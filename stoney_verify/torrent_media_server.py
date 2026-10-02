@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from aiohttp import web
 
 from stoney_verify.api_new.torrent_stream_routes import register_torrent_public_routes
+from stoney_verify.movie_night_web import register_movie_night_public_routes
 from stoney_verify.torrent_streaming import get_torrent_manager
 
 _MEDIA_RUNNER: Optional[web.AppRunner] = None
@@ -94,6 +95,7 @@ async def start_torrent_media_server() -> bool:
     app = web.Application(client_max_size=1024 * 1024)
     app.router.add_get("/health", _health)
     register_torrent_public_routes(app)
+    register_movie_night_public_routes(app)
 
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
