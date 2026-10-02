@@ -103,6 +103,14 @@ def test_internet_archive_builtin_search_is_scoped_to_feature_films() -> None:
     assert "rows=12" in url
 
 
+def test_internet_archive_query_cannot_escape_feature_films_scope() -> None:
+    url = resolver._internet_archive_search_url(
+        'Movie") OR collection:opensource_movies OR title:("Other'
+    )
+    assert "collection%3Afeature_films" in url
+    assert "%5C%22" in url
+
+
 def test_internet_archive_doc_becomes_torrent_variant() -> None:
     variant = resolver._archive_variant_from_doc(
         {
@@ -123,9 +131,10 @@ def test_internet_archive_doc_becomes_torrent_variant() -> None:
 
 
 def test_internet_archive_doc_rejects_unsafe_identifier() -> None:
-    assert resolver._archive_variant_from_doc(
-        {"identifier": "../not-safe", "title": "Bad"}
-    ) is None
+    for identifier in ("../not-safe", ".", ".."):
+        assert resolver._archive_variant_from_doc(
+            {"identifier": identifier, "title": "Bad"}
+        ) is None
 
 
 
