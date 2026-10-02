@@ -18,6 +18,8 @@ Active branch: `feat/toke-media`.
 
 Active issue: #386 — **Add optional media to /toke cards**.
 
+Active PR: #387 — **Add optional image and GIF media to /toke** (draft).
+
 ## Scope
 
 Extend only the existing canonical top-level `/toke` callback and its command-surface contract.
