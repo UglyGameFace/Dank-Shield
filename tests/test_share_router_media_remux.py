@@ -234,6 +234,47 @@ def test_run_ffmpeg_timeout_kills_process(monkeypatch) -> None:
     assert "timed out" in detail
 
 
+def test_run_ffmpeg_cancellation_kills_process(monkeypatch) -> None:
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.killed = False
+            self.returncode = None
+
+        async def communicate(self):
+            if self.killed:
+                self.returncode = -9
+                return b"", b"cancelled"
+            await asyncio.Event().wait()
+            return b"", b""
+
+        def kill(self) -> None:
+            self.killed = True
+            self.returncode = -9
+
+    process = FakeProcess()
+
+    async def fake_create(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create)
+
+    async def scenario():
+        task = asyncio.create_task(
+            remux._run_ffmpeg(
+                ["/usr/bin/ffmpeg", "-version"],
+                timeout_seconds=30.0,
+            )
+        )
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert process.killed is True
+    assert process.returncode == -9
+
+
 def test_remux_concurrency_is_bounded(monkeypatch) -> None:
     monkeypatch.setenv("DANK_SHARE_ROUTER_MEDIA_REMUX_CONCURRENCY", "1")
     remux.reset_media_remux_state_for_tests()
