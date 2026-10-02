@@ -445,7 +445,7 @@ class TorrentMediaManager:
             "active_limit": self.max_sessions,
             "download_rate_limit": _env_int(
                 "DANK_TORRENT_DOWNLOAD_RATE_BYTES",
-                8 * 1024 * 1024,
+                16 * 1024 * 1024,
                 minimum=128 * 1024,
                 maximum=64 * 1024 * 1024,
             ),
