@@ -16,22 +16,6 @@ from stoney_verify.torrent_streaming import (
 _STREAM_CHUNK_BYTES = 1024 * 1024
 
 
-async def is_signed_public_torrent_request(request: web.Request) -> bool:
-    if not str(request.path or "").startswith("/media/torrent/stream/"):
-        return False
-    token = str(request.match_info.get("token", "") or "")
-    expires = str(request.query.get("exp", "") or "")
-    signature = str(request.query.get("sig", "") or "")
-    try:
-        return await get_torrent_manager().validate_stream_access(
-            token,
-            expires,
-            signature,
-        )
-    except Exception:
-        return False
-
-
 async def torrent_stream(request: web.Request) -> web.StreamResponse:
     manager = get_torrent_manager()
     token = str(request.match_info.get("token", "") or "")
@@ -133,21 +117,24 @@ async def torrent_cancel(request: web.Request) -> web.Response:
     return web.json_response({"ok": bool(removed)})
 
 
-def register_torrent_stream_routes(app: web.Application, server: Any) -> None:
-    _ = server
+def register_torrent_public_routes(app: web.Application) -> None:
     get_torrent_manager().ensure_cleanup_task()
     app.router.add_get(
         "/media/torrent/stream/{token}/{filename}",
         torrent_stream,
         allow_head=True,
     )
+
+
+def register_torrent_admin_routes(app: web.Application, server: Any) -> None:
+    _ = server
     app.router.add_get("/media/torrent/status/{token}", torrent_status)
     app.router.add_post("/media/torrent/cancel/{token}", torrent_cancel)
 
 
 __all__ = [
-    "is_signed_public_torrent_request",
-    "register_torrent_stream_routes",
+    "register_torrent_admin_routes",
+    "register_torrent_public_routes",
     "torrent_cancel",
     "torrent_status",
     "torrent_stream",
