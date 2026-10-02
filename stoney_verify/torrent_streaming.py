@@ -412,6 +412,7 @@ class TorrentMediaManager:
         self._identity_index: dict[str, str] = {}
         self._identity_locks: dict[str, asyncio.Lock] = {}
         self._starting = 0
+        self._starting_by_guild: dict[int, int] = {}
         self._replacements_in_flight: set[str] = set()
         self._lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task[Any]] = None
@@ -652,8 +653,18 @@ class TorrentMediaManager:
             int(request_guild_id),
             exclude_token=exclude,
         )
+        guild_in_flight = (
+            int(self._starting_by_guild.get(int(request_guild_id), 0))
+            if int(request_guild_id) > 0
+            else 0
+        )
         guild_slots = (
-            max(0, int(self.max_unique_per_guild) - int(guild_unique))
+            max(
+                0,
+                int(self.max_unique_per_guild)
+                - int(guild_unique)
+                - int(guild_in_flight),
+            )
             if int(request_guild_id) > 0
             else int(self.max_unique_per_guild)
         )
@@ -753,6 +764,11 @@ class TorrentMediaManager:
             "memory_slots_available": snap.memory_slots_available,
             "session_slots_available": snap.session_slots_available,
             "guild_unique_sessions": snap.guild_unique_sessions,
+            "guild_in_flight": (
+                int(self._starting_by_guild.get(int(guild_id), 0))
+                if int(guild_id) > 0
+                else 0
+            ),
             "guild_slots_available": snap.guild_slots_available,
             "free_disk_bytes": snap.free_disk_bytes,
             "disk_reserve_bytes": snap.disk_reserve_bytes,
@@ -846,7 +862,10 @@ class TorrentMediaManager:
                 shutil.rmtree(save_root, ignore_errors=True)
                 raise
             finally:
-                await self._release_start(replace_token=replace_token)
+                await self._release_start(
+                    replace_token=replace_token,
+                    guild_id=int(guild_id),
+                )
 
     async def start_torrent_bytes(
         self,
@@ -911,7 +930,10 @@ class TorrentMediaManager:
             raise
         finally:
             if reserved:
-                await self._release_start(replace_token=replace_token)
+                await self._release_start(
+                    replace_token=replace_token,
+                    guild_id=int(guild_id),
+                )
 
     async def _reserve_start(
         self,
@@ -936,11 +958,31 @@ class TorrentMediaManager:
             if token and self._replacement_is_releasable(token, lease_key):
                 self._replacements_in_flight.add(token)
             self._starting += 1
+            gid = int(guild_id or 0)
+            if gid > 0:
+                self._starting_by_guild[gid] = (
+                    int(self._starting_by_guild.get(gid, 0)) + 1
+                )
 
-    async def _release_start(self, *, replace_token: str = "") -> None:
+    async def _release_start(
+        self,
+        *,
+        replace_token: str = "",
+        guild_id: int = 0,
+    ) -> None:
         token = str(replace_token or "")
         async with self._lock:
             self._starting = max(0, self._starting - 1)
+            gid = int(guild_id or 0)
+            if gid > 0:
+                remaining = max(
+                    0,
+                    int(self._starting_by_guild.get(gid, 0)) - 1,
+                )
+                if remaining:
+                    self._starting_by_guild[gid] = remaining
+                else:
+                    self._starting_by_guild.pop(gid, None)
             if token:
                 self._replacements_in_flight.discard(token)
 
