@@ -77,6 +77,7 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
                 "progress": status.get("progress", 0.0),
                 "download_rate": status.get("download_rate", 0),
                 "peers": status.get("peers", 0),
+                "buffer": status.get("buffer", {}),
             },
             status=503,
             headers={"Retry-After": "2"},
@@ -90,6 +91,7 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
         while cursor <= end:
             chunk_end = min(end, cursor + _STREAM_CHUNK_BYTES - 1)
             if cursor != start:
+                plan = manager.prepare_playback_request(session, cursor, chunk_end)
                 ready = await manager.wait_range(
                     session,
                     cursor,
