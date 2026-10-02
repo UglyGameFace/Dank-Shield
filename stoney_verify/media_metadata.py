@@ -29,7 +29,7 @@ _RESOLUTION_RE = re.compile(r"\b(4320p|2160p|1440p|1080p|1080i|720p|576p|480p)\b
 _YEAR_RE = re.compile(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)")
 _EPISODE_RE = re.compile(r"\bS(\d{1,2})E(\d{1,3})\b", re.IGNORECASE)
 _ALT_EPISODE_RE = re.compile(r"\b(\d{1,2})x(\d{1,3})\b", re.IGNORECASE)
-_RELEASE_GROUP_RE = re.compile(r"-([A-Za-z0-9][A-Za-z0-9._-]{1,40})$")
+_RELEASE_GROUP_RE = re.compile(r"-([A-Za-z0-9][A-Za-z0-9._]{1,40})$")
 _TOKEN_SPLIT_RE = re.compile(r"[._]+|\s+")
 
 _AUDIO_TAGS: tuple[tuple[str, str], ...] = (
