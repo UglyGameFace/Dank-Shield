@@ -2,72 +2,97 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-397 — Share Router parity for direct memes-channel video posts**
+**DANK-SHIELD-384 — audit repeated Discord 429s during/after activity recovery**
 
 Production baseline:
-`main@d0b7b9cc34ab4725bccf7c12526409bb75539d8e` (PR #398 merged).
+`main@e647876844f9766c119b62534bd20e43af0dd8aa` (PR #399 merged).
 
 Active branch:
-`fix/share-router-direct-memes-inline-video`
+`audit/discord-429-message-fetches`
 
 Status:
-**Implementation complete on branch; exact-head validation pending.**
+**Root cause identified; remediation implemented on branch; exact-head validation pending.**
 
 ### Scope / required outcome
 
-1. Reuse the canonical Share Router native-video extraction/download/upload path.
-2. Apply direct-post enhancement only to the guild-configured destination of the canonical `share-memes` route.
-3. Do not add another listener, downloader, provider extractor, or guild-specific channel setting.
-4. Leave the member's original memes-channel message untouched on success or failure.
-5. Skip bot/webhook messages and avoid loops.
-6. If Discord already renders a video attachment/embed inline, do not repost it.
-7. Reuse the existing recent-route dedupe identity so proxy-routed and directly-posted copies suppress each other.
-8. Preserve existing upload-size, timeout, trusted-host, Attach Files, and extraction limits.
-9. Keep unsupported/extraction-failed media non-destructive and unmarked so a later Share Router proxy attempt can still work.
-10. Add regression coverage for configured-route discovery, already-inline detection, successful relay, extraction failure, dedupe, one-listener ownership, and webhook exclusion.
+1. Trace the production single-message `GET /channels/{channel}/messages/{message}` callers separately from paced startup history scans.
+2. Preserve the existing process-wide recovery REST budget as the aggregate startup/recovery owner; do not add a second limiter.
+3. Prevent avoidable same-channel `fetch_message()` bursts across Dank Shield owners without replacing discord.py's route-aware 429 handling.
+4. Coalesce simultaneous requests for the same channel/message identity.
+5. Keep latency-sensitive live moderation/recovery outside the slower startup aggregate budget while still preventing same-route fan-out.
+6. Route known startup/recovery single-message GETs through the existing aggregate budget.
+7. Preserve cache-first / zero-REST paths already used by persistent ticket/verification panels.
+8. Avoid permanent per-channel lock growth across large guild counts.
+9. Add behavioral and ownership regressions for serialization, coalescing, startup budgeting, live-path isolation, and cleanup.
+10. Validate the exact branch head with focused/full repository CI and review the final diff for unrelated changes.
 
 ### Findings / root cause
 
-- `route_message()` previously returned immediately whenever the current channel was not a configured proxy source.
-- The real memes destination already exists in guild-aware Share Router state as the target of the canonical `share-memes` route, so a new setting would duplicate authority.
-- `_prepare_native_video()` already owns trusted Discord/proxy video discovery, X extraction, bounded downloading, upload-size limits, and Attach Files checks.
-- `_RECENT_ROUTE_KEYS` already keys dedupe by guild + destination + canonical source identity, so the direct destination path can share dedupe with proxy routing.
+- Authoritative activity restart reconciliation is already sequential and calls `reserve_recovery_discord_rest_requests()` before archived-thread and history requests. Its visible pacing logs are expected aggregate protection, not the later raw-message GET 429 source.
+- The central `discord_api_safety` owner previously protected audit logs, sends, channel edits, and bulk recovery requests, but **single-message GETs had no shared owner**.
+- Community Tools startup reconciliation runs a bounded `gather()` with `STARTUP_RECONCILE_CONCURRENCY = 10`; its sticky and quiet-notice identity checks directly fetched persisted messages outside the aggregate recovery budget.
+- The live-guild-name ticket-footer startup sweep also directly fetched each persisted ticket panel outside that recovery budget.
+- Ticket-panel and Basic Verify restart recovery already reserved aggregate capacity before their identity fetch, but each still called `fetch_message()` directly, so duplicate owners could not coalesce the same identity.
+- Invite Shield uncached raw-edit recovery created one task per `(channel_id, message_id)`. Different message IDs edited in the same channel could therefore issue concurrent GETs against the same Discord route family. This matches the observed cluster of 429s against one channel with multiple message IDs in the same second.
+- Existing cache-first protections are retained: Invite raw edits skip REST when `cached_message` exists; current ticket/basic-verify panel identities bind persistent views without REST when the saved application/component contract is already authoritative.
 
 ### Execution path / changes
 
-- `stoney_verify/share_router_runtime.py`
-  - resolves the configured memes destination from the canonical Share Router route;
-  - detects already-inline video attachments/embeds;
-  - adds a direct-memes entry condition without adding another listener;
-  - consolidates native-video preparation, upload, file-close, mention safety, and send-failure handling into one `_relay_native_video_upload()` owner reused by both proxy routing and direct memes enhancement;
-  - replies to the member's original post with explicit attribution while leaving the source post untouched;
-  - records the same destination/source dedupe key only after a successful direct relay or when Discord already supplied inline video;
-  - leaves unsupported/extraction-failed/upload-rejected media untouched and unmarked;
-  - ignores webhook-authored messages only for the new direct-destination enhancement, preserving existing proxy-source webhook behavior;
-  - keeps one `route_message` listener.
-- `tests/test_share_router_native_runtime.py`
-  - covers canonical `share-memes` target discovery versus unrelated same-name channels;
-  - covers existing inline-video detection;
-  - verifies supported direct video uses the canonical native relay and closes the file;
-  - verifies extraction and upload-send failures leave the original path untouched/unmarked;
-  - verifies recent-route dedupe suppresses duplicate relay;
-  - verifies guild-local route resolution;
-  - locks one-listener ownership, shared upload ownership, and direct-only webhook exclusion.
+- `stoney_verify/startup_guards/discord_api_safety.py`
+  - adds one `fetch_message_with_api_safety()` owner;
+  - serializes guarded single-message GETs **per channel**, not globally;
+  - coalesces concurrent requests for the same `(channel_id, message_id)`;
+  - optionally reserves one slot from the existing recovery REST budget;
+  - deliberately adds **no retry loop**; discord.py continues to own real route/bucket 429 retry behavior;
+  - shields the shared in-flight request from cancellation by one waiter;
+  - removes completed in-flight entries and idle per-channel locks so the state cannot grow forever with server/channel count;
+  - exposes a small diagnostic snapshot for guarded channels, inflight requests, and coalesced requests.
+- `stoney_verify/invite_reconciliation_runtime.py`
+  - uncached raw-edit fetches now use the central per-channel guard with `recovery=False`, preserving live enforcement latency while eliminating same-channel fan-out.
+- `stoney_verify/community_tools_runtime.py`
+  - startup sticky and quiet-notice identity fetches now use the central guard with `recovery=True`, so their existing 10-way startup worker pool shares the aggregate recovery budget.
+- `stoney_verify/ticket_panel_runtime.py`
+  - recovery identity fetch uses the central guarded fetch with `recovery=True`; existing history/edit/post/delete recovery reservations stay intact.
+- `stoney_verify/verification_new/basic_verify.py`
+  - saved-panel recovery identity fetch uses the central guarded fetch with `recovery=True`; zero-REST current-identity bind remains unchanged.
+- `stoney_verify/startup_guards/live_guild_name_footer_guard.py`
+  - saved ticket-panel fetch uses the central guard; startup calls reserve aggregate recovery capacity while live guild-rename refreshes only use per-channel serialization/coalescing.
+- `tests/test_discord_recovery_rest_budget.py`
+  - proves different message IDs in one channel never overlap;
+  - proves different channels remain parallel;
+  - proves identical concurrent message requests collapse to one REST call;
+  - proves recovery callers reserve the existing aggregate budget and live callers do not;
+  - proves inflight state and idle channel locks clean up.
+- `tests/test_startup_recovery_scaling.py`
+  - locks the Invite Shield raw-edit live path to the central guard without startup pacing;
+  - locks Community Tools, ticket-panel, Basic Verify, and startup footer identity fetches to the central recovery owner.
 
 ### Validation / cleanup / blockers
 
 Pending before completion claim:
 - exact-head focused/full GitHub CI;
-- branch-vs-main final diff review;
-- post-merge production Android canary with a supported X/video link posted directly into the configured memes destination.
-
-Latest review corrections:
-- removed duplicate native-video send/file-close logic from the direct memes path by introducing one canonical upload owner shared with existing proxy routing;
-- scoped webhook exclusion to direct-destination enhancement so existing proxy-source webhook routing is not accidentally changed;
-- extended regression coverage for upload rejection, cross-guild isolation, shared upload ownership, and webhook scope;
-- final diff review found the pre-consolidation source-contract test still asserted three retired implementation strings; updated that regression to verify the shared file payload, current preview suppression call, current send-failure diagnostic, and explicit proxy link fallback without restoring obsolete duplicate logic.
+- final branch-vs-main diff and dead/duplicate ownership review;
+- production observation after deploy for disappearance/reduction of same-channel `GET .../messages/... 429` clusters.
 
 No unrelated task is active.
+
+---
+
+## Previous completed Share Router direct-memes follow-up
+
+**DANK-SHIELD-397 — Share Router parity for direct memes-channel video posts**
+
+PR #399 merged to production `main` as:
+`e647876844f9766c119b62534bd20e43af0dd8aa`.
+
+Final exact-head `02e886fd84d0a5d04471a3c6e35e0945ef3e1390` passed:
+- Dank Shield CI #3538;
+- Profile Runtime Diagnostics #2084;
+- Dank Design Regression CI #1616;
+- Application Command Size Diagnostics #2395;
+- Ticket Owner Emergency Override #2109.
+
+That baseline keeps one Share Router listener/media stack, resolves the configured memes destination from the canonical `share-memes` route, reuses the native-video upload owner, preserves proxy behavior, and leaves direct memes posts non-destructive.
 
 ---
 
