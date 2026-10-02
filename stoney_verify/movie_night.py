@@ -35,6 +35,66 @@ class ViewerState:
 
 
 @dataclass
+class MovieSourceVariant:
+    variant_id: str
+    source_ref: str
+    created_at: float
+    file_size: int = 0
+    peers: int = 0
+    seeds: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
+    votes: set[int] = field(default_factory=set)
+
+    def quality_efficiency_key(self) -> tuple[int, int, int, int, int]:
+        meta = dict(self.metadata or {})
+        verified = meta.get("verified") if isinstance(meta.get("verified"), Mapping) else {}
+        release = meta.get("release_name") if isinstance(meta.get("release_name"), Mapping) else meta
+
+        video = verified.get("video") if isinstance(verified.get("video"), Mapping) else {}
+        width = int(video.get("width") or 0)
+        height = int(video.get("height") or 0)
+        pixels = width * height
+
+        hdr = len(video.get("hdr") or []) if isinstance(video.get("hdr"), list) else 0
+        audio_tracks = verified.get("audio_tracks")
+        audio_channels = 0
+        if isinstance(audio_tracks, list):
+            for row in audio_tracks:
+                if isinstance(row, Mapping):
+                    audio_channels = max(audio_channels, int(row.get("channels") or 0))
+
+        codec = str(video.get("codec") or "").lower()
+        codec_efficiency = 3 if codec in {"av1"} else 2 if codec in {"hevc", "h265", "h.265"} else 1 if codec in {"h264", "h.264", "avc"} else 0
+
+        source = str(release.get("source") or "").upper()
+        source_weight = {
+            "BLURAY REMUX": 7,
+            "REMUX": 7,
+            "BLURAY": 6,
+            "BDRIP": 5,
+            "BRRIP": 5,
+            "WEB-DL": 5,
+            "WEBRIP": 4,
+            "HDTV": 3,
+            "DVDRIP": 2,
+            "DVD": 2,
+            "TC": 1,
+            "TS": 1,
+            "CAM": 0,
+        }.get(source, 0)
+
+        health = max(0, int(self.seeds)) * 4 + max(0, int(self.peers))
+        size_penalty = max(0, int(self.file_size)) // (256 * 1024 * 1024)
+        return (
+            pixels,
+            hdr + audio_channels,
+            codec_efficiency,
+            source_weight,
+            health - size_penalty,
+        )
+
+
+@dataclass
 class MovieCandidate:
     candidate_id: str
     title: str
@@ -43,6 +103,8 @@ class MovieCandidate:
     source_ref: str = ""
     metadata_ref: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    variants: dict[str, MovieSourceVariant] = field(default_factory=dict)
+    selected_variant_id: str = ""
     votes: set[int] = field(default_factory=set)
 
 
@@ -304,6 +366,126 @@ class MovieNightManager:
         room.candidates[candidate.candidate_id] = candidate
         return candidate
 
+    def add_variant(
+        self,
+        room_id: str,
+        candidate_id: str,
+        *,
+        user_id: int,
+        source_ref: str,
+        file_size: int = 0,
+        peers: int = 0,
+        seeds: int = 0,
+        metadata: Optional[Mapping[str, Any]] = None,
+        now: Optional[float] = None,
+    ) -> MovieSourceVariant:
+        room = self._require_room(room_id)
+        current = time.monotonic() if now is None else float(now)
+        uid = int(user_id)
+        if uid not in self.active_viewers(room, now=current):
+            raise PermissionError("Only active Movie Night viewers may add source variants.")
+
+        candidate = room.candidates.get(str(candidate_id or ""))
+        if candidate is None:
+            raise LookupError("Movie candidate not found.")
+
+        source = str(source_ref or "").strip()
+        if not source:
+            raise ValueError("A source reference is required.")
+
+        variant = MovieSourceVariant(
+            variant_id=secrets.token_urlsafe(9),
+            source_ref=source[:2000],
+            created_at=current,
+            file_size=max(0, int(file_size or 0)),
+            peers=max(0, int(peers or 0)),
+            seeds=max(0, int(seeds or 0)),
+            metadata=dict(metadata or {}),
+            votes={uid},
+        )
+        candidate.variants[variant.variant_id] = variant
+        if not candidate.selected_variant_id:
+            candidate.selected_variant_id = variant.variant_id
+        return variant
+
+    def vote_variant(
+        self,
+        room_id: str,
+        candidate_id: str,
+        variant_id: str,
+        *,
+        user_id: int,
+        approve: bool = True,
+        now: Optional[float] = None,
+    ) -> MovieSourceVariant:
+        room = self._require_room(room_id)
+        current = time.monotonic() if now is None else float(now)
+        uid = int(user_id)
+        if uid not in self.active_viewers(room, now=current):
+            raise PermissionError("Only active Movie Night viewers may vote on source variants.")
+
+        candidate = room.candidates.get(str(candidate_id or ""))
+        if candidate is None:
+            raise LookupError("Movie candidate not found.")
+        variant = candidate.variants.get(str(variant_id or ""))
+        if variant is None:
+            raise LookupError("Movie source variant not found.")
+
+        if approve:
+            variant.votes.add(uid)
+        else:
+            variant.votes.discard(uid)
+        return variant
+
+    def ranked_variants(
+        self,
+        room_id: str,
+        candidate_id: str,
+        *,
+        now: Optional[float] = None,
+    ) -> list[MovieSourceVariant]:
+        room = self._require_room(room_id)
+        candidate = room.candidates.get(str(candidate_id or ""))
+        if candidate is None:
+            raise LookupError("Movie candidate not found.")
+
+        active = self.active_viewers(room, now=now)
+        return sorted(
+            candidate.variants.values(),
+            key=lambda item: (
+                -len(item.votes & active),
+                tuple(-part for part in item.quality_efficiency_key()),
+                int(item.file_size),
+                float(item.created_at),
+            ),
+        )
+
+    def select_variant(
+        self,
+        room_id: str,
+        candidate_id: str,
+        *,
+        variant_id: Optional[str] = None,
+        now: Optional[float] = None,
+    ) -> MovieSourceVariant:
+        room = self._require_room(room_id)
+        candidate = room.candidates.get(str(candidate_id or ""))
+        if candidate is None:
+            raise LookupError("Movie candidate not found.")
+
+        if variant_id:
+            variant = candidate.variants.get(str(variant_id))
+            if variant is None:
+                raise LookupError("Movie source variant not found.")
+        else:
+            ranked = self.ranked_variants(room_id, candidate_id, now=now)
+            if not ranked:
+                raise LookupError("No source variants are available for this movie.")
+            variant = ranked[0]
+
+        candidate.selected_variant_id = variant.variant_id
+        return variant
+
     def vote_candidate(
         self,
         room_id: str,
@@ -515,6 +697,7 @@ def get_movie_night_manager() -> MovieNightManager:
 __all__ = [
     "ALL_ACTIONS",
     "MovieCandidate",
+    "MovieSourceVariant",
     "MovieNightManager",
     "MovieNightRoom",
     "PLAYBACK_ACTIONS",
