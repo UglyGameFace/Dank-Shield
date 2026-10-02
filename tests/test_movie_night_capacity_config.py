@@ -17,6 +17,7 @@ def test_env_example_has_movie_night_dynamic_capacity_contract() -> None:
     env = (ROOT / ".env.example").read_text(encoding="utf-8")
 
     required = (
+        "DANK_MEDIA_SERVER_ENABLED=true",
         "DANK_MEDIA_BIND_HOST=0.0.0.0",
         "DANK_MEDIA_PORT=8080",
         "DANK_PROCESS_MEMORY_LIMIT_MB=1495",
@@ -61,3 +62,15 @@ def test_shared_torrent_architecture_keeps_one_canonical_runtime() -> None:
     assert "DANK_TORRENT_SOFT_SESSION_LIMIT" in source
     assert "DANK_MOVIE_NIGHT_MEMORY_RESERVE_MB" in source
     assert "DANK_TORRENT_DISK_RESERVE_BYTES" in source
+
+
+
+def test_site_listener_can_start_before_movie_night_signing_is_configured() -> None:
+    source = (
+        ROOT / "stoney_verify" / "torrent_media_server.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'DANK_MEDIA_SERVER_ENABLED' in source
+    assert '"0.0.0.0"' in source
+    assert "health remains available but media/watch access stays fail-closed" in source
+    assert "Torrent media server refused to start" not in source
