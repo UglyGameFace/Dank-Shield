@@ -7,6 +7,7 @@ import importlib.util
 import os
 import re
 from typing import Any, Mapping, Optional
+from urllib.parse import urlsplit
 
 import aiohttp
 import discord
@@ -36,6 +37,8 @@ from stoney_verify.movie_night import (
 )
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from stoney_verify.torrent_media_server import (
+    media_bind_host,
+    media_bind_port,
     media_public_base_url,
     media_server_ready,
 )
@@ -220,6 +223,21 @@ def _setup_readiness(
     stream_secret = bool(
         str(os.getenv("DANK_TORRENT_STREAM_SECRET", "") or "").strip()
     )
+    bind_host = media_bind_host()
+    bind_port = media_bind_port()
+    public_host = ""
+    try:
+        public_host = str(urlsplit(public_base).hostname or "").lower()
+    except Exception:
+        public_host = ""
+    external_public_base = bool(
+        public_base
+        and public_host not in {"localhost", "127.0.0.1", "::1"}
+    )
+    externally_bound = bool(
+        not external_public_base
+        or bind_host in {"0.0.0.0", "::", "[::]"}
+    )
     libtorrent_ready = importlib.util.find_spec("libtorrent") is not None
     pyav_ready = importlib.util.find_spec("av") is not None
     runtime_ready = bool(media_server_ready())
@@ -239,6 +257,11 @@ def _setup_readiness(
         blockers.append("DANK_MEDIA_PUBLIC_BASE_URL is not configured.")
     if not stream_secret:
         blockers.append("DANK_TORRENT_STREAM_SECRET is not configured.")
+    if not externally_bound:
+        blockers.append(
+            "Public Movie Night media is configured, but DANK_MEDIA_BIND_HOST is not externally reachable. "
+            "Use 0.0.0.0 on Discloud/site hosting."
+        )
     if not libtorrent_ready:
         blockers.append("The pinned libtorrent runtime is not installed.")
     if not pyav_ready:
@@ -254,7 +277,7 @@ def _setup_readiness(
         )
     if role is None and not can_manage_roles:
         blockers.append("Dank Shield needs Manage Roles to create the Movie Night role.")
-    if not enabled_custom_sources(source_registry.sources and source_registry or MediaSourceRegistry()):
+    if not enabled_custom_sources(source_registry):
         warnings.append(
             "No custom media sources are enabled. Magnet/.torrent playback still works."
         )
@@ -270,6 +293,9 @@ def _setup_readiness(
         "libtorrent_ready": libtorrent_ready,
         "pyav_ready": pyav_ready,
         "runtime_ready": runtime_ready,
+        "bind_host": bind_host,
+        "bind_port": bind_port,
+        "externally_bound": externally_bound,
         "sources": len(source_registry.sources),
         "enabled_sources": len(enabled_custom_sources(source_registry)),
         "blockers": blockers,
@@ -326,6 +352,7 @@ def _setup_embed(
             f"{_status(ready['pyav_ready'])} • PyAV / FFmpeg metadata\n"
             f"{_status(bool(ready['public_base']))} • DANK_MEDIA_PUBLIC_BASE_URL\n"
             f"{_status(ready['stream_secret'])} • DANK_TORRENT_STREAM_SECRET\n"
+            f"{_status(ready['externally_bound'])} • bind {ready['bind_host']}:{ready['bind_port']}\n"
             f"{_status(ready['runtime_ready'])} • public media server process"
         ),
         inline=False,
@@ -800,6 +827,30 @@ async def _create_or_repair_movie_role(interaction: discord.Interaction) -> None
 
     if isinstance(current_role, discord.Role):
         try:
+            current_channel_perms = _channel_permissions(guild, interaction.channel)
+            can_ping_locked_role = bool(
+                current_channel_perms
+                and (
+                    getattr(current_channel_perms, "administrator", False)
+                    or getattr(current_channel_perms, "mention_everyone", False)
+                )
+            )
+            if not current_role.mentionable and not can_ping_locked_role:
+                me = guild.me
+                guild_perms = getattr(me, "guild_permissions", None)
+                if (
+                    me is not None
+                    and guild_perms is not None
+                    and (
+                        getattr(guild_perms, "administrator", False)
+                        or getattr(guild_perms, "manage_roles", False)
+                    )
+                    and current_role < me.top_role
+                ):
+                    await current_role.edit(
+                        mentionable=True,
+                        reason="Dank Shield Movie Night notification readiness",
+                    )
             updated = register_movie_night_notification_role(
                 model,
                 role_id=int(current_role.id),
@@ -847,7 +898,7 @@ async def _create_or_repair_movie_role(interaction: discord.Interaction) -> None
     try:
         role = await guild.create_role(
             name=_MOVIE_ROLE_NAME,
-            mentionable=False,
+            mentionable=True,
             reason="Dank Shield Movie Night setup",
         )
         updated = register_movie_night_notification_role(
@@ -890,30 +941,40 @@ async def _test_public_media(interaction: discord.Interaction) -> None:
             interaction,
             "❌ DANK_MEDIA_PUBLIC_BASE_URL is not configured.",
         )
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
     health_url = base.rstrip("/") + "/health"
     timeout = aiohttp.ClientTimeout(total=6.0, connect=3.0, sock_read=4.0)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(health_url, allow_redirects=False) as response:
                 if response.status != 200:
-                    return await _private(
+                    return await _replace(
                         interaction,
-                        f"❌ Public media health returned HTTP {response.status}.",
+                        content=f"❌ Public media health returned HTTP {response.status}.",
+                        embed=None,
+                        view=MovieNightSetupView(int(interaction.user.id)),
                     )
                 data = await response.json(content_type=None)
     except Exception as exc:
-        return await _private(
+        return await _replace(
             interaction,
-            f"❌ Public media endpoint is not reachable: {type(exc).__name__}.",
+            content=f"❌ Public media endpoint is not reachable: {type(exc).__name__}.",
+            embed=None,
+            view=MovieNightSetupView(int(interaction.user.id)),
         )
     if not isinstance(data, Mapping) or data.get("service") != "dank_torrent_media":
-        return await _private(
+        return await _replace(
             interaction,
-            "❌ The public URL responded, but it was not Dank Shield's torrent media service.",
+            content="❌ The public URL responded, but it was not Dank Shield's torrent media service.",
+            embed=None,
+            view=MovieNightSetupView(int(interaction.user.id)),
         )
-    await _private(
+    await _replace(
         interaction,
-        "✅ Public Movie Night media endpoint is reachable and identified correctly.",
+        content="✅ Public Movie Night media endpoint is reachable and identified correctly.",
+        embed=None,
+        view=MovieNightSetupView(int(interaction.user.id)),
     )
 
 
