@@ -53,6 +53,7 @@ Status:
 - Provider Deck now exposes **Add JSON Provider** and **Add Search Link**. External links are query-templated but never fetched by Dank Shield.
 - Movie candidate pages expose **Search Elsewhere**, and searches with no playable result can fall back to enabled external provider buttons without converting those pages into releases.
 - Search-link provider modal acknowledgement now occurs before the guild-config CAS write; success, persistence failure, and CAS-conflict paths all terminate by editing the deferred original response instead of risking a Discord interaction timeout or orphaned thinking state.
+- External provider links now enforce Discord's 512-character link-button URL limit; setup validates against the full supported 180-character query budget so a provider cannot save successfully and later fail only when the Search Elsewhere view renders.
 - Regression coverage is being extended in the catalog, media-source, and public Movie Night test suites.
 
 ### Validation / cleanup / blockers
@@ -63,10 +64,11 @@ Pending before completion claim:
 - branch-vs-main diff and import/dead-reference review;
 - production canary after merge/deploy remains an owner runtime check.
 
-Latest validation finding:
-- review of the first PR #398 head found the new Search Link modal could call `save_media_source_registry()` before acknowledging Discord;
-- fixed the interaction lifecycle at `1fa4ce4032f338f713803bf259ec5cbb9f52874f` and added acknowledgement-order regression coverage;
-- all prior-head companion workflows were green, but the old main CI run is superseded; exact-head CI for `1fa4ce4032f338f713803bf259ec5cbb9f52874f` is required before merge.
+Latest validation findings:
+- review of the first PR #398 head found the new Search Link modal could call `save_media_source_registry()` before acknowledging Discord; the modal now defers before persistence and terminates the deferred original response on success/failure/conflict;
+- review also found external provider templates could be accepted up to 1000 characters even though Discord link-button URLs are capped at 512; the renderer now rejects overflow and setup validates using the maximum supported query length;
+- regression coverage locks both interaction acknowledgement ordering and the Discord button URL budget;
+- all earlier-head CI results are superseded; exact-head CI for the current branch head is required before merge.
 
 Merged baseline:
 - PR #396 merged after all exact-head workflows passed at `eb75bacc4b479a0ed0a896cb4c1b695a068bea98`;
