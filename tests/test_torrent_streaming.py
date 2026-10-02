@@ -817,3 +817,23 @@ def test_untracked_share_router_consumer_prevents_movie_release_from_deleting_se
     assert session.token in manager._sessions
     assert session.leases == set()
     assert session.unleased_hold
+
+
+
+def test_in_flight_start_reserves_estimated_memory_before_rss_moves(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.max_sessions = 4
+    manager.soft_session_limit = 4
+    manager.process_memory_limit_mb = 700
+    manager.protected_memory_reserve_mb = 350
+    manager.estimated_session_memory_mb = 96
+    manager.disk_reserve_bytes = 0
+    manager._starting = 1
+    monkeypatch.setattr(torrent_streaming, "current_rss_mb", lambda: 250.0)
+
+    # Raw headroom is 100 MiB, which looks like one slot until the already
+    # admitted in-flight start reserves its estimated 96 MiB.
+    snap = manager.capacity_snapshot()
+    assert snap.memory_headroom_mb == pytest.approx(100.0)
+    assert snap.memory_slots_available == 0
+    assert not snap.admission_allowed
