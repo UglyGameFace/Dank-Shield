@@ -443,6 +443,8 @@ def select_media_resolution(
         ]
     ] = []
     manifest: tuple[str, str, str] | None = None
+    saw_separate_video = False
+    saw_fragmented = False
 
     for entry in _iter_entries(info):
         formats = entry.get("formats")
@@ -461,34 +463,50 @@ def select_media_resolution(
                 except Exception:
                     protocol = ""
 
+            fragments = fmt.get("fragments")
+            is_fragmented = isinstance(fragments, (list, tuple)) and bool(fragments)
+            if is_fragmented:
+                saw_fragmented = True
+                if manifest is None and is_safe_media_download_url(
+                    _safe_str(fmt.get("manifest_url") or url)
+                ):
+                    manifest = (
+                        _safe_str(fmt.get("manifest_url") or url),
+                        protocol or "fragmented",
+                        ext,
+                    )
+
             if (
                 url
+                and not is_fragmented
                 and protocol in _PROGRESSIVE_PROTOCOLS
                 and (not ext or ext in _PROGRESSIVE_EXTENSIONS)
                 and is_safe_media_download_url(url)
             ):
                 vcodec = _safe_str(fmt.get("vcodec")).lower()
+                acodec = _safe_str(fmt.get("acodec")).lower()
                 if vcodec != "none" or ext == "gif":
-                    size = _candidate_size(fmt)
-                    if not (size > max_bytes > 0):
-                        acodec = _safe_str(fmt.get("acodec")).lower()
-                        has_audio = 0 if acodec == "none" else 1
-                        height = _safe_int(fmt.get("height"), 0)
-                        try:
-                            tbr = float(fmt.get("tbr") or 0.0)
-                        except Exception:
-                            tbr = 0.0
-                        size_score = -size if size > 0 else 0
-                        progressive.append(
-                            (
-                                (has_audio, height, tbr, size_score),
-                                url,
-                                protocol,
-                                ext,
-                                size,
-                                _safe_request_headers(entry, fmt),
+                    if acodec == "none" and ext != "gif":
+                        saw_separate_video = True
+                    else:
+                        size = _candidate_size(fmt)
+                        if not (size > max_bytes > 0):
+                            height = _safe_int(fmt.get("height"), 0)
+                            try:
+                                tbr = float(fmt.get("tbr") or 0.0)
+                            except Exception:
+                                tbr = 0.0
+                            size_score = -size if size > 0 else 0
+                            progressive.append(
+                                (
+                                    (1, height, tbr, size_score),
+                                    url,
+                                    protocol,
+                                    ext,
+                                    size,
+                                    _safe_request_headers(entry, fmt),
+                                )
                             )
-                        )
 
             if manifest is None:
                 candidate = _manifest_candidate(fmt)
@@ -525,13 +543,18 @@ def select_media_resolution(
             reason="manifest_requires_controlled_transcode_or_player",
         )
 
+    reason = "no_safe_progressive_format"
+    if saw_separate_video:
+        reason = "separate_audio_video_requires_merge"
+    elif saw_fragmented:
+        reason = "fragmented_media_requires_controlled_download"
     return MediaResolution(
         source_url=source_url,
         canonical_url=canonical,
         identity=identity,
         provider=provider,
         delivery="link",
-        reason="no_safe_progressive_format",
+        reason=reason,
     )
 
 
