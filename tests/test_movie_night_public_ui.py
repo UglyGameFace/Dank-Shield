@@ -152,7 +152,6 @@ def test_search_results_group_releases_without_automatic_votes(monkeypatch) -> N
         channel_id=2,
         host_id=10,
         stream_token="",
-        now=100.0,
     )
     monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
 
@@ -209,7 +208,7 @@ def test_search_results_group_releases_without_automatic_votes(monkeypatch) -> N
     assert example.votes == set()
     assert len(example.variants) == 2
     assert all(variant.votes == set() for variant in example.variants.values())
-    ranked = manager.ranked_variants(room.room_id, example.candidate_id, now=101.0)
+    ranked = manager.ranked_variants(room.room_id, example.candidate_id)
     assert ranked[0].seeds == 100
 
 
