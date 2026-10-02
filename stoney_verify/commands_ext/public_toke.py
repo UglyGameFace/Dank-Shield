@@ -107,8 +107,10 @@ def _attachment_is_supported_media(attachment: Any) -> bool:
     content_type = str(getattr(attachment, "content_type", "") or "").lower()
     if ";" in content_type:
         content_type = content_type.split(";", 1)[0].strip()
-    if content_type:
-        return content_type in _TOKE_MEDIA_CONTENT_TYPES
+    if content_type in _TOKE_MEDIA_CONTENT_TYPES:
+        return True
+    if content_type and content_type != "application/octet-stream":
+        return False
     filename = str(getattr(attachment, "filename", "") or "").lower()
     return filename.endswith(_TOKE_MEDIA_EXTENSIONS)
 
