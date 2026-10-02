@@ -177,6 +177,36 @@ def test_external_search_provider_modal_defers_before_persistence() -> None:
     assert "return await _replace(" in source
 
 
+def test_provider_deck_custom_provider_field_stays_within_discord_limit() -> None:
+    registry = MediaSourceRegistry(
+        revision=20,
+        sources=tuple(
+            CustomMediaSource(
+                source_id=f"provider-{index}",
+                label=("Provider " + str(index) + " " + ("x" * 60))[:80],
+                endpoint_url=(
+                    "https://catalog.example/search?q={query}&provider="
+                    + str(index)
+                    + "&padding="
+                    + ("x" * 180)
+                ),
+                provider_type=(
+                    movie_ui.PROVIDER_TYPE_EXTERNAL
+                    if index % 2
+                    else movie_ui.PROVIDER_TYPE_JSON
+                ),
+            )
+            for index in range(20)
+        ),
+    )
+    embed = movie_ui._sources_embed(registry)
+    custom = next(
+        field for field in embed.fields if str(field.name).startswith("📚 Custom Providers")
+    )
+    assert len(str(custom.value)) <= 1024
+    assert "more provider(s)" in str(custom.value)
+
+
 def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -> None:
     monkeypatch.delenv("DANK_TMDB_READ_TOKEN", raising=False)
     embed = movie_ui._sources_embed(MediaSourceRegistry())
