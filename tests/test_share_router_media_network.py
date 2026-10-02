@@ -93,8 +93,6 @@ def test_public_get_follows_safe_relative_redirect_without_auto_redirect() -> No
 
 
 def test_public_only_dns_resolver_rejects_private_answer(monkeypatch) -> None:
-    resolver = network.PublicOnlyDNSResolver()
-
     class FakeResolver:
         async def resolve(self, host, port=0, family=0):
             return [{"host": "10.0.0.7"}]
@@ -102,12 +100,14 @@ def test_public_only_dns_resolver_rejects_private_answer(monkeypatch) -> None:
         async def close(self):
             return None
 
-    resolver._resolver = FakeResolver()
-
     async def scenario():
-        with pytest.raises(OSError, match="non-public"):
-            await resolver.resolve("public.example", 443)
-        await resolver.close()
+        resolver = network.PublicOnlyDNSResolver()
+        resolver._resolver = FakeResolver()
+        try:
+            with pytest.raises(OSError, match="non-public"):
+                await resolver.resolve("public.example", 443)
+        finally:
+            await resolver.close()
 
     asyncio.run(scenario())
 
