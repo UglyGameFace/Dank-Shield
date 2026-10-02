@@ -189,6 +189,7 @@ def test_movie_candidate_supports_multiple_release_variants_and_votes() -> None:
         source_ref="authorized:variant:small-hevc",
         file_size=4 * 1024 * 1024 * 1024,
         seeds=40,
+        leechers=15,
         peers=55,
         metadata={
             "release_name": {"source": "WEB-DL"},
@@ -211,6 +212,7 @@ def test_movie_candidate_supports_multiple_release_variants_and_votes() -> None:
         source_ref="authorized:variant:huge-h264",
         file_size=9 * 1024 * 1024 * 1024,
         seeds=15,
+        leechers=5,
         peers=20,
         metadata={
             "release_name": {"source": "WEBRip"},
@@ -248,6 +250,65 @@ def test_movie_candidate_supports_multiple_release_variants_and_votes() -> None:
     )
     ranked = manager.ranked_variants(room_id, candidate.candidate_id, now=110.0)
     assert ranked[0].variant_id == huge_h264.variant_id
+
+
+def test_default_variant_order_is_seed_first_and_zero_seed_is_last() -> None:
+    manager, room_id = _room_with_three_viewers()
+    candidate = manager.nominate(
+        room_id,
+        user_id=20,
+        title="Seed Health Test",
+        now=105.0,
+    )
+
+    healthy = manager.add_variant(
+        room_id,
+        candidate.candidate_id,
+        user_id=20,
+        source_ref="authorized:healthy",
+        file_size=8_000_000_000,
+        seeds=48,
+        leechers=12,
+        peers=60,
+        metadata={
+            "release_name": {"source": "WEB-DL"},
+            "verified": {
+                "video": {"codec": "h264", "width": 1920, "height": 1080, "hdr": []},
+                "audio_tracks": [{"channels": 6}],
+            },
+        },
+        now=106.0,
+    )
+    prettier_but_dead = manager.add_variant(
+        room_id,
+        candidate.candidate_id,
+        user_id=30,
+        source_ref="authorized:dead",
+        file_size=14_000_000_000,
+        seeds=0,
+        leechers=18,
+        peers=18,
+        metadata={
+            "release_name": {"source": "BluRay"},
+            "verified": {
+                "video": {"codec": "hevc", "width": 3840, "height": 2160, "hdr": ["HDR10"]},
+                "audio_tracks": [{"channels": 8}],
+            },
+        },
+        now=107.0,
+    )
+
+    ranked = manager.ranked_variants(room_id, candidate.candidate_id, now=108.0)
+    assert ranked[0].variant_id == healthy.variant_id
+    assert ranked[-1].variant_id == prettier_but_dead.variant_id
+    assert healthy.swarm_health == {
+        "seeds": 48,
+        "leechers": 12,
+        "peers": 60,
+        "seed_leech_ratio": 4.0,
+        "label": "strong",
+    }
+    assert prettier_but_dead.swarm_health["label"] == "dead"
 
 
 def test_variant_selection_can_use_room_vote_winner() -> None:
