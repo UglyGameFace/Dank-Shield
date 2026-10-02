@@ -1693,6 +1693,9 @@ class ExternalSearchProviderModal(discord.ui.Modal):
         except ValueError as exc:
             return await _private(interaction, f"❌ {exc}")
 
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+
         try:
             applied, _saved = await save_media_source_registry(
                 int(guild.id),
@@ -1700,14 +1703,18 @@ class ExternalSearchProviderModal(discord.ui.Modal):
                 updated=updated,
             )
         except Exception as exc:
-            return await _private(
+            return await _replace(
                 interaction,
-                f"❌ Dank Cinema search-link provider could not save safely: {type(exc).__name__}.",
+                content=f"❌ Dank Cinema search-link provider could not save safely: {type(exc).__name__}.",
+                embed=_sources_embed(current),
+                view=MovieNightSourcesView(int(interaction.user.id)),
             )
         if not applied:
-            return await _private(
+            return await _replace(
                 interaction,
-                "❌ Dank Cinema providers changed in another admin session. Refresh and try again.",
+                content="❌ Dank Cinema providers changed in another admin session. Refresh and try again.",
+                embed=_sources_embed(current),
+                view=MovieNightSourcesView(int(interaction.user.id)),
             )
 
         await _replace(
