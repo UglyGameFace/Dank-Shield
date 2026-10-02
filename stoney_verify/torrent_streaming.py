@@ -542,10 +542,18 @@ class TorrentMediaManager:
         )
 
     def _effective_session_memory_mb(self) -> int:
-        return max(
+        configured = max(
+            32,
+            min(2048, int(self.estimated_session_memory_mb)),
+        )
+        learned = max(
             32,
             min(2048, int(round(float(self._adaptive_session_memory_mb)))),
         )
+        # The operator-configured estimate is a safety floor. Adaptive learning
+        # may raise admission cost when production observations are heavier,
+        # but it must never silently undercut the configured reserve model.
+        return max(configured, learned)
 
     def _record_session_memory_observation(
         self,
