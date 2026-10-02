@@ -2077,7 +2077,52 @@ async def _execute_search_vote(
             view=MovieNightHubView(int(interaction.user.id)),
         )
 
+    catalog_metadata = (
+        vote.payload.get("catalog")
+        if isinstance(vote.payload.get("catalog"), Mapping)
+        else {}
+    )
+
+    active = manager.active_viewers(room)
+    actor_id = (
+        int(vote.proposer_id)
+        if int(vote.proposer_id) in active
+        else int(interaction.user.id)
+    )
+
     if not outcome.variants:
+        if catalog_metadata:
+            title = _compact(catalog_metadata.get("title")) or query
+            candidate = manager.find_candidate_by_title(room.room_id, title)
+            if candidate is None:
+                candidate = manager.nominate(
+                    room.room_id,
+                    user_id=actor_id,
+                    title=title,
+                    metadata={
+                        "search_query": query,
+                        "catalog": dict(catalog_metadata),
+                    },
+                    auto_vote=False,
+                )
+            vote.payload["movie_count"] = 1
+            vote.payload["release_count"] = 0
+            if outcome.errors:
+                vote.payload["source_warnings"] = tuple(outcome.errors[:10])
+            return await _replace(
+                interaction,
+                content=(
+                    f"🎬 Found **{title}** in the movie catalog, but no connected playback "
+                    "provider returned a release. The host can still attach a magnet or .torrent."
+                )[:2000],
+                embed=_candidate_embed(room, candidate),
+                view=MovieCandidateView(
+                    int(interaction.user.id),
+                    room.room_id,
+                    candidate.candidate_id,
+                ),
+            )
+
         detail = "; ".join(outcome.errors[:4]) or "No releases were returned."
         manager.set_vote_execution_error(room.room_id, vote.vote_id, detail)
         return await _replace(
@@ -2087,17 +2132,12 @@ async def _execute_search_vote(
             view=MovieNightHubView(int(interaction.user.id)),
         )
 
-    active = manager.active_viewers(room)
-    actor_id = (
-        int(vote.proposer_id)
-        if int(vote.proposer_id) in active
-        else int(interaction.user.id)
-    )
     movies, releases = _materialize_search_results(
         room,
         outcome,
         proposer_id=actor_id,
         query=query,
+        catalog_metadata=catalog_metadata,
     )
 
     if outcome.errors:
@@ -2173,10 +2213,47 @@ async def _execute_passed_vote(
     await open_movie_night(interaction, replace_message=True)
 
 
+async def _propose_movie_search_vote(
+    interaction: discord.Interaction,
+    *,
+    room_id: str,
+    query: str,
+    catalog_movie: Optional[CatalogMovie] = None,
+) -> None:
+    manager = get_movie_night_manager()
+    payload: dict[str, Any] = {"query": _compact(query)}
+    if catalog_movie is not None:
+        payload["catalog"] = catalog_movie.to_metadata()
+    try:
+        vote = manager.propose_vote(
+            room_id,
+            proposer_id=int(interaction.user.id),
+            action="search",
+            payload=payload,
+        )
+    except Exception as exc:
+        return await _private(interaction, f"❌ Search vote could not start: {exc}")
+
+    room = manager.get(room_id)
+    if room is None:
+        return await _private(interaction, "❌ This Movie Night room no longer exists.")
+    if vote.resolved and vote.passed:
+        return await _execute_passed_vote(interaction, room, vote)
+
+    selected = catalog_movie.title if catalog_movie is not None else _compact(query)
+    if catalog_movie is not None and catalog_movie.year:
+        selected = f"{selected} ({catalog_movie.year})"
+    await _private(
+        interaction,
+        f"🗳️ Search vote opened for **{selected}**. "
+        "Other active viewers can vote from their /movie panel.",
+    )
+
+
 class MovieSearchModal(discord.ui.Modal, title="Search / Vote for a Movie"):
     query = discord.ui.TextInput(
-        label="Movie or show",
-        placeholder="What should the room watch next?",
+        label="Movie title",
+        placeholder="Interstellar, The Dark Knight, Shrek…",
         min_length=1,
         max_length=180,
     )
@@ -2189,25 +2266,99 @@ class MovieSearchModal(discord.ui.Modal, title="Search / Vote for a Movie"):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if int(interaction.user.id) != self.owner_id:
             return await _private(interaction, "❌ This search belongs to another member.")
-        manager = get_movie_night_manager()
-        try:
-            vote = manager.propose_vote(
-                self.room_id,
-                proposer_id=int(interaction.user.id),
-                action="search",
-                payload={"query": _compact(self.query.value)},
+
+        raw_query = _compact(self.query.value)
+        if not tmdb_catalog_ready():
+            return await _propose_movie_search_vote(
+                interaction,
+                room_id=self.room_id,
+                query=raw_query,
             )
-        except Exception as exc:
-            return await _private(interaction, f"❌ Search vote could not start: {exc}")
-        room = manager.get(self.room_id)
-        if room is None:
-            return await _private(interaction, "❌ This Movie Night room no longer exists.")
-        if vote.resolved and vote.passed:
-            return await _execute_passed_vote(interaction, room, vote)
-        await _private(
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        catalog = await search_tmdb_movies(raw_query, limit=8)
+        if not catalog.movies:
+            return await _propose_movie_search_vote(
+                interaction,
+                room_id=self.room_id,
+                query=raw_query,
+            )
+
+        if len(catalog.movies) == 1:
+            movie = catalog.movies[0]
+            return await _propose_movie_search_vote(
+                interaction,
+                room_id=self.room_id,
+                query=movie.title,
+                catalog_movie=movie,
+            )
+
+        movie_by_id = {movie.provider_id: movie for movie in catalog.movies}
+
+        async def picked(pick_interaction: discord.Interaction, value: str) -> None:
+            if value == "__raw__":
+                return await _propose_movie_search_vote(
+                    pick_interaction,
+                    room_id=self.room_id,
+                    query=raw_query,
+                )
+            movie = movie_by_id.get(value)
+            if movie is None:
+                return await _private(pick_interaction, "❌ That catalog result expired.")
+            await _propose_movie_search_vote(
+                pick_interaction,
+                room_id=self.room_id,
+                query=movie.title,
+                catalog_movie=movie,
+            )
+
+        choices = [
+            DankChoice(
+                label=(
+                    f"{movie.title} ({movie.year})"
+                    if movie.year
+                    else movie.title
+                )[:100],
+                value=movie.provider_id,
+                description=(
+                    movie.overview
+                    or movie.original_title
+                    or "TMDB movie result"
+                )[:100],
+                emoji="🎬",
+            )
+            for movie in catalog.movies
+        ]
+        choices.append(
+            DankChoice(
+                label=f'Use exactly "{raw_query}"'[:100],
+                value="__raw__",
+                description="Skip catalog matching and search providers with the text you typed.",
+                emoji="🔎",
+            )
+        )
+
+        picker = DankPickerView(
+            author_id=int(interaction.user.id),
+            choices=choices,
+            on_pick=picked,
+            custom_id=f"dank:movie:catalog:{self.room_id[:16]}",
+            placeholder="Choose the exact movie…",
+            title="Choose the Movie",
+            on_home=lambda back_interaction: open_movie_night(
+                back_interaction,
+                replace_message=True,
+            ),
+            home_label="Movie Night",
+        )
+        await _replace(
             interaction,
-            f"🗳️ Search vote opened for **{_compact(self.query.value)}**. "
-            "Other active viewers can vote from their /movie panel.",
+            content=(
+                "🔎 **Choose the exact movie.** This identifies the title only; playback "
+                "still comes from connected providers or a host-supplied magnet/.torrent."
+            ),
+            embed=None,
+            view=picker,
         )
 
 
