@@ -18,12 +18,14 @@ from stoney_verify.commands_ext import public_toke
 from stoney_verify.commands_ext import public_community_pings as community_ui
 from stoney_verify.commands_ext.public_community_pings import CommunityPingsManagerView
 from stoney_verify.community_pings_service import (
+    CAP_MOVIE_NIGHT_NOTIFY,
     CAP_TOKE_NOTIFY,
     CAP_TOKE_START,
     COMMUNITY_PINGS_KEY,
     CommunityPingGroup,
     CommunityPingOption,
     CommunityPingsConfig,
+    movie_night_role_id,
     parse_community_pings,
     toke_role_ids,
 )
@@ -42,11 +44,12 @@ def _labels(view: discord.ui.View) -> set[str]:
 
 
 def test_public_surface_intentionally_exposes_toke() -> None:
-    assert PUBLIC_GLOBAL_COMMAND_COUNT == 9
+    assert PUBLIC_GLOBAL_COMMAND_COUNT == 10
     assert PUBLIC_GLOBAL_COMMAND_NAMES == (
         "dank",
         "captions",
         "mod",
+        "movie",
         "role",
         "ticket",
         "tickets",
@@ -337,6 +340,7 @@ def test_generic_manager_exposes_add_edit_and_safe_remove_controls() -> None:
         "Member Preview",
         "Toke Starter",
         "Toke Notify",
+        "Movie Night Notify",
         "Toke Channel",
         "Clear Toke Channel",
         "Refresh",
@@ -433,6 +437,49 @@ def test_direct_toke_mapping_survives_save_reload_round_trip() -> None:
         CAP_TOKE_NOTIFY,
     )
     assert toke_role_ids(reloaded) == (101, 101)
+
+
+def test_movie_night_mapping_survives_save_reload_and_preserves_toke() -> None:
+    model = CommunityPingsConfig(
+        revision=7,
+        groups=(CommunityPingGroup(key="alerts", label="Alerts"),),
+        options=(
+            CommunityPingOption(
+                key="movie-night",
+                role_id=303,
+                label="Movie Night",
+                kind="notification",
+                group_key="alerts",
+                capabilities=(CAP_TOKE_NOTIFY,),
+            ),
+        ),
+        source="v2",
+    )
+
+    updated = community_ui._assign_toke_capability(
+        model,
+        option_key="movie-night",
+        capability=CAP_MOVIE_NIGHT_NOTIFY,
+    )
+    reloaded = parse_community_pings(
+        {COMMUNITY_PINGS_KEY: updated.to_payload()}
+    )
+
+    assert movie_night_role_id(reloaded) == 303
+    assert CAP_MOVIE_NIGHT_NOTIFY in reloaded.options[0].capabilities
+    assert CAP_TOKE_NOTIFY in reloaded.options[0].capabilities
+
+
+def test_movie_night_manager_mapping_is_notification_only_and_capability_driven() -> None:
+    source = (
+        ROOT / "stoney_verify/commands_ext/public_community_pings.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'label="Movie Night Notify"' in source
+    assert "CAP_MOVIE_NIGHT_NOTIFY" in source
+    assert 'required_kind="notification"' in source
+    assert "movie_night_role_id(model)" in source
+    assert "Movie Night uses the capability mapping, not the role name." in source
 
 
 def test_toke_manager_has_direct_mapping_instructions() -> None:

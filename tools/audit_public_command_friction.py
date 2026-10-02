@@ -65,6 +65,7 @@ def main() -> int:
         "dank",
         "captions",
         "mod",
+        "movie",
         "role",
         "ticket",
         "tickets",

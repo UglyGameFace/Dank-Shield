@@ -55,3 +55,29 @@ Before release, verify that:
 - non-health routes reject unauthenticated requests
 - the API does not bind wider than intended
 - logs clearly state whether auth is enforced
+
+
+## Public torrent media server
+
+Torrent playback uses a separate media-only HTTP server and must not make the
+structured bot/admin API public merely to serve video.
+
+Production rules:
+
+- keep the structured Bot API on `127.0.0.1:8081` with its existing auth;
+- use a dedicated `DANK_TORRENT_STREAM_SECRET`; do not reuse
+  `BOT_API_SHARED_SECRET`;
+- public `DANK_MEDIA_PUBLIC_BASE_URL` values must use HTTPS;
+- stream links are temporary HMAC-signed URLs and should not be logged or
+  reposted beyond the intended audience;
+- expose only the media server through the public reverse proxy;
+- keep torrent session, disk, peer, bandwidth, metadata, and idle-TTL limits
+  enabled;
+- do not enable torrent index/search/discovery endpoints;
+- accept only user-supplied magnets or .torrent files for lawful,
+  public-domain, or otherwise authorized media.
+
+On Discloud, externally reachable HTTP services are `TYPE=site` applications
+and are proxied through `0.0.0.0:8080`. A `TYPE=bot` deployment does not
+provide an externally reachable port. Do not change deployment type blindly;
+confirm the plan supports Sites before enabling the public media endpoint.

@@ -58,6 +58,7 @@ from ..events_new.members import (
     run_role_member_sync,
 )
 from .channel_builder_routes import register_channel_builder_routes
+from .torrent_stream_routes import register_torrent_admin_routes
 from .queued_handlers import queued_api_handler
 from ..operation_queue import operation_queue_health_summary
 
@@ -1480,6 +1481,7 @@ async def start_api(bot_instance: discord.Client):
 
 
     register_channel_builder_routes(app, sys.modules[__name__])
+    register_torrent_admin_routes(app, sys.modules[__name__])
     runner = web.AppRunner(app)
     await runner.setup()
 

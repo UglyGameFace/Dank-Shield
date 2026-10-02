@@ -9,6 +9,7 @@ from typing import Any, Mapping, Optional
 import discord
 
 from stoney_verify.community_pings_service import (
+    CAP_MOVIE_NIGHT_NOTIFY,
     CAP_TOKE_NOTIFY,
     CAP_TOKE_START,
     COMMUNITY_PINGS_KEY,
@@ -20,6 +21,7 @@ from stoney_verify.community_pings_service import (
     community_member_lock,
     enabled_options,
     move_option,
+    movie_night_role_id,
     option_for_role,
     parse_community_pings,
     toke_role_ids,
@@ -28,6 +30,7 @@ from stoney_verify.community_pings_service import (
     validate_config,
     validate_member_selection,
     with_option,
+    with_unique_capability,
     without_option,
 )
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
@@ -178,41 +181,13 @@ def _assign_toke_capability(
     option_key: str,
     capability: str,
 ) -> CommunityPingsConfig:
-    """Assign one /toke capability to exactly one configured option."""
+    """Compatibility name for the shared unique-capability owner."""
 
-    if capability not in {CAP_TOKE_START, CAP_TOKE_NOTIFY}:
-        raise ValueError("Unsupported /toke capability.")
-
-    wanted = str(option_key or "").strip()
-    selected = next((item for item in model.options if item.key == wanted), None)
-    if selected is None:
-        raise ValueError("That Community & Pings option no longer exists.")
-
-    stripped_options = tuple(
-        replace(
-            item,
-            capabilities=tuple(
-                value for value in item.capabilities if value != capability
-            ),
-        )
-        for item in model.options
+    return with_unique_capability(
+        model,
+        option_key=option_key,
+        capability=capability,
     )
-    stripped_model = CommunityPingsConfig(
-        revision=model.revision,
-        groups=model.groups,
-        options=stripped_options,
-        source=model.source,
-    )
-    stripped_selected = next(
-        item for item in stripped_model.options if item.key == wanted
-    )
-    target = replace(
-        stripped_selected,
-        capabilities=tuple(
-            dict.fromkeys((*stripped_selected.capabilities, capability))
-        ),
-    )
-    return with_option(stripped_model, target)
 
 
 def _manager_embed(
@@ -247,6 +222,19 @@ def _manager_embed(
             f"Preferred channel: {channel.mention if isinstance(channel, discord.TextChannel) else 'Use the command channel'}\n"
             "Use **Toke Starter**, **Toke Notify**, and **Toke Channel** below. "
             "Starter/Notify choose from enabled safe Community & Pings options; use **Add Option** first if a role is not listed."
+        ),
+        inline=False,
+    )
+
+    movie_night_id = movie_night_role_id(model)
+    movie_night_role = guild.get_role(movie_night_id) if movie_night_id else None
+    embed.add_field(
+        name="🎬 Movie Night integration",
+        value=(
+            f"Notify role: {movie_night_role.mention if isinstance(movie_night_role, discord.Role) else 'Not configured'}\n"
+            "Movie Night uses the capability mapping, not the role name. "
+            "The role may be renamed/styled later without breaking notifications. "
+            "Use **Movie Night Notify** to map an enabled notification option."
         ),
         inline=False,
     )
@@ -821,6 +809,11 @@ class CommunityOptionEditorView(_OwnedView):
         _ = button
         await self._toggle_capability(interaction, CAP_TOKE_NOTIFY)
 
+    @discord.ui.button(label="Movie Night Notify", emoji="🎬", style=discord.ButtonStyle.secondary, row=2)
+    async def movie_night_notify(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await self._toggle_capability(interaction, CAP_MOVIE_NIGHT_NOTIFY)
+
     async def _toggle_capability(self, interaction: discord.Interaction, capability: str) -> None:
         if not await _staff_authorized(interaction):
             return
@@ -964,6 +957,8 @@ class CommunityPingsManagerView(_OwnedView):
         capability: str,
         title: str,
         placeholder: str,
+        required_kind: str = "",
+        integration_name: str = "/toke",
     ) -> None:
         if not await _staff_authorized(interaction):
             return
@@ -985,11 +980,13 @@ class CommunityPingsManagerView(_OwnedView):
                 default=capability in option.capabilities,
             )
             for option, role in resolved
+            if not required_kind or option.kind == required_kind
         ]
         if not choices:
             return await _reply(
                 interaction,
-                "No enabled safe Community & Pings options are available. Use **Add Option** first, then choose the /toke mapping.",
+                f"No enabled safe {required_kind or 'Community & Pings'} options are available. "
+                f"Use **Add Option** first, then choose the {integration_name} mapping.",
             )
 
         async def picked(
@@ -1046,8 +1043,8 @@ class CommunityPingsManagerView(_OwnedView):
             embed=discord.Embed(
                 title=title,
                 description=(
-                    "Choose which existing Community & Pings option owns this /toke role. "
-                    "Assigning it here automatically removes this same /toke capability from any previously mapped option."
+                    f"Choose which existing Community & Pings option owns this {integration_name} role. "
+                    "Assigning it here automatically removes the same capability from any previously mapped option."
                 ),
                 color=discord.Color.green(),
             ),
@@ -1360,6 +1357,18 @@ class CommunityPingsManagerView(_OwnedView):
             capability=CAP_TOKE_NOTIFY,
             title="Choose /toke Notification Role",
             placeholder="Choose who receives /toke pings…",
+        )
+
+    @discord.ui.button(label="Movie Night Notify", emoji="🎬", style=discord.ButtonStyle.primary, row=2)
+    async def movie_night_notify(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await self._open_toke_capability_picker(
+            interaction,
+            capability=CAP_MOVIE_NIGHT_NOTIFY,
+            title="Choose Movie Night Notification Role",
+            placeholder="Choose who receives Movie Night pings…",
+            required_kind="notification",
+            integration_name="Movie Night",
         )
 
     @discord.ui.button(label="Clear Toke Channel", emoji="🧹", style=discord.ButtonStyle.secondary, row=2)
