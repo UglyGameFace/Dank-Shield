@@ -1678,7 +1678,7 @@ class ExternalSearchProviderModal(discord.ui.Modal):
         current = parse_media_source_registry(self.baseline)
         try:
             prepared_url = prepare_example_search_url(str(self.endpoint_input.value))
-            render_provider_search_url(prepared_url, "batman")
+            render_provider_search_url(prepared_url, "x" * 180)
             host = str(urlsplit(prepared_url).hostname or "").strip(".")
             fallback_label = host.split(".", 1)[0].replace("-", " ").replace("_", " ").title()
             label = _compact(self.label_input.value, 80) or fallback_label or "External Search"
