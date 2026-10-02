@@ -28,6 +28,7 @@ from stoney_verify.media_metadata import (
     parse_release_name,
     probe_media_file,
 )
+from stoney_verify.startup_guards.process_health import current_rss_mb
 
 
 _PLAYABLE_EXTENSIONS = (
@@ -60,6 +61,11 @@ def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> 
     except Exception:
         value = float(default)
     return max(float(minimum), min(float(maximum), value))
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = str(os.getenv(name, "1" if default else "0") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _safe_name(value: str, fallback: str = "video.mp4") -> str:
@@ -187,6 +193,28 @@ class TorrentBufferPlan:
     download_rate: float
 
 
+@dataclass(frozen=True)
+class MediaCapacitySnapshot:
+    current_rss_mb: float | None
+    process_limit_mb: int
+    protected_reserve_mb: int
+    estimated_session_mb: int
+    hard_session_limit: int
+    soft_session_limit: int
+    active_unique_sessions: int
+    in_flight_starts: int
+    total_leases: int
+    shared_sessions: int
+    memory_headroom_mb: float | None
+    memory_slots_available: int
+    session_slots_available: int
+    free_disk_bytes: int
+    disk_reserve_bytes: int
+    committed_file_bytes: int
+    admission_allowed: bool
+    blocker: str = ""
+
+
 @dataclass
 class TorrentStreamSession:
     token: str
@@ -222,6 +250,9 @@ class TorrentStreamSession:
     metadata_probe_running: bool = False
     metadata_probe_attempts: int = 0
     metadata_last_probe_at: float = 0.0
+    leases: set[str] = field(default_factory=set)
+    unleased_hold: bool = False
+    reuse_hits: int = 0
 
     @property
     def absolute_path(self) -> Path:
@@ -244,7 +275,32 @@ class TorrentMediaManager:
             )
         )
         self.root.mkdir(parents=True, exist_ok=True)
-        self.max_sessions = _env_int("DANK_TORRENT_MAX_SESSIONS", 1, minimum=1, maximum=4)
+        self.max_sessions = _env_int("DANK_TORRENT_MAX_SESSIONS", 4, minimum=1, maximum=16)
+        self.soft_session_limit = _env_int(
+            "DANK_TORRENT_SOFT_SESSION_LIMIT",
+            2,
+            minimum=1,
+            maximum=self.max_sessions,
+        )
+        self.allow_burst_sessions = _env_bool("DANK_TORRENT_ALLOW_BURST", False)
+        self.process_memory_limit_mb = _env_int(
+            "DANK_PROCESS_MEMORY_LIMIT_MB",
+            0,
+            minimum=0,
+            maximum=262144,
+        )
+        self.protected_memory_reserve_mb = _env_int(
+            "DANK_MOVIE_NIGHT_MEMORY_RESERVE_MB",
+            350,
+            minimum=128,
+            maximum=16384,
+        )
+        self.estimated_session_memory_mb = _env_int(
+            "DANK_TORRENT_ESTIMATED_SESSION_MB",
+            96,
+            minimum=32,
+            maximum=2048,
+        )
         self.max_metadata_bytes = _env_int(
             "DANK_TORRENT_MAX_METADATA_BYTES",
             4 * 1024 * 1024,
@@ -253,15 +309,21 @@ class TorrentMediaManager:
         )
         self.max_file_bytes = _env_int(
             "DANK_TORRENT_MAX_FILE_BYTES",
-            8 * 1024 * 1024 * 1024,
+            25 * 1024 * 1024 * 1024,
             minimum=8 * 1024 * 1024,
-            maximum=16 * 1024 * 1024 * 1024,
+            maximum=100 * 1024 * 1024 * 1024,
         )
         self.max_torrent_bytes = _env_int(
             "DANK_TORRENT_MAX_TOTAL_BYTES",
-            12 * 1024 * 1024 * 1024,
+            50 * 1024 * 1024 * 1024,
             minimum=16 * 1024 * 1024,
-            maximum=32 * 1024 * 1024 * 1024,
+            maximum=200 * 1024 * 1024 * 1024,
+        )
+        self.disk_reserve_bytes = _env_int(
+            "DANK_TORRENT_DISK_RESERVE_BYTES",
+            64 * 1024 * 1024 * 1024,
+            minimum=2 * 1024 * 1024 * 1024,
+            maximum=1024 * 1024 * 1024 * 1024,
         )
         self.readahead_bytes = _env_int(
             "DANK_TORRENT_READAHEAD_BYTES",
@@ -334,6 +396,8 @@ class TorrentMediaManager:
             os.getenv("DANK_TORRENT_STREAM_SECRET", "") or ""
         ).strip()
         self._sessions: dict[str, TorrentStreamSession] = {}
+        self._identity_index: dict[str, str] = {}
+        self._identity_locks: dict[str, asyncio.Lock] = {}
         self._starting = 0
         self._replacements_in_flight: set[str] = set()
         self._lock = asyncio.Lock()
