@@ -108,3 +108,45 @@ def test_registry_uses_atomic_guild_config_compare_and_swap() -> None:
     assert "compare_and_swap_guild_config_key" in source
     assert "MEDIA_SOURCE_REGISTRY_KEY" in source
     assert 'source="movie_night_media_source_registry"' in source
+
+
+def test_custom_source_id_is_generated_for_simple_admin_setup() -> None:
+    first = add_custom_source(
+        MediaSourceRegistry(),
+        label="Family Library",
+        endpoint_url="https://library.example.org/search?q={query}",
+        added_by=1,
+    )
+    assert first.sources[0].source_id == "family-library"
+
+    second = add_custom_source(
+        first,
+        label="Family Library",
+        endpoint_url="https://backup.example.org/search?q={query}",
+        added_by=2,
+    )
+    assert [source.source_id for source in second.sources] == [
+        "family-library",
+        "family-library-2",
+    ]
+
+
+def test_explicit_source_id_still_updates_existing_source() -> None:
+    first = add_custom_source(
+        MediaSourceRegistry(),
+        label="Family Library",
+        endpoint_url="https://library.example.org/v1",
+        added_by=1,
+    )
+    source_id = first.sources[0].source_id
+    updated = add_custom_source(
+        first,
+        source_id=source_id,
+        label="Family Library Updated",
+        endpoint_url="https://library.example.org/v2",
+        added_by=2,
+    )
+    assert len(updated.sources) == 1
+    assert updated.sources[0].source_id == source_id
+    assert updated.sources[0].label == "Family Library Updated"
+    assert updated.sources[0].endpoint_url.endswith("/v2")
