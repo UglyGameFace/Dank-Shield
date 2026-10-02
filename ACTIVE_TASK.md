@@ -61,6 +61,24 @@ New regression coverage:
 - unsafe custom source URL rejection;
 - atomic guild-config CAS ownership.
 
+## Community & Pings Movie Night role integration
+
+Movie Night role ownership now uses the existing generic Community & Pings system:
+
+- canonical capability: `movie_night_notify`;
+- runtime role lookup is capability-based, not name-based or hard-coded-ID-based;
+- direct Community & Pings manager control: **Movie Night Notify**;
+- direct mapping is limited to enabled safe notification options;
+- Movie Night role registration helper creates/normalizes a notification option and assigns the capability uniquely;
+- existing prerequisite/exclusivity/removability/group/presentation/unrelated capability state is preserved when mapping an existing role;
+- /toke start/notify capabilities are preserved;
+- role rename/styling after setup is safe;
+- setup can call `movie_night_registration_blocker()` before creating a Discord role so the 25-option cap cannot leave an avoidable orphan role;
+- member opt-in remains owned by the existing Community & Pings picker and per-member lock;
+- no second Movie Night role table/config key is introduced.
+
+Regression coverage now checks capability payload round-trip, unique reassignment, preservation of existing rules and /toke capabilities, direct manager mapping, notification-only filtering, and option-capacity preflight.
+
 ## Hosting constraint found
 
 Current production `discloud.config` is `TYPE=bot`.
