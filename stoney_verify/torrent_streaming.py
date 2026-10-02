@@ -253,10 +253,9 @@ class TorrentMediaManager:
             maximum=21600.0,
         )
         self.public_base_url = str(os.getenv("DANK_MEDIA_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
-        self.stream_secret = (
-            str(os.getenv("DANK_TORRENT_STREAM_SECRET", "") or "").strip()
-            or str(os.getenv("BOT_API_SHARED_SECRET", "") or "").strip()
-        )
+        self.stream_secret = str(
+            os.getenv("DANK_TORRENT_STREAM_SECRET", "") or ""
+        ).strip()
         self._sessions: dict[str, TorrentStreamSession] = {}
         self._starting = 0
         self._lock = asyncio.Lock()
