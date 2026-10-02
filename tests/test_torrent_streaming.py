@@ -111,6 +111,38 @@ def _manager(monkeypatch, tmp_path: Path) -> TorrentMediaManager:
     return TorrentMediaManager(lt_module=_FakeLT())
 
 
+def test_live_torrent_status_exposes_seed_and_leech_counts(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    handle = _FakeHandle()
+    session = TorrentStreamSession(
+        token="swarm",
+        secret="secret",
+        owner_id=2,
+        guild_id=1,
+        source_kind="magnet",
+        source_identity="btih:swarm",
+        save_root=tmp_path,
+        handle=handle,
+        info=object(),
+        file_index=0,
+        file_path="movie.mp4",
+        file_name="movie.mp4",
+        file_size=4096,
+        file_offset=0,
+        piece_length=1024,
+        first_piece=0,
+        last_piece=3,
+        created_at=0.0,
+        last_access=0.0,
+    )
+
+    status = manager.status(session)
+    assert status["peers"] == 3
+    assert status["seeds"] == 1
+    assert status["leechers"] == 2
+    assert status["seed_leech_ratio"] == 0.5
+
+
 def test_magnet_and_torrent_source_detection() -> None:
     magnet = "magnet:?xt=urn:btih:ABC123&dn=Public+Domain"
     assert find_magnet(f"watch this {magnet}") == magnet
