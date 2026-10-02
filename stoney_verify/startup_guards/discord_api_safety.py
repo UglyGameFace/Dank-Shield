@@ -302,11 +302,13 @@ async def fetch_message_with_api_safety(
         name=f"dank-safe-message-fetch-{channel_id}-{resolved_message_id}",
     )
     _MESSAGE_FETCH_INFLIGHT[key] = task
-    try:
-        return await asyncio.shield(task)
-    finally:
-        if _MESSAGE_FETCH_INFLIGHT.get(key) is task and task.done():
+
+    def _cleanup(finished: asyncio.Task[Any]) -> None:
+        if _MESSAGE_FETCH_INFLIGHT.get(key) is finished:
             _MESSAGE_FETCH_INFLIGHT.pop(key, None)
+
+    task.add_done_callback(_cleanup)
+    return await asyncio.shield(task)
 
 
 async def reserve_bulk_discord_rest_requests(
