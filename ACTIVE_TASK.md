@@ -5,62 +5,48 @@
 **DANK-SHIELD-390 — Universal Share Router media resolver and stream playback**
 
 Production baseline:
-`main@3e78288c71579aed340314acaa6640b233bb0f44` (PR #400 merged).
+`main@549cb685ef39b567124150c63ec27fc33fd8a443` (PR #402 merged).
 
 Active branch:
-`feat/390-universal-media-resolver-foundation`
+`feat/390-controlled-media-remux`
 
 Status:
-**Slice 1 active — provider-neutral resolver foundation.**
+**Slice 2 active — controlled HLS/DASH + separate A/V remux/merge.**
 
-### Issue outcome
+### Slice 2 scope
 
-Expand Share Router from the current X-specific extraction path into one canonical media-resolution layer for supported social/video URLs while preserving the existing Share Router route/listener/upload owners.
+1. Reuse the Slice 1 provider-neutral resolver and existing Share Router upload owner.
+2. Preserve separate video/audio candidates instead of collapsing them to link-only fallback.
+3. Add one controlled media remux owner for:
+   - HLS manifests;
+   - DASH manifests;
+   - fragmented provider media where ffmpeg can remux;
+   - separate video + audio progressive streams.
+4. Use fixed `ffmpeg` argv through `asyncio.create_subprocess_exec`; never invoke a shell or accept arbitrary command arguments.
+5. Default to one concurrent remux process, bounded by environment config.
+6. Kill processes on timeout and always clean temporary files.
+7. Enforce the existing Discord upload byte cap after remux and reject empty/oversize output.
+8. Prefer stream-copy/remux only in this slice. No CPU-heavy general re-encoding.
+9. Fall back to the canonical provider link on missing ffmpeg, unsupported codecs/container, timeout, oversize output, or remux failure.
+10. Preserve Share Router privacy, permission, dedupe, attribution, source cleanup, and direct-memes behavior.
+11. Add regressions for fixed argv/no-shell execution, timeout/kill, concurrency, cleanup, separate A/V selection, manifest remux, and fallback.
+12. Run exact-head full CI and final diff review.
 
-The issue will be delivered as validated slices. Do not stack HLS/DASH transcoding, external player work, or unrelated Share Router UI changes into Slice 1 before the resolver foundation is proven.
+### Resource/safety contract
 
-### Slice 1 scope
+- Discloud already installs `ffmpeg` via `APT=canvas, ffmpeg`.
+- Bot RAM is 1495 MB, so this slice deliberately avoids general transcode/re-encode.
+- No arbitrary shell execution.
+- No unbounded output files.
+- No permanent media cache.
+- No second Share Router listener or upload owner.
+- No provider-specific command implementations.
+- Remux failure is non-destructive and link-safe.
 
-1. Replace the X-only yt-dlp extraction seam with one provider-neutral resolver.
-2. Add one provider registry for X/Twitter, TikTok, Instagram/Reels, YouTube/Shorts, Reddit, Twitch, Facebook public video, Vimeo, Streamable, Imgur, Tumblr, Bluesky, Pinterest, and direct media URLs.
-3. Centralize canonical URL normalization and media identity.
-4. Add explicit provider allow/deny policy without per-command provider implementations.
-5. Keep bounded extraction concurrency and bounded positive/negative metadata caching.
-6. Select safe progressive HTTP(S) video/GIF formats under the existing Discord upload byte cap.
-7. Detect HLS/DASH/fragmented-only results and fail open to the canonical provider link in this slice rather than pretending Discord can natively embed arbitrary manifests.
-8. Reject loopback/private/local media destinations before relay.
-9. Preserve existing Discord/CDN attachment fast path, source attribution, dedupe, permissions, upload-size cap, timeout, source cleanup, and direct-memes parity.
-10. Add provider fixture/canonicalization/policy/cache/concurrency/fallback regressions and run exact-head CI.
+### Previous slice
 
-### Current findings
+PR #402 established the universal provider resolver, provider policy, cache/coalescing, public media URL safety, provider health diagnostics, progressive selection, safe extractor headers, and explicit HLS/DASH/separate-stream classification.
 
-- Share Router already has one canonical route listener and one native-video upload owner.
-- The reusable upload/download pieces are already bounded by size/time and fail open to the provider link.
-- The extraction layer is still X-specific: X-only URL discovery, cache, semaphore, and yt-dlp helper.
-- The progressive selector is also coupled to the old trusted-host whitelist, which prevents provider-neutral yt-dlp CDN results.
-- Discord cannot host a custom bot-controlled HTML5 player inside a normal message. Manifest-only HLS/DASH output therefore needs a later controlled transcode/player slice; Slice 1 records that state and preserves the source link.
-- Existing X behavior must remain compatible through wrappers while canonical ownership moves to the provider-neutral resolver.
-
-### Safety contract
-
-- no arbitrary shell execution;
-- no unbounded media buffering;
-- no global provider-specific listeners or commands;
-- no second Share Router runtime owner;
-- no private/loopback/local URL relay;
-- no unsupported manifest presented as successful native playback;
-- no guild-specific hardcoding;
-- no change to member permission/privacy checks.
-
-### Validation / blockers
-
-Pending:
-- implementation and focused tests;
-- exact-head full CI;
-- final branch-vs-main diff review;
-- production canaries for high-value providers after merge.
-
-#384 implementation is merged. Issue #384 remains open only for the production 429 log canary; it is no longer an active implementation task.
 
 ---
 
