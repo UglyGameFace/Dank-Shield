@@ -35,6 +35,32 @@ Build the real torrent media runtime, not a decorative command:
 
 Use is limited to lawful, public-domain, or otherwise user-authorized media.
 
+## Movie Night release selection + custom sources
+
+Expanded requirements now implemented in the active branch:
+
+- release variants carry live `seeds`, `leechers`, total peers, seed/leech ratio, and a human swarm-health label;
+- default release ordering is availability-first when votes are tied: live seeds → seed/leech balance → leech count → verified quality/codec efficiency → file size;
+- viewer votes remain authoritative once the room starts choosing between variants;
+- zero-seed/dead variants sort behind live alternatives by default;
+- one movie candidate can hold multiple quality/release variants instead of one opaque source;
+- variants retain source ID/display label provenance;
+- verified media metadata and release-name inference remain separate truth levels;
+- guilds have a revisioned custom-media-source registry persisted through canonical guild-config CAS;
+- custom sources can be added, updated, enabled/disabled, and removed;
+- custom source URLs require HTTPS and reject embedded credentials plus obvious local/private/reserved literal addresses;
+- the future resolver must revalidate DNS/network destinations at request time before fetching;
+- custom-source results will merge into the same Movie Night variant list and voting/queue model;
+- no temporary duplicate source-config command is being added; the first canonical Movie Night manager owns Sources → Add / Enable / Disable / Remove.
+
+New regression coverage:
+- seed/leech/peer status exposure;
+- seed-first default variant ordering;
+- source provenance retention;
+- custom source parse/add/update/disable/remove round-trip;
+- unsafe custom source URL rejection;
+- atomic guild-config CAS ownership.
+
 ## Hosting constraint found
 
 Current production `discloud.config` is `TYPE=bot`.
