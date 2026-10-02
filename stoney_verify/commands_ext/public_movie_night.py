@@ -2341,11 +2341,19 @@ class MovieNightHubView(_OwnedView):
             None,
         )
         try:
-            vote = existing or manager.propose_vote(
-                room.room_id,
-                proposer_id=int(interaction.user.id),
-                action="end",
-            )
+            if existing is not None:
+                vote = manager.cast_vote(
+                    room.room_id,
+                    existing.vote_id,
+                    user_id=int(interaction.user.id),
+                    approve=True,
+                )
+            else:
+                vote = manager.propose_vote(
+                    room.room_id,
+                    proposer_id=int(interaction.user.id),
+                    action="end",
+                )
         except Exception as exc:
             return await _private(interaction, f"❌ End-session vote could not start: {exc}")
 
