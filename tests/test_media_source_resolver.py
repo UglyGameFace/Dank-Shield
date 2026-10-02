@@ -90,3 +90,38 @@ def test_torrent_metadata_fetch_reuses_public_only_resolver_and_byte_cap() -> No
     assert "_validate_request_url(urljoin(current, location))" in source
     assert "torrent metadata exceeds the configured limit" in source
     assert "use_dns_cache=False" in source
+
+
+
+def test_internet_archive_builtin_search_is_scoped_to_feature_films() -> None:
+    url = resolver._internet_archive_search_url("Night of the Living Dead")
+    assert url.startswith("https://archive.org/advancedsearch.php?")
+    assert "collection%3Afeature_films" in url
+    assert "Night+of+the+Living+Dead" in url
+    assert "output=json" in url
+    assert "rows=12" in url
+
+
+def test_internet_archive_doc_becomes_torrent_variant() -> None:
+    variant = resolver._archive_variant_from_doc(
+        {
+            "identifier": "example_feature_film",
+            "title": "Example Feature Film",
+            "date": "1940",
+            "downloads": 1234,
+        }
+    )
+    assert variant is not None
+    assert variant.source_id == resolver.INTERNET_ARCHIVE_SOURCE_ID
+    assert variant.source_label == resolver.INTERNET_ARCHIVE_SOURCE_LABEL
+    assert variant.source_ref == (
+        "https://archive.org/download/example_feature_film/"
+        "example_feature_film_archive.torrent"
+    )
+    assert variant.metadata["source_reported"]["archive_downloads"] == 1234
+
+
+def test_internet_archive_doc_rejects_unsafe_identifier() -> None:
+    assert resolver._archive_variant_from_doc(
+        {"identifier": "../not-safe", "title": "Bad"}
+    ) is None
