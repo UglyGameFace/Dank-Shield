@@ -32,6 +32,12 @@ from stoney_verify.share_router_resources import (
     is_share_router_design_resource,
     share_source_key,
 )
+from stoney_verify.torrent_streaming import (
+    find_magnet,
+    get_torrent_manager,
+    is_torrent_filename,
+    magnet_identity,
+)
 
 _DATA_LOCK = asyncio.Lock()
 _RECENT_ROUTE_KEYS: dict[tuple[int, int, str], float] = {}
@@ -909,6 +915,104 @@ async def _route_rejection_log(
         pass
 
 
+async def _torrent_attachment_bytes(message: discord.Message) -> bytes:
+    manager = get_torrent_manager()
+    for attachment in list(getattr(message, "attachments", []) or []):
+        if not is_torrent_filename(_safe_str(getattr(attachment, "filename", ""))):
+            continue
+        size = _safe_int(getattr(attachment, "size", 0), 0)
+        if size > manager.max_metadata_bytes:
+            raise ValueError("The .torrent attachment exceeds the configured metadata limit.")
+        payload = await attachment.read()
+        if len(payload) > manager.max_metadata_bytes:
+            raise ValueError("The .torrent attachment exceeds the configured metadata limit.")
+        return bytes(payload)
+    return b""
+
+
+async def _route_torrent_media(
+    message: discord.Message,
+    target: discord.TextChannel,
+) -> Optional[bool]:
+    magnet = find_magnet(_safe_str(getattr(message, "content", "")))
+    torrent_bytes = b"" if magnet else await _torrent_attachment_bytes(message)
+    if not magnet and not torrent_bytes:
+        return None
+
+    manager = get_torrent_manager()
+    if magnet:
+        identity = magnet_identity(magnet)
+    else:
+        import hashlib
+
+        identity = "torrent-file:" + hashlib.sha256(torrent_bytes).hexdigest()
+
+    now = time.monotonic()
+    _prune_recent(now)
+    dedupe_key = (int(message.guild.id), int(target.id), f"torrent:{identity}")
+    if identity and dedupe_key in _RECENT_ROUTE_KEYS:
+        _RECENT_ROUTE_KEYS[dedupe_key] = now
+        return True
+
+    if magnet:
+        session = await manager.start_magnet(
+            magnet,
+            guild_id=int(message.guild.id),
+            owner_id=int(message.author.id),
+        )
+    else:
+        session = await manager.start_torrent_bytes(
+            torrent_bytes,
+            guild_id=int(message.guild.id),
+            owner_id=int(message.author.id),
+        )
+
+    stream_url = manager.stream_url(session)
+    if not stream_url:
+        await manager.remove(session.token)
+        raise RuntimeError(
+            "Torrent metadata loaded, but DANK_MEDIA_PUBLIC_BASE_URL and a stream-signing secret "
+            "must be configured before members can play the stream."
+        )
+
+    status = manager.status(session)
+    embed = discord.Embed(
+        title="🎞️ Torrent Stream Ready",
+        description=(
+            f"**{discord.utils.escape_markdown(session.file_name)}**\n"
+            "Playback starts progressively; Dank Shield prioritizes requested and upcoming pieces."
+        ),
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(
+        name="Media",
+        value=f"{session.file_size / (1024 * 1024):.1f} MiB • {status.get('peers', 0)} peer(s)",
+        inline=False,
+    )
+    embed.add_field(
+        name="Lifecycle",
+        value="The stream is temporary and is removed after the configured idle timeout.",
+        inline=False,
+    )
+
+    await target.send(
+        content=(
+            f"{stream_url}\n\n"
+            f"↪️ Shared by {message.author.mention} via Dank Shield Share Router"
+        )[:2000],
+        embed=embed,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+    if identity:
+        _RECENT_ROUTE_KEYS[dedupe_key] = now
+    _log(
+        f"torrent stream routed guild={message.guild.id} source={message.channel.id} "
+        f"target={target.id} token={session.token} file={session.file_name!r}"
+    )
+    return False
+
+
 async def route_message(message: discord.Message) -> None:
     """Route one human message when its channel is a configured proxy source."""
 
@@ -971,6 +1075,42 @@ async def route_message(message: discord.Message) -> None:
                 target=target,
                 reason=permission_blockers[0],
             )
+            return
+
+        try:
+            torrent_duplicate = await _route_torrent_media(message, target)
+        except Exception as exc:
+            await _route_rejection_log(
+                message,
+                target=target,
+                reason=f"Torrent stream could not start: {type(exc).__name__}: {exc}",
+            )
+            return
+
+        if torrent_duplicate is not None:
+            if bool(route.get("delete_source", True)) and source_perms.manage_messages:
+                try:
+                    await message.delete(reason="Dank Shield Share Router: torrent source routed")
+                except discord.NotFound:
+                    pass
+                except Exception:
+                    pass
+
+            embed = discord.Embed(
+                title=(
+                    "🔁 Share Router Duplicate Cleaned"
+                    if torrent_duplicate
+                    else "🎞️ Share Router Torrent Stream Started"
+                ),
+                color=discord.Color.orange() if torrent_duplicate else discord.Color.blurple(),
+                timestamp=discord.utils.utcnow(),
+            )
+            embed.add_field(name="Source", value=f"{message.channel.mention} ({message.channel.id})", inline=False)
+            embed.add_field(name="Target", value=f"{target.mention} ({target.id})", inline=False)
+            embed.add_field(name="Author", value=f"{message.author.mention} ({message.author.id})", inline=False)
+            if torrent_duplicate:
+                embed.add_field(name="Duplicate", value="Already routed recently, so a second torrent session was not started.", inline=False)
+            await _send_modlog(guild, embed)
             return
 
         text = _message_share_text(message)
