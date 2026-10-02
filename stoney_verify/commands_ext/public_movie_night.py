@@ -619,9 +619,23 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
                 f"{state} **{source.label}** • {mode}\n"
                 f"↳ {source.endpoint_url[:180]}"
             )
+
+        visible_rows: list[str] = []
+        for index, row in enumerate(rows):
+            hidden_after = len(rows) - (index + 1)
+            suffix = f"\n… +{hidden_after} more provider(s)" if hidden_after else ""
+            candidate = "\n".join([*visible_rows, row])
+            if len(candidate) + len(suffix) > 1024:
+                break
+            visible_rows.append(row)
+
+        hidden = len(rows) - len(visible_rows)
+        provider_value = "\n".join(visible_rows)
+        if hidden:
+            provider_value += f"\n… +{hidden} more provider(s)"
         embed.add_field(
             name=f"📚 Custom Providers • {len(registry.sources)}",
-            value="\n".join(rows)[:4000],
+            value=provider_value,
             inline=False,
         )
     embed.add_field(
