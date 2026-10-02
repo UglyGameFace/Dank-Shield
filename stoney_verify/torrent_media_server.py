@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from typing import Optional
+from urllib.parse import urlsplit
 
 from aiohttp import web
 
@@ -41,6 +42,21 @@ def media_server_enabled() -> bool:
     return bool(media_public_base_url())
 
 
+def _validate_public_base_url() -> None:
+    raw = media_public_base_url()
+    if not raw:
+        return
+    parsed = urlsplit(raw)
+    host = str(parsed.hostname or "").lower()
+    if parsed.scheme == "https":
+        return
+    if parsed.scheme == "http" and host in {"127.0.0.1", "localhost", "::1"}:
+        return
+    raise RuntimeError(
+        "DANK_MEDIA_PUBLIC_BASE_URL must use HTTPS outside localhost development."
+    )
+
+
 async def _health(request: web.Request) -> web.Response:
     _ = request
     manager = get_torrent_manager()
@@ -64,6 +80,7 @@ async def start_torrent_media_server() -> bool:
         print("ℹ️ Torrent media server disabled: DANK_MEDIA_PUBLIC_BASE_URL is not configured.")
         return False
 
+    _validate_public_base_url()
     manager = get_torrent_manager()
     if not manager.stream_secret:
         raise RuntimeError(
