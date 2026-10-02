@@ -150,10 +150,15 @@ async def url_resolves_public(value: str, *, timeout_seconds: float = 4.0) -> bo
     return bool(addresses) and all(is_public_address(item) for item in addresses)
 
 
-def public_tcp_connector(*, ttl_dns_cache: int = 60) -> aiohttp.TCPConnector:
+def public_tcp_connector(
+    *,
+    ttl_dns_cache: int = 60,
+    limit: int = 16,
+) -> aiohttp.TCPConnector:
     return aiohttp.TCPConnector(
         resolver=PublicOnlyDNSResolver(),
         ttl_dns_cache=max(0, int(ttl_dns_cache)),
+        limit=max(1, min(int(limit), 32)),
     )
 
 
