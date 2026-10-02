@@ -2,21 +2,37 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-TORRENT-391 — progressive magnet/.torrent media streaming**
+**DANK-SHIELD-MOVIE-NIGHT-393 — dynamic media capacity + shared torrent reuse**
 
-Explicit FORCE SWITCH accepted:
-**Build torrent/magnet progressive streaming**
+PR #392 / issue #391 are merged to production main as:
+`151076e83ec49a8a09a1856fbedd5dd5a61a62df`.
 
-Reason:
-Torrent support is required for Dank Shield's media system and should become the active task now.
+The active task is now issue #393:
+**Scale Movie Night media capacity safely on the current 1.46 GB host**.
 
-Production baseline: `main` = `585f06121ca3c20759aac0bd43f506b82c9cb7f0` (PR #389 merged after exact-head CI passed).
+Active branch:
+`feat/movie-night-dynamic-capacity`
 
-Active branch: `feat/torrent-progressive-streaming`.
+Current host facts supplied by the owner:
+- allocated RAM: **1.46 GB / ~1495 MiB**;
+- ordinary Dank Shield RSS observed before Movie Night load: **~340–390 MB**;
+- current free disk reported by Movie Night setup: **~1.17 TiB**;
+- Discloud plan supports Site deployment, so the same `main.py` process can keep Discord ownership while exposing the media-only HTTP surface.
 
-Active issue: #391 — **Torrent/magnet progressive streaming pipeline**.
+## Current task contract
 
-Active PR: #392 — **Build progressive torrent and magnet streaming** (draft).
+1. Keep one canonical torrent runtime; do not create a second media stack.
+2. Protect the core Discord bot with dynamic memory admission before starting a new **unique** torrent.
+3. Start conservatively at 2 unique torrents on this host; keep a configurable hard ceiling of 4 while burst admission remains disabled by default.
+4. Reuse an existing torrent session/file cache when multiple Movie Night rooms choose the same canonical torrent identity.
+5. Track per-room leases so one guild switching/ending cannot delete a torrent still used by another room.
+6. Preserve independent Movie Night clocks/viewers even when rooms share one torrent session.
+7. Raise the practical disk-backed movie ceiling to 25 GiB, 50 GiB declared torrent budget, and a 64 GiB free-disk safety reserve.
+8. Expose current RSS, protected memory reserve, unique torrent count, leases/shared sessions, admission slots, disk reserve, committed media, and free disk in Movie Night Setup.
+9. Convert the checked-in Discloud profile to the Site-capable 1.46 GB deployment target.
+10. Document the exact production `.env` values and protect secrets.
+11. Add regression coverage for memory rejection, disk rejection, identity reuse, shared lease release, replacement, and capacity telemetry.
+12. The 300,000+ guild scale target is based on concurrent unique media sessions, not installed guild count; the public `/movie` UX must remain compatible with a future external media-worker pool.
 
 ## Scope
 
