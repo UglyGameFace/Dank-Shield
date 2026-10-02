@@ -554,6 +554,15 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
             inline=False,
         )
     embed.add_field(
+        name="Expected JSON",
+        value=(
+            'Example: `{"results":[{"title":"Example Movie","magnet":"magnet:?xt=...",'
+            '"seeds":42,"leechers":5}]}`\n'
+            "An HTTPS `.torrent` URL can be returned as `url` instead of `magnet`."
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="Network safety",
         value=(
             "Sources must use HTTPS, return structured JSON, cannot embed credentials, and cannot "
