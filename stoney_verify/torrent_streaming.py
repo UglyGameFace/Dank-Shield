@@ -253,13 +253,13 @@ class TorrentMediaManager:
         )
         self.max_file_bytes = _env_int(
             "DANK_TORRENT_MAX_FILE_BYTES",
-            2 * 1024 * 1024 * 1024,
+            8 * 1024 * 1024 * 1024,
             minimum=8 * 1024 * 1024,
             maximum=16 * 1024 * 1024 * 1024,
         )
         self.max_torrent_bytes = _env_int(
             "DANK_TORRENT_MAX_TOTAL_BYTES",
-            4 * 1024 * 1024 * 1024,
+            12 * 1024 * 1024 * 1024,
             minimum=16 * 1024 * 1024,
             maximum=32 * 1024 * 1024 * 1024,
         )
@@ -968,6 +968,23 @@ class TorrentMediaManager:
                 return fh.read(length)
 
         return await asyncio.to_thread(_read)
+
+    def storage_status(self) -> dict[str, Any]:
+        try:
+            usage = shutil.disk_usage(self.root)
+            total = int(usage.total)
+            used = int(usage.used)
+            free = int(usage.free)
+        except Exception:
+            total = used = free = 0
+        return {
+            "root": str(self.root),
+            "total_bytes": total,
+            "used_bytes": used,
+            "free_bytes": free,
+            "max_file_bytes": int(self.max_file_bytes),
+            "max_torrent_bytes": int(self.max_torrent_bytes),
+        }
 
     def status(self, session: TorrentStreamSession) -> dict[str, Any]:
         status = session.handle.status()
