@@ -239,6 +239,61 @@ def test_seek_reprioritizes_requested_and_upcoming_pieces(monkeypatch, tmp_path:
     assert priorities[9] == 6
 
 
+def test_full_video_seek_can_reprioritize_near_end_not_just_bootstrap(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.readahead_bytes = 4 * 1024 * 1024
+    handle = _FakeHandle()
+    full_size = 90 * 1024 * 1024
+    piece_length = 1024 * 1024
+    session = TorrentStreamSession(
+        token="full-video",
+        secret="secret",
+        owner_id=2,
+        guild_id=1,
+        source_kind="magnet",
+        source_identity="btih:full",
+        save_root=tmp_path,
+        handle=handle,
+        info=object(),
+        file_index=0,
+        file_path="movie.mp4",
+        file_name="movie.mp4",
+        file_size=full_size,
+        file_offset=0,
+        piece_length=piece_length,
+        first_piece=0,
+        last_piece=(full_size - 1) // piece_length,
+        created_at=0.0,
+        last_access=0.0,
+    )
+
+    seek_start = 82 * 1024 * 1024
+    seek_end = 83 * 1024 * 1024 - 1
+    manager.prioritize_range(session, seek_start, seek_end)
+
+    priorities = dict(handle.piece_updates)
+    assert priorities[82] == 7
+    assert priorities[83] == 6
+    assert priorities[86] == 6
+    assert session.file_size == full_size
+    assert session.last_piece == 89
+
+
+def test_http_ranges_can_address_first_middle_and_final_bytes_of_full_video() -> None:
+    size = 90 * 1024 * 1024
+    assert parse_http_range("bytes=0-1048575", size) == (0, 1048575, True)
+    assert parse_http_range("bytes=47185920-48234495", size) == (
+        47185920,
+        48234495,
+        True,
+    )
+    assert parse_http_range("bytes=-1048576", size) == (
+        size - 1048576,
+        size - 1,
+        True,
+    )
+
+
 def test_wait_range_requires_all_requested_pieces(monkeypatch, tmp_path: Path) -> None:
     manager = _manager(monkeypatch, tmp_path)
     handle = _FakeHandle()
