@@ -168,17 +168,22 @@ async def public_get(
     *,
     headers: Mapping[str, Any] | tuple[tuple[str, str], ...] | None = None,
     max_redirects: int = 4,
+    method: str = "GET",
 ) -> tuple[aiohttp.ClientResponse, str]:
     """GET a public URL and validate every redirect before the next request."""
 
     current = _safe_str(url)
     safe_headers = safe_media_headers(headers)
+    verb = _safe_str(method, "GET").upper()
+    if verb not in {"GET", "HEAD"}:
+        raise ValueError("public_get only supports GET/HEAD")
 
     for _ in range(max(0, int(max_redirects)) + 1):
         if not is_safe_media_download_url(current):
             raise UnsafeMediaURL("media URL is not a safe public HTTP(S) target")
 
-        response = await session.get(
+        response = await session.request(
+            verb,
             current,
             allow_redirects=False,
             headers=safe_headers or None,
