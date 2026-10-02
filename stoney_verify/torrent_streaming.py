@@ -192,7 +192,6 @@ class TorrentStreamSession:
     save_root: Path
     handle: Any
     info: Any
-    candidates: tuple[TorrentFileCandidate, ...]
     file_index: int
     file_path: str
     file_name: str
@@ -203,6 +202,7 @@ class TorrentStreamSession:
     last_piece: int
     created_at: float
     last_access: float
+    candidates: tuple[TorrentFileCandidate, ...] = ()
     smoothed_download_rate: float = 0.0
     smoothed_consume_rate: float = 0.0
     last_request_at: float = 0.0
