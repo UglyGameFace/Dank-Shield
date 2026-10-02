@@ -412,3 +412,54 @@ def test_public_address_helper_rejects_private_and_reserved_ips() -> None:
     assert media.is_public_address("10.0.0.1") is False
     assert media.is_public_address("169.254.169.254") is False
     assert media.is_public_address("::1") is False
+
+
+
+def test_video_only_progressive_format_falls_back_for_later_merge() -> None:
+    info = {
+        "formats": [
+            {
+                "url": "https://cdn.example.com/video-only.mp4",
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "none",
+                "filesize": 5_000_000,
+            }
+        ]
+    }
+    resolved = media.select_media_resolution(
+        info,
+        source_url="https://www.youtube.com/watch?v=abc123",
+        provider="youtube",
+        max_bytes=25_000_000,
+    )
+    assert resolved.delivery == "link"
+    assert resolved.reason == "separate_audio_video_requires_merge"
+
+
+def test_fragmented_https_format_is_not_misclassified_as_progressive() -> None:
+    info = {
+        "formats": [
+            {
+                "url": "https://cdn.example.com/fragments/base.mp4",
+                "manifest_url": "https://cdn.example.com/manifest.mpd",
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "aac",
+                "fragments": [
+                    {"url": "https://cdn.example.com/fragments/1.m4s"},
+                    {"url": "https://cdn.example.com/fragments/2.m4s"},
+                ],
+            }
+        ]
+    }
+    resolved = media.select_media_resolution(
+        info,
+        source_url="https://vimeo.com/123456",
+        provider="vimeo",
+        max_bytes=25_000_000,
+    )
+    assert resolved.delivery == "manifest"
+    assert resolved.media_url == "https://cdn.example.com/manifest.mpd"
