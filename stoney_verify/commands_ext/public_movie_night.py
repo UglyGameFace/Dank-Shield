@@ -31,6 +31,12 @@ from stoney_verify.media_source_registry import (
     save_media_source_registry,
     set_custom_source_enabled,
 )
+from stoney_verify.media_source_resolver import (
+    MediaSourceSearchOutcome,
+    ResolvedMediaVariant,
+    fetch_torrent_metadata,
+    search_custom_media_sources,
+)
 from stoney_verify.movie_night import (
     MovieNightRoom,
     get_movie_night_manager,
@@ -65,6 +71,54 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 def _compact(value: Any, limit: int = 180) -> str:
     return " ".join(str(value or "").split())[:limit]
+
+
+def _format_bytes(value: Any) -> str:
+    size = max(0, _safe_int(value, 0))
+    if size <= 0:
+        return "size unknown"
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    amount = float(size)
+    unit = units[0]
+    for unit in units:
+        if amount < 1024.0 or unit == units[-1]:
+            break
+        amount /= 1024.0
+    return f"{amount:.2f} {unit}"
+
+
+def _release_source_label(metadata: Mapping[str, Any]) -> str:
+    release = metadata.get("release_name")
+    if isinstance(release, Mapping):
+        return _compact(release.get("source") or "Unknown source", 40)
+    return "Unknown source"
+
+
+def _release_hint_label(metadata: Mapping[str, Any]) -> str:
+    release = metadata.get("release_name")
+    if not isinstance(release, Mapping):
+        return ""
+    parts: list[str] = []
+    for key in ("resolution", "video_codec", "audio_codec"):
+        value = _compact(release.get(key), 30)
+        if value and value not in parts:
+            parts.append(value)
+    return " • ".join(parts[:3])
+
+
+def _variant_choice_text(variant: Any) -> tuple[str, str]:
+    metadata = variant.metadata if isinstance(variant.metadata, Mapping) else {}
+    source = _release_source_label(metadata)
+    hint = _release_hint_label(metadata)
+    health = variant.swarm_health
+    label = f"{source} • {_format_bytes(variant.file_size)}"
+    description = (
+        f"Seeds {health['seeds']} • Leeches {health['leechers']} • "
+        f"{variant.source_label or variant.source_id or 'custom source'}"
+    )
+    if hint:
+        description = f"{hint} • {description}"
+    return label[:100], description[:100]
 
 
 async def _private(
