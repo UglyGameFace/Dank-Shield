@@ -327,6 +327,61 @@ async def _search_one(
         await resolver.close()
 
 
+async def fetch_torrent_metadata(
+    source_ref: str,
+    *,
+    max_bytes: int = 4 * 1024 * 1024,
+) -> bytes:
+    """Fetch authorized .torrent metadata without permitting private-network access."""
+
+    current = _validate_request_url(str(source_ref or "").strip())
+    limit = max(64 * 1024, min(int(max_bytes), 16 * 1024 * 1024))
+    resolver = PublicOnlyResolver()
+    connector = aiohttp.TCPConnector(
+        resolver=resolver,
+        use_dns_cache=False,
+        ttl_dns_cache=0,
+        limit=1,
+    )
+    timeout = aiohttp.ClientTimeout(total=8.0, connect=3.0, sock_read=5.0)
+
+    try:
+        async with aiohttp.ClientSession(
+            connector=connector,
+            timeout=timeout,
+            headers={
+                "Accept": "application/x-bittorrent, application/octet-stream",
+                "User-Agent": "DankShield-MovieNight/1.0",
+            },
+        ) as session:
+            for _ in range(4):
+                async with session.get(current, allow_redirects=False) as response:
+                    if response.status in {301, 302, 303, 307, 308}:
+                        location = str(response.headers.get("Location") or "").strip()
+                        if not location:
+                            raise ValueError("torrent redirect had no location")
+                        current = _validate_request_url(urljoin(current, location))
+                        continue
+                    if response.status != 200:
+                        raise ValueError(f"torrent source returned HTTP {response.status}")
+
+                    length = _safe_int(response.headers.get("Content-Length"))
+                    if length > limit:
+                        raise ValueError("torrent metadata exceeds the configured limit")
+
+                    payload = bytearray()
+                    async for chunk in response.content.iter_chunked(64 * 1024):
+                        payload.extend(chunk)
+                        if len(payload) > limit:
+                            raise ValueError("torrent metadata exceeds the configured limit")
+                    if not payload:
+                        raise ValueError("torrent metadata response was empty")
+                    return bytes(payload)
+            raise ValueError("torrent source redirected too many times")
+    finally:
+        await resolver.close()
+
+
 async def search_custom_media_sources(
     guild_id: int,
     query: str,
@@ -380,6 +435,7 @@ async def search_custom_media_sources(
 __all__ = [
     "MediaSourceSearchOutcome",
     "PublicOnlyResolver",
+    "fetch_torrent_metadata",
     "ResolvedMediaVariant",
     "search_custom_media_sources",
 ]
