@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from types import SimpleNamespace
 
 import discord
@@ -165,6 +166,15 @@ def test_external_search_provider_modal_and_result_links() -> None:
 def test_movie_candidate_view_exposes_search_elsewhere() -> None:
     view = movie_ui.MovieCandidateView(1, "room", "candidate")
     assert "Search Elsewhere" in _labels(view)
+
+
+def test_external_search_provider_modal_defers_before_persistence() -> None:
+    source = inspect.getsource(movie_ui.ExternalSearchProviderModal.on_submit)
+    assert "await interaction.response.defer" in source
+    assert source.index("await interaction.response.defer") < source.index(
+        "await save_media_source_registry"
+    )
+    assert "return await _replace(" in source
 
 
 def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -> None:
