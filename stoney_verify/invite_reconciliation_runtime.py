@@ -24,6 +24,7 @@ from stoney_verify.settings_registry import (
 )
 from stoney_verify.startup_recovery_coordinator import startup_recovery_slot
 from stoney_verify.startup_guards.discord_api_safety import (
+    fetch_message_with_api_safety,
     recovery_request_weight,
     reserve_recovery_discord_rest_requests,
 )
@@ -617,10 +618,19 @@ async def _raw_message_edit_worker(
             return
 
         try:
-            # This is live recovery, not startup backfill. Let discord.py own
-            # the route-aware REST limiter so a startup-history budget cannot
-            # delay enforcement of a just-edited message.
-            message = await channel.fetch_message(int(message_id))
+            # This is live recovery, not startup backfill. Keep it outside the
+            # slow aggregate recovery budget, but serialize/coalesce the
+            # same-channel message GET route through the central API-safety
+            # owner so bursts of uncached edits do not manufacture 429s.
+            message = await fetch_message_with_api_safety(
+                channel,
+                int(message_id),
+                label=(
+                    "invite raw edit "
+                    f"guild={guild_id} message={message_id}"
+                ),
+                recovery=False,
+            )
         except (discord.NotFound, discord.Forbidden):
             return
 
@@ -724,7 +734,7 @@ def install_invite_reconciliation(bot: Any) -> bool:
             "active; ready/resume use an invite-specific durable checkpoint, "
             f"scan up to {_AUTO_HISTORY_LIMIT} messages per readable channel, "
             f"live invite events rescan {_EVENT_HISTORY_LIMIT} recent messages, "
-            "and uncached raw edits are fetched directly"
+            "and uncached raw edits share the central per-channel fetch guard"
         )
         return True
     except Exception as exc:
