@@ -65,12 +65,12 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
 
     assert {
         "Start / Join",
-        "Search / Vote",
-        "Results",
-        "Queue",
+        "Find Movie",
+        "Movie Picks",
+        "Watch Queue",
         "Vote Yes",
         "Vote No",
-        "Providers",
+        "Provider Deck",
         "Setup",
         "Community & Pings",
         "End Session",
@@ -79,7 +79,7 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
     } <= _labels(hub)
     assert {
         "Create / Repair Role",
-        "Providers",
+        "Provider Deck",
         "Test Media Endpoint",
         "Community & Pings",
         "Refresh",
@@ -87,8 +87,8 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
         "Close",
     } <= _labels(setup)
     assert {
-        "Add Custom API",
-        "Manage Custom API",
+        "Add Provider",
+        "Manage Providers",
         "Back",
         "Close",
     } <= _labels(sources)
@@ -103,8 +103,8 @@ def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
     add_modal = movie_ui.CustomSourceModal(owner_id=1, baseline={})
     assert len(add_modal.children) == 2
     assert [item.label for item in add_modal.children] == [
-        "Name (optional)",
-        "Paste a working search URL",
+        "Provider name (optional)",
+        "Provider search URL",
     ]
 
     source = CustomMediaSource(
@@ -124,7 +124,13 @@ def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
     assert edit_modal.endpoint_input.default == source.endpoint_url
 
     actions = movie_ui.SourceActionView(1, "family-library")
-    assert {"Edit", "Enable", "Disable", "Remove", "Back"} <= _labels(actions)
+    assert {
+        "Edit Provider",
+        "Enable Provider",
+        "Pause Provider",
+        "Remove Provider",
+        "Back",
+    } <= _labels(actions)
 
 
 def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -> None:
@@ -135,12 +141,19 @@ def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -
         + [str(field.value) for field in embed.fields]
     )
 
-    assert "Regular members only need **Search / Vote**" in rendered
+    assert "Regular members only use **Find Movie**" in rendered
+    assert "Dank Catalog" in rendered
+    assert "Powered by TMDB" in rendered
+    assert "Dank Watch" in rendered
+    assert "JustWatch via TMDB" in rendered
+    assert "Dank Archive" in rendered
     assert "Internet Archive Feature Films" in rendered
+    assert "Dank Direct" in rendered
     assert "Magnet links" in rendered
     assert ".torrent files" in rendered
-    assert "TMDB" in rendered
-    assert "Add Custom API" in _labels(movie_ui.MovieNightSourcesView(1))
+    assert "Dank Provider Lab" in rendered
+    assert "Dank Engine" in rendered
+    assert "Add Provider" in _labels(movie_ui.MovieNightSourcesView(1))
 
 
 def test_candidate_embed_shows_tmdb_watch_availability(monkeypatch) -> None:
@@ -180,11 +193,27 @@ def test_candidate_embed_shows_tmdb_watch_availability(monkeypatch) -> None:
 
     embed = movie_ui._candidate_embed(room, candidate)
     fields = {str(field.name): str(field.value) for field in embed.fields}
-    where = next(value for name, value in fields.items() if name.startswith("Where to watch"))
+    where = next(value for name, value in fields.items() if name.startswith("📡 Dank Watch"))
     assert "Tubi" in where
     assert "Pluto TV" in where
     assert "Plex" in where
     assert "JustWatch via TMDB" in where
+
+
+def test_dank_cinema_branding_is_consistent_across_core_surfaces(monkeypatch) -> None:
+    monkeypatch.delenv("DANK_TMDB_READ_TOKEN", raising=False)
+    providers = movie_ui._sources_embed(MediaSourceRegistry())
+    assert str(providers.title) == "🎞️ Dank Cinema • Provider Deck"
+    assert "Dank Cinema • powered by Dank Shield" in str(providers.footer.text)
+
+    empty_room = movie_ui._room_embed(
+        SimpleNamespace(guild=None, channel=None),
+        None,
+    )
+    assert str(empty_room.title) == "🍿 Dank Cinema"
+
+    search_modal = movie_ui.MovieSearchModal(owner_id=1, room_id="room")
+    assert str(search_modal.title) == "Dank Cinema Search"
 
 
 def test_movie_night_hub_adds_signed_watch_link_when_media_is_active(monkeypatch) -> None:
