@@ -44,11 +44,12 @@ def _labels(view: discord.ui.View) -> set[str]:
 
 
 def test_public_surface_intentionally_exposes_toke() -> None:
-    assert PUBLIC_GLOBAL_COMMAND_COUNT == 9
+    assert PUBLIC_GLOBAL_COMMAND_COUNT == 10
     assert PUBLIC_GLOBAL_COMMAND_NAMES == (
         "dank",
         "captions",
         "mod",
+        "movie",
         "role",
         "ticket",
         "tickets",
