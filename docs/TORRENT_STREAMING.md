@@ -131,7 +131,7 @@ Current production-oriented defaults:
 - metadata wait: 30 seconds
 - idle cleanup: 30 minutes
 - peer connection limit: 80
-- download cap: 8 MiB/s
+- download cap: 16 MiB/s
 - upload cap: 512 KiB/s
 
 ### Shared torrent reuse
