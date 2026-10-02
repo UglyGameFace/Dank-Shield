@@ -1823,18 +1823,41 @@ async def _start_variant_source(
             ),
         )
 
+    latest_room = room_manager.get(current.room_id)
+    if (
+        latest_room is None
+        or latest_room.ended
+        or int(latest_room.host_id) != int(current.host_id)
+        or str(latest_room.stream_token or "") != previous
+    ):
+        await torrent_manager.release_lease(
+            session.token,
+            lease_key,
+            remove_if_unused=True,
+        )
+        return await _replace(
+            interaction,
+            content=(
+                "❌ Movie Night changed while this release was loading, so the stale "
+                "media result was discarded instead of overwriting the newer room state."
+            ),
+            embed=_room_embed(interaction, latest_room) if latest_room is not None else None,
+            view=MovieNightHubView(int(interaction.user.id), latest_room),
+        )
+
     room_manager.select_variant(
-        current.room_id,
+        latest_room.room_id,
         candidate.candidate_id,
         variant_id=variant.variant_id,
     )
     room_manager.set_room_media(
-        current.room_id,
-        host_id=int(current.host_id),
+        latest_room.room_id,
+        host_id=int(latest_room.host_id),
         stream_token=session.token,
         candidate_id=candidate.candidate_id,
         variant_id=variant.variant_id,
     )
+    current = latest_room
 
     merged_meta = dict(variant.metadata or {})
     merged_meta["release_name"] = dict(session.release_metadata or merged_meta.get("release_name") or {})
@@ -2312,13 +2335,43 @@ async def _attach_torrent_media(
             view=MovieNightHubView(int(interaction.user.id)),
         )
 
+    latest_room = room_manager.active_room_for_channel(
+        int(guild.id),
+        int(channel.id),
+    )
     if room is None:
-        room = room_manager.create_room(
-            guild_id=int(guild.id),
-            channel_id=int(channel.id),
-            host_id=int(interaction.user.id),
-            stream_token=session.token,
-        )
+        if latest_room is not None:
+            await manager.release_lease(
+                session.token,
+                lease_key,
+                remove_if_unused=True,
+            )
+            return await interaction.edit_original_response(
+                content=(
+                    "❌ Another Movie Night room started while this torrent was loading. "
+                    "The stale media start was discarded safely."
+                ),
+                embed=_room_embed(interaction, latest_room),
+                view=MovieNightHubView(int(interaction.user.id), latest_room),
+            )
+        try:
+            room = room_manager.create_room(
+                guild_id=int(guild.id),
+                channel_id=int(channel.id),
+                host_id=int(interaction.user.id),
+                stream_token=session.token,
+            )
+        except Exception as exc:
+            await manager.release_lease(
+                session.token,
+                lease_key,
+                remove_if_unused=True,
+            )
+            return await interaction.edit_original_response(
+                content=f"❌ Movie Night room changed while media was loading: {exc}",
+                embed=None,
+                view=MovieNightHubView(int(interaction.user.id)),
+            )
         role = ready["role"]
         if isinstance(role, discord.Role):
             try:
@@ -2326,6 +2379,27 @@ async def _attach_torrent_media(
             except Exception:
                 pass
     else:
+        if (
+            latest_room is None
+            or latest_room.ended
+            or latest_room.room_id != room.room_id
+            or int(latest_room.host_id) != int(interaction.user.id)
+            or str(latest_room.stream_token or "") != previous
+        ):
+            await manager.release_lease(
+                session.token,
+                lease_key,
+                remove_if_unused=True,
+            )
+            return await interaction.edit_original_response(
+                content=(
+                    "❌ Movie Night changed while this torrent was loading, so the stale "
+                    "media result was discarded."
+                ),
+                embed=_room_embed(interaction, latest_room) if latest_room is not None else None,
+                view=MovieNightHubView(int(interaction.user.id), latest_room),
+            )
+        room = latest_room
         room_manager.set_room_media(
             room.room_id,
             host_id=int(interaction.user.id),
