@@ -18,6 +18,12 @@ PLAYBACK_ACTIONS = frozenset({"pause", "resume", "seek", "skip", "end"})
 PROGRAMMING_ACTIONS = frozenset({"search", "nominate", "queue", "play_next", "play_variant"})
 ALL_ACTIONS = PLAYBACK_ACTIONS | PROGRAMMING_ACTIONS
 
+def movie_room_lease_key(guild_id: int, channel_id: int) -> str:
+    """Stable tracked torrent consumer identity for one Movie Night room."""
+
+    return f"movie:{int(guild_id)}:{int(channel_id)}"
+
+
 
 @dataclass
 class ViewerState:
@@ -1127,4 +1133,5 @@ __all__ = [
     "RoomVote",
     "ViewerState",
     "get_movie_night_manager",
+    "movie_room_lease_key",
 ]
