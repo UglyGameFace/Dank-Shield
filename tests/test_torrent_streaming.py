@@ -315,15 +315,20 @@ def test_stream_url_is_signed_and_expiring(monkeypatch, tmp_path: Path) -> None:
     )
 
 
-def test_torrent_runtime_static_contract_keeps_public_stream_signed() -> None:
+def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
     root = Path(__file__).resolve().parents[1]
     server = (root / "stoney_verify/api_new/server.py").read_text(encoding="utf-8")
     routes = (root / "stoney_verify/api_new/torrent_stream_routes.py").read_text(encoding="utf-8")
+    media_server = (root / "stoney_verify/torrent_media_server.py").read_text(encoding="utf-8")
+    app = (root / "stoney_verify/app.py").read_text(encoding="utf-8")
     router = (root / "stoney_verify/share_router_runtime.py").read_text(encoding="utf-8")
 
-    assert 'startswith("/media/torrent/stream/")' in server
-    assert "await is_signed_public_torrent_request(request)" in server
-    assert "register_torrent_stream_routes(app" in server
+    assert "register_torrent_admin_routes(app" in server
+    assert "/media/torrent/stream/" not in server
+    assert "register_torrent_public_routes(app)" in media_server
+    assert 'DANK_MEDIA_BIND_HOST' in media_server
+    assert 'DANK_MEDIA_PORT' in media_server
+    assert "start_torrent_media_server" in app
     assert "parse_http_range(" in routes
     assert '"Accept-Ranges": "bytes"' in routes
     assert "await manager.wait_range(" in routes
@@ -333,3 +338,5 @@ def test_torrent_runtime_static_contract_keeps_public_stream_signed() -> None:
     assert "manager.start_magnet(" in router
     assert "manager.start_torrent_bytes(" in router
     assert "manager.stream_url(session)" in router
+    assert "DANK_MEDIA_PUBLIC_BASE_URL is required" in router
+    assert "DANK_TORRENT_STREAM_SECRET is required" in router
