@@ -814,10 +814,11 @@ class TorrentMediaManager:
             if existing is not None:
                 return existing
 
+            start_rss_mb = current_rss_mb()
             await self._reserve_start(
                 replace_token=replace_token,
                 lease_key=lease_key,
-                request_guild_id=int(guild_id),
+                guild_id=int(guild_id),
             )
             token = secrets.token_urlsafe(18)
             save_root = Path(tempfile.mkdtemp(prefix=f"{token}-", dir=str(self.root)))
@@ -927,6 +928,7 @@ class TorrentMediaManager:
             snapshot = self._capacity_snapshot_unlocked(
                 replace_token=token,
                 lease_key=lease_key,
+                request_guild_id=int(guild_id),
             )
             if not snapshot.admission_allowed:
                 raise RuntimeError(snapshot.blocker)
