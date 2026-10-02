@@ -200,6 +200,9 @@ def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -
     assert ".torrent files" in rendered
     assert "Dank Provider Lab" in rendered
     assert "Dank Engine" in rendered
+    assert "**Add JSON Provider**" in rendered
+    assert "**Add Search Link**" in rendered
+    assert "without scraping it" in rendered
     assert "Add JSON Provider" in _labels(movie_ui.MovieNightSourcesView(1))
     assert "Add Search Link" in _labels(movie_ui.MovieNightSourcesView(1))
 
