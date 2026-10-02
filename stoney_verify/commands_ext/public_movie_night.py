@@ -1597,6 +1597,240 @@ async def open_movie_night_setup(
         await _private(interaction, embed=embed, view=view)
 
 
+async def _start_variant_source(
+    interaction: discord.Interaction,
+    room: MovieNightRoom,
+    candidate_id: str,
+    variant_id: str,
+    *,
+    authorized_by_vote: bool,
+) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return await _private(interaction, "❌ Movie Night only works inside a server.")
+
+    room_manager = get_movie_night_manager()
+    current = room_manager.get(room.room_id)
+    if current is None:
+        return await _private(interaction, "❌ This Movie Night room no longer exists.")
+    candidate = current.candidates.get(str(candidate_id))
+    if candidate is None:
+        return await _private(interaction, "❌ That movie result no longer exists.")
+    variant = candidate.variants.get(str(variant_id))
+    if variant is None:
+        return await _private(interaction, "❌ That release no longer exists.")
+
+    if not authorized_by_vote and int(interaction.user.id) != int(current.host_id):
+        return await _private(
+            interaction,
+            "❌ Only the active host can directly replace the Movie Night media.",
+        )
+
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+    torrent_manager = get_torrent_manager()
+    previous = str(current.stream_token or "")
+    source_ref = str(variant.source_ref or "").strip()
+
+    try:
+        if source_ref.lower().startswith("magnet:?"):
+            clean_magnet = find_magnet(source_ref)
+            if not clean_magnet:
+                raise ValueError("This source returned an invalid magnet link.")
+            session = await torrent_manager.start_magnet(
+                clean_magnet,
+                guild_id=int(guild.id),
+                owner_id=int(current.host_id),
+                replace_token=previous,
+            )
+        elif source_ref.lower().startswith("https://"):
+            payload = await fetch_torrent_metadata(
+                source_ref,
+                max_bytes=torrent_manager.max_metadata_bytes,
+            )
+            session = await torrent_manager.start_torrent_bytes(
+                payload,
+                guild_id=int(guild.id),
+                owner_id=int(current.host_id),
+                replace_token=previous,
+            )
+        else:
+            raise ValueError(
+                "This release is not a supported magnet or HTTPS .torrent source."
+            )
+    except Exception as exc:
+        return await _replace(
+            interaction,
+            content=f"❌ Selected release could not start: {type(exc).__name__}: {exc}",
+            embed=_release_embed(current, candidate, variant),
+            view=MovieReleaseView(
+                int(interaction.user.id),
+                current.room_id,
+                candidate.candidate_id,
+                variant.variant_id,
+            ),
+        )
+
+    stream_url = torrent_manager.stream_url(session)
+    if not stream_url:
+        await torrent_manager.remove(session.token)
+        return await _replace(
+            interaction,
+            content="❌ The torrent started but no signed public stream URL could be created.",
+            embed=_release_embed(current, candidate, variant),
+            view=MovieReleaseView(
+                int(interaction.user.id),
+                current.room_id,
+                candidate.candidate_id,
+                variant.variant_id,
+            ),
+        )
+
+    room_manager.select_variant(
+        current.room_id,
+        candidate.candidate_id,
+        variant_id=variant.variant_id,
+    )
+    room_manager.set_room_media(
+        current.room_id,
+        host_id=int(current.host_id),
+        stream_token=session.token,
+        candidate_id=candidate.candidate_id,
+        variant_id=variant.variant_id,
+    )
+
+    merged_meta = dict(variant.metadata or {})
+    merged_meta["release_name"] = dict(session.release_metadata or merged_meta.get("release_name") or {})
+    if session.verified_metadata:
+        merged_meta["verified"] = dict(session.verified_metadata)
+    variant.metadata = merged_meta
+    variant.file_size = int(session.file_size or variant.file_size)
+
+    if previous and previous != session.token:
+        await torrent_manager.remove(previous)
+
+    await _replace(
+        interaction,
+        content=(
+            f"✅ Now playing **{candidate.title}** • "
+            f"{_release_source_label(variant.metadata)} • {_format_bytes(variant.file_size)}\n"
+            f"Full progressive stream: {stream_url}"
+        )[:2000],
+        embed=_release_embed(current, candidate, variant),
+        view=MovieNightHubView(int(interaction.user.id)),
+    )
+
+
+async def _execute_search_vote(
+    interaction: discord.Interaction,
+    room: MovieNightRoom,
+    vote: Any,
+) -> None:
+    manager = get_movie_night_manager()
+    if not manager.claim_vote_execution(room.room_id, vote.vote_id):
+        return await open_movie_results(interaction, room.room_id, replace_message=True)
+
+    query = _compact(vote.payload.get("query"))
+    if not query:
+        manager.set_vote_execution_error(room.room_id, vote.vote_id, "Search query was empty.")
+        return await _private(interaction, "❌ The approved Movie Night search query was empty.")
+
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+    try:
+        outcome = await search_custom_media_sources(int(room.guild_id), query)
+    except Exception as exc:
+        manager.set_vote_execution_error(
+            room.room_id,
+            vote.vote_id,
+            f"{type(exc).__name__}: {exc}",
+        )
+        return await _replace(
+            interaction,
+            content=f"❌ Movie Night source search failed: {type(exc).__name__}: {exc}",
+            embed=_room_embed(interaction, room),
+            view=MovieNightHubView(int(interaction.user.id)),
+        )
+
+    if not outcome.variants:
+        detail = "; ".join(outcome.errors[:4]) or "No releases were returned."
+        manager.set_vote_execution_error(room.room_id, vote.vote_id, detail)
+        return await _replace(
+            interaction,
+            content=f"ℹ️ No playable releases found for **{query}**. {detail}"[:2000],
+            embed=_room_embed(interaction, room),
+            view=MovieNightHubView(int(interaction.user.id)),
+        )
+
+    active = manager.active_viewers(room)
+    actor_id = (
+        int(vote.proposer_id)
+        if int(vote.proposer_id) in active
+        else int(interaction.user.id)
+    )
+    movies, releases = _materialize_search_results(
+        room,
+        outcome,
+        proposer_id=actor_id,
+        query=query,
+    )
+
+    if outcome.errors:
+        vote.payload["source_warnings"] = tuple(outcome.errors[:10])
+    vote.payload["movie_count"] = int(movies)
+    vote.payload["release_count"] = int(releases)
+
+    await open_movie_results(interaction, room.room_id, replace_message=True)
+
+
+async def _execute_passed_vote(
+    interaction: discord.Interaction,
+    room: MovieNightRoom,
+    vote: Any,
+) -> None:
+    if not getattr(vote, "resolved", False) or not getattr(vote, "passed", False):
+        return await open_movie_night(interaction, replace_message=True)
+
+    if vote.action == "search":
+        return await _execute_search_vote(interaction, room, vote)
+
+    if vote.action == "play_variant":
+        manager = get_movie_night_manager()
+        if not manager.claim_vote_execution(room.room_id, vote.vote_id):
+            return await open_movie_night(interaction, replace_message=True)
+        candidate_id = str(vote.payload.get("candidate_id") or "")
+        variant_id = str(vote.payload.get("variant_id") or "")
+        if not candidate_id or not variant_id:
+            manager.set_vote_execution_error(
+                room.room_id,
+                vote.vote_id,
+                "Approved playback vote had no release identity.",
+            )
+            return await _private(
+                interaction,
+                "❌ Approved playback vote did not contain a valid release.",
+            )
+        try:
+            return await _start_variant_source(
+                interaction,
+                room,
+                candidate_id,
+                variant_id,
+                authorized_by_vote=True,
+            )
+        except Exception as exc:
+            manager.set_vote_execution_error(
+                room.room_id,
+                vote.vote_id,
+                f"{type(exc).__name__}: {exc}",
+            )
+            raise
+
+    await open_movie_night(interaction, replace_message=True)
+
+
 class MovieSearchModal(discord.ui.Modal, title="Search / Vote for a Movie"):
     query = discord.ui.TextInput(
         label="Movie or show",
