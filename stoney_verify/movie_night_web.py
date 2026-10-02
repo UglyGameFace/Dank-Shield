@@ -137,7 +137,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         if isinstance(release, dict):
             source = str(release.get("source") or "")
 
-    stream_url = torrent_manager.stream_url(session, ttl_seconds=3600) if session is not None else ""
+    stream_url = torrent_manager.stream_url(session, ttl_seconds=21600) if session is not None else ""
     torrent_status = torrent_manager.status(session) if session is not None else {}
 
     return {
