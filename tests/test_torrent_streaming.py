@@ -838,3 +838,91 @@ def test_in_flight_start_reserves_estimated_memory_before_rss_moves(monkeypatch,
     assert snap.memory_headroom_mb == pytest.approx(100.0)
     assert snap.memory_slots_available == 0
     assert not snap.admission_allowed
+
+
+
+def test_per_guild_unique_limit_prevents_one_server_consuming_all_slots(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.max_sessions = 4
+    manager.soft_session_limit = 4
+    manager.max_unique_per_guild = 1
+    manager.disk_reserve_bytes = 0
+    monkeypatch.setattr(torrent_streaming, "current_rss_mb", lambda: 200.0)
+
+    session = _shared_session(tmp_path, token="guild-one")
+    session.source_identity = "btih:guild-one"
+    session.leases.add("movie:1:10")
+    session.lease_guild_ids["movie:1:10"] = 1
+    manager._sessions[session.token] = session
+    manager._identity_index[session.source_identity] = session.token
+
+    guild_one = manager.capacity_snapshot(guild_id=1)
+    assert not guild_one.admission_allowed
+    assert guild_one.guild_unique_sessions == 1
+    assert guild_one.guild_slots_available == 0
+    assert "this server reached" in guild_one.blocker.lower()
+
+    guild_two = manager.capacity_snapshot(guild_id=2)
+    assert guild_two.admission_allowed
+    assert guild_two.guild_unique_sessions == 0
+    assert guild_two.guild_slots_available == 1
+
+
+def test_existing_identical_torrent_can_be_shared_even_when_guild_unique_limit_is_full(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.max_sessions = 4
+    manager.soft_session_limit = 4
+    manager.max_unique_per_guild = 1
+    manager.disk_reserve_bytes = 0
+    monkeypatch.setattr(torrent_streaming, "current_rss_mb", lambda: 200.0)
+
+    existing = _shared_session(tmp_path, token="existing")
+    existing.leases.add("movie:1:10")
+    existing.lease_guild_ids["movie:1:10"] = 1
+    manager._sessions[existing.token] = existing
+    manager._identity_index[existing.source_identity] = existing.token
+
+    reused = asyncio.run(
+        manager._reuse_session(
+            existing.source_identity,
+            lease_key="movie:1:20",
+            guild_id=1,
+        )
+    )
+    assert reused is existing
+    assert existing.leases == {"movie:1:10", "movie:1:20"}
+    assert existing.lease_guild_ids["movie:1:20"] == 1
+    assert len(manager._sessions) == 1
+
+
+def test_session_memory_estimate_learns_from_clean_rss_delta(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.max_sessions = 4
+    manager.soft_session_limit = 4
+    manager._adaptive_session_memory_mb = 96.0
+    manager._session_memory_samples = 0
+    manager._starting = 1
+    monkeypatch.setattr(torrent_streaming, "current_rss_mb", lambda: 520.0)
+
+    manager._record_session_memory_observation(400.0)
+
+    assert manager._session_memory_samples == 1
+    # 75% of the 96 MiB prior + 25% of the observed 120 MiB delta.
+    assert manager._effective_session_memory_mb() == 102
+
+    snap = manager.capacity_snapshot()
+    assert snap.estimated_session_mb == 102
+    assert snap.memory_samples == 1
+
+
+def test_overlapping_starts_do_not_pollute_adaptive_memory_estimate(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager._adaptive_session_memory_mb = 96.0
+    manager._session_memory_samples = 0
+    manager._starting = 2
+    monkeypatch.setattr(torrent_streaming, "current_rss_mb", lambda: 700.0)
+
+    manager._record_session_memory_observation(400.0)
+
+    assert manager._session_memory_samples == 0
+    assert manager._effective_session_memory_mb() == 96
