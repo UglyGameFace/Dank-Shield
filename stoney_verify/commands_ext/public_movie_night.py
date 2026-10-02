@@ -40,6 +40,11 @@ from stoney_verify.media_source_resolver import (
     probe_custom_media_source,
     search_movie_sources,
 )
+from stoney_verify.movie_catalog import (
+    CatalogMovie,
+    search_tmdb_movies,
+    tmdb_catalog_ready,
+)
 from stoney_verify.movie_night import (
     MovieNightRoom,
     get_movie_night_manager,
@@ -483,12 +488,13 @@ def _setup_embed(
         )
 
     embed.add_field(
-        name="6 • Movie search sources",
+        name="6 • Movie providers",
         value=(
-            f"✅ Built-in: **{INTERNET_ARCHIVE_SOURCE_LABEL}**\n"
-            f"Custom APIs: **{ready['sources']}** configured • **{ready['enabled_sources']}** enabled\n"
-            "Built-in title search needs no feed URL or API key. Direct magnet and .torrent "
-            "playback also needs no source setup."
+            f"{'✅' if tmdb_catalog_ready() else '⚠️'} Catalog: **TMDB** "
+            f"({'connected' if tmdb_catalog_ready() else 'bot token not configured'})\n"
+            f"✅ Playable built-in: **{INTERNET_ARCHIVE_SOURCE_LABEL}**\n"
+            f"✅ Direct input: **magnet links + .torrent files**\n"
+            f"Custom APIs: **{ready['sources']}** configured • **{ready['enabled_sources']}** enabled"
         ),
         inline=False,
     )
@@ -523,71 +529,78 @@ async def _sources_state(
 
 
 def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
+    catalog_ready = tmdb_catalog_ready()
     embed = discord.Embed(
-        title="🎞️ Movie Night Sources",
+        title="🎞️ Movie Night Providers",
         description=(
-            "**Movie search works without adding a feed.** Dank Shield includes a built-in "
-            "public-domain-focused movie source, and direct magnet / .torrent playback still "
-            "needs no source setup."
+            "Regular members only need **Search / Vote**. Providers, catalog matching, "
+            "magnets, and .torrent plumbing stay behind the scenes."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="✅ Easiest: just search",
+        name="🔎 Movie catalog",
         value=(
-            f"**{INTERNET_ARCHIVE_SOURCE_LABEL}** is available automatically.\n"
-            "Start a room → **Search / Vote** → type the movie title. No API key or feed URL."
+            f"{'✅' if catalog_ready else '⚠️'} **TMDB** • "
+            f"{'connected for exact title/year matching' if catalog_ready else 'not connected by the bot owner'}\n"
+            "TMDB identifies the exact movie; it does **not** provide the movie file."
         ),
         inline=False,
     )
     embed.add_field(
-        name="🧲 Already have a magnet or .torrent?",
+        name="🎬 Playable built-in",
         value=(
-            "Skip Sources completely. Use `/movie magnet:<link>` or attach the `.torrent` "
-            "with `/movie torrent:<file>`."
+            f"✅ **{INTERNET_ARCHIVE_SOURCE_LABEL}** • no API key or server setup.\n"
+            "This is public-domain-focused, so modern catalog matches may still need another "
+            "authorized media source."
         ),
         inline=False,
     )
     embed.add_field(
-        name="⚙️ Advanced: add your own search API",
+        name="🧲 Direct media",
         value=(
-            "Only use this for an authorized **HTTPS JSON search API/feed** you control or may use.\n"
-            "1️⃣ Search that API for **Batman** in your browser/service.\n"
-            "2️⃣ Copy the resulting search URL.\n"
+            "✅ **Magnet links** • /movie magnet:<link>\n"
+            "✅ **.torrent files** • /movie torrent:<file>\n"
+            "These bypass provider search entirely and remain available to the Movie Night host."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="⚙️ Advanced custom provider",
+        value=(
+            "For an authorized **HTTPS JSON search API/feed** you control or may use:\n"
+            "1️⃣ Search it once for **Batman**.\n"
+            "2️⃣ Copy that working search URL.\n"
             "3️⃣ Tap **Add Custom API** and paste it.\n"
-            "Dank Shield detects common `q=`, `query=`, `search=`, `term=`, `keyword=`, or `s=` "
-            "parameters, converts the URL into a reusable search, and tests it before saving."
+            "Dank Shield detects common search parameters and tests the endpoint before saving."
         ),
         inline=False,
     )
     if not registry.sources:
         embed.add_field(
             name="📚 Custom APIs",
-            value="None added. That is completely fine; built-in search still works.",
+            value="None added. Built-in search and direct magnet/.torrent playback still work.",
             inline=False,
         )
     else:
-        lines = []
+        rows = []
         for source in registry.sources:
             state = "✅" if source.enabled else "⏸️"
-            lines.append(
-                f"{state} **{source.label}**\n"
-                f"↳ {source.endpoint_url[:180]}"
-            )
+            rows.append(f"{state} **{source.label}**\n↳ {source.endpoint_url[:180]}")
         embed.add_field(
             name=f"📚 Custom APIs • {len(registry.sources)}",
-            value="\n".join(lines)[:4000],
+            value="\n".join(rows)[:4000],
             inline=False,
         )
     embed.add_field(
         name="🔒 Custom API rule",
         value=(
-            "A normal website page is not a feed. Custom APIs must use HTTPS and return JSON. "
+            "A normal website page is not an API. Custom providers must use HTTPS and return JSON. "
             "Do not put passwords, API secrets, or private-network addresses in the URL."
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Built-in search ready • custom revision {registry.revision}")
+    embed.set_footer(text=f"Provider hub • custom revision {registry.revision}")
     return embed
 
 
