@@ -108,6 +108,62 @@ def test_member_message_cannot_smuggle_mass_mentions() -> None:
     assert len(public_toke._clean_member_message("x" * 500)) == 180
 
 
+def test_toke_media_url_validation_and_direct_detection() -> None:
+    direct = "https://media.tenor.com/example/party.gif"
+    assert public_toke._clean_media_url(f" <{direct}> ") == direct
+    assert public_toke._is_direct_media_url(direct)
+    assert public_toke._is_direct_media_url(
+        "https://cdn.discordapp.com/attachments/1/2/reaction.webp?ex=123"
+    )
+    assert public_toke._is_direct_media_url(
+        "https://media1.giphy.com/media/example/giphy.gif"
+    )
+    assert not public_toke._is_direct_media_url(
+        "https://tenor.com/view/example-gif-123456"
+    )
+
+    for invalid in ("not-a-url", "ftp://example.com/file.gif", "https://example.com/a b.gif"):
+        try:
+            public_toke._clean_media_url(invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Expected invalid media URL: {invalid}")
+
+
+def test_toke_upload_accepts_only_supported_image_media() -> None:
+    assert public_toke._attachment_is_supported_media(
+        SimpleNamespace(content_type="image/gif", filename="reaction.bin")
+    )
+    assert public_toke._attachment_is_supported_media(
+        SimpleNamespace(content_type="application/octet-stream", filename="reaction.webp")
+    )
+    assert public_toke._attachment_is_supported_media(
+        SimpleNamespace(content_type="", filename="photo.JPG")
+    )
+    assert not public_toke._attachment_is_supported_media(
+        SimpleNamespace(content_type="video/mp4", filename="clip.mp4")
+    )
+    assert not public_toke._attachment_is_supported_media(
+        SimpleNamespace(content_type="image/svg+xml", filename="vector.svg")
+    )
+
+
+def test_toke_media_send_path_keeps_one_canonical_post() -> None:
+    source = Path(public_toke.__file__).read_text(encoding="utf-8")
+
+    assert "upload: Optional[discord.Attachment] = None" in source
+    assert 'media="Optional image/GIF URL' in source
+    assert "Choose either a media URL or an upload, not both." in source
+    assert 'embed.set_image(url=f"attachment://{upload_file.filename}")' in source
+    assert "elif direct_media:" in source
+    assert "embed.set_image(url=clean_media)" in source
+    assert 'send_content += f"\\n{clean_media}"' in source
+    assert 'send_payload["file"] = upload_file' in source
+    assert "await channel.send(**send_payload)" in source
+    assert "aiohttp" not in source
+
+
 def test_toke_allowed_mentions_only_serializes_selected_role() -> None:
     role = discord.Object(id=123456789012345678)
     payload = public_toke._toke_allowed_mentions(role).to_dict()
