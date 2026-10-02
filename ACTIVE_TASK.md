@@ -46,6 +46,7 @@ Status:
   - optionally reserves one slot from the existing recovery REST budget;
   - deliberately adds **no retry loop**; discord.py continues to own real route/bucket 429 retry behavior;
   - shields the shared in-flight request from cancellation by one waiter;
+  - waits for aggregate recovery capacity **before** taking the per-channel lock, so a budget-throttled startup fetch cannot block live guarded traffic in that channel;
   - removes completed in-flight entries and idle per-channel locks so the state cannot grow forever with server/channel count;
   - exposes a small diagnostic snapshot for guarded channels, inflight requests, and coalesced requests.
 - `stoney_verify/invite_reconciliation_runtime.py`
@@ -63,6 +64,7 @@ Status:
   - proves different channels remain parallel;
   - proves identical concurrent message requests collapse to one REST call;
   - proves recovery callers reserve the existing aggregate budget and live callers do not;
+  - proves a recovery-budget wait does not hold the same-channel lock ahead of live traffic;
   - proves inflight state and idle channel locks clean up.
 - `tests/test_startup_recovery_scaling.py`
   - locks the Invite Shield raw-edit live path to the central guard without startup pacing;
