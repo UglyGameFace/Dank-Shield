@@ -24,6 +24,15 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, quote, urlsplit
 
+from stoney_verify.media_session_votes import (
+    ACTION_END_STREAM,
+    ACTION_REBUFFER,
+    ACTION_SWITCH_FILE,
+    MediaVote,
+    MediaVoteManager,
+)
+
+
 _PLAYABLE_EXTENSIONS = (
     ".mp4",
     ".m4v",
@@ -323,6 +332,7 @@ class TorrentMediaManager:
             os.getenv("DANK_TORRENT_STREAM_SECRET", "") or ""
         ).strip()
         self._sessions: dict[str, TorrentStreamSession] = {}
+        self._votes: dict[str, MediaVoteManager] = {}
         self._starting = 0
         self._lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task[Any]] = None
@@ -563,6 +573,7 @@ class TorrentMediaManager:
 
         async with self._lock:
             self._sessions[token] = session
+            self._votes[token] = MediaVoteManager(owner_id=session.owner_id)
         return session
 
     def _select_candidate(
@@ -621,6 +632,95 @@ class TorrentMediaManager:
 
         self._select_candidate(session, selected)
         return session
+
+    async def vote_manager(self, token: str) -> MediaVoteManager:
+        async with self._lock:
+            manager = self._votes.get(str(token or ""))
+        if manager is None:
+            raise LookupError("Torrent media vote session not found.")
+        return manager
+
+    async def host_touch(self, token: str, user_id: int) -> bool:
+        votes = await self.vote_manager(token)
+        return votes.host_touch(int(user_id))
+
+    async def set_host_away(
+        self,
+        token: str,
+        user_id: int,
+        *,
+        away: bool = True,
+    ) -> bool:
+        votes = await self.vote_manager(token)
+        return votes.set_host_away(int(user_id), away)
+
+    async def host_reclaim(self, token: str, user_id: int) -> bool:
+        votes = await self.vote_manager(token)
+        return votes.host_reclaim(int(user_id))
+
+    async def start_action_vote(
+        self,
+        token: str,
+        *,
+        user_id: int,
+        action: str,
+        payload: Optional[dict[str, Any]] = None,
+        destructive: Optional[bool] = None,
+    ) -> MediaVote:
+        votes = await self.vote_manager(token)
+        return votes.start_vote(
+            user_id=int(user_id),
+            action=action,
+            payload=payload,
+            destructive=destructive,
+        )
+
+    async def cast_action_vote(
+        self,
+        token: str,
+        *,
+        user_id: int,
+        approve: bool,
+    ) -> MediaVote:
+        votes = await self.vote_manager(token)
+        return votes.cast(user_id=int(user_id), approve=bool(approve))
+
+    async def consume_passed_action(
+        self,
+        token: str,
+        *,
+        eligible_count: int,
+    ) -> Optional[MediaVote]:
+        votes = await self.vote_manager(token)
+        vote = votes.consume_if_passed(eligible_count=max(1, int(eligible_count)))
+        if vote is None:
+            return None
+
+        if vote.action == ACTION_SWITCH_FILE:
+            file_index = int(vote.payload.get("file_index", -1))
+            await self.select_file(token, file_index)
+        elif vote.action == ACTION_REBUFFER:
+            session = await self.get(token)
+            if session is not None:
+                session.stall_count = max(2, int(session.stall_count))
+                session.smoothed_download_rate = 0.0
+                session.smoothed_consume_rate = 0.0
+                self.prioritize_range(
+                    session,
+                    0,
+                    min(session.file_size - 1, self.bootstrap_bytes - 1),
+                    readahead_bytes=max(
+                        self.min_readahead_bytes,
+                        session.adaptive_readahead_bytes,
+                    ),
+                )
+        elif vote.action == ACTION_END_STREAM:
+            await self.remove(token)
+
+        # Search/play-result/queue/play-next actions are intentionally returned
+        # untouched for the universal media resolver (#390) to execute. The
+        # torrent owner does not grow a second provider-search implementation.
+        return vote
 
     def prioritize_range(
         self,
@@ -929,6 +1029,7 @@ class TorrentMediaManager:
     async def remove(self, token: str) -> bool:
         async with self._lock:
             session = self._sessions.pop(str(token or ""), None)
+            self._votes.pop(str(token or ""), None)
         if session is None:
             return False
         self._safe_remove_handle(session.handle)
