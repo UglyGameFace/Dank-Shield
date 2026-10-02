@@ -57,6 +57,7 @@ _TRUSTED_VIDEO_HOSTS = {
     "media.tenor.com",
     "i.giphy.com",
 }
+_MEMES_SHARE_SOURCE_KEY = "share-memes"
 def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
     try:
         value = int(str(os.getenv(name, str(default)) or default).strip())
@@ -870,6 +871,57 @@ def _message_share_text(message: discord.Message) -> str:
     return "\n".join(part for part in parts if part).strip()
 
 
+def _configured_share_target_id(
+    guild: discord.Guild,
+    routes: list[dict[str, Any]],
+    source_key: str,
+) -> int:
+    wanted = share_source_key(source_key)
+    if wanted is None:
+        return 0
+
+    for route in routes:
+        if not bool(route.get("enabled", True)):
+            continue
+        source_id = _safe_int(route.get("source_channel_id"), 0)
+        target_id = _safe_int(route.get("target_channel_id"), 0)
+        if source_id <= 0 or target_id <= 0:
+            continue
+        source = guild.get_channel(source_id)
+        if source is None:
+            continue
+        if share_source_key(getattr(source, "name", "")) != wanted:
+            continue
+        if not is_share_router_design_resource(source):
+            continue
+        return target_id
+    return 0
+
+
+def _message_has_inline_video(message: discord.Message) -> bool:
+    try:
+        for attachment in list(getattr(message, "attachments", []) or []):
+            content_type = _safe_str(getattr(attachment, "content_type", "")).lower()
+            filename = _safe_str(getattr(attachment, "filename", "")).lower()
+            if content_type.startswith("video/") or filename.endswith(_VIDEO_EXTENSIONS):
+                return True
+    except Exception:
+        pass
+
+    try:
+        for embed in list(getattr(message, "embeds", []) or []):
+            video = getattr(embed, "video", None)
+            if video is None:
+                continue
+            if _safe_str(getattr(video, "proxy_url", None)) or _safe_str(
+                getattr(video, "url", None)
+            ):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _dedupe_key(text: str) -> str:
     urls = URL_RE.findall(text or "")
     if urls:
@@ -914,6 +966,86 @@ async def _route_rejection_log(
         await _send_modlog(message.guild, embed)
     except Exception:
         pass
+
+
+async def _relay_direct_memes_video(
+    message: discord.Message,
+    routes: list[dict[str, Any]],
+) -> bool:
+    """Relay one supported direct memes-channel video without touching the source post."""
+
+    guild = message.guild
+    channel = message.channel
+    if guild is None:
+        return False
+
+    memes_target_id = _configured_share_target_id(
+        guild,
+        routes,
+        _MEMES_SHARE_SOURCE_KEY,
+    )
+    if memes_target_id <= 0 or int(getattr(channel, "id", 0) or 0) != memes_target_id:
+        return False
+
+    text = _message_share_text(message)
+    if not text:
+        return True
+
+    now = time.monotonic()
+    _prune_recent(now)
+    key_text = _dedupe_key(text)
+    dedupe = (int(guild.id), int(memes_target_id), key_text)
+    if key_text and dedupe in _RECENT_ROUTE_KEYS:
+        _RECENT_ROUTE_KEYS[dedupe] = now
+        return True
+
+    # Native video attachments or Discord video embeds are already playable in
+    # place. Count them as handled so the equivalent Share Router source does
+    # not create a second copy in the same configured memes destination.
+    if _message_has_inline_video(message):
+        if key_text:
+            _RECENT_ROUTE_KEYS[dedupe] = now
+        return True
+
+    native_video = await _prepare_native_video(message, channel, text)
+    if native_video is None:
+        # Unsupported/extraction-failed media remains exactly as the member
+        # posted it. Do not mark it routed; a later proxy share may still work.
+        return True
+
+    send_payload: dict[str, Any] = {
+        "content": f"🎬 Inline video for {message.author.mention}'s post",
+        "file": native_video.file,
+        "mention_author": False,
+        "allowed_mentions": discord.AllowedMentions.none(),
+    }
+    try:
+        send_payload["reference"] = message.to_reference(fail_if_not_exists=False)
+    except Exception:
+        pass
+
+    try:
+        await channel.send(**send_payload)
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        # Direct-channel enhancement is strictly non-destructive. If Discord
+        # rejects the relay, leave the member's original post untouched.
+        _log(
+            f"direct memes native video skipped guild={guild.id} channel={memes_target_id} "
+            f"error={type(exc).__name__}"
+        )
+    else:
+        if key_text:
+            _RECENT_ROUTE_KEYS[dedupe] = now
+        _log(
+            f"direct memes native video relayed guild={guild.id} channel={memes_target_id} "
+            f"bytes={native_video.size_bytes}"
+        )
+    finally:
+        try:
+            native_video.file.close()
+        except Exception:
+            pass
+    return True
 
 
 async def _torrent_attachment_bytes(message: discord.Message) -> bytes:
@@ -1080,10 +1212,13 @@ async def route_message(message: discord.Message) -> None:
             return
         if getattr(message.author, "bot", False):
             return
+        if getattr(message, "webhook_id", None) is not None:
+            return
 
         routes = await guild_routes(int(guild.id))
         route = route_for_source(routes, int(message.channel.id))
         if route is None:
+            await _relay_direct_memes_video(message, routes)
             return
 
         age_blocker = source_age_blocker(message.channel)
