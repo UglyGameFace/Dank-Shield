@@ -483,11 +483,12 @@ def _setup_embed(
         )
 
     embed.add_field(
-        name="6 • Search / custom sources",
+        name="6 • Movie search sources",
         value=(
-            f"Configured: **{ready['sources']}** • Enabled: **{ready['enabled_sources']}**\n"
-            "Custom authorized HTTPS feeds are managed from **Sources**. "
-            "Direct magnet and .torrent playback does not require a custom feed."
+            f"✅ Built-in: **{INTERNET_ARCHIVE_SOURCE_LABEL}**\n"
+            f"Custom APIs: **{ready['sources']}** configured • **{ready['enabled_sources']}** enabled\n"
+            "Built-in title search needs no feed URL or API key. Direct magnet and .torrent "
+            "playback also needs no source setup."
         ),
         inline=False,
     )
