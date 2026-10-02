@@ -438,6 +438,21 @@ def select_media_resolution(
 ) -> MediaResolution:
     canonical = canonicalize_media_url(source_url)
     identity = media_url_identity(canonical)
+
+    entries = _iter_entries(info)
+    if any(
+        bool(entry.get("is_live"))
+        or _safe_str(entry.get("live_status")).lower() == "is_live"
+        for entry in entries
+    ):
+        return MediaResolution(
+            source_url=source_url,
+            canonical_url=canonical,
+            identity=identity,
+            provider=provider,
+            delivery="link",
+            reason="live_stream_requires_player",
+        )
     progressive: list[
         tuple[
             tuple[int, int, float, int],
@@ -477,7 +492,7 @@ def select_media_resolution(
     saw_separate_video = False
     saw_fragmented = False
 
-    for entry in _iter_entries(info):
+    for entry in entries:
         formats = entry.get("formats")
         pool: list[Mapping[str, Any]] = []
         if isinstance(formats, list):
