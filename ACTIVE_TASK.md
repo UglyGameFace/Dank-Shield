@@ -16,6 +16,8 @@ Active branch: `feat/torrent-progressive-streaming`.
 
 Active issue: #391 — **Torrent/magnet progressive streaming pipeline**.
 
+Active PR: #392 — **Build progressive torrent and magnet streaming** (draft).
+
 ## Scope
 
 Build the real torrent media runtime, not a decorative command:
