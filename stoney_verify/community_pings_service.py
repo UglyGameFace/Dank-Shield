@@ -659,7 +659,18 @@ def register_movie_night_notification_role(
             kind="notification",
             enabled=True,
         )
-        model = with_option(config, updated)
+        # This is a stale-role repair, not a new option. Replace the existing
+        # machine-key owner in place so a full 25-option guild can recover
+        # without tripping the duplicate-key guard in with_option().
+        model = CommunityPingsConfig(
+            revision=next_revision(config),
+            groups=config.groups,
+            options=tuple(
+                updated if item.key == stale_mapping.key else item
+                for item in config.options
+            ),
+            source="v2",
+        )
         return with_unique_capability(
             model,
             option_key=updated.key,
