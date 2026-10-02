@@ -325,11 +325,310 @@ def parse_ffprobe_payload(
     }
 
 
-async def probe_media_file(
-    path: Path,
+def _pyav_stream_tags(stream: Any) -> dict[str, str]:
+    raw = getattr(stream, "metadata", None)
+    if not isinstance(raw, Mapping):
+        return {}
+    return {
+        str(key)[:80]: str(value)[:500]
+        for key, value in list(raw.items())[:64]
+        if str(key).strip() and str(value).strip()
+    }
+
+
+def _pyav_codec_names(stream: Any) -> tuple[str, str]:
+    context = getattr(stream, "codec_context", None)
+    codec = getattr(context, "codec", None)
+    short = str(
+        getattr(codec, "name", None)
+        or getattr(context, "name", None)
+        or ""
+    )
+    long_name = str(getattr(codec, "long_name", None) or "")
+    return short, long_name
+
+
+def _pyav_duration_seconds(stream: Any) -> Optional[float]:
+    duration = getattr(stream, "duration", None)
+    time_base = getattr(stream, "time_base", None)
+    if duration is None or time_base is None:
+        return None
+    try:
+        return round(float(duration * time_base), 3)
+    except Exception:
+        return None
+
+
+def _pyav_hdr_signals(stream: Any) -> list[str]:
+    context = getattr(stream, "codec_context", None)
+    transfer = str(getattr(context, "color_trc", "") or "").lower()
+    primaries = str(getattr(context, "color_primaries", "") or "").lower()
+    pixel_format = str(getattr(context, "pix_fmt", "") or "").lower()
+    tags: list[str] = []
+
+    if "2084" in transfer or transfer == "pq":
+        tags.append("HDR10/PQ")
+    if "b67" in transfer or "arib" in transfer:
+        tags.append("HLG")
+    if "bt2020" in primaries and not tags:
+        tags.append("BT.2020")
+
+    for item in list(getattr(context, "coded_side_data", None) or []):
+        text = str(getattr(item, "type", item) or "").lower()
+        if "dovi" in text or "dolby" in text:
+            tags.append("Dolby Vision")
+        if "dynamic hdr" in text or "hdr10+" in text:
+            tags.append("HDR10+")
+        if "mastering display" in text:
+            tags.append("HDR mastering metadata")
+
+    if re.search(r"(?:10|12)(?:le|be)?$", pixel_format):
+        tags.append(f"{pixel_format} pixel format")
+
+    return _dedupe(tags)
+
+
+def parse_pyav_container(
+    container: Any,
     *,
     filename: str = "",
-    timeout_seconds: float = 6.0,
+    file_size: Optional[int] = None,
+    av_time_base: int = 1_000_000,
+) -> dict[str, Any]:
+    streams = list(getattr(container, "streams", None) or [])
+    videos = [item for item in streams if str(getattr(item, "type", "") or "") == "video"]
+    audios = [item for item in streams if str(getattr(item, "type", "") or "") == "audio"]
+    subtitles = [item for item in streams if str(getattr(item, "type", "") or "") == "subtitle"]
+
+    format_obj = getattr(container, "format", None)
+    raw_tags = getattr(container, "metadata", None)
+    tags = (
+        {
+            str(key)[:80]: str(value)[:500]
+            for key, value in list(raw_tags.items())[:64]
+            if str(key).strip() and str(value).strip()
+        }
+        if isinstance(raw_tags, Mapping)
+        else {}
+    )
+
+    duration_raw = getattr(container, "duration", None)
+    duration: Optional[float] = None
+    if duration_raw is not None:
+        try:
+            duration = round(float(duration_raw) / float(av_time_base), 3)
+        except Exception:
+            duration = None
+    if duration is None:
+        stream_durations = [
+            value
+            for value in (_pyav_duration_seconds(item) for item in streams)
+            if value is not None
+        ]
+        duration = max(stream_durations, default=None)
+
+    def _language(stream: Any) -> str:
+        stream_tags = _pyav_stream_tags(stream)
+        return str(
+            getattr(stream, "language", None)
+            or stream_tags.get("language")
+            or stream_tags.get("LANGUAGE")
+            or ""
+        ).strip()
+
+    def _title(stream: Any) -> str:
+        stream_tags = _pyav_stream_tags(stream)
+        return str(stream_tags.get("title") or stream_tags.get("TITLE") or "").strip()
+
+    audio_rows: list[dict[str, Any]] = []
+    for stream in audios:
+        context = getattr(stream, "codec_context", None)
+        codec, codec_long = _pyav_codec_names(stream)
+        layout = getattr(context, "layout", None)
+        audio_rows.append(
+            {
+                "codec": codec,
+                "codec_long_name": codec_long,
+                "profile": str(
+                    getattr(stream, "profile", None)
+                    or getattr(context, "profile", None)
+                    or ""
+                ),
+                "channels": _safe_int(getattr(context, "channels", None)),
+                "layout": str(getattr(layout, "name", None) or ""),
+                "sample_rate": _safe_int(getattr(context, "sample_rate", None)),
+                "bitrate": _safe_int(getattr(context, "bit_rate", None)),
+                "language": _language(stream),
+                "title": _title(stream),
+                "duration_seconds": _pyav_duration_seconds(stream),
+            }
+        )
+
+    subtitle_rows: list[dict[str, Any]] = []
+    for stream in subtitles:
+        codec, codec_long = _pyav_codec_names(stream)
+        subtitle_rows.append(
+            {
+                "codec": codec,
+                "codec_long_name": codec_long,
+                "language": _language(stream),
+                "title": _title(stream),
+            }
+        )
+
+    video: dict[str, Any] = {}
+    if videos:
+        stream = videos[0]
+        context = getattr(stream, "codec_context", None)
+        codec, codec_long = _pyav_codec_names(stream)
+        width = _safe_int(getattr(context, "width", None))
+        height = _safe_int(getattr(context, "height", None))
+        average_rate = getattr(stream, "average_rate", None)
+        fps = None
+        try:
+            if average_rate:
+                fps = round(float(average_rate), 3)
+        except Exception:
+            fps = None
+
+        pixel_format = str(getattr(context, "pix_fmt", None) or "")
+        bit_depth = None
+        match = re.search(r"(?:p|gbrp)(9|10|12|14|16)(?:le|be)?$", pixel_format.lower())
+        if match:
+            bit_depth = int(match.group(1))
+
+        video = {
+            "codec": codec,
+            "codec_long_name": codec_long,
+            "profile": str(
+                getattr(stream, "profile", None)
+                or getattr(context, "profile", None)
+                or ""
+            ),
+            "width": width,
+            "height": height,
+            "resolution": f"{width}x{height}" if width and height else "",
+            "fps": fps,
+            "pixel_format": pixel_format,
+            "bit_depth": bit_depth,
+            "color_space": str(getattr(context, "colorspace", None) or ""),
+            "color_transfer": str(getattr(context, "color_trc", None) or ""),
+            "color_primaries": str(getattr(context, "color_primaries", None) or ""),
+            "field_order": str(getattr(context, "field_order", None) or ""),
+            "hdr": _pyav_hdr_signals(stream),
+            "bitrate": _safe_int(getattr(context, "bit_rate", None)),
+            "duration_seconds": _pyav_duration_seconds(stream),
+        }
+
+    embedded_year: Optional[int] = None
+    for candidate in (
+        tags.get("date"),
+        tags.get("year"),
+        tags.get("creation_time"),
+        tags.get("DATE"),
+        tags.get("YEAR"),
+    ):
+        match = _YEAR_RE.search(str(candidate or ""))
+        if match:
+            embedded_year = int(match.group(1))
+            break
+
+    chapters_raw = list(getattr(container, "chapters", None) or [])
+    chapters: list[dict[str, Any]] = []
+    for index, chapter in enumerate(chapters_raw[:200]):
+        chapter_tags = getattr(chapter, "metadata", None)
+        chapter_title = ""
+        if isinstance(chapter_tags, Mapping):
+            chapter_title = str(
+                chapter_tags.get("title")
+                or chapter_tags.get("TITLE")
+                or ""
+            )[:180]
+        start = None
+        end = None
+        try:
+            start = round(float(chapter.start * chapter.time_base), 3)
+        except Exception:
+            pass
+        try:
+            end = round(float(chapter.end * chapter.time_base), 3)
+        except Exception:
+            pass
+        chapters.append(
+            {
+                "index": index,
+                "title": chapter_title,
+                "start_seconds": start,
+                "end_seconds": end,
+            }
+        )
+
+    return {
+        "origin": "verified_file",
+        "probe_engine": "pyav",
+        "filename": str(filename or ""),
+        "file_size": (
+            int(file_size)
+            if file_size is not None
+            else _safe_int(getattr(container, "size", None))
+        ),
+        "container": str(getattr(format_obj, "name", None) or ""),
+        "container_long_name": str(getattr(format_obj, "long_name", None) or ""),
+        "duration_seconds": duration,
+        "duration": format_duration(duration),
+        "bitrate": _safe_int(getattr(container, "bit_rate", None)),
+        "embedded_title": str(
+            tags.get("title")
+            or tags.get("TITLE")
+            or tags.get("name")
+            or tags.get("NAME")
+            or ""
+        ).strip(),
+        "embedded_year": embedded_year,
+        "container_tags": tags,
+        "video": video,
+        "audio_tracks": audio_rows,
+        "subtitle_tracks": subtitle_rows,
+        "audio_languages": _dedupe([row["language"] for row in audio_rows]),
+        "subtitle_languages": _dedupe([row["language"] for row in subtitle_rows]),
+        "chapters": chapters,
+        "chapter_count": len(chapters_raw),
+    }
+
+
+def _probe_pyav_sync(file_path: Path, filename: str) -> dict[str, Any]:
+    import av
+
+    with av.open(
+        str(file_path),
+        mode="r",
+        options={
+            "probesize": str(8 * 1024 * 1024),
+            "analyzeduration": "5000000",
+        },
+    ) as container:
+        try:
+            size = file_path.stat().st_size
+        except OSError:
+            size = None
+        result = parse_pyav_container(
+            container,
+            filename=filename or file_path.name,
+            file_size=size,
+            av_time_base=int(getattr(av, "time_base", 1_000_000) or 1_000_000),
+        )
+        result["available"] = bool(
+            result.get("video", {}).get("codec")
+            or result.get("duration_seconds")
+        )
+        return result
+
+
+async def _probe_with_ffprobe(
+    file_path: Path,
+    *,
+    filename: str,
+    timeout_seconds: float,
 ) -> dict[str, Any]:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
@@ -337,14 +636,6 @@ async def probe_media_file(
             "origin": "verified_file",
             "available": False,
             "reason": "ffprobe_not_installed",
-        }
-
-    file_path = Path(path)
-    if not file_path.exists():
-        return {
-            "origin": "verified_file",
-            "available": False,
-            "reason": "file_not_ready",
         }
 
     command = [
@@ -404,13 +695,64 @@ async def probe_media_file(
         filename=filename or file_path.name,
         file_size=size,
     )
-    result["available"] = bool(result.get("video", {}).get("codec") or result.get("duration_seconds"))
+    result["probe_engine"] = "ffprobe"
+    result["available"] = bool(
+        result.get("video", {}).get("codec")
+        or result.get("duration_seconds")
+    )
     return result
+
+
+async def probe_media_file(
+    path: Path,
+    *,
+    filename: str = "",
+    timeout_seconds: float = 6.0,
+) -> dict[str, Any]:
+    file_path = Path(path)
+    if not file_path.exists():
+        return {
+            "origin": "verified_file",
+            "available": False,
+            "reason": "file_not_ready",
+        }
+
+    pyav_error = ""
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                _probe_pyav_sync,
+                file_path,
+                filename or file_path.name,
+            ),
+            timeout=max(2.0, min(float(timeout_seconds), 15.0)),
+        )
+        if result.get("available"):
+            return result
+        pyav_error = str(result.get("reason") or "pyav_incomplete")
+    except asyncio.TimeoutError:
+        pyav_error = "pyav_timeout"
+    except Exception as exc:
+        pyav_error = f"pyav_{type(exc).__name__}"
+
+    # Compatibility fallback for hosts that already provide ffprobe. Production
+    # does not depend on it because PyAV 17.1.0 carries bundled FFmpeg libraries.
+    fallback = await _probe_with_ffprobe(
+        file_path,
+        filename=filename or file_path.name,
+        timeout_seconds=timeout_seconds,
+    )
+    if fallback.get("available"):
+        return fallback
+
+    fallback["pyav_reason"] = pyav_error
+    return fallback
 
 
 __all__ = [
     "format_duration",
     "parse_ffprobe_payload",
+    "parse_pyav_container",
     "parse_release_name",
     "probe_media_file",
 ]
