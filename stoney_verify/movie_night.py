@@ -39,6 +39,8 @@ class MovieSourceVariant:
     variant_id: str
     source_ref: str
     created_at: float
+    source_id: str = ""
+    source_label: str = ""
     file_size: int = 0
     peers: int = 0
     seeds: int = 0
@@ -398,6 +400,8 @@ class MovieNightManager:
         *,
         user_id: int,
         source_ref: str,
+        source_id: str = "",
+        source_label: str = "",
         file_size: int = 0,
         peers: int = 0,
         seeds: int = 0,
@@ -423,6 +427,8 @@ class MovieNightManager:
             variant_id=secrets.token_urlsafe(9),
             source_ref=source[:2000],
             created_at=current,
+            source_id=str(source_id or "").strip()[:48],
+            source_label=" ".join(str(source_label or "").split())[:80],
             file_size=max(0, int(file_size or 0)),
             peers=max(0, int(peers or 0)),
             seeds=max(0, int(seeds or 0)),
