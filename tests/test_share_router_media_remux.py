@@ -68,6 +68,10 @@ def test_build_manifest_command_is_fixed_stream_copy_only(tmp_path: Path) -> Non
     assert "http,https,tcp,tls,crypto" in command
     assert "-rw_timeout" in command
     assert command.count("-i") == 1
+    video_map_index = command.index("-map")
+    assert command[video_map_index + 1] == "0:v:0"
+    assert "0:v:0?" not in command
+    assert "0:a:0?" in command
     assert "-c:v" in command and command[command.index("-c:v") + 1] == "copy"
     assert "-c:a" in command and command[command.index("-c:a") + 1] == "copy"
     assert "libx264" not in command
