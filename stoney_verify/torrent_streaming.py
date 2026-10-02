@@ -548,7 +548,13 @@ class TorrentMediaManager:
             memory_slots = 0
         else:
             headroom = float(process_limit) - float(reserve) - float(rss)
-            memory_slots = max(0, int(headroom // max(1, estimate)))
+            # Reserve estimated memory for starts already admitted but not yet
+            # fully reflected in RSS so concurrent metadata/session startup
+            # cannot collectively cross the core-bot safety reserve.
+            memory_slots = max(
+                0,
+                int(headroom // max(1, estimate)) - int(self._starting),
+            )
 
         try:
             usage = shutil.disk_usage(self.root)
