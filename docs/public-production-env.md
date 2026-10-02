@@ -176,6 +176,7 @@ Use these production environment values:
 
 ```env
 DANK_MEDIA_PUBLIC_BASE_URL=https://YOUR-DISCLOUD-SITE.discloud.app
+DANK_MEDIA_SERVER_ENABLED=true
 DANK_MEDIA_BIND_HOST=0.0.0.0
 DANK_MEDIA_PORT=8080
 DANK_TORRENT_STREAM_SECRET=<NEW RANDOM SECRET, DO NOT REUSE ANOTHER TOKEN>
@@ -247,3 +248,11 @@ The setup panel reports:
 The controller fails closed on new unique media when memory or disk safety cannot
 be verified. Reusing an already-active identical torrent remains possible even
 when the unique-session soft limit is full.
+
+
+The media-only Site listener stays up for `/health` even if the public URL or
+stream-signing secret is temporarily missing. In that state all signed
+Movie Night/watch access remains fail-closed, while Discloud can still see a
+healthy Site process and `/movie → Setup` can report the missing configuration.
+Set `DANK_MEDIA_SERVER_ENABLED=false` only if you intentionally want to disable
+the Site listener.
