@@ -8,13 +8,14 @@ general video/audio re-encoding.
 """
 
 import asyncio
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import os
 import shutil
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
+
+import aiohttp
 
 from stoney_verify.share_router_manifest_proxy import (
     ManifestProxy,
