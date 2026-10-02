@@ -644,6 +644,28 @@ def register_movie_night_notification_role(
             capability=CAP_MOVIE_NIGHT_NOTIFY,
         )
 
+    stale_mapping = next(
+        (
+            item
+            for item in config.options
+            if CAP_MOVIE_NIGHT_NOTIFY in item.capabilities
+        ),
+        None,
+    )
+    if stale_mapping is not None:
+        updated = replace(
+            stale_mapping,
+            role_id=rid,
+            kind="notification",
+            enabled=True,
+        )
+        model = with_option(config, updated)
+        return with_unique_capability(
+            model,
+            option_key=updated.key,
+            capability=CAP_MOVIE_NIGHT_NOTIFY,
+        )
+
     blocker = movie_night_registration_blocker(config)
     if blocker:
         raise ValueError(blocker)
