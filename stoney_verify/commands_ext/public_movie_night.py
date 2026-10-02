@@ -567,9 +567,34 @@ def _room_embed(
             inline=False,
         )
     if room.stream_token:
+        current_candidate = (
+            room.candidates.get(room.current_candidate_id)
+            if room.current_candidate_id
+            else None
+        )
+        current_variant = (
+            current_candidate.variants.get(room.current_variant_id)
+            if current_candidate is not None and room.current_variant_id
+            else None
+        )
+        if current_candidate is not None and current_variant is not None:
+            health = current_variant.swarm_health
+            media_value = (
+                f"**{current_candidate.title}** • "
+                f"{_release_source_label(current_variant.metadata)} • "
+                f"{_format_bytes(current_variant.file_size)}\n"
+                f"🌱 {health['seeds']} seeds • 🧲 {health['leechers']} leeches • "
+                f"👥 {health['peers']} peers\n"
+                "Use **Watch** for the synchronized full-video player."
+            )
+        else:
+            media_value = (
+                "Torrent/media session attached. Use **Watch** for the synchronized "
+                "full-video player."
+            )
         embed.add_field(
             name="Media",
-            value="Torrent/media session attached and ready for the shared playback pipeline.",
+            value=media_value[:1024],
             inline=False,
         )
     else:
@@ -588,27 +613,34 @@ def _queue_embed(room: MovieNightRoom) -> discord.Embed:
         title="📺 Movie Night Queue",
         color=discord.Color.blurple(),
     )
-    if not room.candidates:
-        embed.description = "No movie candidates yet. Use Search / Vote to begin."
+    queued = [
+        room.candidates[candidate_id]
+        for candidate_id in room.queue
+        if candidate_id in room.candidates
+    ]
+    if not queued:
+        embed.description = (
+            "The shared queue is empty. Open **Results**, choose a movie, and use "
+            "**Vote to Queue**."
+        )
         return embed
 
-    ranked = manager.ranked_candidates(room.room_id)
+    active = manager.active_viewers(room)
     lines: list[str] = []
-    for candidate in ranked[:15]:
+    for index, candidate in enumerate(queued[:15], start=1):
         variants = manager.ranked_variants(room.room_id, candidate.candidate_id)
         best = variants[0] if variants else None
         if best is None:
-            lines.append(f"• **{candidate.title}** • {len(candidate.votes)} vote(s)")
+            lines.append(
+                f"**{index}. {candidate.title}** • {len(candidate.votes & active)} movie vote(s)"
+            )
             continue
         health = best.swarm_health
-        meta = best.metadata or {}
-        release = meta.get("release_name") if isinstance(meta.get("release_name"), Mapping) else {}
-        source = str(release.get("source") or "Unknown source")
-        size = f"{best.file_size / (1024 ** 3):.2f} GiB" if best.file_size else "size unknown"
+        source = _release_source_label(best.metadata)
         lines.append(
-            f"• **{candidate.title}** • {len(candidate.votes)} movie vote(s)\n"
-            f"  ↳ {source} • {size} • 🌱 {health['seeds']} seeds • "
-            f"🧲 {health['leechers']} leeches • {len(best.votes)} release vote(s)"
+            f"**{index}. {candidate.title}** • {source} • {_format_bytes(best.file_size)}\n"
+            f"↳ 🌱 {health['seeds']} • 🧲 {health['leechers']} • "
+            f"🗳️ {len(best.votes & active)} release vote(s)"
         )
     embed.description = "\n".join(lines)[:4000]
     return embed
