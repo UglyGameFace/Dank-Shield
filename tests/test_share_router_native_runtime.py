@@ -598,7 +598,10 @@ def test_runtime_native_video_relay_is_bounded_and_fail_open() -> None:
     assert "if not native_sent:" in RUNTIME
     assert "await target.send(" in RUNTIME
     assert "resolve_first_media" in RUNTIME
-    assert "is_safe_media_download_url" in RUNTIME
+    assert "if not is_safe_media_download_url(url):" in RUNTIME
+    assert "if not is_safe_media_download_url(current):" in RUNTIME
+    assert "_PublicOnlyDNSResolver" in RUNTIME
+    assert "request_headers=dict(resolution.request_headers)" in RUNTIME
     assert "_extract_x_video_url" not in RUNTIME
     assert "asyncio.to_thread" in RESOLVER
     assert "yt_dlp.YoutubeDL" in RESOLVER
