@@ -25,6 +25,14 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import aiohttp
 import discord
 
+from stoney_verify.share_router_media_resolver import (
+    canonicalize_media_url,
+    is_safe_media_download_url,
+    media_url_identity,
+    provider_label,
+    resolve_first_media,
+    select_media_resolution,
+)
 from stoney_verify.share_router_resources import (
     DEFAULT_SHARE_CHANNELS,
     SHARE_ROUTER_CATEGORY_NAME,
@@ -44,11 +52,12 @@ _DATA_LOCK = asyncio.Lock()
 _RECENT_ROUTE_KEYS: dict[tuple[int, int, str], float] = {}
 URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
 _X_STATUS_PATH_RE = re.compile(r"^/([^/]+)/status/(\d+)(?:/.*)?$", re.IGNORECASE)
-_VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov")
+_VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".gif")
 _VIDEO_CONTENT_TYPES = {
     "video/mp4": ".mp4",
     "video/webm": ".webm",
     "video/quicktime": ".mov",
+    "image/gif": ".gif",
 }
 _DEFAULT_VIDEO_MAX_BYTES = 25 * 1024 * 1024
 _DEFAULT_VIDEO_TIMEOUT_SECONDS = 12.0
@@ -65,17 +74,6 @@ def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
         value = int(default)
     return max(int(minimum), min(value, int(maximum)))
 
-
-_X_EXTRACT_CONCURRENCY = _env_int(
-    "DANK_SHARE_ROUTER_X_EXTRACT_CONCURRENCY",
-    2,
-    minimum=1,
-    maximum=4,
-)
-_X_EXTRACT_SEMAPHORE = asyncio.Semaphore(_X_EXTRACT_CONCURRENCY)
-_X_VIDEO_CACHE: dict[str, tuple[float, Optional[str]]] = {}
-_X_VIDEO_CACHE_TTL_SECONDS = 15 * 60.0
-_X_VIDEO_NEGATIVE_CACHE_TTL_SECONDS = 90.0
 
 # Keep the historical path so a deployed guild does not have to rebuild routes
 # merely because ownership moved out of startup_guards.
@@ -160,45 +158,11 @@ def _x_status_parts(value: str) -> Optional[tuple[str, str]]:
 
 
 def _canonical_share_url(value: str) -> str:
-    raw = _safe_str(value).rstrip(".,)")
-    if not raw:
-        return ""
-    status = _x_status_parts(raw)
-    if status is not None:
-        handle, status_id = status
-        return f"https://x.com/{handle}/status/{status_id}"
-    try:
-        parsed = urlsplit(raw)
-    except Exception:
-        return raw
-    if str(parsed.scheme or "").lower() not in {"http", "https"}:
-        return raw
-    host = str(parsed.hostname or "").lower()
-    if not host:
-        return raw
-    netloc = host
-    try:
-        port = parsed.port
-    except ValueError:
-        return raw
-    if port:
-        netloc = f"{host}:{port}"
-    return urlunsplit(
-        (
-            str(parsed.scheme or "").lower(),
-            netloc,
-            str(parsed.path or ""),
-            str(parsed.query or ""),
-            "",
-        )
-    )
+    return canonicalize_media_url(value)
 
 
 def _url_identity(value: str) -> str:
-    status = _x_status_parts(value)
-    if status is not None:
-        return f"x-status:{status[1]}"
-    return _canonical_share_url(value).lower()
+    return media_url_identity(value)
 
 
 def _normalize_share_text_urls(text: str, seen_urls: set[str]) -> str:
@@ -341,134 +305,15 @@ def _select_progressive_video_url(
     *,
     max_bytes: int,
 ) -> str:
-    candidates: list[tuple[tuple[int, int, float, int], str]] = []
+    """Compatibility wrapper around the canonical provider-neutral selector."""
 
-    for entry in _iter_extracted_video_entries(info):
-        formats = entry.get("formats")
-        pool: list[Mapping[str, Any]] = []
-        if isinstance(formats, list):
-            pool.extend(item for item in formats if isinstance(item, Mapping))
-        pool.append(entry)
-
-        for fmt in pool:
-            url = _safe_str(fmt.get("url"))
-            if not url or not _trusted_video_url(url):
-                continue
-
-            protocol = _safe_str(fmt.get("protocol")).lower()
-            if protocol and protocol not in {"http", "https"}:
-                continue
-
-            ext = _safe_str(fmt.get("ext")).lower()
-            if ext and ext not in {"mp4", "webm", "mov"}:
-                continue
-
-            vcodec = _safe_str(fmt.get("vcodec")).lower()
-            if vcodec == "none":
-                continue
-
-            known_size = _safe_int(
-                fmt.get("filesize") or fmt.get("filesize_approx"),
-                0,
-            )
-            if known_size > max_bytes > 0:
-                continue
-
-            acodec = _safe_str(fmt.get("acodec")).lower()
-            has_audio = 0 if acodec == "none" else 1
-            height = _safe_int(fmt.get("height"), 0)
-            try:
-                tbr = float(fmt.get("tbr") or 0.0)
-            except Exception:
-                tbr = 0.0
-
-            # Prefer combined A/V, then resolution/bitrate. Unknown-size media
-            # is allowed because the actual relay is still hard-capped while
-            # streaming and fails open to the source link.
-            size_score = -known_size if known_size > 0 else 0
-            candidates.append(((has_audio, height, tbr, size_score), url))
-
-    if not candidates:
-        return ""
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    return candidates[0][1]
-
-
-def _extract_x_video_url_sync(status_url: str, max_bytes: int) -> str:
-    canonical = _canonical_share_url(status_url)
-    if _x_status_parts(canonical) is None:
-        return ""
-
-    try:
-        import yt_dlp
-    except Exception:
-        return ""
-
-    options = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "noplaylist": True,
-        "cachedir": False,
-        "socket_timeout": 6,
-        "retries": 1,
-        "extractor_retries": 1,
-        "fragment_retries": 0,
-    }
-    try:
-        with yt_dlp.YoutubeDL(options) as ydl:
-            info = ydl.extract_info(canonical, download=False)
-    except Exception:
-        return ""
-
-    return _select_progressive_video_url(info, max_bytes=max_bytes)
-
-
-async def _extract_x_video_url(status_url: str, *, max_bytes: int) -> str:
-    canonical = _canonical_share_url(status_url)
-    status = _x_status_parts(canonical)
-    if status is None:
-        return ""
-
-    cache_key = f"x-status:{status[1]}"
-    now = time.monotonic()
-    cached = _X_VIDEO_CACHE.get(cache_key)
-    if cached is not None:
-        expires_at, value = cached
-        if now < expires_at:
-            return value or ""
-        _X_VIDEO_CACHE.pop(cache_key, None)
-
-    async with _X_EXTRACT_SEMAPHORE:
-        # Recheck after waiting for the semaphore so concurrent shares of the
-        # same status do not all hit X independently.
-        now = time.monotonic()
-        cached = _X_VIDEO_CACHE.get(cache_key)
-        if cached is not None:
-            expires_at, value = cached
-            if now < expires_at:
-                return value or ""
-            _X_VIDEO_CACHE.pop(cache_key, None)
-
-        try:
-            extracted = await asyncio.wait_for(
-                asyncio.to_thread(
-                    _extract_x_video_url_sync,
-                    canonical,
-                    int(max_bytes),
-                ),
-                timeout=10.0,
-            )
-        except Exception:
-            extracted = ""
-
-        ttl = (
-            _X_VIDEO_CACHE_TTL_SECONDS
-            if extracted
-            else _X_VIDEO_NEGATIVE_CACHE_TTL_SECONDS
-        )
-        _X_VIDEO_CACHE[cache_key] = (time.monotonic() + ttl, extracted or None)
-        return extracted
+    resolved = select_media_resolution(
+        info,
+        source_url="https://x.com/i/status/1",
+        provider="x",
+        max_bytes=max_bytes,
+    )
+    return resolved.media_url if resolved.progressive else ""
 
 
 def _share_video_timeout_seconds() -> float:
@@ -519,7 +364,7 @@ async def _download_trusted_video(
             headers={"User-Agent": "DankShield-ShareRouter/1.0"},
         ) as session:
             for _ in range(4):
-                if not _trusted_video_url(current):
+                if not is_safe_media_download_url(current):
                     return None
                 async with session.get(current, allow_redirects=False) as response:
                     if response.status in {301, 302, 303, 307, 308}:
@@ -530,7 +375,7 @@ async def _download_trusted_video(
                         continue
                     if response.status != 200:
                         return None
-                    if not _trusted_video_url(str(response.url)):
+                    if not is_safe_media_download_url(str(response.url)):
                         return None
 
                     content_type = _safe_str(response.headers.get("Content-Type")).lower()
@@ -538,6 +383,7 @@ async def _download_trusted_video(
                     path = str(urlsplit(str(response.url)).path or "").lower()
                     if not (
                         media_type.startswith("video/")
+                        or media_type == "image/gif"
                         or (
                             media_type in {"", "application/octet-stream"}
                             and path.endswith(_VIDEO_EXTENSIONS)
@@ -592,22 +438,45 @@ async def _prepare_native_video(
 
     max_bytes = _share_video_limit_bytes(message.guild)
 
-    # Fast path: use a real video URL Discord already supplied.
+    # Fast path: use a real video/GIF URL Discord already supplied. This path
+    # remains intentionally stricter because embed URLs are not extractor output.
     for candidate in _video_source_urls(message):
         routed = await _download_trusted_video(candidate, max_bytes=max_bytes)
         if routed is not None:
             return routed
 
-    # X commonly gives Discord only a static preview image. When that happens,
-    # extract the real progressive video URL from the canonical X status itself.
-    status_url = _first_x_status_url(routed_text)
-    if status_url:
-        candidate = await _extract_x_video_url(status_url, max_bytes=max_bytes)
-        if candidate:
-            routed = await _download_trusted_video(candidate, max_bytes=max_bytes)
-            if routed is not None:
-                return routed
+    # Provider-neutral path: one resolver owns social/direct URL recognition,
+    # canonical identity, yt-dlp extraction, cache/concurrency and manifest
+    # classification. The runtime still owns the bounded byte download + upload.
+    resolution = await resolve_first_media(routed_text, max_bytes=max_bytes)
+    if resolution is None:
+        return None
 
+    if resolution.progressive:
+        routed = await _download_trusted_video(
+            resolution.media_url,
+            max_bytes=max_bytes,
+        )
+        if routed is not None:
+            _log(
+                "media resolved "
+                f"provider={provider_label(resolution.provider)} "
+                f"delivery=progressive protocol={resolution.protocol or 'unknown'}"
+            )
+            return routed
+        _log(
+            "media fallback "
+            f"provider={provider_label(resolution.provider)} "
+            "reason=bounded_download_rejected"
+        )
+        return None
+
+    _log(
+        "media fallback "
+        f"provider={provider_label(resolution.provider)} "
+        f"delivery={resolution.delivery or 'link'} "
+        f"reason={resolution.reason or 'unavailable'}"
+    )
     return None
 
 
