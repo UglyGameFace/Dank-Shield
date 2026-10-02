@@ -135,6 +135,7 @@ async def torrent_cancel(request: web.Request) -> web.Response:
 
 def register_torrent_stream_routes(app: web.Application, server: Any) -> None:
     _ = server
+    get_torrent_manager().ensure_cleanup_task()
     app.router.add_get(
         "/media/torrent/stream/{token}/{filename}",
         torrent_stream,
