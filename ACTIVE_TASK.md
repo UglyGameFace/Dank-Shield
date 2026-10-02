@@ -1,87 +1,66 @@
-# Active Task
+# Dank Shield Active Task
 
 ## Active task / outcome
 
-**DANK-SHIELD-384 — audit repeated Discord 429s during/after activity recovery**
+**DANK-SHIELD-390 — Universal Share Router media resolver and stream playback**
 
 Production baseline:
-`main@e647876844f9766c119b62534bd20e43af0dd8aa` (PR #399 merged).
+`main@3e78288c71579aed340314acaa6640b233bb0f44` (PR #400 merged).
 
 Active branch:
-`audit/discord-429-message-fetches`
+`feat/390-universal-media-resolver-foundation`
 
 Status:
-**Root cause identified; remediation implemented on branch; exact-head validation pending.**
+**Slice 1 active — provider-neutral resolver foundation.**
 
-### Scope / required outcome
+### Issue outcome
 
-1. Trace the production single-message `GET /channels/{channel}/messages/{message}` callers separately from paced startup history scans.
-2. Preserve the existing process-wide recovery REST budget as the aggregate startup/recovery owner; do not add a second limiter.
-3. Prevent avoidable same-channel `fetch_message()` bursts across Dank Shield owners without replacing discord.py's route-aware 429 handling.
-4. Coalesce simultaneous requests for the same channel/message identity.
-5. Keep latency-sensitive live moderation/recovery outside the slower startup aggregate budget while still preventing same-route fan-out.
-6. Route known startup/recovery single-message GETs through the existing aggregate budget.
-7. Preserve cache-first / zero-REST paths already used by persistent ticket/verification panels.
-8. Avoid permanent per-channel lock growth across large guild counts.
-9. Add behavioral and ownership regressions for serialization, coalescing, startup budgeting, live-path isolation, and cleanup.
-10. Validate the exact branch head with focused/full repository CI and review the final diff for unrelated changes.
+Expand Share Router from the current X-specific extraction path into one canonical media-resolution layer for supported social/video URLs while preserving the existing Share Router route/listener/upload owners.
 
-### Findings / root cause
+The issue will be delivered as validated slices. Do not stack HLS/DASH transcoding, external player work, or unrelated Share Router UI changes into Slice 1 before the resolver foundation is proven.
 
-- Authoritative activity restart reconciliation is already sequential and calls `reserve_recovery_discord_rest_requests()` before archived-thread and history requests. Its visible pacing logs are expected aggregate protection, not the later raw-message GET 429 source.
-- The central `discord_api_safety` owner previously protected audit logs, sends, channel edits, and bulk recovery requests, but **single-message GETs had no shared owner**.
-- Community Tools startup reconciliation runs a bounded `gather()` with `STARTUP_RECONCILE_CONCURRENCY = 10`; its sticky and quiet-notice identity checks directly fetched persisted messages outside the aggregate recovery budget.
-- The live-guild-name ticket-footer startup sweep also directly fetched each persisted ticket panel outside that recovery budget.
-- Ticket-panel and Basic Verify restart recovery already reserved aggregate capacity before their identity fetch, but each still called `fetch_message()` directly, so duplicate owners could not coalesce the same identity.
-- Invite Shield uncached raw-edit recovery created one task per `(channel_id, message_id)`. Different message IDs edited in the same channel could therefore issue concurrent GETs against the same Discord route family. This matches the observed cluster of 429s against one channel with multiple message IDs in the same second.
-- Existing cache-first protections are retained: Invite raw edits skip REST when `cached_message` exists; current ticket/basic-verify panel identities bind persistent views without REST when the saved application/component contract is already authoritative.
-- Live Profile Card was inspected and intentionally left unchanged: production registration instantiates `stoney_verify.profile_card_runtime.LiveProfileCardRuntime`, whose native `on_ready()` overrides the legacy core reconciler and does not perform the core startup `fetch_message()` sweep.
+### Slice 1 scope
 
-### Execution path / changes
+1. Replace the X-only yt-dlp extraction seam with one provider-neutral resolver.
+2. Add one provider registry for X/Twitter, TikTok, Instagram/Reels, YouTube/Shorts, Reddit, Twitch, Facebook public video, Vimeo, Streamable, Imgur, Tumblr, Bluesky, Pinterest, and direct media URLs.
+3. Centralize canonical URL normalization and media identity.
+4. Add explicit provider allow/deny policy without per-command provider implementations.
+5. Keep bounded extraction concurrency and bounded positive/negative metadata caching.
+6. Select safe progressive HTTP(S) video/GIF formats under the existing Discord upload byte cap.
+7. Detect HLS/DASH/fragmented-only results and fail open to the canonical provider link in this slice rather than pretending Discord can natively embed arbitrary manifests.
+8. Reject loopback/private/local media destinations before relay.
+9. Preserve existing Discord/CDN attachment fast path, source attribution, dedupe, permissions, upload-size cap, timeout, source cleanup, and direct-memes parity.
+10. Add provider fixture/canonicalization/policy/cache/concurrency/fallback regressions and run exact-head CI.
 
-- `stoney_verify/startup_guards/discord_api_safety.py`
-  - adds one `fetch_message_with_api_safety()` owner;
-  - serializes guarded single-message GETs **per channel**, not globally;
-  - coalesces concurrent requests for the same `(channel_id, message_id)`;
-  - optionally reserves one slot from the existing recovery REST budget;
-  - deliberately adds **no retry loop**; discord.py continues to own real route/bucket 429 retry behavior;
-  - shields the shared in-flight request from cancellation by one waiter;
-  - waits for aggregate recovery capacity **before** taking the per-channel lock, so a budget-throttled startup fetch cannot block live guarded traffic in that channel;
-  - removes completed in-flight entries and idle per-channel locks so the state cannot grow forever with server/channel count;
-  - exposes a small diagnostic snapshot for guarded channels, inflight requests, and coalesced requests.
-- `stoney_verify/invite_reconciliation_runtime.py`
-  - uncached raw-edit fetches now use the central per-channel guard with `recovery=False`, preserving live enforcement latency while eliminating same-channel fan-out.
-- `stoney_verify/community_tools_runtime.py`
-  - startup sticky and quiet-notice identity fetches now use the central guard with `recovery=True`, so their existing 10-way startup worker pool shares the aggregate recovery budget.
-- `stoney_verify/ticket_panel_runtime.py`
-  - recovery identity fetch uses the central guarded fetch with `recovery=True`; existing history/edit/post/delete recovery reservations stay intact.
-- `stoney_verify/verification_new/basic_verify.py`
-  - saved-panel recovery identity fetch uses the central guarded fetch with `recovery=True`; zero-REST current-identity bind remains unchanged.
-- `stoney_verify/startup_guards/live_guild_name_footer_guard.py`
-  - saved ticket-panel fetch uses the central guard; startup calls reserve aggregate recovery capacity while live guild-rename refreshes only use per-channel serialization/coalescing.
-- `tests/test_discord_recovery_rest_budget.py`
-  - proves different message IDs in one channel never overlap;
-  - proves different channels remain parallel;
-  - proves identical concurrent message requests collapse to one REST call;
-  - proves recovery callers reserve the existing aggregate budget and live callers do not;
-  - proves a recovery-budget wait does not hold the same-channel lock ahead of live traffic;
-  - proves inflight state and idle channel locks clean up.
-- `tests/test_startup_recovery_scaling.py`
-  - locks the Invite Shield raw-edit live path to the central guard without startup pacing;
-  - locks Community Tools, ticket-panel, Basic Verify, and startup footer identity fetches to the central recovery owner.
+### Current findings
 
-### Validation / cleanup / blockers
+- Share Router already has one canonical route listener and one native-video upload owner.
+- The reusable upload/download pieces are already bounded by size/time and fail open to the provider link.
+- The extraction layer is still X-specific: X-only URL discovery, cache, semaphore, and yt-dlp helper.
+- The progressive selector is also coupled to the old trusted-host whitelist, which prevents provider-neutral yt-dlp CDN results.
+- Discord cannot host a custom bot-controlled HTML5 player inside a normal message. Manifest-only HLS/DASH output therefore needs a later controlled transcode/player slice; Slice 1 records that state and preserves the source link.
+- Existing X behavior must remain compatible through wrappers while canonical ownership moves to the provider-neutral resolver.
 
-Pending before completion claim:
-- exact-head focused/full GitHub CI;
-- final branch-vs-main diff and dead/duplicate ownership review;
-- production observation after deploy for disappearance/reduction of same-channel `GET .../messages/... 429` clusters.
+### Safety contract
 
-Backlog for #380 runtime-ownership audit:
-- `stoney_verify/events_new/interactions.py` defines a verification submission message bridge but is not installed by the current `main.py` / `app.py` production path.
-- `stoney_verify/submissions.py` and `stoney_verify/submission_handler.py` also retain duplicate `handle_possible_submission()` implementations. None are required for #384's active production 429 paths; reference-safe retirement/consolidation belongs in the broader ownership audit.
+- no arbitrary shell execution;
+- no unbounded media buffering;
+- no global provider-specific listeners or commands;
+- no second Share Router runtime owner;
+- no private/loopback/local URL relay;
+- no unsupported manifest presented as successful native playback;
+- no guild-specific hardcoding;
+- no change to member permission/privacy checks.
 
-No unrelated task is active.
+### Validation / blockers
+
+Pending:
+- implementation and focused tests;
+- exact-head full CI;
+- final branch-vs-main diff review;
+- production canaries for high-value providers after merge.
+
+#384 implementation is merged. Issue #384 remains open only for the production 429 log canary; it is no longer an active implementation task.
 
 ---
 

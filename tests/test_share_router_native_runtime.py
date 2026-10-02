@@ -39,6 +39,7 @@ PUBLIC_UI = (ROOT / "stoney_verify/commands_ext/public_share_router.py").read_te
 COMMUNITY = (ROOT / "stoney_verify/commands_ext/public_community_tools.py").read_text(encoding="utf-8")
 DESIGN = (ROOT / "stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
 RUNTIME = (ROOT / "stoney_verify/share_router_runtime.py").read_text(encoding="utf-8")
+RESOLVER = (ROOT / "stoney_verify/share_router_media_resolver.py").read_text(encoding="utf-8")
 LEGACY = (ROOT / "stoney_verify/startup_guards/share_router_guard.py").read_text(encoding="utf-8")
 
 
@@ -178,7 +179,7 @@ def test_progressive_x_video_selection_rejects_oversize_and_untrusted_media() ->
                 "filesize": 30_000_000,
             },
             {
-                "url": "https://evil.example/video.mp4",
+                "url": "http://127.0.0.1/video.mp4",
                 "protocol": "https",
                 "ext": "mp4",
                 "vcodec": "h264",
@@ -596,11 +597,17 @@ def test_runtime_native_video_relay_is_bounded_and_fail_open() -> None:
     assert "native video send failed" in RUNTIME
     assert "if not native_sent:" in RUNTIME
     assert "await target.send(" in RUNTIME
-    assert "asyncio.to_thread" in RUNTIME
-    assert "yt_dlp.YoutubeDL" in RUNTIME
-    assert "_X_EXTRACT_SEMAPHORE" in RUNTIME
-    assert "_X_VIDEO_CACHE" in RUNTIME
-    assert "_first_x_status_url(routed_text)" in RUNTIME
+    assert "resolve_first_media" in RUNTIME
+    assert "if not is_safe_media_download_url(url):" in RUNTIME
+    assert "if not is_safe_media_download_url(current):" in RUNTIME
+    assert "_PublicOnlyDNSResolver" in RUNTIME
+    assert "request_headers=dict(resolution.request_headers)" in RUNTIME
+    assert "_extract_x_video_url" not in RUNTIME
+    assert "asyncio.to_thread" in RESOLVER
+    assert "yt_dlp.YoutubeDL" in RESOLVER
+    assert "_RESOLVER_INFLIGHT" in RESOLVER
+    assert "_RESOLUTION_CACHE" in RESOLVER
+    assert "DANK_SHARE_ROUTER_MEDIA_EXTRACT_CONCURRENCY" in RESOLVER
 
 
 def test_runtime_keeps_legacy_route_storage_and_sender_permission_boundary() -> None:
