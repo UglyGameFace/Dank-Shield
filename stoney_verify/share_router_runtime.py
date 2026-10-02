@@ -25,11 +25,13 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import aiohttp
 import discord
 
+from stoney_verify.share_router_media_network import (
+    is_safe_media_download_url,
+    public_tcp_connector,
+)
 from stoney_verify.share_router_media_remux import remux_media_for_discord
 from stoney_verify.share_router_media_resolver import (
     canonicalize_media_url,
-    is_public_address,
-    is_safe_media_download_url,
     media_url_identity,
     provider_label,
     resolve_first_media,
@@ -111,29 +113,6 @@ class RoutedVideo:
     source_url: str
     size_bytes: int
     cleanup_path: Optional[Path] = None
-
-
-class _PublicOnlyDNSResolver(aiohttp.abc.AbstractResolver):
-    """Reject DNS answers that would route media fetches to non-public IPs."""
-
-    def __init__(self) -> None:
-        self._resolver = aiohttp.DefaultResolver()
-
-    async def resolve(self, host: str, port: int = 0, family: int = 0):
-        records = await self._resolver.resolve(host, port, family)
-        if not records:
-            raise OSError("media host did not resolve")
-        for record in records:
-            try:
-                address = str(record["host"])
-            except Exception as exc:
-                raise OSError("media DNS answer was malformed") from exc
-            if not is_public_address(address):
-                raise OSError("media host resolved to a non-public address")
-        return records
-
-    async def close(self) -> None:
-        await self._resolver.close()
 
 
 def _log(message: str) -> None:
@@ -393,10 +372,7 @@ async def _download_trusted_video(
             if safe_name and safe_value:
                 headers[safe_name] = safe_value[:1000]
 
-        connector = aiohttp.TCPConnector(
-            resolver=_PublicOnlyDNSResolver(),
-            ttl_dns_cache=60,
-        )
+        connector = public_tcp_connector(ttl_dns_cache=60)
         async with aiohttp.ClientSession(
             timeout=timeout,
             headers=headers,
