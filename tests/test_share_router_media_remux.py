@@ -101,13 +101,37 @@ def test_build_merge_command_has_two_bounded_inputs_and_safe_headers(
     assert "must-not-forward" not in joined
 
 
-def test_direct_manifest_stays_link_only_without_spawning_ffmpeg(monkeypatch) -> None:
+def test_direct_manifest_uses_validating_local_proxy(monkeypatch) -> None:
     direct = _manifest_resolution(provider="direct")
+    events: dict[str, object] = {}
+    commands: list[list[str]] = []
 
-    async def should_not_validate(_resolution):
-        raise AssertionError("direct manifest must stop before network validation")
+    class FakeProxy:
+        def __init__(self, upstream_url, *, headers, max_output_bytes):
+            events["upstream_url"] = upstream_url
+            events["headers"] = tuple(headers)
+            events["max_output_bytes"] = max_output_bytes
+            self.entry_url = "http://127.0.0.1:43123/token/r/root"
 
-    monkeypatch.setattr(remux, "_inputs_are_public", should_not_validate)
+        async def start(self):
+            events["started"] = True
+            return self
+
+        async def close(self):
+            events["closed"] = True
+
+    async def public(_resolution):
+        return True
+
+    async def fake_run(command, *, timeout_seconds):
+        commands.append(list(command))
+        Path(command[-1]).write_bytes(b"x" * 256)
+        return 0, "", False
+
+    monkeypatch.setattr(remux, "ManifestProxy", FakeProxy)
+    monkeypatch.setattr(remux, "_inputs_are_public", public)
+    monkeypatch.setattr(remux.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(remux, "_run_ffmpeg", fake_run)
 
     result = asyncio.run(
         remux.remux_media_for_discord(
@@ -115,8 +139,19 @@ def test_direct_manifest_stays_link_only_without_spawning_ffmpeg(monkeypatch) ->
             max_bytes=25_000_000,
         )
     )
-    assert result is None
-    assert remux.media_remux_snapshot()["unavailable"] == 1
+    assert result is not None
+    try:
+        assert events["upstream_url"] == direct.media_url
+        assert events["started"] is True
+        assert events["closed"] is True
+        assert commands
+        command = commands[0]
+        assert "http://127.0.0.1:43123/token/r/root" in command
+        whitelist_index = command.index("-protocol_whitelist")
+        assert command[whitelist_index + 1] == "http,tcp,crypto,data"
+        assert "http,https,tcp,tls,crypto" not in command
+    finally:
+        result.cleanup()
 
 
 def test_successful_remux_transfers_temp_file_ownership(monkeypatch) -> None:
