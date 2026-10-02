@@ -6,6 +6,7 @@ from stoney_verify.media_source_registry import (
     add_custom_source,
     enabled_custom_sources,
     parse_media_source_registry,
+    prepare_example_search_url,
     remove_custom_source,
     set_custom_source_enabled,
 )
@@ -150,3 +151,33 @@ def test_explicit_source_id_still_updates_existing_source() -> None:
     assert updated.sources[0].source_id == source_id
     assert updated.sources[0].label == "Family Library Updated"
     assert updated.sources[0].endpoint_url.endswith("/v2")
+
+
+
+def test_example_search_url_auto_detects_common_query_parameters() -> None:
+    assert prepare_example_search_url(
+        "https://api.example.com/search?q=batman&type=movie"
+    ) == "https://api.example.com/search?q={query}&type=movie"
+
+    assert prepare_example_search_url(
+        "https://api.example.com/find?search=batman"
+    ) == "https://api.example.com/find?search={query}"
+
+    assert prepare_example_search_url(
+        "https://api.example.com/search?q={query}"
+    ) == "https://api.example.com/search?q={query}"
+
+    assert prepare_example_search_url(
+        "https://api.example.com/search"
+    ) == "https://api.example.com/search"
+
+
+def test_example_search_url_rejects_ambiguous_existing_query_string() -> None:
+    try:
+        prepare_example_search_url(
+            "https://api.example.com/search?type=movie&category=feature"
+        )
+    except ValueError as exc:
+        assert "could not find the movie-search part" in str(exc).lower()
+    else:
+        raise AssertionError("ambiguous example search URL was accepted")
