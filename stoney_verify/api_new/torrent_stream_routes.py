@@ -59,8 +59,15 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
     if request.method == "HEAD":
         return web.Response(status=status_code, headers=headers)
 
+    plan = manager.prepare_playback_request(session, start, end)
     first_end = min(end, start + _STREAM_CHUNK_BYTES - 1)
-    ready = await manager.wait_range(session, start, first_end)
+    startup_wait_end = max(first_end, plan.startup_wait_end)
+    ready = await manager.wait_range(
+        session,
+        start,
+        startup_wait_end,
+        readahead_bytes=plan.target_bytes,
+    )
     if not ready:
         status = manager.status(session)
         return web.json_response(
@@ -83,7 +90,12 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
         while cursor <= end:
             chunk_end = min(end, cursor + _STREAM_CHUNK_BYTES - 1)
             if cursor != start:
-                ready = await manager.wait_range(session, cursor, chunk_end)
+                ready = await manager.wait_range(
+                    session,
+                    cursor,
+                    chunk_end,
+                    readahead_bytes=plan.target_bytes,
+                )
                 if not ready:
                     break
             payload = await manager.read_range(session, cursor, chunk_end)
