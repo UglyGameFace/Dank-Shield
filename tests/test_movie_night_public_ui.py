@@ -103,8 +103,8 @@ def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
     add_modal = movie_ui.CustomSourceModal(owner_id=1, baseline={})
     assert len(add_modal.children) == 2
     assert [item.label for item in add_modal.children] == [
-        "Source name",
-        "HTTPS JSON search/feed URL",
+        "Name",
+        "Search/feed URL",
     ]
 
     source = CustomMediaSource(
