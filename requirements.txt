@@ -15,3 +15,5 @@ justmytype-intl-sea==0.1.0
 justmytype-intl-africa==0.1.0
 justmytype-intl-cjk==0.1.0
 deckr-fonts==0.2.0
+
+yt-dlp==2026.8.19
