@@ -2,89 +2,105 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-TOKE-386 — add optional media to the canonical /toke card**
+**DANK-SHIELD-SHARE-388 — native Share Router video relay + X/Twitter duplicate collapse**
 
-Previous /toke reliability task #381 is complete:
-- PR #382 fixed large-guild channel discovery and merged;
-- PR #383 exposed direct Starter/Notify mapping and merged;
-- PR #385 fixed capability save/reload corruption and merged;
-- exact-head CI passed;
-- Android canary confirmed /toke posts in the configured general channel, pings the configured Stoner role, and Cheers works;
-- issue #381 is closed.
+Explicit FORCE SWITCH accepted:
+**Fix Share Router video playback and duplicate X/Twitter posts**
 
-Production baseline: `main` = `d3c65b2de716ad32a668edfa70e10a4fda6a9cbe` (PR #385 merge).
+Reason:
+Dank Shield should upload playable video inline like VidVaul and must not post both x.com and twitter.com versions of the same status.
 
-Active branch: `feat/toke-media`.
+Production baseline: `main` = `1f6b99e4aa2fc111cb11271db2b8e07ac1979d0c` (PR #387 merge).
 
-Active issue: #386 — **Add optional media to /toke cards**.
+Active branch: `fix/share-router-native-video-dedupe`.
 
-Active PR: #387 — **Add optional image and GIF media to /toke** (draft).
+Active issue: #388 — **Share Router: native inline video + X/Twitter dedupe**.
 
 ## Scope
 
-Extend only the existing canonical top-level `/toke` callback and its command-surface contract.
+Fix only Share Router's routed-message construction and media relay required for:
+- one canonical X/Twitter status instead of duplicate aliases/previews;
+- Discord-native inline video when the source Discord message already exposes a trusted direct/proxy video resource.
 
-Desired public options:
-- `message` — existing optional short text;
-- `media` — optional external HTTP(S) image/GIF/share URL;
-- `upload` — optional PNG/JPG/JPEG/GIF/WEBP Discord attachment.
+Do not add a second Share Router implementation, yt-dlp/ffmpeg/provider credentials, arbitrary-page scraping, command-surface changes, route storage changes, or unrelated REST/rate-limit work.
 
-One media source at a time.
+## Root cause
 
-Do not create a second Toke command, duplicate posting path, media persistence model, server-side arbitrary URL fetcher, or custom GIF search service.
+Current `share_router_runtime._message_share_text()` concatenates:
+- the human's original message content;
+- Discord-generated embed URL;
+- Discord-generated embed title;
+- Discord-generated embed description;
+- attachment URLs.
 
-Discord's built-in GIF tab is not exposed as a slash-command option. A future message-context action may bridge an already-posted Discord GIF into /toke, but that is outside this active implementation.
+For X shares, the human content may contain `x.com/<user>/status/<id>` while Discord's generated provider embed exposes the equivalent `twitter.com/<user>/status/<id>`. The router therefore reposts both aliases and the provider-generated title/description. Discord then unfurls both URLs, producing the doubled X preview shown in production.
+
+The runtime also forwards only text/URLs. It never turns a source message's existing direct/proxied video resource into a Discord attachment, so the target can only show provider unfurls. VidVaul-style native playback requires sending an actual video file back to Discord.
 
 ## Execution path
 
-`/toke -> public_command_surface_v2._standalone("toke", open_toke_command) -> public_toke.open_toke_command -> existing Community & Pings role/channel resolution -> existing cooldown/permission checks -> one channel.send() with the Toke embed + Cheers view`.
+`human post in configured Share Router source -> native on_message listener -> share_router_runtime.route_message -> route permission/privacy checks -> _message_share_text -> recent-route dedupe -> one target.send -> optional source delete -> modlog`.
 
-The media feature stays inside that single send owner.
-
-## Findings / requirements
-
-- The compact public surface infers `/toke` slash options directly from `open_toke_command()`.
-- Existing command-tree coverage previously claimed `/dank upload` was the only attachment doorway; that global claim must be updated rather than bypassed.
-- Uploaded media should be re-uploaded with the Toke post and referenced as an `attachment://` embed image.
-- Direct media URLs can be placed in the Toke embed image.
-- Normal Tenor/Giphy/share-page URLs should remain on the same message so Discord can render its own link preview; Dank Shield must not fetch arbitrary user URLs.
-- Existing role mention safety, starter authorization, cooldowns, target-channel routing, message sanitization, and Cheers behavior must remain unchanged.
+This task keeps that owner and one-send contract.
 
 ## Changes on active branch
 
-- `/toke` now exposes optional `media` and `upload` parameters alongside `message`.
-- External media URLs are restricted to valid HTTP(S) URLs and length/whitespace checked.
-- Direct Discord CDN / Tenor media / Giphy media / direct image URLs are rendered inside the existing Toke embed.
-- Non-direct share-page links stay on the same bot message for Discord-native preview behavior.
-- Uploaded PNG/JPG/JPEG/GIF/WEBP media is validated, re-uploaded, and displayed through `attachment://...` in the same Toke card.
-- Simultaneous URL + upload is rejected.
-- Uploaded media requires Attach Files in the destination channel; the existing Embed Links requirement remains.
-- No arbitrary remote URL is fetched by Dank Shield.
-- Help text now distinguishes card-asset `/dank upload` from optional `/toke upload:`.
-- Command-tree regression now enumerates attachment option owners and permits only `dank upload:file` and `toke:upload`.
-- Focused tests cover URL validation/direct-media classification, upload type validation, and the canonical one-post media send contract.
+### Alias/content normalization
+- X and Twitter status URLs now normalize to one `x-status:<status_id>` identity.
+- `twitter.com/<user>/status/<id>` canonicalizes to `x.com/<user>/status/<id>`.
+- equivalent aliases inside the human content collapse to one URL.
+- Discord-generated embed URL is added only when it is not equivalent to an already-seen URL.
+- generated embed title/description are no longer copied into routed text.
+- recent-route dedupe uses the same canonical URL identity.
+
+### Native video relay
+- Source video candidates are derived only from source attachments and Discord embed `video.proxy_url` / `video.url`.
+- Discord proxy/CDN video is preferred when available.
+- Direct relay is restricted to trusted media hosts; arbitrary user URLs are not fetched.
+- Downloads use `aiohttp` with bounded timeout, explicit redirect validation, streaming chunks, a spooled temp file, guild upload limit, and a configurable safety cap.
+- Native relay requires Attach Files in the target. Missing permission, unsupported media, timeout, oversize, or download failure falls back to the single canonical provider link instead of dropping the route.
+- When native video upload succeeds, source URLs are angle-bracketed to suppress provider unfurls while keeping them clickable, producing one visual media surface: Discord's native uploaded-video player.
+- If Discord rejects the uploaded file at final send, Share Router retries the same route once as link-only content.
+
+## Regression coverage
+
+- exact X/Twitter alias collapse;
+- same status ID dedupes across x.com and twitter.com;
+- provider-generated embed title/description are not copied;
+- duplicate aliases inside one human message collapse;
+- Discord proxy video is preferred over provider direct URL;
+- untrusted arbitrary video hosts are rejected;
+- native-video mode suppresses link unfurls while preserving clickability;
+- static ownership checks require bounded spool/timeout/size behavior and link-only fallback.
 
 ## Validation required
 
 Before merge:
-- branch must remain 0 behind production main;
-- compile/import validation;
-- focused `test_profile_community_toke.py`;
-- final live command-tree/schema test including Attachment option type;
-- application command payload-size diagnostics;
+- compile/import;
+- focused Share Router tests;
 - full Dank Shield pytest/CI;
-- final diff check for unrelated work;
-- verify no new attachment doorway appears outside `/dank upload` and `/toke`.
+- final diff/references review;
+- 0 behind production main;
+- no new runtime owner or command surface;
+- no arbitrary external fetch path.
 
 After merge/deploy Android canary:
-1. run plain `/toke`;
-2. run `/toke message:`;
-3. run `/toke media:` with a direct GIF/image URL;
-4. run `/toke media:` with a normal Tenor/Giphy share link;
-5. run `/toke upload:` with a GIF;
-6. run `/toke upload:` with PNG/JPG/WEBP;
-7. confirm media appears with the same Toke post, role ping remains constrained, Cheers still works, and cooldown semantics are unchanged;
-8. confirm URL + upload together is rejected clearly.
+1. share the same X video through the configured proxy;
+2. verify target contains only one canonical status link;
+3. verify no duplicate `twitter.com` alias/provider title copy;
+4. verify an actual Discord native inline video player appears when Discord exposes a relayable video resource;
+5. verify source cleanup still works;
+6. verify sender attribution remains and mentions are still suppressed;
+7. verify duplicate-share cleanup still suppresses a repeated share;
+8. verify link-only fallback still routes if native video relay cannot be used.
+
+## Suspended work
+
+Issue #386 / PR #387 — **Toke media** — PR merged as `1f6b99e4aa2fc111cb11271db2b8e07ac1979d0c`; post-merge Android canary is suspended by this FORCE SWITCH.
+
+Issue #380 — **True master runtime ownership + production-path audit** remains queued.
+
+Issue #384 — **Audit repeated Discord 429s during/after activity recovery** remains backlogged.
 
 ## Backlog / suspended work
 
