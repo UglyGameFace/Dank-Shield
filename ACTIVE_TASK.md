@@ -5,47 +5,46 @@
 **DANK-SHIELD-390 — Universal Share Router media resolver and stream playback**
 
 Production baseline:
-`main@549cb685ef39b567124150c63ec27fc33fd8a443` (PR #402 merged).
+`main@631bce802b4d2e21f3a7b6ed3177b305af14684b` (PR #403 merged).
 
 Active branch:
-`feat/390-controlled-media-remux`
+`feat/390-safe-manifest-proxy`
 
 Status:
-**Slice 2 active — controlled HLS/DASH + separate A/V remux/merge.**
+**Slice 3 active — safe validating manifest/segment proxy for direct and provider HLS/DASH.**
 
-### Slice 2 scope
+### Slice 3 scope
 
-1. Reuse the Slice 1 provider-neutral resolver and existing Share Router upload owner.
-2. Preserve separate video/audio candidates instead of collapsing them to link-only fallback.
-3. Add one controlled media remux owner for:
-   - HLS manifests;
-   - DASH manifests;
-   - fragmented provider media where ffmpeg can remux;
-   - separate video + audio progressive streams.
-4. Use fixed `ffmpeg` argv through `asyncio.create_subprocess_exec`; never invoke a shell or accept arbitrary command arguments.
-5. Default to one concurrent remux process, bounded by environment config.
-6. Kill processes on timeout and always clean temporary files.
-7. Enforce the existing Discord upload byte cap after remux and reject empty/oversize output.
-8. Prefer stream-copy/remux only in this slice. No CPU-heavy general re-encoding.
-9. Fall back to the canonical provider link on missing ffmpeg, unsupported codecs/container, timeout, oversize output, or remux failure.
-10. Preserve Share Router privacy, permission, dedupe, attribution, source cleanup, and direct-memes behavior.
-11. Add regressions for fixed argv/no-shell execution, timeout/kill, concurrency, cleanup, separate A/V selection, manifest remux, and fallback.
-12. Run exact-head full CI and final diff review.
+1. Add one localhost-only validating manifest proxy used only by the bounded Share Router remux owner.
+2. Centralize public-network DNS enforcement so normal provider downloads, manifest fetches, redirects, segments, keys, init files, and playlists use one safety owner.
+3. Fetch upstream manifests through the public-DNS guard with bounded redirects, timeout, headers, and byte limits.
+4. Rewrite HLS nested playlist/segment/key/map/media URLs to localhost proxy URLs backed by approved public upstream mappings.
+5. Rewrite DASH BaseURL / Location / SegmentTemplate / SegmentURL / initialization URL references to the localhost proxy so ffmpeg cannot fetch arbitrary nested URLs directly.
+6. Revalidate every proxied upstream request and redirect before opening a socket.
+7. Stream segment/media bytes through bounded chunks without unbounded RAM buffering.
+8. Apply a per-remux total upstream byte budget and reject when exhausted.
+9. Bind the proxy only to 127.0.0.1 with an unguessable per-session token.
+10. Route all manifest remuxes, including provider-extracted manifests, through this proxy. Direct manifests may become remuxable only through this validated path.
+11. Keep live streams link/player-only and preserve all Slice 1/2 fallbacks.
+12. Add HLS/DASH rewrite, redirect, private-target, byte-budget, cleanup, localhost-binding, and remux-integration tests.
+13. Run exact-head full CI and final diff/ownership review.
 
-### Resource/safety contract
+### Security / resource contract
 
-- Discloud already installs `ffmpeg` via `APT=canvas, ffmpeg`.
-- Bot RAM is 1495 MB, so this slice deliberately avoids general transcode/re-encode.
-- No arbitrary shell execution.
-- No unbounded output files.
-- No permanent media cache.
-- No second Share Router listener or upload owner.
-- No provider-specific command implementations.
-- Remux failure is non-destructive and link-safe.
+- ffmpeg never receives an upstream manifest URL directly in this slice;
+- nested manifest URLs cannot bypass the public DNS guard;
+- no arbitrary shell execution;
+- no public listener;
+- no permanent proxy/media cache;
+- no unbounded body buffering;
+- no general re-encoding;
+- no second Share Router listener or sender;
+- failures remain non-destructive and fall back to the canonical source link.
 
-### Previous slice
+### Previous slices
 
-PR #402 established the universal provider resolver, provider policy, cache/coalescing, public media URL safety, provider health diagnostics, progressive selection, safe extractor headers, and explicit HLS/DASH/separate-stream classification.
+- PR #402: provider-neutral resolver foundation.
+- PR #403: bounded stream-copy remux/merge for provider manifests and separate A/V.
 
 
 ---
