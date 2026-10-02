@@ -26,6 +26,11 @@ OPTION_KINDS = frozenset({"community", "notification"})
 CAP_TOKE_START = "toke_start"
 CAP_TOKE_NOTIFY = "toke_notify"
 CAP_MOVIE_NIGHT_NOTIFY = "movie_night_notify"
+UNIQUE_CAPABILITIES = frozenset({
+    CAP_TOKE_START,
+    CAP_TOKE_NOTIFY,
+    CAP_MOVIE_NIGHT_NOTIFY,
+})
 
 _COMMUNITY_MEMBER_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
@@ -553,6 +558,140 @@ def toke_role_ids(
     return starter, notify
 
 
+def with_unique_capability(
+    config: CommunityPingsConfig,
+    *,
+    option_key: str,
+    capability: str,
+) -> CommunityPingsConfig:
+    """Assign one integration capability to exactly one option."""
+
+    cap = _capability_id(capability)
+    if cap not in UNIQUE_CAPABILITIES:
+        raise ValueError("Unsupported Community & Pings capability.")
+
+    wanted = str(option_key or "").strip()
+    selected = next((item for item in config.options if item.key == wanted), None)
+    if selected is None:
+        raise ValueError("That Community & Pings option no longer exists.")
+
+    stripped = tuple(
+        replace(
+            item,
+            capabilities=tuple(
+                value for value in item.capabilities if value != cap
+            ),
+        )
+        for item in config.options
+    )
+    stripped_model = CommunityPingsConfig(
+        revision=config.revision,
+        groups=config.groups,
+        options=stripped,
+        source=config.source,
+    )
+    selected = next(item for item in stripped_model.options if item.key == wanted)
+    return with_option(
+        stripped_model,
+        replace(
+            selected,
+            capabilities=tuple(dict.fromkeys((*selected.capabilities, cap))),
+        ),
+    )
+
+
+def movie_night_registration_blocker(config: CommunityPingsConfig) -> str:
+    """Return a setup blocker before creating a new Discord Movie Night role."""
+
+    if any(
+        item.enabled and CAP_MOVIE_NIGHT_NOTIFY in item.capabilities
+        for item in config.options
+    ):
+        return ""
+    if len(config.options) >= MAX_COMMUNITY_OPTIONS:
+        return (
+            f"Community & Pings already has the maximum {MAX_COMMUNITY_OPTIONS} options. "
+            "Remove an unused option before creating a new Movie Night notification role."
+        )
+    return ""
+
+
+def register_movie_night_notification_role(
+    config: CommunityPingsConfig,
+    *,
+    role_id: int,
+    label: str = "Movie Night",
+    emoji: str = "🎬",
+    description: str = "Opt in to Movie Night announcements",
+) -> CommunityPingsConfig:
+    """Register a Discord role as the canonical Movie Night notification option.
+
+    If the role is already a Community & Pings option, its existing presentation
+    and group are preserved; only notification kind/capability are normalized.
+    """
+
+    rid = _safe_int(role_id, 0)
+    if rid <= 0:
+        raise ValueError("Movie Night role ID is invalid.")
+
+    existing = option_for_role(config, rid)
+    if existing is not None:
+        updated = replace(existing, kind="notification", enabled=True)
+        model = with_option(config, updated)
+        return with_unique_capability(
+            model,
+            option_key=updated.key,
+            capability=CAP_MOVIE_NIGHT_NOTIFY,
+        )
+
+    blocker = movie_night_registration_blocker(config)
+    if blocker:
+        raise ValueError(blocker)
+
+    groups = list(config.groups)
+    chosen_group = next(
+        (
+            group.key
+            for group in groups
+            if group.key in {"movie-night", "notifications", "pings"}
+            or "notification" in group.label.casefold()
+            or "ping" in group.label.casefold()
+        ),
+        "",
+    )
+    if not chosen_group:
+        if len(groups) < MAX_COMMUNITY_GROUPS:
+            chosen_group = "movie-night"
+        elif groups:
+            chosen_group = groups[0].key
+        else:
+            chosen_group = "movie-night"
+
+    base_key = "movie-night"
+    occupied = {item.key for item in config.options}
+    key = base_key if base_key not in occupied else f"movie-night-{rid}"[:48]
+
+    option = CommunityPingOption(
+        key=key,
+        role_id=rid,
+        label=_text(label, 100) or "Movie Night",
+        emoji=_emoji(emoji, "🎬"),
+        description=_text(description, 100),
+        kind="notification",
+        group_key=chosen_group,
+        removable=True,
+        enabled=True,
+        order=len(config.options),
+        capabilities=(),
+    )
+    model = with_option(config, option)
+    return with_unique_capability(
+        model,
+        option_key=option.key,
+        capability=CAP_MOVIE_NIGHT_NOTIFY,
+    )
+
+
 def movie_night_role_id(config: CommunityPingsConfig) -> int:
     """Resolve the enabled Community & Pings role used for Movie Night notices.
 
@@ -668,13 +807,16 @@ __all__ = [
     "MAX_COMMUNITY_GROUPS",
     "MAX_COMMUNITY_OPTIONS",
     "OPTION_KINDS",
+    "UNIQUE_CAPABILITIES",
     "community_member_lock",
     "enabled_options",
     "move_option",
+    "movie_night_registration_blocker",
     "movie_night_role_id",
     "next_revision",
     "option_for_role",
     "parse_community_pings",
+    "register_movie_night_notification_role",
     "role_dependency_labels",
     "self_service_kind",
     "toke_role_ids",
@@ -683,5 +825,6 @@ __all__ = [
     "validate_config",
     "validate_member_selection",
     "with_option",
+    "with_unique_capability",
     "without_option",
 ]
