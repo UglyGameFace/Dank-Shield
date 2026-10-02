@@ -30,6 +30,7 @@ from stoney_verify.community_pings_service import (
     validate_config,
     validate_member_selection,
     with_option,
+    with_unique_capability,
     without_option,
 )
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
@@ -180,49 +181,13 @@ def _assign_toke_capability(
     option_key: str,
     capability: str,
 ) -> CommunityPingsConfig:
-    """Assign one integration capability to exactly one configured option.
+    """Compatibility name for the shared unique-capability owner."""
 
-    The historical function name is retained because existing /toke tests and
-    callers use it. Movie Night uses the same unique-capability semantics.
-    """
-
-    if capability not in {
-        CAP_TOKE_START,
-        CAP_TOKE_NOTIFY,
-        CAP_MOVIE_NIGHT_NOTIFY,
-    }:
-        raise ValueError("Unsupported Community & Pings capability.")
-
-    wanted = str(option_key or "").strip()
-    selected = next((item for item in model.options if item.key == wanted), None)
-    if selected is None:
-        raise ValueError("That Community & Pings option no longer exists.")
-
-    stripped_options = tuple(
-        replace(
-            item,
-            capabilities=tuple(
-                value for value in item.capabilities if value != capability
-            ),
-        )
-        for item in model.options
+    return with_unique_capability(
+        model,
+        option_key=option_key,
+        capability=capability,
     )
-    stripped_model = CommunityPingsConfig(
-        revision=model.revision,
-        groups=model.groups,
-        options=stripped_options,
-        source=model.source,
-    )
-    stripped_selected = next(
-        item for item in stripped_model.options if item.key == wanted
-    )
-    target = replace(
-        stripped_selected,
-        capabilities=tuple(
-            dict.fromkeys((*stripped_selected.capabilities, capability))
-        ),
-    )
-    return with_option(stripped_model, target)
 
 
 def _manager_embed(
