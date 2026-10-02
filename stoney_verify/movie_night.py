@@ -723,14 +723,38 @@ class MovieNightManager:
     ) -> list[MovieCandidate]:
         room = self._require_room(room_id)
         active = self.active_viewers(room, now=now)
-        return sorted(
-            room.candidates.values(),
-            key=lambda item: (
-                -len(item.votes & active),
+
+        def _rank(item: MovieCandidate) -> tuple[Any, ...]:
+            movie_votes = len(item.votes & active)
+            variants = self.ranked_variants(
+                room_id,
+                item.candidate_id,
+                now=now,
+            )
+            if variants:
+                best = variants[0]
+                health = best.swarm_health
+                seeds = int(health["seeds"])
+                ratio = float(health["seed_leech_ratio"])
+                leechers = int(health["leechers"])
+                peers = int(health["peers"])
+            else:
+                seeds = 0
+                ratio = 0.0
+                leechers = 0
+                peers = 0
+            return (
+                -movie_votes,
+                0 if seeds > 0 else 1,
+                -seeds,
+                -ratio,
+                leechers,
+                -peers,
                 float(item.created_at),
                 item.title.lower(),
-            ),
-        )
+            )
+
+        return sorted(room.candidates.values(), key=_rank)
 
     def queue_winner(
         self,
