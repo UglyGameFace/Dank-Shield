@@ -1857,18 +1857,16 @@ class MovieSearchModal(discord.ui.Modal, title="Search / Vote for a Movie"):
             )
         except Exception as exc:
             return await _private(interaction, f"❌ Search vote could not start: {exc}")
+        room = manager.get(self.room_id)
+        if room is None:
+            return await _private(interaction, "❌ This Movie Night room no longer exists.")
         if vote.resolved and vote.passed:
-            await _private(
-                interaction,
-                f"✅ Search approved: **{_compact(self.query.value)}**. "
-                "Configured source resolvers can now populate release candidates.",
-            )
-        else:
-            await _private(
-                interaction,
-                f"🗳️ Search vote opened for **{_compact(self.query.value)}**. "
-                "Other active viewers can vote from their `/movie` panel.",
-            )
+            return await _execute_passed_vote(interaction, room, vote)
+        await _private(
+            interaction,
+            f"🗳️ Search vote opened for **{_compact(self.query.value)}**. "
+            "Other active viewers can vote from their /movie panel.",
+        )
 
 
 async def _announce_room(
@@ -1969,6 +1967,14 @@ class MovieNightHubView(_OwnedView):
             MovieSearchModal(owner_id=self.owner_id, room_id=room.room_id)
         )
 
+    @discord.ui.button(label="Results", emoji="🎞️", style=discord.ButtonStyle.primary, row=0)
+    async def results(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        room = _room_for_interaction(interaction)
+        if room is None:
+            return await _private(interaction, "ℹ️ No Movie Night room is active here.")
+        await open_movie_results(interaction, room.room_id, replace_message=True)
+
     @discord.ui.button(label="Queue", emoji="📺", style=discord.ButtonStyle.primary, row=0)
     async def queue(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -2001,7 +2007,7 @@ class MovieNightHubView(_OwnedView):
         if vote is None:
             return await _private(interaction, "ℹ️ There is no open Movie Night vote.")
         try:
-            manager.cast_vote(
+            vote = manager.cast_vote(
                 room.room_id,
                 vote.vote_id,
                 user_id=int(interaction.user.id),
@@ -2009,6 +2015,8 @@ class MovieNightHubView(_OwnedView):
             )
         except Exception as exc:
             return await _private(interaction, f"❌ Vote failed: {exc}")
+        if vote.resolved and vote.passed and vote.action in {"search", "play_variant"}:
+            return await _execute_passed_vote(interaction, room, vote)
         await open_movie_night(interaction, replace_message=True)
 
     @discord.ui.button(label="Sources", emoji="🎞️", style=discord.ButtonStyle.secondary, row=2)
