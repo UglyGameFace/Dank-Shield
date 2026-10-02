@@ -28,7 +28,9 @@ Status:
 11. Do not store the TMDB deployment token in guild config or expose it in Discord UI.
 12. Do not add provider-specific scraping/reverse-engineering for unauthorized streaming sites. Provider architecture remains compatible with future authorized APIs/personal libraries once their credential storage is designed safely.
 13. Brand the entire public surface as **Dank Cinema** so catalog, provider, queue, result, direct-media, and setup flows feel native to Dank Shield while preserving required third-party attribution and source identities.
-14. Add regression coverage for TMDB identity/watch metadata, built-in search scoping, Archive torrent-reference normalization, automatic example-URL conversion, zero-setup provider UI, Dank Cinema branding, and aggregate search behavior.
+14. Support **both provider modes**: structured JSON providers feed normalized playable releases into Dank Engine, while external search-link providers open the provider's own query-results page without scraping or ingesting HTML.
+15. Keep external search-link providers separate from playback results and never treat a web page as a playable release.
+16. Add regression coverage for TMDB identity/watch metadata, built-in search scoping, Archive torrent-reference normalization, automatic example-URL conversion, provider-mode migration/partitioning, external search rendering, zero-setup provider UI, Dank Cinema branding, and aggregate search behavior.
 
 ### Findings / root cause
 
@@ -47,6 +49,9 @@ Status:
 - Existing custom API management remains Edit / Enable / Disable / Remove through the canonical guild registry.
 - `.env.example` and production docs now define `DANK_TMDB_READ_TOKEN` and `DANK_TMDB_WATCH_REGION`.
 - Public Movie Night UX is now branded as **Dank Cinema**: **Dank Catalog**, **Dank Watch**, **Dank Archive**, **Dank Direct**, **Dank Engine**, and **Dank Provider Lab**. Underlying providers remain explicitly identified where attribution or source provenance matters.
+- Custom provider registry now has backward-compatible provider modes: **JSON** for structured/playable resolver input and **external** for browser search-result links. Legacy saved providers default to JSON.
+- Provider Deck now exposes **Add JSON Provider** and **Add Search Link**. External links are query-templated but never fetched by Dank Shield.
+- Movie candidate pages expose **Search Elsewhere**, and searches with no playable result can fall back to enabled external provider buttons without converting those pages into releases.
 - Regression coverage is being extended in the catalog, media-source, and public Movie Night test suites.
 
 ### Validation / cleanup / blockers
