@@ -2,15 +2,77 @@
 
 ## Active task / outcome
 
+**DANK-SHIELD-MOVIE-NIGHT-FOLLOWUP — simple custom-source UX + complete session termination**
+
+Production baseline inspected before this task:
+`main@7d09c89c15ed48067cb97ee32bc900931e1833dd` (PR #394 merged).
+
+Active branch:
+`fix/movie-night-source-ux-session-end`
+
+Status:
+**Implementation in progress; validation pending.**
+
+### Scope / required outcome
+
+1. Preserve the existing canonical Movie Night torrent runtime, direct user-supplied magnet playback, and direct user-supplied `.torrent` playback.
+2. Make guild-configured **authorized structured HTTPS JSON sources** easy to add without asking admins to invent an internal Source ID.
+3. Add first-class source editing while preserving enable / disable / remove and canonical guild-config CAS persistence.
+4. Keep source fetching network-safe and structured; do not add arbitrary HTML scraping or provider-specific piracy-index integrations.
+5. Add a real **End Session** control distinct from closing the ephemeral Discord panel.
+6. The host can end immediately only after confirmation.
+7. Active viewers can open and pass an **end-session vote even while the host is present**.
+8. Every successful end path must use one canonical cleanup owner that:
+   - marks the room ended;
+   - releases only that room's torrent lease so shared torrents remain valid for other rooms;
+   - clears room-owned media identity, queue, candidates, and approved search state;
+   - allows a fresh Movie Night to start in the same channel.
+9. Web-player host termination and Discord termination must converge on the same cleanup path.
+10. Add regression coverage for end voting, post-end side-effect claiming, lease cleanup/idempotence, source-ID generation, source editing UX, and Discord end-vote cleanup.
+
+### Findings / root cause
+
+- `end` was grouped with failover playback actions, so a non-host could not even open an end vote while the host was active.
+- A passed `end` vote marked the room ended in memory, but the Discord vote executor only performed external side effects for `search` and `play_variant`; the torrent lease could remain allocated.
+- The web player had its own manual lease-release code, creating duplicate termination ownership.
+- `claim_vote_execution()` rejected already-ended rooms, so cleanup could not be claimed after an end vote transitioned room state.
+- The public hub had no true End Session action; **Close** only dismissed the UI.
+- Custom source setup exposed an internal Source ID and labeled one modal Add / Update even though editing required knowing/reusing that hidden identity.
+
+### Execution path / changes so far
+
+- `stoney_verify/movie_night.py`: separates collaborative session actions from host-failover playback actions and permits post-end execution claiming.
+- `stoney_verify/movie_night_session.py`: new canonical end/lease cleanup owner.
+- `stoney_verify/movie_night_web.py`: host web termination routes through canonical cleanup; ended heartbeats return terminal state.
+- `stoney_verify/commands_ext/public_movie_night.py`: adds host-confirmed End Session, viewer end voting, end-vote cleanup execution, simpler source add/edit UI.
+- `stoney_verify/media_source_registry.py`: generates stable unique internal source IDs when admins add a source without one.
+- Regression tests are being added in the existing Movie Night/source suites plus `tests/test_movie_night_session.py`.
+
+### Validation / cleanup / blockers
+
+Pending before completion claim:
+- targeted Movie Night/source tests;
+- repository compile/type/lint/static checks used by CI;
+- exact-head GitHub Actions;
+- branch-vs-main comparison and final diff review;
+- stale/duplicate termination references and import cleanup;
+- production/mobile canary after merge/deploy remains an owner runtime check.
+
+No unrelated task is active.
+
+---
+
+## Previous completed baseline
+
 **DANK-SHIELD-MOVIE-NIGHT-393 — dynamic media capacity + shared torrent reuse**
 
 PR #392 / issue #391 are merged to production main as:
 `151076e83ec49a8a09a1856fbedd5dd5a61a62df`.
 
-The active task is now issue #393:
-**Scale Movie Night media capacity safely on the current 1.46 GB host**.
+Issue #393 was completed and merged as PR #394 into:
+`7d09c89c15ed48067cb97ee32bc900931e1833dd`.
 
-Active branch:
+Previous implementation branch:
 `feat/movie-night-dynamic-capacity`
 
 Current host facts supplied by the owner:
