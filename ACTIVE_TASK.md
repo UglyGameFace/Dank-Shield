@@ -79,6 +79,69 @@ Movie Night role ownership now uses the existing generic Community & Pings syste
 
 Regression coverage now checks capability payload round-trip, unique reassignment, preservation of existing rules and /toke capabilities, direct manager mapping, notification-only filtering, and option-capacity preflight.
 
+## Public Movie Night command + complete setup
+
+The feature now has a real public doorway and setup surface instead of backend-only state.
+
+Public entry:
+- `/movie` opens the canonical Movie Night hub;
+- `/movie magnet:<link>` attaches an authorized magnet to the active/current-channel room;
+- `/movie torrent:<file>` accepts an uploaded .torrent metadata file;
+- Dank Home → Community & Engagement → **Movie Night** routes to the same owner;
+- no duplicate `/movienight`, `/movie-search`, or setup command tree is introduced.
+
+Hub controls:
+- Start / Join;
+- Search / Vote;
+- Queue;
+- Vote Yes / Vote No;
+- Sources;
+- Setup;
+- Community & Pings;
+- Refresh;
+- Close.
+
+Complete setup checks:
+1. Movie Night notification role exists and maps through Community & Pings capability `movie_night_notify`;
+2. role notification ping is actually usable;
+3. current channel has View Channel / Send Messages / Embed Links and reports Attach Files status;
+4. libtorrent runtime is installed;
+5. PyAV/FFmpeg metadata runtime is installed;
+6. `DANK_MEDIA_PUBLIC_BASE_URL` exists;
+7. dedicated `DANK_TORRENT_STREAM_SECRET` exists;
+8. externally-addressed media uses an externally reachable bind host (Discloud: `0.0.0.0`);
+9. the dedicated media server reports started;
+10. custom source counts/enabled state are visible;
+11. **Test Media Endpoint** performs a real health request after deferring the Discord interaction.
+
+Role setup behavior:
+- **Create / Repair Role** preflights Community & Pings capacity before creating Discord state;
+- new role is created as a ping-ready Movie Night notification role;
+- role is registered atomically into the existing Community & Pings config;
+- if persistence loses a CAS race/fails, the newly-created Discord role is deleted as rollback;
+- repairing an existing mapped role preserves the capability model and can make it mentionable when the bot otherwise cannot ping it safely;
+- no second Movie Night role config authority exists.
+
+Source setup behavior:
+- **Sources** lists guild-owned custom sources with provenance and revision;
+- **Add / Update Source** persists through the canonical CAS registry;
+- **Manage Source** supports Enable / Disable / Remove;
+- source setup remains staff-only;
+- normal members can still open Movie Night and their own Community & Pings choices.
+
+Command-surface contract:
+- intentional final public surface is now 10 items including `/movie`;
+- attachment doorways are intentionally limited to `/dank upload:file`, `/toke upload:`, and `/movie torrent:`;
+- navigation registry and compact command audits are updated to fail closed on drift.
+
+Regression coverage includes:
+- `/movie` schema and optional attachment type;
+- hub/setup/source component labels and Discord component limits;
+- navigation aliases such as `movie night`, `watch party`, `group streaming`, and `torrent streaming`;
+- external-media bind readiness;
+- complete ready-state evaluation;
+- media health test acknowledgement before network I/O.
+
 ## Hosting constraint found
 
 Current production `discloud.config` is `TYPE=bot`.
