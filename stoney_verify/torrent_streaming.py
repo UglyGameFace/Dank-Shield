@@ -882,12 +882,19 @@ class TorrentMediaManager:
         owner_id: int,
         source_kind: str,
         source_identity: str,
+        lease_key: str = "",
+        replace_token: str = "",
     ) -> TorrentStreamSession:
         candidates = self._playable_candidates(info)
         if not candidates:
             raise ValueError("This torrent does not contain a supported playable video file.")
 
         selected = candidates[0]
+        self._assert_disk_capacity(
+            selected.size,
+            replace_token=replace_token,
+            lease_key=lease_key,
+        )
         piece_length = int(info.piece_length())
         if piece_length <= 0:
             raise RuntimeError("Torrent metadata reported an invalid piece length.")
@@ -913,11 +920,14 @@ class TorrentMediaManager:
             last_piece=0,
             created_at=time.monotonic(),
             last_access=time.monotonic(),
+            leases={str(lease_key).strip()[:180]} if str(lease_key or "").strip() else set(),
+            unleased_hold=not bool(str(lease_key or "").strip()),
         )
         self._select_candidate(session, selected)
 
         async with self._lock:
             self._sessions[token] = session
+            self._identity_index[source_identity] = token
         return session
 
     def _select_candidate(
@@ -971,6 +981,11 @@ class TorrentMediaManager:
             raise LookupError("Torrent stream session not found.")
         if owner_id is not None and int(owner_id) != int(session.owner_id):
             raise PermissionError("Only the member who started this torrent may switch its media file.")
+        if len(session.leases) > 1 or session.unleased_hold:
+            raise RuntimeError(
+                "This torrent is shared by multiple consumers; switch to a separate source "
+                "instead of changing the shared file selection."
+            )
 
         selected = next(
             (item for item in session.candidates if int(item.index) == int(file_index)),
@@ -1307,6 +1322,8 @@ class TorrentMediaManager:
             "free_bytes": free,
             "max_file_bytes": int(self.max_file_bytes),
             "max_torrent_bytes": int(self.max_torrent_bytes),
+            "disk_reserve_bytes": int(self.disk_reserve_bytes),
+            "committed_file_bytes": int(self._committed_file_bytes()),
         }
 
     def status(self, session: TorrentStreamSession) -> dict[str, Any]:
@@ -1323,6 +1340,11 @@ class TorrentMediaManager:
         return {
             "token": session.token,
             "name": session.file_name,
+            "source_identity": session.source_identity,
+            "lease_count": len(session.leases),
+            "shared": len(session.leases) > 1,
+            "reuse_hits": int(session.reuse_hits),
+            "unleased_hold": bool(session.unleased_hold),
             "size": session.file_size,
             "downloaded": int(progress or 0),
             "progress": min(1.0, max(0.0, float(progress or 0) / max(1, session.file_size))),
@@ -1405,15 +1427,52 @@ class TorrentMediaManager:
                 for token, session in self._sessions.items()
                 if now - session.last_access > self.idle_ttl_seconds
             ]
+        removed = 0
         for token in expired:
-            await self.remove(token)
-        return len(expired)
+            if await self.remove(token, force=True):
+                removed += 1
+        return removed
 
-    async def remove(self, token: str) -> bool:
-        async with self._lock:
-            session = self._sessions.pop(str(token or ""), None)
-        if session is None:
+    async def release_lease(
+        self,
+        token: str,
+        lease_key: str,
+        *,
+        remove_if_unused: bool = True,
+    ) -> bool:
+        key = str(lease_key or "").strip()[:180]
+        if not key:
             return False
+
+        should_remove = False
+        async with self._lock:
+            session = self._sessions.get(str(token or ""))
+            if session is None:
+                return False
+            existed = key in session.leases
+            session.leases.discard(key)
+            session.last_access = time.monotonic()
+            should_remove = bool(
+                remove_if_unused
+                and existed
+                and not session.leases
+                and not session.unleased_hold
+            )
+        if should_remove:
+            return await self.remove(token, force=True)
+        return existed
+
+    async def remove(self, token: str, *, force: bool = False) -> bool:
+        clean_token = str(token or "")
+        async with self._lock:
+            session = self._sessions.get(clean_token)
+            if session is None:
+                return False
+            if session.leases and not force:
+                return False
+            self._sessions.pop(clean_token, None)
+            if self._identity_index.get(session.source_identity) == clean_token:
+                self._identity_index.pop(session.source_identity, None)
         self._safe_remove_handle(session.handle)
         await asyncio.to_thread(shutil.rmtree, session.save_root, True)
         return True
@@ -1439,6 +1498,7 @@ def get_torrent_manager() -> TorrentMediaManager:
 
 
 __all__ = [
+    "MediaCapacitySnapshot",
     "TorrentBufferPlan",
     "TorrentFileCandidate",
     "TorrentMediaManager",
