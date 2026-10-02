@@ -64,7 +64,8 @@ Pending before completion claim:
 Latest review corrections:
 - removed duplicate native-video send/file-close logic from the direct memes path by introducing one canonical upload owner shared with existing proxy routing;
 - scoped webhook exclusion to direct-destination enhancement so existing proxy-source webhook routing is not accidentally changed;
-- extended regression coverage for upload rejection, cross-guild isolation, shared upload ownership, and webhook scope.
+- extended regression coverage for upload rejection, cross-guild isolation, shared upload ownership, and webhook scope;
+- final diff review found the pre-consolidation source-contract test still asserted three retired implementation strings; updated that regression to verify the shared file payload, current preview suppression call, current send-failure diagnostic, and explicit proxy link fallback without restoring obsolete duplicate logic.
 
 No unrelated task is active.
 
