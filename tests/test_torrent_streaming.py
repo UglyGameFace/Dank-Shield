@@ -78,6 +78,8 @@ class _FakeHandle:
         self.file_priorities = None
         self.piece_updates: list[tuple[int, int]] = []
         self.available: set[int] = set()
+        self.download_rate = 1234
+        self.upload_rate = 50
 
     def prioritize_files(self, priorities) -> None:
         self.file_priorities = list(priorities)
@@ -91,8 +93,8 @@ class _FakeHandle:
     def status(self):
         return SimpleNamespace(
             error="",
-            download_rate=1234,
-            upload_rate=50,
+            download_rate=self.download_rate,
+            upload_rate=self.upload_rate,
             num_peers=3,
             num_seeds=1,
             state="downloading",
@@ -294,6 +296,180 @@ def test_http_ranges_can_address_first_middle_and_final_bytes_of_full_video() ->
     )
 
 
+def test_adaptive_buffer_expands_on_slow_swarm_and_shrinks_on_fast_swarm(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.min_readahead_bytes = 4 * 1024 * 1024
+    manager.max_readahead_bytes = 96 * 1024 * 1024
+    manager.buffer_target_seconds = 30.0
+    manager.buffer_max_seconds = 75.0
+    handle = _FakeHandle()
+    session = TorrentStreamSession(
+        token="adaptive",
+        secret="secret",
+        owner_id=2,
+        guild_id=1,
+        source_kind="magnet",
+        source_identity="btih:adaptive",
+        save_root=tmp_path,
+        handle=handle,
+        info=object(),
+        file_index=0,
+        file_path="movie.mp4",
+        file_name="movie.mp4",
+        file_size=400 * 1024 * 1024,
+        file_offset=0,
+        piece_length=1024 * 1024,
+        first_piece=0,
+        last_piece=399,
+        created_at=0.0,
+        last_access=0.0,
+        smoothed_consume_rate=2 * 1024 * 1024,
+    )
+
+    handle.download_rate = 1024 * 1024
+    slow = manager.prepare_playback_request(
+        session,
+        10 * 1024 * 1024,
+        11 * 1024 * 1024 - 1,
+    )
+
+    session.smoothed_download_rate = 0.0
+    handle.download_rate = 10 * 1024 * 1024
+    fast = manager.prepare_playback_request(
+        session,
+        11 * 1024 * 1024,
+        12 * 1024 * 1024 - 1,
+    )
+
+    assert slow.target_seconds > fast.target_seconds
+    assert slow.target_bytes > fast.target_bytes
+    assert slow.target_bytes <= manager.max_readahead_bytes
+
+
+def test_adaptive_buffer_detects_seek_and_rebuilds_near_new_position(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.min_readahead_bytes = 4 * 1024 * 1024
+    manager.max_readahead_bytes = 64 * 1024 * 1024
+    handle = _FakeHandle()
+    handle.download_rate = 8 * 1024 * 1024
+    session = TorrentStreamSession(
+        token="seek-adaptive",
+        secret="secret",
+        owner_id=2,
+        guild_id=1,
+        source_kind="magnet",
+        source_identity="btih:seek",
+        save_root=tmp_path,
+        handle=handle,
+        info=object(),
+        file_index=0,
+        file_path="movie.mp4",
+        file_name="movie.mp4",
+        file_size=300 * 1024 * 1024,
+        file_offset=0,
+        piece_length=1024 * 1024,
+        first_piece=0,
+        last_piece=299,
+        created_at=0.0,
+        last_access=0.0,
+        last_request_at=1.0,
+        last_request_bytes=1024 * 1024,
+        last_request_end=5 * 1024 * 1024 - 1,
+        smoothed_consume_rate=1024 * 1024,
+    )
+
+    plan = manager.prepare_playback_request(
+        session,
+        200 * 1024 * 1024,
+        201 * 1024 * 1024 - 1,
+    )
+
+    assert plan.seek
+    assert plan.startup_wait_end > 201 * 1024 * 1024 - 1
+    priorities = dict(handle.piece_updates)
+    assert priorities[200] == 7
+    assert priorities[201] == 6
+
+
+def test_startup_buffer_is_bounded_even_when_client_requests_whole_file(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.bootstrap_bytes = 8 * 1024 * 1024
+    handle = _FakeHandle()
+    handle.download_rate = 4 * 1024 * 1024
+    session = TorrentStreamSession(
+        token="startup",
+        secret="secret",
+        owner_id=2,
+        guild_id=1,
+        source_kind="magnet",
+        source_identity="btih:startup",
+        save_root=tmp_path,
+        handle=handle,
+        info=object(),
+        file_index=0,
+        file_path="movie.mp4",
+        file_name="movie.mp4",
+        file_size=500 * 1024 * 1024,
+        file_offset=0,
+        piece_length=1024 * 1024,
+        first_piece=0,
+        last_piece=499,
+        created_at=0.0,
+        last_access=0.0,
+    )
+
+    first_chunk_end = 1024 * 1024 - 1
+    plan = manager.prepare_playback_request(session, 0, first_chunk_end)
+
+    assert plan.startup_wait_end > first_chunk_end
+    assert plan.startup_wait_end <= first_chunk_end + manager.bootstrap_bytes
+    assert plan.startup_wait_end < session.file_size - 1
+
+
+def test_stall_history_increases_adaptive_buffer_margin(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    handle = _FakeHandle()
+    handle.download_rate = 3 * 1024 * 1024
+    session = TorrentStreamSession(
+        token="stall",
+        secret="secret",
+        owner_id=2,
+        guild_id=1,
+        source_kind="magnet",
+        source_identity="btih:stall",
+        save_root=tmp_path,
+        handle=handle,
+        info=object(),
+        file_index=0,
+        file_path="movie.mp4",
+        file_name="movie.mp4",
+        file_size=400 * 1024 * 1024,
+        file_offset=0,
+        piece_length=1024 * 1024,
+        first_piece=0,
+        last_piece=399,
+        created_at=0.0,
+        last_access=0.0,
+        smoothed_consume_rate=2 * 1024 * 1024,
+    )
+
+    normal = manager.prepare_playback_request(
+        session,
+        20 * 1024 * 1024,
+        21 * 1024 * 1024 - 1,
+    )
+    session.stall_count = 3
+    session.smoothed_download_rate = 0.0
+    buffered = manager.prepare_playback_request(
+        session,
+        21 * 1024 * 1024,
+        22 * 1024 * 1024 - 1,
+    )
+
+    assert buffered.target_seconds > normal.target_seconds
+    assert buffered.target_bytes >= normal.target_bytes
+
+
 def test_wait_range_requires_all_requested_pieces(monkeypatch, tmp_path: Path) -> None:
     manager = _manager(monkeypatch, tmp_path)
     handle = _FakeHandle()
@@ -411,6 +587,8 @@ def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
     assert "parse_http_range(" in routes
     assert '"Accept-Ranges": "bytes"' in routes
     assert "await manager.wait_range(" in routes
+    assert "manager.prepare_playback_request(session, start, first_end)" in routes
+    assert "plan.target_bytes" in routes
     assert "get_torrent_manager().ensure_cleanup_task()" in routes
     assert "find_magnet(" in router
     assert "is_torrent_filename(" in router
