@@ -7,6 +7,7 @@ This guard addresses the exact log patterns seen in production:
 - repeated audit-log 429s
 - transient Discord 5xx/no-healthy-upstream errors while sending modlogs
 - bursty channel edits during ticket close/rename flows
+- concurrent single-message GET bursts from recovery/runtime owners
 
 It does not change business rules. It serializes and retries Discord API calls in
 places where Discord itself is telling us to slow down. Security-critical AntiNuke
@@ -41,6 +42,15 @@ _RECOVERY_REST_LOOP: asyncio.AbstractEventLoop | None = None
 _RECOVERY_REST_LOCK: asyncio.Lock | None = None
 _RECOVERY_REST_RESERVED_AT: deque[float] = deque()
 _RECOVERY_REST_WAITERS = 0
+
+# Single-message fetches use Discord's same /channels/{channel}/messages/{id}
+# route family. Multiple owners can otherwise collide on one channel bucket or
+# duplicate the same message GET concurrently. Keep this state process-wide and
+# loop-local, exactly like the recovery budget state above.
+_MESSAGE_FETCH_LOOP: asyncio.AbstractEventLoop | None = None
+_MESSAGE_FETCH_LOCKS: dict[int, asyncio.Lock] = {}
+_MESSAGE_FETCH_INFLIGHT: dict[tuple[int, int], asyncio.Task[Any]] = {}
+_MESSAGE_FETCH_COALESCED = 0
 
 # AntiNuke deliberately searches 50 recent entries for these high-risk actions.
 # That request shape is the narrow contract that lets the existing API safety layer
@@ -210,6 +220,104 @@ async def reserve_recovery_discord_rest_requests(
             await _recovery_rest_sleep(wait_for)
         finally:
             _RECOVERY_REST_WAITERS = max(0, _RECOVERY_REST_WAITERS - 1)
+
+
+def _ensure_message_fetch_state() -> None:
+    global _MESSAGE_FETCH_LOOP
+    global _MESSAGE_FETCH_COALESCED
+
+    loop = asyncio.get_running_loop()
+    if _MESSAGE_FETCH_LOOP is loop:
+        return
+
+    _MESSAGE_FETCH_LOOP = loop
+    _MESSAGE_FETCH_LOCKS.clear()
+    _MESSAGE_FETCH_INFLIGHT.clear()
+    _MESSAGE_FETCH_COALESCED = 0
+
+
+def message_fetch_safety_snapshot() -> dict[str, int]:
+    return {
+        "channels": len(_MESSAGE_FETCH_LOCKS),
+        "inflight": sum(
+            1
+            for task in _MESSAGE_FETCH_INFLIGHT.values()
+            if task is not None and not task.done()
+        ),
+        "coalesced": max(0, int(_MESSAGE_FETCH_COALESCED)),
+    }
+
+
+async def fetch_message_with_api_safety(
+    channel: Any,
+    message_id: int,
+    *,
+    label: str = "message fetch",
+    recovery: bool = False,
+) -> Any:
+    """Serialize one-message REST GETs by channel and coalesce duplicate IDs.
+
+    Discord.py remains the authority for route-aware rate-limit retries. This
+    helper only prevents multiple Dank Shield owners from creating avoidable
+    same-channel bursts. Recovery callers can additionally reserve from the
+    existing process-wide recovery budget so startup work still leaves headroom
+    for live moderation and interactions.
+    """
+
+    global _MESSAGE_FETCH_COALESCED
+
+    channel_id = int(getattr(channel, "id", 0) or 0)
+    resolved_message_id = int(message_id or 0)
+    if channel_id <= 0 or resolved_message_id <= 0:
+        raise ValueError("channel and message IDs must be positive")
+
+    _ensure_message_fetch_state()
+    key = (channel_id, resolved_message_id)
+    existing = _MESSAGE_FETCH_INFLIGHT.get(key)
+    if existing is not None and not existing.done():
+        _MESSAGE_FETCH_COALESCED += 1
+        _log(
+            "message fetch coalesced "
+            f"label={str(label or 'message fetch')[:100]} "
+            f"channel={channel_id} message={resolved_message_id}"
+        )
+        return await asyncio.shield(existing)
+
+    async def _run() -> Any:
+        if recovery:
+            # Wait for aggregate recovery capacity *before* taking the channel
+            # route lock. A slow startup budget must never block a live guarded
+            # fetch that needs the same channel.
+            await reserve_recovery_discord_rest_requests(
+                1,
+                label=(
+                    "message fetch "
+                    f"{str(label or 'recovery')[:90]} "
+                    f"channel={channel_id}"
+                ),
+            )
+
+        lock = _MESSAGE_FETCH_LOCKS.setdefault(channel_id, asyncio.Lock())
+        async with lock:
+            return await channel.fetch_message(resolved_message_id)
+
+    task = asyncio.create_task(
+        _run(),
+        name=f"dank-safe-message-fetch-{channel_id}-{resolved_message_id}",
+    )
+    _MESSAGE_FETCH_INFLIGHT[key] = task
+
+    def _cleanup(finished: asyncio.Task[Any]) -> None:
+        if _MESSAGE_FETCH_INFLIGHT.get(key) is finished:
+            _MESSAGE_FETCH_INFLIGHT.pop(key, None)
+        if not any(
+            fetch_key[0] == channel_id and not inflight.done()
+            for fetch_key, inflight in _MESSAGE_FETCH_INFLIGHT.items()
+        ):
+            _MESSAGE_FETCH_LOCKS.pop(channel_id, None)
+
+    task.add_done_callback(_cleanup)
+    return await asyncio.shield(task)
 
 
 async def reserve_bulk_discord_rest_requests(
@@ -532,7 +640,9 @@ def install_discord_api_safety() -> None:
 install_discord_api_safety()
 
 __all__ = [
+    "fetch_message_with_api_safety",
     "install_discord_api_safety",
+    "message_fetch_safety_snapshot",
     "recovery_discord_rest_budget_snapshot",
     "recovery_request_weight",
     "reserve_bulk_discord_rest_requests",

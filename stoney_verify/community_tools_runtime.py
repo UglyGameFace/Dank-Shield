@@ -10,6 +10,7 @@ from typing import Any, Awaitable, Iterable, Optional
 
 import discord
 
+from .startup_guards.discord_api_safety import fetch_message_with_api_safety
 from .community_quiet_notice_service import (
     QuietNoticeConfig,
     clear_quiet_delivery,
@@ -490,7 +491,15 @@ class StickyRuntime:
             await self.refresh_channel(channel, expected_config=config, force=True)
             return
         try:
-            await channel.fetch_message(int(config.last_message_id))
+            await fetch_message_with_api_safety(
+                channel,
+                int(config.last_message_id),
+                label=(
+                    "community sticky startup "
+                    f"guild={int(config.guild_id)}"
+                ),
+                recovery=True,
+            )
         except discord.NotFound:
             await self.refresh_channel(channel, expected_config=config, force=True)
         except (discord.Forbidden, discord.HTTPException):
@@ -532,7 +541,15 @@ class StickyRuntime:
                     self.set_quiet_config(saved)
                 return
             try:
-                await channel.fetch_message(int(current.last_notice_message_id))
+                await fetch_message_with_api_safety(
+                    channel,
+                    int(current.last_notice_message_id),
+                    label=(
+                        "community quiet startup "
+                        f"guild={guild_id}"
+                    ),
+                    recovery=True,
+                )
             except discord.NotFound:
                 try:
                     saved = await clear_quiet_delivery(

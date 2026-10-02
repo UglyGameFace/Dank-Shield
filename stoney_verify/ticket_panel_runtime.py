@@ -16,6 +16,7 @@ from typing import Any, Mapping
 import discord
 
 from .commands_ext import public_ticket_panel_clean as panel
+from .startup_guards.discord_api_safety import fetch_message_with_api_safety
 
 _RUNTIME_VIEW_REGISTERED = False
 _RUNTIME_FALLBACK_LISTENER_REGISTERED = False
@@ -569,14 +570,15 @@ async def _reconcile_saved_ticket_panel(
     message: discord.Message | None = None
     if message_id > 0:
         try:
-            await _reserve_recovery_requests(
-                1,
+            message = await fetch_message_with_api_safety(
+                channel,
+                message_id,
                 label=(
-                    "ticket panel identity fetch "
-                    f"guild={int(guild.id)} channel={int(channel.id)}"
+                    "ticket panel identity "
+                    f"guild={int(guild.id)}"
                 ),
+                recovery=True,
             )
-            message = await channel.fetch_message(message_id)
         except discord.NotFound:
             return "missing_message"
         except Exception as exc:

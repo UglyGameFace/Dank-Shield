@@ -12,6 +12,8 @@ from typing import Any
 
 import discord
 
+from stoney_verify.startup_guards.discord_api_safety import fetch_message_with_api_safety
+
 _PATCHED = False
 _READY_RAN = False
 
@@ -96,7 +98,15 @@ async def refresh_ticket_panel_footer(guild: discord.Guild, *, reason: str = "li
             return False
 
         try:
-            message = await channel.fetch_message(message_id)
+            message = await fetch_message_with_api_safety(
+                channel,
+                message_id,
+                label=(
+                    "ticket footer "
+                    f"guild={int(guild.id)} reason={str(reason)[:40]}"
+                ),
+                recovery=(str(reason).strip().lower() == "startup"),
+            )
         except Exception:
             return False
 

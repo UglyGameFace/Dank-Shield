@@ -22,6 +22,7 @@ from stoney_verify.guild_config import (
 )
 from stoney_verify.globals import get_supabase
 from stoney_verify.setup_engine.loader import snapshot_from_config
+from stoney_verify.startup_guards.discord_api_safety import fetch_message_with_api_safety
 from stoney_verify.setup_engine.verification_modes import (
     BASIC_VERIFY_CUSTOM_ID,
     BASIC_VERIFY_FOOTER,
@@ -921,13 +922,15 @@ async def _reconcile_one_basic_verify_panel(
         if not allow_legacy_rest:
             return "legacy_deferred"
         try:
-            await _reserve_basic_verify_recovery_request(
+            message = await fetch_message_with_api_safety(
+                channel,
+                persisted_mid,
                 label=(
-                    "basic verify identity fetch "
-                    f"guild={int(guild.id)} channel={int(channel.id)}"
-                )
+                    "basic verify identity "
+                    f"guild={int(guild.id)}"
+                ),
+                recovery=True,
             )
-            message = await channel.fetch_message(persisted_mid)
         except discord.NotFound:
             return "missing_message"
         except Exception as exc:
