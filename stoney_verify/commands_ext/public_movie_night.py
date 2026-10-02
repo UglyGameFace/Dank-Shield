@@ -410,7 +410,7 @@ def _setup_embed(
         title="🍿 Dank Cinema • Setup",
         description=(
             "**Home › Community & Engagement › Dank Cinema › Setup**\n"
-            "This page validates the whole Movie Night chain before a room is allowed to launch."
+            "This page validates the full Dank Cinema chain before a room is allowed to launch."
         ),
         color=discord.Color.green() if ready["launch_ready"] else discord.Color.orange(),
         timestamp=discord.utils.utcnow(),
@@ -518,9 +518,9 @@ def _setup_embed(
 
     embed.set_footer(
         text=(
-            "Ready to launch"
+            f"{_CINEMA_FOOTER} • ready to launch"
             if ready["launch_ready"]
-            else "Fix every red blocker before starting Movie Night"
+            else f"{_CINEMA_FOOTER} • fix every red blocker before launch"
         )
     )
     return embed
@@ -558,6 +558,25 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
         value=(
             f"✅ Built-in playable search via **{INTERNET_ARCHIVE_SOURCE_LABEL}** • no API key.\n"
             "Public-domain-focused playback feeds the same Dank Cinema release, vote, and stream engine."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="📡 Dank Watch",
+        value=(
+            f"{'✅' if catalog_ready else '⚠️'} Legal availability discovery "
+            f"{'ready' if catalog_ready else 'activates with Dank Catalog'}\n"
+            "**Availability data by JustWatch via TMDB.** Free/ad-supported, subscription, "
+            "rent, and buy options stay informational and are never disguised as direct streams."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="⚡ Dank Engine",
+        value=(
+            "Provider searches run through one Movie Night pipeline: normalize → dedupe → "
+            "rank releases → vote → libtorrent verification/streaming. A provider can fail "
+            "without replacing the direct magnet/.torrent path."
         ),
         inline=False,
     )
@@ -1369,7 +1388,7 @@ class CustomSourceModal(discord.ui.Modal):
         source: Optional[CustomMediaSource] = None,
     ) -> None:
         super().__init__(
-            title="Edit Custom Movie API" if source is not None else "Add Custom Movie API",
+            title="Edit Dank Provider" if source is not None else "Add Dank Provider",
             timeout=300,
         )
         self.owner_id = int(owner_id)
@@ -1377,14 +1396,14 @@ class CustomSourceModal(discord.ui.Modal):
         self.source_id = str(source.source_id if source is not None else "")
 
         self.label_input = discord.ui.TextInput(
-            label="Name (optional)",
-            placeholder="My Movies",
+            label="Provider name (optional)",
+            placeholder="My Movie Feed",
             default=str(source.label if source is not None else "")[:80] or None,
             required=False,
             max_length=80,
         )
         self.endpoint_input = discord.ui.TextInput(
-            label="Paste a working search URL",
+            label="Provider search URL",
             placeholder="https://api.example.com/search?q=batman",
             default=str(source.endpoint_url if source is not None else "")[:1000] or None,
             min_length=8,
@@ -1430,7 +1449,7 @@ class CustomSourceModal(discord.ui.Modal):
             None,
         )
         if candidate is None:
-            return await _private(interaction, "❌ Dank Shield could not prepare that custom source.")
+            return await _private(interaction, "❌ Dank Cinema could not prepare that provider.")
 
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True, thinking=True)
@@ -1440,7 +1459,7 @@ class CustomSourceModal(discord.ui.Modal):
             return await _replace(
                 interaction,
                 content=(
-                    "❌ **Custom API was not saved.** Dank Shield tested the URL and could not use it.\n"
+                    "❌ **Provider was not saved.** Dank Cinema tested the URL and could not use it.\n"
                     f"{probe.error}"
                 )[:2000],
                 embed=_sources_embed(current),
@@ -1456,22 +1475,22 @@ class CustomSourceModal(discord.ui.Modal):
         except Exception as exc:
             return await _replace(
                 interaction,
-                content=f"❌ Movie Night source could not save safely: {type(exc).__name__}.",
+                content=f"❌ Dank Cinema provider could not save safely: {type(exc).__name__}.",
                 embed=_sources_embed(current),
                 view=MovieNightSourcesView(int(interaction.user.id)),
             )
         if not applied:
             return await _replace(
                 interaction,
-                content="❌ Movie Night sources changed in another admin session. Refresh and try again.",
+                content="❌ Dank Cinema providers changed in another admin session. Refresh and try again.",
                 embed=_sources_embed(current),
                 view=MovieNightSourcesView(int(interaction.user.id)),
             )
 
-        notice = "✅ Custom movie API tested and saved."
+        notice = "✅ Dank provider tested and saved."
         if probe.playable_results == 0:
             notice = (
-                "⚠️ Custom API responded with valid JSON and was saved, but the Batman test "
+                "⚠️ Provider responded with valid JSON and was saved, but the Batman test "
                 "returned no playable results. Try a title you know exists in that source."
             )
         await _replace(
@@ -1522,7 +1541,7 @@ class SourceActionView(_OwnedView):
             )
         await open_movie_night_sources(interaction, replace_message=True)
 
-    @discord.ui.button(label="Edit", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Edit Provider", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         guild = interaction.guild
@@ -1543,17 +1562,17 @@ class SourceActionView(_OwnedView):
             )
         )
 
-    @discord.ui.button(label="Enable", emoji="✅", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Enable Provider", emoji="✅", style=discord.ButtonStyle.success, row=0)
     async def enable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._mutate(interaction, enabled=True)
 
-    @discord.ui.button(label="Disable", emoji="⏸️", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Pause Provider", emoji="⏸️", style=discord.ButtonStyle.secondary, row=0)
     async def disable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._mutate(interaction, enabled=False)
 
-    @discord.ui.button(label="Remove", emoji="🗑️", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="Remove Provider", emoji="🗑️", style=discord.ButtonStyle.danger, row=0)
     async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._mutate(interaction, remove=True)
@@ -1580,11 +1599,11 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
         if source is None:
             return await _private(pick_interaction, "❌ That source no longer exists.")
         embed = discord.Embed(
-            title=f"🎞️ {source.label}",
+            title=f"🧩 Dank Provider • {source.label}",
             description=(
                 f"State: **{'Enabled' if source.enabled else 'Disabled'}**\n"
                 f"Search/feed URL: {source.endpoint_url}\n\n"
-                "Use **Edit** to change the name or URL. Dank Shield keeps the internal "
+                "Use **Edit** to change the name or URL. Dank Cinema keeps the internal "
                 "source identity automatically."
             ),
             color=discord.Color.blurple(),
@@ -2069,7 +2088,7 @@ async def _start_variant_source(
         content=(
             f"✅ Now playing **{candidate.title}** • "
             f"{_release_source_label(variant.metadata)} • {_format_bytes(variant.file_size)}\n"
-            f"Full progressive stream: {stream_url}"
+            f"Dank Cinema stream: {stream_url}"
         )[:2000],
         embed=_release_embed(current, candidate, variant),
         view=MovieNightHubView(int(interaction.user.id), current),
@@ -2419,8 +2438,8 @@ async def _announce_room(
     embed = discord.Embed(
         title="🍿 Dank Cinema Started",
         description=(
-            f"{interaction.user.mention} is hosting Movie Night.\n"
-            "Open `/movie` to join, search, vote, and view the queue."
+            f"{interaction.user.mention} opened **Dank Cinema**.\n"
+            "Open `/movie` to join, find a movie, vote, and watch together."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -2883,7 +2902,7 @@ async def _attach_torrent_media(
     await interaction.edit_original_response(
         content=(
             f"✅ Movie Night media attached: **{session.file_name}**\n"
-            f"Full progressive stream: {stream_url}"
+            f"Dank Cinema stream: {stream_url}"
         )[:2000],
         embed=_room_embed(interaction, room),
         view=MovieNightHubView(int(interaction.user.id), room),
