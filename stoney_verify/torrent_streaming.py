@@ -954,6 +954,11 @@ class TorrentMediaManager:
             progress = session.handle.file_progress()[session.file_index]
         except Exception:
             progress = 0
+        peers = int(getattr(status, "num_peers", 0) or 0)
+        seeds = int(getattr(status, "num_seeds", 0) or 0)
+        leechers = max(0, peers - seeds)
+        distributed = float(getattr(status, "distributed_copies", 0.0) or 0.0)
+
         return {
             "token": session.token,
             "name": session.file_name,
@@ -962,8 +967,11 @@ class TorrentMediaManager:
             "progress": min(1.0, max(0.0, float(progress or 0) / max(1, session.file_size))),
             "download_rate": int(getattr(status, "download_rate", 0) or 0),
             "upload_rate": int(getattr(status, "upload_rate", 0) or 0),
-            "peers": int(getattr(status, "num_peers", 0) or 0),
-            "seeds": int(getattr(status, "num_seeds", 0) or 0),
+            "peers": peers,
+            "seeds": seeds,
+            "leechers": leechers,
+            "distributed_copies": round(max(0.0, distributed), 3),
+            "seed_leech_ratio": round(seeds / max(1, leechers), 3),
             "state": str(getattr(status, "state", "") or ""),
             "error": str(getattr(status, "error", "") or ""),
             "buffer": {
