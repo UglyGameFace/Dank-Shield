@@ -306,6 +306,11 @@ async def fetch_message_with_api_safety(
     def _cleanup(finished: asyncio.Task[Any]) -> None:
         if _MESSAGE_FETCH_INFLIGHT.get(key) is finished:
             _MESSAGE_FETCH_INFLIGHT.pop(key, None)
+        if not any(
+            fetch_key[0] == channel_id and not inflight.done()
+            for fetch_key, inflight in _MESSAGE_FETCH_INFLIGHT.items()
+        ):
+            _MESSAGE_FETCH_LOCKS.pop(channel_id, None)
 
     task.add_done_callback(_cleanup)
     return await asyncio.shield(task)
