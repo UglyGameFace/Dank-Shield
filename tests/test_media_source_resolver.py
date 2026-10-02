@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from stoney_verify import media_source_resolver as resolver
@@ -125,3 +126,42 @@ def test_internet_archive_doc_rejects_unsafe_identifier() -> None:
     assert resolver._archive_variant_from_doc(
         {"identifier": "../not-safe", "title": "Bad"}
     ) is None
+
+
+
+def test_aggregate_search_keeps_builtin_results_without_custom_sources(monkeypatch) -> None:
+    builtin = resolver.ResolvedMediaVariant(
+        title="Public Domain Movie",
+        source_id=resolver.INTERNET_ARCHIVE_SOURCE_ID,
+        source_label=resolver.INTERNET_ARCHIVE_SOURCE_LABEL,
+        source_ref=(
+            "https://archive.org/download/public_domain_movie/"
+            "public_domain_movie_archive.torrent"
+        ),
+        file_size=0,
+        seeds=0,
+        leechers=0,
+        peers=0,
+        metadata={},
+    )
+
+    async def fake_builtin(query: str):
+        assert query == "Public Domain Movie"
+        return [builtin], ""
+
+    async def fake_custom(guild_id: int, query: str):
+        assert guild_id == 123
+        assert query == "Public Domain Movie"
+        return resolver.MediaSourceSearchOutcome(
+            variants=(),
+            errors=("No custom sources are enabled.",),
+        )
+
+    monkeypatch.setattr(resolver, "_search_builtin_internet_archive", fake_builtin)
+    monkeypatch.setattr(resolver, "search_custom_media_sources", fake_custom)
+
+    outcome = asyncio.run(
+        resolver.search_movie_sources(123, "Public Domain Movie")
+    )
+    assert outcome.variants == (builtin,)
+    assert outcome.errors == ()
