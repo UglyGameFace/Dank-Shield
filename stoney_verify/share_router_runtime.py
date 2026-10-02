@@ -592,9 +592,10 @@ async def _relay_native_video_upload(
             native_video.file.close()
         except Exception:
             pass
-        if native_video.cleanup_path is not None:
+        cleanup_path = getattr(native_video, "cleanup_path", None)
+        if cleanup_path is not None:
             try:
-                native_video.cleanup_path.unlink(missing_ok=True)
+                Path(cleanup_path).unlink(missing_ok=True)
             except Exception:
                 pass
 
