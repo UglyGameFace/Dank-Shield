@@ -228,6 +228,23 @@ FEATURES: tuple[NavigationFeature, ...] = (
         ("hub", "lfg", "party", "cross server", "community hub"),
     ),
     NavigationFeature(
+        "movie_night",
+        "Movie Night",
+        "🎬",
+        "community",
+        "Start or join synchronized group streaming, search/vote on movies, manage sources, queue releases, and configure Movie Night.",
+        (
+            "movie",
+            "movie night",
+            "watch party",
+            "watch together",
+            "torrent streaming",
+            "group streaming",
+            "movies",
+            "cinema",
+        ),
+    ),
+    NavigationFeature(
         "tickets",
         "Tickets",
         "🎫",
