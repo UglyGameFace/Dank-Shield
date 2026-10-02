@@ -81,7 +81,7 @@ The intentional **final** public global application-command surface is exactly *
 4. `/role` — smart Roles & Profiles doorway; optional member/role shortcuts reuse existing guarded surfaces
 5. `/ticket` — one current-ticket controls doorway
 6. `/tickets` — one ticket queues/setup/routing doorway
-7. `/toke` — ping the configured opt-in crowd; Community & Pings starter role required
+7. `/toke` — ping the configured opt-in crowd with optional short text or image/GIF media; Community & Pings starter role required
 8. `/verify` — one verification status/repair doorway
 9. `View Dank Profile` user context menu
 
@@ -90,7 +90,7 @@ The intentional **final** public global application-command surface is exactly *
 - `/dank home` — the categorized Dank Shield control center. It exposes Setup & Server Settings, Onboarding & Access, Safety & Moderation, Members/Roles/Profiles, Community & Engagement, Tickets & Support, Design & Branding, Voice & Accessibility, Logs/Stats/Diagnostics, My Dank Shield, Utilities & Help, plus Find a Feature and All Features.
 - `/dank purge` — the compact destructive-cleanup entrypoint that remains a direct command for explicit targeting and confirmation.
 - `/dank setup` — the guided onboarding/setup entrypoint restored for discoverability while advanced setup tools stay inside the UI. Its **Live Captions** section can select/create the ordinary-server caption output, allow all VCs or selected VCs/categories/exclusions, and choose **Original**, **English**, or **Original + English** caption text. Gemini Live input defaults to automatic detection across its supported languages and code-switching.
-- `/dank upload` — the single attachment command for a Join Card background, Exit Card background, or custom card font. This remains a command because Discord buttons cannot provide an attachment field.
+- `/dank upload` — the compact **card-asset** attachment command for a Join Card background, Exit Card background, or custom card font. `/toke upload:` is the only other attachment doorway and is limited to optional image/GIF media on the Toke post. Discord buttons still cannot provide attachment fields.
 
 Former roots such as `/ticket-intake`, `/ticket-category`, and `/ticket-panel` are not public autocomplete commands anymore. Their implementation modules remain loaded and their actions are available inside `/tickets`. Likewise, former `/dank` shortcuts such as status/diagnostics/welcome are reached through `/dank home` rather than separate autocomplete entries.
 

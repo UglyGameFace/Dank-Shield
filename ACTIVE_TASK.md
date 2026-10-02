@@ -2,83 +2,97 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-TOKE-381 — fix /toke preferred-channel discovery on large servers**
+**DANK-SHIELD-TOKE-386 — add optional media to the canonical /toke card**
 
-Explicit FORCE SWITCH accepted:
-**Fix /toke channel picker**
+Previous /toke reliability task #381 is complete:
+- PR #382 fixed large-guild channel discovery and merged;
+- PR #383 exposed direct Starter/Notify mapping and merged;
+- PR #385 fixed capability save/reload corruption and merged;
+- exact-head CI passed;
+- Android canary confirmed /toke posts in the configured general channel, pings the configured Stoner role, and Cheers works;
+- issue #381 is closed.
 
-Reason:
-`/toke` setup cannot select the user's valid general chat channel from the visible picker.
+Production baseline: `main` = `d3c65b2de716ad32a668edfa70e10a4fda6a9cbe` (PR #385 merge).
 
-Production baseline: `main` = `534614801e6c19dfbc248e100022e1d5c8c87bc1` (PR #379 merged; exact-head CI green).
+Active branch: `feat/toke-media`.
 
-Active branch: `fix/toke-direct-role-mapping`.
+Active issue: #386 — **Add optional media to /toke cards**.
 
-Active issue: #381 — **Toke setup text-channel picker omits expected general channel**.\n\nPR #382 — **Fix /toke large-server channel picker discovery** — merged as `63fe519431e90be7fb7f897c2b6a10a4f2d241fc`.
-
-Active PR: #383 — **Expose direct /toke starter and notify role setup** (draft).
+Active PR: #387 — **Add optional image and GIF media to /toke** (draft).
 
 ## Scope
 
-Trace and fix only the `/toke` / Community & Pings preferred-channel picker and the shared resource-browser behavior required for correctness on large guilds. Preserve guild-scoped persistence, staff authorization, Community & Pings ownership, Search-Safe lookup, and existing /toke send semantics.
+Extend only the existing canonical top-level `/toke` callback and its command-surface contract.
 
-## Findings / root cause
+Desired public options:
+- `message` — existing optional short text;
+- `media` — optional external HTTP(S) image/GIF/share URL;
+- `upload` — optional PNG/JPG/JPEG/GIF/WEBP Discord attachment.
 
-The production screenshot contains exactly **25** channel options. That is Discord's maximum number of options in one string select.
+One media source at a time.
 
-The current Community & Pings **Toke Channel** route already uses the canonical `DankGuildResourceBrowserView` and does not permission-filter normal text channels. The shared browser discovers from the guild cache, retains every matching resource, and pages at 25 items. On a server with more than 25 text channels, a valid channel can therefore be on page 2+ even though the opened mobile dropdown visually looks like a complete list.
+Do not create a second Toke command, duplicate posting path, media persistence model, server-side arbitrary URL fetcher, or custom GIF search service.
 
-The shared browser currently leaves **Next / Previous / Search** outside the opened dropdown. On Discord mobile the 25-option sheet covers those controls, so a user can reasonably conclude a page-2 channel is missing.
-
-A second duplicate path also existed in `public_toke.py`: the legacy `CommunityPingSetupView` / `open_toke_preset_setup` used Discord-native `DankRoleSelect` / `DankChannelSelect` selectors. Repository reference search found no external caller for that old view, but retaining it would allow the same divergent discovery behavior to return later.
+Discord's built-in GIF tab is not exposed as a slash-command option. A future message-context action may bridge an already-posted Discord GIF into /toke, but that is outside this active implementation.
 
 ## Execution path
 
-Current canonical manager path:
-`/dank home or /role -> Community & Pings Manager -> Toke Channel -> public_community_pings.CommunityPingsManagerView -> DankGuildResourceBrowserView -> guild.channels -> paged DankPickerView -> existing guild_config write`.
+`/toke -> public_command_surface_v2._standalone("toke", open_toke_command) -> public_toke.open_toke_command -> existing Community & Pings role/channel resolution -> existing cooldown/permission checks -> one channel.send() with the Toke embed + Cheers view`.
 
-The save owner remains `public_community_pings.py`; the shared browser owns discovery/search/paging only.
+The media feature stays inside that single send owner.
+
+## Findings / requirements
+
+- The compact public surface infers `/toke` slash options directly from `open_toke_command()`.
+- Existing command-tree coverage previously claimed `/dank upload` was the only attachment doorway; that global claim must be updated rather than bypassed.
+- Uploaded media should be re-uploaded with the Toke post and referenced as an `attachment://` embed image.
+- Direct media URLs can be placed in the Toke embed image.
+- Normal Tenor/Giphy/share-page URLs should remain on the same message so Discord can render its own link preview; Dank Shield must not fetch arbitrary user URLs.
+- Existing role mention safety, starter authorization, cooldowns, target-channel routing, message sanitization, and Cheers behavior must remain unchanged.
 
 ## Changes on active branch
 
-- Shared resource browser now makes pagination explicit in the select placeholder when multiple pages exist, e.g. **Page 1/3**.
-- Its embed states the exact visible range, e.g. **1–25 of 63**, explains Discord's 25-item dropdown limit, and tells mobile users to close the list and use **Next / Previous** or **Search**.
-- Retired the unused legacy `CommunityPingSetupView` native-selector implementation from `public_toke.py`.
-- `open_toke_preset_setup` remains as a compatibility entrypoint but delegates to the canonical Community & Pings manager.
-- Added regression coverage for a 63-text-channel guild where `general-chat` is beyond page 1 and remains discoverable through page 2 and Search.
-- Added regression coverage forbidding `DankChannelSelect` / `DankRoleSelect` from returning to `public_toke.py` setup and requiring Toke Channel to use `DankGuildResourceBrowserView`.
-- Updated picker-adoption documentation.
+- `/toke` now exposes optional `media` and `upload` parameters alongside `message`.
+- External media URLs are restricted to valid HTTP(S) URLs and length/whitespace checked.
+- Direct Discord CDN / Tenor media / Giphy media / direct image URLs are rendered inside the existing Toke embed.
+- Non-direct share-page links stay on the same bot message for Discord-native preview behavior.
+- Uploaded PNG/JPG/JPEG/GIF/WEBP media is validated, re-uploaded, and displayed through `attachment://...` in the same Toke card.
+- Simultaneous URL + upload is rejected.
+- Uploaded media requires Attach Files in the destination channel; the existing Embed Links requirement remains.
+- No arbitrary remote URL is fetched by Dank Shield.
+- Help text now distinguishes card-asset `/dank upload` from optional `/toke upload:`.
+- Command-tree regression now enumerates attachment option owners and permits only `dank upload:file` and `toke:upload`.
+- Focused tests cover URL validation/direct-media classification, upload type validation, and the canonical one-post media send contract.
 
 ## Validation required
 
 Before merge:
-- compile;
-- focused resource-browser tests;
-- focused Community & Pings / /toke tests;
-- full pytest / Dank Shield CI;
-- existing picker/navigation regressions;
-- branch must remain based on current production main;
-- final diff/reference check must show no unrelated work and no live caller of the retired view.
+- branch must remain 0 behind production main;
+- compile/import validation;
+- focused `test_profile_community_toke.py`;
+- final live command-tree/schema test including Attachment option type;
+- application command payload-size diagnostics;
+- full Dank Shield pytest/CI;
+- final diff check for unrelated work;
+- verify no new attachment doorway appears outside `/dank upload` and `/toke`.
 
-After merge/deploy:
-- Android canary in the affected large server;
-- open Community & Pings -> Toke Channel;
-- verify the picker visibly reports page/range when >25 channels exist;
-- verify Next reaches later channels;
-- verify Search finds the expected general chat by current/styled name;
-- save it;
-- run `/toke` and confirm the card posts to the selected channel.
+After merge/deploy Android canary:
+1. run plain `/toke`;
+2. run `/toke message:`;
+3. run `/toke media:` with a direct GIF/image URL;
+4. run `/toke media:` with a normal Tenor/Giphy share link;
+5. run `/toke upload:` with a GIF;
+6. run `/toke upload:` with PNG/JPG/WEBP;
+7. confirm media appears with the same Toke post, role ping remains constrained, Cheers still works, and cooldown semantics are unchanged;
+8. confirm URL + upload together is rejected clearly.
 
-## Suspended work
+## Backlog / suspended work
 
-Issue #375 Protection/navigation is suspended by explicit FORCE SWITCH.
-Preserved state:
-- PR #379 merged to `main` as `534614801e6c19dfbc248e100022e1d5c8c87bc1`;
-- exact-head Dank Shield CI and companion workflows passed;
-- production/mobile canary is still required before issue #375 can be closed;
-- no additional Protection changes should be made while #381 is active.
+Issue #380 — **True master runtime ownership + production-path audit** remains queued immediately after this feature unless the user explicitly changes priority.
 
-Issue #380 **True master runtime ownership + production-path audit** remains the next repo-wide audit task after the current active task unless another explicit FORCE SWITCH occurs.
+Issue #384 — **Audit repeated Discord 429s during/after activity recovery** remains backlogged and must not be investigated during #386.
+
+Issue #375 Protection/navigation remains suspended at its preserved post-PR #379 canary checkpoint below.
 
 ## Suspended Protection task record
 

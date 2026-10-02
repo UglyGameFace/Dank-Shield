@@ -8,6 +8,7 @@ import weakref
 from collections.abc import Mapping
 from time import monotonic
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 import discord
 from discord import app_commands
@@ -26,6 +27,12 @@ TOKE_CHANNEL_KEY = LEGACY_TOKE_CHANNEL_KEY
 
 TOKE_USER_COOLDOWN_SECONDS = 15 * 60
 TOKE_GUILD_COOLDOWN_SECONDS = 5 * 60
+
+_TOKE_MEDIA_EXTENSIONS = (".gif", ".jpg", ".jpeg", ".png", ".webp")
+_TOKE_MEDIA_CONTENT_TYPES = frozenset(
+    {"image/gif", "image/jpeg", "image/png", "image/webp"}
+)
+
 
 _TOKE_USER_LAST: dict[tuple[int, int], float] = {}
 _TOKE_GUILD_LAST: dict[int, float] = {}
@@ -64,6 +71,48 @@ def _clean_member_message(value: Any) -> str:
     text = re.sub(r"\s+", " ", text)
     text = discord.utils.escape_mentions(text)
     return text[:180]
+
+
+def _clean_media_url(value: Any) -> str:
+    text = str(value or "").strip().strip("<>")
+    if not text:
+        return ""
+    if len(text) > 2048:
+        raise ValueError("Media URL is too long.")
+    parsed = urlsplit(text)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Media URL must be a valid http:// or https:// link.")
+    if any(ch.isspace() for ch in text):
+        raise ValueError("Media URL cannot contain spaces.")
+    return text
+
+
+def _is_direct_media_url(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    parsed = urlsplit(text)
+    host = str(parsed.hostname or "").lower()
+    path = str(parsed.path or "").lower()
+    if path.endswith(_TOKE_MEDIA_EXTENSIONS):
+        return True
+    if host in {"cdn.discordapp.com", "media.discordapp.net", "media.tenor.com", "i.giphy.com"}:
+        return True
+    if host.startswith("media") and host.endswith(".giphy.com"):
+        return True
+    return False
+
+
+def _attachment_is_supported_media(attachment: Any) -> bool:
+    content_type = str(getattr(attachment, "content_type", "") or "").lower()
+    if ";" in content_type:
+        content_type = content_type.split(";", 1)[0].strip()
+    if content_type in _TOKE_MEDIA_CONTENT_TYPES:
+        return True
+    if content_type and content_type != "application/octet-stream":
+        return False
+    filename = str(getattr(attachment, "filename", "") or "").lower()
+    return filename.endswith(_TOKE_MEDIA_EXTENSIONS)
 
 
 def _format_wait(seconds: float) -> str:
@@ -212,15 +261,33 @@ def _target_channel(
     return channel if isinstance(channel, discord.TextChannel) else None
 
 
-@app_commands.describe(message="Optional short message to include with the sesh ping.")
+@app_commands.describe(
+    message="Optional short message to include with the sesh ping.",
+    media="Optional image/GIF URL (Discord CDN, direct media, Tenor/Giphy share link).",
+    upload="Optional PNG/JPG/GIF/WEBP upload to place on the Toke card.",
+)
 async def open_toke_command(
     interaction: discord.Interaction,
     message: Optional[str] = None,
+    media: Optional[str] = None,
+    upload: Optional[discord.Attachment] = None,
 ) -> None:
     guild = interaction.guild
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
     if guild is None or member is None:
         return await _reply(interaction, "/toke only works inside a server.")
+
+    try:
+        clean_media = _clean_media_url(media)
+    except ValueError as exc:
+        return await _reply(interaction, str(exc))
+    if clean_media and upload is not None:
+        return await _reply(interaction, "Choose either a media URL or an upload, not both.")
+    if upload is not None and not _attachment_is_supported_media(upload):
+        return await _reply(
+            interaction,
+            "Upload a PNG, JPG/JPEG, GIF, or WEBP image for /toke media.",
+        )
 
     await _defer_private(interaction)
     cfg = await _config(guild)
@@ -255,6 +322,11 @@ async def open_toke_command(
     perms = channel.permissions_for(me)
     if not (perms.view_channel and perms.send_messages and perms.embed_links):
         return await _reply(interaction, f"Dank Shield cannot post the sesh card in {channel.mention}.")
+    if upload is not None and not perms.attach_files:
+        return await _reply(
+            interaction,
+            f"Dank Shield needs **Attach Files** in {channel.mention} to include uploaded /toke media.",
+        )
     if not _ping_permission_ready(ping_role, perms):
         return await _reply(
             interaction,
@@ -284,13 +356,39 @@ async def open_toke_command(
             timestamp=discord.utils.utcnow(),
         )
         embed.set_footer(text="Only members with the configured /toke notification role were notified.")
+
+        upload_file: Optional[discord.File] = None
+        direct_media = bool(clean_media and _is_direct_media_url(clean_media))
+        if upload is not None:
+            try:
+                upload_file = await upload.to_file()
+            except discord.HTTPException as exc:
+                return await _reply(
+                    interaction,
+                    f"Discord could not read the uploaded /toke media: {type(exc).__name__}.",
+                )
+            embed.set_image(url=f"attachment://{upload_file.filename}")
+        elif direct_media:
+            embed.set_image(url=clean_media)
+
+        send_content = ping_role.mention
+        if clean_media and not direct_media:
+            # Keep share-page URLs (for example normal Tenor/Giphy links) on
+            # the same message so Discord can render its native link preview.
+            # Dank Shield never fetches arbitrary user URLs server-side.
+            send_content += f"\n{clean_media}"
+
+        send_payload: dict[str, Any] = {
+            "content": send_content,
+            "embed": embed,
+            "view": TokeCheersView(member.id, stoner_role.id),
+            "allowed_mentions": _toke_allowed_mentions(ping_role),
+        }
+        if upload_file is not None:
+            send_payload["file"] = upload_file
+
         try:
-            sent = await channel.send(
-                content=ping_role.mention,
-                embed=embed,
-                view=TokeCheersView(member.id, stoner_role.id),
-                allowed_mentions=_toke_allowed_mentions(ping_role),
-            )
+            sent = await channel.send(**send_payload)
         except discord.Forbidden:
             return await _reply(interaction, f"Discord blocked the sesh ping in {channel.mention}.")
         except discord.HTTPException as exc:
@@ -314,7 +412,10 @@ __all__ = [
     "TOKE_GUILD_COOLDOWN_SECONDS",
     "TOKE_USER_COOLDOWN_SECONDS",
     "TokeCheersView",
+    "_attachment_is_supported_media",
+    "_clean_media_url",
     "_clean_member_message",
+    "_is_direct_media_url",
     "_configured_ids",
     "_cooldown_remaining",
     "_member_has_role_id",
