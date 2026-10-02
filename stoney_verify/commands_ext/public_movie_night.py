@@ -1034,6 +1034,110 @@ class _OwnedView(discord.ui.View):
         return False
 
 
+class ExternalSearchResultsView(_OwnedView):
+    def __init__(
+        self,
+        owner_id: int,
+        *,
+        room_id: str,
+        query: str,
+        links: list[tuple[str, str]],
+        candidate_id: str = "",
+    ) -> None:
+        super().__init__(owner_id)
+        self.room_id = str(room_id)
+        self.query = _compact(query)
+        self.candidate_id = str(candidate_id or "")
+
+        for index, (label, url) in enumerate(links[:20]):
+            self.add_item(
+                discord.ui.Button(
+                    label=_compact(label, 80) or "Open provider",
+                    emoji="🔎",
+                    style=discord.ButtonStyle.link,
+                    url=url,
+                    row=index // 5,
+                )
+            )
+
+    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if self.candidate_id:
+            return await _open_candidate_detail(
+                interaction,
+                self.room_id,
+                self.candidate_id,
+            )
+        await open_movie_night(interaction, replace_message=True)
+
+
+async def _external_provider_links(
+    guild_id: int,
+    query: str,
+) -> list[tuple[str, str]]:
+    _raw, registry = await _sources_state(int(guild_id))
+    links: list[tuple[str, str]] = []
+    for source in enabled_external_sources(registry):
+        try:
+            url = render_provider_search_url(source.endpoint_url, query)
+        except ValueError:
+            continue
+        links.append((source.label, url))
+        if len(links) >= 20:
+            break
+    return links
+
+
+async def _open_external_search_results(
+    interaction: discord.Interaction,
+    *,
+    room_id: str,
+    query: str,
+    candidate_id: str = "",
+) -> bool:
+    room = get_movie_night_manager().get(room_id)
+    if room is None:
+        await _private(interaction, "❌ This Movie Night room no longer exists.")
+        return False
+
+    links = await _external_provider_links(int(room.guild_id), query)
+    if not links:
+        await _private(
+            interaction,
+            "ℹ️ No external search-link providers are enabled for this server.",
+        )
+        return False
+
+    embed = discord.Embed(
+        title="🔗 Dank Cinema • Search Elsewhere",
+        description=(
+            f"Search **{_compact(query)}** on an enabled provider's own results page.\n"
+            "These buttons only open external search pages. Dank Cinema does not scrape, "
+            "copy, or treat those pages as playable releases."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="External providers",
+        value="\n".join(f"• {label}" for label, _url in links)[:1024],
+        inline=False,
+    )
+    embed.set_footer(text=f"{_CINEMA_FOOTER} • external search")
+    await _replace(
+        interaction,
+        embed=embed,
+        view=ExternalSearchResultsView(
+            int(interaction.user.id),
+            room_id=room.room_id,
+            query=query,
+            links=links,
+            candidate_id=candidate_id,
+        ),
+    )
+    return True
+
+
 class MovieCandidateView(_OwnedView):
     def __init__(self, owner_id: int, room_id: str, candidate_id: str) -> None:
         super().__init__(owner_id)
@@ -1091,6 +1195,22 @@ class MovieCandidateView(_OwnedView):
         await _private(
             interaction,
             "🗳️ Queue vote opened. Other active viewers can vote from /movie.",
+        )
+
+    @discord.ui.button(label="Search Elsewhere", emoji="🔗", style=discord.ButtonStyle.secondary, row=1)
+    async def external_search(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        room = get_movie_night_manager().get(self.room_id)
+        if room is None:
+            return await _private(interaction, "❌ This Movie Night room no longer exists.")
+        candidate = room.candidates.get(self.candidate_id)
+        if candidate is None:
+            return await _private(interaction, "❌ That movie result no longer exists.")
+        await _open_external_search_results(
+            interaction,
+            room_id=room.room_id,
+            query=candidate.title,
+            candidate_id=candidate.candidate_id,
         )
 
     @discord.ui.button(label="Back to Results", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
@@ -2308,6 +2428,31 @@ async def _execute_search_vote(
                     int(interaction.user.id),
                     room.room_id,
                     candidate.candidate_id,
+                ),
+            )
+
+        external_links = await _external_provider_links(int(room.guild_id), query)
+        if external_links:
+            vote.payload["external_provider_count"] = len(external_links)
+            return await _replace(
+                interaction,
+                content=(
+                    f"🔗 No connected provider returned a playable release for **{query}**, "
+                    "but external search providers are available."
+                )[:2000],
+                embed=discord.Embed(
+                    title="🔗 Dank Cinema • External Search Available",
+                    description=(
+                        "Open a provider's own search-results page below. Dank Cinema does not "
+                        "scrape or ingest those pages."
+                    ),
+                    color=discord.Color.blurple(),
+                ),
+                view=ExternalSearchResultsView(
+                    int(interaction.user.id),
+                    room_id=room.room_id,
+                    query=query,
+                    links=external_links,
                 ),
             )
 
