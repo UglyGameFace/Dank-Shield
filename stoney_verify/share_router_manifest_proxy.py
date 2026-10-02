@@ -32,7 +32,7 @@ _DEFAULT_MANIFEST_MAX_BYTES = 2 * 1024 * 1024
 _DEFAULT_PROXY_CHUNK_BYTES = 64 * 1024
 _DEFAULT_UPSTREAM_MULTIPLIER = 3
 _HLS_URI_ATTR_RE = re.compile(r'URI="([^"]+)"', re.IGNORECASE)
-_SCHEME_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\\s\\"'<>]+")
+_SCHEME_URL_RE = re.compile(r"""[A-Za-z][A-Za-z0-9+.-]*://[^\s"'<>]+""")
 _DASH_URL_ATTRS = {
     "href",
     "initialization",
