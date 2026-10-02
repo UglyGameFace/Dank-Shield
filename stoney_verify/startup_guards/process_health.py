@@ -223,6 +223,12 @@ def _current_rss_mb() -> float | None:
     return None
 
 
+def current_rss_mb() -> float | None:
+    """Public current-RSS accessor for resource admission controllers."""
+
+    return _current_rss_mb()
+
+
 def _peak_rss_mb() -> float | None:
     """Return the process lifetime RSS high-water mark when available."""
 
@@ -442,6 +448,7 @@ def install_process_health() -> bool:
 
 __all__ = [
     "attach_process_health",
+    "current_rss_mb",
     "install_process_health",
     "install_loop_exception_handler",
     "start_health_loop",
