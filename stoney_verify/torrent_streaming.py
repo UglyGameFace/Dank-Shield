@@ -182,6 +182,7 @@ class TorrentStreamSession:
     save_root: Path
     handle: Any
     info: Any
+    candidates: tuple[TorrentFileCandidate, ...]
     file_index: int
     file_path: str
     file_name: str
@@ -484,18 +485,9 @@ class TorrentMediaManager:
             raise ValueError("This torrent does not contain a supported playable video file.")
 
         selected = candidates[0]
-        files = info.files()
-        file_offset = int(files.file_offset(selected.index))
         piece_length = int(info.piece_length())
         if piece_length <= 0:
             raise RuntimeError("Torrent metadata reported an invalid piece length.")
-
-        first_piece = file_offset // piece_length
-        last_piece = (file_offset + selected.size - 1) // piece_length
-
-        priorities = [0] * int(files.num_files())
-        priorities[selected.index] = 1
-        handle.prioritize_files(priorities)
 
         session = TorrentStreamSession(
             token=token,
@@ -507,21 +499,50 @@ class TorrentMediaManager:
             save_root=save_root,
             handle=handle,
             info=info,
+            candidates=tuple(candidates),
             file_index=selected.index,
             file_path=selected.path,
             file_name=_safe_name(selected.path),
             file_size=selected.size,
-            file_offset=file_offset,
+            file_offset=0,
             piece_length=piece_length,
-            first_piece=first_piece,
-            last_piece=last_piece,
+            first_piece=0,
+            last_piece=0,
             created_at=time.monotonic(),
             last_access=time.monotonic(),
         )
+        self._select_candidate(session, selected)
+
         async with self._lock:
             self._sessions[token] = session
+        return session
 
-        self.prioritize_range(session, 0, min(session.file_size - 1, self.bootstrap_bytes - 1))
+    def _select_candidate(
+        self,
+        session: TorrentStreamSession,
+        selected: TorrentFileCandidate,
+    ) -> None:
+        files = session.info.files()
+        priorities = [0] * int(files.num_files())
+        priorities[selected.index] = 1
+        session.handle.prioritize_files(priorities)
+
+        session.file_index = int(selected.index)
+        session.file_path = str(selected.path)
+        session.file_name = _safe_name(selected.path)
+        session.file_size = int(selected.size)
+        session.file_offset = int(files.file_offset(selected.index))
+        session.first_piece = session.file_offset // session.piece_length
+        session.last_piece = (
+            session.file_offset + session.file_size - 1
+        ) // session.piece_length
+        session.last_access = time.monotonic()
+
+        self.prioritize_range(
+            session,
+            0,
+            min(session.file_size - 1, self.bootstrap_bytes - 1),
+        )
         if session.file_size > self.tail_probe_bytes:
             self.prioritize_range(
                 session,
@@ -529,6 +550,28 @@ class TorrentMediaManager:
                 session.file_size - 1,
                 readahead=False,
             )
+
+    async def select_file(
+        self,
+        token: str,
+        file_index: int,
+        *,
+        owner_id: Optional[int] = None,
+    ) -> TorrentStreamSession:
+        session = await self.get(token)
+        if session is None:
+            raise LookupError("Torrent stream session not found.")
+        if owner_id is not None and int(owner_id) != int(session.owner_id):
+            raise PermissionError("Only the member who started this torrent may switch its media file.")
+
+        selected = next(
+            (item for item in session.candidates if int(item.index) == int(file_index)),
+            None,
+        )
+        if selected is None:
+            raise ValueError("That torrent file is not an approved playable media candidate.")
+
+        self._select_candidate(session, selected)
         return session
 
     def prioritize_range(
@@ -629,6 +672,16 @@ class TorrentMediaManager:
             "seeds": int(getattr(status, "num_seeds", 0) or 0),
             "state": str(getattr(status, "state", "") or ""),
             "error": str(getattr(status, "error", "") or ""),
+            "playable_files": [
+                {
+                    "index": item.index,
+                    "name": _safe_name(item.path),
+                    "path": item.path,
+                    "size": item.size,
+                    "selected": int(item.index) == int(session.file_index),
+                }
+                for item in session.candidates
+            ],
         }
 
     async def get(self, token: str) -> Optional[TorrentStreamSession]:
