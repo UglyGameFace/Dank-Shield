@@ -14,7 +14,7 @@ Production baseline: `main` = `1f6b99e4aa2fc111cb11271db2b8e07ac1979d0c` (PR #38
 
 Active branch: `fix/share-router-native-video-dedupe`.
 
-Active issue: #388 — **Share Router: native inline video + X/Twitter dedupe**.
+Active issue: #388 — **Share Router: native inline video + X/Twitter dedupe**.\n\nActive PR: #389 — **Share Router: native inline video and X/Twitter dedupe** (draft).
 
 ## Scope
 
