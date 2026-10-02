@@ -611,6 +611,59 @@ async def _prepare_native_video(
     return None
 
 
+async def _relay_native_video_upload(
+    message: discord.Message,
+    target: discord.TextChannel,
+    routed_text: str,
+    *,
+    content: str,
+    reply_to_source: bool = False,
+) -> bool:
+    """Use the canonical native-video preparation + upload path.
+
+    Returns True only when a native video attachment was actually sent. Callers
+    decide whether a normal link-only fallback should be sent when this returns
+    False.
+    """
+
+    native_video = await _prepare_native_video(message, target, routed_text)
+    if native_video is None:
+        return False
+
+    send_payload: dict[str, Any] = {
+        "content": content[:2000],
+        "file": native_video.file,
+        "allowed_mentions": discord.AllowedMentions.none(),
+    }
+    if reply_to_source:
+        send_payload["mention_author"] = False
+        try:
+            send_payload["reference"] = message.to_reference(fail_if_not_exists=False)
+        except Exception:
+            pass
+
+    try:
+        await target.send(**send_payload)
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        _log(
+            f"native video send failed guild={message.guild.id} "
+            f"source={message.channel.id} target={target.id} "
+            f"error={type(exc).__name__}"
+        )
+        return False
+    finally:
+        try:
+            native_video.file.close()
+        except Exception:
+            pass
+
+    _log(
+        f"native video relayed guild={message.guild.id} source={message.channel.id} "
+        f"target={target.id} bytes={native_video.size_bytes}"
+    )
+    return True
+
+
 def _utc_iso() -> str:
     try:
         return discord.utils.utcnow().isoformat()
@@ -1007,44 +1060,17 @@ async def _relay_direct_memes_video(
             _RECENT_ROUTE_KEYS[dedupe] = now
         return True
 
-    native_video = await _prepare_native_video(message, channel, text)
-    if native_video is None:
-        # Unsupported/extraction-failed media remains exactly as the member
-        # posted it. Do not mark it routed; a later proxy share may still work.
-        return True
-
-    send_payload: dict[str, Any] = {
-        "content": f"🎬 Inline video for {message.author.mention}'s post",
-        "file": native_video.file,
-        "mention_author": False,
-        "allowed_mentions": discord.AllowedMentions.none(),
-    }
-    try:
-        send_payload["reference"] = message.to_reference(fail_if_not_exists=False)
-    except Exception:
-        pass
-
-    try:
-        await channel.send(**send_payload)
-    except (discord.Forbidden, discord.HTTPException) as exc:
-        # Direct-channel enhancement is strictly non-destructive. If Discord
-        # rejects the relay, leave the member's original post untouched.
-        _log(
-            f"direct memes native video skipped guild={guild.id} channel={memes_target_id} "
-            f"error={type(exc).__name__}"
-        )
-    else:
-        if key_text:
-            _RECENT_ROUTE_KEYS[dedupe] = now
-        _log(
-            f"direct memes native video relayed guild={guild.id} channel={memes_target_id} "
-            f"bytes={native_video.size_bytes}"
-        )
-    finally:
-        try:
-            native_video.file.close()
-        except Exception:
-            pass
+    sent = await _relay_native_video_upload(
+        message,
+        channel,
+        text,
+        content=f"🎬 Inline video relay for {message.author.mention}'s post",
+        reply_to_source=True,
+    )
+    if sent and key_text:
+        _RECENT_ROUTE_KEYS[dedupe] = now
+    # Unsupported/extraction-failed/send-rejected media remains exactly as the
+    # member posted it. Do not mark it routed; a later proxy share may still work.
     return True
 
 
@@ -1212,12 +1238,15 @@ async def route_message(message: discord.Message) -> None:
             return
         if getattr(message.author, "bot", False):
             return
-        if getattr(message, "webhook_id", None) is not None:
-            return
 
         routes = await guild_routes(int(guild.id))
         route = route_for_source(routes, int(message.channel.id))
         if route is None:
+            # Direct-destination enhancement ignores webhooks so a webhook or
+            # relay cannot recursively manufacture another inline-video reply.
+            # Existing proxy-source webhook behavior remains unchanged.
+            if getattr(message, "webhook_id", None) is not None:
+                return
             await _relay_direct_memes_video(message, routes)
             return
 
@@ -1319,47 +1348,26 @@ async def route_message(message: discord.Message) -> None:
             _RECENT_ROUTE_KEYS[dedupe] = now
 
         if not duplicate:
-            native_video = await _prepare_native_video(message, target, text)
-            routed_text = text
-            if native_video is not None:
-                # Keep the source URL clickable without asking Discord to render
-                # a second provider preview beside the uploaded native player.
-                routed_text = _suppress_url_previews(routed_text)
-            routed = f"{routed_text}\n\n↪️ Shared by {message.author.mention} via Dank Shield Share Router"
-
-            send_payload: dict[str, Any] = {
-                "content": routed[:2000],
-                "allowed_mentions": discord.AllowedMentions.none(),
-            }
-            if native_video is not None:
-                send_payload["file"] = native_video.file
-
-            try:
-                await target.send(**send_payload)
-                if native_video is not None:
-                    _log(
-                        f"native video relayed guild={guild.id} source={message.channel.id} "
-                        f"target={target.id} bytes={native_video.size_bytes}"
-                    )
-            except (discord.Forbidden, discord.HTTPException) as exc:
+            attribution = (
+                f"↪️ Shared by {message.author.mention} via Dank Shield Share Router"
+            )
+            native_content = (
+                f"{_suppress_url_previews(text)}\n\n{attribution}"
+            )
+            native_sent = await _relay_native_video_upload(
+                message,
+                target,
+                text,
+                content=native_content,
+            )
+            if not native_sent:
                 # A provider-link route is still preferable to losing the share
-                # if Discord rejects the file at send time (size/bucket/etc.).
-                if native_video is None:
-                    raise
-                _log(
-                    f"native video send fallback guild={guild.id} target={target.id} "
-                    f"error={type(exc).__name__}"
-                )
+                # when media is unsupported, unavailable, or Discord rejects
+                # the attachment at send time.
                 await target.send(
-                    f"{text}\n\n↪️ Shared by {message.author.mention} via Dank Shield Share Router"[:2000],
+                    f"{text}\n\n{attribution}"[:2000],
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
-            finally:
-                if native_video is not None:
-                    try:
-                        native_video.file.close()
-                    except Exception:
-                        pass
 
         if bool(route.get("delete_source", True)) and source_perms.manage_messages:
             try:
