@@ -137,6 +137,7 @@ except Exception:
 # API SERVERS
 # ============================================================
 from .api_new.server import start_api
+from .torrent_media_server import start_torrent_media_server
 
 try:
     from .bot_actions_api import start_bot_actions_server
@@ -157,6 +158,7 @@ _NATIVE_PUBLIC_STARTUP_SCOPE = True
 
 _STARTED_LEGACY_ACTIONS_API = False
 _STARTED_NEW_ACTIONS_API = False
+_STARTED_TORRENT_MEDIA_SERVER = False
 _STARTED_WORKERS = False
 _DID_SLASH_MAINTENANCE = False
 _DID_GLOBAL_COMMAND_CLEANUP = False
@@ -988,6 +990,29 @@ async def _start_new_api_once() -> None:
         print("❌ New API failed:", repr(e))
 
 
+async def _start_torrent_media_server_once() -> None:
+    global _STARTED_TORRENT_MEDIA_SERVER
+
+    if _STARTED_TORRENT_MEDIA_SERVER:
+        return
+
+    if not claim_startup_flag("torrent_media_server"):
+        _STARTED_TORRENT_MEDIA_SERVER = True
+        print("ℹ️ Torrent media server startup already claimed elsewhere; skipping here.")
+        return
+
+    _STARTED_TORRENT_MEDIA_SERVER = True
+
+    try:
+        started = await start_torrent_media_server()
+        if started:
+            print("🎞️ Torrent media server started")
+        else:
+            print("ℹ️ Torrent media server is not configured for public playback")
+    except Exception as e:
+        print("❌ Torrent media server failed:", repr(e))
+
+
 async def _start_workers_once() -> None:
     global _STARTED_WORKERS
 
@@ -1122,6 +1147,7 @@ async def on_ready() -> None:
         await _maybe_resume_kick_timers_once()
         await _start_legacy_actions_api_once()
         await _start_new_api_once()
+        await _start_torrent_media_server_once()
         await _start_workers_once()
         await _run_permission_self_check_once()
 
