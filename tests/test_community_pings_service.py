@@ -584,6 +584,47 @@ def test_movie_night_registration_is_unique_without_disturbing_other_capabilitie
     assert movie_night_role_id(updated) == 501
 
 
+def test_movie_night_role_repair_reuses_stale_mapped_option_at_capacity() -> None:
+    groups = (CommunityPingGroup(key="alerts", label="Alerts"),)
+    options = [
+        CommunityPingOption(
+            key="movie-night",
+            role_id=500,
+            label="Movie Night",
+            kind="notification",
+            group_key="alerts",
+            capabilities=(CAP_MOVIE_NIGHT_NOTIFY,),
+        )
+    ]
+    options.extend(
+        CommunityPingOption(
+            key=f"role-{index}",
+            role_id=1000 + index,
+            label=f"Role {index}",
+            group_key="alerts",
+        )
+        for index in range(MAX_COMMUNITY_OPTIONS - 1)
+    )
+    full = CommunityPingsConfig(
+        revision=4,
+        groups=groups,
+        options=tuple(options),
+        source="v2",
+    )
+
+    repaired = register_movie_night_notification_role(full, role_id=999)
+    assert len(repaired.options) == MAX_COMMUNITY_OPTIONS
+    mapped = next(
+        item
+        for item in repaired.options
+        if CAP_MOVIE_NIGHT_NOTIFY in item.capabilities
+    )
+    assert mapped.key == "movie-night"
+    assert mapped.role_id == 999
+    assert mapped.kind == "notification"
+    assert mapped.enabled
+
+
 def test_movie_night_role_creation_preflight_blocks_only_when_new_option_cannot_fit() -> None:
     groups = (CommunityPingGroup(key="alerts", label="Alerts"),)
     full = CommunityPingsConfig(
