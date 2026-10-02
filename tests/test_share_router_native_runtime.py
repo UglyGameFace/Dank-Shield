@@ -15,8 +15,10 @@ from stoney_verify.services import server_design_apply_service as design_apply_s
 from stoney_verify.share_router_runtime import (
     _canonical_share_url,
     _dedupe_key,
+    _first_x_status_url,
     _message_share_text,
     _merged_overwrite,
+    _select_progressive_video_url,
     _suppress_url_previews,
     _trusted_video_url,
     _url_identity,
@@ -106,6 +108,84 @@ def test_share_text_collapses_duplicate_aliases_inside_human_content() -> None:
     routed = _message_share_text(message)
     assert routed.count(status_id) == 1
     assert "twitter.com" not in routed
+
+
+def test_x_status_url_is_recovered_from_canonical_routed_text() -> None:
+    routed = (
+        "watch this\n"
+        "https://x.com/AIslop_/status/2105553400381505781"
+    )
+    assert _first_x_status_url(routed) == (
+        "https://x.com/AIslop_/status/2105553400381505781"
+    )
+    assert _first_x_status_url("https://example.com/video/123") == ""
+
+
+def test_progressive_x_video_selection_prefers_combined_http_media() -> None:
+    info = {
+        "formats": [
+            {
+                "url": "https://video.twimg.com/ext_tw_video/id/pu/pl/playlist.m3u8",
+                "protocol": "m3u8_native",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "aac",
+                "height": 1080,
+                "tbr": 3500,
+            },
+            {
+                "url": "https://video.twimg.com/ext_tw_video/id/pu/vid/720x1280/a.mp4",
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "aac",
+                "height": 720,
+                "tbr": 1800,
+                "filesize": 8_000_000,
+            },
+            {
+                "url": "https://video.twimg.com/ext_tw_video/id/pu/vid/1080x1920/b.mp4",
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "none",
+                "height": 1080,
+                "tbr": 3000,
+                "filesize": 9_000_000,
+            },
+        ]
+    }
+
+    assert _select_progressive_video_url(info, max_bytes=25_000_000).endswith(
+        "/720x1280/a.mp4"
+    )
+
+
+def test_progressive_x_video_selection_rejects_oversize_and_untrusted_media() -> None:
+    info = {
+        "formats": [
+            {
+                "url": "https://video.twimg.com/ext_tw_video/id/pu/vid/720x1280/too-big.mp4",
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "aac",
+                "height": 720,
+                "filesize": 30_000_000,
+            },
+            {
+                "url": "https://evil.example/video.mp4",
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "aac",
+                "height": 720,
+                "filesize": 5_000_000,
+            },
+        ]
+    }
+
+    assert _select_progressive_video_url(info, max_bytes=25_000_000) == ""
 
 
 def test_share_router_video_candidates_prefer_trusted_discord_proxy() -> None:
@@ -291,6 +371,11 @@ def test_runtime_native_video_relay_is_bounded_and_fail_open() -> None:
     assert "_suppress_url_previews(routed_text)" in RUNTIME
     assert "native video send fallback" in RUNTIME
     assert "await target.send(" in RUNTIME
+    assert "asyncio.to_thread" in RUNTIME
+    assert "yt_dlp.YoutubeDL" in RUNTIME
+    assert "_X_EXTRACT_SEMAPHORE" in RUNTIME
+    assert "_X_VIDEO_CACHE" in RUNTIME
+    assert "_first_x_status_url(routed_text)" in RUNTIME
 
 
 def test_runtime_keeps_legacy_route_storage_and_sender_permission_boundary() -> None:
