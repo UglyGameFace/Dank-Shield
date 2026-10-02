@@ -407,6 +407,7 @@ const notice=document.getElementById("notice");
 let lastToken="";
 let remoteApply=false;
 let lastState=null;
+let terminated=false;
 
 function api(path) {{ return path+"?"+BOOT.query; }}
 async function jsonFetch(path, options={{}}) {{
@@ -444,6 +445,17 @@ async function applyState(s) {{
   document.getElementById("play").disabled=!s.is_host;
   document.getElementById("pause").disabled=!s.is_host;
 
+  if(s.ended) {{
+    terminated=true;
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    document.getElementById("play").disabled=true;
+    document.getElementById("pause").disabled=true;
+    notice.textContent="Movie Night has ended.";
+    return;
+  }}
+
   if(s.stream_token && s.stream_url && s.stream_token!==lastToken) {{
     lastToken=s.stream_token;
     video.src=s.stream_url;
@@ -473,10 +485,6 @@ async function applyState(s) {{
         catch(_) {{ notice.textContent="Tap Sync once to allow synchronized playback."; }}
       }}
     }}
-    if(s.ended) {{
-      video.pause();
-      notice.textContent="Movie Night has ended.";
-    }}
   }} finally {{
     setTimeout(()=>{{remoteApply=false;}},150);
   }}
@@ -486,10 +494,21 @@ async function applyState(s) {{
   }}
 }}
 async function poll() {{
+  if(terminated) return;
   try {{ await applyState(await jsonFetch("/movie/"+BOOT.roomId+"/state")); }}
-  catch(err) {{ notice.textContent="Sync error: "+String(err.message||err); }}
+  catch(err) {{
+    const message=String(err.message||err);
+    if(message.includes("Movie Night room not found")) {{
+      terminated=true;
+      video.pause();
+      notice.textContent="Movie Night has ended.";
+      return;
+    }}
+    notice.textContent="Sync error: "+message;
+  }}
 }}
 async function heartbeat() {{
+  if(terminated) return;
   try {{
     await jsonFetch("/movie/"+BOOT.roomId+"/heartbeat", {{
       method:"POST",
