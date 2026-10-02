@@ -202,6 +202,9 @@ class MovieNightManager:
         now: Optional[float] = None,
     ) -> MovieNightRoom:
         current = time.monotonic() if now is None else float(now)
+        existing = self.active_room_for_channel(guild_id, channel_id)
+        if existing is not None:
+            raise RuntimeError("A Movie Night room is already active in this channel.")
         room = MovieNightRoom(
             room_id=secrets.token_urlsafe(12),
             guild_id=int(guild_id),
@@ -222,6 +225,67 @@ class MovieNightManager:
 
     def get(self, room_id: str) -> Optional[MovieNightRoom]:
         return self._rooms.get(str(room_id or ""))
+
+    def active_room_for_channel(
+        self,
+        guild_id: int,
+        channel_id: int,
+    ) -> Optional[MovieNightRoom]:
+        matches = [
+            room
+            for room in self._rooms.values()
+            if not room.ended
+            and int(room.guild_id) == int(guild_id)
+            and int(room.channel_id) == int(channel_id)
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda room: float(room.created_at))
+
+    def active_rooms_for_guild(self, guild_id: int) -> tuple[MovieNightRoom, ...]:
+        return tuple(
+            sorted(
+                (
+                    room
+                    for room in self._rooms.values()
+                    if not room.ended and int(room.guild_id) == int(guild_id)
+                ),
+                key=lambda room: float(room.created_at),
+            )
+        )
+
+    def join_room(
+        self,
+        room_id: str,
+        *,
+        user_id: int,
+        now: Optional[float] = None,
+    ) -> MovieNightRoom:
+        room = self._require_room(room_id)
+        current = time.monotonic() if now is None else float(now)
+        uid = int(user_id)
+        viewer = room.viewers.get(uid)
+        if viewer is None:
+            room.viewers[uid] = ViewerState(
+                user_id=uid,
+                joined_at=current,
+                last_seen=current,
+            )
+        else:
+            viewer.last_seen = current
+        if uid == int(room.host_id):
+            room.host_last_seen = current
+        return room
+
+    def leave_room(
+        self,
+        room_id: str,
+        *,
+        user_id: int,
+    ) -> MovieNightRoom:
+        room = self._require_room(room_id)
+        room.viewers.pop(int(user_id), None)
+        return room
 
     def heartbeat(
         self,
