@@ -38,6 +38,7 @@ from stoney_verify.torrent_streaming import (
     is_torrent_filename,
     magnet_identity,
 )
+from stoney_verify.torrent_media_server import media_server_ready
 
 _DATA_LOCK = asyncio.Lock()
 _RECENT_ROUTE_KEYS: dict[tuple[int, int, str], float] = {}
@@ -947,6 +948,10 @@ async def _route_torrent_media(
         raise RuntimeError(
             "DANK_TORRENT_STREAM_SECRET is required before Share Router can sign torrent stream URLs."
         )
+    if not media_server_ready():
+        raise RuntimeError(
+            "The torrent media server is not running, so Share Router will not start a torrent session."
+        )
 
     manager = get_torrent_manager()
     if magnet:
@@ -1005,14 +1010,19 @@ async def _route_torrent_media(
         inline=False,
     )
 
-    await target.send(
-        content=(
-            f"{stream_url}\n\n"
-            f"↪️ Shared by {message.author.mention} via Dank Shield Share Router"
-        )[:2000],
-        embed=embed,
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
+    try:
+        await target.send(
+            content=(
+                f"{stream_url}\n\n"
+                f"↪️ Shared by {message.author.mention} via Dank Shield Share Router"
+            )[:2000],
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    except Exception:
+        await manager.remove(session.token)
+        raise
+
     if identity:
         _RECENT_ROUTE_KEYS[dedupe_key] = now
     _log(
