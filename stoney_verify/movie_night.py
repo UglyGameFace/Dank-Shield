@@ -270,6 +270,18 @@ class MovieNightManager:
     def get(self, room_id: str) -> Optional[MovieNightRoom]:
         return self._rooms.get(str(room_id or ""))
 
+    def retire_room(self, room_id: str) -> bool:
+        """Forget an ended room after its external resources are released."""
+
+        key = str(room_id or "")
+        room = self._rooms.get(key)
+        if room is None:
+            return False
+        if not room.ended:
+            raise RuntimeError("Cannot retire an active Movie Night room.")
+        self._rooms.pop(key, None)
+        return True
+
     def active_room_for_channel(
         self,
         guild_id: int,
