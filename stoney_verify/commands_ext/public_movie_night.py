@@ -74,6 +74,10 @@ def _compact(value: Any, limit: int = 180) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
+def _movie_lease_key(guild_id: int, channel_id: int) -> str:
+    return f"movie:{int(guild_id)}:{int(channel_id)}"
+
+
 def _format_bytes(value: Any) -> str:
     size = max(0, _safe_int(value, 0))
     if size <= 0:
@@ -1719,6 +1723,7 @@ async def _start_variant_source(
             ),
         )
     previous = str(current.stream_token or "")
+    lease_key = _movie_lease_key(int(current.guild_id), int(current.channel_id))
     source_ref = str(variant.source_ref or "").strip()
 
     try:
@@ -1731,6 +1736,7 @@ async def _start_variant_source(
                 guild_id=int(guild.id),
                 owner_id=int(current.host_id),
                 replace_token=previous,
+                lease_key=lease_key,
             )
         elif source_ref.lower().startswith("https://"):
             payload = await fetch_torrent_metadata(
@@ -1742,6 +1748,7 @@ async def _start_variant_source(
                 guild_id=int(guild.id),
                 owner_id=int(current.host_id),
                 replace_token=previous,
+                lease_key=lease_key,
             )
         else:
             raise ValueError(
@@ -1762,7 +1769,11 @@ async def _start_variant_source(
 
     stream_url = torrent_manager.stream_url(session)
     if not stream_url:
-        await torrent_manager.remove(session.token)
+        await torrent_manager.release_lease(
+            session.token,
+            lease_key,
+            remove_if_unused=True,
+        )
         return await _replace(
             interaction,
             content="❌ The torrent started but no signed public stream URL could be created.",
@@ -1796,7 +1807,11 @@ async def _start_variant_source(
     variant.file_size = int(session.file_size or variant.file_size)
 
     if previous and previous != session.token:
-        await torrent_manager.remove(previous)
+        await torrent_manager.release_lease(
+            previous,
+            lease_key,
+            remove_if_unused=True,
+        )
 
     await _replace(
         interaction,
@@ -2207,6 +2222,7 @@ async def _attach_torrent_media(
             "❌ Only the active Movie Night host can replace the room's media source.",
         )
     previous = str(room.stream_token or "") if room is not None else ""
+    lease_key = _movie_lease_key(int(guild.id), int(channel.id))
 
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -2222,6 +2238,7 @@ async def _attach_torrent_media(
                 guild_id=int(guild.id),
                 owner_id=int(interaction.user.id),
                 replace_token=previous,
+                lease_key=lease_key,
             )
         elif torrent is not None:
             if not is_torrent_filename(str(torrent.filename or "")):
@@ -2234,6 +2251,7 @@ async def _attach_torrent_media(
                 guild_id=int(guild.id),
                 owner_id=int(interaction.user.id),
                 replace_token=previous,
+                lease_key=lease_key,
             )
         else:
             return await open_movie_night(interaction, replace_message=True)
@@ -2246,7 +2264,11 @@ async def _attach_torrent_media(
 
     stream_url = manager.stream_url(session)
     if not stream_url:
-        await manager.remove(session.token)
+        await manager.release_lease(
+            session.token,
+            lease_key,
+            remove_if_unused=True,
+        )
         return await interaction.edit_original_response(
             content="❌ Torrent started, but no signed public stream URL could be created. Check Movie Night Setup.",
             embed=None,
@@ -2273,7 +2295,11 @@ async def _attach_torrent_media(
             stream_token=session.token,
         )
         if previous and previous != session.token:
-            await manager.remove(previous)
+            await manager.release_lease(
+                previous,
+                lease_key,
+                remove_if_unused=True,
+            )
 
     await interaction.edit_original_response(
         content=(
