@@ -32,6 +32,7 @@ _DEFAULT_MANIFEST_MAX_BYTES = 2 * 1024 * 1024
 _DEFAULT_PROXY_CHUNK_BYTES = 64 * 1024
 _DEFAULT_UPSTREAM_MULTIPLIER = 3
 _HLS_URI_ATTR_RE = re.compile(r'URI="([^"]+)"', re.IGNORECASE)
+_SCHEME_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\\s\\"'<>]+")
 _DASH_URL_ATTRS = {
     "href",
     "initialization",
@@ -243,6 +244,16 @@ class ManifestProxy:
             manifest_hint=manifest_hint,
         )
         return self._exact_local_url(resource_id)
+
+    def _assert_rewrite_is_local_only(self, text: str) -> None:
+        local_prefix = f"http://127.0.0.1:{self._port}/"
+        for match in _SCHEME_URL_RE.finditer(text or ""):
+            value = match.group(0)
+            if value.startswith(local_prefix):
+                continue
+            raise ManifestProxyError(
+                "rewritten manifest retained a non-local network reference"
+            )
 
     def _rewrite_hls(
         self,
@@ -532,6 +543,7 @@ class ManifestProxy:
                         headers=headers,
                     )
                     media_type = "application/dash+xml"
+                self._assert_rewrite_is_local_only(rewritten)
                 return web.Response(
                     text=rewritten,
                     content_type=media_type,
@@ -548,7 +560,7 @@ class ManifestProxy:
 
             declared = int(response.headers.get("Content-Length") or 0)
             remaining = await self._budget.remaining()
-            if declared > remaining > 0:
+            if declared > 0 and declared > remaining:
                 raise web.HTTPRequestEntityTooLarge(
                     max_size=self._budget.limit,
                     actual_size=self._budget.used + declared,
