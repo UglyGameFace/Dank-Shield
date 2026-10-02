@@ -245,15 +245,42 @@ class ManifestProxy:
         )
         return self._exact_local_url(resource_id)
 
-    def _assert_rewrite_is_local_only(self, text: str) -> None:
+    def _assert_rewrite_is_local_only(
+        self,
+        text: str,
+        *,
+        xml_manifest: bool = False,
+    ) -> None:
         local_prefix = f"http://127.0.0.1:{self._port}/"
-        for match in _SCHEME_URL_RE.finditer(text or ""):
-            value = match.group(0)
-            if value.startswith(local_prefix):
-                continue
-            raise ManifestProxyError(
-                "rewritten manifest retained a non-local network reference"
-            )
+
+        def assert_value(value: str) -> None:
+            for match in _SCHEME_URL_RE.finditer(value or ""):
+                candidate = match.group(0)
+                if candidate.startswith(local_prefix):
+                    continue
+                raise ManifestProxyError(
+                    "rewritten manifest retained a non-local network reference"
+                )
+
+        if not xml_manifest:
+            assert_value(text)
+            return
+
+        try:
+            root = ET.fromstring(text)
+        except Exception as exc:
+            raise ManifestProxyError("rewritten DASH manifest is invalid") from exc
+
+        for element in root.iter():
+            local = _local_name(element.tag)
+            if local in {"baseurl", "location"}:
+                assert_value(str(element.text or ""))
+            for key, value in element.attrib.items():
+                attr_name = _local_name(key)
+                # XML schema-location metadata is not a media fetch target.
+                if attr_name == "schemalocation":
+                    continue
+                assert_value(str(value or ""))
 
     def _rewrite_hls(
         self,
@@ -600,7 +627,10 @@ class ManifestProxy:
                         headers=headers,
                     )
                     media_type = "application/dash+xml"
-                self._assert_rewrite_is_local_only(rewritten)
+                self._assert_rewrite_is_local_only(
+                    rewritten,
+                    xml_manifest=(media_type == "application/dash+xml"),
+                )
                 return web.Response(
                     text=rewritten,
                     content_type=media_type,
