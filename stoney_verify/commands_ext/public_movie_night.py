@@ -613,6 +613,159 @@ def _queue_embed(room: MovieNightRoom) -> discord.Embed:
     return embed
 
 
+
+def _candidate_embed(room: MovieNightRoom, candidate: Any) -> discord.Embed:
+    manager = get_movie_night_manager()
+    active = manager.active_viewers(room)
+    movie_votes = len(candidate.votes & active)
+    variants = manager.ranked_variants(room.room_id, candidate.candidate_id)
+
+    embed = discord.Embed(
+        title=f"🎬 {candidate.title}",
+        description=(
+            f"Movie votes: **{movie_votes}** • Releases: **{len(variants)}**\n"
+            "Release ordering favors live seeds and swarm health when votes are tied."
+        ),
+        color=discord.Color.blurple(),
+    )
+    lines: list[str] = []
+    for index, variant in enumerate(variants[:8], start=1):
+        health = variant.swarm_health
+        source = _release_source_label(
+            variant.metadata if isinstance(variant.metadata, Mapping) else {}
+        )
+        lines.append(
+            f"**{index}. {source}** • {_format_bytes(variant.file_size)} • "
+            f"🌱 {health['seeds']} • 🧲 {health['leechers']} • "
+            f"👥 {health['peers']} • 🗳️ {len(variant.votes & active)}"
+        )
+    embed.add_field(
+        name="Top releases",
+        value="\n".join(lines)[:1024] if lines else "No releases attached yet.",
+        inline=False,
+    )
+    if candidate.candidate_id in room.queue:
+        embed.add_field(name="Queue", value="✅ This movie is queued.", inline=False)
+    return embed
+
+
+def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discord.Embed:
+    manager = get_movie_night_manager()
+    active = manager.active_viewers(room)
+    health = variant.swarm_health
+    metadata = variant.metadata if isinstance(variant.metadata, Mapping) else {}
+    release = metadata.get("release_name") if isinstance(metadata.get("release_name"), Mapping) else {}
+    source_reported = (
+        metadata.get("source_reported")
+        if isinstance(metadata.get("source_reported"), Mapping)
+        else {}
+    )
+    verified = metadata.get("verified") if isinstance(metadata.get("verified"), Mapping) else {}
+
+    source = _release_source_label(metadata)
+    hint = _release_hint_label(metadata)
+    embed = discord.Embed(
+        title=f"🎞️ {candidate.title} • {source}",
+        description=(
+            f"Release votes: **{len(variant.votes & active)}**\n"
+            f"Source: **{variant.source_label or variant.source_id or 'Custom source'}**"
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Swarm",
+        value=(
+            f"🌱 Seeds: **{health['seeds']}**\n"
+            f"🧲 Leeches: **{health['leechers']}**\n"
+            f"👥 Peers: **{health['peers']}**\n"
+            f"Health: **{health['label']}** • ratio **{health['seed_leech_ratio']}**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="File",
+        value=(
+            f"Size: **{_format_bytes(variant.file_size)}**\n"
+            f"Release: **{source}** *(inferred)*\n"
+            f"{hint or 'Quality details pending file verification'}"
+        )[:1024],
+        inline=True,
+    )
+
+    if source_reported:
+        source_lines = [
+            f"• **{_compact(key, 40)}:** {_compact(value, 100)}"
+            for key, value in list(source_reported.items())[:6]
+        ]
+        embed.add_field(
+            name="Source-reported metadata • not yet verified",
+            value="\n".join(source_lines)[:1024],
+            inline=False,
+        )
+
+    if verified:
+        video = verified.get("video") if isinstance(verified.get("video"), Mapping) else {}
+        audio = verified.get("audio_tracks") if isinstance(verified.get("audio_tracks"), list) else []
+        embed.add_field(
+            name="Verified from selected media",
+            value=(
+                f"Duration: **{verified.get('duration') or 'unknown'}**\n"
+                f"Video: **{video.get('resolution') or 'unknown'}** • "
+                f"**{video.get('codec') or 'unknown'}**\n"
+                f"Audio tracks: **{len(audio)}**"
+            )[:1024],
+            inline=False,
+        )
+
+    embed.set_footer(
+        text=(
+            "Release/source labels are inferred from naming until the actual file is probed."
+        )
+    )
+    return embed
+
+
+def _materialize_search_results(
+    room: MovieNightRoom,
+    outcome: MediaSourceSearchOutcome,
+    *,
+    proposer_id: int,
+    query: str,
+) -> tuple[int, int]:
+    manager = get_movie_night_manager()
+    candidate_ids: set[str] = set()
+    release_count = 0
+
+    for result in outcome.variants:
+        candidate = manager.find_candidate_by_title(room.room_id, result.title)
+        if candidate is None:
+            candidate = manager.nominate(
+                room.room_id,
+                user_id=int(proposer_id),
+                title=result.title,
+                metadata={"search_query": query},
+                auto_vote=False,
+            )
+        candidate_ids.add(candidate.candidate_id)
+        manager.add_variant(
+            room.room_id,
+            candidate.candidate_id,
+            user_id=int(proposer_id),
+            source_ref=result.source_ref,
+            source_id=result.source_id,
+            source_label=result.source_label,
+            file_size=result.file_size,
+            peers=result.peers,
+            seeds=result.seeds,
+            leechers=result.leechers,
+            metadata=result.metadata,
+            auto_vote=False,
+        )
+        release_count += 1
+
+    return len(candidate_ids), release_count
+
+
 class _OwnedView(discord.ui.View):
     def __init__(self, owner_id: int) -> None:
         super().__init__(timeout=PRIVATE_MENU_TTL_SECONDS)
