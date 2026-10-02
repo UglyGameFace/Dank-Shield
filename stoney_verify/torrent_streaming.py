@@ -498,17 +498,18 @@ class TorrentMediaManager:
         if not token:
             return False
         session = self._sessions.get(token)
-        if session is None or session.unleased_hold:
+        if session is None or bool(getattr(session, "unleased_hold", False)):
             return False
+        leases = set(getattr(session, "leases", set()) or set())
         key = str(lease_key or "").strip()
         if key:
-            return not session.leases or session.leases <= {key}
-        return not session.leases
+            return not leases or leases <= {key}
+        return not leases
 
     def _committed_file_bytes(self, *, exclude_token: str = "") -> int:
         excluded = str(exclude_token or "")
         return sum(
-            max(0, int(session.file_size))
+            max(0, int(getattr(session, "file_size", 0) or 0))
             for token, session in self._sessions.items()
             if token != excluded
         )
@@ -563,11 +564,14 @@ class TorrentMediaManager:
             + max(0, int(expected_file_bytes))
         )
 
-        total_leases = sum(len(session.leases) for session in self._sessions.values())
+        total_leases = sum(
+            len(set(getattr(session, "leases", set()) or set()))
+            for session in self._sessions.values()
+        )
         shared_sessions = sum(
             1
             for session in self._sessions.values()
-            if len(session.leases) > 1
+            if len(set(getattr(session, "leases", set()) or set())) > 1
         )
 
         blocker = ""
