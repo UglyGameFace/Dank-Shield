@@ -12,12 +12,15 @@ import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit, urlunsplit
 
 MEDIA_SOURCE_REGISTRY_KEY = "movie_night_media_sources_v1"
-MEDIA_SOURCE_REGISTRY_VERSION = 1
+MEDIA_SOURCE_REGISTRY_VERSION = 2
 MAX_CUSTOM_MEDIA_SOURCES = 20
 
+PROVIDER_TYPE_JSON = "json"
+PROVIDER_TYPE_EXTERNAL = "external"
+_PROVIDER_TYPES = {PROVIDER_TYPE_JSON, PROVIDER_TYPE_EXTERNAL}
 _SOURCE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 
 
@@ -26,6 +29,7 @@ class CustomMediaSource:
     source_id: str
     label: str
     endpoint_url: str
+    provider_type: str = PROVIDER_TYPE_JSON
     enabled: bool = True
     added_by: int = 0
     created_at: str = ""
@@ -35,6 +39,7 @@ class CustomMediaSource:
             "source_id": self.source_id,
             "label": self.label,
             "endpoint_url": self.endpoint_url,
+            "provider_type": self.provider_type,
             "enabled": bool(self.enabled),
             "added_by": int(self.added_by),
             "created_at": self.created_at,
@@ -66,6 +71,11 @@ def _safe_id(value: Any) -> str:
 
 def _safe_label(value: Any) -> str:
     return " ".join(str(value or "").split())[:80]
+
+
+def _safe_provider_type(value: Any) -> str:
+    clean = str(value or PROVIDER_TYPE_JSON).strip().casefold()
+    return clean if clean in _PROVIDER_TYPES else PROVIDER_TYPE_JSON
 
 
 def _safe_int(value: Any) -> int:
@@ -174,6 +184,31 @@ def prepare_example_search_url(value: Any) -> str:
         )
     )
 
+def render_provider_search_url(endpoint_url: Any, query: Any) -> str:
+    """Render a safe provider search URL without fetching or scraping the page."""
+
+    endpoint = _normalize_endpoint_url(endpoint_url)
+    clean_query = " ".join(str(query or "").split())[:180]
+    if not clean_query:
+        raise ValueError("Movie search query is empty.")
+
+    if "{query}" in endpoint:
+        return endpoint.replace("{query}", quote_plus(clean_query))
+
+    parsed = urlsplit(endpoint)
+    pairs = list(parse_qsl(parsed.query, keep_blank_values=True))
+    pairs.append(("q", clean_query))
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(pairs),
+            "",
+        )
+    )
+
+
 def _source_from_raw(raw: Any) -> Optional[CustomMediaSource]:
     if not isinstance(raw, Mapping):
         return None
@@ -189,6 +224,7 @@ def _source_from_raw(raw: Any) -> Optional[CustomMediaSource]:
         source_id=source_id,
         label=label,
         endpoint_url=endpoint,
+        provider_type=_safe_provider_type(raw.get("provider_type")),
         enabled=bool(raw.get("enabled", True)),
         added_by=_safe_int(raw.get("added_by")),
         created_at=str(raw.get("created_at") or "")[:64],
@@ -250,9 +286,11 @@ def add_custom_source(
     label: str,
     endpoint_url: str,
     added_by: int,
+    provider_type: str = PROVIDER_TYPE_JSON,
 ) -> MediaSourceRegistry:
     clean_label = _safe_label(label)
     clean_url = _normalize_endpoint_url(endpoint_url)
+    clean_type = _safe_provider_type(provider_type)
     clean_id = _safe_id(source_id)
     if not clean_label:
         raise ValueError("Custom media source name is required.")
@@ -281,6 +319,7 @@ def add_custom_source(
         source_id=clean_id,
         label=clean_label,
         endpoint_url=clean_url,
+        provider_type=clean_type,
         enabled=True if previous is None else bool(previous.enabled),
         added_by=_safe_int(added_by),
         created_at=created_at,
@@ -333,6 +372,22 @@ def enabled_custom_sources(registry: MediaSourceRegistry) -> tuple[CustomMediaSo
     return tuple(item for item in registry.sources if item.enabled)
 
 
+def enabled_structured_sources(registry: MediaSourceRegistry) -> tuple[CustomMediaSource, ...]:
+    return tuple(
+        item
+        for item in registry.sources
+        if item.enabled and item.provider_type == PROVIDER_TYPE_JSON
+    )
+
+
+def enabled_external_sources(registry: MediaSourceRegistry) -> tuple[CustomMediaSource, ...]:
+    return tuple(
+        item
+        for item in registry.sources
+        if item.enabled and item.provider_type == PROVIDER_TYPE_EXTERNAL
+    )
+
+
 async def load_media_source_registry(
     guild_id: int,
     *,
@@ -364,6 +419,11 @@ async def save_media_source_registry(
 
 
 __all__ = [
+    "render_provider_search_url",
+    "enabled_external_sources",
+    "enabled_structured_sources",
+    "PROVIDER_TYPE_EXTERNAL",
+    "PROVIDER_TYPE_JSON",
     "CustomMediaSource",
     "MEDIA_SOURCE_REGISTRY_KEY",
     "MAX_CUSTOM_MEDIA_SOURCES",
