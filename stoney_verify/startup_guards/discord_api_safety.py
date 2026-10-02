@@ -284,17 +284,21 @@ async def fetch_message_with_api_safety(
         return await asyncio.shield(existing)
 
     async def _run() -> Any:
+        if recovery:
+            # Wait for aggregate recovery capacity *before* taking the channel
+            # route lock. A slow startup budget must never block a live guarded
+            # fetch that needs the same channel.
+            await reserve_recovery_discord_rest_requests(
+                1,
+                label=(
+                    "message fetch "
+                    f"{str(label or 'recovery')[:90]} "
+                    f"channel={channel_id}"
+                ),
+            )
+
         lock = _MESSAGE_FETCH_LOCKS.setdefault(channel_id, asyncio.Lock())
         async with lock:
-            if recovery:
-                await reserve_recovery_discord_rest_requests(
-                    1,
-                    label=(
-                        "message fetch "
-                        f"{str(label or 'recovery')[:90]} "
-                        f"channel={channel_id}"
-                    ),
-                )
             return await channel.fetch_message(resolved_message_id)
 
     task = asyncio.create_task(
