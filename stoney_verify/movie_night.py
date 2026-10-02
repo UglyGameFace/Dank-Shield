@@ -42,8 +42,33 @@ class MovieSourceVariant:
     file_size: int = 0
     peers: int = 0
     seeds: int = 0
+    leechers: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
     votes: set[int] = field(default_factory=set)
+
+    @property
+    def swarm_health(self) -> dict[str, Any]:
+        seeds = max(0, int(self.seeds))
+        leechers = max(0, int(self.leechers))
+        peers = max(seeds + leechers, int(self.peers))
+        ratio = round(seeds / max(1, leechers), 3)
+        if seeds <= 0:
+            label = "dead"
+        elif seeds >= 50:
+            label = "excellent"
+        elif seeds >= 20:
+            label = "strong"
+        elif seeds >= 5:
+            label = "usable"
+        else:
+            label = "weak"
+        return {
+            "seeds": seeds,
+            "leechers": leechers,
+            "peers": peers,
+            "seed_leech_ratio": ratio,
+            "label": label,
+        }
 
     def quality_efficiency_key(self) -> tuple[int, int, int, int, int]:
         meta = dict(self.metadata or {})
@@ -376,6 +401,7 @@ class MovieNightManager:
         file_size: int = 0,
         peers: int = 0,
         seeds: int = 0,
+        leechers: int = 0,
         metadata: Optional[Mapping[str, Any]] = None,
         now: Optional[float] = None,
     ) -> MovieSourceVariant:
@@ -400,6 +426,7 @@ class MovieNightManager:
             file_size=max(0, int(file_size or 0)),
             peers=max(0, int(peers or 0)),
             seeds=max(0, int(seeds or 0)),
+            leechers=max(0, int(leechers or 0)),
             metadata=dict(metadata or {}),
             votes={uid},
         )
@@ -450,15 +477,29 @@ class MovieNightManager:
             raise LookupError("Movie candidate not found.")
 
         active = self.active_viewers(room, now=now)
-        return sorted(
-            candidate.variants.values(),
-            key=lambda item: (
-                -len(item.votes & active),
-                tuple(-part for part in item.quality_efficiency_key()),
+        def _rank(item: MovieSourceVariant) -> tuple[Any, ...]:
+            votes = len(item.votes & active)
+            health = item.swarm_health
+            seeds = int(health["seeds"])
+            leechers = int(health["leechers"])
+            ratio = float(health["seed_leech_ratio"])
+            quality = item.quality_efficiency_key()
+
+            # Room votes remain authoritative once people start choosing.
+            # Before votes diverge, the default ordering is swarm-first:
+            # live seeds, then seed/leech balance, then verified quality.
+            return (
+                -votes,
+                0 if seeds > 0 else 1,
+                -seeds,
+                -ratio,
+                leechers,
+                tuple(-part for part in quality),
                 int(item.file_size),
                 float(item.created_at),
-            ),
-        )
+            )
+
+        return sorted(candidate.variants.values(), key=_rank)
 
     def select_variant(
         self,
