@@ -13,11 +13,8 @@ from urllib.parse import urlencode
 
 from aiohttp import web
 
-from stoney_verify.movie_night import (
-    MovieNightRoom,
-    get_movie_night_manager,
-    movie_room_lease_key,
-)
+from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
+from stoney_verify.movie_night_session import terminate_movie_night_room
 from stoney_verify.torrent_streaming import get_torrent_manager
 
 
@@ -202,6 +199,8 @@ def _float(value: Any, default: float = 0.0) -> float:
 
 async def movie_night_heartbeat(request: web.Request) -> web.Response:
     room, uid = await _room_and_user(request)
+    if room.ended:
+        return web.json_response(await _state_payload(room, uid))
     try:
         payload = await request.json()
     except Exception:
@@ -327,23 +326,14 @@ async def movie_night_action(request: web.Request) -> web.Response:
 
     manager = get_movie_night_manager()
     manager.join_room(room.room_id, user_id=uid)
-    stream_token = str(room.stream_token or "")
     manager.apply_host_action(
         room.room_id,
         host_id=uid,
         action=action,
         payload=action_payload,
     )
-    if action == "end" and stream_token:
-        torrent_manager = get_torrent_manager()
-        await torrent_manager.release_lease(
-            stream_token,
-            movie_room_lease_key(room.guild_id, room.channel_id),
-            remove_if_unused=True,
-        )
-        room.stream_token = ""
-        room.current_candidate_id = ""
-        room.current_variant_id = ""
+    if action == "end":
+        await terminate_movie_night_room(room)
     return web.json_response(await _state_payload(room, uid))
 
 
@@ -398,6 +388,7 @@ small {{ color:#8994aa; }}
     <button id="sync">Tap to Sync</button>
     <button id="play" disabled>Play</button>
     <button id="pause" disabled>Pause</button>
+    <button id="end" disabled>End Session</button>
   </div>
   <div id="notice"></div>
   <div class="grid">
@@ -417,6 +408,7 @@ const notice=document.getElementById("notice");
 let lastToken="";
 let remoteApply=false;
 let lastState=null;
+let terminated=false;
 
 function api(path) {{ return path+"?"+BOOT.query; }}
 async function jsonFetch(path, options={{}}) {{
@@ -453,6 +445,19 @@ async function applyState(s) {{
 
   document.getElementById("play").disabled=!s.is_host;
   document.getElementById("pause").disabled=!s.is_host;
+  document.getElementById("end").disabled=!s.is_host;
+
+  if(s.ended) {{
+    terminated=true;
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    document.getElementById("play").disabled=true;
+    document.getElementById("pause").disabled=true;
+    document.getElementById("end").disabled=true;
+    notice.textContent="Movie Night has ended.";
+    return;
+  }}
 
   if(s.stream_token && s.stream_url && s.stream_token!==lastToken) {{
     lastToken=s.stream_token;
@@ -483,10 +488,6 @@ async function applyState(s) {{
         catch(_) {{ notice.textContent="Tap Sync once to allow synchronized playback."; }}
       }}
     }}
-    if(s.ended) {{
-      video.pause();
-      notice.textContent="Movie Night has ended.";
-    }}
   }} finally {{
     setTimeout(()=>{{remoteApply=false;}},150);
   }}
@@ -496,10 +497,21 @@ async function applyState(s) {{
   }}
 }}
 async function poll() {{
+  if(terminated) return;
   try {{ await applyState(await jsonFetch("/movie/"+BOOT.roomId+"/state")); }}
-  catch(err) {{ notice.textContent="Sync error: "+String(err.message||err); }}
+  catch(err) {{
+    const message=String(err.message||err);
+    if(message.includes("Movie Night room not found")) {{
+      terminated=true;
+      video.pause();
+      notice.textContent="Movie Night has ended.";
+      return;
+    }}
+    notice.textContent="Sync error: "+message;
+  }}
 }}
 async function heartbeat() {{
+  if(terminated) return;
   try {{
     await jsonFetch("/movie/"+BOOT.roomId+"/heartbeat", {{
       method:"POST",
@@ -532,6 +544,10 @@ document.getElementById("sync").onclick=async()=>{{
 }};
 document.getElementById("play").onclick=()=>hostAction("resume");
 document.getElementById("pause").onclick=()=>hostAction("pause");
+document.getElementById("end").onclick=()=>{{
+  if(confirm("End this Movie Night for everyone and release the room media session?"))
+    hostAction("end");
+}};
 video.addEventListener("play",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("resume"); }});
 video.addEventListener("pause",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("pause"); }});
 video.addEventListener("seeked",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("seek",{{seconds:video.currentTime||0}}); }});

@@ -14,9 +14,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
-PLAYBACK_ACTIONS = frozenset({"pause", "resume", "seek", "skip", "end"})
+PLAYBACK_ACTIONS = frozenset({"pause", "resume", "seek", "skip"})
+SESSION_ACTIONS = frozenset({"end"})
 PROGRAMMING_ACTIONS = frozenset({"search", "nominate", "queue", "play_next", "play_variant"})
-ALL_ACTIONS = PLAYBACK_ACTIONS | PROGRAMMING_ACTIONS
+ALL_ACTIONS = PLAYBACK_ACTIONS | SESSION_ACTIONS | PROGRAMMING_ACTIONS
 
 def movie_room_lease_key(guild_id: int, channel_id: int) -> str:
     """Stable tracked torrent consumer identity for one Movie Night room."""
@@ -268,6 +269,18 @@ class MovieNightManager:
 
     def get(self, room_id: str) -> Optional[MovieNightRoom]:
         return self._rooms.get(str(room_id or ""))
+
+    def retire_room(self, room_id: str) -> bool:
+        """Forget an ended room after its external resources are released."""
+
+        key = str(room_id or "")
+        room = self._rooms.get(key)
+        if room is None:
+            return False
+        if not room.ended:
+            raise RuntimeError("Cannot retire an active Movie Night room.")
+        self._rooms.pop(key, None)
+        return True
 
     def active_room_for_channel(
         self,
@@ -625,7 +638,9 @@ class MovieNightManager:
     ) -> bool:
         """Claim one passed vote's external side effect exactly once."""
 
-        room = self._require_room(room_id)
+        room = self.get(room_id)
+        if room is None:
+            return False
         vote = room.votes.get(str(vote_id or ""))
         if vote is None or not vote.resolved or not vote.passed or vote.executed:
             return False
@@ -638,7 +653,9 @@ class MovieNightManager:
         vote_id: str,
         error: str,
     ) -> None:
-        room = self._require_room(room_id)
+        room = self.get(room_id)
+        if room is None:
+            return
         vote = room.votes.get(str(vote_id or ""))
         if vote is not None:
             vote.execution_error = " ".join(str(error or "").split())[:240]
@@ -1130,6 +1147,7 @@ __all__ = [
     "MovieNightRoom",
     "PLAYBACK_ACTIONS",
     "PROGRAMMING_ACTIONS",
+    "SESSION_ACTIONS",
     "RoomVote",
     "ViewerState",
     "get_movie_night_manager",

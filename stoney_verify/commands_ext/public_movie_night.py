@@ -42,6 +42,7 @@ from stoney_verify.movie_night import (
     get_movie_night_manager,
     movie_room_lease_key,
 )
+from stoney_verify.movie_night_session import terminate_movie_night_room
 from stoney_verify.movie_night_web import movie_night_watch_url
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from stoney_verify.torrent_media_server import (
@@ -526,9 +527,10 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
     embed = discord.Embed(
         title="🎞️ Movie Night Sources",
         description=(
-            "Add authorized HTTPS catalog/feed sources for Movie Night search. "
-            "Results from every source retain provenance and merge into the same "
-            "seed/leech/quality voting model."
+            "Add an authorized **HTTPS JSON search/feed URL** and Dank Shield handles the "
+            "internal source ID for you. Use `{query}` where the movie title belongs, or "
+            "Dank Shield appends `?q=` automatically. Results can point to a magnet link "
+            "or an HTTPS .torrent URL. Plain website/HTML pages are not scraped."
         ),
         color=discord.Color.blurple(),
     )
@@ -552,11 +554,20 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
             inline=False,
         )
     embed.add_field(
+        name="Expected JSON",
+        value=(
+            'Example: `{"results":[{"title":"Example Movie","magnet":"magnet:?xt=...",'
+            '"seeds":42,"leechers":5}]}`\n'
+            "An HTTPS `.torrent` URL can be returned as `url` instead of `magnet`."
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="Network safety",
         value=(
-            "Sources must use HTTPS, cannot embed credentials, and cannot point at obvious "
-            "localhost/private/reserved addresses. The resolver must also re-check DNS destinations "
-            "before fetching."
+            "Sources must use HTTPS, return structured JSON, cannot embed credentials, and cannot "
+            "point at localhost/private/reserved addresses. DNS destinations are re-checked before "
+            "every fetch."
         ),
         inline=False,
     )
@@ -1251,30 +1262,38 @@ async def open_movie_results(
         await _private(interaction, embed=embed, view=picker)
 
 
-class CustomSourceModal(discord.ui.Modal, title="Add / Update Movie Source"):
-    source_id = discord.ui.TextInput(
-        label="Source ID",
-        placeholder="family-library",
-        min_length=1,
-        max_length=48,
-    )
-    label = discord.ui.TextInput(
-        label="Display name",
-        placeholder="Family Library",
-        min_length=1,
-        max_length=80,
-    )
-    endpoint = discord.ui.TextInput(
-        label="HTTPS catalog/feed endpoint",
-        placeholder="https://media.example.com/search?q={query}",
-        min_length=8,
-        max_length=1000,
-    )
-
-    def __init__(self, *, owner_id: int, baseline: Mapping[str, Any]) -> None:
-        super().__init__(timeout=300)
+class CustomSourceModal(discord.ui.Modal):
+    def __init__(
+        self,
+        *,
+        owner_id: int,
+        baseline: Mapping[str, Any],
+        source: Optional[CustomMediaSource] = None,
+    ) -> None:
+        super().__init__(
+            title="Edit Movie Source" if source is not None else "Add Movie Source",
+            timeout=300,
+        )
         self.owner_id = int(owner_id)
         self.baseline = dict(baseline)
+        self.source_id = str(source.source_id if source is not None else "")
+
+        self.label_input = discord.ui.TextInput(
+            label="Source name",
+            placeholder="Family Library",
+            default=str(source.label if source is not None else "")[:80] or None,
+            min_length=1,
+            max_length=80,
+        )
+        self.endpoint_input = discord.ui.TextInput(
+            label="HTTPS JSON search/feed URL",
+            placeholder="https://media.example.com/search?q={query}",
+            default=str(source.endpoint_url if source is not None else "")[:1000] or None,
+            min_length=8,
+            max_length=1000,
+        )
+        self.add_item(self.label_input)
+        self.add_item(self.endpoint_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if int(interaction.user.id) != self.owner_id:
@@ -1285,15 +1304,15 @@ class CustomSourceModal(discord.ui.Modal, title="Add / Update Movie Source"):
         if not _staff_authorized(interaction):
             return await _private(interaction, "❌ Manage Server or Administrator is required.")
 
-        current = MediaSourceRegistry()
         from stoney_verify.media_source_registry import parse_media_source_registry
+
         current = parse_media_source_registry(self.baseline)
         try:
             updated = add_custom_source(
                 current,
-                source_id=str(self.source_id.value),
-                label=str(self.label.value),
-                endpoint_url=str(self.endpoint.value),
+                source_id=self.source_id,
+                label=str(self.label_input.value),
+                endpoint_url=str(self.endpoint_input.value),
                 added_by=int(interaction.user.id),
             )
         except ValueError as exc:
@@ -1358,6 +1377,27 @@ class SourceActionView(_OwnedView):
             )
         await open_movie_night_sources(interaction, replace_message=True)
 
+    @discord.ui.button(label="Edit", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
+    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        guild = interaction.guild
+        if guild is None or not _staff_authorized(interaction):
+            return await _private(interaction, "❌ Manage Server or Administrator is required.")
+        raw, registry = await _sources_state(int(guild.id))
+        source = next(
+            (item for item in registry.sources if item.source_id == self.source_id),
+            None,
+        )
+        if source is None:
+            return await _private(interaction, "❌ That source no longer exists.")
+        await interaction.response.send_modal(
+            CustomSourceModal(
+                owner_id=self.owner_id,
+                baseline=raw,
+                source=source,
+            )
+        )
+
     @discord.ui.button(label="Enable", emoji="✅", style=discord.ButtonStyle.success, row=0)
     async def enable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1397,9 +1437,10 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
         embed = discord.Embed(
             title=f"🎞️ {source.label}",
             description=(
-                f"ID: `{source.source_id}`\n"
                 f"State: **{'Enabled' if source.enabled else 'Disabled'}**\n"
-                f"Endpoint: {source.endpoint_url}"
+                f"Search/feed URL: {source.endpoint_url}\n\n"
+                "Use **Edit** to change the name or URL. Dank Shield keeps the internal "
+                "source identity automatically."
             ),
             color=discord.Color.blurple(),
         )
@@ -1435,7 +1476,7 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
         interaction,
         embed=discord.Embed(
             title="🎞️ Manage Movie Night Source",
-            description="Choose the custom source to enable, disable, or remove.",
+            description="Choose a source to edit, enable, disable, or remove.",
             color=discord.Color.blurple(),
         ),
         view=view,
@@ -1443,7 +1484,7 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
 
 
 class MovieNightSourcesView(_OwnedView):
-    @discord.ui.button(label="Add / Update Source", emoji="➕", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Add Source", emoji="➕", style=discord.ButtonStyle.success, row=0)
     async def add(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not _staff_authorized(interaction):
@@ -1961,6 +2002,25 @@ async def _execute_passed_vote(
     if not getattr(vote, "resolved", False) or not getattr(vote, "passed", False):
         return await open_movie_night(interaction, replace_message=True)
 
+    if vote.action == "end":
+        manager = get_movie_night_manager()
+        if not manager.claim_vote_execution(room.room_id, vote.vote_id):
+            return await open_movie_night(interaction, replace_message=True)
+        result = await terminate_movie_night_room(room)
+        notice = "✅ Movie Night ended and the room media session was released."
+        if result.cleanup_error:
+            notice = (
+                "⚠️ Movie Night ended, but torrent cleanup reported an error. "
+                "The idle media cleanup worker can still reclaim it. "
+                f"({result.cleanup_error})"
+            )
+        return await _replace(
+            interaction,
+            content=notice[:2000],
+            embed=_room_embed(interaction, None),
+            view=MovieNightHubView(int(interaction.user.id)),
+        )
+
     if vote.action == "search":
         return await _execute_search_vote(interaction, room, vote)
 
@@ -2115,6 +2175,42 @@ def _latest_open_vote(room: MovieNightRoom) -> Any:
     return max(votes, key=lambda item: item.created_at) if votes else None
 
 
+class ConfirmMovieNightEndView(_OwnedView):
+    def __init__(self, owner_id: int, room_id: str) -> None:
+        super().__init__(owner_id)
+        self.room_id = str(room_id)
+
+    @discord.ui.button(label="End Movie Night", emoji="🛑", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        manager = get_movie_night_manager()
+        room = manager.get(self.room_id)
+        if room is None or room.ended:
+            return await open_movie_night(interaction, replace_message=True)
+        if int(room.host_id) != int(interaction.user.id):
+            return await _private(interaction, "❌ Only the active Movie Night host can end it immediately.")
+
+        result = await terminate_movie_night_room(room)
+        notice = "✅ Movie Night ended and its room media session was released."
+        if result.cleanup_error:
+            notice = (
+                "⚠️ Movie Night ended, but torrent cleanup reported an error. "
+                "The idle media cleanup worker can still reclaim it. "
+                f"({result.cleanup_error})"
+            )
+        await _replace(
+            interaction,
+            content=notice[:2000],
+            embed=_room_embed(interaction, None),
+            view=MovieNightHubView(int(interaction.user.id)),
+        )
+
+    @discord.ui.button(label="Keep Watching", emoji="↩️", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_movie_night(interaction, replace_message=True)
+
+
 class MovieNightHubView(_OwnedView):
     def __init__(
         self,
@@ -2202,7 +2298,7 @@ class MovieNightHubView(_OwnedView):
             )
         except Exception as exc:
             return await _private(interaction, f"❌ Vote failed: {exc}")
-        if vote.resolved and vote.passed and vote.action in {"search", "play_variant"}:
+        if vote.resolved and vote.passed and vote.action in {"search", "play_variant", "end"}:
             return await _execute_passed_vote(interaction, room, vote)
         await open_movie_night(interaction, replace_message=True)
 
@@ -2224,6 +2320,63 @@ class MovieNightHubView(_OwnedView):
             return await open_community_ping_setup(interaction, replace_message=True)
         from .public_community_pings import open_member_community_pings
         return await open_member_community_pings(interaction, replace_message=True)
+
+    @discord.ui.button(label="End Session", emoji="🛑", style=discord.ButtonStyle.danger, row=3)
+    async def end_session(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        room = _room_for_interaction(interaction)
+        if room is None:
+            return await _private(interaction, "ℹ️ No Movie Night room is active here.")
+
+        manager = get_movie_night_manager()
+        manager.join_room(room.room_id, user_id=int(interaction.user.id))
+        if int(room.host_id) == int(interaction.user.id):
+            return await _replace(
+                interaction,
+                content=(
+                    "🛑 End this Movie Night completely? This stops the room, releases its "
+                    "torrent/media lease, clears the queue, and lets a fresh room start here."
+                ),
+                embed=_room_embed(interaction, room),
+                view=ConfirmMovieNightEndView(int(interaction.user.id), room.room_id),
+            )
+
+        existing = next(
+            (
+                item
+                for item in room.votes.values()
+                if not item.resolved and item.action == "end"
+            ),
+            None,
+        )
+        try:
+            if existing is not None:
+                vote = manager.cast_vote(
+                    room.room_id,
+                    existing.vote_id,
+                    user_id=int(interaction.user.id),
+                    approve=True,
+                )
+            else:
+                vote = manager.propose_vote(
+                    room.room_id,
+                    proposer_id=int(interaction.user.id),
+                    action="end",
+                )
+        except Exception as exc:
+            return await _private(interaction, f"❌ End-session vote could not start: {exc}")
+
+        if vote.resolved and vote.passed:
+            return await _execute_passed_vote(interaction, room, vote)
+        await _replace(
+            interaction,
+            content=(
+                "🗳️ **End Movie Night** vote opened. Active viewers can use "
+                "**Vote Yes** / **Vote No**."
+            ),
+            embed=_room_embed(interaction, room),
+            view=MovieNightHubView(int(interaction.user.id), room),
+        )
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

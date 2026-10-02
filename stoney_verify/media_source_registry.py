@@ -173,21 +173,53 @@ def parse_media_source_registry(raw_config: Mapping[str, Any]) -> MediaSourceReg
     return MediaSourceRegistry(revision=revision, sources=tuple(sources))
 
 
+def _generated_source_id(
+    registry: MediaSourceRegistry,
+    *,
+    label: str,
+    endpoint_url: str,
+) -> str:
+    base = _safe_id(label)
+    if not base:
+        try:
+            host = str(urlsplit(endpoint_url).hostname or "").split(".", 1)[0]
+        except Exception:
+            host = ""
+        base = _safe_id(host) or "source"
+
+    existing = {item.source_id for item in registry.sources}
+    if base not in existing:
+        return base
+
+    for suffix in range(2, MAX_CUSTOM_MEDIA_SOURCES + 2):
+        tail = f"-{suffix}"
+        candidate = f"{base[: max(1, 48 - len(tail))]}{tail}"
+        if candidate not in existing and _SOURCE_ID_RE.fullmatch(candidate):
+            return candidate
+    raise ValueError("Could not generate a unique custom media source ID.")
+
+
 def add_custom_source(
     registry: MediaSourceRegistry,
     *,
-    source_id: str,
+    source_id: str = "",
     label: str,
     endpoint_url: str,
     added_by: int,
 ) -> MediaSourceRegistry:
-    clean_id = _safe_id(source_id)
     clean_label = _safe_label(label)
     clean_url = _normalize_endpoint_url(endpoint_url)
-    if not clean_id:
-        raise ValueError("Custom media source ID is invalid.")
+    clean_id = _safe_id(source_id)
     if not clean_label:
         raise ValueError("Custom media source name is required.")
+    if not str(source_id or "").strip():
+        clean_id = _generated_source_id(
+            registry,
+            label=clean_label,
+            endpoint_url=clean_url,
+        )
+    elif not clean_id:
+        raise ValueError("Custom media source ID is invalid.")
 
     existing = {item.source_id: item for item in registry.sources}
     if clean_id not in existing and len(existing) >= MAX_CUSTOM_MEDIA_SOURCES:
