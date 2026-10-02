@@ -107,6 +107,12 @@ class _FakeHandle:
 def _manager(monkeypatch, tmp_path: Path) -> TorrentMediaManager:
     monkeypatch.setenv("DANK_TORRENT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DANK_TORRENT_MAX_SESSIONS", "1")
+    monkeypatch.setenv("DANK_TORRENT_SOFT_SESSION_LIMIT", "1")
+    monkeypatch.setenv("DANK_TORRENT_ALLOW_BURST", "false")
+    monkeypatch.setenv("DANK_PROCESS_MEMORY_LIMIT_MB", "8192")
+    monkeypatch.setenv("DANK_MOVIE_NIGHT_MEMORY_RESERVE_MB", "128")
+    monkeypatch.setenv("DANK_TORRENT_ESTIMATED_SESSION_MB", "32")
+    monkeypatch.setenv("DANK_TORRENT_DISK_RESERVE_BYTES", str(2 * 1024 * 1024 * 1024))
     monkeypatch.setenv("DANK_TORRENT_MAX_TOTAL_BYTES", str(8 * 1024 * 1024 * 1024))
     return TorrentMediaManager(lt_module=_FakeLT())
 
@@ -557,7 +563,7 @@ def test_one_for_one_replacement_can_start_at_capacity(monkeypatch, tmp_path: Pa
 def test_live_session_capacity_counts_existing_sessions(monkeypatch, tmp_path: Path) -> None:
     manager = _manager(monkeypatch, tmp_path)
     manager._sessions["existing"] = object()  # type: ignore[assignment]
-    with pytest.raises(RuntimeError, match="1-session capacity"):
+    with pytest.raises(RuntimeError, match="1-unique-torrent"):
         asyncio.run(manager._reserve_start())
 
 
