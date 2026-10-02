@@ -2,7 +2,7 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-MOVIE-NIGHT-EASY-SOURCES — zero-setup search + faster custom API onboarding**
+**DANK-SHIELD-MOVIE-NIGHT-EASY-SOURCES — zero-setup catalog + provider search**
 
 Production baseline:
 `main@d8a3f2ddd0ece13dfe2164176076ecc5c3988cc1` (PR #395 merged).
@@ -17,15 +17,17 @@ Status:
 
 1. Preserve the canonical Movie Night torrent runtime, direct magnet playback, direct `.torrent` playback, voting, shared leases, and session termination.
 2. Make normal Movie Night title search work **without requiring a server owner to obtain or configure a feed URL**.
-3. Add one built-in, no-key search provider limited to Internet Archive's `feature_films` collection, returning Archive-hosted `.torrent` references into the existing variant/playback pipeline.
-4. Keep built-in search and custom source results merged into the existing candidate/release ranking model. Do not create a second playback stack.
-5. Demote custom feeds to **Advanced Custom API** setup instead of presenting them as required.
-6. Let an admin paste a working example search URL instead of hand-writing `{query}`.
-7. Detect common search parameters (`q`, `query`, `search`, `term`, `keyword`, `keywords`, `s`) and convert them to Dank Shield's reusable query template automatically.
-8. Test a custom JSON endpoint before saving it; reject unreachable/invalid JSON endpoints with a plain-English error.
-9. Preserve HTTPS-only, no embedded credentials, private-network blocking, DNS revalidation, response-size caps, redirect validation, and guild-config CAS ownership.
-10. Remove the misleading setup warning that no custom sources means Movie Night search is incomplete.
-11. Add regression coverage for built-in search scoping, Archive torrent-reference normalization, automatic example-URL conversion, ambiguous query rejection, zero-setup source UI, and aggregate search behavior.
+3. Add deployment-level **TMDB catalog matching** so users can choose the exact movie/title/year/poster without guild owners handling API URLs or credentials.
+4. Add TMDB/JustWatch **where-to-watch discovery** for the selected catalog movie, with explicit JustWatch attribution; this is informational and must not be treated as a direct playback URL.
+5. Add one built-in, no-key playable search provider limited to Internet Archive's `feature_films` collection, returning Archive-hosted `.torrent` references into the existing variant/playback pipeline.
+6. Keep built-in search and custom source results merged into the existing candidate/release ranking model. Do not create a second playback stack.
+7. Keep direct host-supplied magnet and `.torrent` input as universal provider-independent fallback paths.
+8. Demote custom feeds to **Advanced Custom API** setup instead of presenting them as required.
+9. Let an admin paste a working example search URL instead of hand-writing `{query}`; detect common search parameters and test the endpoint before saving.
+10. Preserve HTTPS-only, no embedded credentials, private-network blocking, DNS revalidation, response-size caps, redirect validation, and guild-config CAS ownership.
+11. Do not store the TMDB deployment token in guild config or expose it in Discord UI.
+12. Do not add provider-specific scraping/reverse-engineering for unauthorized streaming sites. Provider architecture remains compatible with future authorized APIs/personal libraries once their credential storage is designed safely.
+13. Add regression coverage for TMDB identity/watch metadata, built-in search scoping, Archive torrent-reference normalization, automatic example-URL conversion, zero-setup provider UI, and aggregate search behavior.
 
 ### Findings / root cause
 
@@ -36,11 +38,14 @@ Status:
 
 ### Execution path / changes so far
 
+- `stoney_verify/movie_catalog.py`: added deployment-level TMDB exact-movie search plus region-scoped legal availability discovery from TMDB/JustWatch; catalog metadata is separate from playback media.
 - `stoney_verify/media_source_registry.py`: added working-search-URL normalization for common query parameters.
 - `stoney_verify/media_source_resolver.py`: added built-in Internet Archive Feature Films search, custom endpoint probing, and aggregate built-in + custom search.
-- `stoney_verify/commands_ext/public_movie_night.py`: source screen now makes no-setup search the primary path, direct magnet/.torrent the second path, and custom JSON APIs an advanced option; custom API submit now auto-detects the query parameter and tests before save.
+- `stoney_verify/commands_ext/public_movie_night.py`: provider screen now separates catalog, playable built-in, direct magnet/.torrent, and advanced custom APIs; Search / Vote can use TMDB to choose the exact movie before searching playback providers.
+- Catalog-only matches remain usable even when no provider has a release; the host can attach a magnet or `.torrent` afterward.
 - Existing custom API management remains Edit / Enable / Disable / Remove through the canonical guild registry.
-- Regression coverage is being extended in the existing media-source and public Movie Night test suites.
+- `.env.example` and production docs now define `DANK_TMDB_READ_TOKEN` and `DANK_TMDB_WATCH_REGION`.
+- Regression coverage is being extended in the catalog, media-source, and public Movie Night test suites.
 
 ### Validation / cleanup / blockers
 
