@@ -22,6 +22,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 MEDIA_URL_RE = re.compile(r"https?://[^\\s<>()]+", re.IGNORECASE)
 _VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".gif"}
+_MANIFEST_EXTENSIONS = {".m3u8", ".mpd"}
 _PROGRESSIVE_EXTENSIONS = {"mp4", "webm", "mov", "gif"}
 _PROGRESSIVE_PROTOCOLS = {"http", "https"}
 _MANIFEST_PROTOCOLS = {"m3u8", "m3u8_native", "http_dash_segments", "dash"}
@@ -67,6 +68,7 @@ class MediaResolution:
     protocol: str = ""
     ext: str = ""
     known_size: int = 0
+    request_headers: tuple[tuple[str, str], ...] = ()
     reason: str = ""
 
     @property
@@ -205,7 +207,7 @@ def provider_for_url(value: str) -> str:
     parsed = _parsed_http_url(value)
     if parsed is None:
         return ""
-    if _path_extension(parsed):
+    if _path_extension(parsed) or str(parsed.path or "").lower().endswith(tuple(_MANIFEST_EXTENSIONS)):
         return "direct"
     host = str(parsed.hostname or "").lower().strip(".")
     for provider in PROVIDERS:
@@ -381,6 +383,30 @@ def _candidate_size(fmt: Mapping[str, Any]) -> int:
     return _safe_int(fmt.get("filesize") or fmt.get("filesize_approx"), 0)
 
 
+_SAFE_REQUEST_HEADERS = {
+    "accept",
+    "accept-language",
+    "origin",
+    "referer",
+    "user-agent",
+}
+
+
+def _safe_request_headers(*sources: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+    merged: dict[str, str] = {}
+    for source in sources:
+        raw = source.get("http_headers")
+        if not isinstance(raw, Mapping):
+            continue
+        for key, value in raw.items():
+            name = _safe_str(key)
+            text = _safe_str(value)
+            if not name or not text or name.lower() not in _SAFE_REQUEST_HEADERS:
+                continue
+            merged[name] = text[:1000]
+    return tuple(sorted(merged.items(), key=lambda item: item[0].lower()))
+
+
 def _manifest_candidate(fmt: Mapping[str, Any]) -> tuple[str, str, str]:
     protocol = _safe_str(fmt.get("protocol")).lower()
     url = _safe_str(fmt.get("manifest_url") or fmt.get("url"))
@@ -399,7 +425,16 @@ def select_media_resolution(
 ) -> MediaResolution:
     canonical = canonicalize_media_url(source_url)
     identity = media_url_identity(canonical)
-    progressive: list[tuple[tuple[int, int, float, int], str, str, str, int]] = []
+    progressive: list[
+        tuple[
+            tuple[int, int, float, int],
+            str,
+            str,
+            str,
+            int,
+            tuple[tuple[str, str], ...],
+        ]
+    ] = []
     manifest: tuple[str, str, str] | None = None
 
     for entry in _iter_entries(info):
@@ -438,7 +473,14 @@ def select_media_resolution(
                             tbr = 0.0
                         size_score = -size if size > 0 else 0
                         progressive.append(
-                            ((has_audio, height, tbr, size_score), url, protocol, ext, size)
+                            (
+                                (has_audio, height, tbr, size_score),
+                                url,
+                                protocol,
+                                ext,
+                                size,
+                                _safe_request_headers(entry, fmt),
+                            )
                         )
 
             if manifest is None:
@@ -448,7 +490,7 @@ def select_media_resolution(
 
     if progressive:
         progressive.sort(key=lambda item: item[0], reverse=True)
-        _, url, protocol, ext, size = progressive[0]
+        _, url, protocol, ext, size, request_headers = progressive[0]
         return MediaResolution(
             source_url=source_url,
             canonical_url=canonical,
@@ -459,6 +501,7 @@ def select_media_resolution(
             protocol=protocol,
             ext=ext,
             known_size=size,
+            request_headers=request_headers,
         )
 
     if manifest is not None:
@@ -632,6 +675,24 @@ async def resolve_media_url(value: str, *, max_bytes: int) -> MediaResolution:
 
     if provider == "direct":
         if is_safe_media_download_url(canonical):
+            parsed = urlsplit(canonical)
+            lower_path = str(parsed.path or "").lower()
+            manifest_ext = next(
+                (ext for ext in _MANIFEST_EXTENSIONS if lower_path.endswith(ext)),
+                "",
+            )
+            if manifest_ext:
+                return MediaResolution(
+                    source_url=source,
+                    canonical_url=canonical,
+                    identity=identity,
+                    provider=provider,
+                    delivery="manifest",
+                    media_url=canonical,
+                    protocol="m3u8_native" if manifest_ext == ".m3u8" else "http_dash_segments",
+                    ext=manifest_ext.lstrip("."),
+                    reason="manifest_requires_controlled_transcode_or_player",
+                )
             return MediaResolution(
                 source_url=source,
                 canonical_url=canonical,
@@ -639,8 +700,8 @@ async def resolve_media_url(value: str, *, max_bytes: int) -> MediaResolution:
                 provider=provider,
                 delivery="progressive",
                 media_url=canonical,
-                protocol=str(urlsplit(canonical).scheme or "").lower(),
-                ext=_path_extension(urlsplit(canonical)).lstrip("."),
+                protocol=str(parsed.scheme or "").lower(),
+                ext=_path_extension(parsed).lstrip("."),
             )
         return MediaResolution(
             source_url=source,
