@@ -27,7 +27,8 @@ Status:
 10. Preserve HTTPS-only, no embedded credentials, private-network blocking, DNS revalidation, response-size caps, redirect validation, and guild-config CAS ownership.
 11. Do not store the TMDB deployment token in guild config or expose it in Discord UI.
 12. Do not add provider-specific scraping/reverse-engineering for unauthorized streaming sites. Provider architecture remains compatible with future authorized APIs/personal libraries once their credential storage is designed safely.
-13. Add regression coverage for TMDB identity/watch metadata, built-in search scoping, Archive torrent-reference normalization, automatic example-URL conversion, zero-setup provider UI, and aggregate search behavior.
+13. Brand the entire public surface as **Dank Cinema** so catalog, provider, queue, result, direct-media, and setup flows feel native to Dank Shield while preserving required third-party attribution and source identities.
+14. Add regression coverage for TMDB identity/watch metadata, built-in search scoping, Archive torrent-reference normalization, automatic example-URL conversion, zero-setup provider UI, Dank Cinema branding, and aggregate search behavior.
 
 ### Findings / root cause
 
@@ -45,6 +46,7 @@ Status:
 - Catalog-only matches remain usable even when no provider has a release; the host can attach a magnet or `.torrent` afterward.
 - Existing custom API management remains Edit / Enable / Disable / Remove through the canonical guild registry.
 - `.env.example` and production docs now define `DANK_TMDB_READ_TOKEN` and `DANK_TMDB_WATCH_REGION`.
+- Public Movie Night UX is now branded as **Dank Cinema**: **Dank Catalog**, **Dank Watch**, **Dank Archive**, **Dank Direct**, **Dank Engine**, and **Dank Provider Lab**. Underlying providers remain explicitly identified where attribution or source provenance matters.
 - Regression coverage is being extended in the catalog, media-source, and public Movie Night test suites.
 
 ### Validation / cleanup / blockers
