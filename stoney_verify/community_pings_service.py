@@ -25,6 +25,7 @@ LEGACY_TOKE_CHANNEL_KEY = "toke_channel_id"
 OPTION_KINDS = frozenset({"community", "notification"})
 CAP_TOKE_START = "toke_start"
 CAP_TOKE_NOTIFY = "toke_notify"
+CAP_MOVIE_NIGHT_NOTIFY = "movie_night_notify"
 
 _COMMUNITY_MEMBER_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
@@ -552,6 +553,23 @@ def toke_role_ids(
     return starter, notify
 
 
+def movie_night_role_id(config: CommunityPingsConfig) -> int:
+    """Resolve the enabled Community & Pings role used for Movie Night notices.
+
+    The runtime depends on the capability, not a role name or hard-coded ID, so
+    administrators may rename/style the Discord role without breaking Movie Night.
+    """
+
+    return next(
+        (
+            int(item.role_id)
+            for item in config.options
+            if item.enabled and CAP_MOVIE_NIGHT_NOTIFY in item.capabilities
+        ),
+        0,
+    )
+
+
 def validate_member_selection(
     config: CommunityPingsConfig,
     *,
@@ -636,6 +654,7 @@ def validate_config(config: CommunityPingsConfig) -> list[str]:
 
 
 __all__ = [
+    "CAP_MOVIE_NIGHT_NOTIFY",
     "CAP_TOKE_NOTIFY",
     "CAP_TOKE_START",
     "COMMUNITY_PINGS_KEY",
@@ -652,6 +671,7 @@ __all__ = [
     "community_member_lock",
     "enabled_options",
     "move_option",
+    "movie_night_role_id",
     "next_revision",
     "option_for_role",
     "parse_community_pings",
