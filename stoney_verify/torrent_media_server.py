@@ -42,6 +42,10 @@ def media_server_enabled() -> bool:
     return bool(media_public_base_url())
 
 
+def media_server_ready() -> bool:
+    return _MEDIA_RUNNER is not None and _MEDIA_SITE is not None
+
+
 def _validate_public_base_url() -> None:
     raw = media_public_base_url()
     if not raw:
@@ -114,5 +118,6 @@ __all__ = [
     "media_bind_port",
     "media_public_base_url",
     "media_server_enabled",
+    "media_server_ready",
     "start_torrent_media_server",
 ]
