@@ -298,11 +298,15 @@ def _setup_readiness(
     pyav_ready = importlib.util.find_spec("av") is not None
     runtime_ready = bool(media_server_ready())
     storage: dict[str, Any] = {}
+    capacity: dict[str, Any] = {}
     if libtorrent_ready:
         try:
-            storage = get_torrent_manager().storage_status()
+            torrent_manager = get_torrent_manager()
+            storage = torrent_manager.storage_status()
+            capacity = torrent_manager.capacity_status()
         except Exception:
             storage = {}
+            capacity = {}
 
     blockers: list[str] = []
     warnings: list[str] = []
@@ -334,6 +338,13 @@ def _setup_readiness(
         warnings.append(
             "Torrent storage is low; larger Movie Night releases may not fit this host."
         )
+    if capacity and not bool(capacity.get("admission_allowed", False)):
+        blocker = str(capacity.get("blocker") or "").strip()
+        if blocker:
+            warnings.append(
+                "New unique Movie Night media is temporarily admission-blocked: "
+                + blocker
+            )
     if public_base and stream_secret and not runtime_ready:
         warnings.append(
             "Media settings exist, but the public media server is not currently reporting started."
@@ -362,6 +373,7 @@ def _setup_readiness(
         "pyav_ready": pyav_ready,
         "runtime_ready": runtime_ready,
         "storage": storage,
+        "capacity": capacity,
         "bind_host": bind_host,
         "bind_port": bind_port,
         "externally_bound": externally_bound,
@@ -438,8 +450,36 @@ def _setup_embed(
             inline=False,
         )
 
+    capacity = ready.get("capacity") if isinstance(ready.get("capacity"), Mapping) else {}
+    if capacity:
+        rss = capacity.get("current_rss_mb")
+        rss_text = "unknown" if rss is None else f"{float(rss):.0f} MB"
+        headroom = capacity.get("memory_headroom_mb")
+        headroom_text = (
+            "unknown"
+            if headroom is None
+            else f"{max(0.0, float(headroom)):.0f} MB"
+        )
+        embed.add_field(
+            name="5 • Media capacity",
+            value=(
+                f"Process RSS: **{rss_text} / {int(capacity.get('process_limit_mb') or 0)} MB**\n"
+                f"Protected reserve: **{int(capacity.get('protected_reserve_mb') or 0)} MB**\n"
+                f"Protected headroom: **{headroom_text}**\n"
+                f"Unique torrents: **{int(capacity.get('active_unique_sessions') or 0)}** "
+                f"• leases: **{int(capacity.get('total_leases') or 0)}** "
+                f"• shared: **{int(capacity.get('shared_sessions') or 0)}**\n"
+                f"Admission slots: **{int(capacity.get('session_slots_available') or 0)}** "
+                f"• soft/hard: **{int(capacity.get('soft_session_limit') or 0)}"
+                f"/{int(capacity.get('hard_session_limit') or 0)}**\n"
+                f"Disk reserve: **{_format_bytes(capacity.get('disk_reserve_bytes'))}** "
+                f"• committed: **{_format_bytes(capacity.get('committed_file_bytes'))}**"
+            )[:1024],
+            inline=False,
+        )
+
     embed.add_field(
-        name="5 • Search / custom sources",
+        name="6 • Search / custom sources",
         value=(
             f"Configured: **{ready['sources']}** • Enabled: **{ready['enabled_sources']}**\n"
             "Custom authorized HTTPS feeds are managed from **Sources**. "
