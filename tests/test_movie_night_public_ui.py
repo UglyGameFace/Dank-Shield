@@ -87,8 +87,8 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
         "Close",
     } <= _labels(setup)
     assert {
-        "Add Source",
-        "Manage Source",
+        "Add Custom API",
+        "Manage Custom API",
         "Back",
         "Close",
     } <= _labels(sources)
@@ -103,8 +103,8 @@ def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
     add_modal = movie_ui.CustomSourceModal(owner_id=1, baseline={})
     assert len(add_modal.children) == 2
     assert [item.label for item in add_modal.children] == [
-        "Source name",
-        "HTTPS JSON search/feed URL",
+        "Name (optional)",
+        "Paste a working search URL",
     ]
 
     source = CustomMediaSource(
@@ -125,6 +125,19 @@ def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
 
     actions = movie_ui.SourceActionView(1, "family-library")
     assert {"Edit", "Enable", "Disable", "Remove", "Back"} <= _labels(actions)
+
+
+def test_movie_source_page_makes_builtin_search_the_default() -> None:
+    embed = movie_ui._sources_embed(MediaSourceRegistry())
+    rendered = "\n".join(
+        [str(embed.description or "")]
+        + [str(field.value) for field in embed.fields]
+    )
+
+    assert "Movie search works without adding a feed" in rendered
+    assert "Internet Archive Feature Films" in rendered
+    assert "No API key or feed URL" in rendered
+    assert "Add Custom API" in _labels(movie_ui.MovieNightSourcesView(1))
 
 
 def test_movie_night_hub_adds_signed_watch_link_when_media_is_active(monkeypatch) -> None:
@@ -309,6 +322,7 @@ def test_setup_readiness_accepts_complete_public_runtime(monkeypatch) -> None:
     assert result["blockers"] == []
     assert result["externally_bound"]
     assert result["runtime_ready"]
+    assert not any("No custom media sources" in item for item in result["warnings"])
 
 
 def test_media_endpoint_check_acknowledges_before_network(monkeypatch) -> None:
