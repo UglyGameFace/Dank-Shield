@@ -54,6 +54,7 @@ Status:
 - Movie candidate pages expose **Search Elsewhere**, and searches with no playable result can fall back to enabled external provider buttons without converting those pages into releases.
 - Search-link provider modal acknowledgement now occurs before the guild-config CAS write; success, persistence failure, and CAS-conflict paths all terminate by editing the deferred original response instead of risking a Discord interaction timeout or orphaned thinking state.
 - External provider links now enforce Discord's 512-character link-button URL limit; setup validates against the full supported 180-character query budget so a provider cannot save successfully and later fail only when the Search Elsewhere view renders.
+- Provider Deck guidance now matches the actual split controls and explains both **Add JSON Provider** and **Add Search Link** instead of retaining the pre-split “Add Provider” instructions.
 - Regression coverage is being extended in the catalog, media-source, and public Movie Night test suites.
 
 ### Validation / cleanup / blockers
