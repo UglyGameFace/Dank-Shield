@@ -70,6 +70,9 @@ from stoney_verify.ui.picker import DankChoice, DankPickerView
 
 _ALLOWED_NONE = discord.AllowedMentions.none()
 _MOVIE_ROLE_NAME = "Movie Night"
+_CINEMA_NAME = "Dank Cinema"
+_CINEMA_TAGLINE = "Search it. Queue it. Vote it. Watch together."
+_CINEMA_FOOTER = "Dank Cinema • powered by Dank Shield"
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -404,9 +407,9 @@ def _setup_embed(
     role = ready["role"]
 
     embed = discord.Embed(
-        title="🎬 Movie Night Setup",
+        title="🍿 Dank Cinema • Setup",
         description=(
-            "**Home › Community & Engagement › Movie Night › Setup**\n"
+            "**Home › Community & Engagement › Dank Cinema › Setup**\n"
             "This page validates the whole Movie Night chain before a room is allowed to launch."
         ),
         color=discord.Color.green() if ready["launch_ready"] else discord.Color.orange(),
@@ -489,13 +492,13 @@ def _setup_embed(
         )
 
     embed.add_field(
-        name="6 • Movie providers",
+        name="6 • Dank Cinema providers",
         value=(
-            f"{'✅' if tmdb_catalog_ready() else '⚠️'} Catalog: **TMDB** "
-            f"({'connected' if tmdb_catalog_ready() else 'bot token not configured'})\n"
-            f"✅ Playable built-in: **{INTERNET_ARCHIVE_SOURCE_LABEL}**\n"
-            f"✅ Direct input: **magnet links + .torrent files**\n"
-            f"Custom APIs: **{ready['sources']}** configured • **{ready['enabled_sources']}** enabled"
+            f"{'✅' if tmdb_catalog_ready() else '⚠️'} **Dank Catalog** • powered by TMDB "
+            f"({'ready' if tmdb_catalog_ready() else 'bot token not configured'})\n"
+            f"✅ **Dank Archive** • {INTERNET_ARCHIVE_SOURCE_LABEL}\n"
+            f"✅ **Dank Direct** • magnet links + .torrent files\n"
+            f"🧩 **Provider Lab** • {ready['sources']} custom configured • {ready['enabled_sources']} enabled"
         ),
         inline=False,
     )
@@ -532,55 +535,55 @@ async def _sources_state(
 def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
     catalog_ready = tmdb_catalog_ready()
     embed = discord.Embed(
-        title="🎞️ Movie Night Providers",
+        title="🎞️ Dank Cinema • Provider Deck",
         description=(
-            "Regular members only need **Search / Vote**. Providers, catalog matching, "
-            "magnets, and .torrent plumbing stay behind the scenes."
+            f"**{_CINEMA_TAGLINE}**\n"
+            "Regular members only use **Find Movie**. Dank Cinema handles catalog matching, "
+            "provider discovery, release ranking, magnets, and .torrent plumbing behind the scenes."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="🔎 Movie catalog",
+        name="🔎 Dank Catalog",
         value=(
-            f"{'✅' if catalog_ready else '⚠️'} **TMDB** • "
-            f"{'exact title/year + where-to-watch discovery' if catalog_ready else 'not connected by the bot owner'}\n"
-            "TMDB identifies the movie and can show legal availability providers. "
-            "It does **not** provide the movie file."
+            f"{'✅' if catalog_ready else '⚠️'} Exact movie matching "
+            f"{'ready' if catalog_ready else 'needs the bot-owner catalog token'}\n"
+            "**Powered by TMDB** for title, year, poster, overview, and movie identity. "
+            "Catalog metadata never pretends to be the playable movie."
         ),
         inline=False,
     )
     embed.add_field(
-        name="🎬 Playable built-in",
+        name="🎬 Dank Archive",
         value=(
-            f"✅ **{INTERNET_ARCHIVE_SOURCE_LABEL}** • no API key or server setup.\n"
-            "This is public-domain-focused, so modern catalog matches may still need another "
-            "authorized media source."
+            f"✅ Built-in playable search via **{INTERNET_ARCHIVE_SOURCE_LABEL}** • no API key.\n"
+            "Public-domain-focused playback feeds the same Dank Cinema release, vote, and stream engine."
         ),
         inline=False,
     )
     embed.add_field(
-        name="🧲 Direct media",
+        name="🧲 Dank Direct",
         value=(
             "✅ **Magnet links** • /movie magnet:<link>\n"
             "✅ **.torrent files** • /movie torrent:<file>\n"
-            "These bypass provider search entirely and remain available to the Movie Night host."
+            "Provider search can fail spectacularly and the host can still feed Dank Cinema media directly."
         ),
         inline=False,
     )
     embed.add_field(
-        name="⚙️ Advanced custom provider",
+        name="🧩 Dank Provider Lab",
         value=(
-            "For an authorized **HTTPS JSON search API/feed** you control or may use:\n"
+            "Advanced owners can plug in an authorized **HTTPS JSON search API/feed**.\n"
             "1️⃣ Search it once for **Batman**.\n"
             "2️⃣ Copy that working search URL.\n"
-            "3️⃣ Tap **Add Custom API** and paste it.\n"
-            "Dank Shield detects common search parameters and tests the endpoint before saving."
+            "3️⃣ Tap **Add Provider** and paste it.\n"
+            "Dank Cinema detects common search parameters, tests the endpoint, then keeps the provider plumbing hidden."
         ),
         inline=False,
     )
     if not registry.sources:
         embed.add_field(
-            name="📚 Custom APIs",
+            name="📚 Custom Providers",
             value="None added. Built-in search and direct magnet/.torrent playback still work.",
             inline=False,
         )
@@ -590,19 +593,19 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
             state = "✅" if source.enabled else "⏸️"
             rows.append(f"{state} **{source.label}**\n↳ {source.endpoint_url[:180]}")
         embed.add_field(
-            name=f"📚 Custom APIs • {len(registry.sources)}",
+            name=f"📚 Custom Providers • {len(registry.sources)}",
             value="\n".join(rows)[:4000],
             inline=False,
         )
     embed.add_field(
-        name="🔒 Custom API rule",
+        name="🔒 Provider Safety",
         value=(
             "A normal website page is not an API. Custom providers must use HTTPS and return JSON. "
             "Do not put passwords, API secrets, or private-network addresses in the URL."
         ),
         inline=False,
     )
-    embed.set_footer(text=f"Provider hub • custom revision {registry.revision}")
+    embed.set_footer(text=f"{_CINEMA_FOOTER} • provider revision {registry.revision}")
     return embed
 
 
@@ -623,9 +626,9 @@ def _room_embed(
 ) -> discord.Embed:
     if room is None:
         embed = discord.Embed(
-            title="🎬 Movie Night",
+            title="🍿 Dank Cinema",
             description=(
-                "No room is active in this channel. Start one, then use Search or "
+                "No room is active in this channel. Start one, then use **Find Movie** or "
                 "`/movie magnet:` / `/movie torrent:` to choose the media."
             ),
             color=discord.Color.blurple(),
@@ -634,7 +637,7 @@ def _room_embed(
             name="Room flow",
             value=(
                 "1. **Start / Join**\n"
-                "2. **Search / Vote** or provide a magnet/.torrent\n"
+                "2. **Find Movie** or provide a magnet/.torrent\n"
                 "3. Pick the release/quality using seed, leech, metadata, and votes\n"
                 "4. Watch together with host controls and vote failover"
             ),
@@ -647,7 +650,7 @@ def _room_embed(
     host = interaction.guild.get_member(room.host_id) if interaction.guild else None
     host_label = host.mention if isinstance(host, discord.Member) else f"<@{room.host_id}>"
     embed = discord.Embed(
-        title="🎬 Movie Night • Active Room",
+        title="🍿 Dank Cinema • Now Showing",
         description=(
             f"Host: {host_label}\n"
             f"State: **{room.playback_state.title()}**\n"
@@ -716,14 +719,14 @@ def _room_embed(
             value="No media attached yet. Search or provide a magnet/.torrent.",
             inline=False,
         )
-    embed.set_footer(text=f"Room {room.room_id} • Movie Night state is shared per channel")
+    embed.set_footer(text=f"{_CINEMA_FOOTER} • room {room.room_id}")
     return embed
 
 
 def _queue_embed(room: MovieNightRoom) -> discord.Embed:
     manager = get_movie_night_manager()
     embed = discord.Embed(
-        title="📺 Movie Night Queue",
+        title="📺 Dank Cinema • Queue",
         color=discord.Color.blurple(),
     )
     queued = [
@@ -733,7 +736,7 @@ def _queue_embed(room: MovieNightRoom) -> discord.Embed:
     ]
     if not queued:
         embed.description = (
-            "The shared queue is empty. Open **Results**, choose a movie, and use "
+            "The shared queue is empty. Open **Movie Picks**, choose a movie, and use "
             "**Vote to Queue**."
         )
         return embed
@@ -767,7 +770,7 @@ def _candidate_embed(room: MovieNightRoom, candidate: Any) -> discord.Embed:
     variants = manager.ranked_variants(room.room_id, candidate.candidate_id)
 
     embed = discord.Embed(
-        title=f"🎬 {candidate.title}",
+        title=f"🎬 Dank Cinema • {candidate.title}",
         description=(
             f"Movie votes: **{movie_votes}** • Releases: **{len(variants)}**\n"
             "Release ordering favors live seeds and swarm health when votes are tied."
@@ -829,7 +832,7 @@ def _candidate_embed(room: MovieNightRoom, candidate: Any) -> discord.Embed:
             if watch_lines:
                 watch_lines.append("*Availability data: JustWatch via TMDB.*")
                 embed.add_field(
-                    name=f"Where to watch • {watch.get('region') or 'region'}",
+                    name=f"📡 Dank Watch • {watch.get('region') or 'region'}",
                     value="\n".join(watch_lines)[:1024],
                     inline=False,
                 )
@@ -1335,15 +1338,15 @@ async def open_movie_results(
         on_pick=picked,
         custom_id=f"dank:movie:results:{room.room_id[:16]}",
         placeholder="Choose a movie result…",
-        title="Movie Night Results",
+        title="Dank Cinema Results",
         on_home=lambda back_interaction: open_movie_night(
             back_interaction,
             replace_message=True,
         ),
-        home_label="Movie Night",
+        home_label="Dank Cinema",
     )
     embed = discord.Embed(
-        title="🔎 Movie Night Results",
+        title="🔎 Dank Cinema • Search Results",
         description=(
             f"Approved search: **{room.approved_search_query or '—'}**\n"
             f"Movies: **{len(ranked)}** • "
@@ -1612,13 +1615,13 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
             back_interaction,
             replace_message=True,
         ),
-        home_label="Sources",
+        home_label="Provider Deck",
     )
     await _replace(
         interaction,
         embed=discord.Embed(
-            title="⚙️ Manage Custom Movie API",
-            description="Choose a custom API to edit, enable, disable, or remove.",
+            title="🧩 Dank Cinema • Provider Lab",
+            description="Manage one advanced custom provider without exposing it to regular members.",
             color=discord.Color.blurple(),
         ),
         view=view,
@@ -1626,7 +1629,7 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
 
 
 class MovieNightSourcesView(_OwnedView):
-    @discord.ui.button(label="Add Custom API", emoji="➕", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Add Provider", emoji="➕", style=discord.ButtonStyle.success, row=0)
     async def add(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not _staff_authorized(interaction):
@@ -1639,7 +1642,7 @@ class MovieNightSourcesView(_OwnedView):
             CustomSourceModal(owner_id=self.owner_id, baseline=raw)
         )
 
-    @discord.ui.button(label="Manage Custom API", emoji="🛠️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Manage Providers", emoji="🛠️", style=discord.ButtonStyle.primary, row=0)
     async def manage(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not _staff_authorized(interaction):
@@ -1847,7 +1850,7 @@ class MovieNightSetupView(_OwnedView):
         _ = button
         await _create_or_repair_movie_role(interaction)
 
-    @discord.ui.button(label="Providers", emoji="🎞️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Provider Deck", emoji="🎞️", style=discord.ButtonStyle.primary, row=0)
     async def sources(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night_sources(interaction, replace_message=True)
@@ -2292,7 +2295,7 @@ async def _propose_movie_search_vote(
     )
 
 
-class MovieSearchModal(discord.ui.Modal, title="Search / Vote for a Movie"):
+class MovieSearchModal(discord.ui.Modal, title="Dank Cinema Search"):
     query = discord.ui.TextInput(
         label="Movie title",
         placeholder="Interstellar, The Dark Knight, Shrek…",
@@ -2386,12 +2389,12 @@ class MovieSearchModal(discord.ui.Modal, title="Search / Vote for a Movie"):
             on_pick=picked,
             custom_id=f"dank:movie:catalog:{self.room_id[:16]}",
             placeholder="Choose the exact movie…",
-            title="Choose the Movie",
+            title="Dank Cinema • Choose Movie",
             on_home=lambda back_interaction: open_movie_night(
                 back_interaction,
                 replace_message=True,
             ),
-            home_label="Movie Night",
+            home_label="Dank Cinema",
         )
         await _replace(
             interaction,
@@ -2414,7 +2417,7 @@ async def _announce_room(
     if channel is None or not hasattr(channel, "send"):
         return
     embed = discord.Embed(
-        title="🎬 Movie Night Started",
+        title="🍿 Dank Cinema Started",
         description=(
             f"{interaction.user.mention} is hosting Movie Night.\n"
             "Open `/movie` to join, search, vote, and view the queue."
@@ -2422,7 +2425,7 @@ async def _announce_room(
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
     )
-    embed.set_footer(text=f"Room {room.room_id}")
+    embed.set_footer(text=f"{_CINEMA_FOOTER} • room {room.room_id}")
     allowed = discord.AllowedMentions(
         everyone=False,
         users=False,
@@ -2543,7 +2546,7 @@ class MovieNightHubView(_OwnedView):
         _ = button
         await _start_or_join_room(interaction)
 
-    @discord.ui.button(label="Search / Vote", emoji="🔎", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Find Movie", emoji="🔎", style=discord.ButtonStyle.primary, row=0)
     async def search(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room = _room_for_interaction(interaction)
@@ -2557,7 +2560,7 @@ class MovieNightHubView(_OwnedView):
             MovieSearchModal(owner_id=self.owner_id, room_id=room.room_id)
         )
 
-    @discord.ui.button(label="Results", emoji="🎞️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Movie Picks", emoji="🎞️", style=discord.ButtonStyle.primary, row=0)
     async def results(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room = _room_for_interaction(interaction)
@@ -2565,7 +2568,7 @@ class MovieNightHubView(_OwnedView):
             return await _private(interaction, "ℹ️ No Movie Night room is active here.")
         await open_movie_results(interaction, room.room_id, replace_message=True)
 
-    @discord.ui.button(label="Queue", emoji="📺", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Watch Queue", emoji="📺", style=discord.ButtonStyle.primary, row=0)
     async def queue(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room = _room_for_interaction(interaction)
@@ -2609,7 +2612,7 @@ class MovieNightHubView(_OwnedView):
             return await _execute_passed_vote(interaction, room, vote)
         await open_movie_night(interaction, replace_message=True)
 
-    @discord.ui.button(label="Providers", emoji="🎞️", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Provider Deck", emoji="🎞️", style=discord.ButtonStyle.secondary, row=2)
     async def sources(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night_sources(interaction, replace_message=True)
