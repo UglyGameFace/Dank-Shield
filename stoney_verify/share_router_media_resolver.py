@@ -892,7 +892,7 @@ async def resolve_media_url(value: str, *, max_bytes: int) -> MediaResolution:
     resolution = await asyncio.shield(task)
     ttl = (
         _POSITIVE_CACHE_TTL_SECONDS
-        if resolution.delivery in {"progressive", "manifest"}
+        if resolution.delivery in {"progressive", "manifest", "merge"}
         else _NEGATIVE_CACHE_TTL_SECONDS
     )
     _RESOLUTION_CACHE[cache_key] = (time.monotonic() + ttl, resolution)
