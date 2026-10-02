@@ -148,7 +148,7 @@ def test_destructive_action_requires_stronger_majority() -> None:
     assert details["pass_fraction"] == 0.75
 
 
-def test_search_play_queue_and_next_actions_validate_result_ids() -> None:
+def test_search_play_queue_and_next_actions() -> None:
     manager = MediaVoteManager(owner_id=10)
     manager.set_host_away(10, True)
 
@@ -160,7 +160,7 @@ def test_search_play_queue_and_next_actions_validate_result_ids() -> None:
     assert search.payload["query"] == "Blade Runner 2049"
 
     manager.active = None
-    for action in (ACTION_PLAY_RESULT, ACTION_QUEUE_RESULT, ACTION_PLAY_NEXT):
+    for action in (ACTION_PLAY_RESULT, ACTION_QUEUE_RESULT):
         with pytest.raises(ValueError, match="result id"):
             manager.start_vote(user_id=20, action=action, payload={})
         vote = manager.start_vote(
@@ -170,6 +170,13 @@ def test_search_play_queue_and_next_actions_validate_result_ids() -> None:
         )
         assert vote.payload["result_id"] == "resolver:movie:123"
         manager.active = None
+
+    play_next = manager.start_vote(
+        user_id=20,
+        action=ACTION_PLAY_NEXT,
+        payload={},
+    )
+    assert play_next.action == ACTION_PLAY_NEXT
 
 
 def test_vote_expiry_removes_stale_action() -> None:
