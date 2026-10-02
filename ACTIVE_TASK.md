@@ -2,119 +2,189 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-SHARE-388 — native Share Router video relay + X/Twitter duplicate collapse**
+**DANK-SHIELD-TORRENT-391 — progressive magnet/.torrent media streaming**
 
 Explicit FORCE SWITCH accepted:
-**Fix Share Router video playback and duplicate X/Twitter posts**
+**Build torrent/magnet progressive streaming**
 
 Reason:
-Dank Shield should upload playable video inline like VidVaul and must not post both x.com and twitter.com versions of the same status.
+Torrent support is required for Dank Shield's media system and should become the active task now.
 
-Production baseline: `main` = `1f6b99e4aa2fc111cb11271db2b8e07ac1979d0c` (PR #387 merge).
+Production baseline: `main` = `585f06121ca3c20759aac0bd43f506b82c9cb7f0` (PR #389 merged after exact-head CI passed).
 
-Active branch: `fix/share-router-native-video-dedupe`.
+Active branch: `feat/torrent-progressive-streaming`.
 
-Active issue: #388 — **Share Router: native inline video + X/Twitter dedupe**.\n\nActive PR: #389 — **Share Router: native inline video and X/Twitter dedupe** (draft).
+Active issue: #391 — **Torrent/magnet progressive streaming pipeline**.
 
 ## Scope
 
-Fix only Share Router's routed-message construction and media relay required for:
-- one canonical X/Twitter status instead of duplicate aliases/previews;
-- Discord-native inline video when the source Discord message already exposes a trusted direct/proxy video resource.
+Build the real torrent media runtime, not a decorative command:
 
-Do not add a second Share Router implementation, yt-dlp/ffmpeg/provider credentials, arbitrary-page scraping, command-surface changes, route storage changes, or unrelated REST/rate-limit work.
+- accept user-supplied magnet links;
+- accept user-supplied `.torrent` attachments;
+- resolve metadata;
+- select a playable video file;
+- progressively prioritize pieces for startup and seeks;
+- expose the selected file through a signed HTTP byte-range stream;
+- integrate ingestion into the existing Share Router route owner;
+- enforce strict session, disk, bandwidth, metadata, peer, timeout, and cleanup limits;
+- keep the structured bot/admin API private;
+- do not add torrent indexing/search/discovery.
 
-## Root cause
+Use is limited to lawful, public-domain, or otherwise user-authorized media.
 
-Current `share_router_runtime._message_share_text()` concatenates:
-- the human's original message content;
-- Discord-generated embed URL;
-- Discord-generated embed title;
-- Discord-generated embed description;
-- attachment URLs.
+## Hosting constraint found
 
-For X shares, the human content may contain `x.com/<user>/status/<id>` while Discord's generated provider embed exposes the equivalent `twitter.com/<user>/status/<id>`. The router therefore reposts both aliases and the provider-generated title/description. Discord then unfurls both URLs, producing the doubled X preview shown in production.
+Current production `discloud.config` is `TYPE=bot`.
 
-The runtime also forwards only text/URLs. It never turns a source message's existing direct/proxied video resource into a Discord attachment, so the target can only show provider unfurls. VidVaul-style native playback requires sending an actual video file back to Discord.
+Discloud Bot deployments do not expose an external HTTP port. Externally reachable
+web/API/bot-with-web-interface deployments use `TYPE=site` and Discloud proxies
+traffic to `0.0.0.0:8080`.
 
-## Execution path
+Therefore:
 
-`human post in configured Share Router source -> native on_message listener -> share_router_runtime.route_message -> route permission/privacy checks -> _message_share_text -> recent-route dedupe -> one target.send -> optional source delete -> modlog`.
+- the torrent engine can run under the current bot process;
+- actual external playback needs a public media endpoint;
+- the implementation uses a **separate media-only server** on the media port;
+- the structured admin API stays on `127.0.0.1:8081`;
+- production `discloud.config` is intentionally not changed automatically because
+  Site hosting depends on the account plan/subdomain.
 
-This task keeps that owner and one-send contract.
+## Architecture
 
-## Changes on active branch
+### `stoney_verify/torrent_streaming.py`
 
-### Alias/content normalization
-- X and Twitter status URLs now normalize to one `x-status:<status_id>` identity.
-- `twitter.com/<user>/status/<id>` canonicalizes to `x.com/<user>/status/<id>`.
-- equivalent aliases inside the human content collapse to one URL.
-- Discord-generated embed URL is added only when it is not equivalent to an already-seen URL.
-- generated embed title/description are no longer copied into routed text.
-- recent-route dedupe uses the same canonical URL identity.
+Canonical torrent runtime owner:
 
-### Native video relay
-- Fast path: source video candidates are derived from source attachments and Discord embed `video.proxy_url` / `video.url`.
-- Android evidence showed X can expose only a static preview image, so preview metadata alone is not sufficient.
-- X-only fallback: the canonical X status URL is passed through pinned `yt-dlp==2026.8.19` with `download=False` to resolve a real progressive video URL.
-- The extractor runs off the event loop, behind a small semaphore, with positive/negative per-status cache entries and a hard wait timeout.
-- Only progressive HTTP(S) video formats on trusted media hosts are eligible; HLS-only, arbitrary-host, known-oversize, and audio-only candidates are rejected.
-- Discord proxy/CDN video remains preferred when available.
-- Downloads use `aiohttp` with bounded timeout, explicit redirect validation, streaming chunks, a spooled temp file, guild upload limit, and a configurable safety cap.
-- Native relay requires Attach Files in the target. Missing permission, extractor failure, unsupported media, timeout, oversize, or download failure falls back to the single canonical provider link instead of dropping the route.
-- When native video upload succeeds, source URLs are angle-bracketed to suppress provider unfurls while keeping them clickable, producing one visual media surface: Discord's native uploaded-video player.
-- If Discord rejects the uploaded file at final send, Share Router retries the same route once as link-only content.
+- pinned `libtorrent==2.1.1`;
+- live-session cap with one-session default for the current 512 MB host;
+- magnet and `.torrent` ingestion;
+- normalized BTIH identity across hex/base32 magnets;
+- metadata timeout and input limits;
+- torrent total-size and selected-file limits;
+- largest supported playable video selection;
+- non-selected files priority 0;
+- startup piece priority 7;
+- bounded readahead priority 6;
+- tail priority for MP4-style end metadata;
+- seek reprioritization from HTTP byte ranges;
+- piece-availability wait before sparse-file reads;
+- signed temporary stream URLs;
+- periodic idle cleanup and file deletion.
+
+### `stoney_verify/api_new/torrent_stream_routes.py`
+
+- public byte-range stream handler;
+- correct `Accept-Ranges` / `206 Partial Content` behavior;
+- signed URL validation;
+- buffering `503` when the requested first chunk is not ready;
+- internal-auth status/cancel routes.
+
+### `stoney_verify/torrent_media_server.py`
+
+Dedicated public media-only server:
+
+- no ticket/member/admin endpoints;
+- public stream URL must be HTTPS outside localhost development;
+- own bind host/port;
+- requires dedicated `DANK_TORRENT_STREAM_SECRET`;
+- starts through native `app.py` lifecycle.
+
+### Share Router
+
+- detects a magnet in the source message;
+- detects `.torrent` attachments;
+- refuses to join a swarm before public media/signing configuration exists;
+- dedupes recent torrent sources before starting duplicate magnet sessions;
+- creates one canonical torrent session;
+- posts the temporary playback URL and media details;
+- deletes the proxy source only after successful stream creation;
+- leaves failed/unconfigured sources intact and logs the blocked route.
+
+## Resource defaults
+
+Current conservative defaults:
+
+- live sessions: 1;
+- metadata: 4 MiB;
+- selected video: 2 GiB;
+- total torrent declared size: 4 GiB;
+- startup window: 8 MiB;
+- tail probe: 4 MiB;
+- readahead: 16 MiB;
+- metadata wait: 30 s;
+- buffering wait: 20 s;
+- idle TTL: 30 min;
+- peers/connections: 80;
+- download cap: 8 MiB/s;
+- upload cap: 512 KiB/s.
+
+All are generic environment settings, not guild hardcoding.
 
 ## Regression coverage
 
-- exact X/Twitter alias collapse;
-- same status ID dedupes across x.com and twitter.com;
-- provider-generated embed title/description are not copied;
-- duplicate aliases inside one human message collapse;
-- Discord proxy video is preferred over provider direct URL;
-- X status recovery from routed text;
-- progressive combined A/V MP4 selection from extracted X metadata;
-- HLS-only, untrusted, and known-oversize candidates are rejected;
-- untrusted arbitrary video hosts are rejected;
-- native-video mode suppresses link unfurls while preserving clickability;
-- static ownership checks require bounded spool/timeout/size behavior, extractor concurrency/cache guards, and link-only fallback.
+New `tests/test_torrent_streaming.py` covers:
+
+- magnet and `.torrent` detection;
+- base32/hex BTIH normalization;
+- supported video formats/content types;
+- normal/open/suffix HTTP range parsing;
+- invalid/multi-range rejection;
+- largest playable file selection;
+- selected-file-only priorities;
+- startup/tail priority behavior;
+- seek + readahead piece math;
+- requested-piece availability waits;
+- live-session capacity;
+- signed stream URL validation/tamper rejection;
+- HTTPS-only public media policy;
+- isolated public media server ownership;
+- Share Router magnet / `.torrent` integration markers.
 
 ## Validation required
 
 Before merge:
-- compile/import;
-- focused Share Router tests;
-- full Dank Shield pytest/CI;
-- final diff/references review;
-- 0 behind production main;
-- no new runtime owner or command surface;
-- no arbitrary external fetch path.
 
-After merge/deploy Android canary:
-1. share the same X video through the configured proxy;
-2. verify target contains only one canonical status link;
-3. verify no duplicate `twitter.com` alias/provider title copy;
-4. verify an actual Discord native inline video player appears when Discord exposes a relayable video resource;
-5. verify source cleanup still works;
-6. verify sender attribution remains and mentions are still suppressed;
-7. verify duplicate-share cleanup still suppresses a repeated share;
-8. verify link-only fallback still routes if native video relay cannot be used.
+- compile/import;
+- pinned libtorrent installs successfully on CI Python 3.11;
+- focused torrent streaming tests;
+- focused Share Router tests;
+- structured API security tests;
+- full Dank Shield pytest/CI;
+- application command diagnostics unchanged;
+- final diff/reference audit;
+- branch remains 0 behind production main;
+- no public admin API exposure;
+- no arbitrary torrent index/search feature.
+
+After merge/deploy:
+
+1. first deploy under existing `TYPE=bot` should keep the media server disabled unless configured;
+2. confirm the Discord bot and private structured API remain healthy;
+3. when a Discloud Site/subdomain is intentionally configured, expose only the media server on `0.0.0.0:8080`;
+4. test a known legal/public-domain magnet;
+5. confirm playback starts before the entire selected file completes;
+6. seek forward and confirm piece reprioritization/buffering recovers;
+7. test a legal `.torrent` attachment;
+8. verify duplicate magnet share does not start a second session;
+9. verify idle cleanup removes the handle and files;
+10. verify tampered/expired stream URLs fail.
 
 ## Suspended work
 
-Issue #386 / PR #387 — **Toke media** — PR merged as `1f6b99e4aa2fc111cb11271db2b8e07ac1979d0c`; post-merge Android canary is suspended by this FORCE SWITCH.
+Issue #388 / PR #389 — **Share Router native video + X/Twitter dedupe** — merged as
+`585f06121ca3c20759aac0bd43f506b82c9cb7f0`; exact-head workflows passed.
+Its production Android canary is suspended by this FORCE SWITCH.
+
+Issue #390 — **Universal Share Router media resolver and stream playback** remains queued.
+Torrent support is being built first by explicit FORCE SWITCH and should later plug into that
+broader resolver instead of being reimplemented.
+
+Issue #386 / PR #387 — **Toke media** — merged previously; post-merge Android canary remains suspended.
 
 Issue #380 — **True master runtime ownership + production-path audit** remains queued.
 
 Issue #384 — **Audit repeated Discord 429s during/after activity recovery** remains backlogged.
-
-## Backlog / suspended work
-
-Issue #380 — **True master runtime ownership + production-path audit** remains queued immediately after this feature unless the user explicitly changes priority.
-
-Issue #384 — **Audit repeated Discord 429s during/after activity recovery** remains backlogged and must not be investigated during #386.
-
-Issue #375 Protection/navigation remains suspended at its preserved post-PR #379 canary checkpoint below.
 
 ## Suspended Protection task record
 
