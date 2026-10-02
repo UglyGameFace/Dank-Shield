@@ -121,6 +121,14 @@ def _append_input(
     url: str,
     headers: Mapping[str, str] | tuple[tuple[str, str], ...],
 ) -> None:
+    command.extend(
+        [
+            "-protocol_whitelist",
+            "http,https,tcp,tls,crypto",
+            "-rw_timeout",
+            "12000000",
+        ]
+    )
     header_blob = _safe_header_blob(headers)
     if header_blob:
         command.extend(["-headers", header_blob])
@@ -144,10 +152,6 @@ def build_ffmpeg_remux_command(
         "-loglevel",
         "error",
         "-y",
-        "-protocol_whitelist",
-        "http,https,tcp,tls,crypto",
-        "-rw_timeout",
-        "12000000",
     ]
     _append_input(
         command,
