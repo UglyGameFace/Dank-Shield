@@ -348,3 +348,67 @@ def test_resolve_first_media_skips_unknown_page_and_uses_direct_media() -> None:
     assert resolved.progressive is True
     assert resolved.provider == "direct"
     assert resolved.media_url.endswith("/final.webm")
+
+
+
+def test_progressive_selector_preserves_only_safe_extractor_headers() -> None:
+    info = {
+        "http_headers": {
+            "User-Agent": "Provider UA",
+            "Cookie": "do-not-forward",
+        },
+        "formats": [
+            {
+                "url": "https://cdn.example.com/video.mp4",
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "aac",
+                "filesize": 5_000_000,
+                "http_headers": {
+                    "Referer": "https://www.tiktok.com/",
+                    "Authorization": "do-not-forward",
+                },
+            }
+        ],
+    }
+    resolved = media.select_media_resolution(
+        info,
+        source_url="https://www.tiktok.com/@user/video/123",
+        provider="tiktok",
+        max_bytes=25_000_000,
+    )
+    assert dict(resolved.request_headers) == {
+        "Referer": "https://www.tiktok.com/",
+        "User-Agent": "Provider UA",
+    }
+
+
+@pytest.mark.parametrize(
+    ("url", "protocol"),
+    [
+        ("https://cdn.example.com/live/master.m3u8?token=abc", "m3u8_native"),
+        ("https://cdn.example.com/video/manifest.mpd?token=abc", "http_dash_segments"),
+    ],
+)
+def test_direct_manifests_are_classified_for_later_controlled_playback(
+    url: str,
+    protocol: str,
+) -> None:
+    async def scenario():
+        return await media.resolve_media_url(url, max_bytes=25_000_000)
+
+    resolved = asyncio.run(scenario())
+    assert resolved.provider == "direct"
+    assert resolved.manifest is True
+    assert resolved.protocol == protocol
+    assert resolved.reason == "manifest_requires_controlled_transcode_or_player"
+
+
+def test_public_address_helper_rejects_private_and_reserved_ips() -> None:
+    assert media.is_public_address("8.8.8.8") is True
+    assert media.is_public_address("1.1.1.1") is True
+    assert media.is_public_address("127.0.0.1") is False
+    assert media.is_public_address("10.0.0.1") is False
+    assert media.is_public_address("169.254.169.254") is False
+    assert media.is_public_address("::1") is False
