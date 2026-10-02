@@ -152,3 +152,98 @@ DANK_HEALTHCHECKS_TIMEOUT_SECONDS=5
 ```
 
 Keep the ping URL private. Do not commit it to GitHub. Dank Shield sends an immediate success ping after Discord `on_ready`, then another ping from the process-health loop every `DANK_PROCESS_HEALTH_INTERVAL_SECONDS` (120 seconds by default). A 5-minute Healthchecks.io period with a 10-minute grace window is compatible with the default interval.
+
+
+## Movie Night media capacity (1.46 GB Discloud target)
+
+The current Dank Shield production host has about **1.46 GB / 1495 MiB RAM**. Normal
+bot RSS observed before Movie Night load is roughly **340–390 MB**, so Movie Night
+uses dynamic admission instead of treating installed guild count as media load.
+
+The checked-in Discloud profile for this task is:
+
+```ini
+TYPE=site
+MAIN=main.py
+RAM=1495
+```
+
+The same process still owns the Discord bot. `TYPE=site` is required only so the
+media-only HTTP server can be reached through the Discloud Site proxy. The private
+structured/admin API remains on its existing loopback listener.
+
+Use these production environment values:
+
+```env
+DANK_MEDIA_PUBLIC_BASE_URL=https://YOUR-DISCLOUD-SITE.discloud.app
+DANK_MEDIA_BIND_HOST=0.0.0.0
+DANK_MEDIA_PORT=8080
+DANK_TORRENT_STREAM_SECRET=<NEW RANDOM SECRET, DO NOT REUSE ANOTHER TOKEN>
+
+DANK_PROCESS_MEMORY_LIMIT_MB=1495
+DANK_MOVIE_NIGHT_MEMORY_RESERVE_MB=350
+DANK_TORRENT_ESTIMATED_SESSION_MB=96
+DANK_TORRENT_SOFT_SESSION_LIMIT=2
+DANK_TORRENT_MAX_SESSIONS=4
+DANK_TORRENT_ALLOW_BURST=false
+
+DANK_TORRENT_MAX_METADATA_BYTES=4194304
+DANK_TORRENT_MAX_FILE_BYTES=26843545600
+DANK_TORRENT_MAX_TOTAL_BYTES=53687091200
+DANK_TORRENT_DISK_RESERVE_BYTES=68719476736
+
+DANK_TORRENT_READAHEAD_BYTES=16777216
+DANK_TORRENT_MIN_READAHEAD_BYTES=4194304
+DANK_TORRENT_MAX_READAHEAD_BYTES=67108864
+DANK_TORRENT_TARGET_BUFFER_SECONDS=30
+DANK_TORRENT_MAX_BUFFER_SECONDS=75
+DANK_TORRENT_MIN_ESTIMATED_PLAYBACK_BYTES_PER_SECOND=524288
+DANK_TORRENT_BOOTSTRAP_BYTES=8388608
+DANK_TORRENT_TAIL_PROBE_BYTES=4194304
+DANK_TORRENT_BUFFER_WAIT_SECONDS=20
+DANK_TORRENT_METADATA_WAIT_SECONDS=30
+DANK_TORRENT_IDLE_TTL_SECONDS=1800
+
+DANK_TORRENT_CONNECTION_LIMIT=80
+DANK_TORRENT_DOWNLOAD_RATE_BYTES=8388608
+DANK_TORRENT_UPLOAD_RATE_BYTES=524288
+DANK_TORRENT_LISTEN_INTERFACES=0.0.0.0:6881,[::]:6881
+```
+
+### Admission behavior
+
+A new **unique** torrent is admitted only when all of the following remain healthy:
+
+- current process RSS leaves the configured 350 MiB core-bot reserve intact;
+- the conservative unique-session soft limit is not full;
+- the hard unique-session limit is not full;
+- free disk remains above the 64 GiB safety reserve after accounting for
+  already-committed selected files and the new selected file.
+
+Identical torrents are deduplicated by canonical torrent identity/info-hash. If
+multiple Movie Night rooms choose the same release, they reuse one libtorrent
+session and one disk cache while keeping independent room clocks and viewer sync.
+Each room owns a tracked lease. Releasing one room does not delete the torrent
+while another room still holds a lease.
+
+`DANK_TORRENT_ALLOW_BURST=false` is intentional for this host. It keeps the live
+production target at 2 unique torrents while still exposing a hard ceiling of 4.
+After real production telemetry proves the extra headroom is safe, burst can be
+enabled or the soft limit raised without changing `/movie`.
+
+### Movie Night Setup telemetry
+
+The setup panel reports:
+
+- process RSS / configured memory limit;
+- protected memory reserve and remaining headroom;
+- active unique torrents;
+- total room leases and number of shared torrents;
+- currently available admission slots;
+- soft/hard unique-session limits;
+- free disk, protected disk reserve, and committed media bytes;
+- per-movie and per-torrent size ceilings.
+
+The controller fails closed on new unique media when memory or disk safety cannot
+be verified. Reusing an already-active identical torrent remains possible even
+when the unique-session soft limit is full.
