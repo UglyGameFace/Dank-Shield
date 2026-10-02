@@ -191,7 +191,7 @@ def test_verification_submission_settle_fetch_uses_live_message_guard() -> None:
     handler = _block(
         INTERACTION_HANDLERS,
         "async def handle_possible_submission(",
-        "# ============================================================\n# Component interaction dispatcher",
+        "async def handle_component_interaction(",
     )
     assert "fetch_message_with_api_safety(" in handler
     assert "recovery=False" in handler
