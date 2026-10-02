@@ -234,6 +234,60 @@ def test_safe_message_fetch_recovery_reserves_existing_budget(monkeypatch) -> No
         _reset_recovery_budget_state()
 
 
+def test_recovery_budget_wait_does_not_block_live_same_channel(monkeypatch) -> None:
+    _reset_recovery_budget_state()
+    channel = _FetchChannel(78, delay=0)
+    recovery_entered = asyncio.Event()
+    release_recovery = asyncio.Event()
+    call_order: list[int] = []
+
+    async def reserve(*_args, **_kwargs) -> None:
+        recovery_entered.set()
+        await release_recovery.wait()
+
+    async def fetch(message_id: int):
+        call_order.append(int(message_id))
+        return {"channel_id": channel.id, "message_id": int(message_id)}
+
+    channel.fetch_message = fetch
+    monkeypatch.setattr(
+        discord_api_safety,
+        "reserve_recovery_discord_rest_requests",
+        reserve,
+    )
+
+    async def scenario():
+        recovery_task = asyncio.create_task(
+            discord_api_safety.fetch_message_with_api_safety(
+                channel,
+                351,
+                label="startup",
+                recovery=True,
+            )
+        )
+        await recovery_entered.wait()
+
+        live_result = await discord_api_safety.fetch_message_with_api_safety(
+            channel,
+            352,
+            label="live",
+            recovery=False,
+        )
+        assert live_result["message_id"] == 352
+        assert call_order == [352]
+
+        release_recovery.set()
+        recovery_result = await recovery_task
+        return recovery_result
+
+    try:
+        result = asyncio.run(scenario())
+        assert result["message_id"] == 351
+        assert call_order == [352, 351]
+    finally:
+        _reset_recovery_budget_state()
+
+
 def test_safe_message_fetch_live_path_skips_recovery_budget(monkeypatch) -> None:
     _reset_recovery_budget_state()
     channel = _FetchChannel(88, delay=0)
