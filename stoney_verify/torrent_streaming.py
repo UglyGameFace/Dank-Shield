@@ -19,7 +19,7 @@ import secrets
 import shutil
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, quote, urlsplit
@@ -30,6 +30,12 @@ from stoney_verify.media_session_votes import (
     ACTION_SWITCH_FILE,
     MediaVote,
     MediaVoteManager,
+)
+
+
+from stoney_verify.media_metadata import (
+    parse_release_name,
+    probe_media_file,
 )
 
 
@@ -220,6 +226,10 @@ class TorrentStreamSession:
     adaptive_readahead_bytes: int = 0
     adaptive_target_seconds: float = 0.0
     stall_count: int = 0
+    release_metadata: dict[str, Any] = field(default_factory=dict)
+    verified_metadata: dict[str, Any] = field(default_factory=dict)
+    metadata_probe_running: bool = False
+    metadata_probe_attempts: int = 0
 
     @property
     def absolute_path(self) -> Path:
@@ -591,6 +601,10 @@ class TorrentMediaManager:
         session.file_name = _safe_name(selected.path)
         session.file_size = int(selected.size)
         session.file_offset = int(files.file_offset(selected.index))
+        session.release_metadata = parse_release_name(session.file_name)
+        session.verified_metadata = {}
+        session.metadata_probe_running = False
+        session.metadata_probe_attempts = 0
         session.first_piece = session.file_offset // session.piece_length
         session.last_piece = (
             session.file_offset + session.file_size - 1
@@ -721,6 +735,44 @@ class TorrentMediaManager:
         # untouched for the universal media resolver (#390) to execute. The
         # torrent owner does not grow a second provider-search implementation.
         return vote
+
+    def schedule_metadata_probe(self, session: TorrentStreamSession) -> bool:
+        if session.verified_metadata.get("available"):
+            return False
+        if session.metadata_probe_running or session.metadata_probe_attempts >= 3:
+            return False
+
+        session.metadata_probe_running = True
+        session.metadata_probe_attempts += 1
+
+        async def _run() -> None:
+            try:
+                result = await probe_media_file(
+                    session.absolute_path,
+                    filename=session.file_name,
+                    timeout_seconds=6.0,
+                )
+                if isinstance(result, dict):
+                    session.verified_metadata = result
+            except Exception as exc:
+                session.verified_metadata = {
+                    "origin": "verified_file",
+                    "available": False,
+                    "reason": f"probe_error:{type(exc).__name__}",
+                }
+            finally:
+                session.metadata_probe_running = False
+
+        try:
+            task = asyncio.create_task(
+                _run(),
+                name=f"torrent_media_probe:{session.token}",
+            )
+            task.add_done_callback(lambda _task: None)
+            return True
+        except RuntimeError:
+            session.metadata_probe_running = False
+            return False
 
     def prioritize_range(
         self,
@@ -964,6 +1016,12 @@ class TorrentMediaManager:
                 "consume_rate": int(session.smoothed_consume_rate or 0),
                 "download_rate": int(session.smoothed_download_rate or 0),
                 "stall_count": int(session.stall_count),
+            },
+            "metadata": {
+                "release_name": dict(session.release_metadata or {}),
+                "verified": dict(session.verified_metadata or {}),
+                "probe_running": bool(session.metadata_probe_running),
+                "probe_attempts": int(session.metadata_probe_attempts),
             },
             "playable_files": [
                 {
