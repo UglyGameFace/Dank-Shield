@@ -13,6 +13,11 @@ from stoney_verify.command_surface_contract import (
 from stoney_verify.commands_ext import public_movie_night as movie_ui
 from stoney_verify.commands_ext.public_command_surface_v2 import _standalone
 from stoney_verify.media_source_registry import MediaSourceRegistry
+from stoney_verify.media_source_resolver import (
+    MediaSourceSearchOutcome,
+    ResolvedMediaVariant,
+)
+from stoney_verify.movie_night import MovieNightManager
 from stoney_verify.navigation_registry import feature_by_key, search_features
 
 
@@ -108,6 +113,74 @@ def test_movie_night_hub_adds_signed_watch_link_when_media_is_active(monkeypatch
     assert str(links[0].url).startswith(
         "https://media.example.com/movie/room-123/watch?"
     )
+
+
+def test_search_results_group_releases_without_automatic_votes(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        now=100.0,
+    )
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+
+    outcome = MediaSourceSearchOutcome(
+        variants=(
+            ResolvedMediaVariant(
+                title="Example Movie",
+                source_id="source-a",
+                source_label="Source A",
+                source_ref="magnet:?xt=urn:btih:aaa",
+                file_size=4_000_000_000,
+                seeds=100,
+                leechers=10,
+                peers=110,
+                metadata={"release_name": {"source": "WEB-DL"}},
+            ),
+            ResolvedMediaVariant(
+                title="Example Movie",
+                source_id="source-b",
+                source_label="Source B",
+                source_ref="magnet:?xt=urn:btih:bbb",
+                file_size=8_000_000_000,
+                seeds=50,
+                leechers=5,
+                peers=55,
+                metadata={"release_name": {"source": "BluRay"}},
+            ),
+            ResolvedMediaVariant(
+                title="Other Movie",
+                source_id="source-a",
+                source_label="Source A",
+                source_ref="magnet:?xt=urn:btih:ccc",
+                file_size=3_000_000_000,
+                seeds=20,
+                leechers=4,
+                peers=24,
+                metadata={"release_name": {"source": "WEBRip"}},
+            ),
+        ),
+    )
+
+    movies, releases = movie_ui._materialize_search_results(
+        room,
+        outcome,
+        proposer_id=10,
+        query="example",
+    )
+    assert movies == 2
+    assert releases == 3
+    assert len(room.candidates) == 2
+
+    example = manager.find_candidate_by_title(room.room_id, "Example Movie")
+    assert example is not None
+    assert example.votes == set()
+    assert len(example.variants) == 2
+    assert all(variant.votes == set() for variant in example.variants.values())
+    ranked = manager.ranked_variants(room.room_id, example.candidate_id, now=101.0)
+    assert ranked[0].seeds == 100
 
 
 def test_movie_night_is_reachable_from_home_registry_and_normal_search_words() -> None:
