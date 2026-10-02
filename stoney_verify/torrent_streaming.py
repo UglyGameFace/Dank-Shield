@@ -171,6 +171,16 @@ class TorrentFileCandidate:
     size: int
 
 
+@dataclass(frozen=True)
+class TorrentBufferPlan:
+    seek: bool
+    target_seconds: float
+    target_bytes: int
+    startup_wait_end: int
+    consume_rate: float
+    download_rate: float
+
+
 @dataclass
 class TorrentStreamSession:
     token: str
@@ -193,6 +203,14 @@ class TorrentStreamSession:
     last_piece: int
     created_at: float
     last_access: float
+    smoothed_download_rate: float = 0.0
+    smoothed_consume_rate: float = 0.0
+    last_request_at: float = 0.0
+    last_request_bytes: int = 0
+    last_request_end: int = -1
+    adaptive_readahead_bytes: int = 0
+    adaptive_target_seconds: float = 0.0
+    stall_count: int = 0
 
     @property
     def absolute_path(self) -> Path:
@@ -239,6 +257,36 @@ class TorrentMediaManager:
             16 * 1024 * 1024,
             minimum=2 * 1024 * 1024,
             maximum=128 * 1024 * 1024,
+        )
+        self.min_readahead_bytes = _env_int(
+            "DANK_TORRENT_MIN_READAHEAD_BYTES",
+            4 * 1024 * 1024,
+            minimum=1 * 1024 * 1024,
+            maximum=64 * 1024 * 1024,
+        )
+        self.max_readahead_bytes = _env_int(
+            "DANK_TORRENT_MAX_READAHEAD_BYTES",
+            64 * 1024 * 1024,
+            minimum=self.min_readahead_bytes,
+            maximum=256 * 1024 * 1024,
+        )
+        self.buffer_target_seconds = _env_float(
+            "DANK_TORRENT_TARGET_BUFFER_SECONDS",
+            30.0,
+            minimum=8.0,
+            maximum=120.0,
+        )
+        self.buffer_max_seconds = _env_float(
+            "DANK_TORRENT_MAX_BUFFER_SECONDS",
+            75.0,
+            minimum=self.buffer_target_seconds,
+            maximum=180.0,
+        )
+        self.min_consume_rate = _env_int(
+            "DANK_TORRENT_MIN_ESTIMATED_PLAYBACK_BYTES",
+            512 * 1024,
+            minimum=128 * 1024,
+            maximum=8 * 1024 * 1024,
         )
         self.bootstrap_bytes = _env_int(
             "DANK_TORRENT_BOOTSTRAP_BYTES",
@@ -581,6 +629,7 @@ class TorrentMediaManager:
         end: int,
         *,
         readahead: bool = True,
+        readahead_bytes: Optional[int] = None,
     ) -> None:
         start = max(0, min(int(start), session.file_size - 1))
         end = max(start, min(int(end), session.file_size - 1))
@@ -596,7 +645,12 @@ class TorrentMediaManager:
                 updates.append((piece, 7))
 
         if readahead:
-            ahead_end = min(session.file_size - 1, end + self.readahead_bytes)
+            ahead_bytes = (
+                self.readahead_bytes
+                if readahead_bytes is None
+                else max(0, int(readahead_bytes))
+            )
+            ahead_end = min(session.file_size - 1, end + ahead_bytes)
             ahead_last = (session.file_offset + ahead_end) // session.piece_length
             for piece in range(last + 1, ahead_last + 1):
                 if session.first_piece <= piece <= session.last_piece:
@@ -606,6 +660,124 @@ class TorrentMediaManager:
             session.handle.prioritize_pieces(updates)
         session.last_access = time.monotonic()
 
+    def _download_rate(self, session: TorrentStreamSession) -> float:
+        try:
+            live = float(getattr(session.handle.status(), "download_rate", 0) or 0)
+        except Exception:
+            live = 0.0
+        if live > 0:
+            if session.smoothed_download_rate <= 0:
+                session.smoothed_download_rate = live
+            else:
+                session.smoothed_download_rate = (
+                    session.smoothed_download_rate * 0.70 + live * 0.30
+                )
+        return max(0.0, session.smoothed_download_rate or live)
+
+    def prepare_playback_request(
+        self,
+        session: TorrentStreamSession,
+        start: int,
+        end: int,
+    ) -> TorrentBufferPlan:
+        now = time.monotonic()
+        start = max(0, min(int(start), session.file_size - 1))
+        end = max(start, min(int(end), session.file_size - 1))
+        request_bytes = end - start + 1
+
+        seek_threshold = max(session.piece_length * 2, 4 * 1024 * 1024)
+        expected_next = session.last_request_end + 1
+        seek = (
+            session.last_request_end >= 0
+            and abs(start - expected_next) > seek_threshold
+        )
+
+        if session.last_request_at > 0 and session.last_request_bytes > 0 and not seek:
+            elapsed = now - session.last_request_at
+            if 0.10 <= elapsed <= 30.0:
+                observed = session.last_request_bytes / elapsed
+                if session.smoothed_consume_rate <= 0:
+                    session.smoothed_consume_rate = observed
+                else:
+                    session.smoothed_consume_rate = (
+                        session.smoothed_consume_rate * 0.75 + observed * 0.25
+                    )
+
+        consume_rate = max(
+            float(self.min_consume_rate),
+            float(session.smoothed_consume_rate or 0.0),
+        )
+        download_rate = self._download_rate(session)
+        ratio = download_rate / consume_rate if consume_rate > 0 else 0.0
+
+        if seek:
+            target_seconds = max(8.0, self.buffer_target_seconds * 0.45)
+        elif ratio <= 0.0:
+            target_seconds = self.buffer_target_seconds
+        elif ratio < 1.10:
+            target_seconds = self.buffer_max_seconds
+        elif ratio < 1.50:
+            target_seconds = min(
+                self.buffer_max_seconds,
+                self.buffer_target_seconds * 1.70,
+            )
+        elif ratio < 2.50:
+            target_seconds = self.buffer_target_seconds
+        else:
+            target_seconds = max(12.0, self.buffer_target_seconds * 0.65)
+
+        if session.stall_count:
+            target_seconds = min(
+                self.buffer_max_seconds,
+                target_seconds + min(30.0, session.stall_count * 8.0),
+            )
+
+        target_bytes = int(consume_rate * target_seconds)
+        target_bytes = max(self.min_readahead_bytes, target_bytes)
+        target_bytes = min(self.max_readahead_bytes, target_bytes)
+        target_bytes = min(target_bytes, max(0, session.file_size - end - 1))
+
+        first_request = session.last_request_end < 0
+        startup_extra = 0
+        if first_request and start == 0:
+            startup_extra = min(
+                max(self.bootstrap_bytes, self.min_readahead_bytes),
+                max(0, session.file_size - end - 1),
+            )
+        elif seek:
+            startup_extra = min(
+                max(self.min_readahead_bytes, request_bytes * 2),
+                max(0, session.file_size - end - 1),
+            )
+
+        startup_wait_end = min(
+            session.file_size - 1,
+            end + min(target_bytes, startup_extra),
+        )
+
+        session.adaptive_readahead_bytes = target_bytes
+        session.adaptive_target_seconds = float(target_seconds)
+        session.last_request_at = now
+        session.last_request_bytes = request_bytes
+        session.last_request_end = end
+        session.last_access = now
+
+        self.prioritize_range(
+            session,
+            start,
+            end,
+            readahead=True,
+            readahead_bytes=target_bytes,
+        )
+        return TorrentBufferPlan(
+            seek=seek,
+            target_seconds=float(target_seconds),
+            target_bytes=int(target_bytes),
+            startup_wait_end=int(startup_wait_end),
+            consume_rate=float(consume_rate),
+            download_rate=float(download_rate),
+        )
+
     async def wait_range(
         self,
         session: TorrentStreamSession,
@@ -613,8 +785,19 @@ class TorrentMediaManager:
         end: int,
         *,
         timeout: Optional[float] = None,
+        readahead_bytes: Optional[int] = None,
     ) -> bool:
-        self.prioritize_range(session, start, end)
+        self.prioritize_range(
+            session,
+            start,
+            end,
+            readahead=True,
+            readahead_bytes=(
+                session.adaptive_readahead_bytes
+                if readahead_bytes is None
+                else readahead_bytes
+            ),
+        )
         wait = self.buffer_wait_seconds if timeout is None else max(0.5, float(timeout))
         deadline = time.monotonic() + wait
 
@@ -626,12 +809,15 @@ class TorrentMediaManager:
         while time.monotonic() < deadline:
             if all(bool(session.handle.have_piece(piece)) for piece in range(first, last + 1)):
                 session.last_access = time.monotonic()
+                if session.stall_count > 0:
+                    session.stall_count -= 1
                 return True
             status = session.handle.status()
             error = str(getattr(status, "error", "") or "").strip()
             if error:
                 return False
             await asyncio.sleep(0.15)
+        session.stall_count = min(20, session.stall_count + 1)
         return False
 
     async def read_range(
@@ -672,6 +858,13 @@ class TorrentMediaManager:
             "seeds": int(getattr(status, "num_seeds", 0) or 0),
             "state": str(getattr(status, "state", "") or ""),
             "error": str(getattr(status, "error", "") or ""),
+            "buffer": {
+                "target_seconds": round(float(session.adaptive_target_seconds or 0.0), 1),
+                "readahead_bytes": int(session.adaptive_readahead_bytes or 0),
+                "consume_rate": int(session.smoothed_consume_rate or 0),
+                "download_rate": int(session.smoothed_download_rate or 0),
+                "stall_count": int(session.stall_count),
+            },
             "playable_files": [
                 {
                     "index": item.index,
@@ -763,6 +956,7 @@ def get_torrent_manager() -> TorrentMediaManager:
 
 
 __all__ = [
+    "TorrentBufferPlan",
     "TorrentFileCandidate",
     "TorrentMediaManager",
     "TorrentStreamSession",
