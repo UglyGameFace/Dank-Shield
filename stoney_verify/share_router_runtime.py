@@ -373,7 +373,7 @@ async def _download_trusted_video(
     max_bytes: int,
     request_headers: Optional[Mapping[str, str]] = None,
 ) -> Optional[RoutedVideo]:
-    if not _trusted_video_url(url):
+    if not is_safe_media_download_url(url):
         return None
 
     timeout = aiohttp.ClientTimeout(
