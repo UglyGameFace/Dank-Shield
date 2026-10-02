@@ -58,6 +58,10 @@ from ..events_new.members import (
     run_role_member_sync,
 )
 from .channel_builder_routes import register_channel_builder_routes
+from .torrent_stream_routes import (
+    is_signed_public_torrent_request,
+    register_torrent_stream_routes,
+)
 from .queued_handlers import queued_api_handler
 from ..operation_queue import operation_queue_health_summary
 
@@ -573,6 +577,11 @@ def _validate_api_startup_config() -> None:
 async def _auth_middleware(request: web.Request, handler):
     if request.path == "/health":
         return await handler(request)
+
+    if str(request.path or "").startswith("/media/torrent/stream/"):
+        if await is_signed_public_torrent_request(request):
+            return await handler(request)
+        return _json_error("Unauthorized", 401)
 
     if not _should_require_api_auth():
         return await handler(request)
@@ -1480,6 +1489,7 @@ async def start_api(bot_instance: discord.Client):
 
 
     register_channel_builder_routes(app, sys.modules[__name__])
+    register_torrent_stream_routes(app, sys.modules[__name__])
     runner = web.AppRunner(app)
     await runner.setup()
 
