@@ -158,9 +158,11 @@ Regression coverage includes:
 - complete ready-state evaluation;
 - media health test acknowledgement before network I/O.
 
-## Hosting constraint found
+## Historical #391 hosting constraint (superseded by active #393)
 
-Current production `discloud.config` is `TYPE=bot`.
+At the time #391 was implemented, production `discloud.config` was `TYPE=bot`.
+Issue #393 intentionally changes the checked-in deployment target to `TYPE=site`
+with `RAM=1495` now that the owner confirmed a Site-capable Diamond plan.
 
 Discloud Bot deployments do not expose an external HTTP port. Externally reachable
 web/API/bot-with-web-interface deployments use `TYPE=site` and Discloud proxies
@@ -226,9 +228,9 @@ Dedicated public media-only server:
 - deletes the proxy source only after successful stream creation;
 - leaves failed/unconfigured sources intact and logs the blocked route.
 
-## Resource defaults
+## Historical #391 resource defaults (superseded by active #393)
 
-Current conservative defaults:
+The original #391 conservative defaults were:
 
 - live sessions: 1;
 - metadata: 4 MiB;
