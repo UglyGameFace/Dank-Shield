@@ -2,65 +2,86 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-MOVIE-NIGHT-FOLLOWUP — simple custom-source UX + complete session termination**
+**DANK-SHIELD-MOVIE-NIGHT-EASY-SOURCES — zero-setup catalog + provider search**
 
-Production baseline inspected before this task:
-`main@7d09c89c15ed48067cb97ee32bc900931e1833dd` (PR #394 merged).
+Production baseline:
+`main@d8a3f2ddd0ece13dfe2164176076ecc5c3988cc1` (PR #395 merged).
 
 Active branch:
-`fix/movie-night-source-ux-session-end`
+`feat/movie-night-easy-sources`
 
 Status:
 **Implementation in progress; validation pending.**
 
 ### Scope / required outcome
 
-1. Preserve the existing canonical Movie Night torrent runtime, direct user-supplied magnet playback, and direct user-supplied `.torrent` playback.
-2. Make guild-configured **authorized structured HTTPS JSON sources** easy to add without asking admins to invent an internal Source ID.
-3. Add first-class source editing while preserving enable / disable / remove and canonical guild-config CAS persistence.
-4. Keep source fetching network-safe and structured; do not add arbitrary HTML scraping or provider-specific piracy-index integrations.
-5. Add a real **End Session** control distinct from closing the ephemeral Discord panel.
-6. The host can end immediately only after confirmation.
-7. Active viewers can open and pass an **end-session vote even while the host is present**.
-8. Every successful end path must use one canonical cleanup owner that:
-   - marks the room ended;
-   - releases only that room's torrent lease so shared torrents remain valid for other rooms;
-   - clears room-owned media identity, queue, candidates, and approved search state;
-   - allows a fresh Movie Night to start in the same channel.
-9. Web-player host termination and Discord termination must converge on the same cleanup path.
-10. Add regression coverage for end voting, post-end side-effect claiming, lease cleanup/idempotence, source-ID generation, source editing UX, and Discord end-vote cleanup.
+1. Preserve the canonical Movie Night torrent runtime, direct magnet playback, direct `.torrent` playback, voting, shared leases, and session termination.
+2. Make normal Movie Night title search work **without requiring a server owner to obtain or configure a feed URL**.
+3. Add deployment-level **TMDB catalog matching** so users can choose the exact movie/title/year/poster without guild owners handling API URLs or credentials.
+4. Add TMDB/JustWatch **where-to-watch discovery** for the selected catalog movie, with explicit JustWatch attribution; this is informational and must not be treated as a direct playback URL.
+5. Add one built-in, no-key playable search provider limited to Internet Archive's `feature_films` collection, returning Archive-hosted `.torrent` references into the existing variant/playback pipeline.
+6. Keep built-in search and custom source results merged into the existing candidate/release ranking model. Do not create a second playback stack.
+7. Keep direct host-supplied magnet and `.torrent` input as universal provider-independent fallback paths.
+8. Demote custom feeds to **Advanced Custom API** setup instead of presenting them as required.
+9. Let an admin paste a working example search URL instead of hand-writing `{query}`; detect common search parameters and test the endpoint before saving.
+10. Preserve HTTPS-only, no embedded credentials, private-network blocking, DNS revalidation, response-size caps, redirect validation, and guild-config CAS ownership.
+11. Do not store the TMDB deployment token in guild config or expose it in Discord UI.
+12. Do not add provider-specific scraping/reverse-engineering for unauthorized streaming sites. Provider architecture remains compatible with future authorized APIs/personal libraries once their credential storage is designed safely.
+13. Brand the entire public surface as **Dank Cinema** so catalog, provider, queue, result, direct-media, and setup flows feel native to Dank Shield while preserving required third-party attribution and source identities.
+14. Add regression coverage for TMDB identity/watch metadata, built-in search scoping, Archive torrent-reference normalization, automatic example-URL conversion, zero-setup provider UI, Dank Cinema branding, and aggregate search behavior.
 
 ### Findings / root cause
 
-- `end` was grouped with failover playback actions, so a non-host could not even open an end vote while the host was active.
-- A passed `end` vote marked the room ended in memory, but the Discord vote executor only performed external side effects for `search` and `play_variant`; the torrent lease could remain allocated.
-- The web player had its own manual lease-release code, creating duplicate termination ownership.
-- `claim_vote_execution()` rejected already-ended rooms, so cleanup could not be claimed after an end vote transitioned room state.
-- The public hub had no true End Session action; **Close** only dismissed the UI.
-- Custom source setup exposed an internal Source ID and labeled one modal Add / Update even though editing required knowing/reusing that hidden identity.
+- The merged source UI still made **custom JSON feeds** look like the normal path even though most server owners do not already have one.
+- Obtaining a reusable API/feed URL is not consistently easy, so the fastest safe path is a built-in no-key provider plus direct magnet/.torrent playback.
+- The resolver already has the correct public-network safety boundary and one canonical result model, so the fix belongs there rather than adding another scraper/runtime.
+- Existing custom source URLs can stay compatible; only the admin onboarding path needs automatic query-template detection and pre-save testing.
 
 ### Execution path / changes so far
 
-- `stoney_verify/movie_night.py`: separates collaborative session actions from host-failover playback actions and permits post-end execution claiming.
-- `stoney_verify/movie_night_session.py`: new canonical end/lease cleanup owner.
-- `stoney_verify/movie_night_web.py`: host web termination routes through canonical cleanup; ended heartbeats return terminal state.
-- `stoney_verify/commands_ext/public_movie_night.py`: adds host-confirmed End Session, viewer end voting, end-vote cleanup execution, simpler source add/edit UI.
-- `stoney_verify/media_source_registry.py`: generates stable unique internal source IDs when admins add a source without one.
-- Regression tests are being added in the existing Movie Night/source suites plus `tests/test_movie_night_session.py`.
+- `stoney_verify/movie_catalog.py`: added deployment-level TMDB exact-movie search plus region-scoped legal availability discovery from TMDB/JustWatch; catalog metadata is separate from playback media.
+- `stoney_verify/media_source_registry.py`: added working-search-URL normalization for common query parameters.
+- `stoney_verify/media_source_resolver.py`: added built-in Internet Archive Feature Films search, custom endpoint probing, and aggregate built-in + custom search.
+- `stoney_verify/commands_ext/public_movie_night.py`: provider screen now separates catalog, playable built-in, direct magnet/.torrent, and advanced custom APIs; Search / Vote can use TMDB to choose the exact movie before searching playback providers.
+- Catalog-only matches remain usable even when no provider has a release; the host can attach a magnet or `.torrent` afterward.
+- Existing custom API management remains Edit / Enable / Disable / Remove through the canonical guild registry.
+- `.env.example` and production docs now define `DANK_TMDB_READ_TOKEN` and `DANK_TMDB_WATCH_REGION`.
+- Public Movie Night UX is now branded as **Dank Cinema**: **Dank Catalog**, **Dank Watch**, **Dank Archive**, **Dank Direct**, **Dank Engine**, and **Dank Provider Lab**. Underlying providers remain explicitly identified where attribution or source provenance matters.
+- Regression coverage is being extended in the catalog, media-source, and public Movie Night test suites.
 
 ### Validation / cleanup / blockers
 
 Pending before completion claim:
-- targeted Movie Night/source tests;
-- repository compile/type/lint/static checks used by CI;
-- exact-head GitHub Actions;
-- branch-vs-main comparison and final diff review;
-- stale/duplicate termination references and import cleanup;
-- production/mobile canary after merge/deploy remains an owner runtime check.
+- targeted source/Movie Night tests;
+- full repository CI at exact PR head;
+- branch-vs-main diff and import/dead-reference review;
+- production canary after merge/deploy remains an owner runtime check.
+
+Latest CI finding:
+- exact-head run at `eb8eca01fd027a6857ab9b324a523ba3ba9a8b90` had **1 test failure, 2524 passes**;
+- production code compiled successfully and the failure was a stale branding assertion: the test concatenated embed descriptions/values but asserted against the **Dank Watch field name**, which it had intentionally excluded;
+- corrected the test renderer to include field names at `b6896a736c5ac6d3a1c46209395e3578d2120c94`; no runtime implementation change was required for that failure.
 
 No unrelated task is active.
 
 ---
+
+## Previous completed Movie Night follow-up
+
+**DANK-SHIELD-MOVIE-NIGHT-FOLLOWUP — simple custom-source UX + complete session termination**
+
+PR #395 merged to production main as:
+`d8a3f2ddd0ece13dfe2164176076ecc5c3988cc1`.
+
+That baseline includes:
+- host-confirmed and viewer-voted complete Movie Night termination;
+- canonical shared torrent lease cleanup;
+- web-player termination convergence;
+- internal source-ID hiding/generation;
+- first-class custom-source edit / enable / disable / remove.
+
+---
+
 
 ## Previous completed baseline
 

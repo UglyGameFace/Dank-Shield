@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from stoney_verify import media_source_resolver as resolver
@@ -90,3 +91,86 @@ def test_torrent_metadata_fetch_reuses_public_only_resolver_and_byte_cap() -> No
     assert "_validate_request_url(urljoin(current, location))" in source
     assert "torrent metadata exceeds the configured limit" in source
     assert "use_dns_cache=False" in source
+
+
+
+def test_internet_archive_builtin_search_is_scoped_to_feature_films() -> None:
+    url = resolver._internet_archive_search_url("Night of the Living Dead")
+    assert url.startswith("https://archive.org/advancedsearch.php?")
+    assert "collection%3Afeature_films" in url
+    assert "Night+of+the+Living+Dead" in url
+    assert "output=json" in url
+    assert "rows=12" in url
+
+
+def test_internet_archive_query_cannot_escape_feature_films_scope() -> None:
+    url = resolver._internet_archive_search_url(
+        'Movie") OR collection:opensource_movies OR title:("Other'
+    )
+    assert "collection%3Afeature_films" in url
+    assert "%5C%22" in url
+
+
+def test_internet_archive_doc_becomes_torrent_variant() -> None:
+    variant = resolver._archive_variant_from_doc(
+        {
+            "identifier": "example_feature_film",
+            "title": "Example Feature Film",
+            "date": "1940",
+            "downloads": 1234,
+        }
+    )
+    assert variant is not None
+    assert variant.source_id == resolver.INTERNET_ARCHIVE_SOURCE_ID
+    assert variant.source_label == resolver.INTERNET_ARCHIVE_SOURCE_LABEL
+    assert variant.source_ref == (
+        "https://archive.org/download/example_feature_film/"
+        "example_feature_film_archive.torrent"
+    )
+    assert variant.metadata["source_reported"]["archive_downloads"] == 1234
+
+
+def test_internet_archive_doc_rejects_unsafe_identifier() -> None:
+    for identifier in ("../not-safe", ".", ".."):
+        assert resolver._archive_variant_from_doc(
+            {"identifier": identifier, "title": "Bad"}
+        ) is None
+
+
+
+def test_aggregate_search_keeps_builtin_results_without_custom_sources(monkeypatch) -> None:
+    builtin = resolver.ResolvedMediaVariant(
+        title="Public Domain Movie",
+        source_id=resolver.INTERNET_ARCHIVE_SOURCE_ID,
+        source_label=resolver.INTERNET_ARCHIVE_SOURCE_LABEL,
+        source_ref=(
+            "https://archive.org/download/public_domain_movie/"
+            "public_domain_movie_archive.torrent"
+        ),
+        file_size=0,
+        seeds=0,
+        leechers=0,
+        peers=0,
+        metadata={},
+    )
+
+    async def fake_builtin(query: str):
+        assert query == "Public Domain Movie"
+        return [builtin], ""
+
+    async def fake_custom(guild_id: int, query: str):
+        assert guild_id == 123
+        assert query == "Public Domain Movie"
+        return resolver.MediaSourceSearchOutcome(
+            variants=(),
+            errors=("No custom sources are enabled.",),
+        )
+
+    monkeypatch.setattr(resolver, "_search_builtin_internet_archive", fake_builtin)
+    monkeypatch.setattr(resolver, "search_custom_media_sources", fake_custom)
+
+    outcome = asyncio.run(
+        resolver.search_movie_sources(123, "Public Domain Movie")
+    )
+    assert outcome.variants == (builtin,)
+    assert outcome.errors == ()

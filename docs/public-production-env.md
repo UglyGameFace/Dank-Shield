@@ -99,6 +99,26 @@ Advanced repair/setup aliases such as direct `/dank setup-review`, `/dank db-che
 
 Schema health should show either successful read-only readiness or exact migration guidance for missing tables/columns. It must never report that a direct database URL will auto-repair production schema.
 
+## Movie Night catalog and provider search
+
+Movie Night separates **movie identity** from **playback media**.
+
+- `DANK_TMDB_READ_TOKEN` is the bot owner's TMDB **API Read Access Token**. Configure it once at deployment level. Guild owners and ordinary members never paste this token.
+- `DANK_TMDB_WATCH_REGION` is the two-letter default country used for TMDB/JustWatch availability discovery. Production defaults to `US` when omitted or invalid.
+- TMDB supplies exact title/year/poster/overview matching and legal provider availability. It never supplies the movie file.
+- JustWatch availability returned through TMDB is displayed with JustWatch attribution.
+- Internet Archive Feature Films remains the built-in no-key playable search provider.
+- Authorized custom HTTPS JSON APIs remain optional advanced providers.
+- Host-supplied magnet links and `.torrent` attachments remain direct playback paths and do not require TMDB or a custom provider.
+- Movie Night never stores the TMDB token in guild config or exposes it in Discord UI.
+
+Recommended production values:
+
+```env
+DANK_TMDB_READ_TOKEN=<TMDB API Read Access Token>
+DANK_TMDB_WATCH_REGION=US
+```
+
 ## Live Captions native audio runtime
 
 Live Captions receive DAVE-decrypted Opus frames and then decode each speaker to 48 kHz stereo PCM before segmentation/transcription. `discord.py` requires a loadable native libopus for that PCM decoder.

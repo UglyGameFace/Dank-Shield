@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 MEDIA_SOURCE_REGISTRY_KEY = "movie_night_media_sources_v1"
 MEDIA_SOURCE_REGISTRY_VERSION = 1
@@ -129,6 +129,50 @@ def _normalize_endpoint_url(value: Any) -> str:
         )
     )
 
+
+def prepare_example_search_url(value: Any) -> str:
+    """Turn a pasted working search URL into a reusable Movie Night template.
+
+    Admins should not have to hand-write the query placeholder. Common search
+    parameters are detected automatically. A bare endpoint with no query string
+    remains valid because the resolver already appends q= at search time.
+    """
+
+    clean = _normalize_endpoint_url(value)
+    if "{query}" in clean:
+        return clean
+
+    parsed = urlsplit(clean)
+    pairs = list(parse_qsl(parsed.query, keep_blank_values=True))
+    if not pairs:
+        return clean
+
+    common_keys = {"q", "query", "search", "term", "keyword", "keywords", "s"}
+    updated: list[tuple[str, str]] = []
+    replaced = False
+    for key, raw_value in pairs:
+        if not replaced and str(key or "").strip().casefold() in common_keys:
+            updated.append((key, "{query}"))
+            replaced = True
+        else:
+            updated.append((key, raw_value))
+
+    if not replaced:
+        raise ValueError(
+            "Dank Shield could not find the movie-search part of that URL. "
+            "Paste a search URL that uses q=, query=, search=, term=, keyword=, keywords=, or s=."
+        )
+
+    query = urlencode(updated, doseq=True).replace("%7Bquery%7D", "{query}")
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            query,
+            "",
+        )
+    )
 
 def _source_from_raw(raw: Any) -> Optional[CustomMediaSource]:
     if not isinstance(raw, Mapping):
@@ -328,6 +372,7 @@ __all__ = [
     "enabled_custom_sources",
     "load_media_source_registry",
     "parse_media_source_registry",
+    "prepare_example_search_url",
     "remove_custom_source",
     "save_media_source_registry",
     "set_custom_source_enabled",

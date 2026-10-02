@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import re
 import socket
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
@@ -24,6 +25,11 @@ _MAX_TOTAL_RESULTS = 100
 _MAX_RESPONSE_BYTES = 1024 * 1024
 _MAX_CONCURRENCY = 4
 _TIMEOUT_SECONDS = 8.0
+
+INTERNET_ARCHIVE_SOURCE_ID = "internet-archive-feature-films"
+INTERNET_ARCHIVE_SOURCE_LABEL = "Internet Archive Feature Films"
+_INTERNET_ARCHIVE_SEARCH_URL = "https://archive.org/advancedsearch.php"
+_ARCHIVE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,180}$")
 
 
 def _public_ip(value: str) -> bool:
@@ -102,6 +108,12 @@ class MediaSourceSearchOutcome:
     variants: tuple[ResolvedMediaVariant, ...]
     errors: tuple[str, ...] = ()
 
+@dataclass(frozen=True)
+class MediaSourceProbeOutcome:
+    reachable: bool
+    playable_results: int = 0
+    error: str = ""
+
 
 def _safe_int(value: Any) -> int:
     try:
@@ -109,6 +121,62 @@ def _safe_int(value: Any) -> int:
     except Exception:
         return 0
 
+
+def _internet_archive_search_url(query: str) -> str:
+    clean_query = " ".join(str(query or "").split())[:180]
+    if not clean_query:
+        raise ValueError("Movie search query is empty.")
+
+    escaped_query = clean_query.replace("\\", "\\\\").replace('"', '\\"')
+    params = [
+        ("q", f'collection:feature_films AND title:("{escaped_query}")'),
+        ("fl[]", "identifier"),
+        ("fl[]", "title"),
+        ("fl[]", "date"),
+        ("fl[]", "downloads"),
+        ("rows", "12"),
+        ("page", "1"),
+        ("output", "json"),
+        ("sort[]", "downloads desc"),
+    ]
+    return f"{_INTERNET_ARCHIVE_SEARCH_URL}?{urlencode(params)}"
+
+
+def _archive_variant_from_doc(item: Mapping[str, Any]) -> Optional[ResolvedMediaVariant]:
+    identifier = str(item.get("identifier") or "").strip()
+    if (
+        not identifier
+        or identifier in {".", ".."}
+        or not _ARCHIVE_ID_RE.fullmatch(identifier)
+    ):
+        return None
+    title = _clean_title(item.get("title") or identifier)
+    if not title:
+        return None
+
+    torrent_url = f"https://archive.org/download/{identifier}/{identifier}_archive.torrent"
+    release = parse_release_name(title)
+    metadata: dict[str, Any] = {
+        "release_name": release,
+        "source_reported_verified": False,
+        "source_reported": {
+            "archive_identifier": identifier,
+            "archive_date": _clean_title(item.get("date"))[:40],
+            "archive_downloads": _safe_int(item.get("downloads")),
+        },
+        "builtin_source": INTERNET_ARCHIVE_SOURCE_ID,
+    }
+    return ResolvedMediaVariant(
+        title=title,
+        source_id=INTERNET_ARCHIVE_SOURCE_ID,
+        source_label=INTERNET_ARCHIVE_SOURCE_LABEL,
+        source_ref=torrent_url,
+        file_size=0,
+        seeds=0,
+        leechers=0,
+        peers=0,
+        metadata=metadata,
+    )
 
 def _clean_title(value: Any) -> str:
     return " ".join(str(value or "").split())[:180]
@@ -327,6 +395,74 @@ async def _search_one(
         await resolver.close()
 
 
+async def _search_builtin_internet_archive(
+    query: str,
+) -> tuple[list[ResolvedMediaVariant], str]:
+    resolver = PublicOnlyResolver()
+    connector = aiohttp.TCPConnector(
+        resolver=resolver,
+        use_dns_cache=False,
+        ttl_dns_cache=0,
+        limit=2,
+    )
+    timeout = aiohttp.ClientTimeout(
+        total=_TIMEOUT_SECONDS,
+        connect=3.0,
+        sock_read=5.0,
+    )
+    current = _validate_request_url(_internet_archive_search_url(query))
+
+    try:
+        async with aiohttp.ClientSession(
+            connector=connector,
+            timeout=timeout,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "DankShield-MovieNight/1.0",
+            },
+        ) as session:
+            for _ in range(4):
+                async with session.get(current, allow_redirects=False) as response:
+                    if response.status in {301, 302, 303, 307, 308}:
+                        location = str(response.headers.get("Location") or "").strip()
+                        if not location:
+                            raise ValueError("built-in source redirect had no location")
+                        current = _validate_request_url(urljoin(current, location))
+                        continue
+                    if response.status != 200:
+                        return [], f"{INTERNET_ARCHIVE_SOURCE_LABEL}: HTTP {response.status}"
+                    payload = await _read_json_limited(response)
+                    response_blob = payload.get("response") if isinstance(payload, Mapping) else None
+                    docs = response_blob.get("docs") if isinstance(response_blob, Mapping) else None
+                    if not isinstance(docs, list):
+                        return [], f"{INTERNET_ARCHIVE_SOURCE_LABEL}: unexpected search response"
+                    variants = [
+                        variant
+                        for item in docs[:12]
+                        if isinstance(item, Mapping)
+                        if (variant := _archive_variant_from_doc(item)) is not None
+                    ]
+                    return variants, ""
+            return [], f"{INTERNET_ARCHIVE_SOURCE_LABEL}: too many redirects"
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError) as exc:
+        return [], f"{INTERNET_ARCHIVE_SOURCE_LABEL}: {type(exc).__name__}: {exc}"
+    finally:
+        await resolver.close()
+
+
+async def probe_custom_media_source(
+    source: CustomMediaSource,
+    *,
+    query: str = "batman",
+) -> MediaSourceProbeOutcome:
+    variants, error = await _search_one(source, query)
+    if error:
+        return MediaSourceProbeOutcome(reachable=False, error=error)
+    return MediaSourceProbeOutcome(
+        reachable=True,
+        playable_results=len(variants),
+    )
+
 async def fetch_torrent_metadata(
     source_ref: str,
     *,
@@ -432,7 +568,65 @@ async def search_custom_media_sources(
     )
 
 
+def _merge_media_outcomes(
+    outcomes: tuple[MediaSourceSearchOutcome, ...],
+) -> MediaSourceSearchOutcome:
+    variants: list[ResolvedMediaVariant] = []
+    errors: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for outcome in outcomes:
+        errors.extend(outcome.errors)
+        for row in outcome.variants:
+            key = (row.title.casefold(), row.source_ref)
+            if key in seen:
+                continue
+            seen.add(key)
+            variants.append(row)
+            if len(variants) >= _MAX_TOTAL_RESULTS:
+                break
+        if len(variants) >= _MAX_TOTAL_RESULTS:
+            break
+
+    variants.sort(
+        key=lambda item: (
+            -int(item.seeds),
+            -(float(item.seeds) / float(max(1, item.leechers))),
+            int(item.leechers),
+            -int(item.peers),
+            int(item.file_size or 0),
+            item.title.casefold(),
+        )
+    )
+    return MediaSourceSearchOutcome(
+        variants=tuple(variants),
+        errors=tuple(errors[:20]),
+    )
+
+
+async def search_movie_sources(
+    guild_id: int,
+    query: str,
+) -> MediaSourceSearchOutcome:
+    builtin_result, custom = await asyncio.gather(
+        _search_builtin_internet_archive(query),
+        search_custom_media_sources(int(guild_id), query),
+    )
+    builtin_rows, builtin_error = builtin_result
+    builtin = MediaSourceSearchOutcome(
+        variants=tuple(builtin_rows),
+        errors=(builtin_error,) if builtin_error else (),
+    )
+    if custom.errors == ("No custom sources are enabled.",):
+        custom = MediaSourceSearchOutcome(variants=custom.variants)
+    return _merge_media_outcomes((builtin, custom))
+
+
 __all__ = [
+    "search_movie_sources",
+    "probe_custom_media_source",
+    "MediaSourceProbeOutcome",
+    "INTERNET_ARCHIVE_SOURCE_LABEL",
+    "INTERNET_ARCHIVE_SOURCE_ID",
     "MediaSourceSearchOutcome",
     "PublicOnlyResolver",
     "fetch_torrent_metadata",
