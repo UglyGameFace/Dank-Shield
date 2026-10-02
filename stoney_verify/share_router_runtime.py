@@ -25,6 +25,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import aiohttp
 import discord
 
+from stoney_verify.share_router_media_remux import remux_media_for_discord
 from stoney_verify.share_router_media_resolver import (
     canonicalize_media_url,
     is_public_address,
@@ -109,6 +110,7 @@ class RoutedVideo:
     file: discord.File
     source_url: str
     size_bytes: int
+    cleanup_path: Optional[Path] = None
 
 
 class _PublicOnlyDNSResolver(aiohttp.abc.AbstractResolver):
@@ -509,6 +511,33 @@ async def _prepare_native_video(
         )
         return None
 
+    if resolution.delivery in {"manifest", "merge"}:
+        staged = await remux_media_for_discord(
+            resolution,
+            max_bytes=max_bytes,
+        )
+        if staged is not None:
+            try:
+                routed_file = discord.File(
+                    str(staged.path),
+                    filename=staged.filename,
+                )
+            except Exception:
+                staged.cleanup()
+            else:
+                _log(
+                    "media resolved "
+                    f"provider={provider_label(resolution.provider)} "
+                    f"delivery={resolution.delivery} remux=stream_copy "
+                    f"bytes={staged.size_bytes}"
+                )
+                return RoutedVideo(
+                    file=routed_file,
+                    source_url=resolution.canonical_url or resolution.source_url,
+                    size_bytes=staged.size_bytes,
+                    cleanup_path=staged.path,
+                )
+
     _log(
         "media fallback "
         f"provider={provider_label(resolution.provider)} "
@@ -563,6 +592,11 @@ async def _relay_native_video_upload(
             native_video.file.close()
         except Exception:
             pass
+        if native_video.cleanup_path is not None:
+            try:
+                native_video.cleanup_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     _log(
         f"native video relayed guild={message.guild.id} source={message.channel.id} "
