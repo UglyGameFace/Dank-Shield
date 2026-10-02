@@ -40,6 +40,7 @@ COMMUNITY = (ROOT / "stoney_verify/commands_ext/public_community_tools.py").read
 DESIGN = (ROOT / "stoney_verify/commands_ext/public_design_studio.py").read_text(encoding="utf-8")
 RUNTIME = (ROOT / "stoney_verify/share_router_runtime.py").read_text(encoding="utf-8")
 RESOLVER = (ROOT / "stoney_verify/share_router_media_resolver.py").read_text(encoding="utf-8")
+REMUX = (ROOT / "stoney_verify/share_router_media_remux.py").read_text(encoding="utf-8")
 LEGACY = (ROOT / "stoney_verify/startup_guards/share_router_guard.py").read_text(encoding="utf-8")
 
 
@@ -368,6 +369,47 @@ def test_direct_memes_supported_video_uses_canonical_native_relay(monkeypatch) -
     assert key in share_runtime._RECENT_ROUTE_KEYS
 
 
+def test_native_upload_removes_remux_temp_file_after_send(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    message, _routes, channel = _direct_memes_fixture()
+    cleanup_path = tmp_path / "remuxed.mp4"
+    cleanup_path.write_bytes(b"remuxed")
+
+    class FakeFile:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    fake_file = FakeFile()
+
+    async def fake_prepare(source_message, target, routed_text):
+        assert source_message is message
+        assert target is channel
+        return SimpleNamespace(
+            file=fake_file,
+            size_bytes=7,
+            cleanup_path=cleanup_path,
+        )
+
+    monkeypatch.setattr(share_runtime, "_prepare_native_video", fake_prepare)
+
+    sent = asyncio.run(
+        share_runtime._relay_native_video_upload(
+            message,
+            channel,
+            message.content,
+            content="test",
+        )
+    )
+    assert sent is True
+    assert fake_file.closed is True
+    assert not cleanup_path.exists()
+
+
 def test_direct_memes_failure_and_duplicate_are_non_destructive(monkeypatch) -> None:
     message, routes, channel = _direct_memes_fixture()
     share_runtime._RECENT_ROUTE_KEYS.clear()
@@ -608,6 +650,13 @@ def test_runtime_native_video_relay_is_bounded_and_fail_open() -> None:
     assert "_RESOLVER_INFLIGHT" in RESOLVER
     assert "_RESOLUTION_CACHE" in RESOLVER
     assert "DANK_SHARE_ROUTER_MEDIA_EXTRACT_CONCURRENCY" in RESOLVER
+    assert "remux_media_for_discord(" in RUNTIME
+    assert 'resolution.delivery in {"manifest", "merge"}' in RUNTIME
+    assert 'cleanup_path = getattr(native_video, "cleanup_path", None)' in RUNTIME
+    assert "asyncio.create_subprocess_exec(" in REMUX
+    assert "create_subprocess_shell" not in REMUX
+    assert '"-c:v",\n            "copy"' in REMUX
+    assert "DANK_SHARE_ROUTER_MEDIA_REMUX_CONCURRENCY" in REMUX
 
 
 def test_runtime_keeps_legacy_route_storage_and_sender_permission_boundary() -> None:
