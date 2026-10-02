@@ -289,6 +289,19 @@ def test_configured_memes_target_comes_from_canonical_share_memes_route() -> Non
     )
 
 
+def test_configured_memes_target_is_guild_local() -> None:
+    message, routes, _channel = _direct_memes_fixture()
+    assert _configured_share_target_id(message.guild, routes, "share-memes") == 22
+
+    class OtherGuild:
+        id = 404
+
+        def get_channel(self, _channel_id: int):
+            return None
+
+    assert _configured_share_target_id(OtherGuild(), routes, "share-memes") == 0
+
+
 def test_direct_memes_detects_existing_inline_video_without_relay() -> None:
     attachment_message = SimpleNamespace(
         attachments=[SimpleNamespace(content_type="video/mp4", filename="clip.mp4")],
@@ -364,11 +377,22 @@ def test_direct_memes_failure_and_duplicate_are_non_destructive(monkeypatch) -> 
     monkeypatch.setattr(share_runtime, "_prepare_native_video", no_media)
     assert asyncio.run(_relay_direct_memes_video(message, routes)) is True
     assert channel.sent == []
-    assert (101, 22, _dedupe_key(message.content)) not in share_runtime._RECENT_ROUTE_KEYS
+    key = (101, 22, _dedupe_key(message.content))
+    assert key not in share_runtime._RECENT_ROUTE_KEYS
 
-    share_runtime._RECENT_ROUTE_KEYS[
-        (101, 22, _dedupe_key(message.content))
-    ] = share_runtime.time.monotonic()
+    async def rejected_upload(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(
+        share_runtime,
+        "_relay_native_video_upload",
+        rejected_upload,
+    )
+    assert asyncio.run(_relay_direct_memes_video(message, routes)) is True
+    assert channel.sent == []
+    assert key not in share_runtime._RECENT_ROUTE_KEYS
+
+    share_runtime._RECENT_ROUTE_KEYS[key] = share_runtime.time.monotonic()
     assert asyncio.run(_relay_direct_memes_video(message, routes)) is True
     assert channel.sent == []
 
@@ -394,12 +418,26 @@ def test_direct_memes_already_inline_never_calls_native_relay(monkeypatch) -> No
     assert (101, 22, _dedupe_key(message.content)) in share_runtime._RECENT_ROUTE_KEYS
 
 
-def test_direct_memes_runtime_reuses_one_listener_and_ignores_webhooks() -> None:
+def test_direct_memes_runtime_reuses_one_listener_and_canonical_upload_owner() -> None:
     assert "routes = await guild_routes(int(guild.id))" in RUNTIME
     assert "await _relay_direct_memes_video(message, routes)" in RUNTIME
-    assert 'getattr(message, "webhook_id", None) is not None' in RUNTIME
     assert RUNTIME.count('bot.add_listener(route_message, "on_message")') == 1
-    assert "_prepare_native_video(message, channel, text)" in RUNTIME
+    assert RUNTIME.count("_relay_native_video_upload(") >= 3
+    assert "native_sent = await _relay_native_video_upload(" in RUNTIME
+    assert "sent = await _relay_native_video_upload(" in RUNTIME
+
+
+def test_direct_memes_webhook_ignore_does_not_disable_proxy_webhook_routes() -> None:
+    route_lookup = RUNTIME.index(
+        "route = route_for_source(routes, int(message.channel.id))"
+    )
+    direct_webhook_guard = RUNTIME.index(
+        'if getattr(message, "webhook_id", None) is not None:'
+    )
+    direct_relay = RUNTIME.index(
+        "await _relay_direct_memes_video(message, routes)"
+    )
+    assert route_lookup < direct_webhook_guard < direct_relay
 
 
 def test_route_lookup_preserves_existing_enabled_semantics() -> None:
