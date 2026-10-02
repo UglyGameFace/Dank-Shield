@@ -42,6 +42,7 @@ from stoney_verify.media_source_resolver import (
 )
 from stoney_verify.movie_catalog import (
     CatalogMovie,
+    get_tmdb_watch_availability,
     search_tmdb_movies,
     tmdb_catalog_ready,
 )
@@ -542,8 +543,9 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
         name="🔎 Movie catalog",
         value=(
             f"{'✅' if catalog_ready else '⚠️'} **TMDB** • "
-            f"{'connected for exact title/year matching' if catalog_ready else 'not connected by the bot owner'}\n"
-            "TMDB identifies the exact movie; it does **not** provide the movie file."
+            f"{'exact title/year + where-to-watch discovery' if catalog_ready else 'not connected by the bot owner'}\n"
+            "TMDB identifies the movie and can show legal availability providers. "
+            "It does **not** provide the movie file."
         ),
         inline=False,
     )
@@ -805,6 +807,32 @@ def _candidate_embed(room: MovieNightRoom, candidate: Any) -> discord.Embed:
         poster_url = str(catalog.get("poster_url") or "").strip()
         if poster_url.startswith("https://image.tmdb.org/"):
             embed.set_thumbnail(url=poster_url)
+
+        watch = catalog.get("watch") if isinstance(catalog.get("watch"), Mapping) else {}
+        if watch:
+            watch_lines: list[str] = []
+            for key, label in (
+                ("free", "Free"),
+                ("ads", "Free with ads"),
+                ("flatrate", "Subscription"),
+                ("rent", "Rent"),
+                ("buy", "Buy"),
+            ):
+                names = watch.get(key)
+                if isinstance(names, list):
+                    clean_names = [_compact(name, 50) for name in names if _compact(name, 50)]
+                    if clean_names:
+                        watch_lines.append(f"**{label}:** {', '.join(clean_names[:8])}")
+            link = str(watch.get("link") or "").strip()
+            if link.startswith("https://www.themoviedb.org/"):
+                watch_lines.append(f"[View provider details on TMDB]({link})")
+            if watch_lines:
+                watch_lines.append("*Availability data: JustWatch via TMDB.*")
+                embed.add_field(
+                    name=f"Where to watch • {watch.get('region') or 'region'}",
+                    value="\n".join(watch_lines)[:1024],
+                    inline=False,
+                )
 
     embed.add_field(
         name="Top releases",
@@ -1819,7 +1847,7 @@ class MovieNightSetupView(_OwnedView):
         _ = button
         await _create_or_repair_movie_role(interaction)
 
-    @discord.ui.button(label="Sources", emoji="🎞️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Providers", emoji="🎞️", style=discord.ButtonStyle.primary, row=0)
     async def sources(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night_sources(interaction, replace_message=True)
@@ -2062,8 +2090,28 @@ async def _execute_search_vote(
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=True)
 
+    catalog_metadata = (
+        dict(vote.payload.get("catalog"))
+        if isinstance(vote.payload.get("catalog"), Mapping)
+        else {}
+    )
+    catalog_id = _compact(catalog_metadata.get("catalog_id"), 40)
+
     try:
-        outcome = await search_movie_sources(int(room.guild_id), query)
+        if catalog_id:
+            outcome, watch = await asyncio.gather(
+                search_movie_sources(int(room.guild_id), query),
+                get_tmdb_watch_availability(catalog_id),
+            )
+            watch_metadata = watch.to_metadata()
+            if any(
+                watch_metadata.get(key)
+                for key in ("free", "ads", "flatrate", "rent", "buy")
+            ):
+                catalog_metadata["watch"] = watch_metadata
+                vote.payload["catalog"] = dict(catalog_metadata)
+        else:
+            outcome = await search_movie_sources(int(room.guild_id), query)
     except Exception as exc:
         manager.set_vote_execution_error(
             room.room_id,
@@ -2076,12 +2124,6 @@ async def _execute_search_vote(
             embed=_room_embed(interaction, room),
             view=MovieNightHubView(int(interaction.user.id)),
         )
-
-    catalog_metadata = (
-        vote.payload.get("catalog")
-        if isinstance(vote.payload.get("catalog"), Mapping)
-        else {}
-    )
 
     active = manager.active_viewers(room)
     actor_id = (
@@ -2567,7 +2609,7 @@ class MovieNightHubView(_OwnedView):
             return await _execute_passed_vote(interaction, room, vote)
         await open_movie_night(interaction, replace_message=True)
 
-    @discord.ui.button(label="Sources", emoji="🎞️", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Providers", emoji="🎞️", style=discord.ButtonStyle.secondary, row=2)
     async def sources(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night_sources(interaction, replace_message=True)
