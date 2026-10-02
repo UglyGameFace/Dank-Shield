@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+import stoney_verify.torrent_streaming as torrent_streaming
 from stoney_verify.torrent_media_server import _validate_public_base_url
 from stoney_verify.torrent_streaming import (
     TorrentMediaManager,
@@ -657,3 +658,162 @@ def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
     assert "DANK_TORRENT_STREAM_SECRET is required" in router
     assert "media_server_ready()" in router
     assert "await manager.remove(session.token)" in router
+
+
+def _shared_session(tmp_path: Path, *, token: str = "shared") -> TorrentStreamSession:
+    root = tmp_path / token
+    root.mkdir(parents=True, exist_ok=True)
+    return TorrentStreamSession(
+        token=token,
+        secret="secret",
+        owner_id=1,
+        guild_id=1,
+        source_kind="magnet",
+        source_identity="btih:shared",
+        save_root=root,
+        handle=_FakeHandle(),
+        info=object(),
+        file_index=0,
+        file_path="movie.mp4",
+        file_name="movie.mp4",
+        file_size=1024 * 1024 * 1024,
+        file_offset=0,
+        piece_length=1024 * 1024,
+        first_piece=0,
+        last_piece=1023,
+        created_at=0.0,
+        last_access=0.0,
+    )
+
+
+def test_dynamic_capacity_uses_current_rss_and_protected_reserve(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.max_sessions = 4
+    manager.soft_session_limit = 2
+    manager.process_memory_limit_mb = 1495
+    manager.protected_memory_reserve_mb = 350
+    manager.estimated_session_memory_mb = 96
+    manager.disk_reserve_bytes = 0
+    monkeypatch.setattr(torrent_streaming, "current_rss_mb", lambda: 390.0)
+
+    snap = manager.capacity_snapshot()
+    assert snap.admission_allowed
+    assert snap.current_rss_mb == 390.0
+    assert snap.process_limit_mb == 1495
+    assert snap.protected_reserve_mb == 350
+    assert snap.memory_headroom_mb == pytest.approx(755.0)
+    assert snap.memory_slots_available == 7
+    assert snap.session_slots_available == 2
+
+
+def test_dynamic_capacity_rejects_before_core_bot_reserve_is_crossed(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.max_sessions = 4
+    manager.soft_session_limit = 2
+    manager.process_memory_limit_mb = 1495
+    manager.protected_memory_reserve_mb = 350
+    manager.estimated_session_memory_mb = 96
+    manager.disk_reserve_bytes = 0
+    monkeypatch.setattr(torrent_streaming, "current_rss_mb", lambda: 1100.0)
+
+    snap = manager.capacity_snapshot()
+    assert not snap.admission_allowed
+    assert snap.memory_slots_available == 0
+    assert "protected memory reserve" in snap.blocker.lower()
+
+    with pytest.raises(RuntimeError, match="protected memory reserve"):
+        asyncio.run(manager._reserve_start())
+
+
+def test_disk_admission_reserves_space_for_existing_and_new_media(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.max_sessions = 4
+    manager.soft_session_limit = 4
+    manager.disk_reserve_bytes = 2 * 1024 * 1024 * 1024
+    monkeypatch.setattr(torrent_streaming, "current_rss_mb", lambda: 200.0)
+    monkeypatch.setattr(
+        torrent_streaming.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(
+            total=20 * 1024 * 1024 * 1024,
+            used=17 * 1024 * 1024 * 1024,
+            free=3 * 1024 * 1024 * 1024,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="disk admission rejected"):
+        manager._assert_disk_capacity(2 * 1024 * 1024 * 1024)
+
+
+def test_identical_torrent_reuses_one_session_and_adds_room_lease(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    session = _shared_session(tmp_path)
+    session.leases.add("movie:1:10")
+    manager._sessions[session.token] = session
+    manager._identity_index[session.source_identity] = session.token
+
+    reused = asyncio.run(
+        manager._reuse_session(
+            "btih:shared",
+            lease_key="movie:2:20",
+        )
+    )
+    assert reused is session
+    assert session.leases == {"movie:1:10", "movie:2:20"}
+    assert session.reuse_hits == 1
+
+    status = manager.capacity_status()
+    assert status["active_unique_sessions"] == 1
+    assert status["total_leases"] == 2
+    assert status["shared_sessions"] == 1
+
+
+def test_releasing_one_room_does_not_delete_shared_torrent(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    session = _shared_session(tmp_path)
+    session.leases.update({"movie:1:10", "movie:2:20"})
+    manager._sessions[session.token] = session
+    manager._identity_index[session.source_identity] = session.token
+
+    released = asyncio.run(
+        manager.release_lease(
+            session.token,
+            "movie:1:10",
+            remove_if_unused=True,
+        )
+    )
+    assert released
+    assert session.token in manager._sessions
+    assert session.leases == {"movie:2:20"}
+
+    released = asyncio.run(
+        manager.release_lease(
+            session.token,
+            "movie:2:20",
+            remove_if_unused=True,
+        )
+    )
+    assert released
+    assert session.token not in manager._sessions
+    assert session.source_identity not in manager._identity_index
+
+
+def test_untracked_share_router_consumer_prevents_movie_release_from_deleting_session(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    session = _shared_session(tmp_path)
+    session.leases.add("movie:1:10")
+    session.unleased_hold = True
+    manager._sessions[session.token] = session
+    manager._identity_index[session.source_identity] = session.token
+
+    released = asyncio.run(
+        manager.release_lease(
+            session.token,
+            "movie:1:10",
+            remove_if_unused=True,
+        )
+    )
+    assert released
+    assert session.token in manager._sessions
+    assert session.leases == set()
+    assert session.unleased_hold
