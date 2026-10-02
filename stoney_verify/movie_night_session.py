@@ -64,6 +64,8 @@ async def terminate_movie_night_room(room: MovieNightRoom) -> MovieNightTerminat
             vote.resolved = True
             vote.passed = False
 
+    manager.retire_room(current.room_id)
+
     return MovieNightTerminationResult(
         had_stream=had_stream,
         lease_released=lease_released,
