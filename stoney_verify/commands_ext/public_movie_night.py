@@ -1428,9 +1428,10 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
         embed = discord.Embed(
             title=f"🎞️ {source.label}",
             description=(
-                f"ID: `{source.source_id}`\n"
                 f"State: **{'Enabled' if source.enabled else 'Disabled'}**\n"
-                f"Endpoint: {source.endpoint_url}"
+                f"Search/feed URL: {source.endpoint_url}\n\n"
+                "Use **Edit** to change the name or URL. Dank Shield keeps the internal "
+                "source identity automatically."
             ),
             color=discord.Color.blurple(),
         )
