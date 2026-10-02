@@ -657,7 +657,8 @@ def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
     assert "DANK_MEDIA_PUBLIC_BASE_URL is required" in router
     assert "DANK_TORRENT_STREAM_SECRET is required" in router
     assert "media_server_ready()" in router
-    assert "await manager.remove(session.token)" in router
+    assert "lease_key=lease_key" in router
+    assert "await manager.release_lease(" in router
 
 
 def _shared_session(tmp_path: Path, *, token: str = "shared") -> TorrentStreamSession:
