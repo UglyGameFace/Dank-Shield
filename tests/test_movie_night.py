@@ -352,6 +352,85 @@ def test_variant_selection_can_use_room_vote_winner() -> None:
     assert a.variant_id != candidate.selected_variant_id
 
 
+def test_release_variants_keep_source_provenance() -> None:
+    manager, room_id = _room_with_three_viewers()
+    candidate = manager.nominate(
+        room_id,
+        user_id=20,
+        title="Source Provenance",
+        now=105.0,
+    )
+    variant = manager.add_variant(
+        room_id,
+        candidate.candidate_id,
+        user_id=20,
+        source_ref="authorized:source:item-1",
+        source_id="family-library",
+        source_label="Family Library",
+        file_size=2_000_000_000,
+        seeds=75,
+        leechers=10,
+        peers=85,
+        now=106.0,
+    )
+
+    assert variant.source_id == "family-library"
+    assert variant.source_label == "Family Library"
+    assert variant.swarm_health["seeds"] == 75
+    assert variant.swarm_health["leechers"] == 10
+    assert variant.swarm_health["seed_leech_ratio"] == 7.5
+
+
+def test_seed_count_wins_default_tie_before_quality() -> None:
+    manager, room_id = _room_with_three_viewers()
+    candidate = manager.nominate(
+        room_id,
+        user_id=20,
+        title="Seed First",
+        now=105.0,
+    )
+    high_seed_1080 = manager.add_variant(
+        room_id,
+        candidate.candidate_id,
+        user_id=20,
+        source_ref="authorized:1080",
+        file_size=4_000_000_000,
+        seeds=120,
+        leechers=20,
+        peers=140,
+        metadata={
+            "release_name": {"source": "WEB-DL"},
+            "verified": {
+                "video": {"codec": "hevc", "width": 1920, "height": 1080, "hdr": []},
+                "audio_tracks": [{"channels": 6}],
+            },
+        },
+        now=106.0,
+    )
+    low_seed_4k = manager.add_variant(
+        room_id,
+        candidate.candidate_id,
+        user_id=30,
+        source_ref="authorized:4k",
+        file_size=10_000_000_000,
+        seeds=8,
+        leechers=2,
+        peers=10,
+        metadata={
+            "release_name": {"source": "BluRay"},
+            "verified": {
+                "video": {"codec": "hevc", "width": 3840, "height": 2160, "hdr": ["HDR10"]},
+                "audio_tracks": [{"channels": 8}],
+            },
+        },
+        now=107.0,
+    )
+
+    ranked = manager.ranked_variants(room_id, candidate.candidate_id, now=108.0)
+    assert ranked[0].variant_id == high_seed_1080.variant_id
+    assert ranked[1].variant_id == low_seed_4k.variant_id
+
+
 def test_group_buffer_corridor_tracks_shared_viewer_health() -> None:
     manager, room_id = _room_with_three_viewers()
     manager.heartbeat(
