@@ -69,6 +69,7 @@ BORING_PUBLIC_TARGET = {
     "dank",
     "captions",
     "mod",
+    "movie",
     "role",
     "ticket",
     "tickets",
@@ -198,6 +199,7 @@ def _overview_embed() -> discord.Embed:
         "`/dank` setup and the main app-style control center\n"
         "`/captions` ordinary-server Live Captions and personal voice consent\n"
         "`/mod` moderation/member center\n"
+        "`/movie` Movie Night hub, setup, group voting, and authorized torrent/media playback\n"
         "`/role` Roles & Profiles, self-service roles, and guarded staff shortcuts\n"
         "`/ticket` actions for the current ticket\n"
         "`/tickets` server-wide ticket management\n"
