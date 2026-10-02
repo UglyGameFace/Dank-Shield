@@ -2089,8 +2089,17 @@ async def _attach_torrent_media(
     if not ready["launch_ready"]:
         return await _private(
             interaction,
-            "❌ Movie Night setup is not launch-ready. Run `/movie` → **Setup** first.",
+            "❌ Movie Night setup is not launch-ready. Run /movie → Setup first.",
         )
+
+    room_manager = get_movie_night_manager()
+    room = room_manager.active_room_for_channel(int(guild.id), int(channel.id))
+    if room is not None and int(room.host_id) != int(interaction.user.id):
+        return await _private(
+            interaction,
+            "❌ Only the active Movie Night host can replace the room's media source.",
+        )
+    previous = str(room.stream_token or "") if room is not None else ""
 
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -2105,6 +2114,7 @@ async def _attach_torrent_media(
                 clean_magnet,
                 guild_id=int(guild.id),
                 owner_id=int(interaction.user.id),
+                replace_token=previous,
             )
         elif torrent is not None:
             if not is_torrent_filename(str(torrent.filename or "")):
@@ -2116,6 +2126,7 @@ async def _attach_torrent_media(
                 bytes(payload),
                 guild_id=int(guild.id),
                 owner_id=int(interaction.user.id),
+                replace_token=previous,
             )
         else:
             return await open_movie_night(interaction, replace_message=True)
@@ -2135,8 +2146,6 @@ async def _attach_torrent_media(
             view=MovieNightHubView(int(interaction.user.id)),
         )
 
-    room_manager = get_movie_night_manager()
-    room = room_manager.active_room_for_channel(int(guild.id), int(channel.id))
     if room is None:
         room = room_manager.create_room(
             guild_id=int(guild.id),
@@ -2151,15 +2160,11 @@ async def _attach_torrent_media(
             except Exception:
                 pass
     else:
-        if int(room.host_id) != int(interaction.user.id):
-            await manager.remove(session.token)
-            return await interaction.edit_original_response(
-                content="❌ Only the active Movie Night host can replace the room's media source.",
-                embed=None,
-                view=MovieNightHubView(int(interaction.user.id)),
-            )
-        previous = str(room.stream_token or "")
-        room.stream_token = session.token
+        room_manager.set_room_media(
+            room.room_id,
+            host_id=int(interaction.user.id),
+            stream_token=session.token,
+        )
         if previous and previous != session.token:
             await manager.remove(previous)
 
