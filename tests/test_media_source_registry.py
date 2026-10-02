@@ -248,3 +248,13 @@ def test_render_provider_search_url_only_builds_link_and_preserves_filters() -> 
     )
     assert "category=movies" in appended
     assert "q=Alien" in appended
+
+
+def test_render_provider_search_url_rejects_discord_button_overflow() -> None:
+    endpoint = "https://catalog.example/search?q={query}&padding=" + ("x" * 470)
+    try:
+        render_provider_search_url(endpoint, "Blade Runner")
+    except ValueError as exc:
+        assert "too long for a discord link button" in str(exc).lower()
+    else:
+        raise AssertionError("oversized external provider link was accepted")
