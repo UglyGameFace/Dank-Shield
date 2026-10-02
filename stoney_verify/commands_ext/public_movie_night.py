@@ -27,15 +27,18 @@ from stoney_verify.media_source_registry import (
     add_custom_source,
     enabled_custom_sources,
     load_media_source_registry,
+    prepare_example_search_url,
     remove_custom_source,
     save_media_source_registry,
     set_custom_source_enabled,
 )
 from stoney_verify.media_source_resolver import (
+    INTERNET_ARCHIVE_SOURCE_LABEL,
     MediaSourceSearchOutcome,
     ResolvedMediaVariant,
     fetch_torrent_metadata,
-    search_custom_media_sources,
+    probe_custom_media_source,
+    search_movie_sources,
 )
 from stoney_verify.movie_night import (
     MovieNightRoom,
@@ -357,11 +360,6 @@ def _setup_readiness(
         )
     if role is None and not can_manage_roles:
         blockers.append("Dank Shield needs Manage Roles to create the Movie Night role.")
-    if not enabled_custom_sources(source_registry):
-        warnings.append(
-            "No custom media sources are enabled. Magnet/.torrent playback still works."
-        )
-
     return {
         "role": role,
         "can_send": can_send,
@@ -527,17 +525,44 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
     embed = discord.Embed(
         title="🎞️ Movie Night Sources",
         description=(
-            "Add an authorized **HTTPS JSON search/feed URL** and Dank Shield handles the "
-            "internal source ID for you. Use `{query}` where the movie title belongs, or "
-            "Dank Shield appends `?q=` automatically. Results can point to a magnet link "
-            "or an HTTPS .torrent URL. Plain website/HTML pages are not scraped."
+            "**Movie search works without adding a feed.** Dank Shield includes a built-in "
+            "public-domain-focused movie source, and direct magnet / .torrent playback still "
+            "needs no source setup."
         ),
         color=discord.Color.blurple(),
     )
+    embed.add_field(
+        name="✅ Easiest: just search",
+        value=(
+            f"**{INTERNET_ARCHIVE_SOURCE_LABEL}** is available automatically.\n"
+            "Start a room → **Search / Vote** → type the movie title. No API key or feed URL."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🧲 Already have a magnet or .torrent?",
+        value=(
+            "Skip Sources completely. Use `/movie magnet:<link>` or attach the `.torrent` "
+            "with `/movie torrent:<file>`."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="⚙️ Advanced: add your own search API",
+        value=(
+            "Only use this for an authorized **HTTPS JSON search API/feed** you control or may use.\n"
+            "1️⃣ Search that API for **Batman** in your browser/service.\n"
+            "2️⃣ Copy the resulting search URL.\n"
+            "3️⃣ Tap **Add Custom API** and paste it.\n"
+            "Dank Shield detects common `q=`, `query=`, `search=`, `term=`, `keyword=`, or `s=` "
+            "parameters, converts the URL into a reusable search, and tests it before saving."
+        ),
+        inline=False,
+    )
     if not registry.sources:
         embed.add_field(
-            name="Configured sources",
-            value="None yet. Magnet and .torrent playback still works directly.",
+            name="📚 Custom APIs",
+            value="None added. That is completely fine; built-in search still works.",
             inline=False,
         )
     else:
@@ -545,33 +570,23 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
         for source in registry.sources:
             state = "✅" if source.enabled else "⏸️"
             lines.append(
-                f"{state} **{source.label}** • `{source.source_id}`\n"
+                f"{state} **{source.label}**\n"
                 f"↳ {source.endpoint_url[:180]}"
             )
         embed.add_field(
-            name=f"Configured sources • {len(registry.sources)}",
+            name=f"📚 Custom APIs • {len(registry.sources)}",
             value="\n".join(lines)[:4000],
             inline=False,
         )
     embed.add_field(
-        name="Expected JSON",
+        name="🔒 Custom API rule",
         value=(
-            'Example: `{"results":[{"title":"Example Movie","magnet":"magnet:?xt=...",'
-            '"seeds":42,"leechers":5}]}`\n'
-            "An HTTPS `.torrent` URL can be returned as `url` instead of `magnet`."
+            "A normal website page is not a feed. Custom APIs must use HTTPS and return JSON. "
+            "Do not put passwords, API secrets, or private-network addresses in the URL."
         ),
         inline=False,
     )
-    embed.add_field(
-        name="Network safety",
-        value=(
-            "Sources must use HTTPS, return structured JSON, cannot embed credentials, and cannot "
-            "point at localhost/private/reserved addresses. DNS destinations are re-checked before "
-            "every fetch."
-        ),
-        inline=False,
-    )
-    embed.set_footer(text=f"Revision {registry.revision} • per-server sources")
+    embed.set_footer(text=f"Built-in search ready • custom revision {registry.revision}")
     return embed
 
 
@@ -1271,7 +1286,7 @@ class CustomSourceModal(discord.ui.Modal):
         source: Optional[CustomMediaSource] = None,
     ) -> None:
         super().__init__(
-            title="Edit Movie Source" if source is not None else "Add Movie Source",
+            title="Edit Custom Movie API" if source is not None else "Add Custom Movie API",
             timeout=300,
         )
         self.owner_id = int(owner_id)
@@ -1279,15 +1294,15 @@ class CustomSourceModal(discord.ui.Modal):
         self.source_id = str(source.source_id if source is not None else "")
 
         self.label_input = discord.ui.TextInput(
-            label="Source name",
-            placeholder="Family Library",
+            label="Name (optional)",
+            placeholder="My Movies",
             default=str(source.label if source is not None else "")[:80] or None,
-            min_length=1,
+            required=False,
             max_length=80,
         )
         self.endpoint_input = discord.ui.TextInput(
-            label="HTTPS JSON search/feed URL",
-            placeholder="https://media.example.com/search?q={query}",
+            label="Paste a working search URL",
+            placeholder="https://api.example.com/search?q=batman",
             default=str(source.endpoint_url if source is not None else "")[:1000] or None,
             min_length=8,
             max_length=1000,
@@ -1308,15 +1323,46 @@ class CustomSourceModal(discord.ui.Modal):
 
         current = parse_media_source_registry(self.baseline)
         try:
+            prepared_url = prepare_example_search_url(str(self.endpoint_input.value))
+            host = str(urlsplit(prepared_url).hostname or "").strip(".")
+            fallback_label = host.split(".", 1)[0].replace("-", " ").replace("_", " ").title()
+            label = _compact(self.label_input.value, 80) or fallback_label or "Custom Movies"
             updated = add_custom_source(
                 current,
                 source_id=self.source_id,
-                label=str(self.label_input.value),
-                endpoint_url=str(self.endpoint_input.value),
+                label=label,
+                endpoint_url=prepared_url,
                 added_by=int(interaction.user.id),
             )
         except ValueError as exc:
             return await _private(interaction, f"❌ {exc}")
+
+        candidate = next(
+            (
+                item
+                for item in updated.sources
+                if (self.source_id and item.source_id == self.source_id)
+                or (not self.source_id and item.endpoint_url == prepared_url and item.label == label)
+            ),
+            None,
+        )
+        if candidate is None:
+            return await _private(interaction, "❌ Dank Shield could not prepare that custom source.")
+
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+
+        probe = await probe_custom_media_source(candidate, query="batman")
+        if not probe.reachable:
+            return await _replace(
+                interaction,
+                content=(
+                    "❌ **Custom API was not saved.** Dank Shield tested the URL and could not use it.\n"
+                    f"{probe.error}"
+                )[:2000],
+                embed=_sources_embed(current),
+                view=MovieNightSourcesView(int(interaction.user.id)),
+            )
 
         try:
             applied, _saved = await save_media_source_registry(
@@ -1325,16 +1371,32 @@ class CustomSourceModal(discord.ui.Modal):
                 updated=updated,
             )
         except Exception as exc:
-            return await _private(
+            return await _replace(
                 interaction,
-                f"❌ Movie Night source could not save safely: {type(exc).__name__}.",
+                content=f"❌ Movie Night source could not save safely: {type(exc).__name__}.",
+                embed=_sources_embed(current),
+                view=MovieNightSourcesView(int(interaction.user.id)),
             )
         if not applied:
-            return await _private(
+            return await _replace(
                 interaction,
-                "❌ Movie Night sources changed in another admin session. Refresh and try again.",
+                content="❌ Movie Night sources changed in another admin session. Refresh and try again.",
+                embed=_sources_embed(current),
+                view=MovieNightSourcesView(int(interaction.user.id)),
             )
-        await open_movie_night_sources(interaction, replace_message=True)
+
+        notice = "✅ Custom movie API tested and saved."
+        if probe.playable_results == 0:
+            notice = (
+                "⚠️ Custom API responded with valid JSON and was saved, but the Batman test "
+                "returned no playable results. Try a title you know exists in that source."
+            )
+        await _replace(
+            interaction,
+            content=notice,
+            embed=_sources_embed(updated),
+            view=MovieNightSourcesView(int(interaction.user.id)),
+        )
 
 
 class SourceActionView(_OwnedView):
@@ -1475,8 +1537,8 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
     await _replace(
         interaction,
         embed=discord.Embed(
-            title="🎞️ Manage Movie Night Source",
-            description="Choose a source to edit, enable, disable, or remove.",
+            title="⚙️ Manage Custom Movie API",
+            description="Choose a custom API to edit, enable, disable, or remove.",
             color=discord.Color.blurple(),
         ),
         view=view,
@@ -1484,7 +1546,7 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
 
 
 class MovieNightSourcesView(_OwnedView):
-    @discord.ui.button(label="Add Source", emoji="➕", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Add Custom API", emoji="➕", style=discord.ButtonStyle.success, row=0)
     async def add(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not _staff_authorized(interaction):
@@ -1497,7 +1559,7 @@ class MovieNightSourcesView(_OwnedView):
             CustomSourceModal(owner_id=self.owner_id, baseline=raw)
         )
 
-    @discord.ui.button(label="Manage Source", emoji="🛠️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Manage Custom API", emoji="🛠️", style=discord.ButtonStyle.primary, row=0)
     async def manage(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not _staff_authorized(interaction):
@@ -1949,7 +2011,7 @@ async def _execute_search_vote(
         await interaction.response.defer(ephemeral=True, thinking=True)
 
     try:
-        outcome = await search_custom_media_sources(int(room.guild_id), query)
+        outcome = await search_movie_sources(int(room.guild_id), query)
     except Exception as exc:
         manager.set_vote_execution_error(
             room.room_id,
