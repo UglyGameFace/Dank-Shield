@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
 PLAYBACK_ACTIONS = frozenset({"pause", "resume", "seek", "skip", "end"})
-PROGRAMMING_ACTIONS = frozenset({"search", "nominate", "queue", "play_next"})
+PROGRAMMING_ACTIONS = frozenset({"search", "nominate", "queue", "play_next", "play_variant"})
 ALL_ACTIONS = PLAYBACK_ACTIONS | PROGRAMMING_ACTIONS
 
 
