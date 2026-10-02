@@ -40,6 +40,7 @@ from stoney_verify.media_source_resolver import (
 from stoney_verify.movie_night import (
     MovieNightRoom,
     get_movie_night_manager,
+    movie_room_lease_key,
 )
 from stoney_verify.movie_night_web import movie_night_watch_url
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
@@ -72,10 +73,6 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 def _compact(value: Any, limit: int = 180) -> str:
     return " ".join(str(value or "").split())[:limit]
-
-
-def _movie_lease_key(guild_id: int, channel_id: int) -> str:
-    return f"movie:{int(guild_id)}:{int(channel_id)}"
 
 
 def _format_bytes(value: Any) -> str:
@@ -1723,7 +1720,7 @@ async def _start_variant_source(
             ),
         )
     previous = str(current.stream_token or "")
-    lease_key = _movie_lease_key(int(current.guild_id), int(current.channel_id))
+    lease_key = movie_room_lease_key(int(current.guild_id), int(current.channel_id))
     source_ref = str(variant.source_ref or "").strip()
 
     try:
@@ -2222,7 +2219,7 @@ async def _attach_torrent_media(
             "❌ Only the active Movie Night host can replace the room's media source.",
         )
     previous = str(room.stream_token or "") if room is not None else ""
-    lease_key = _movie_lease_key(int(guild.id), int(channel.id))
+    lease_key = movie_room_lease_key(int(guild.id), int(channel.id))
 
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=True)
