@@ -127,8 +127,9 @@ def _internet_archive_search_url(query: str) -> str:
     if not clean_query:
         raise ValueError("Movie search query is empty.")
 
+    escaped_query = clean_query.replace("\\", "\\\\").replace('"', '\\"')
     params = [
-        ("q", f'collection:feature_films AND title:("{clean_query}")'),
+        ("q", f'collection:feature_films AND title:("{escaped_query}")'),
         ("fl[]", "identifier"),
         ("fl[]", "title"),
         ("fl[]", "date"),
@@ -602,12 +603,15 @@ async def search_movie_sources(
     guild_id: int,
     query: str,
 ) -> MediaSourceSearchOutcome:
-    builtin_rows, builtin_error = await _search_builtin_internet_archive(query)
+    builtin_result, custom = await asyncio.gather(
+        _search_builtin_internet_archive(query),
+        search_custom_media_sources(int(guild_id), query),
+    )
+    builtin_rows, builtin_error = builtin_result
     builtin = MediaSourceSearchOutcome(
         variants=tuple(builtin_rows),
         errors=(builtin_error,) if builtin_error else (),
     )
-    custom = await search_custom_media_sources(int(guild_id), query)
     if custom.errors == ("No custom sources are enabled.",):
         custom = MediaSourceSearchOutcome(variants=custom.variants)
     return _merge_media_outcomes((builtin, custom))
