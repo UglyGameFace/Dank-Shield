@@ -29,7 +29,10 @@ def media_public_base_url() -> str:
 
 
 def media_bind_host() -> str:
-    return str(os.getenv("DANK_MEDIA_BIND_HOST", "127.0.0.1") or "127.0.0.1").strip()
+    # The public media server owns only health + signed media/watch routes.
+    # Binding externally by default keeps TYPE=site deployments healthy even
+    # before the operator finishes Movie Night URL/signing configuration.
+    return str(os.getenv("DANK_MEDIA_BIND_HOST", "0.0.0.0") or "0.0.0.0").strip()
 
 
 def media_bind_port() -> int:
@@ -40,7 +43,8 @@ def media_bind_port() -> int:
 
 
 def media_server_enabled() -> bool:
-    return bool(media_public_base_url())
+    raw = str(os.getenv("DANK_MEDIA_SERVER_ENABLED", "true") or "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
 
 
 def media_server_ready() -> bool:
@@ -82,14 +86,21 @@ async def start_torrent_media_server() -> bool:
         return True
 
     if not media_server_enabled():
-        print("ℹ️ Torrent media server disabled: DANK_MEDIA_PUBLIC_BASE_URL is not configured.")
+        print("ℹ️ Torrent media server disabled by DANK_MEDIA_SERVER_ENABLED=false.")
         return False
 
     _validate_public_base_url()
     manager = get_torrent_manager()
     if not manager.stream_secret:
-        raise RuntimeError(
-            "Torrent media server refused to start: DANK_TORRENT_STREAM_SECRET is required."
+        print(
+            "⚠️ Torrent media server starting without stream signing; "
+            "health remains available but media/watch access stays fail-closed "
+            "until DANK_TORRENT_STREAM_SECRET is configured."
+        )
+    if not manager.public_base_url:
+        print(
+            "⚠️ Torrent media server starting without DANK_MEDIA_PUBLIC_BASE_URL; "
+            "Site health remains available but no playback URL can be issued yet."
         )
 
     app = web.Application(client_max_size=1024 * 1024)

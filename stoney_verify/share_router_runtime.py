@@ -968,22 +968,33 @@ async def _route_torrent_media(
         _RECENT_ROUTE_KEYS[dedupe_key] = now
         return True
 
+    lease_key = (
+        f"share:{int(message.guild.id)}:{int(target.id)}:"
+        f"{int(getattr(message, 'id', 0) or 0)}"
+    )
+
     if magnet:
         session = await manager.start_magnet(
             magnet,
             guild_id=int(message.guild.id),
             owner_id=int(message.author.id),
+            lease_key=lease_key,
         )
     else:
         session = await manager.start_torrent_bytes(
             torrent_bytes,
             guild_id=int(message.guild.id),
             owner_id=int(message.author.id),
+            lease_key=lease_key,
         )
 
     stream_url = manager.stream_url(session)
     if not stream_url:
-        await manager.remove(session.token)
+        await manager.release_lease(
+            session.token,
+            lease_key,
+            remove_if_unused=True,
+        )
         raise RuntimeError(
             "Torrent metadata loaded, but DANK_MEDIA_PUBLIC_BASE_URL and a stream-signing secret "
             "must be configured before members can play the stream."
@@ -1044,7 +1055,11 @@ async def _route_torrent_media(
             allowed_mentions=discord.AllowedMentions.none(),
         )
     except Exception:
-        await manager.remove(session.token)
+        await manager.release_lease(
+            session.token,
+            lease_key,
+            remove_if_unused=True,
+        )
         raise
 
     if identity:

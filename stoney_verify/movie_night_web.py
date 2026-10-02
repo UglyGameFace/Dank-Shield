@@ -13,7 +13,11 @@ from urllib.parse import urlencode
 
 from aiohttp import web
 
-from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
+from stoney_verify.movie_night import (
+    MovieNightRoom,
+    get_movie_night_manager,
+    movie_room_lease_key,
+)
 from stoney_verify.torrent_streaming import get_torrent_manager
 
 
@@ -323,12 +327,23 @@ async def movie_night_action(request: web.Request) -> web.Response:
 
     manager = get_movie_night_manager()
     manager.join_room(room.room_id, user_id=uid)
+    stream_token = str(room.stream_token or "")
     manager.apply_host_action(
         room.room_id,
         host_id=uid,
         action=action,
         payload=action_payload,
     )
+    if action == "end" and stream_token:
+        torrent_manager = get_torrent_manager()
+        await torrent_manager.release_lease(
+            stream_token,
+            movie_room_lease_key(room.guild_id, room.channel_id),
+            remove_if_unused=True,
+        )
+        room.stream_token = ""
+        room.current_candidate_id = ""
+        room.current_variant_id = ""
     return web.json_response(await _state_payload(room, uid))
 
 

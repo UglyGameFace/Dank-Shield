@@ -40,6 +40,7 @@ from stoney_verify.media_source_resolver import (
 from stoney_verify.movie_night import (
     MovieNightRoom,
     get_movie_night_manager,
+    movie_room_lease_key,
 )
 from stoney_verify.movie_night_web import movie_night_watch_url
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
@@ -297,11 +298,15 @@ def _setup_readiness(
     pyav_ready = importlib.util.find_spec("av") is not None
     runtime_ready = bool(media_server_ready())
     storage: dict[str, Any] = {}
+    capacity: dict[str, Any] = {}
     if libtorrent_ready:
         try:
-            storage = get_torrent_manager().storage_status()
+            torrent_manager = get_torrent_manager()
+            storage = torrent_manager.storage_status()
+            capacity = torrent_manager.capacity_status(guild_id=int(guild.id))
         except Exception:
             storage = {}
+            capacity = {}
 
     blockers: list[str] = []
     warnings: list[str] = []
@@ -333,6 +338,13 @@ def _setup_readiness(
         warnings.append(
             "Torrent storage is low; larger Movie Night releases may not fit this host."
         )
+    if capacity and not bool(capacity.get("admission_allowed", False)):
+        blocker = str(capacity.get("blocker") or "").strip()
+        if blocker:
+            warnings.append(
+                "New unique Movie Night media is temporarily admission-blocked: "
+                + blocker
+            )
     if public_base and stream_secret and not runtime_ready:
         warnings.append(
             "Media settings exist, but the public media server is not currently reporting started."
@@ -361,6 +373,7 @@ def _setup_readiness(
         "pyav_ready": pyav_ready,
         "runtime_ready": runtime_ready,
         "storage": storage,
+        "capacity": capacity,
         "bind_host": bind_host,
         "bind_port": bind_port,
         "externally_bound": externally_bound,
@@ -437,8 +450,41 @@ def _setup_embed(
             inline=False,
         )
 
+    capacity = ready.get("capacity") if isinstance(ready.get("capacity"), Mapping) else {}
+    if capacity:
+        rss = capacity.get("current_rss_mb")
+        rss_text = "unknown" if rss is None else f"{float(rss):.0f} MB"
+        headroom = capacity.get("memory_headroom_mb")
+        headroom_text = (
+            "unknown"
+            if headroom is None
+            else f"{max(0.0, float(headroom)):.0f} MB"
+        )
+        embed.add_field(
+            name="5 • Media capacity",
+            value=(
+                f"Process RSS: **{rss_text} / {int(capacity.get('process_limit_mb') or 0)} MB**\n"
+                f"Protected reserve: **{int(capacity.get('protected_reserve_mb') or 0)} MB**\n"
+                f"Protected headroom: **{headroom_text}**\n"
+                f"Adaptive next-session estimate: **{int(capacity.get('estimated_session_mb') or 0)} MB** "
+                f"• samples: **{int(capacity.get('memory_samples') or 0)}**\n"
+                f"Unique torrents: **{int(capacity.get('active_unique_sessions') or 0)}** "
+                f"• leases: **{int(capacity.get('total_leases') or 0)}** "
+                f"• shared: **{int(capacity.get('shared_sessions') or 0)}**\n"
+                f"Global slots: **{int(capacity.get('session_slots_available') or 0)}** "
+                f"• soft/hard: **{int(capacity.get('soft_session_limit') or 0)}"
+                f"/{int(capacity.get('hard_session_limit') or 0)}**\n"
+                f"This server: **{int(capacity.get('guild_unique_sessions') or 0)}"
+                f"/{int(capacity.get('per_guild_limit') or 0)} unique** "
+                f"• slots: **{int(capacity.get('guild_slots_available') or 0)}**\n"
+                f"Disk reserve: **{_format_bytes(capacity.get('disk_reserve_bytes'))}** "
+                f"• committed: **{_format_bytes(capacity.get('committed_file_bytes'))}**"
+            )[:1024],
+            inline=False,
+        )
+
     embed.add_field(
-        name="5 • Search / custom sources",
+        name="6 • Search / custom sources",
         value=(
             f"Configured: **{ready['sources']}** • Enabled: **{ready['enabled_sources']}**\n"
             "Custom authorized HTTPS feeds are managed from **Sources**. "
@@ -1719,6 +1765,7 @@ async def _start_variant_source(
             ),
         )
     previous = str(current.stream_token or "")
+    lease_key = movie_room_lease_key(int(current.guild_id), int(current.channel_id))
     source_ref = str(variant.source_ref or "").strip()
 
     try:
@@ -1731,6 +1778,7 @@ async def _start_variant_source(
                 guild_id=int(guild.id),
                 owner_id=int(current.host_id),
                 replace_token=previous,
+                lease_key=lease_key,
             )
         elif source_ref.lower().startswith("https://"):
             payload = await fetch_torrent_metadata(
@@ -1742,6 +1790,7 @@ async def _start_variant_source(
                 guild_id=int(guild.id),
                 owner_id=int(current.host_id),
                 replace_token=previous,
+                lease_key=lease_key,
             )
         else:
             raise ValueError(
@@ -1762,7 +1811,11 @@ async def _start_variant_source(
 
     stream_url = torrent_manager.stream_url(session)
     if not stream_url:
-        await torrent_manager.remove(session.token)
+        await torrent_manager.release_lease(
+            session.token,
+            lease_key,
+            remove_if_unused=True,
+        )
         return await _replace(
             interaction,
             content="❌ The torrent started but no signed public stream URL could be created.",
@@ -1775,18 +1828,41 @@ async def _start_variant_source(
             ),
         )
 
+    latest_room = room_manager.get(current.room_id)
+    if (
+        latest_room is None
+        or latest_room.ended
+        or int(latest_room.host_id) != int(current.host_id)
+        or str(latest_room.stream_token or "") != previous
+    ):
+        await torrent_manager.release_lease(
+            session.token,
+            lease_key,
+            remove_if_unused=True,
+        )
+        return await _replace(
+            interaction,
+            content=(
+                "❌ Movie Night changed while this release was loading, so the stale "
+                "media result was discarded instead of overwriting the newer room state."
+            ),
+            embed=_room_embed(interaction, latest_room) if latest_room is not None else None,
+            view=MovieNightHubView(int(interaction.user.id), latest_room),
+        )
+
     room_manager.select_variant(
-        current.room_id,
+        latest_room.room_id,
         candidate.candidate_id,
         variant_id=variant.variant_id,
     )
     room_manager.set_room_media(
-        current.room_id,
-        host_id=int(current.host_id),
+        latest_room.room_id,
+        host_id=int(latest_room.host_id),
         stream_token=session.token,
         candidate_id=candidate.candidate_id,
         variant_id=variant.variant_id,
     )
+    current = latest_room
 
     merged_meta = dict(variant.metadata or {})
     merged_meta["release_name"] = dict(session.release_metadata or merged_meta.get("release_name") or {})
@@ -1796,7 +1872,11 @@ async def _start_variant_source(
     variant.file_size = int(session.file_size or variant.file_size)
 
     if previous and previous != session.token:
-        await torrent_manager.remove(previous)
+        await torrent_manager.release_lease(
+            previous,
+            lease_key,
+            remove_if_unused=True,
+        )
 
     await _replace(
         interaction,
@@ -2207,6 +2287,7 @@ async def _attach_torrent_media(
             "❌ Only the active Movie Night host can replace the room's media source.",
         )
     previous = str(room.stream_token or "") if room is not None else ""
+    lease_key = movie_room_lease_key(int(guild.id), int(channel.id))
 
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -2222,6 +2303,7 @@ async def _attach_torrent_media(
                 guild_id=int(guild.id),
                 owner_id=int(interaction.user.id),
                 replace_token=previous,
+                lease_key=lease_key,
             )
         elif torrent is not None:
             if not is_torrent_filename(str(torrent.filename or "")):
@@ -2234,6 +2316,7 @@ async def _attach_torrent_media(
                 guild_id=int(guild.id),
                 owner_id=int(interaction.user.id),
                 replace_token=previous,
+                lease_key=lease_key,
             )
         else:
             return await open_movie_night(interaction, replace_message=True)
@@ -2246,20 +2329,54 @@ async def _attach_torrent_media(
 
     stream_url = manager.stream_url(session)
     if not stream_url:
-        await manager.remove(session.token)
+        await manager.release_lease(
+            session.token,
+            lease_key,
+            remove_if_unused=True,
+        )
         return await interaction.edit_original_response(
             content="❌ Torrent started, but no signed public stream URL could be created. Check Movie Night Setup.",
             embed=None,
             view=MovieNightHubView(int(interaction.user.id)),
         )
 
+    latest_room = room_manager.active_room_for_channel(
+        int(guild.id),
+        int(channel.id),
+    )
     if room is None:
-        room = room_manager.create_room(
-            guild_id=int(guild.id),
-            channel_id=int(channel.id),
-            host_id=int(interaction.user.id),
-            stream_token=session.token,
-        )
+        if latest_room is not None:
+            await manager.release_lease(
+                session.token,
+                lease_key,
+                remove_if_unused=True,
+            )
+            return await interaction.edit_original_response(
+                content=(
+                    "❌ Another Movie Night room started while this torrent was loading. "
+                    "The stale media start was discarded safely."
+                ),
+                embed=_room_embed(interaction, latest_room),
+                view=MovieNightHubView(int(interaction.user.id), latest_room),
+            )
+        try:
+            room = room_manager.create_room(
+                guild_id=int(guild.id),
+                channel_id=int(channel.id),
+                host_id=int(interaction.user.id),
+                stream_token=session.token,
+            )
+        except Exception as exc:
+            await manager.release_lease(
+                session.token,
+                lease_key,
+                remove_if_unused=True,
+            )
+            return await interaction.edit_original_response(
+                content=f"❌ Movie Night room changed while media was loading: {exc}",
+                embed=None,
+                view=MovieNightHubView(int(interaction.user.id)),
+            )
         role = ready["role"]
         if isinstance(role, discord.Role):
             try:
@@ -2267,13 +2384,38 @@ async def _attach_torrent_media(
             except Exception:
                 pass
     else:
+        if (
+            latest_room is None
+            or latest_room.ended
+            or latest_room.room_id != room.room_id
+            or int(latest_room.host_id) != int(interaction.user.id)
+            or str(latest_room.stream_token or "") != previous
+        ):
+            await manager.release_lease(
+                session.token,
+                lease_key,
+                remove_if_unused=True,
+            )
+            return await interaction.edit_original_response(
+                content=(
+                    "❌ Movie Night changed while this torrent was loading, so the stale "
+                    "media result was discarded."
+                ),
+                embed=_room_embed(interaction, latest_room) if latest_room is not None else None,
+                view=MovieNightHubView(int(interaction.user.id), latest_room),
+            )
+        room = latest_room
         room_manager.set_room_media(
             room.room_id,
             host_id=int(interaction.user.id),
             stream_token=session.token,
         )
         if previous and previous != session.token:
-            await manager.remove(previous)
+            await manager.release_lease(
+                previous,
+                lease_key,
+                remove_if_unused=True,
+            )
 
     await interaction.edit_original_response(
         content=(

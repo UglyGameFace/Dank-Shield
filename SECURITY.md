@@ -78,6 +78,7 @@ Production rules:
   public-domain, or otherwise authorized media.
 
 On Discloud, externally reachable HTTP services are `TYPE=site` applications
-and are proxied through `0.0.0.0:8080`. A `TYPE=bot` deployment does not
-provide an externally reachable port. Do not change deployment type blindly;
-confirm the plan supports Sites before enabling the public media endpoint.
+and are proxied through `0.0.0.0:8080`. The current owner has confirmed a
+Site-capable Diamond plan, so Dank Shield's checked-in production target is now
+`TYPE=site`. The public listener remains media-only; the structured bot/admin
+API must stay on loopback.

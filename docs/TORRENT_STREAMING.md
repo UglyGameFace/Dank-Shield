@@ -79,29 +79,23 @@ Do not reuse `BOT_API_SHARED_SECRET` as the torrent stream secret.
 
 ## Discloud deployment
 
-The current production repository is configured as:
+The production repository is now configured for the owner's Site-capable
+Diamond deployment target:
 
 ```
-TYPE=bot
+TYPE=site
+MAIN=main.py
+RAM=1495
 ```
 
-Discloud Bot deployments do not expose an external HTTP port. The torrent
-engine can run there, but a member's browser/Discord client cannot reach a
-localhost-only media stream.
-
-For externally reachable playback, Discloud documents web/API/bot-with-web-
-interface deployments as `TYPE=site`, with traffic proxied to:
+External Movie Night playback uses the media-only listener:
 
 ```
 DANK_MEDIA_BIND_HOST=0.0.0.0
 DANK_MEDIA_PORT=8080
 ```
 
-A Site deployment also requires the applicable Discloud plan and a subdomain.
-Do not change the production `discloud.config` until those account-side
-requirements are confirmed.
-
-The intended final Site-style layout is:
+The layout is:
 
 - public Discloud proxy -> media-only server on `0.0.0.0:8080`;
 - internal structured bot API -> `127.0.0.1:8081`;
@@ -112,13 +106,25 @@ torrent byte streams. It does not expose ticket/member/admin actions.
 
 ## Resource defaults
 
-The current conservative defaults are designed around the existing 512 MB bot
-allocation:
+The current host target is approximately **1495 MiB RAM** with ordinary Dank
+Shield RSS around **340–390 MiB** before Movie Night load.
 
-- live torrent sessions: 1
+Movie Night no longer treats the session count as the only safety check. New
+**unique** torrents are admitted only while current RSS, the protected core-bot
+reserve, configured session limits, and free disk are healthy.
+
+Current production-oriented defaults:
+
+- protected core-bot RAM reserve: 350 MiB
+- initial estimated incremental RAM per unique torrent: 96 MiB, then adaptively learned from clean RSS deltas
+- conservative unique-torrent soft limit: 2
+- hard unique-torrent limit: 4
+- per-guild unique-torrent limit: 1
+- burst beyond the soft limit: disabled
 - torrent metadata file: 4 MiB
-- selected video file: 2 GiB
-- total torrent declared size: 4 GiB
+- selected video file: 25 GiB
+- total torrent declared size: 50 GiB
+- protected free-disk reserve: 64 GiB
 - readahead: 16 MiB
 - startup priority window: 8 MiB
 - tail priority window: 4 MiB
@@ -126,10 +132,27 @@ allocation:
 - metadata wait: 30 seconds
 - idle cleanup: 30 minutes
 - peer connection limit: 80
-- download cap: 8 MiB/s
+- download cap: 16 MiB/s
 - upload cap: 512 KiB/s
 
-Raise these only after measuring production RAM, disk, network, and peer load.
+### Shared torrent reuse
+
+Torrent identity/info-hash is indexed process-wide. Multiple Movie Night rooms
+choosing the same torrent reuse one libtorrent handle and one disk cache instead
+of starting duplicate downloads.
+
+Each Movie Night room owns a stable lease
+(`movie:<guild_id>:<channel_id>`). A room switching or ending releases only its
+lease. The underlying torrent is removed only when no tracked room still needs
+it and there is no untracked Share Router hold, or when the normal idle cleanup
+expires it.
+
+Room clocks, votes, viewers, seek state, and synchronized playback remain
+independent even when the torrent bytes are shared.
+
+The Setup panel exposes current RSS, configured memory limit/reserve, unique
+torrent count, room lease count, shared-session count, admission slots, free
+disk, disk reserve, and committed selected-file bytes.
 
 ## Share Router usage
 
@@ -163,5 +186,15 @@ Verify:
 - range requests return correct `206` boundaries;
 - disconnects do not keep writing indefinitely;
 - idle cleanup removes torrent handles and files;
-- one-session default is respected;
+- dynamic memory/disk admission rejects unsafe new unique torrents;
+- identical torrent identities reuse one shared session;
+- releasing one Movie Night lease does not break another room using the same torrent;
 - bot admin API remains private and authenticated.
+
+
+Per-guild start reservations are counted before metadata resolution completes,
+so two simultaneous requests from one guild cannot race through the fairness
+limit. The initial 96 MiB next-session estimate is an admission prior, not a
+permanent constant: clean non-overlapping unique-session starts update it with
+a conservative moving average. Current process RSS and the 350 MiB protected
+reserve remain authoritative even if the learned estimate is optimistic.
