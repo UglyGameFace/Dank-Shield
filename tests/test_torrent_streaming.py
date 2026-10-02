@@ -534,6 +534,26 @@ def test_wait_range_requires_all_requested_pieces(monkeypatch, tmp_path: Path) -
     )
 
 
+def test_one_for_one_replacement_can_start_at_capacity(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager._sessions["old-token"] = object()  # type: ignore[assignment]
+
+    asyncio.run(manager._reserve_start(replace_token="old-token"))
+    assert manager._starting == 1
+    assert "old-token" in manager._replacements_in_flight
+
+    try:
+        asyncio.run(manager._reserve_start(replace_token="old-token"))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("duplicate replacement reservation bypassed session capacity")
+
+    asyncio.run(manager._release_start(replace_token="old-token"))
+    assert manager._starting == 0
+    assert "old-token" not in manager._replacements_in_flight
+
+
 def test_live_session_capacity_counts_existing_sessions(monkeypatch, tmp_path: Path) -> None:
     manager = _manager(monkeypatch, tmp_path)
     manager._sessions["existing"] = object()  # type: ignore[assignment]
