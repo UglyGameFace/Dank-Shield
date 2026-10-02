@@ -151,8 +151,12 @@ def _canonical_share_url(value: str) -> str:
     if not host:
         return raw
     netloc = host
-    if parsed.port:
-        netloc = f"{host}:{parsed.port}"
+    try:
+        port = parsed.port
+    except ValueError:
+        return raw
+    if port:
+        netloc = f"{host}:{port}"
     return urlunsplit(
         (
             str(parsed.scheme or "").lower(),
