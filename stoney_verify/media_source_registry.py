@@ -21,6 +21,7 @@ MAX_CUSTOM_MEDIA_SOURCES = 20
 PROVIDER_TYPE_JSON = "json"
 PROVIDER_TYPE_EXTERNAL = "external"
 _PROVIDER_TYPES = {PROVIDER_TYPE_JSON, PROVIDER_TYPE_EXTERNAL}
+_DISCORD_LINK_BUTTON_URL_LIMIT = 512
 _SOURCE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 
 
@@ -193,20 +194,26 @@ def render_provider_search_url(endpoint_url: Any, query: Any) -> str:
         raise ValueError("Movie search query is empty.")
 
     if "{query}" in endpoint:
-        return endpoint.replace("{query}", quote_plus(clean_query))
-
-    parsed = urlsplit(endpoint)
-    pairs = list(parse_qsl(parsed.query, keep_blank_values=True))
-    pairs.append(("q", clean_query))
-    return urlunsplit(
-        (
-            parsed.scheme,
-            parsed.netloc,
-            parsed.path,
-            urlencode(pairs),
-            "",
+        rendered = endpoint.replace("{query}", quote_plus(clean_query))
+    else:
+        parsed = urlsplit(endpoint)
+        pairs = list(parse_qsl(parsed.query, keep_blank_values=True))
+        pairs.append(("q", clean_query))
+        rendered = urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                urlencode(pairs),
+                "",
+            )
         )
-    )
+
+    if len(rendered) > _DISCORD_LINK_BUTTON_URL_LIMIT:
+        raise ValueError(
+            "Search-link provider URL is too long for a Discord link button after rendering."
+        )
+    return rendered
 
 
 def _source_from_raw(raw: Any) -> Optional[CustomMediaSource]:
