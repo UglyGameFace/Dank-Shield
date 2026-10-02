@@ -22,13 +22,17 @@ from stoney_verify.community_pings_service import (
     validate_config,
 )
 from stoney_verify.media_source_registry import (
+    PROVIDER_TYPE_EXTERNAL,
+    PROVIDER_TYPE_JSON,
     CustomMediaSource,
     MediaSourceRegistry,
     add_custom_source,
     enabled_custom_sources,
+    enabled_external_sources,
     load_media_source_registry,
     prepare_example_search_url,
     remove_custom_source,
+    render_provider_search_url,
     save_media_source_registry,
     set_custom_source_enabled,
 )
@@ -592,11 +596,11 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
     embed.add_field(
         name="🧩 Dank Provider Lab",
         value=(
-            "Advanced owners can plug in an authorized **HTTPS JSON search API/feed**.\n"
-            "1️⃣ Search it once for **Batman**.\n"
-            "2️⃣ Copy that working search URL.\n"
-            "3️⃣ Tap **Add Provider** and paste it.\n"
-            "Dank Cinema detects common search parameters, tests the endpoint, then keeps the provider plumbing hidden."
+            "Advanced owners can add either kind of custom provider:\n"
+            "• **Add JSON Provider** — authorized HTTPS JSON results feed playable releases into Dank Engine.\n"
+            "• **Add Search Link** — opens the provider's own movie-results page without scraping it.\n"
+            "Paste a working search URL after searching once for **Batman**; Dank Cinema detects common "
+            "query parameters and keeps the internal provider identity hidden."
         ),
         inline=False,
     )
@@ -610,17 +614,36 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
         rows = []
         for source in registry.sources:
             state = "✅" if source.enabled else "⏸️"
-            rows.append(f"{state} **{source.label}**\n↳ {source.endpoint_url[:180]}")
+            mode = "JSON" if source.provider_type == PROVIDER_TYPE_JSON else "Search link"
+            rows.append(
+                f"{state} **{source.label}** • {mode}\n"
+                f"↳ {source.endpoint_url[:180]}"
+            )
+
+        visible_rows: list[str] = []
+        for index, row in enumerate(rows):
+            hidden_after = len(rows) - (index + 1)
+            suffix = f"\n… +{hidden_after} more provider(s)" if hidden_after else ""
+            candidate = "\n".join([*visible_rows, row])
+            if len(candidate) + len(suffix) > 1024:
+                break
+            visible_rows.append(row)
+
+        hidden = len(rows) - len(visible_rows)
+        provider_value = "\n".join(visible_rows)
+        if hidden:
+            provider_value += f"\n… +{hidden} more provider(s)"
         embed.add_field(
             name=f"📚 Custom Providers • {len(registry.sources)}",
-            value="\n".join(rows)[:4000],
+            value=provider_value,
             inline=False,
         )
     embed.add_field(
         name="🔒 Provider Safety",
         value=(
-            "A normal website page is not an API. Custom providers must use HTTPS and return JSON. "
-            "Do not put passwords, API secrets, or private-network addresses in the URL."
+            "**JSON providers** must use HTTPS and return structured results with playable media refs. "
+            "**Search-link providers** only open the provider's own result page and are never scraped. "
+            "Do not put passwords, API secrets, or private-network addresses in either URL."
         ),
         inline=False,
     )
@@ -1025,6 +1048,110 @@ class _OwnedView(discord.ui.View):
         return False
 
 
+class ExternalSearchResultsView(_OwnedView):
+    def __init__(
+        self,
+        owner_id: int,
+        *,
+        room_id: str,
+        query: str,
+        links: list[tuple[str, str]],
+        candidate_id: str = "",
+    ) -> None:
+        super().__init__(owner_id)
+        self.room_id = str(room_id)
+        self.query = _compact(query)
+        self.candidate_id = str(candidate_id or "")
+
+        for index, (label, url) in enumerate(links[:20]):
+            self.add_item(
+                discord.ui.Button(
+                    label=_compact(label, 80) or "Open provider",
+                    emoji="🔎",
+                    style=discord.ButtonStyle.link,
+                    url=url,
+                    row=index // 5,
+                )
+            )
+
+    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, row=4)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if self.candidate_id:
+            return await _open_candidate_detail(
+                interaction,
+                self.room_id,
+                self.candidate_id,
+            )
+        await open_movie_night(interaction, replace_message=True)
+
+
+async def _external_provider_links(
+    guild_id: int,
+    query: str,
+) -> list[tuple[str, str]]:
+    _raw, registry = await _sources_state(int(guild_id))
+    links: list[tuple[str, str]] = []
+    for source in enabled_external_sources(registry):
+        try:
+            url = render_provider_search_url(source.endpoint_url, query)
+        except ValueError:
+            continue
+        links.append((source.label, url))
+        if len(links) >= 20:
+            break
+    return links
+
+
+async def _open_external_search_results(
+    interaction: discord.Interaction,
+    *,
+    room_id: str,
+    query: str,
+    candidate_id: str = "",
+) -> bool:
+    room = get_movie_night_manager().get(room_id)
+    if room is None:
+        await _private(interaction, "❌ This Movie Night room no longer exists.")
+        return False
+
+    links = await _external_provider_links(int(room.guild_id), query)
+    if not links:
+        await _private(
+            interaction,
+            "ℹ️ No external search-link providers are enabled for this server.",
+        )
+        return False
+
+    embed = discord.Embed(
+        title="🔗 Dank Cinema • Search Elsewhere",
+        description=(
+            f"Search **{_compact(query)}** on an enabled provider's own results page.\n"
+            "These buttons only open external search pages. Dank Cinema does not scrape, "
+            "copy, or treat those pages as playable releases."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="External providers",
+        value="\n".join(f"• {label}" for label, _url in links)[:1024],
+        inline=False,
+    )
+    embed.set_footer(text=f"{_CINEMA_FOOTER} • external search")
+    await _replace(
+        interaction,
+        embed=embed,
+        view=ExternalSearchResultsView(
+            int(interaction.user.id),
+            room_id=room.room_id,
+            query=query,
+            links=links,
+            candidate_id=candidate_id,
+        ),
+    )
+    return True
+
+
 class MovieCandidateView(_OwnedView):
     def __init__(self, owner_id: int, room_id: str, candidate_id: str) -> None:
         super().__init__(owner_id)
@@ -1082,6 +1209,22 @@ class MovieCandidateView(_OwnedView):
         await _private(
             interaction,
             "🗳️ Queue vote opened. Other active viewers can vote from /movie.",
+        )
+
+    @discord.ui.button(label="Search Elsewhere", emoji="🔗", style=discord.ButtonStyle.secondary, row=1)
+    async def external_search(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        room = get_movie_night_manager().get(self.room_id)
+        if room is None:
+            return await _private(interaction, "❌ This Movie Night room no longer exists.")
+        candidate = room.candidates.get(self.candidate_id)
+        if candidate is None:
+            return await _private(interaction, "❌ That movie result no longer exists.")
+        await _open_external_search_results(
+            interaction,
+            room_id=room.room_id,
+            query=candidate.title,
+            candidate_id=candidate.candidate_id,
         )
 
     @discord.ui.button(label="Back to Results", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
@@ -1501,6 +1644,104 @@ class CustomSourceModal(discord.ui.Modal):
         )
 
 
+
+class ExternalSearchProviderModal(discord.ui.Modal):
+    def __init__(
+        self,
+        *,
+        owner_id: int,
+        baseline: Mapping[str, Any],
+        source: Optional[CustomMediaSource] = None,
+    ) -> None:
+        super().__init__(
+            title="Edit Search-Link Provider" if source is not None else "Add Search-Link Provider",
+            timeout=300,
+        )
+        self.owner_id = int(owner_id)
+        self.baseline = dict(baseline)
+        self.source_id = str(source.source_id if source is not None else "")
+
+        self.label_input = discord.ui.TextInput(
+            label="Provider name (optional)",
+            placeholder="Public Movie Catalog",
+            default=str(source.label if source is not None else "")[:80] or None,
+            required=False,
+            max_length=80,
+        )
+        self.endpoint_input = discord.ui.TextInput(
+            label="Working provider search URL",
+            placeholder="https://movies.example/search?q=batman",
+            default=str(source.endpoint_url if source is not None else "")[:1000] or None,
+            min_length=8,
+            max_length=1000,
+        )
+        self.add_item(self.label_input)
+        self.add_item(self.endpoint_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await _private(interaction, "❌ This provider editor belongs to another admin.")
+        guild = interaction.guild
+        if guild is None:
+            return await _private(interaction, "❌ Dank Cinema providers are configured inside a server.")
+        if not _staff_authorized(interaction):
+            return await _private(interaction, "❌ Manage Server or Administrator is required.")
+
+        from stoney_verify.media_source_registry import parse_media_source_registry
+
+        current = parse_media_source_registry(self.baseline)
+        try:
+            prepared_url = prepare_example_search_url(str(self.endpoint_input.value))
+            render_provider_search_url(prepared_url, "x" * 180)
+            host = str(urlsplit(prepared_url).hostname or "").strip(".")
+            fallback_label = host.split(".", 1)[0].replace("-", " ").replace("_", " ").title()
+            label = _compact(self.label_input.value, 80) or fallback_label or "External Search"
+            updated = add_custom_source(
+                current,
+                source_id=self.source_id,
+                label=label,
+                endpoint_url=prepared_url,
+                added_by=int(interaction.user.id),
+                provider_type=PROVIDER_TYPE_EXTERNAL,
+            )
+        except ValueError as exc:
+            return await _private(interaction, f"❌ {exc}")
+
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+
+        try:
+            applied, _saved = await save_media_source_registry(
+                int(guild.id),
+                expected_config=self.baseline,
+                updated=updated,
+            )
+        except Exception as exc:
+            return await _replace(
+                interaction,
+                content=f"❌ Dank Cinema search-link provider could not save safely: {type(exc).__name__}.",
+                embed=_sources_embed(current),
+                view=MovieNightSourcesView(int(interaction.user.id)),
+            )
+        if not applied:
+            return await _replace(
+                interaction,
+                content="❌ Dank Cinema providers changed in another admin session. Refresh and try again.",
+                embed=_sources_embed(current),
+                view=MovieNightSourcesView(int(interaction.user.id)),
+            )
+
+        await _replace(
+            interaction,
+            content=(
+                "✅ Search-link provider saved. Dank Cinema will open that provider's own "
+                "search-results page for the movie title; it will not scrape or ingest the page."
+            ),
+            embed=_sources_embed(updated),
+            view=MovieNightSourcesView(int(interaction.user.id)),
+        )
+
+
 class SourceActionView(_OwnedView):
     def __init__(self, owner_id: int, source_id: str) -> None:
         super().__init__(owner_id)
@@ -1554,13 +1795,20 @@ class SourceActionView(_OwnedView):
         )
         if source is None:
             return await _private(interaction, "❌ That source no longer exists.")
-        await interaction.response.send_modal(
-            CustomSourceModal(
+        modal: discord.ui.Modal
+        if source.provider_type == PROVIDER_TYPE_EXTERNAL:
+            modal = ExternalSearchProviderModal(
                 owner_id=self.owner_id,
                 baseline=raw,
                 source=source,
             )
-        )
+        else:
+            modal = CustomSourceModal(
+                owner_id=self.owner_id,
+                baseline=raw,
+                source=source,
+            )
+        await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Enable Provider", emoji="✅", style=discord.ButtonStyle.success, row=0)
     async def enable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1602,8 +1850,9 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
             title=f"🧩 Dank Provider • {source.label}",
             description=(
                 f"State: **{'Enabled' if source.enabled else 'Disabled'}**\n"
-                f"Search/feed URL: {source.endpoint_url}\n\n"
-                "Use **Edit** to change the name or URL. Dank Cinema keeps the internal "
+                f"Mode: **{'Structured JSON' if source.provider_type == PROVIDER_TYPE_JSON else 'External search link'}**\n"
+                f"Search URL: {source.endpoint_url}\n\n"
+                "Use **Edit Provider** to change the name or URL. Dank Cinema keeps the internal "
                 "source identity automatically."
             ),
             color=discord.Color.blurple(),
@@ -1618,7 +1867,10 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
         DankChoice(
             label=source.label,
             value=source.source_id,
-            description=("Enabled" if source.enabled else "Disabled"),
+            description=(
+                ("JSON • " if source.provider_type == PROVIDER_TYPE_JSON else "Search link • ")
+                + ("Enabled" if source.enabled else "Disabled")
+            ),
             emoji="✅" if source.enabled else "⏸️",
         )
         for source in registry.sources
@@ -1648,8 +1900,8 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
 
 
 class MovieNightSourcesView(_OwnedView):
-    @discord.ui.button(label="Add Provider", emoji="➕", style=discord.ButtonStyle.success, row=0)
-    async def add(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Add JSON Provider", emoji="🧩", style=discord.ButtonStyle.success, row=0)
+    async def add_json(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not _staff_authorized(interaction):
             return await _private(interaction, "❌ Manage Server or Administrator is required.")
@@ -1659,6 +1911,19 @@ class MovieNightSourcesView(_OwnedView):
         raw, _registry = await _sources_state(int(guild.id))
         await interaction.response.send_modal(
             CustomSourceModal(owner_id=self.owner_id, baseline=raw)
+        )
+
+    @discord.ui.button(label="Add Search Link", emoji="🔗", style=discord.ButtonStyle.success, row=0)
+    async def add_external(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _staff_authorized(interaction):
+            return await _private(interaction, "❌ Manage Server or Administrator is required.")
+        guild = interaction.guild
+        if guild is None:
+            return await _private(interaction, "❌ Use Movie Night inside a server.")
+        raw, _registry = await _sources_state(int(guild.id))
+        await interaction.response.send_modal(
+            ExternalSearchProviderModal(owner_id=self.owner_id, baseline=raw)
         )
 
     @discord.ui.button(label="Manage Providers", emoji="🛠️", style=discord.ButtonStyle.primary, row=0)
@@ -1676,7 +1941,7 @@ class MovieNightSourcesView(_OwnedView):
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _replace(interaction, content="Movie Night sources closed.", embed=None, view=None)
+        await _replace(interaction, content="Dank Cinema provider deck closed.", embed=None, view=None)
 
 
 async def open_movie_night_sources(
@@ -2184,6 +2449,31 @@ async def _execute_search_vote(
                     int(interaction.user.id),
                     room.room_id,
                     candidate.candidate_id,
+                ),
+            )
+
+        external_links = await _external_provider_links(int(room.guild_id), query)
+        if external_links:
+            vote.payload["external_provider_count"] = len(external_links)
+            return await _replace(
+                interaction,
+                content=(
+                    f"🔗 No connected provider returned a playable release for **{query}**, "
+                    "but external search providers are available."
+                )[:2000],
+                embed=discord.Embed(
+                    title="🔗 Dank Cinema • External Search Available",
+                    description=(
+                        "Open a provider's own search-results page below. Dank Cinema does not "
+                        "scrape or ingest those pages."
+                    ),
+                    color=discord.Color.blurple(),
+                ),
+                view=ExternalSearchResultsView(
+                    int(interaction.user.id),
+                    room_id=room.room_id,
+                    query=query,
+                    links=external_links,
                 ),
             )
 

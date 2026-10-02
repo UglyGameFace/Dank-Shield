@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from types import SimpleNamespace
 
 import discord
@@ -87,7 +88,8 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
         "Close",
     } <= _labels(setup)
     assert {
-        "Add Provider",
+        "Add JSON Provider",
+        "Add Search Link",
         "Manage Providers",
         "Back",
         "Close",
@@ -133,6 +135,78 @@ def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
     } <= _labels(actions)
 
 
+def test_external_search_provider_modal_and_result_links() -> None:
+    modal = movie_ui.ExternalSearchProviderModal(owner_id=1, baseline={})
+    assert [item.label for item in modal.children] == [
+        "Provider name (optional)",
+        "Working provider search URL",
+    ]
+
+    view = movie_ui.ExternalSearchResultsView(
+        1,
+        room_id="room",
+        query="Blade Runner",
+        links=[
+            ("Public Catalog", "https://catalog.example/search?q=Blade+Runner"),
+            ("Archive Search", "https://archive.example/find?q=Blade+Runner"),
+        ],
+    )
+    link_buttons = [
+        item
+        for item in view.children
+        if getattr(item, "style", None) is discord.ButtonStyle.link
+    ]
+    assert [item.label for item in link_buttons] == [
+        "Public Catalog",
+        "Archive Search",
+    ]
+    assert all(str(item.url).startswith("https://") for item in link_buttons)
+
+
+def test_movie_candidate_view_exposes_search_elsewhere() -> None:
+    view = movie_ui.MovieCandidateView(1, "room", "candidate")
+    assert "Search Elsewhere" in _labels(view)
+
+
+def test_external_search_provider_modal_defers_before_persistence() -> None:
+    source = inspect.getsource(movie_ui.ExternalSearchProviderModal.on_submit)
+    assert "await interaction.response.defer" in source
+    assert source.index("await interaction.response.defer") < source.index(
+        "await save_media_source_registry"
+    )
+    assert "return await _replace(" in source
+
+
+def test_provider_deck_custom_provider_field_stays_within_discord_limit() -> None:
+    registry = MediaSourceRegistry(
+        revision=20,
+        sources=tuple(
+            CustomMediaSource(
+                source_id=f"provider-{index}",
+                label=("Provider " + str(index) + " " + ("x" * 60))[:80],
+                endpoint_url=(
+                    "https://catalog.example/search?q={query}&provider="
+                    + str(index)
+                    + "&padding="
+                    + ("x" * 180)
+                ),
+                provider_type=(
+                    movie_ui.PROVIDER_TYPE_EXTERNAL
+                    if index % 2
+                    else movie_ui.PROVIDER_TYPE_JSON
+                ),
+            )
+            for index in range(20)
+        ),
+    )
+    embed = movie_ui._sources_embed(registry)
+    custom = next(
+        field for field in embed.fields if str(field.name).startswith("📚 Custom Providers")
+    )
+    assert len(str(custom.value)) <= 1024
+    assert "more provider(s)" in str(custom.value)
+
+
 def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -> None:
     monkeypatch.delenv("DANK_TMDB_READ_TOKEN", raising=False)
     embed = movie_ui._sources_embed(MediaSourceRegistry())
@@ -156,7 +230,11 @@ def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -
     assert ".torrent files" in rendered
     assert "Dank Provider Lab" in rendered
     assert "Dank Engine" in rendered
-    assert "Add Provider" in _labels(movie_ui.MovieNightSourcesView(1))
+    assert "**Add JSON Provider**" in rendered
+    assert "**Add Search Link**" in rendered
+    assert "without scraping it" in rendered
+    assert "Add JSON Provider" in _labels(movie_ui.MovieNightSourcesView(1))
+    assert "Add Search Link" in _labels(movie_ui.MovieNightSourcesView(1))
 
 
 def test_candidate_embed_shows_tmdb_watch_availability(monkeypatch) -> None:

@@ -2,12 +2,17 @@ from __future__ import annotations
 
 from stoney_verify.media_source_registry import (
     MEDIA_SOURCE_REGISTRY_KEY,
+    PROVIDER_TYPE_EXTERNAL,
+    PROVIDER_TYPE_JSON,
     MediaSourceRegistry,
     add_custom_source,
     enabled_custom_sources,
+    enabled_external_sources,
+    enabled_structured_sources,
     parse_media_source_registry,
     prepare_example_search_url,
     remove_custom_source,
+    render_provider_search_url,
     set_custom_source_enabled,
 )
 
@@ -181,3 +186,75 @@ def test_example_search_url_rejects_ambiguous_existing_query_string() -> None:
         assert "could not find the movie-search part" in str(exc).lower()
     else:
         raise AssertionError("ambiguous example search URL was accepted")
+
+
+
+def test_external_search_provider_round_trip_and_partitioning() -> None:
+    registry = add_custom_source(
+        MediaSourceRegistry(),
+        label="Public Catalog",
+        endpoint_url="https://catalog.example/search?q={query}",
+        added_by=7,
+        provider_type=PROVIDER_TYPE_EXTERNAL,
+    )
+    registry = add_custom_source(
+        registry,
+        label="JSON Movies",
+        endpoint_url="https://api.example/search?q={query}",
+        added_by=7,
+        provider_type=PROVIDER_TYPE_JSON,
+    )
+
+    parsed = parse_media_source_registry(
+        {MEDIA_SOURCE_REGISTRY_KEY: registry.to_payload()}
+    )
+    assert len(parsed.sources) == 2
+    assert len(enabled_external_sources(parsed)) == 1
+    assert len(enabled_structured_sources(parsed)) == 1
+    assert enabled_external_sources(parsed)[0].label == "Public Catalog"
+    assert enabled_structured_sources(parsed)[0].label == "JSON Movies"
+
+
+def test_legacy_provider_without_type_defaults_to_structured_json() -> None:
+    parsed = parse_media_source_registry(
+        {
+            MEDIA_SOURCE_REGISTRY_KEY: {
+                "version": 1,
+                "revision": 3,
+                "sources": [
+                    {
+                        "source_id": "legacy",
+                        "label": "Legacy",
+                        "endpoint_url": "https://api.example/search?q={query}",
+                        "enabled": True,
+                    }
+                ],
+            }
+        }
+    )
+    assert parsed.sources[0].provider_type == PROVIDER_TYPE_JSON
+    assert enabled_structured_sources(parsed) == parsed.sources
+
+
+def test_render_provider_search_url_only_builds_link_and_preserves_filters() -> None:
+    assert render_provider_search_url(
+        "https://catalog.example/search?q={query}&type=movie",
+        "Blade Runner",
+    ) == "https://catalog.example/search?q=Blade+Runner&type=movie"
+
+    appended = render_provider_search_url(
+        "https://catalog.example/search?category=movies",
+        "Alien",
+    )
+    assert "category=movies" in appended
+    assert "q=Alien" in appended
+
+
+def test_render_provider_search_url_rejects_discord_button_overflow() -> None:
+    endpoint = "https://catalog.example/search?q={query}&padding=" + ("x" * 470)
+    try:
+        render_provider_search_url(endpoint, "Blade Runner")
+    except ValueError as exc:
+        assert "too long for a discord link button" in str(exc).lower()
+    else:
+        raise AssertionError("oversized external provider link was accepted")
