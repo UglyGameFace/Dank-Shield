@@ -186,6 +186,7 @@ DANK_MOVIE_NIGHT_MEMORY_RESERVE_MB=350
 DANK_TORRENT_ESTIMATED_SESSION_MB=96
 DANK_TORRENT_SOFT_SESSION_LIMIT=2
 DANK_TORRENT_MAX_SESSIONS=4
+DANK_TORRENT_MAX_UNIQUE_PER_GUILD=1
 DANK_TORRENT_ALLOW_BURST=false
 
 DANK_TORRENT_MAX_METADATA_BYTES=4194304
@@ -256,3 +257,12 @@ Movie Night/watch access remains fail-closed, while Discloud can still see a
 healthy Site process and `/movie → Setup` can report the missing configuration.
 Set `DANK_MEDIA_SERVER_ENABLED=false` only if you intentionally want to disable
 the Site listener.
+
+
+Per-guild fairness defaults to one unique torrent per guild
+(`DANK_TORRENT_MAX_UNIQUE_PER_GUILD=1`) so one guild cannot consume every
+unique-torrent slot on the current host. Reusing an already-active identical
+torrent does not create another global unique torrent. The next-session memory
+estimate begins at 96 MiB and is adjusted conservatively from clean,
+non-overlapping production RSS deltas; current RSS remains the authoritative
+admission guard.
