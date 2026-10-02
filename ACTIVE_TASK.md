@@ -63,6 +63,26 @@ No unrelated task is active.
 
 ---
 
+## Previous completed Dank Cinema provider follow-up
+
+**DANK-SHIELD-MOVIE-NIGHT-EASY-SOURCES / dual provider modes**
+
+PR #398 merged to production `main` as:
+`d0b7b9cc34ab4725bccf7c12526409bb75539d8e`.
+
+That merged baseline includes:
+- zero-setup TMDB catalog matching and JustWatch availability;
+- built-in Internet Archive Feature Films playable search;
+- direct magnet/.torrent playback;
+- JSON Provider and external Search Link modes;
+- acknowledgement-before-persistence on Search Link setup;
+- Discord link-button URL-budget validation;
+- bounded Provider Deck field rendering and dual-mode guidance.
+
+At the #397 task transition, post-merge main CI #3533 was still running. Same-SHA production/mobile Dank Cinema canary remains an operator acceptance item and is not represented as completed evidence here.
+
+---
+
 ## Previous completed Movie Night follow-up
 
 **DANK-SHIELD-MOVIE-NIGHT-FOLLOWUP — simple custom-source UX + complete session termination**
