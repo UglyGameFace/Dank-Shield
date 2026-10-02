@@ -2,80 +2,62 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-MOVIE-NIGHT-EASY-SOURCES — zero-setup catalog + provider search**
+**DANK-SHIELD-397 — Share Router parity for direct memes-channel video posts**
 
 Production baseline:
-`main@a88f19441476a3fa5ee47b87bbf09f856a4d8690` (PR #396 merged).
+`main@d0b7b9cc34ab4725bccf7c12526409bb75539d8e` (PR #398 merged).
 
 Active branch:
-`feat/dank-cinema-dual-provider-modes`
+`fix/share-router-direct-memes-inline-video`
 
 Status:
-**Implementation in progress; validation pending.**
+**Implementation complete on branch; exact-head validation pending.**
 
 ### Scope / required outcome
 
-1. Preserve the canonical Movie Night torrent runtime, direct magnet playback, direct `.torrent` playback, voting, shared leases, and session termination.
-2. Make normal Movie Night title search work **without requiring a server owner to obtain or configure a feed URL**.
-3. Add deployment-level **TMDB catalog matching** so users can choose the exact movie/title/year/poster without guild owners handling API URLs or credentials.
-4. Add TMDB/JustWatch **where-to-watch discovery** for the selected catalog movie, with explicit JustWatch attribution; this is informational and must not be treated as a direct playback URL.
-5. Add one built-in, no-key playable search provider limited to Internet Archive's `feature_films` collection, returning Archive-hosted `.torrent` references into the existing variant/playback pipeline.
-6. Keep built-in search and custom source results merged into the existing candidate/release ranking model. Do not create a second playback stack.
-7. Keep direct host-supplied magnet and `.torrent` input as universal provider-independent fallback paths.
-8. Demote custom feeds to **Advanced Custom API** setup instead of presenting them as required.
-9. Let an admin paste a working example search URL instead of hand-writing `{query}`; detect common search parameters and test the endpoint before saving.
-10. Preserve HTTPS-only, no embedded credentials, private-network blocking, DNS revalidation, response-size caps, redirect validation, and guild-config CAS ownership.
-11. Do not store the TMDB deployment token in guild config or expose it in Discord UI.
-12. Do not add provider-specific scraping/reverse-engineering for unauthorized streaming sites. Provider architecture remains compatible with future authorized APIs/personal libraries once their credential storage is designed safely.
-13. Brand the entire public surface as **Dank Cinema** so catalog, provider, queue, result, direct-media, and setup flows feel native to Dank Shield while preserving required third-party attribution and source identities.
-14. Support **both provider modes**: structured JSON providers feed normalized playable releases into Dank Engine, while external search-link providers open the provider's own query-results page without scraping or ingesting HTML.
-15. Keep external search-link providers separate from playback results and never treat a web page as a playable release.
-16. Add regression coverage for TMDB identity/watch metadata, built-in search scoping, Archive torrent-reference normalization, automatic example-URL conversion, provider-mode migration/partitioning, external search rendering, zero-setup provider UI, Dank Cinema branding, and aggregate search behavior.
+1. Reuse the canonical Share Router native-video extraction/download/upload path.
+2. Apply direct-post enhancement only to the guild-configured destination of the canonical `share-memes` route.
+3. Do not add another listener, downloader, provider extractor, or guild-specific channel setting.
+4. Leave the member's original memes-channel message untouched on success or failure.
+5. Skip bot/webhook messages and avoid loops.
+6. If Discord already renders a video attachment/embed inline, do not repost it.
+7. Reuse the existing recent-route dedupe identity so proxy-routed and directly-posted copies suppress each other.
+8. Preserve existing upload-size, timeout, trusted-host, Attach Files, and extraction limits.
+9. Keep unsupported/extraction-failed media non-destructive and unmarked so a later Share Router proxy attempt can still work.
+10. Add regression coverage for configured-route discovery, already-inline detection, successful relay, extraction failure, dedupe, one-listener ownership, and webhook exclusion.
 
 ### Findings / root cause
 
-- The merged source UI still made **custom JSON feeds** look like the normal path even though most server owners do not already have one.
-- Obtaining a reusable API/feed URL is not consistently easy, so the fastest safe path is a built-in no-key provider plus direct magnet/.torrent playback.
-- The resolver already has the correct public-network safety boundary and one canonical result model, so the fix belongs there rather than adding another scraper/runtime.
-- Existing custom source URLs can stay compatible; only the admin onboarding path needs automatic query-template detection and pre-save testing.
+- `route_message()` previously returned immediately whenever the current channel was not a configured proxy source.
+- The real memes destination already exists in guild-aware Share Router state as the target of the canonical `share-memes` route, so a new setting would duplicate authority.
+- `_prepare_native_video()` already owns trusted Discord/proxy video discovery, X extraction, bounded downloading, upload-size limits, and Attach Files checks.
+- `_RECENT_ROUTE_KEYS` already keys dedupe by guild + destination + canonical source identity, so the direct destination path can share dedupe with proxy routing.
 
-### Execution path / changes so far
+### Execution path / changes
 
-- `stoney_verify/movie_catalog.py`: added deployment-level TMDB exact-movie search plus region-scoped legal availability discovery from TMDB/JustWatch; catalog metadata is separate from playback media.
-- `stoney_verify/media_source_registry.py`: added working-search-URL normalization for common query parameters.
-- `stoney_verify/media_source_resolver.py`: added built-in Internet Archive Feature Films search, custom endpoint probing, and aggregate built-in + custom search.
-- `stoney_verify/commands_ext/public_movie_night.py`: provider screen now separates catalog, playable built-in, direct magnet/.torrent, and advanced custom APIs; Search / Vote can use TMDB to choose the exact movie before searching playback providers.
-- Catalog-only matches remain usable even when no provider has a release; the host can attach a magnet or `.torrent` afterward.
-- Existing custom API management remains Edit / Enable / Disable / Remove through the canonical guild registry.
-- `.env.example` and production docs now define `DANK_TMDB_READ_TOKEN` and `DANK_TMDB_WATCH_REGION`.
-- Public Movie Night UX is now branded as **Dank Cinema**: **Dank Catalog**, **Dank Watch**, **Dank Archive**, **Dank Direct**, **Dank Engine**, and **Dank Provider Lab**. Underlying providers remain explicitly identified where attribution or source provenance matters.
-- Custom provider registry now has backward-compatible provider modes: **JSON** for structured/playable resolver input and **external** for browser search-result links. Legacy saved providers default to JSON.
-- Provider Deck now exposes **Add JSON Provider** and **Add Search Link**. External links are query-templated but never fetched by Dank Shield.
-- Movie candidate pages expose **Search Elsewhere**, and searches with no playable result can fall back to enabled external provider buttons without converting those pages into releases.
-- Search-link provider modal acknowledgement now occurs before the guild-config CAS write; success, persistence failure, and CAS-conflict paths all terminate by editing the deferred original response instead of risking a Discord interaction timeout or orphaned thinking state.
-- External provider links now enforce Discord's 512-character link-button URL limit; setup validates against the full supported 180-character query budget so a provider cannot save successfully and later fail only when the Search Elsewhere view renders.
-- Provider Deck guidance now matches the actual split controls and explains both **Add JSON Provider** and **Add Search Link** instead of retaining the pre-split “Add Provider” instructions.
-- Custom-provider listing now respects Discord's 1,024-character embed field-value limit and summarizes hidden providers instead of allowing a large registry to make Provider Deck rendering fail.
-- Regression coverage is being extended in the catalog, media-source, and public Movie Night test suites.
+- `stoney_verify/share_router_runtime.py`
+  - resolves the configured memes destination from the canonical Share Router route;
+  - detects already-inline video attachments/embeds;
+  - adds a direct-memes relay path that calls the existing `_prepare_native_video()` owner;
+  - replies with the uploaded native video and explicit member attribution while leaving the source post intact;
+  - records the same destination/source dedupe key only after a successful relay or when Discord already supplied inline video;
+  - leaves unsupported/extraction-failed media untouched and unmarked;
+  - ignores webhook-authored messages in addition to bot-authored messages;
+  - keeps one `route_message` listener.
+- `tests/test_share_router_native_runtime.py`
+  - covers canonical `share-memes` target discovery versus unrelated same-name channels;
+  - covers existing inline-video detection;
+  - verifies supported direct video uses the canonical native relay and closes the file;
+  - verifies extraction failure leaves the original path untouched/unmarked;
+  - verifies recent-route dedupe suppresses duplicate relay;
+  - locks one-listener ownership and webhook exclusion.
 
 ### Validation / cleanup / blockers
 
 Pending before completion claim:
-- targeted source/Movie Night tests;
-- full repository CI at exact PR head;
-- branch-vs-main diff and import/dead-reference review;
-- production canary after merge/deploy remains an owner runtime check.
-
-Latest validation findings:
-- review of the first PR #398 head found the new Search Link modal could call `save_media_source_registry()` before acknowledging Discord; the modal now defers before persistence and terminates the deferred original response on success/failure/conflict;
-- review also found external provider templates could be accepted up to 1000 characters even though Discord link-button URLs are capped at 512; the renderer now rejects overflow and setup validates using the maximum supported query length;
-- regression coverage locks both interaction acknowledgement ordering and the Discord button URL budget;
-- regression coverage also fills the registry to its 20-provider cap and proves the custom-provider embed field remains within Discord's 1,024-character field-value budget;
-- all earlier-head CI results are superseded; exact-head CI for the current branch head is required before merge.
-
-Merged baseline:
-- PR #396 merged after all exact-head workflows passed at `eb75bacc4b479a0ed0a896cb4c1b695a068bea98`;
-- the current branch contains only the post-merge dual-provider follow-up requested after that merge.
+- exact-head focused/full GitHub CI;
+- branch-vs-main final diff review;
+- post-merge production Android canary with a supported X/video link posted directly into the configured memes destination.
 
 No unrelated task is active.
 
