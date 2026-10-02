@@ -50,6 +50,14 @@ _TRUSTED_VIDEO_HOSTS = {
     "media.tenor.com",
     "i.giphy.com",
 }
+_X_EXTRACT_CONCURRENCY = max(
+    1,
+    min(int(os.getenv("DANK_SHARE_ROUTER_X_EXTRACT_CONCURRENCY", "2") or "2"), 4),
+)
+_X_EXTRACT_SEMAPHORE = asyncio.Semaphore(_X_EXTRACT_CONCURRENCY)
+_X_VIDEO_CACHE: dict[str, tuple[float, Optional[str]]] = {}
+_X_VIDEO_CACHE_TTL_SECONDS = 15 * 60.0
+_X_VIDEO_NEGATIVE_CACHE_TTL_SECONDS = 90.0
 
 # Keep the historical path so a deployed guild does not have to rebuild routes
 # merely because ownership moved out of startup_guards.
@@ -290,6 +298,161 @@ def _share_video_limit_bytes(guild: discord.Guild) -> int:
     return configured
 
 
+def _first_x_status_url(text: str) -> str:
+    for raw in URL_RE.findall(text or ""):
+        canonical = _canonical_share_url(raw)
+        if _x_status_parts(canonical) is not None:
+            return canonical
+    return ""
+
+
+def _iter_extracted_video_entries(info: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(info, Mapping):
+        return []
+    entries = info.get("entries")
+    if isinstance(entries, (list, tuple)):
+        flattened: list[Mapping[str, Any]] = []
+        for entry in entries:
+            flattened.extend(_iter_extracted_video_entries(entry))
+        return flattened
+    return [info]
+
+
+def _select_progressive_video_url(
+    info: Any,
+    *,
+    max_bytes: int,
+) -> str:
+    candidates: list[tuple[tuple[int, int, float, int], str]] = []
+
+    for entry in _iter_extracted_video_entries(info):
+        formats = entry.get("formats")
+        pool: list[Mapping[str, Any]] = []
+        if isinstance(formats, list):
+            pool.extend(item for item in formats if isinstance(item, Mapping))
+        pool.append(entry)
+
+        for fmt in pool:
+            url = _safe_str(fmt.get("url"))
+            if not url or not _trusted_video_url(url):
+                continue
+
+            protocol = _safe_str(fmt.get("protocol")).lower()
+            if protocol and protocol not in {"http", "https"}:
+                continue
+
+            ext = _safe_str(fmt.get("ext")).lower()
+            if ext and ext not in {"mp4", "webm", "mov"}:
+                continue
+
+            vcodec = _safe_str(fmt.get("vcodec")).lower()
+            if vcodec == "none":
+                continue
+
+            known_size = _safe_int(
+                fmt.get("filesize") or fmt.get("filesize_approx"),
+                0,
+            )
+            if known_size > max_bytes > 0:
+                continue
+
+            acodec = _safe_str(fmt.get("acodec")).lower()
+            has_audio = 0 if acodec == "none" else 1
+            height = _safe_int(fmt.get("height"), 0)
+            try:
+                tbr = float(fmt.get("tbr") or 0.0)
+            except Exception:
+                tbr = 0.0
+
+            # Prefer combined A/V, then resolution/bitrate. Unknown-size media
+            # is allowed because the actual relay is still hard-capped while
+            # streaming and fails open to the source link.
+            size_score = -known_size if known_size > 0 else 0
+            candidates.append(((has_audio, height, tbr, size_score), url))
+
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def _extract_x_video_url_sync(status_url: str, max_bytes: int) -> str:
+    canonical = _canonical_share_url(status_url)
+    if _x_status_parts(canonical) is None:
+        return ""
+
+    try:
+        import yt_dlp
+    except Exception:
+        return ""
+
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noplaylist": True,
+        "cachedir": False,
+        "socket_timeout": 6,
+        "retries": 1,
+        "extractor_retries": 1,
+        "fragment_retries": 0,
+    }
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(canonical, download=False)
+    except Exception:
+        return ""
+
+    return _select_progressive_video_url(info, max_bytes=max_bytes)
+
+
+async def _extract_x_video_url(status_url: str, *, max_bytes: int) -> str:
+    canonical = _canonical_share_url(status_url)
+    status = _x_status_parts(canonical)
+    if status is None:
+        return ""
+
+    cache_key = f"x-status:{status[1]}"
+    now = time.monotonic()
+    cached = _X_VIDEO_CACHE.get(cache_key)
+    if cached is not None:
+        expires_at, value = cached
+        if now < expires_at:
+            return value or ""
+        _X_VIDEO_CACHE.pop(cache_key, None)
+
+    async with _X_EXTRACT_SEMAPHORE:
+        # Recheck after waiting for the semaphore so concurrent shares of the
+        # same status do not all hit X independently.
+        now = time.monotonic()
+        cached = _X_VIDEO_CACHE.get(cache_key)
+        if cached is not None:
+            expires_at, value = cached
+            if now < expires_at:
+                return value or ""
+            _X_VIDEO_CACHE.pop(cache_key, None)
+
+        try:
+            extracted = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _extract_x_video_url_sync,
+                    canonical,
+                    int(max_bytes),
+                ),
+                timeout=10.0,
+            )
+        except (asyncio.TimeoutError, Exception):
+            extracted = ""
+
+        ttl = (
+            _X_VIDEO_CACHE_TTL_SECONDS
+            if extracted
+            else _X_VIDEO_NEGATIVE_CACHE_TTL_SECONDS
+        )
+        _X_VIDEO_CACHE[cache_key] = (time.monotonic() + ttl, extracted or None)
+        return extracted
+
+
 def _share_video_timeout_seconds() -> float:
     try:
         raw = float(
@@ -398,6 +561,7 @@ async def _download_trusted_video(
 async def _prepare_native_video(
     message: discord.Message,
     target: discord.TextChannel,
+    routed_text: str,
 ) -> Optional[RoutedVideo]:
     try:
         me = target.guild.me
@@ -409,10 +573,23 @@ async def _prepare_native_video(
         return None
 
     max_bytes = _share_video_limit_bytes(message.guild)
+
+    # Fast path: use a real video URL Discord already supplied.
     for candidate in _video_source_urls(message):
         routed = await _download_trusted_video(candidate, max_bytes=max_bytes)
         if routed is not None:
             return routed
+
+    # X commonly gives Discord only a static preview image. When that happens,
+    # extract the real progressive video URL from the canonical X status itself.
+    status_url = _first_x_status_url(routed_text)
+    if status_url:
+        candidate = await _extract_x_video_url(status_url, max_bytes=max_bytes)
+        if candidate:
+            routed = await _download_trusted_video(candidate, max_bytes=max_bytes)
+            if routed is not None:
+                return routed
+
     return None
 
 
@@ -799,7 +976,7 @@ async def route_message(message: discord.Message) -> None:
             _RECENT_ROUTE_KEYS[dedupe] = now
 
         if not duplicate:
-            native_video = await _prepare_native_video(message, target)
+            native_video = await _prepare_native_video(message, target, text)
             routed_text = text
             if native_video is not None:
                 # Keep the source URL clickable without asking Discord to render
