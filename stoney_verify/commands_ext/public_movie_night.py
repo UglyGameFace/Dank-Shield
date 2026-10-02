@@ -41,6 +41,7 @@ from stoney_verify.movie_night import (
     MovieNightRoom,
     get_movie_night_manager,
 )
+from stoney_verify.movie_night_web import movie_night_watch_url
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from stoney_verify.torrent_media_server import (
     media_bind_host,
@@ -1718,7 +1719,7 @@ async def _start_variant_source(
             f"Full progressive stream: {stream_url}"
         )[:2000],
         embed=_release_embed(current, candidate, variant),
-        view=MovieNightHubView(int(interaction.user.id)),
+        view=MovieNightHubView(int(interaction.user.id), current),
     )
 
 
@@ -1948,6 +1949,25 @@ def _latest_open_vote(room: MovieNightRoom) -> Any:
 
 
 class MovieNightHubView(_OwnedView):
+    def __init__(
+        self,
+        owner_id: int,
+        room: Optional[MovieNightRoom] = None,
+    ) -> None:
+        super().__init__(owner_id)
+        if room is not None and room.stream_token:
+            watch_url = movie_night_watch_url(room.room_id, int(owner_id))
+            if watch_url:
+                self.add_item(
+                    discord.ui.Button(
+                        label="Watch",
+                        emoji="▶️",
+                        style=discord.ButtonStyle.link,
+                        url=watch_url,
+                        row=3,
+                    )
+                )
+
     @discord.ui.button(label="Start / Join", emoji="🎬", style=discord.ButtonStyle.success, row=0)
     async def start_join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -2063,7 +2083,7 @@ async def open_movie_night(
             user_id=int(interaction.user.id),
         )
     embed = _room_embed(interaction, room)
-    view = MovieNightHubView(int(interaction.user.id))
+    view = MovieNightHubView(int(interaction.user.id), room)
     if replace_message:
         await _replace(interaction, embed=embed, view=view)
     else:
@@ -2174,7 +2194,7 @@ async def _attach_torrent_media(
             f"Full progressive stream: {stream_url}"
         )[:2000],
         embed=_room_embed(interaction, room),
-        view=MovieNightHubView(int(interaction.user.id)),
+        view=MovieNightHubView(int(interaction.user.id), room),
         allowed_mentions=_ALLOWED_NONE,
     )
 
