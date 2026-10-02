@@ -48,7 +48,7 @@ Expected Home composition:
 🛡️ DANK SHIELD
 CONTROL CENTER
 ━━━━━━━━━━━━━━━━━━━━
-🧭 11 sections  •  ✨ 26 destinations
+🧭 11 sections  •  ✨ 27 destinations
 
 [ 🧭 Choose a section… ▾ ]
   ⚙️ Setup & Server Settings
@@ -118,6 +118,7 @@ Examples:
 - `invite shield` → Protection
 - `ping roles` → Community & Pings Manager
 - `share router` → Share Router
+- `movie night` / `watch party` → Movie Night
 - `member setup manager` → Member Setup Manager
 - `captions` → Live Captions
 - `channel fonts` → Server Design
