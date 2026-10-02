@@ -116,9 +116,10 @@ reserve, configured session limits, and free disk are healthy.
 Current production-oriented defaults:
 
 - protected core-bot RAM reserve: 350 MiB
-- estimated incremental RAM per unique torrent: 96 MiB
+- initial estimated incremental RAM per unique torrent: 96 MiB, then adaptively learned from clean RSS deltas
 - conservative unique-torrent soft limit: 2
 - hard unique-torrent limit: 4
+- per-guild unique-torrent limit: 1
 - burst beyond the soft limit: disabled
 - torrent metadata file: 4 MiB
 - selected video file: 25 GiB
@@ -189,3 +190,11 @@ Verify:
 - identical torrent identities reuse one shared session;
 - releasing one Movie Night lease does not break another room using the same torrent;
 - bot admin API remains private and authenticated.
+
+
+Per-guild start reservations are counted before metadata resolution completes,
+so two simultaneous requests from one guild cannot race through the fairness
+limit. The initial 96 MiB next-session estimate is an admission prior, not a
+permanent constant: clean non-overlapping unique-session starts update it with
+a conservative moving average. Current process RSS and the 350 MiB protected
+reserve remain authoritative even if the learned estimate is optimistic.
