@@ -139,6 +139,19 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
 
     stream_url = torrent_manager.stream_url(session, ttl_seconds=21600) if session is not None else ""
     torrent_status = torrent_manager.status(session) if session is not None else {}
+    viewer = room.viewers.get(int(user_id))
+    sync_ready = bool(
+        int(user_id) == int(room.host_id)
+        or (viewer is not None and viewer.sync_ready)
+    )
+    sync_status = (
+        "host"
+        if int(user_id) == int(room.host_id)
+        else "synced"
+        if sync_ready
+        else "joining"
+    )
+    buffer_quorum = movie_manager.buffer_quorum_viewers(room)
 
     return {
         "ok": True,
@@ -150,6 +163,10 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "is_host": int(user_id) == int(room.host_id),
         "host_active": movie_manager.host_active(room),
         "viewer_count": len(movie_manager.active_viewers(room)),
+        "buffer_quorum_count": len(buffer_quorum),
+        "sync_status": sync_status,
+        "sync_ready": sync_ready,
+        "sync_target_position": round(room.current_position(), 3),
         "stream_token": room.stream_token,
         "stream_url": stream_url,
         "torrent": {
@@ -194,14 +211,57 @@ async def movie_night_heartbeat(request: web.Request) -> web.Response:
     paused = bool(payload.get("paused", True))
 
     torrent_manager = get_torrent_manager()
+    movie_manager = get_movie_night_manager()
     session = await torrent_manager.get(room.stream_token) if room.stream_token else None
+    viewer_before = room.viewers.get(int(uid))
+    joining = bool(
+        session is not None
+        and int(uid) != int(room.host_id)
+        and (viewer_before is None or not viewer_before.sync_ready)
+    )
+
     byte_position = 0
     buffered_byte = 0
+    sync_buffer_target_seconds = 0.0
     if session is not None and duration > 0:
         byte_position = int(min(1.0, position / duration) * session.file_size)
         buffered_byte = int(min(1.0, buffered / duration) * session.file_size)
 
-    movie_manager = get_movie_night_manager()
+        if joining:
+            target_seconds = max(0.0, room.current_position())
+            target_byte = int(
+                min(1.0, target_seconds / duration) * session.file_size
+            )
+            target_end = min(
+                session.file_size - 1,
+                target_byte + 1024 * 1024 - 1,
+            )
+            plan = torrent_manager.prepare_playback_request(
+                session,
+                target_byte,
+                target_end,
+            )
+            sync_buffer_target_seconds = min(
+                15.0,
+                max(8.0, float(getattr(plan, "target_seconds", 8.0) or 8.0)),
+            )
+            prioritize_end = min(
+                session.file_size - 1,
+                target_byte + max(
+                    1024 * 1024,
+                    int(getattr(plan, "target_bytes", 0) or 0),
+                ),
+            )
+            torrent_manager.prioritize_range(
+                session,
+                target_byte,
+                prioritize_end,
+                readahead_bytes=max(
+                    1024 * 1024,
+                    int(getattr(plan, "target_bytes", 0) or 0),
+                ),
+            )
+
     movie_manager.heartbeat(
         room.room_id,
         user_id=uid,
@@ -211,6 +271,7 @@ async def movie_night_heartbeat(request: web.Request) -> web.Response:
         paused=paused,
         buffered_until_seconds=buffered,
         media_duration_seconds=duration,
+        sync_buffer_target_seconds=sync_buffer_target_seconds,
     )
 
     if session is not None:
@@ -367,7 +428,8 @@ async function applyState(s) {{
   document.getElementById("title").textContent=(s.title||"Movie Night")+(s.release_source?" • "+s.release_source:"");
   document.getElementById("state").textContent=s.state||"—";
   document.getElementById("viewers").textContent=String(s.viewer_count||0);
-  document.getElementById("role").textContent=s.is_host?"Host":"Viewer";
+  document.getElementById("role").textContent=
+    s.is_host?"Host":(s.sync_status==="joining"?"Joining…":"Synced Viewer");
   const t=s.torrent||{{}};
   document.getElementById("progress").textContent=((t.progress||0)*100).toFixed(1)+"% • "+fmtRate(t.download_rate||0);
   document.getElementById("peers").textContent=String(t.seeds||0)+" / "+String(t.peers||0);
@@ -392,10 +454,19 @@ async function applyState(s) {{
   remoteApply=true;
   try {{
     if(drift>1.75 && Number.isFinite(target)) video.currentTime=target;
-    if(s.state==="paused" && !video.paused) video.pause();
-    if(s.state==="playing" && video.paused) {{
-      try {{ await video.play(); notice.textContent=""; }}
-      catch(_) {{ notice.textContent="Tap Sync once to allow synchronized playback."; }}
+    if(s.sync_status==="joining") {{
+      if(!video.paused) video.pause();
+      notice.textContent=
+        "Joining Movie Night… buffering around "+Math.floor(target/60)+":"+
+        String(Math.floor(target%60)).padStart(2,"0")+
+        " without pausing the room.";
+    }} else {{
+      if((s.state==="paused" || s.state==="buffering") && !video.paused) video.pause();
+      if(s.state==="buffering") notice.textContent="Buffering the group for smoother playback…";
+      if(s.state==="playing" && video.paused) {{
+        try {{ await video.play(); notice.textContent=""; }}
+        catch(_) {{ notice.textContent="Tap Sync once to allow synchronized playback."; }}
+      }}
     }}
     if(s.ended) {{
       video.pause();
@@ -405,7 +476,7 @@ async function applyState(s) {{
     setTimeout(()=>{{remoteApply=false;}},150);
   }}
 
-  if(s.open_vote) {{
+  if(s.open_vote && s.sync_status!=="joining") {{
     notice.textContent="Vote open: "+s.open_vote.action+" • "+s.open_vote.yes+"/"+s.open_vote.required_yes+" yes. Open /movie in Discord to vote.";
   }}
 }}
