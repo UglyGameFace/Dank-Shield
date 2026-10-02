@@ -270,11 +270,24 @@ async def _run_ffmpeg(
             timeout=timeout_seconds,
         )
     except asyncio.TimeoutError:
-        process.kill()
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
         _stdout, stderr = await process.communicate()
         return int(process.returncode or -9), (
             stderr.decode("utf-8", "replace")[:400] if stderr else ""
         ), True
+    except asyncio.CancelledError:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(process.communicate(), timeout=5.0)
+        except Exception:
+            pass
+        raise
 
     return int(process.returncode or 0), (
         stderr.decode("utf-8", "replace")[:400] if stderr else ""
