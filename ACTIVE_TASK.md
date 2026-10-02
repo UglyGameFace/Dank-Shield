@@ -35,6 +35,7 @@ Status:
 - Ticket-panel and Basic Verify restart recovery already reserved aggregate capacity before their identity fetch, but each still called `fetch_message()` directly, so duplicate owners could not coalesce the same identity.
 - Invite Shield uncached raw-edit recovery created one task per `(channel_id, message_id)`. Different message IDs edited in the same channel could therefore issue concurrent GETs against the same Discord route family. This matches the observed cluster of 429s against one channel with multiple message IDs in the same second.
 - Existing cache-first protections are retained: Invite raw edits skip REST when `cached_message` exists; current ticket/basic-verify panel identities bind persistent views without REST when the saved application/component contract is already authoritative.
+- The authoritative verification submission bridge can enter the same handler from both message-create and message-edit events. Its 1.2-second settle fallback previously fetched the same webhook message directly; it now uses the live central guard so concurrent same-message settle reads coalesce.
 - Live Profile Card was inspected and intentionally left unchanged: production registration instantiates `stoney_verify.profile_card_runtime.LiveProfileCardRuntime`, whose native `on_ready()` overrides the legacy core reconciler and does not perform the core startup `fetch_message()` sweep.
 
 ### Execution path / changes
@@ -59,6 +60,8 @@ Status:
   - saved-panel recovery identity fetch uses the central guarded fetch with `recovery=True`; zero-REST current-identity bind remains unchanged.
 - `stoney_verify/startup_guards/live_guild_name_footer_guard.py`
   - saved ticket-panel fetch uses the central guard; startup calls reserve aggregate recovery capacity while live guild-rename refreshes only use per-channel serialization/coalescing.
+- `stoney_verify/interaction_handlers.py`
+  - authoritative verification-submission settle fetch uses the same live central guard with `recovery=False`, coalescing create/edit races for the same webhook message.
 - `tests/test_discord_recovery_rest_budget.py`
   - proves different message IDs in one channel never overlap;
   - proves different channels remain parallel;
@@ -68,7 +71,8 @@ Status:
   - proves inflight state and idle channel locks clean up.
 - `tests/test_startup_recovery_scaling.py`
   - locks the Invite Shield raw-edit live path to the central guard without startup pacing;
-  - locks Community Tools, ticket-panel, Basic Verify, and startup footer identity fetches to the central recovery owner.
+  - locks Community Tools, ticket-panel, Basic Verify, and startup footer identity fetches to the central recovery owner;
+  - locks the authoritative verification-submission settle fetch to the live central guard and confirms the event bridge dispatches that canonical handler.
 
 ### Validation / cleanup / blockers
 
@@ -76,6 +80,9 @@ Pending before completion claim:
 - exact-head focused/full GitHub CI;
 - final branch-vs-main diff and dead/duplicate ownership review;
 - production observation after deploy for disappearance/reduction of same-channel `GET .../messages/... 429` clusters.
+
+Backlog for #380 runtime-ownership audit:
+- `stoney_verify/submissions.py` and `stoney_verify/submission_handler.py` still contain unreferenced duplicate `handle_possible_submission()` implementations, including the historical direct settle fetch. They are not registered by the current event bridge and are not required for #384 correctness; reference-safe removal/consolidation belongs in the broader ownership audit.
 
 No unrelated task is active.
 
