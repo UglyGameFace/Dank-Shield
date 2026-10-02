@@ -117,6 +117,37 @@ def test_non_host_playback_vote_waits_until_host_is_away() -> None:
     assert manager.get(room_id).playback_state == "paused"  # type: ignore[union-attr]
 
 
+
+def test_end_vote_is_collaborative_even_while_host_is_active() -> None:
+    manager, room_id = _room_with_three_viewers()
+
+    vote = manager.propose_vote(
+        room_id,
+        proposer_id=20,
+        action="end",
+        now=105.0,
+    )
+    assert not vote.resolved
+
+    vote = manager.cast_vote(
+        room_id,
+        vote.vote_id,
+        user_id=30,
+        approve=True,
+        now=106.0,
+    )
+    assert vote.resolved and vote.passed
+
+    room = manager.get(room_id)
+    assert room is not None
+    assert room.ended
+    assert room.playback_state == "ended"
+
+    # External cleanup is claimed after the state transition marks the room ended.
+    assert manager.claim_vote_execution(room_id, vote.vote_id)
+    assert not manager.claim_vote_execution(room_id, vote.vote_id)
+
+
 def test_returning_host_cancels_failover_playback_vote_but_not_search_vote() -> None:
     manager, room_id = _room_with_three_viewers()
     room = manager.get(room_id)
