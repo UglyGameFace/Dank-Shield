@@ -27,6 +27,7 @@ import discord
 
 from stoney_verify.share_router_media_resolver import (
     canonicalize_media_url,
+    is_public_address,
     is_safe_media_download_url,
     media_url_identity,
     provider_label,
@@ -108,6 +109,29 @@ class RoutedVideo:
     file: discord.File
     source_url: str
     size_bytes: int
+
+
+class _PublicOnlyDNSResolver(aiohttp.abc.AbstractResolver):
+    """Reject DNS answers that would route media fetches to non-public IPs."""
+
+    def __init__(self) -> None:
+        self._resolver = aiohttp.DefaultResolver()
+
+    async def resolve(self, host: str, port: int = 0, family: int = 0):
+        records = await self._resolver.resolve(host, port, family)
+        if not records:
+            raise OSError("media host did not resolve")
+        for record in records:
+            try:
+                address = str(record["host"])
+            except Exception as exc:
+                raise OSError("media DNS answer was malformed") from exc
+            if not is_public_address(address):
+                raise OSError("media host resolved to a non-public address")
+        return records
+
+    async def close(self) -> None:
+        await self._resolver.close()
 
 
 def _log(message: str) -> None:
@@ -347,6 +371,7 @@ async def _download_trusted_video(
     url: str,
     *,
     max_bytes: int,
+    request_headers: Optional[Mapping[str, str]] = None,
 ) -> Optional[RoutedVideo]:
     if not _trusted_video_url(url):
         return None
@@ -359,9 +384,21 @@ async def _download_trusted_video(
     spool = tempfile.SpooledTemporaryFile(max_size=2 * 1024 * 1024, mode="w+b")
     current = url
     try:
+        headers = {"User-Agent": "DankShield-ShareRouter/1.0"}
+        for name, value in dict(request_headers or {}).items():
+            safe_name = _safe_str(name)
+            safe_value = _safe_str(value)
+            if safe_name and safe_value:
+                headers[safe_name] = safe_value[:1000]
+
+        connector = aiohttp.TCPConnector(
+            resolver=_PublicOnlyDNSResolver(),
+            ttl_dns_cache=60,
+        )
         async with aiohttp.ClientSession(
             timeout=timeout,
-            headers={"User-Agent": "DankShield-ShareRouter/1.0"},
+            headers=headers,
+            connector=connector,
         ) as session:
             for _ in range(4):
                 if not is_safe_media_download_url(current):
@@ -456,6 +493,7 @@ async def _prepare_native_video(
         routed = await _download_trusted_video(
             resolution.media_url,
             max_bytes=max_bytes,
+            request_headers=dict(resolution.request_headers),
         )
         if routed is not None:
             _log(
