@@ -163,7 +163,7 @@ def test_aggregate_search_keeps_builtin_results_without_custom_sources(monkeypat
         assert query == "Public Domain Movie"
         return resolver.MediaSourceSearchOutcome(
             variants=(),
-            errors=("No custom sources are enabled.",),
+            errors=("No structured custom sources are enabled.",),
         )
 
     monkeypatch.setattr(resolver, "_search_builtin_internet_archive", fake_builtin)
