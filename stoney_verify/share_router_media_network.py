@@ -25,6 +25,7 @@ _SAFE_REQUEST_HEADERS = {
     "origin",
     "referer",
     "user-agent",
+    "range",
 }
 
 
