@@ -125,6 +125,48 @@ def test_safe_message_fetch_serializes_different_ids_in_one_channel() -> None:
         assert [item["message_id"] for item in results] == [101, 102]
         assert sorted(channel.calls) == [101, 102]
         assert channel.max_active == 1
+        snapshot = discord_api_safety.message_fetch_safety_snapshot()
+        assert snapshot["channels"] == 0
+        assert snapshot["inflight"] == 0
+    finally:
+        _reset_recovery_budget_state()
+
+
+def test_safe_message_fetch_does_not_globally_serialize_other_channels() -> None:
+    _reset_recovery_budget_state()
+    first = _FetchChannel(56, delay=0.03)
+    second = _FetchChannel(57, delay=0.03)
+    total_active = 0
+    max_total_active = 0
+    gate = asyncio.Lock()
+
+    async def tracked_fetch(channel: _FetchChannel, message_id: int):
+        nonlocal total_active, max_total_active
+        async with gate:
+            total_active += 1
+            max_total_active = max(max_total_active, total_active)
+        try:
+            await asyncio.sleep(0.03)
+            return {"channel_id": channel.id, "message_id": int(message_id)}
+        finally:
+            async with gate:
+                total_active -= 1
+
+    async def scenario():
+        first.fetch_message = lambda message_id: tracked_fetch(first, message_id)
+        second.fetch_message = lambda message_id: tracked_fetch(second, message_id)
+        return await asyncio.gather(
+            discord_api_safety.fetch_message_with_api_safety(first, 111),
+            discord_api_safety.fetch_message_with_api_safety(second, 222),
+        )
+
+    try:
+        results = asyncio.run(scenario())
+        assert {item["channel_id"] for item in results} == {56, 57}
+        assert max_total_active == 2
+        snapshot = discord_api_safety.message_fetch_safety_snapshot()
+        assert snapshot["channels"] == 0
+        assert snapshot["inflight"] == 0
     finally:
         _reset_recovery_budget_state()
 
@@ -154,6 +196,7 @@ def test_safe_message_fetch_coalesces_same_inflight_message() -> None:
         snapshot = discord_api_safety.message_fetch_safety_snapshot()
         assert snapshot["coalesced"] == 1
         assert snapshot["inflight"] == 0
+        assert snapshot["channels"] == 0
     finally:
         _reset_recovery_budget_state()
 
