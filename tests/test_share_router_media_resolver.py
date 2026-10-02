@@ -463,3 +463,142 @@ def test_fragmented_https_format_is_not_misclassified_as_progressive() -> None:
     )
     assert resolved.delivery == "manifest"
     assert resolved.media_url == "https://cdn.example.com/manifest.mpd"
+
+
+
+def test_separate_audio_video_resolves_to_merge_when_no_combined_format() -> None:
+    info = {
+        "formats": [
+            {
+                "url": "https://video.example.com/video-only.mp4",
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "none",
+                "height": 1080,
+                "tbr": 3500,
+                "filesize": 12_000_000,
+                "http_headers": {"Referer": "https://www.youtube.com/"},
+            },
+            {
+                "url": "https://audio.example.com/audio-only.m4a",
+                "protocol": "https",
+                "ext": "m4a",
+                "vcodec": "none",
+                "acodec": "aac",
+                "abr": 128,
+                "filesize": 2_000_000,
+                "http_headers": {"User-Agent": "Provider UA"},
+            },
+        ]
+    }
+    resolved = media.select_media_resolution(
+        info,
+        source_url="https://www.youtube.com/watch?v=abc123",
+        provider="youtube",
+        max_bytes=25_000_000,
+    )
+    assert resolved.delivery == "merge"
+    assert resolved.media_url.endswith("video-only.mp4")
+    assert resolved.audio_url.endswith("audio-only.m4a")
+    assert resolved.known_size == 12_000_000
+    assert resolved.audio_known_size == 2_000_000
+    assert dict(resolved.request_headers)["Referer"] == "https://www.youtube.com/"
+    assert dict(resolved.audio_request_headers)["User-Agent"] == "Provider UA"
+
+
+def test_combined_progressive_still_beats_separate_merge() -> None:
+    info = {
+        "formats": [
+            {
+                "url": "https://cdn.example.com/combined.mp4",
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "aac",
+                "height": 720,
+                "filesize": 8_000_000,
+            },
+            {
+                "url": "https://cdn.example.com/video-only.mp4",
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "none",
+                "height": 1080,
+                "filesize": 10_000_000,
+            },
+            {
+                "url": "https://cdn.example.com/audio.m4a",
+                "protocol": "https",
+                "ext": "m4a",
+                "vcodec": "none",
+                "acodec": "aac",
+                "filesize": 2_000_000,
+            },
+        ]
+    }
+    resolved = media.select_media_resolution(
+        info,
+        source_url="https://vimeo.com/123",
+        provider="vimeo",
+        max_bytes=25_000_000,
+    )
+    assert resolved.delivery == "progressive"
+    assert resolved.media_url.endswith("combined.mp4")
+    assert resolved.audio_url == ""
+
+
+def test_known_separate_stream_pair_must_fit_upload_budget() -> None:
+    info = {
+        "formats": [
+            {
+                "url": "https://cdn.example.com/video-only.mp4",
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "none",
+                "filesize": 24_000_000,
+            },
+            {
+                "url": "https://cdn.example.com/audio.m4a",
+                "protocol": "https",
+                "ext": "m4a",
+                "vcodec": "none",
+                "acodec": "aac",
+                "filesize": 3_000_000,
+            },
+        ]
+    }
+    resolved = media.select_media_resolution(
+        info,
+        source_url="https://www.youtube.com/watch?v=abc123",
+        provider="youtube",
+        max_bytes=25_000_000,
+    )
+    assert resolved.delivery == "link"
+    assert resolved.reason == "separate_audio_video_requires_merge"
+
+
+def test_live_provider_stream_skips_remux_classification() -> None:
+    info = {
+        "is_live": True,
+        "live_status": "is_live",
+        "formats": [
+            {
+                "url": "https://cdn.example.com/live/master.m3u8",
+                "protocol": "m3u8_native",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "aac",
+            }
+        ],
+    }
+    resolved = media.select_media_resolution(
+        info,
+        source_url="https://www.twitch.tv/example",
+        provider="twitch",
+        max_bytes=25_000_000,
+    )
+    assert resolved.delivery == "link"
+    assert resolved.reason == "live_stream_requires_player"
