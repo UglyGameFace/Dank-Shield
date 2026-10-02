@@ -19,3 +19,5 @@ deckr-fonts==0.2.0
 yt-dlp==2026.8.19
 
 libtorrent==2.1.1
+
+av==17.1.0
