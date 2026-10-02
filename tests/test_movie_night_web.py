@@ -74,6 +74,10 @@ def test_movie_night_player_contains_sync_heartbeat_and_host_controls() -> None:
     assert "bufferedEnd()" in html
     assert "Tap to Sync" in html
     assert "Buffering the group for smoother playback" in html
+    assert "Joining Movie Night" in html
+    assert "without pausing the room" in html
+    assert 's.sync_status==="joining"' in html
+    assert "Synced Viewer" in html
 
 
 def test_public_media_server_registers_movie_night_without_admin_api() -> None:
