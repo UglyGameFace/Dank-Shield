@@ -335,6 +335,7 @@ class TorrentMediaManager:
         ).strip()
         self._sessions: dict[str, TorrentStreamSession] = {}
         self._starting = 0
+        self._replacements_in_flight: set[str] = set()
         self._lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task[Any]] = None
         self._session = self._build_libtorrent_session()
@@ -380,7 +381,14 @@ class TorrentMediaManager:
         }
         return self.lt.session(settings)
 
-    async def start_magnet(self, magnet: str, *, guild_id: int, owner_id: int) -> TorrentStreamSession:
+    async def start_magnet(
+        self,
+        magnet: str,
+        *,
+        guild_id: int,
+        owner_id: int,
+        replace_token: str = "",
+    ) -> TorrentStreamSession:
         raw = str(magnet or "").strip()
         if len(raw) > 8192:
             raise ValueError("Magnet link exceeds the configured input limit.")
@@ -389,7 +397,7 @@ class TorrentMediaManager:
             raise ValueError("That is not a valid BitTorrent magnet link.")
 
         await self.cleanup_expired()
-        await self._reserve_start()
+        await self._reserve_start(replace_token=replace_token)
         token = secrets.token_urlsafe(18)
         save_root = Path(tempfile.mkdtemp(prefix=f"{token}-", dir=str(self.root)))
         handle = None
@@ -413,7 +421,7 @@ class TorrentMediaManager:
             shutil.rmtree(save_root, ignore_errors=True)
             raise
         finally:
-            await self._release_start()
+            await self._release_start(replace_token=replace_token)
 
     async def start_torrent_bytes(
         self,
@@ -421,13 +429,14 @@ class TorrentMediaManager:
         *,
         guild_id: int,
         owner_id: int,
+        replace_token: str = "",
     ) -> TorrentStreamSession:
         data = bytes(payload or b"")
         if not data or len(data) > self.max_metadata_bytes:
             raise ValueError("The .torrent metadata file is empty or exceeds the configured limit.")
 
         await self.cleanup_expired()
-        await self._reserve_start()
+        await self._reserve_start(replace_token=replace_token)
         token = secrets.token_urlsafe(18)
         save_root = Path(tempfile.mkdtemp(prefix=f"{token}-", dir=str(self.root)))
         torrent_path = save_root / "source.torrent"
@@ -455,19 +464,31 @@ class TorrentMediaManager:
             shutil.rmtree(save_root, ignore_errors=True)
             raise
         finally:
-            await self._release_start()
+            await self._release_start(replace_token=replace_token)
 
-    async def _reserve_start(self) -> None:
+    async def _reserve_start(self, *, replace_token: str = "") -> None:
+        token = str(replace_token or "")
         async with self._lock:
-            if len(self._sessions) + self._starting >= self.max_sessions:
+            replacing = bool(
+                token
+                and token in self._sessions
+                and token not in self._replacements_in_flight
+            )
+            effective_live = len(self._sessions) - (1 if replacing else 0)
+            if effective_live + self._starting >= self.max_sessions:
                 raise RuntimeError(
                     f"Torrent streaming is at its configured {self.max_sessions}-session capacity."
                 )
+            if replacing:
+                self._replacements_in_flight.add(token)
             self._starting += 1
 
-    async def _release_start(self) -> None:
+    async def _release_start(self, *, replace_token: str = "") -> None:
+        token = str(replace_token or "")
         async with self._lock:
             self._starting = max(0, self._starting - 1)
+            if token:
+                self._replacements_in_flight.discard(token)
 
     def ensure_cleanup_task(self) -> None:
         try:
