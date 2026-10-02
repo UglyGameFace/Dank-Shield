@@ -591,9 +591,10 @@ def test_runtime_native_video_relay_is_bounded_and_fail_open() -> None:
     assert "allow_redirects=False" in RUNTIME
     assert "_trusted_video_url" in RUNTIME
     assert "target.permissions_for(me).attach_files" in RUNTIME
-    assert 'send_payload["file"] = native_video.file' in RUNTIME
-    assert "_suppress_url_previews(routed_text)" in RUNTIME
-    assert "native video send fallback" in RUNTIME
+    assert '"file": native_video.file' in RUNTIME
+    assert "_suppress_url_previews(text)" in RUNTIME
+    assert "native video send failed" in RUNTIME
+    assert "if not native_sent:" in RUNTIME
     assert "await target.send(" in RUNTIME
     assert "asyncio.to_thread" in RUNTIME
     assert "yt_dlp.YoutubeDL" in RUNTIME
