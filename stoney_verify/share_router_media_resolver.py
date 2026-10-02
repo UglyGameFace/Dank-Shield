@@ -20,7 +20,7 @@ from typing import Any, Mapping, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
-MEDIA_URL_RE = re.compile(r"https?://[^\\s<>()]+", re.IGNORECASE)
+MEDIA_URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
 _VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".gif"}
 _MANIFEST_EXTENSIONS = {".m3u8", ".mpd"}
 _PROGRESSIVE_EXTENSIONS = {"mp4", "webm", "mov", "gif"}
@@ -44,8 +44,8 @@ _LOCAL_HOST_SUFFIXES = (
     ".home",
     ".home.arpa",
 )
-_X_STATUS_PATH_RE = re.compile(r"^/([^/]+)/status/(\\d+)(?:/.*)?$", re.IGNORECASE)
-_TIKTOK_VIDEO_RE = re.compile(r"/video/(\\d+)(?:/|$)", re.IGNORECASE)
+_X_STATUS_PATH_RE = re.compile(r"^/([^/]+)/status/(\d+)(?:/.*)?$", re.IGNORECASE)
+_TIKTOK_VIDEO_RE = re.compile(r"/video/(\d+)(?:/|$)", re.IGNORECASE)
 _INSTAGRAM_MEDIA_RE = re.compile(r"/(?:reel|reels|p|tv)/([^/?#]+)", re.IGNORECASE)
 _REDDIT_POST_RE = re.compile(r"/comments/([^/?#]+)", re.IGNORECASE)
 
