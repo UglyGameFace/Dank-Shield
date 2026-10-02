@@ -138,7 +138,10 @@ def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -
     embed = movie_ui._sources_embed(MediaSourceRegistry())
     rendered = "\n".join(
         [str(embed.description or "")]
-        + [str(field.value) for field in embed.fields]
+        + [
+            f"{field.name}\n{field.value}"
+            for field in embed.fields
+        ]
     )
 
     assert "Regular members only use **Find Movie**" in rendered
