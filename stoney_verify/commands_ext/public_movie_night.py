@@ -1759,8 +1759,8 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
 
 
 class MovieNightSourcesView(_OwnedView):
-    @discord.ui.button(label="Add Provider", emoji="➕", style=discord.ButtonStyle.success, row=0)
-    async def add(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="Add JSON Provider", emoji="🧩", style=discord.ButtonStyle.success, row=0)
+    async def add_json(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not _staff_authorized(interaction):
             return await _private(interaction, "❌ Manage Server or Administrator is required.")
@@ -1770,6 +1770,19 @@ class MovieNightSourcesView(_OwnedView):
         raw, _registry = await _sources_state(int(guild.id))
         await interaction.response.send_modal(
             CustomSourceModal(owner_id=self.owner_id, baseline=raw)
+        )
+
+    @discord.ui.button(label="Add Search Link", emoji="🔗", style=discord.ButtonStyle.success, row=0)
+    async def add_external(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _staff_authorized(interaction):
+            return await _private(interaction, "❌ Manage Server or Administrator is required.")
+        guild = interaction.guild
+        if guild is None:
+            return await _private(interaction, "❌ Use Movie Night inside a server.")
+        raw, _registry = await _sources_state(int(guild.id))
+        await interaction.response.send_modal(
+            ExternalSearchProviderModal(owner_id=self.owner_id, baseline=raw)
         )
 
     @discord.ui.button(label="Manage Providers", emoji="🛠️", style=discord.ButtonStyle.primary, row=0)
@@ -1787,7 +1800,7 @@ class MovieNightSourcesView(_OwnedView):
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _replace(interaction, content="Movie Night sources closed.", embed=None, view=None)
+        await _replace(interaction, content="Dank Cinema provider deck closed.", embed=None, view=None)
 
 
 async def open_movie_night_sources(
