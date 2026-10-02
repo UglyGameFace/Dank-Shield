@@ -324,23 +324,48 @@ class ManifestProxy:
         except Exception as exc:
             raise ManifestProxyError("invalid DASH manifest") from exc
 
-        # Ensure relative references cannot resolve against the localhost
-        # manifest-resource path by accident.
-        root_base_id = self._register_base(urljoin(base_url, "."), headers=headers)
-        base_tag = root.tag.rsplit("}", 1)[0] + "}BaseURL" if "}" in root.tag else "BaseURL"
-        injected = ET.Element(base_tag)
-        injected.text = self._base_local_url(root_base_id)
-        root.insert(0, injected)
-
-        for element in root.iter():
-            local = _local_name(element.tag)
-            if local == "baseurl" and element is not injected:
+        # Anchor root-relative references in the local proxy namespace. Nested
+        # relative BaseURL values then naturally resolve through the already
+        # proxied parent BaseURL, preserving DASH hierarchy.
+        root_base_elements = [
+            child for child in list(root) if _local_name(child.tag) == "baseurl"
+        ]
+        injected: Optional[ET.Element] = None
+        if not root_base_elements:
+            root_base_id = self._register_base(
+                urljoin(base_url, "."),
+                headers=headers,
+            )
+            base_tag = (
+                root.tag.rsplit("}", 1)[0] + "}BaseURL"
+                if "}" in root.tag
+                else "BaseURL"
+            )
+            injected = ET.Element(base_tag)
+            injected.text = self._base_local_url(root_base_id)
+            root.insert(0, injected)
+        else:
+            for element in root_base_elements:
                 raw = str(element.text or "").strip()
                 if not raw:
                     continue
                 resolved = urljoin(base_url, raw)
                 base_id = self._register_base(resolved, headers=headers)
                 element.text = self._base_local_url(base_id)
+
+        root_base_ids = {id(item) for item in root_base_elements}
+        if injected is not None:
+            root_base_ids.add(id(injected))
+
+        for element in root.iter():
+            local = _local_name(element.tag)
+            if local == "baseurl" and id(element) not in root_base_ids:
+                raw = str(element.text or "").strip()
+                if raw.startswith(("http://", "https://")):
+                    base_id = self._register_base(raw, headers=headers)
+                    element.text = self._base_local_url(base_id)
+                # Nested relative BaseURL is deliberately left relative. Its
+                # ancestor BaseURL is already localhost-only.
             elif local == "location":
                 raw = str(element.text or "").strip()
                 if raw:
