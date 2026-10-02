@@ -40,6 +40,7 @@ from stoney_verify.media_source_resolver import (
 from stoney_verify.movie_night import (
     MovieNightRoom,
     get_movie_night_manager,
+    movie_room_lease_key,
 )
 from stoney_verify.movie_night_session import terminate_movie_night_room
 from stoney_verify.movie_night_web import movie_night_watch_url
