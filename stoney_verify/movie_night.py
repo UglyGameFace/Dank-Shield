@@ -12,7 +12,7 @@ import math
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 PLAYBACK_ACTIONS = frozenset({"pause", "resume", "seek", "skip", "end"})
 PROGRAMMING_ACTIONS = frozenset({"search", "nominate", "queue", "play_next"})
@@ -42,6 +42,7 @@ class MovieCandidate:
     created_at: float
     source_ref: str = ""
     metadata_ref: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
     votes: set[int] = field(default_factory=set)
 
 
@@ -161,6 +162,13 @@ class MovieNightManager:
         viewer.paused = bool(paused)
         if uid == int(room.host_id):
             room.host_last_seen = current
+            # A returning host immediately regains playback authority. Any
+            # unresolved failover-only playback vote is cancelled, while
+            # collaborative search/queue votes remain alive.
+            for vote in room.votes.values():
+                if not vote.resolved and vote.action in PLAYBACK_ACTIONS:
+                    vote.resolved = True
+                    vote.passed = False
         self._expire_votes(room, current)
         return room
 
@@ -271,6 +279,7 @@ class MovieNightManager:
         title: str,
         source_ref: str = "",
         metadata_ref: str = "",
+        metadata: Optional[Mapping[str, Any]] = None,
         now: Optional[float] = None,
     ) -> MovieCandidate:
         room = self._require_room(room_id)
@@ -288,6 +297,7 @@ class MovieNightManager:
             proposer_id=uid,
             source_ref=str(source_ref or "").strip()[:1000],
             metadata_ref=str(metadata_ref or "").strip()[:1000],
+            metadata=dict(metadata or {}),
             created_at=current,
             votes={uid},
         )
