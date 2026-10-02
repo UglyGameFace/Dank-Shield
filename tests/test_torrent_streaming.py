@@ -895,6 +895,15 @@ def test_existing_identical_torrent_can_be_shared_even_when_guild_unique_limit_i
     assert len(manager._sessions) == 1
 
 
+def test_configured_session_memory_estimate_is_admission_floor(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.estimated_session_memory_mb = 96
+    manager._adaptive_session_memory_mb = 32.0
+    manager._session_memory_samples = 3
+
+    assert manager._effective_session_memory_mb() == 96
+
+
 def test_session_memory_estimate_learns_from_clean_rss_delta(monkeypatch, tmp_path: Path) -> None:
     manager = _manager(monkeypatch, tmp_path)
     manager.max_sessions = 4
