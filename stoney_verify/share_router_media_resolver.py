@@ -24,6 +24,7 @@ MEDIA_URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
 _VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".gif"}
 _MANIFEST_EXTENSIONS = {".m3u8", ".mpd"}
 _PROGRESSIVE_EXTENSIONS = {"mp4", "webm", "mov", "gif"}
+_AUDIO_EXTENSIONS = {"m4a", "mp4", "webm", "aac", "mp3", "opus", "ogg"}
 _PROGRESSIVE_PROTOCOLS = {"http", "https"}
 _MANIFEST_PROTOCOLS = {"m3u8", "m3u8_native", "http_dash_segments", "dash"}
 _TRACKING_QUERY_KEYS = {
@@ -65,10 +66,15 @@ class MediaResolution:
     provider: str
     delivery: str
     media_url: str = ""
+    audio_url: str = ""
     protocol: str = ""
+    audio_protocol: str = ""
     ext: str = ""
+    audio_ext: str = ""
     known_size: int = 0
+    audio_known_size: int = 0
     request_headers: tuple[tuple[str, str], ...] = ()
+    audio_request_headers: tuple[tuple[str, str], ...] = ()
     reason: str = ""
 
     @property
@@ -442,7 +448,32 @@ def select_media_resolution(
             tuple[tuple[str, str], ...],
         ]
     ] = []
-    manifest: tuple[str, str, str] | None = None
+    manifest: tuple[
+        str,
+        str,
+        str,
+        tuple[tuple[str, str], ...],
+    ] | None = None
+    video_only: list[
+        tuple[
+            tuple[int, float, int],
+            str,
+            str,
+            str,
+            int,
+            tuple[tuple[str, str], ...],
+        ]
+    ] = []
+    audio_only: list[
+        tuple[
+            tuple[float, int],
+            str,
+            str,
+            str,
+            int,
+            tuple[tuple[str, str], ...],
+        ]
+    ] = []
     saw_separate_video = False
     saw_fragmented = False
 
@@ -474,44 +505,89 @@ def select_media_resolution(
                         _safe_str(fmt.get("manifest_url") or url),
                         protocol or "fragmented",
                         ext,
+                        _safe_request_headers(entry, fmt),
                     )
 
             if (
                 url
                 and not is_fragmented
                 and protocol in _PROGRESSIVE_PROTOCOLS
-                and (not ext or ext in _PROGRESSIVE_EXTENSIONS)
                 and is_safe_media_download_url(url)
             ):
                 vcodec = _safe_str(fmt.get("vcodec")).lower()
                 acodec = _safe_str(fmt.get("acodec")).lower()
+                size = _candidate_size(fmt)
+                if size > max_bytes > 0:
+                    continue
+                headers = _safe_request_headers(entry, fmt)
+
+                if vcodec == "none" and acodec != "none":
+                    if not ext or ext in _AUDIO_EXTENSIONS:
+                        try:
+                            abr = float(fmt.get("abr") or fmt.get("tbr") or 0.0)
+                        except Exception:
+                            abr = 0.0
+                        size_score = -size if size > 0 else 0
+                        audio_only.append(
+                            (
+                                (abr, size_score),
+                                url,
+                                protocol,
+                                ext,
+                                size,
+                                headers,
+                            )
+                        )
+                    continue
+
                 if vcodec != "none" or ext == "gif":
+                    if ext and ext not in _PROGRESSIVE_EXTENSIONS:
+                        continue
                     if acodec == "none" and ext != "gif":
                         saw_separate_video = True
-                    else:
-                        size = _candidate_size(fmt)
-                        if not (size > max_bytes > 0):
-                            height = _safe_int(fmt.get("height"), 0)
-                            try:
-                                tbr = float(fmt.get("tbr") or 0.0)
-                            except Exception:
-                                tbr = 0.0
-                            size_score = -size if size > 0 else 0
-                            progressive.append(
-                                (
-                                    (1, height, tbr, size_score),
-                                    url,
-                                    protocol,
-                                    ext,
-                                    size,
-                                    _safe_request_headers(entry, fmt),
-                                )
+                        height = _safe_int(fmt.get("height"), 0)
+                        try:
+                            tbr = float(fmt.get("tbr") or 0.0)
+                        except Exception:
+                            tbr = 0.0
+                        size_score = -size if size > 0 else 0
+                        video_only.append(
+                            (
+                                (height, tbr, size_score),
+                                url,
+                                protocol,
+                                ext,
+                                size,
+                                headers,
                             )
+                        )
+                    else:
+                        height = _safe_int(fmt.get("height"), 0)
+                        try:
+                            tbr = float(fmt.get("tbr") or 0.0)
+                        except Exception:
+                            tbr = 0.0
+                        size_score = -size if size > 0 else 0
+                        progressive.append(
+                            (
+                                (1, height, tbr, size_score),
+                                url,
+                                protocol,
+                                ext,
+                                size,
+                                headers,
+                            )
+                        )
 
             if manifest is None:
                 candidate = _manifest_candidate(fmt)
                 if candidate[0]:
-                    manifest = candidate
+                    manifest = (
+                        candidate[0],
+                        candidate[1],
+                        candidate[2],
+                        _safe_request_headers(entry, fmt),
+                    )
 
     if progressive:
         progressive.sort(key=lambda item: item[0], reverse=True)
@@ -529,8 +605,35 @@ def select_media_resolution(
             request_headers=request_headers,
         )
 
+    if video_only and audio_only:
+        video_only.sort(key=lambda item: item[0], reverse=True)
+        audio_only.sort(key=lambda item: item[0], reverse=True)
+        for video in video_only:
+            for audio in audio_only:
+                known_total = int(video[4] or 0) + int(audio[4] or 0)
+                if known_total > max_bytes > 0:
+                    continue
+                return MediaResolution(
+                    source_url=source_url,
+                    canonical_url=canonical,
+                    identity=identity,
+                    provider=provider,
+                    delivery="merge",
+                    media_url=video[1],
+                    audio_url=audio[1],
+                    protocol=video[2],
+                    audio_protocol=audio[2],
+                    ext=video[3],
+                    audio_ext=audio[3],
+                    known_size=video[4],
+                    audio_known_size=audio[4],
+                    request_headers=video[5],
+                    audio_request_headers=audio[5],
+                    reason="separate_audio_video_requires_merge",
+                )
+
     if manifest is not None:
-        url, protocol, ext = manifest
+        url, protocol, ext, request_headers = manifest
         return MediaResolution(
             source_url=source_url,
             canonical_url=canonical,
@@ -540,6 +643,7 @@ def select_media_resolution(
             media_url=url,
             protocol=protocol,
             ext=ext,
+            request_headers=request_headers,
             reason="manifest_requires_controlled_transcode_or_player",
         )
 
@@ -591,6 +695,7 @@ def _health_bucket(provider: str) -> dict[str, Any]:
             "attempts": 0,
             "progressive": 0,
             "manifest": 0,
+            "merge": 0,
             "fallback": 0,
             "cache_hits": 0,
             "coalesced": 0,
@@ -671,6 +776,8 @@ async def _resolve_extracted(
         _record(provider, "progressive")
     elif resolution.delivery == "manifest":
         _record(provider, "manifest", reason=resolution.reason)
+    elif resolution.delivery == "merge":
+        _record(provider, "merge", reason=resolution.reason)
     else:
         _record(provider, "fallback", reason=resolution.reason)
     return resolution
@@ -809,6 +916,7 @@ def media_resolver_snapshot() -> dict[str, Any]:
                 "attempts": int(value.get("attempts", 0) or 0),
                 "progressive": int(value.get("progressive", 0) or 0),
                 "manifest": int(value.get("manifest", 0) or 0),
+                "merge": int(value.get("merge", 0) or 0),
                 "fallback": int(value.get("fallback", 0) or 0),
                 "cache_hits": int(value.get("cache_hits", 0) or 0),
                 "coalesced": int(value.get("coalesced", 0) or 0),
