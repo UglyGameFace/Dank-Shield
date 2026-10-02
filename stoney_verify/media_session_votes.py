@@ -10,6 +10,60 @@ from typing import Any, Optional
 DEFAULT_HOST_AWAY_SECONDS = 120.0
 DEFAULT_VOTE_TTL_SECONDS = 60.0
 
+ACTION_PAUSE = "pause"
+ACTION_RESUME = "resume"
+ACTION_SEEK = "seek"
+ACTION_SWITCH_FILE = "switch_file"
+ACTION_REBUFFER = "rebuffer"
+ACTION_END_STREAM = "end_stream"
+ACTION_SEARCH_MEDIA = "search_media"
+ACTION_PLAY_RESULT = "play_result"
+ACTION_QUEUE_RESULT = "queue_result"
+ACTION_PLAY_NEXT = "play_next"
+
+DESTRUCTIVE_ACTIONS = frozenset(
+    {
+        ACTION_END_STREAM,
+        ACTION_PLAY_RESULT,
+        ACTION_PLAY_NEXT,
+        ACTION_SWITCH_FILE,
+    }
+)
+SEARCH_ACTIONS = frozenset(
+    {
+        ACTION_SEARCH_MEDIA,
+        ACTION_PLAY_RESULT,
+        ACTION_QUEUE_RESULT,
+        ACTION_PLAY_NEXT,
+    }
+)
+
+
+def normalize_media_action(value: str) -> str:
+    action = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    allowed = {
+        ACTION_PAUSE,
+        ACTION_RESUME,
+        ACTION_SEEK,
+        ACTION_SWITCH_FILE,
+        ACTION_REBUFFER,
+        ACTION_END_STREAM,
+        ACTION_SEARCH_MEDIA,
+        ACTION_PLAY_RESULT,
+        ACTION_QUEUE_RESULT,
+        ACTION_PLAY_NEXT,
+    }
+    if action not in allowed:
+        raise ValueError("Unsupported shared media action.")
+    return action
+
+
+def normalize_search_query(value: str) -> str:
+    query = " ".join(str(value or "").strip().split())
+    if not query:
+        raise ValueError("Search query cannot be empty.")
+    return query[:180]
+
 
 @dataclass(frozen=True)
 class VotePolicy:
@@ -101,7 +155,7 @@ class MediaVoteManager:
         user_id: int,
         action: str,
         payload: Optional[dict[str, Any]] = None,
-        destructive: bool = False,
+        destructive: Optional[bool] = None,
     ) -> MediaVote:
         if not self.host_away:
             raise PermissionError("The host is active; voting is not available.")
@@ -109,14 +163,37 @@ class MediaVoteManager:
         if self.active is not None:
             raise RuntimeError("Another media action vote is already active.")
 
+        normalized_action = normalize_media_action(action)
+        normalized_payload = dict(payload or {})
+
+        if normalized_action == ACTION_SEARCH_MEDIA:
+            normalized_payload["query"] = normalize_search_query(
+                normalized_payload.get("query", "")
+            )
+        elif normalized_action in {
+            ACTION_PLAY_RESULT,
+            ACTION_QUEUE_RESULT,
+            ACTION_PLAY_NEXT,
+        }:
+            result_id = str(normalized_payload.get("result_id", "") or "").strip()
+            if not result_id:
+                raise ValueError("A media result id is required for that action.")
+            normalized_payload["result_id"] = result_id[:160]
+
+        is_destructive = (
+            normalized_action in DESTRUCTIVE_ACTIONS
+            if destructive is None
+            else bool(destructive)
+        )
+
         now = time.monotonic()
         vote = MediaVote(
-            action=str(action or "").strip(),
-            payload=dict(payload or {}),
+            action=normalized_action,
+            payload=normalized_payload,
             created_by=int(user_id),
             created_at=now,
             expires_at=now + max(15.0, float(self.policy.ttl_seconds)),
-            destructive=bool(destructive),
+            destructive=is_destructive,
         )
         vote.yes.add(int(user_id))
         self.active = vote
@@ -193,10 +270,24 @@ class MediaVoteManager:
 
 
 __all__ = [
+    "ACTION_END_STREAM",
+    "ACTION_PAUSE",
+    "ACTION_PLAY_NEXT",
+    "ACTION_PLAY_RESULT",
+    "ACTION_QUEUE_RESULT",
+    "ACTION_REBUFFER",
+    "ACTION_RESUME",
+    "ACTION_SEARCH_MEDIA",
+    "ACTION_SEEK",
+    "ACTION_SWITCH_FILE",
     "DEFAULT_HOST_AWAY_SECONDS",
     "DEFAULT_VOTE_TTL_SECONDS",
+    "DESTRUCTIVE_ACTIONS",
     "HostLease",
     "MediaVote",
     "MediaVoteManager",
+    "SEARCH_ACTIONS",
     "VotePolicy",
+    "normalize_media_action",
+    "normalize_search_query",
 ]
