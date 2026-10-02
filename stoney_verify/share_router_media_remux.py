@@ -10,18 +10,13 @@ general video/audio re-encoding.
 import asyncio
 import os
 import shutil
-import socket
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
-from urllib.parse import urlsplit
 
-from stoney_verify.share_router_media_resolver import (
-    MediaResolution,
-    is_public_address,
-    is_safe_media_download_url,
-)
+from stoney_verify.share_router_media_network import url_resolves_public
+from stoney_verify.share_router_media_resolver import MediaResolution
 
 
 _DEFAULT_REMUX_CONCURRENCY = 1
@@ -208,48 +203,12 @@ def build_ffmpeg_remux_command(
     return command
 
 
-async def _url_resolves_public(value: str) -> bool:
-    if not is_safe_media_download_url(value):
-        return False
-    parsed = urlsplit(value)
-    host = str(parsed.hostname or "").strip()
-    if not host:
-        return False
-    if is_public_address(host):
-        return True
-
-    try:
-        port = int(parsed.port or (443 if parsed.scheme == "https" else 80))
-    except ValueError:
-        return False
-
-    try:
-        infos = await asyncio.wait_for(
-            asyncio.get_running_loop().getaddrinfo(
-                host,
-                port,
-                family=socket.AF_UNSPEC,
-                type=socket.SOCK_STREAM,
-            ),
-            timeout=4.0,
-        )
-    except Exception:
-        return False
-
-    addresses = {
-        str(item[4][0])
-        for item in infos
-        if len(item) >= 5 and item[4]
-    }
-    return bool(addresses) and all(is_public_address(item) for item in addresses)
-
-
 async def _inputs_are_public(resolution: MediaResolution) -> bool:
     urls = [resolution.media_url]
     if resolution.delivery == "merge":
         urls.append(resolution.audio_url)
     for value in urls:
-        if not value or not await _url_resolves_public(value):
+        if not value or not await url_resolves_public(value):
             return False
     return True
 
