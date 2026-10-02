@@ -388,6 +388,7 @@ small {{ color:#8994aa; }}
     <button id="sync">Tap to Sync</button>
     <button id="play" disabled>Play</button>
     <button id="pause" disabled>Pause</button>
+    <button id="end" disabled>End Session</button>
   </div>
   <div id="notice"></div>
   <div class="grid">
@@ -444,6 +445,7 @@ async function applyState(s) {{
 
   document.getElementById("play").disabled=!s.is_host;
   document.getElementById("pause").disabled=!s.is_host;
+  document.getElementById("end").disabled=!s.is_host;
 
   if(s.ended) {{
     terminated=true;
@@ -452,6 +454,7 @@ async function applyState(s) {{
     video.load();
     document.getElementById("play").disabled=true;
     document.getElementById("pause").disabled=true;
+    document.getElementById("end").disabled=true;
     notice.textContent="Movie Night has ended.";
     return;
   }}
@@ -541,6 +544,10 @@ document.getElementById("sync").onclick=async()=>{{
 }};
 document.getElementById("play").onclick=()=>hostAction("resume");
 document.getElementById("pause").onclick=()=>hostAction("pause");
+document.getElementById("end").onclick=()=>{{
+  if(confirm("End this Movie Night for everyone and release the room media session?"))
+    hostAction("end");
+}};
 video.addEventListener("play",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("resume"); }});
 video.addEventListener("pause",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("pause"); }});
 video.addEventListener("seeked",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("seek",{{seconds:video.currentTime||0}}); }});
