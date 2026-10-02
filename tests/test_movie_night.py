@@ -467,3 +467,191 @@ def test_group_buffer_corridor_tracks_shared_viewer_health() -> None:
     assert start == 98 * 1024 * 1024
     assert weakest_buffer_end == 130 * 1024 * 1024
     assert leader == 150 * 1024 * 1024
+
+
+
+def test_passed_external_vote_execution_is_claimed_exactly_once() -> None:
+    manager, room_id = _room_with_three_viewers()
+    vote = manager.propose_vote(
+        room_id,
+        proposer_id=20,
+        action="search",
+        payload={"query": "The Thing"},
+        now=105.0,
+    )
+    vote = manager.cast_vote(
+        room_id,
+        vote.vote_id,
+        user_id=30,
+        approve=True,
+        now=106.0,
+    )
+    assert vote.passed
+    assert manager.claim_vote_execution(room_id, vote.vote_id)
+    assert not manager.claim_vote_execution(room_id, vote.vote_id)
+
+
+def test_movie_result_order_uses_best_live_seed_count_when_votes_tie() -> None:
+    manager, room_id = _room_with_three_viewers()
+    weak = manager.nominate(
+        room_id,
+        user_id=20,
+        title="Weak Swarm",
+        auto_vote=False,
+        now=105.0,
+    )
+    strong = manager.nominate(
+        room_id,
+        user_id=20,
+        title="Strong Swarm",
+        auto_vote=False,
+        now=106.0,
+    )
+    manager.add_variant(
+        room_id,
+        weak.candidate_id,
+        user_id=20,
+        source_ref="magnet:?xt=urn:btih:weak",
+        seeds=2,
+        leechers=8,
+        peers=10,
+        auto_vote=False,
+        now=107.0,
+    )
+    manager.add_variant(
+        room_id,
+        strong.candidate_id,
+        user_id=20,
+        source_ref="magnet:?xt=urn:btih:strong",
+        seeds=90,
+        leechers=10,
+        peers=100,
+        auto_vote=False,
+        now=108.0,
+    )
+
+    ranked = manager.ranked_candidates(room_id, now=109.0)
+    assert ranked[0].candidate_id == strong.candidate_id
+    assert ranked[1].candidate_id == weak.candidate_id
+
+
+def test_group_buffer_hold_pauses_and_resumes_without_infinite_stall() -> None:
+    manager = MovieNightManager(
+        host_grace_seconds=45,
+        viewer_ttl_seconds=120,
+        vote_ttl_seconds=60,
+        buffer_low_seconds=4,
+        buffer_resume_seconds=10,
+        buffer_max_hold_seconds=20,
+    )
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="torrent-token",
+        now=100.0,
+    )
+    manager.join_room(room.room_id, user_id=20, now=100.0)
+    manager.apply_host_action(
+        room.room_id,
+        host_id=10,
+        action="resume",
+        now=100.0,
+    )
+
+    manager.heartbeat(
+        room.room_id,
+        user_id=10,
+        position_seconds=10,
+        byte_position=10_000,
+        buffered_until_byte=30_000,
+        paused=False,
+        buffered_until_seconds=30,
+        media_duration_seconds=600,
+        now=101.0,
+    )
+    manager.heartbeat(
+        room.room_id,
+        user_id=20,
+        position_seconds=10,
+        byte_position=10_000,
+        buffered_until_byte=12_000,
+        paused=False,
+        buffered_until_seconds=12,
+        media_duration_seconds=600,
+        now=101.0,
+    )
+    assert room.playback_state == "buffering"
+    held_position = room.playback_position
+
+    manager.heartbeat(
+        room.room_id,
+        user_id=10,
+        position_seconds=held_position,
+        byte_position=10_000,
+        buffered_until_byte=40_000,
+        paused=True,
+        buffered_until_seconds=30,
+        media_duration_seconds=600,
+        now=105.0,
+    )
+    manager.heartbeat(
+        room.room_id,
+        user_id=20,
+        position_seconds=held_position,
+        byte_position=10_000,
+        buffered_until_byte=40_000,
+        paused=True,
+        buffered_until_seconds=30,
+        media_duration_seconds=600,
+        now=105.0,
+    )
+    assert room.playback_state == "playing"
+    assert room.buffering_since == 0.0
+
+
+def test_group_buffer_hold_has_max_wait_and_cooldown() -> None:
+    manager = MovieNightManager(
+        viewer_ttl_seconds=120,
+        buffer_low_seconds=4,
+        buffer_resume_seconds=10,
+        buffer_max_hold_seconds=5,
+    )
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="torrent-token",
+        now=100.0,
+    )
+    manager.join_room(room.room_id, user_id=20, now=100.0)
+    manager.apply_host_action(room.room_id, host_id=10, action="resume", now=100.0)
+
+    for uid in (10, 20):
+        manager.heartbeat(
+            room.room_id,
+            user_id=uid,
+            position_seconds=10,
+            byte_position=10_000,
+            buffered_until_byte=11_000,
+            paused=False,
+            buffered_until_seconds=11,
+            media_duration_seconds=600,
+            now=101.0,
+        )
+    assert room.playback_state == "buffering"
+
+    for uid in (10, 20):
+        manager.heartbeat(
+            room.room_id,
+            user_id=uid,
+            position_seconds=room.playback_position,
+            byte_position=10_000,
+            buffered_until_byte=11_000,
+            paused=True,
+            buffered_until_seconds=11,
+            media_duration_seconds=600,
+            now=107.0,
+        )
+    assert room.playback_state == "playing"
+    assert room.buffering_cooldown_until > 107.0
