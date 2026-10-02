@@ -57,6 +57,11 @@ Pending before completion claim:
 - branch-vs-main diff and import/dead-reference review;
 - production canary after merge/deploy remains an owner runtime check.
 
+Latest CI finding:
+- exact-head run at `eb8eca01fd027a6857ab9b324a523ba3ba9a8b90` had **1 test failure, 2524 passes**;
+- production code compiled successfully and the failure was a stale branding assertion: the test concatenated embed descriptions/values but asserted against the **Dank Watch field name**, which it had intentionally excluded;
+- corrected the test renderer to include field names at `b6896a736c5ac6d3a1c46209395e3578d2120c94`; no runtime implementation change was required for that failure.
+
 No unrelated task is active.
 
 ---
