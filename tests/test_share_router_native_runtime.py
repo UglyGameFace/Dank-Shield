@@ -41,6 +41,8 @@ DESIGN = (ROOT / "stoney_verify/commands_ext/public_design_studio.py").read_text
 RUNTIME = (ROOT / "stoney_verify/share_router_runtime.py").read_text(encoding="utf-8")
 RESOLVER = (ROOT / "stoney_verify/share_router_media_resolver.py").read_text(encoding="utf-8")
 REMUX = (ROOT / "stoney_verify/share_router_media_remux.py").read_text(encoding="utf-8")
+NETWORK = (ROOT / "stoney_verify/share_router_media_network.py").read_text(encoding="utf-8")
+PROXY = (ROOT / "stoney_verify/share_router_manifest_proxy.py").read_text(encoding="utf-8")
 LEGACY = (ROOT / "stoney_verify/startup_guards/share_router_guard.py").read_text(encoding="utf-8")
 
 
@@ -642,7 +644,10 @@ def test_runtime_native_video_relay_is_bounded_and_fail_open() -> None:
     assert "resolve_first_media" in RUNTIME
     assert "if not is_safe_media_download_url(url):" in RUNTIME
     assert "if not is_safe_media_download_url(current):" in RUNTIME
-    assert "_PublicOnlyDNSResolver" in RUNTIME
+    assert "_PublicOnlyDNSResolver" not in RUNTIME
+    assert "public_tcp_connector(ttl_dns_cache=60)" in RUNTIME
+    assert "class PublicOnlyDNSResolver" in NETWORK
+    assert "PublicOnlyDNSResolver()" in NETWORK
     assert "request_headers=dict(resolution.request_headers)" in RUNTIME
     assert "_extract_x_video_url" not in RUNTIME
     assert "asyncio.to_thread" in RESOLVER
@@ -657,6 +662,10 @@ def test_runtime_native_video_relay_is_bounded_and_fail_open() -> None:
     assert "create_subprocess_shell" not in REMUX
     assert '"-c:v",\n            "copy"' in REMUX
     assert "DANK_SHARE_ROUTER_MEDIA_REMUX_CONCURRENCY" in REMUX
+    assert "ManifestProxy(" in REMUX
+    assert "manifest_via_proxy=proxy is not None" in REMUX
+    assert 'web.TCPSite(self._runner, "127.0.0.1", 0)' in PROXY
+    assert "public_get(" in PROXY
 
 
 def test_runtime_keeps_legacy_route_storage_and_sender_permission_boundary() -> None:
