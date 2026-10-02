@@ -314,3 +314,62 @@ def test_safe_message_fetch_live_path_skips_recovery_budget(monkeypatch) -> None
         assert reservations == []
     finally:
         _reset_recovery_budget_state()
+
+
+def test_cancelled_coalesced_waiter_does_not_cancel_shared_fetch() -> None:
+    _reset_recovery_budget_state()
+
+    class _BlockingFetchChannel:
+        def __init__(self) -> None:
+            self.id = 99
+            self.calls: list[int] = []
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def fetch_message(self, message_id: int):
+            self.calls.append(int(message_id))
+            self.started.set()
+            await self.release.wait()
+            return {"channel_id": self.id, "message_id": int(message_id)}
+
+    async def scenario():
+        channel = _BlockingFetchChannel()
+        first = asyncio.create_task(
+            discord_api_safety.fetch_message_with_api_safety(
+                channel,
+                501,
+                label="first waiter",
+            )
+        )
+        await channel.started.wait()
+
+        second = asyncio.create_task(
+            discord_api_safety.fetch_message_with_api_safety(
+                channel,
+                501,
+                label="second waiter",
+            )
+        )
+        await asyncio.sleep(0)
+
+        first.cancel()
+        try:
+            await first
+        except asyncio.CancelledError:
+            pass
+
+        assert not second.done()
+        channel.release.set()
+        result = await second
+        return channel, result
+
+    try:
+        channel, result = asyncio.run(scenario())
+        assert result == {"channel_id": 99, "message_id": 501}
+        assert channel.calls == [501]
+        snapshot = discord_api_safety.message_fetch_safety_snapshot()
+        assert snapshot["coalesced"] == 1
+        assert snapshot["inflight"] == 0
+        assert snapshot["channels"] == 0
+    finally:
+        _reset_recovery_budget_state()
