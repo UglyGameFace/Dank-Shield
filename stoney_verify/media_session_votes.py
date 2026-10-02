@@ -173,7 +173,6 @@ class MediaVoteManager:
         elif normalized_action in {
             ACTION_PLAY_RESULT,
             ACTION_QUEUE_RESULT,
-            ACTION_PLAY_NEXT,
         }:
             result_id = str(normalized_payload.get("result_id", "") or "").strip()
             if not result_id:
