@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from stoney_verify.community_pings_service import (
+    CAP_MOVIE_NIGHT_NOTIFY,
     CAP_TOKE_NOTIFY,
     CAP_TOKE_START,
     COMMUNITY_PINGS_KEY,
@@ -13,7 +14,10 @@ from stoney_verify.community_pings_service import (
     CommunityPingsConfig,
     community_member_lock,
     move_option,
+    movie_night_registration_blocker,
+    movie_night_role_id,
     parse_community_pings,
+    register_movie_night_notification_role,
     role_dependency_labels,
     self_service_kind,
     toke_role_ids,
@@ -480,6 +484,140 @@ def test_toke_capabilities_prefer_v2_and_fall_back_to_legacy_ids() -> None:
         migrated,
         {"stoner_role_id": "111", "sesh_ping_role_id": "222"},
     ) == (0, 0)
+
+
+def test_movie_night_role_registration_is_notification_capability_and_round_trips() -> None:
+    config = _base()
+    updated = register_movie_night_notification_role(
+        config,
+        role_id=777,
+        label="Movie Night",
+    )
+
+    option = next(item for item in updated.options if item.role_id == 777)
+    assert option.kind == "notification"
+    assert CAP_MOVIE_NIGHT_NOTIFY in option.capabilities
+    assert movie_night_role_id(updated) == 777
+    assert movie_night_registration_blocker(updated) == ""
+
+    reparsed = parse_community_pings(
+        {COMMUNITY_PINGS_KEY: updated.to_payload()}
+    )
+    assert movie_night_role_id(reparsed) == 777
+    reparsed_option = next(item for item in reparsed.options if item.role_id == 777)
+    assert CAP_MOVIE_NIGHT_NOTIFY in reparsed_option.capabilities
+
+
+def test_movie_night_registration_preserves_existing_option_rules_and_toke_caps() -> None:
+    config = CommunityPingsConfig(
+        revision=3,
+        groups=(CommunityPingGroup(key="alerts", label="Alerts"),),
+        options=(
+            CommunityPingOption(
+                key="cinema",
+                role_id=555,
+                label="Cinema Crew",
+                emoji="🍿",
+                description="Existing member choice",
+                kind="community",
+                group_key="alerts",
+                prerequisite_role_id=123,
+                exclusive_key="events",
+                removable=False,
+                enabled=False,
+                capabilities=(CAP_TOKE_NOTIFY,),
+            ),
+        ),
+        source="v2",
+    )
+
+    updated = register_movie_night_notification_role(
+        config,
+        role_id=555,
+    )
+    option = updated.options[0]
+    assert option.key == "cinema"
+    assert option.label == "Cinema Crew"
+    assert option.emoji == "🍿"
+    assert option.description == "Existing member choice"
+    assert option.group_key == "alerts"
+    assert option.prerequisite_role_id == 123
+    assert option.exclusive_key == "events"
+    assert not option.removable
+    assert option.enabled
+    assert option.kind == "notification"
+    assert CAP_TOKE_NOTIFY in option.capabilities
+    assert CAP_MOVIE_NIGHT_NOTIFY in option.capabilities
+
+
+def test_movie_night_registration_is_unique_without_disturbing_other_capabilities() -> None:
+    config = CommunityPingsConfig(
+        revision=2,
+        groups=(CommunityPingGroup(key="alerts", label="Alerts"),),
+        options=(
+            CommunityPingOption(
+                key="old-movie",
+                role_id=500,
+                label="Old Movie Pings",
+                kind="notification",
+                group_key="alerts",
+                capabilities=(CAP_MOVIE_NIGHT_NOTIFY, CAP_TOKE_NOTIFY),
+            ),
+            CommunityPingOption(
+                key="new-movie",
+                role_id=501,
+                label="New Movie Pings",
+                kind="notification",
+                group_key="alerts",
+                capabilities=(CAP_TOKE_START,),
+            ),
+        ),
+        source="v2",
+    )
+
+    updated = register_movie_night_notification_role(config, role_id=501)
+    by_role = {item.role_id: item for item in updated.options}
+    assert CAP_MOVIE_NIGHT_NOTIFY not in by_role[500].capabilities
+    assert CAP_TOKE_NOTIFY in by_role[500].capabilities
+    assert CAP_MOVIE_NIGHT_NOTIFY in by_role[501].capabilities
+    assert CAP_TOKE_START in by_role[501].capabilities
+    assert movie_night_role_id(updated) == 501
+
+
+def test_movie_night_role_creation_preflight_blocks_only_when_new_option_cannot_fit() -> None:
+    groups = (CommunityPingGroup(key="alerts", label="Alerts"),)
+    full = CommunityPingsConfig(
+        revision=1,
+        groups=groups,
+        options=tuple(
+            CommunityPingOption(
+                key=f"role-{index}",
+                role_id=1000 + index,
+                label=f"Role {index}",
+                group_key="alerts",
+            )
+            for index in range(MAX_COMMUNITY_OPTIONS)
+        ),
+        source="v2",
+    )
+    assert "maximum" in movie_night_registration_blocker(full).lower()
+
+    already_mapped = CommunityPingsConfig(
+        revision=1,
+        groups=groups,
+        options=(
+            CommunityPingOption(
+                key="movie-night",
+                role_id=999,
+                label="Movie Night",
+                kind="notification",
+                group_key="alerts",
+                capabilities=(CAP_MOVIE_NIGHT_NOTIFY,),
+            ),
+        ),
+        source="v2",
+    )
+    assert movie_night_registration_blocker(already_mapped) == ""
 
 
 def test_remove_and_reorder_bump_revision_only_when_changed() -> None:
