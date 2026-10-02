@@ -55,6 +55,7 @@ Status:
 - Search-link provider modal acknowledgement now occurs before the guild-config CAS write; success, persistence failure, and CAS-conflict paths all terminate by editing the deferred original response instead of risking a Discord interaction timeout or orphaned thinking state.
 - External provider links now enforce Discord's 512-character link-button URL limit; setup validates against the full supported 180-character query budget so a provider cannot save successfully and later fail only when the Search Elsewhere view renders.
 - Provider Deck guidance now matches the actual split controls and explains both **Add JSON Provider** and **Add Search Link** instead of retaining the pre-split “Add Provider” instructions.
+- Custom-provider listing now respects Discord's 1,024-character embed field-value limit and summarizes hidden providers instead of allowing a large registry to make Provider Deck rendering fail.
 - Regression coverage is being extended in the catalog, media-source, and public Movie Night test suites.
 
 ### Validation / cleanup / blockers
@@ -69,6 +70,7 @@ Latest validation findings:
 - review of the first PR #398 head found the new Search Link modal could call `save_media_source_registry()` before acknowledging Discord; the modal now defers before persistence and terminates the deferred original response on success/failure/conflict;
 - review also found external provider templates could be accepted up to 1000 characters even though Discord link-button URLs are capped at 512; the renderer now rejects overflow and setup validates using the maximum supported query length;
 - regression coverage locks both interaction acknowledgement ordering and the Discord button URL budget;
+- regression coverage also fills the registry to its 20-provider cap and proves the custom-provider embed field remains within Discord's 1,024-character field-value budget;
 - all earlier-head CI results are superseded; exact-head CI for the current branch head is required before merge.
 
 Merged baseline:
