@@ -61,6 +61,7 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
     assert {
         "Start / Join",
         "Search / Vote",
+        "Results",
         "Queue",
         "Vote Yes",
         "Vote No",
@@ -89,6 +90,24 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
     assert len(hub.children) <= 25
     assert len(setup.children) <= 25
     assert len(sources.children) <= 25
+
+
+def test_movie_night_hub_adds_signed_watch_link_when_media_is_active(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://media.example.com")
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "movie-secret")
+    room = SimpleNamespace(room_id="room-123", stream_token="torrent-token")
+
+    view = movie_ui.MovieNightHubView(123, room)
+    links = [
+        item
+        for item in view.children
+        if getattr(item, "style", None) is discord.ButtonStyle.link
+    ]
+    assert len(links) == 1
+    assert links[0].label == "Watch"
+    assert str(links[0].url).startswith(
+        "https://media.example.com/movie/room-123/watch?"
+    )
 
 
 def test_movie_night_is_reachable_from_home_registry_and_normal_search_words() -> None:
