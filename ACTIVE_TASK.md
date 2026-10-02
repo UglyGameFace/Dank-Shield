@@ -54,11 +54,14 @@ This task keeps that owner and one-send contract.
 - recent-route dedupe uses the same canonical URL identity.
 
 ### Native video relay
-- Source video candidates are derived only from source attachments and Discord embed `video.proxy_url` / `video.url`.
-- Discord proxy/CDN video is preferred when available.
-- Direct relay is restricted to trusted media hosts; arbitrary user URLs are not fetched.
+- Fast path: source video candidates are derived from source attachments and Discord embed `video.proxy_url` / `video.url`.
+- Android evidence showed X can expose only a static preview image, so preview metadata alone is not sufficient.
+- X-only fallback: the canonical X status URL is passed through pinned `yt-dlp==2026.8.19` with `download=False` to resolve a real progressive video URL.
+- The extractor runs off the event loop, behind a small semaphore, with positive/negative per-status cache entries and a hard wait timeout.
+- Only progressive HTTP(S) video formats on trusted media hosts are eligible; HLS-only, arbitrary-host, known-oversize, and audio-only candidates are rejected.
+- Discord proxy/CDN video remains preferred when available.
 - Downloads use `aiohttp` with bounded timeout, explicit redirect validation, streaming chunks, a spooled temp file, guild upload limit, and a configurable safety cap.
-- Native relay requires Attach Files in the target. Missing permission, unsupported media, timeout, oversize, or download failure falls back to the single canonical provider link instead of dropping the route.
+- Native relay requires Attach Files in the target. Missing permission, extractor failure, unsupported media, timeout, oversize, or download failure falls back to the single canonical provider link instead of dropping the route.
 - When native video upload succeeds, source URLs are angle-bracketed to suppress provider unfurls while keeping them clickable, producing one visual media surface: Discord's native uploaded-video player.
 - If Discord rejects the uploaded file at final send, Share Router retries the same route once as link-only content.
 
@@ -69,9 +72,12 @@ This task keeps that owner and one-send contract.
 - provider-generated embed title/description are not copied;
 - duplicate aliases inside one human message collapse;
 - Discord proxy video is preferred over provider direct URL;
+- X status recovery from routed text;
+- progressive combined A/V MP4 selection from extracted X metadata;
+- HLS-only, untrusted, and known-oversize candidates are rejected;
 - untrusted arbitrary video hosts are rejected;
 - native-video mode suppresses link unfurls while preserving clickability;
-- static ownership checks require bounded spool/timeout/size behavior and link-only fallback.
+- static ownership checks require bounded spool/timeout/size behavior, extractor concurrency/cache guards, and link-only fallback.
 
 ## Validation required
 
