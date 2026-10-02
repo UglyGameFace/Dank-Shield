@@ -2,7 +2,9 @@ from __future__ import annotations
 
 """Canonical public-network safety helpers for Share Router media."""
 
+import asyncio
 import ipaddress
+import socket
 from typing import Any, Mapping
 from urllib.parse import urljoin, urlsplit
 
@@ -111,6 +113,43 @@ class PublicOnlyDNSResolver(aiohttp.abc.AbstractResolver):
         await self._resolver.close()
 
 
+
+async def url_resolves_public(value: str, *, timeout_seconds: float = 4.0) -> bool:
+    if not is_safe_media_download_url(value):
+        return False
+    parsed = urlsplit(value)
+    host = str(parsed.hostname or "").strip()
+    if not host:
+        return False
+    if is_public_address(host):
+        return True
+
+    try:
+        port = int(parsed.port or (443 if parsed.scheme == "https" else 80))
+    except ValueError:
+        return False
+
+    try:
+        infos = await asyncio.wait_for(
+            asyncio.get_running_loop().getaddrinfo(
+                host,
+                port,
+                family=socket.AF_UNSPEC,
+                type=socket.SOCK_STREAM,
+            ),
+            timeout=max(0.5, min(float(timeout_seconds), 10.0)),
+        )
+    except Exception:
+        return False
+
+    addresses = {
+        str(item[4][0])
+        for item in infos
+        if len(item) >= 5 and item[4]
+    }
+    return bool(addresses) and all(is_public_address(item) for item in addresses)
+
+
 def public_tcp_connector(*, ttl_dns_cache: int = 60) -> aiohttp.TCPConnector:
     return aiohttp.TCPConnector(
         resolver=PublicOnlyDNSResolver(),
@@ -159,4 +198,5 @@ __all__ = [
     "public_get",
     "public_tcp_connector",
     "safe_media_headers",
+    "url_resolves_public",
 ]
