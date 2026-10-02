@@ -155,3 +155,30 @@ def test_proxy_source_contract_has_no_public_listener_or_shell() -> None:
     assert "public_get(" in source
     assert "public_tcp_connector(" in source
     assert "ManifestBudgetExceeded" in source
+
+
+
+def test_dash_nested_relative_baseurl_stays_relative_inside_proxy_namespace() -> None:
+    proxy = _proxy()
+    source = """<MPD xmlns="urn:mpeg:dash:schema:mpd:2011">
+  <BaseURL>https://cdn.example.com/root/</BaseURL>
+  <Period>
+    <BaseURL>video/</BaseURL>
+    <AdaptationSet>
+      <Representation>
+        <SegmentTemplate media="chunk-$Number$.m4s" initialization="init.mp4"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"""
+
+    rewritten = proxy._rewrite_dash(
+        source,
+        base_url="https://cdn.example.com/manifest.mpd",
+        headers=proxy.headers,
+    )
+
+    assert "https://cdn.example.com" not in rewritten
+    assert ">video/<" in rewritten
+    assert "http://127.0.0.1:43123/" in rewritten
+    proxy._assert_rewrite_is_local_only(rewritten)
