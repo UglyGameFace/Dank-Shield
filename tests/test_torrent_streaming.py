@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from stoney_verify.torrent_media_server import _validate_public_base_url
 from stoney_verify.torrent_streaming import (
     TorrentMediaManager,
     TorrentStreamSession,
@@ -116,6 +117,17 @@ def test_magnet_and_torrent_source_detection() -> None:
     assert is_torrent_filename("movie.torrent")
     assert is_torrent_filename("MOVIE.TORRENT")
     assert not is_torrent_filename("movie.mp4")
+
+
+def test_base32_and_hex_btih_normalize_to_same_identity() -> None:
+    zeros_hex = "0" * 40
+    zeros_base32 = "A" * 32
+    assert magnet_identity(
+        f"magnet:?xt=urn:btih:{zeros_hex}"
+    ) == f"btih:{zeros_hex}"
+    assert magnet_identity(
+        f"magnet:?xt=urn:btih:{zeros_base32}"
+    ) == f"btih:{zeros_hex}"
 
 
 def test_playable_media_detection_and_content_types() -> None:
@@ -313,6 +325,18 @@ def test_stream_url_is_signed_and_expiring(monkeypatch, tmp_path: Path) -> None:
             "bad-signature",
         )
     )
+
+
+def test_public_media_url_requires_https_outside_localhost(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://media.example")
+    _validate_public_base_url()
+
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "http://127.0.0.1:8080")
+    _validate_public_base_url()
+
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "http://media.example")
+    with pytest.raises(RuntimeError, match="must use HTTPS"):
+        _validate_public_base_url()
 
 
 def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
