@@ -22,13 +22,17 @@ from stoney_verify.community_pings_service import (
     validate_config,
 )
 from stoney_verify.media_source_registry import (
+    PROVIDER_TYPE_EXTERNAL,
+    PROVIDER_TYPE_JSON,
     CustomMediaSource,
     MediaSourceRegistry,
     add_custom_source,
     enabled_custom_sources,
+    enabled_external_sources,
     load_media_source_registry,
     prepare_example_search_url,
     remove_custom_source,
+    render_provider_search_url,
     save_media_source_registry,
     set_custom_source_enabled,
 )
@@ -610,7 +614,11 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
         rows = []
         for source in registry.sources:
             state = "✅" if source.enabled else "⏸️"
-            rows.append(f"{state} **{source.label}**\n↳ {source.endpoint_url[:180]}")
+            mode = "JSON" if source.provider_type == PROVIDER_TYPE_JSON else "Search link"
+            rows.append(
+                f"{state} **{source.label}** • {mode}\n"
+                f"↳ {source.endpoint_url[:180]}"
+            )
         embed.add_field(
             name=f"📚 Custom Providers • {len(registry.sources)}",
             value="\n".join(rows)[:4000],
@@ -619,8 +627,9 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
     embed.add_field(
         name="🔒 Provider Safety",
         value=(
-            "A normal website page is not an API. Custom providers must use HTTPS and return JSON. "
-            "Do not put passwords, API secrets, or private-network addresses in the URL."
+            "**JSON providers** must use HTTPS and return structured results with playable media refs. "
+            "**Search-link providers** only open the provider's own result page and are never scraped. "
+            "Do not put passwords, API secrets, or private-network addresses in either URL."
         ),
         inline=False,
     )
