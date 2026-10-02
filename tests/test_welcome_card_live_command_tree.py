@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import discord
 from discord import app_commands
 
 from stoney_verify import commands as commands_module
@@ -66,15 +67,47 @@ def test_final_fast_doorways_are_commands_not_subcommand_groups() -> None:
     assert commands_module.bot.tree.get_command("ticket-panel", guild=None) is None
 
 
-def test_dank_upload_is_the_only_attachment_command_doorway() -> None:
+def test_attachment_doorways_are_limited_to_card_upload_and_toke_media() -> None:
     _final_imported_tree()
+
     upload = dank_group.get_command("upload")
     assert isinstance(upload, app_commands.Command)
     assert getattr(upload.callback, "__module__", "") == (
         "stoney_verify.commands_ext.public_command_surface_v2"
     )
-    params = getattr(upload, "_params", {})
-    assert set(params) == {"asset", "file"}
+    upload_params = getattr(upload, "_params", {})
+    assert set(upload_params) == {"asset", "file"}
+    assert upload_params["file"].type is discord.AppCommandOptionType.attachment
+
+    toke = commands_module.bot.tree.get_command("toke", guild=None)
+    assert isinstance(toke, app_commands.Command)
+    assert getattr(toke.callback, "__module__", "") == (
+        "stoney_verify.commands_ext.public_toke"
+    )
+    toke_params = getattr(toke, "_params", {})
+    assert set(toke_params) == {"message", "media", "upload"}
+    assert toke_params["upload"].type is discord.AppCommandOptionType.attachment
+    assert not bool(getattr(toke_params["upload"], "required", True))
+
+    attachment_paths: set[str] = set()
+
+    def collect(command: Any, prefix: str = "") -> None:
+        name = str(getattr(command, "name", "") or "")
+        path = f"{prefix} {name}".strip()
+        if isinstance(command, app_commands.Group):
+            for child in command.commands:
+                collect(child, path)
+            return
+        if not isinstance(command, app_commands.Command):
+            return
+        for param_name, param in getattr(command, "_params", {}).items():
+            if getattr(param, "type", None) is discord.AppCommandOptionType.attachment:
+                attachment_paths.add(f"{path}:{param_name}")
+
+    for root in commands_module.bot.tree.get_commands(guild=None):
+        collect(root)
+
+    assert attachment_paths == {"dank upload:file", "toke:upload"}
 
 
 def test_lifecycle_studios_remain_reachable_from_home_not_subcommands() -> None:
