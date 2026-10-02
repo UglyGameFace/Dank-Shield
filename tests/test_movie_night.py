@@ -655,3 +655,188 @@ def test_group_buffer_hold_has_max_wait_and_cooldown() -> None:
         )
     assert room.playback_state == "playing"
     assert room.buffering_cooldown_until > 107.0
+
+
+
+def test_late_joiner_does_not_pause_room_until_synchronized() -> None:
+    manager = MovieNightManager(
+        viewer_ttl_seconds=120,
+        buffer_low_seconds=4,
+        buffer_resume_seconds=10,
+        buffer_max_hold_seconds=20,
+        late_join_min_buffer_seconds=8,
+        late_join_max_buffer_seconds=15,
+        late_join_sync_tolerance_seconds=2.5,
+    )
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="torrent-token",
+        now=100.0,
+    )
+    manager.apply_host_action(
+        room.room_id,
+        host_id=10,
+        action="seek",
+        payload={"seconds": 2700},
+        now=100.0,
+    )
+    manager.apply_host_action(
+        room.room_id,
+        host_id=10,
+        action="resume",
+        now=100.0,
+    )
+
+    manager.heartbeat(
+        room.room_id,
+        user_id=10,
+        position_seconds=2701,
+        byte_position=2701_000,
+        buffered_until_byte=2730_000,
+        paused=False,
+        buffered_until_seconds=2730,
+        media_duration_seconds=7200,
+        now=101.0,
+    )
+
+    manager.join_room(room.room_id, user_id=20, now=110.0)
+    viewer = room.viewers[20]
+    assert not viewer.sync_ready
+    assert 20 in manager.active_viewers(room, now=110.0)
+    assert 20 not in manager.buffer_quorum_viewers(room, now=110.0)
+
+    # The late viewer has barely any data. Existing playback must continue.
+    target = room.current_position(111.0)
+    manager.heartbeat(
+        room.room_id,
+        user_id=20,
+        position_seconds=target,
+        byte_position=target.__int__() * 1000,
+        buffered_until_byte=target.__int__() * 1000 + 1000,
+        paused=True,
+        buffered_until_seconds=target + 2,
+        media_duration_seconds=7200,
+        sync_buffer_target_seconds=12,
+        now=111.0,
+    )
+    assert not viewer.sync_ready
+    assert room.playback_state == "playing"
+    assert 20 not in manager.buffer_quorum_viewers(room, now=111.0)
+
+    # Once the viewer is at the live room position with enough adaptive buffer,
+    # they graduate into the normal group-buffer quorum.
+    target = room.current_position(113.0)
+    manager.heartbeat(
+        room.room_id,
+        user_id=20,
+        position_seconds=target,
+        byte_position=target.__int__() * 1000,
+        buffered_until_byte=target.__int__() * 1000 + 20_000,
+        paused=True,
+        buffered_until_seconds=target + 12,
+        media_duration_seconds=7200,
+        sync_buffer_target_seconds=12,
+        now=113.0,
+    )
+    assert viewer.sync_ready
+    assert viewer.sync_ready_at == 113.0
+    assert 20 in manager.buffer_quorum_viewers(room, now=113.0)
+
+
+def test_late_joiner_can_trigger_group_buffering_only_after_sync() -> None:
+    manager = MovieNightManager(
+        viewer_ttl_seconds=120,
+        buffer_low_seconds=4,
+        buffer_resume_seconds=10,
+        buffer_max_hold_seconds=20,
+        late_join_min_buffer_seconds=8,
+        late_join_max_buffer_seconds=15,
+    )
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="torrent-token",
+        now=100.0,
+    )
+    manager.apply_host_action(room.room_id, host_id=10, action="resume", now=100.0)
+    manager.heartbeat(
+        room.room_id,
+        user_id=10,
+        position_seconds=1,
+        byte_position=1000,
+        buffered_until_byte=30_000,
+        paused=False,
+        buffered_until_seconds=30,
+        media_duration_seconds=600,
+        now=101.0,
+    )
+
+    manager.join_room(room.room_id, user_id=20, now=105.0)
+    target = room.current_position(106.0)
+    manager.heartbeat(
+        room.room_id,
+        user_id=20,
+        position_seconds=target,
+        byte_position=6000,
+        buffered_until_byte=30_000,
+        paused=True,
+        buffered_until_seconds=target + 12,
+        media_duration_seconds=600,
+        sync_buffer_target_seconds=10,
+        now=106.0,
+    )
+    assert room.viewers[20].sync_ready
+    assert room.playback_state == "playing"
+
+    # Once synchronized, a later low-buffer heartbeat may legitimately protect
+    # the group with a bounded shared buffering hold.
+    target = room.current_position(108.0)
+    manager.heartbeat(
+        room.room_id,
+        user_id=10,
+        position_seconds=target,
+        byte_position=8000,
+        buffered_until_byte=30_000,
+        paused=False,
+        buffered_until_seconds=target + 20,
+        media_duration_seconds=600,
+        now=108.0,
+    )
+    manager.heartbeat(
+        room.room_id,
+        user_id=20,
+        position_seconds=target,
+        byte_position=8000,
+        buffered_until_byte=8500,
+        paused=False,
+        buffered_until_seconds=target + 1,
+        media_duration_seconds=600,
+        sync_buffer_target_seconds=10,
+        now=108.0,
+    )
+    assert room.playback_state == "buffering"
+
+
+def test_media_change_requalifies_non_host_viewers_for_new_stream() -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="old-token",
+        now=100.0,
+    )
+    manager.join_room(room.room_id, user_id=20, now=100.0)
+    assert room.viewers[20].sync_ready
+
+    manager.set_room_media(
+        room.room_id,
+        host_id=10,
+        stream_token="new-token",
+    )
+    assert room.viewers[10].sync_ready
+    assert not room.viewers[20].sync_ready
+    assert 20 not in manager.buffer_quorum_viewers(room, now=101.0)
