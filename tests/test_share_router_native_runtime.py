@@ -13,7 +13,14 @@ from stoney_verify.share_router_resources import (
 )
 from stoney_verify.services import server_design_apply_service as design_apply_service
 from stoney_verify.share_router_runtime import (
+    _canonical_share_url,
+    _dedupe_key,
+    _message_share_text,
     _merged_overwrite,
+    _suppress_url_previews,
+    _trusted_video_url,
+    _url_identity,
+    _video_source_urls,
     ensure_share_router_runtime,
     route_for_source,
     source_age_blocker,
@@ -48,6 +55,85 @@ def test_share_router_design_resource_is_structural_not_global_name_matching() -
     assert is_share_router_design_resource(router_category)
     assert is_share_router_design_resource(router_child)
     assert not is_share_router_design_resource(unrelated_same_name)
+
+
+def test_x_and_twitter_status_aliases_collapse_to_one_identity() -> None:
+    x_url = "https://x.com/AIslop_/status/2105553400381505781"
+    twitter_url = "https://twitter.com/AIslop_/status/2105553400381505781"
+
+    assert _canonical_share_url(twitter_url) == x_url
+    assert _url_identity(x_url) == "x-status:2105553400381505781"
+    assert _url_identity(twitter_url) == _url_identity(x_url)
+    assert _dedupe_key(x_url) == _dedupe_key(twitter_url)
+
+
+def test_share_text_does_not_duplicate_x_alias_or_generated_embed_copy() -> None:
+    status_id = "2105553400381505781"
+    x_url = f"https://x.com/AIslop_/status/{status_id}"
+    twitter_url = f"https://twitter.com/AIslop_/status/{status_id}"
+    message = SimpleNamespace(
+        content=x_url,
+        embeds=[
+            SimpleNamespace(
+                url=twitter_url,
+                title="AI Slop (@AIslop_) on X",
+                description="Generated provider preview copy",
+            )
+        ],
+        attachments=[],
+    )
+
+    routed = _message_share_text(message)
+
+    assert routed == x_url
+    assert routed.count(status_id) == 1
+    assert "twitter.com" not in routed
+    assert "Generated provider preview copy" not in routed
+    assert "AI Slop (@AIslop_) on X" not in routed
+
+
+def test_share_text_collapses_duplicate_aliases_inside_human_content() -> None:
+    status_id = "2105553400381505781"
+    message = SimpleNamespace(
+        content=(
+            f"https://x.com/AIslop_/status/{status_id}\n"
+            f"https://twitter.com/AIslop_/status/{status_id}"
+        ),
+        embeds=[],
+        attachments=[],
+    )
+
+    routed = _message_share_text(message)
+    assert routed.count(status_id) == 1
+    assert "twitter.com" not in routed
+
+
+def test_share_router_video_candidates_prefer_trusted_discord_proxy() -> None:
+    message = SimpleNamespace(
+        attachments=[],
+        embeds=[
+            SimpleNamespace(
+                video=SimpleNamespace(
+                    proxy_url="https://media.discordapp.net/external/token/video.mp4",
+                    url="https://video.twimg.com/ext_tw_video/example/pu/vid/720x1280/file.mp4",
+                )
+            )
+        ],
+    )
+
+    assert _video_source_urls(message) == [
+        "https://media.discordapp.net/external/token/video.mp4",
+        "https://video.twimg.com/ext_tw_video/example/pu/vid/720x1280/file.mp4",
+    ]
+    assert _trusted_video_url(_video_source_urls(message)[0])
+    assert _trusted_video_url(_video_source_urls(message)[1])
+    assert not _trusted_video_url("https://example.com/user-controlled/video.mp4")
+
+
+def test_native_video_mode_suppresses_provider_unfurl_but_keeps_link_clickable() -> None:
+    url = "https://x.com/AIslop_/status/2105553400381505781"
+    suppressed = _suppress_url_previews(f"watch {url}")
+    assert suppressed == f"watch <{url}>"
 
 
 def test_route_lookup_preserves_existing_enabled_semantics() -> None:
@@ -191,6 +277,20 @@ def test_dank_design_excludes_share_router_from_batch_and_exact_edit_paths() -> 
     assert "design.format_lock.reserved_category" in DESIGN
     assert "design.format_lock.reserved_channel" in DESIGN
     assert "design.protection.reserved" in DESIGN
+
+
+def test_runtime_native_video_relay_is_bounded_and_fail_open() -> None:
+    assert "DANK_SHARE_ROUTER_MAX_VIDEO_BYTES" in RUNTIME
+    assert "DANK_SHARE_ROUTER_VIDEO_TIMEOUT_SECONDS" in RUNTIME
+    assert "tempfile.SpooledTemporaryFile" in RUNTIME
+    assert "aiohttp.ClientTimeout" in RUNTIME
+    assert "allow_redirects=False" in RUNTIME
+    assert "_trusted_video_url" in RUNTIME
+    assert "target.permissions_for(me).attach_files" in RUNTIME
+    assert 'send_payload["file"] = native_video.file' in RUNTIME
+    assert "_suppress_url_previews(routed_text)" in RUNTIME
+    assert "native video send fallback" in RUNTIME
+    assert "await target.send(" in RUNTIME
 
 
 def test_runtime_keeps_legacy_route_storage_and_sender_permission_boundary() -> None:
