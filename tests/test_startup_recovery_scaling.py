@@ -25,6 +25,8 @@ COMMUNITY_TOOLS = (ROOT / "stoney_verify" / "community_tools_runtime.py").read_t
 TICKET_PANEL_RUNTIME = (ROOT / "stoney_verify" / "ticket_panel_runtime.py").read_text(encoding="utf-8")
 BASIC_VERIFY = (ROOT / "stoney_verify" / "verification_new" / "basic_verify.py").read_text(encoding="utf-8")
 LIVE_GUILD_FOOTER = (ROOT / "stoney_verify" / "startup_guards" / "live_guild_name_footer_guard.py").read_text(encoding="utf-8")
+INTERACTION_HANDLERS = (ROOT / "stoney_verify" / "interaction_handlers.py").read_text(encoding="utf-8")
+EVENT_INTERACTIONS = (ROOT / "stoney_verify" / "events_new" / "interactions.py").read_text(encoding="utf-8")
 
 
 def _block(source: str, start_marker: str, end_marker: str) -> str:
@@ -183,6 +185,22 @@ def test_single_message_startup_recovery_uses_shared_api_safety_owner() -> None:
     )
     assert "fetch_message_with_api_safety(" in footer
     assert 'recovery=(str(reason).strip().lower() == "startup")' in footer
+
+
+def test_verification_submission_settle_fetch_uses_live_message_guard() -> None:
+    handler = _block(
+        INTERACTION_HANDLERS,
+        "async def handle_possible_submission(",
+        "# ============================================================\n# Component interaction dispatcher",
+    )
+    assert "fetch_message_with_api_safety(" in handler
+    assert "recovery=False" in handler
+    assert "message.channel.fetch_message(message.id)" not in handler
+
+    assert "from ..commands import handle_possible_submission" in EVENT_INTERACTIONS
+    assert "await handle_possible_submission(message)" in EVENT_INTERACTIONS
+    assert "await handle_possible_submission(after)" not in EVENT_INTERACTIONS
+    assert "await _dispatch_possible_submission(after)" in EVENT_INTERACTIONS
 
 
 def test_activity_pins_pre_restart_heartbeat_before_state_advances() -> None:
