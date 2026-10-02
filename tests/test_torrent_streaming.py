@@ -926,3 +926,31 @@ def test_overlapping_starts_do_not_pollute_adaptive_memory_estimate(monkeypatch,
 
     assert manager._session_memory_samples == 0
     assert manager._effective_session_memory_mb() == 96
+
+
+
+def test_per_guild_in_flight_start_reserves_the_guild_slot(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.max_sessions = 4
+    manager.soft_session_limit = 4
+    manager.max_unique_per_guild = 1
+    manager.disk_reserve_bytes = 0
+    monkeypatch.setattr(torrent_streaming, "current_rss_mb", lambda: 200.0)
+
+    asyncio.run(manager._reserve_start(guild_id=77))
+    assert manager._starting_by_guild[77] == 1
+
+    snap = manager.capacity_snapshot(guild_id=77)
+    assert not snap.admission_allowed
+    assert snap.guild_unique_sessions == 0
+    assert snap.guild_slots_available == 0
+    assert "this server reached" in snap.blocker.lower()
+
+    with pytest.raises(RuntimeError, match="This server reached"):
+        asyncio.run(manager._reserve_start(guild_id=77))
+
+    other = manager.capacity_snapshot(guild_id=88)
+    assert other.guild_slots_available == 1
+
+    asyncio.run(manager._release_start(guild_id=77))
+    assert 77 not in manager._starting_by_guild
