@@ -163,7 +163,7 @@ def test_single_message_startup_recovery_uses_shared_api_safety_owner() -> None:
     ticket_identity = _block(
         TICKET_PANEL_RUNTIME,
         "async def _reconcile_saved_ticket_panel(",
-        "def bind_public_ticket_panel_message",
+        "async def _reconcile_ticket_panels_after_ready(",
     )
     assert "fetch_message_with_api_safety(" in ticket_identity
     assert "recovery=True" in ticket_identity
