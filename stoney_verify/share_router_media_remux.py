@@ -312,6 +312,7 @@ async def remux_media_for_discord(
         )
         os.close(fd)
         output_path = Path(raw_path)
+        keep_output = False
         try:
             output_path.unlink(missing_ok=True)
             command = build_ffmpeg_remux_command(
@@ -350,17 +351,15 @@ async def remux_media_for_discord(
                 return None
 
             _REMUX_STATS["success"] += 1
+            keep_output = True
             return RemuxedMedia(
                 path=output_path,
                 size_bytes=size,
             )
         finally:
-            # Ownership of a successful file transfers to RemuxedMedia. Failed
-            # attempts are always removed here.
-            if output_path.exists() and (
-                output_path.stat().st_size <= 0
-                or _REMUX_STATS["success"] <= 0
-            ):
+            # Ownership of a successful file transfers to RemuxedMedia. Every
+            # failed/timeout/oversize attempt is removed regardless of history.
+            if not keep_output:
                 try:
                     output_path.unlink(missing_ok=True)
                 except Exception:
