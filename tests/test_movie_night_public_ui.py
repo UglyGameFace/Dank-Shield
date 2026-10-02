@@ -12,7 +12,7 @@ from stoney_verify.command_surface_contract import (
 )
 from stoney_verify.commands_ext import public_movie_night as movie_ui
 from stoney_verify.commands_ext.public_command_surface_v2 import _standalone
-from stoney_verify.media_source_registry import MediaSourceRegistry
+from stoney_verify.media_source_registry import CustomMediaSource, MediaSourceRegistry
 from stoney_verify.media_source_resolver import (
     MediaSourceSearchOutcome,
     ResolvedMediaVariant,
@@ -73,6 +73,7 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
         "Sources",
         "Setup",
         "Community & Pings",
+        "End Session",
         "Refresh",
         "Close",
     } <= _labels(hub)
@@ -86,7 +87,7 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
         "Close",
     } <= _labels(setup)
     assert {
-        "Add / Update Source",
+        "Add Source",
         "Manage Source",
         "Back",
         "Close",
@@ -95,6 +96,35 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
     assert len(hub.children) <= 25
     assert len(setup.children) <= 25
     assert len(sources.children) <= 25
+
+
+
+def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
+    add_modal = movie_ui.CustomSourceModal(owner_id=1, baseline={})
+    assert len(add_modal.children) == 2
+    assert [item.label for item in add_modal.children] == [
+        "Source name",
+        "HTTPS JSON search/feed URL",
+    ]
+
+    source = CustomMediaSource(
+        source_id="family-library",
+        label="Family Library",
+        endpoint_url="https://library.example.org/search?q={query}",
+        enabled=True,
+        added_by=1,
+    )
+    edit_modal = movie_ui.CustomSourceModal(
+        owner_id=1,
+        baseline={},
+        source=source,
+    )
+    assert edit_modal.source_id == "family-library"
+    assert edit_modal.label_input.default == "Family Library"
+    assert edit_modal.endpoint_input.default == source.endpoint_url
+
+    actions = movie_ui.SourceActionView(1, "family-library")
+    assert {"Edit", "Enable", "Disable", "Remove", "Back"} <= _labels(actions)
 
 
 def test_movie_night_hub_adds_signed_watch_link_when_media_is_active(monkeypatch) -> None:
@@ -348,3 +378,60 @@ def test_media_endpoint_check_acknowledges_before_network(monkeypatch) -> None:
     assert "http-enter" in events
     assert interaction.edits
     assert "reachable" in str(interaction.edits[-1].get("content", "")).lower()
+
+
+
+def test_passed_end_vote_runs_canonical_session_cleanup(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="torrent-token",
+        now=100.0,
+    )
+    manager.join_room(room.room_id, user_id=20, now=100.0)
+    manager.join_room(room.room_id, user_id=30, now=100.0)
+
+    vote = manager.propose_vote(
+        room.room_id,
+        proposer_id=20,
+        action="end",
+        now=101.0,
+    )
+    vote = manager.cast_vote(
+        room.room_id,
+        vote.vote_id,
+        user_id=30,
+        approve=True,
+        now=102.0,
+    )
+    assert vote.resolved and vote.passed and room.ended
+
+    cleanup_calls: list[str] = []
+    replacements: list[dict] = []
+
+    async def fake_cleanup(target):
+        cleanup_calls.append(target.room_id)
+        target.stream_token = ""
+        return SimpleNamespace(cleanup_error="")
+
+    async def fake_replace(interaction, **kwargs):
+        _ = interaction
+        replacements.append(kwargs)
+
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(movie_ui, "terminate_movie_night_room", fake_cleanup)
+    monkeypatch.setattr(movie_ui, "_replace", fake_replace)
+
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=20),
+        guild=None,
+        channel=None,
+    )
+    asyncio.run(movie_ui._execute_passed_vote(interaction, room, vote))
+
+    assert cleanup_calls == [room.room_id]
+    assert replacements
+    assert "ended" in replacements[-1]["content"].lower()
+    assert manager.claim_vote_execution(room.room_id, vote.vote_id) is False
