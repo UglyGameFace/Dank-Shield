@@ -482,3 +482,13 @@ Correction:
 Active branch: `fix/toke-capability-roundtrip`.
 
 Do not close #381 until this exact-head fix passes CI, merges/deploys, and Android confirms both role mappings remain configured after Refresh and `/toke` posts successfully.
+
+
+## Swarm-health release ranking
+
+- Movie Night voting/search/queue state is centralized under one canonical room owner.
+- Torrent-backed movie results support multiple release/quality variants for the same title.
+- Each variant carries live swarm health: seeds, leechers, total peers, seed/leech ratio, and a health label.
+- Default variant ordering is swarm-first: user votes, then non-zero seed availability, highest seed count, seed/leech balance, verified quality/codec/source, and size.
+- Zero-seed variants are retained for visibility but demoted below playable swarms.
+- Live torrent status exposes seeds, leechers, peers, distributed copies, and seed/leech ratio for playback diagnostics.
