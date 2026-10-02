@@ -144,7 +144,11 @@ def _internet_archive_search_url(query: str) -> str:
 
 def _archive_variant_from_doc(item: Mapping[str, Any]) -> Optional[ResolvedMediaVariant]:
     identifier = str(item.get("identifier") or "").strip()
-    if not identifier or not _ARCHIVE_ID_RE.fullmatch(identifier):
+    if (
+        not identifier
+        or identifier in {".", ".."}
+        or not _ARCHIVE_ID_RE.fullmatch(identifier)
+    ):
         return None
     title = _clean_title(item.get("title") or identifier)
     if not title:
