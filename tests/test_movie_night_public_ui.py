@@ -87,7 +87,8 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
         "Close",
     } <= _labels(setup)
     assert {
-        "Add Provider",
+        "Add JSON Provider",
+        "Add Search Link",
         "Manage Providers",
         "Back",
         "Close",
@@ -133,6 +134,39 @@ def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
     } <= _labels(actions)
 
 
+def test_external_search_provider_modal_and_result_links() -> None:
+    modal = movie_ui.ExternalSearchProviderModal(owner_id=1, baseline={})
+    assert [item.label for item in modal.children] == [
+        "Provider name (optional)",
+        "Working provider search URL",
+    ]
+
+    view = movie_ui.ExternalSearchResultsView(
+        1,
+        room_id="room",
+        query="Blade Runner",
+        links=[
+            ("Public Catalog", "https://catalog.example/search?q=Blade+Runner"),
+            ("Archive Search", "https://archive.example/find?q=Blade+Runner"),
+        ],
+    )
+    link_buttons = [
+        item
+        for item in view.children
+        if getattr(item, "style", None) is discord.ButtonStyle.link
+    ]
+    assert [item.label for item in link_buttons] == [
+        "Public Catalog",
+        "Archive Search",
+    ]
+    assert all(str(item.url).startswith("https://") for item in link_buttons)
+
+
+def test_movie_candidate_view_exposes_search_elsewhere() -> None:
+    view = movie_ui.MovieCandidateView(1, "room", "candidate")
+    assert "Search Elsewhere" in _labels(view)
+
+
 def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -> None:
     monkeypatch.delenv("DANK_TMDB_READ_TOKEN", raising=False)
     embed = movie_ui._sources_embed(MediaSourceRegistry())
@@ -156,7 +190,8 @@ def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -
     assert ".torrent files" in rendered
     assert "Dank Provider Lab" in rendered
     assert "Dank Engine" in rendered
-    assert "Add Provider" in _labels(movie_ui.MovieNightSourcesView(1))
+    assert "Add JSON Provider" in _labels(movie_ui.MovieNightSourcesView(1))
+    assert "Add Search Link" in _labels(movie_ui.MovieNightSourcesView(1))
 
 
 def test_candidate_embed_shows_tmdb_watch_availability(monkeypatch) -> None:
