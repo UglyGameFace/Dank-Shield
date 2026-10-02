@@ -230,6 +230,7 @@ class TorrentStreamSession:
     verified_metadata: dict[str, Any] = field(default_factory=dict)
     metadata_probe_running: bool = False
     metadata_probe_attempts: int = 0
+    metadata_last_probe_at: float = 0.0
 
     @property
     def absolute_path(self) -> Path:
@@ -605,6 +606,7 @@ class TorrentMediaManager:
         session.verified_metadata = {}
         session.metadata_probe_running = False
         session.metadata_probe_attempts = 0
+        session.metadata_last_probe_at = 0.0
         session.first_piece = session.file_offset // session.piece_length
         session.last_piece = (
             session.file_offset + session.file_size - 1
@@ -736,14 +738,68 @@ class TorrentMediaManager:
         # torrent owner does not grow a second provider-search implementation.
         return vote
 
+    def _range_is_available(
+        self,
+        session: TorrentStreamSession,
+        start: int,
+        end: int,
+    ) -> bool:
+        if session.file_size <= 0:
+            return False
+        start = max(0, min(int(start), session.file_size - 1))
+        end = max(start, min(int(end), session.file_size - 1))
+        global_start = session.file_offset + start
+        global_end = session.file_offset + end
+        first = global_start // session.piece_length
+        last = global_end // session.piece_length
+        try:
+            return all(
+                bool(session.handle.have_piece(piece))
+                for piece in range(first, last + 1)
+            )
+        except Exception:
+            return False
+
+    def _metadata_probe_ready(self, session: TorrentStreamSession) -> bool:
+        if session.file_size <= 0:
+            return False
+
+        head_end = min(
+            session.file_size - 1,
+            max(2 * 1024 * 1024, min(self.bootstrap_bytes, 8 * 1024 * 1024)) - 1,
+        )
+        if not self._range_is_available(session, 0, head_end):
+            return False
+
+        # MP4/MOV-family files commonly keep the moov atom at the end. The
+        # torrent owner already prioritizes this tail region, so do not waste
+        # probe attempts until it is actually present.
+        suffix = Path(session.file_name).suffix.lower()
+        if suffix in {".mp4", ".m4v", ".mov"} and session.file_size > self.tail_probe_bytes:
+            tail_start = max(0, session.file_size - self.tail_probe_bytes)
+            if not self._range_is_available(
+                session,
+                tail_start,
+                session.file_size - 1,
+            ):
+                return False
+        return True
+
     def schedule_metadata_probe(self, session: TorrentStreamSession) -> bool:
         if session.verified_metadata.get("available"):
             return False
         if session.metadata_probe_running or session.metadata_probe_attempts >= 3:
             return False
+        if not self._metadata_probe_ready(session):
+            return False
+
+        now = time.monotonic()
+        if session.metadata_last_probe_at and now - session.metadata_last_probe_at < 5.0:
+            return False
 
         session.metadata_probe_running = True
         session.metadata_probe_attempts += 1
+        session.metadata_last_probe_at = now
 
         async def _run() -> None:
             try:
