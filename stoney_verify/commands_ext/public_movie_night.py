@@ -1510,6 +1510,97 @@ class CustomSourceModal(discord.ui.Modal):
         )
 
 
+
+class ExternalSearchProviderModal(discord.ui.Modal):
+    def __init__(
+        self,
+        *,
+        owner_id: int,
+        baseline: Mapping[str, Any],
+        source: Optional[CustomMediaSource] = None,
+    ) -> None:
+        super().__init__(
+            title="Edit Search-Link Provider" if source is not None else "Add Search-Link Provider",
+            timeout=300,
+        )
+        self.owner_id = int(owner_id)
+        self.baseline = dict(baseline)
+        self.source_id = str(source.source_id if source is not None else "")
+
+        self.label_input = discord.ui.TextInput(
+            label="Provider name (optional)",
+            placeholder="Public Movie Catalog",
+            default=str(source.label if source is not None else "")[:80] or None,
+            required=False,
+            max_length=80,
+        )
+        self.endpoint_input = discord.ui.TextInput(
+            label="Working provider search URL",
+            placeholder="https://movies.example/search?q=batman",
+            default=str(source.endpoint_url if source is not None else "")[:1000] or None,
+            min_length=8,
+            max_length=1000,
+        )
+        self.add_item(self.label_input)
+        self.add_item(self.endpoint_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await _private(interaction, "❌ This provider editor belongs to another admin.")
+        guild = interaction.guild
+        if guild is None:
+            return await _private(interaction, "❌ Dank Cinema providers are configured inside a server.")
+        if not _staff_authorized(interaction):
+            return await _private(interaction, "❌ Manage Server or Administrator is required.")
+
+        from stoney_verify.media_source_registry import parse_media_source_registry
+
+        current = parse_media_source_registry(self.baseline)
+        try:
+            prepared_url = prepare_example_search_url(str(self.endpoint_input.value))
+            render_provider_search_url(prepared_url, "batman")
+            host = str(urlsplit(prepared_url).hostname or "").strip(".")
+            fallback_label = host.split(".", 1)[0].replace("-", " ").replace("_", " ").title()
+            label = _compact(self.label_input.value, 80) or fallback_label or "External Search"
+            updated = add_custom_source(
+                current,
+                source_id=self.source_id,
+                label=label,
+                endpoint_url=prepared_url,
+                added_by=int(interaction.user.id),
+                provider_type=PROVIDER_TYPE_EXTERNAL,
+            )
+        except ValueError as exc:
+            return await _private(interaction, f"❌ {exc}")
+
+        try:
+            applied, _saved = await save_media_source_registry(
+                int(guild.id),
+                expected_config=self.baseline,
+                updated=updated,
+            )
+        except Exception as exc:
+            return await _private(
+                interaction,
+                f"❌ Dank Cinema search-link provider could not save safely: {type(exc).__name__}.",
+            )
+        if not applied:
+            return await _private(
+                interaction,
+                "❌ Dank Cinema providers changed in another admin session. Refresh and try again.",
+            )
+
+        await _replace(
+            interaction,
+            content=(
+                "✅ Search-link provider saved. Dank Cinema will open that provider's own "
+                "search-results page for the movie title; it will not scrape or ingest the page."
+            ),
+            embed=_sources_embed(updated),
+            view=MovieNightSourcesView(int(interaction.user.id)),
+        )
+
+
 class SourceActionView(_OwnedView):
     def __init__(self, owner_id: int, source_id: str) -> None:
         super().__init__(owner_id)
@@ -1563,13 +1654,20 @@ class SourceActionView(_OwnedView):
         )
         if source is None:
             return await _private(interaction, "❌ That source no longer exists.")
-        await interaction.response.send_modal(
-            CustomSourceModal(
+        modal: discord.ui.Modal
+        if source.provider_type == PROVIDER_TYPE_EXTERNAL:
+            modal = ExternalSearchProviderModal(
                 owner_id=self.owner_id,
                 baseline=raw,
                 source=source,
             )
-        )
+        else:
+            modal = CustomSourceModal(
+                owner_id=self.owner_id,
+                baseline=raw,
+                source=source,
+            )
+        await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Enable Provider", emoji="✅", style=discord.ButtonStyle.success, row=0)
     async def enable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1611,8 +1709,9 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
             title=f"🧩 Dank Provider • {source.label}",
             description=(
                 f"State: **{'Enabled' if source.enabled else 'Disabled'}**\n"
-                f"Search/feed URL: {source.endpoint_url}\n\n"
-                "Use **Edit** to change the name or URL. Dank Cinema keeps the internal "
+                f"Mode: **{'Structured JSON' if source.provider_type == PROVIDER_TYPE_JSON else 'External search link'}**\n"
+                f"Search URL: {source.endpoint_url}\n\n"
+                "Use **Edit Provider** to change the name or URL. Dank Cinema keeps the internal "
                 "source identity automatically."
             ),
             color=discord.Color.blurple(),
@@ -1627,7 +1726,10 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
         DankChoice(
             label=source.label,
             value=source.source_id,
-            description=("Enabled" if source.enabled else "Disabled"),
+            description=(
+                ("JSON • " if source.provider_type == PROVIDER_TYPE_JSON else "Search link • ")
+                + ("Enabled" if source.enabled else "Disabled")
+            ),
             emoji="✅" if source.enabled else "⏸️",
         )
         for source in registry.sources
