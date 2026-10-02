@@ -599,3 +599,31 @@ Do not close #381 until this exact-head fix passes CI, merges/deploys, and Andro
 - Default variant ordering is swarm-first: user votes, then non-zero seed availability, highest seed count, seed/leech balance, verified quality/codec/source, and size.
 - Zero-seed variants are retained for visibility but demoted below playable swarms.
 - Live torrent status exposes seeds, leechers, peers, distributed copies, and seed/leech ratio for playback diagnostics.
+
+
+## Late-join synchronization
+
+Movie Night late joiners no longer enter the group buffering quorum immediately.
+
+Contract:
+- a viewer joining after playback has already started is marked `joining`;
+- they remain an active room participant and can vote immediately;
+- they do not influence shared buffer holds until actually synchronized;
+- their browser seeks to the current room timestamp and buffers around that position;
+- torrent piece priority is shifted to the current room position for the joining viewer;
+- adaptive late-join readiness uses an 8–15 second target buffer depending on the torrent buffer plan;
+- once position drift is within tolerance and the target buffer is available, the viewer becomes `synced`;
+- only synchronized viewers join the group-buffer quorum;
+- existing viewers continue playing while a newcomer catches up;
+- switching to a new movie resets non-host viewers back to unsynced for the new stream;
+- the host remains immediately authoritative/eligible;
+- the Watch page visibly reports **Joining…** versus **Synced Viewer**;
+- a late viewer with a poor connection cannot repeatedly freeze the room before synchronization;
+- after synchronization, normal bounded group buffering applies to that viewer.
+
+Regression coverage proves:
+- late joiners remain outside buffer quorum;
+- weak initial late-join buffer does not pause the room;
+- adaptive buffer completion graduates the viewer;
+- a graduated viewer can later participate in group buffering;
+- media replacement requalifies non-host viewers for the new stream.
