@@ -27,6 +27,8 @@ class ViewerState:
     position_seconds: float = 0.0
     byte_position: int = 0
     buffered_until_byte: int = 0
+    buffered_until_seconds: float = 0.0
+    media_duration_seconds: float = 0.0
     paused: bool = False
 
     @property
@@ -170,6 +172,8 @@ class MovieNightRoom:
     approved_search_query: str = ""
     current_candidate_id: str = ""
     current_variant_id: str = ""
+    buffering_since: float = 0.0
+    buffering_cooldown_until: float = 0.0
     ended: bool = False
 
     def current_position(self, now: Optional[float] = None) -> float:
@@ -190,10 +194,19 @@ class MovieNightManager:
         host_grace_seconds: float = 45.0,
         viewer_ttl_seconds: float = 35.0,
         vote_ttl_seconds: float = 45.0,
+        buffer_low_seconds: float = 4.0,
+        buffer_resume_seconds: float = 12.0,
+        buffer_max_hold_seconds: float = 20.0,
     ) -> None:
         self.host_grace_seconds = max(10.0, float(host_grace_seconds))
         self.viewer_ttl_seconds = max(10.0, float(viewer_ttl_seconds))
         self.vote_ttl_seconds = max(10.0, float(vote_ttl_seconds))
+        self.buffer_low_seconds = max(1.0, float(buffer_low_seconds))
+        self.buffer_resume_seconds = max(
+            self.buffer_low_seconds + 1.0,
+            float(buffer_resume_seconds),
+        )
+        self.buffer_max_hold_seconds = max(5.0, float(buffer_max_hold_seconds))
         self._rooms: dict[str, MovieNightRoom] = {}
 
     def create_room(
@@ -300,6 +313,8 @@ class MovieNightManager:
         byte_position: int,
         buffered_until_byte: int,
         paused: bool,
+        buffered_until_seconds: float = 0.0,
+        media_duration_seconds: float = 0.0,
         now: Optional[float] = None,
     ) -> MovieNightRoom:
         room = self._require_room(room_id)
@@ -316,6 +331,14 @@ class MovieNightManager:
             viewer.byte_position,
             int(buffered_until_byte),
         )
+        viewer.buffered_until_seconds = max(
+            viewer.position_seconds,
+            float(buffered_until_seconds or 0.0),
+        )
+        viewer.media_duration_seconds = max(
+            0.0,
+            float(media_duration_seconds or 0.0),
+        )
         viewer.paused = bool(paused)
         if uid == int(room.host_id):
             room.host_last_seen = current
@@ -327,7 +350,80 @@ class MovieNightManager:
                     vote.resolved = True
                     vote.passed = False
         self._expire_votes(room, current)
+        self._update_group_buffer_hold(room, current)
         return room
+
+    def _update_group_buffer_hold(
+        self,
+        room: MovieNightRoom,
+        now: float,
+    ) -> None:
+        if not room.stream_token or room.ended:
+            return
+
+        active_ids = self.active_viewers(room, now=now)
+        if len(active_ids) < 2:
+            if room.playback_state == "buffering":
+                room.playback_state = "playing"
+                room.playback_anchor_monotonic = now
+                room.buffering_since = 0.0
+            return
+
+        room_position = room.current_position(now)
+        relevant: list[ViewerState] = []
+        for uid in active_ids:
+            viewer = room.viewers.get(uid)
+            if viewer is None:
+                continue
+            if abs(float(viewer.position_seconds) - room_position) > 15.0:
+                continue
+            if (
+                viewer.media_duration_seconds > 0
+                and viewer.media_duration_seconds - viewer.position_seconds
+                <= self.buffer_low_seconds + 1.0
+            ):
+                continue
+            relevant.append(viewer)
+
+        if len(relevant) < 2:
+            return
+
+        ahead = [
+            max(
+                0.0,
+                float(viewer.buffered_until_seconds)
+                - float(viewer.position_seconds),
+            )
+            for viewer in relevant
+        ]
+        weakest = min(ahead) if ahead else 0.0
+
+        if room.playback_state == "playing":
+            if (
+                now >= float(room.buffering_cooldown_until)
+                and weakest < self.buffer_low_seconds
+            ):
+                room.playback_position = room_position
+                room.playback_state = "buffering"
+                room.playback_anchor_monotonic = now
+                room.buffering_since = now
+            return
+
+        if room.playback_state != "buffering":
+            return
+
+        held = max(0.0, now - float(room.buffering_since or now))
+        if weakest >= self.buffer_resume_seconds:
+            room.playback_state = "playing"
+            room.playback_anchor_monotonic = now
+            room.buffering_since = 0.0
+            return
+
+        if held >= self.buffer_max_hold_seconds:
+            room.playback_state = "playing"
+            room.playback_anchor_monotonic = now
+            room.buffering_since = 0.0
+            room.buffering_cooldown_until = now + self.buffer_max_hold_seconds
 
     def host_active(self, room: MovieNightRoom, *, now: Optional[float] = None) -> bool:
         current = time.monotonic() if now is None else float(now)
