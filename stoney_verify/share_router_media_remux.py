@@ -180,7 +180,7 @@ def build_ffmpeg_remux_command(
         command.extend(
             [
                 "-map",
-                "0:v:0?",
+                "0:v:0",
                 "-map",
                 "0:a:0?",
             ]
