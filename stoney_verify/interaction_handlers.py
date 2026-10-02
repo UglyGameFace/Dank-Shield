@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import discord
 
 from .globals import *  # noqa: F401,F403
-from .startup_guards.discord_api_safety import fetch_message_with_api_safety
 
 from .tickets import (
     find_ticket_owner_retry,
@@ -1086,15 +1085,7 @@ async def handle_possible_submission(message: discord.Message) -> None:
     if not token:
         try:
             await asyncio.sleep(1.2)
-            fresh = await fetch_message_with_api_safety(
-                message.channel,
-                int(message.id),
-                label=(
-                    "verification submission settle "
-                    f"guild={int(message.guild.id)}"
-                ),
-                recovery=False,
-            )
+            fresh = await message.channel.fetch_message(message.id)
             token = extract_token_from_message(fresh)
         except Exception:
             token = None
