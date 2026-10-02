@@ -21,6 +21,10 @@ PANEL_REPAIR = (ROOT / "stoney_verify" / "tickets_new" / "channel_panel_repair.p
 PANEL_BOOTSTRAP = (ROOT / "stoney_verify" / "tickets_new" / "panel_bootstrap.py").read_text(encoding="utf-8")
 DURABLE_INVITE_STATS = (ROOT / "stoney_verify" / "durable_invite_stats.py").read_text(encoding="utf-8")
 ANTINUKE_INCIDENT = (ROOT / "stoney_verify" / "anti_nuke_incident_runtime.py").read_text(encoding="utf-8")
+COMMUNITY_TOOLS = (ROOT / "stoney_verify" / "community_tools_runtime.py").read_text(encoding="utf-8")
+TICKET_PANEL_RUNTIME = (ROOT / "stoney_verify" / "ticket_panel_runtime.py").read_text(encoding="utf-8")
+BASIC_VERIFY = (ROOT / "stoney_verify" / "verification_new" / "basic_verify.py").read_text(encoding="utf-8")
+LIVE_GUILD_FOOTER = (ROOT / "stoney_verify" / "startup_guards" / "live_guild_name_footer_guard.py").read_text(encoding="utf-8")
 
 
 def _block(source: str, start_marker: str, end_marker: str) -> str:
@@ -137,16 +141,48 @@ def test_invite_startup_recovery_uses_its_own_durable_gap_window() -> None:
     assert 'history_kwargs["before"] = before' in POLICY
 
 
-def test_invite_live_raw_edits_are_recovered_without_startup_rest_pacing() -> None:
+def test_invite_live_raw_edits_use_route_guard_without_startup_rest_pacing() -> None:
     assert '"on_raw_message_edit"' in INVITE
-    assert "channel.fetch_message(int(message_id))" in INVITE
     assert 'source="raw_message_edit_recovery"' in INVITE
     raw_worker = _block(
         INVITE,
         "async def _raw_message_edit_worker(",
         "async def _raw_message_edit_listener(",
     )
+    assert "fetch_message_with_api_safety(" in raw_worker
+    assert "recovery=False" in raw_worker
+    assert "channel.fetch_message(int(message_id))" not in raw_worker
     assert "reserve_recovery_discord_rest_requests(" not in raw_worker
+
+
+def test_single_message_startup_recovery_uses_shared_api_safety_owner() -> None:
+    assert "fetch_message_with_api_safety(" in COMMUNITY_TOOLS
+    assert COMMUNITY_TOOLS.count("recovery=True") >= 2
+    assert "STARTUP_RECONCILE_CONCURRENCY = 10" in COMMUNITY_TOOLS
+
+    ticket_identity = _block(
+        TICKET_PANEL_RUNTIME,
+        "async def _reconcile_saved_ticket_panel(",
+        "def bind_public_ticket_panel_message",
+    )
+    assert "fetch_message_with_api_safety(" in ticket_identity
+    assert "recovery=True" in ticket_identity
+
+    basic_identity = _block(
+        BASIC_VERIFY,
+        "async def _reconcile_one_basic_verify_panel(",
+        "async def _reconcile_basic_verify_panels",
+    )
+    assert "fetch_message_with_api_safety(" in basic_identity
+    assert "recovery=True" in basic_identity
+
+    footer = _block(
+        LIVE_GUILD_FOOTER,
+        "async def refresh_ticket_panel_footer(",
+        "async def _refresh_all(",
+    )
+    assert "fetch_message_with_api_safety(" in footer
+    assert 'recovery=(str(reason).strip().lower() == "startup")' in footer
 
 
 def test_activity_pins_pre_restart_heartbeat_before_state_advances() -> None:
