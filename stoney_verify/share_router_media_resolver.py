@@ -343,6 +343,13 @@ def provider_allowed(provider: str) -> bool:
     return bool(key and media_provider_policy().get(key, False))
 
 
+def is_public_address(value: str) -> bool:
+    try:
+        return bool(ipaddress.ip_address(str(value or "").strip()).is_global)
+    except ValueError:
+        return False
+
+
 def is_safe_media_download_url(value: str) -> bool:
     parsed = _parsed_http_url(value)
     if parsed is None:
@@ -361,10 +368,10 @@ def is_safe_media_download_url(value: str) -> bool:
         return False
 
     try:
-        ip = ipaddress.ip_address(host)
+        ipaddress.ip_address(host)
     except ValueError:
         return "." in host
-    return bool(ip.is_global)
+    return is_public_address(host)
 
 
 def _iter_entries(info: Any) -> list[Mapping[str, Any]]:
@@ -806,6 +813,7 @@ __all__ = [
     "MediaResolution",
     "PROVIDERS",
     "canonicalize_media_url",
+    "is_public_address",
     "is_safe_media_download_url",
     "media_provider_policy",
     "media_resolver_snapshot",
