@@ -58,6 +58,7 @@ def test_terminate_movie_night_releases_room_lease_and_clears_media_state(monkey
     assert room.queue == []
     assert room.candidates == {}
     assert manager.active_room_for_channel(1, 2) is None
+    assert manager.get(room.room_id) is None
 
 
 def test_terminate_movie_night_is_idempotent_without_a_stream(monkeypatch) -> None:
@@ -81,3 +82,18 @@ def test_terminate_movie_night_is_idempotent_without_a_stream(monkeypatch) -> No
     assert not second.had_stream
     assert second.lease_released
     assert torrents.calls == []
+
+
+def test_web_player_has_terminal_state_before_missing_room_fallback() -> None:
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "stoney_verify"
+        / "movie_night_web.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'if(s.ended) {' in source
+    assert 'terminated=true;' in source
+    assert 'Movie Night room not found' in source
+    assert 'if(terminated) return;' in source
