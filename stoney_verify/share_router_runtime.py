@@ -50,9 +50,19 @@ _TRUSTED_VIDEO_HOSTS = {
     "media.tenor.com",
     "i.giphy.com",
 }
-_X_EXTRACT_CONCURRENCY = max(
-    1,
-    min(int(os.getenv("DANK_SHARE_ROUTER_X_EXTRACT_CONCURRENCY", "2") or "2"), 4),
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        value = int(str(os.getenv(name, str(default)) or default).strip())
+    except Exception:
+        value = int(default)
+    return max(int(minimum), min(value, int(maximum)))
+
+
+_X_EXTRACT_CONCURRENCY = _env_int(
+    "DANK_SHARE_ROUTER_X_EXTRACT_CONCURRENCY",
+    2,
+    minimum=1,
+    maximum=4,
 )
 _X_EXTRACT_SEMAPHORE = asyncio.Semaphore(_X_EXTRACT_CONCURRENCY)
 _X_VIDEO_CACHE: dict[str, tuple[float, Optional[str]]] = {}
@@ -441,7 +451,7 @@ async def _extract_x_video_url(status_url: str, *, max_bytes: int) -> str:
                 ),
                 timeout=10.0,
             )
-        except (asyncio.TimeoutError, Exception):
+        except Exception:
             extracted = ""
 
         ttl = (
