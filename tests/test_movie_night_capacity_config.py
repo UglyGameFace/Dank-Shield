@@ -25,6 +25,7 @@ def test_env_example_has_movie_night_dynamic_capacity_contract() -> None:
         "DANK_TORRENT_ESTIMATED_SESSION_MB=96",
         "DANK_TORRENT_SOFT_SESSION_LIMIT=2",
         "DANK_TORRENT_MAX_SESSIONS=4",
+        "DANK_TORRENT_MAX_UNIQUE_PER_GUILD=1",
         "DANK_TORRENT_ALLOW_BURST=false",
         "DANK_TORRENT_MAX_FILE_BYTES=26843545600",
         "DANK_TORRENT_MAX_TOTAL_BYTES=53687091200",
@@ -46,6 +47,9 @@ def test_setup_surface_exposes_capacity_and_shared_session_telemetry() -> None:
     assert "total_leases" in source
     assert "shared_sessions" in source
     assert "session_slots_available" in source
+    assert "guild_unique_sessions" in source
+    assert "guild_slots_available" in source
+    assert "memory_samples" in source
     assert "disk_reserve_bytes" in source
     assert "committed_file_bytes" in source
 
