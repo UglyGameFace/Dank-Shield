@@ -199,8 +199,10 @@ class MediaCapacitySnapshot:
     process_limit_mb: int
     protected_reserve_mb: int
     estimated_session_mb: int
+    memory_samples: int
     hard_session_limit: int
     soft_session_limit: int
+    per_guild_limit: int
     active_unique_sessions: int
     in_flight_starts: int
     total_leases: int
@@ -208,6 +210,8 @@ class MediaCapacitySnapshot:
     memory_headroom_mb: float | None
     memory_slots_available: int
     session_slots_available: int
+    guild_unique_sessions: int
+    guild_slots_available: int
     free_disk_bytes: int
     disk_reserve_bytes: int
     committed_file_bytes: int
@@ -251,6 +255,7 @@ class TorrentStreamSession:
     metadata_probe_attempts: int = 0
     metadata_last_probe_at: float = 0.0
     leases: set[str] = field(default_factory=set)
+    lease_guild_ids: dict[str, int] = field(default_factory=dict)
     unleased_hold: bool = False
     reuse_hits: int = 0
 
@@ -300,6 +305,14 @@ class TorrentMediaManager:
             96,
             minimum=32,
             maximum=2048,
+        )
+        self._adaptive_session_memory_mb = float(self.estimated_session_memory_mb)
+        self._session_memory_samples = 0
+        self.max_unique_per_guild = _env_int(
+            "DANK_TORRENT_MAX_UNIQUE_PER_GUILD",
+            1,
+            minimum=1,
+            maximum=self.max_sessions,
         )
         self.max_metadata_bytes = _env_int(
             "DANK_TORRENT_MAX_METADATA_BYTES",
@@ -453,10 +466,18 @@ class TorrentMediaManager:
             self._identity_locks[key] = lock
         return lock
 
-    def _attach_consumer(self, session: TorrentStreamSession, lease_key: str) -> None:
+    def _attach_consumer(
+        self,
+        session: TorrentStreamSession,
+        lease_key: str,
+        *,
+        guild_id: int = 0,
+    ) -> None:
         key = str(lease_key or "").strip()[:180]
         if key:
             session.leases.add(key)
+            if int(guild_id) > 0:
+                session.lease_guild_ids[key] = int(guild_id)
         else:
             # Legacy/untracked consumers (for example Share Router links) do not
             # have an explicit release callback. Keep the session eligible for
@@ -480,12 +501,17 @@ class TorrentMediaManager:
         identity: str,
         *,
         lease_key: str = "",
+        guild_id: int = 0,
     ) -> Optional[TorrentStreamSession]:
         async with self._lock:
             session = self._reusable_session_unlocked(identity)
             if session is None:
                 return None
-            self._attach_consumer(session, lease_key)
+            self._attach_consumer(
+                session,
+                lease_key,
+                guild_id=int(guild_id),
+            )
             session.reuse_hits += 1
             return session
 
@@ -514,17 +540,75 @@ class TorrentMediaManager:
             if token != excluded
         )
 
+    def _effective_session_memory_mb(self) -> int:
+        return max(
+            32,
+            min(2048, int(round(float(self._adaptive_session_memory_mb)))),
+        )
+
+    def _record_session_memory_observation(
+        self,
+        before_rss_mb: float | None,
+    ) -> None:
+        if before_rss_mb is None:
+            return
+        # Overlapping starts make attribution ambiguous; current RSS still
+        # protects admission, but skip learning a misleading per-session delta.
+        if int(self._starting) > 1:
+            return
+        after = current_rss_mb()
+        if after is None:
+            return
+        delta = float(after) - float(before_rss_mb)
+        if delta < 8.0:
+            return
+        observed = max(32.0, min(1024.0, delta))
+        alpha = 0.25
+        self._adaptive_session_memory_mb = (
+            float(self._adaptive_session_memory_mb) * (1.0 - alpha)
+            + observed * alpha
+        )
+        self._session_memory_samples += 1
+
+    @staticmethod
+    def _consumer_guild_ids(session: TorrentStreamSession) -> set[int]:
+        ids = {
+            int(value)
+            for value in dict(getattr(session, "lease_guild_ids", {}) or {}).values()
+            if int(value) > 0
+        }
+        if bool(getattr(session, "unleased_hold", False)) and int(session.guild_id) > 0:
+            ids.add(int(session.guild_id))
+        return ids
+
+    def _guild_unique_session_count(
+        self,
+        guild_id: int,
+        *,
+        exclude_token: str = "",
+    ) -> int:
+        gid = int(guild_id or 0)
+        if gid <= 0:
+            return 0
+        excluded = str(exclude_token or "")
+        return sum(
+            1
+            for token, session in self._sessions.items()
+            if token != excluded and gid in self._consumer_guild_ids(session)
+        )
+
     def _capacity_snapshot_unlocked(
         self,
         *,
         replace_token: str = "",
         lease_key: str = "",
         expected_file_bytes: int = 0,
+        request_guild_id: int = 0,
     ) -> MediaCapacitySnapshot:
         rss = current_rss_mb()
         process_limit = int(self.process_memory_limit_mb)
         reserve = int(self.protected_memory_reserve_mb)
-        estimate = int(self.estimated_session_memory_mb)
+        estimate = int(self._effective_session_memory_mb())
 
         releasable = self._replacement_is_releasable(replace_token, lease_key)
         effective_sessions = max(
@@ -564,6 +648,15 @@ class TorrentMediaManager:
 
         exclude = str(replace_token or "") if releasable else ""
         committed = self._committed_file_bytes(exclude_token=exclude)
+        guild_unique = self._guild_unique_session_count(
+            int(request_guild_id),
+            exclude_token=exclude,
+        )
+        guild_slots = (
+            max(0, int(self.max_unique_per_guild) - int(guild_unique))
+            if int(request_guild_id) > 0
+            else int(self.max_unique_per_guild)
+        )
         required_disk = (
             int(self.disk_reserve_bytes)
             + int(committed)
@@ -598,6 +691,11 @@ class TorrentMediaManager:
                     f"Movie Night reached its conservative {self.soft_session_limit}-unique-torrent "
                     "soft limit. Existing identical torrents can still be shared."
                 )
+        elif int(request_guild_id) > 0 and guild_slots <= 0:
+            blocker = (
+                f"This server reached its {self.max_unique_per_guild}-unique-torrent "
+                "Movie Night limit. Existing identical torrents can still be shared."
+            )
         elif free_disk <= 0:
             blocker = "Free disk could not be measured; refusing a new torrent safely."
         elif free_disk < required_disk:
@@ -610,8 +708,10 @@ class TorrentMediaManager:
             process_limit_mb=process_limit,
             protected_reserve_mb=reserve,
             estimated_session_mb=estimate,
+            memory_samples=int(self._session_memory_samples),
             hard_session_limit=int(self.max_sessions),
             soft_session_limit=int(self.soft_session_limit),
+            per_guild_limit=int(self.max_unique_per_guild),
             active_unique_sessions=len(self._sessions),
             in_flight_starts=int(self._starting),
             total_leases=int(total_leases),
@@ -619,6 +719,8 @@ class TorrentMediaManager:
             memory_headroom_mb=headroom,
             memory_slots_available=int(memory_slots),
             session_slots_available=int(session_slots),
+            guild_unique_sessions=int(guild_unique),
+            guild_slots_available=int(guild_slots),
             free_disk_bytes=int(free_disk),
             disk_reserve_bytes=int(self.disk_reserve_bytes),
             committed_file_bytes=int(committed),
@@ -626,18 +728,22 @@ class TorrentMediaManager:
             blocker=blocker,
         )
 
-    def capacity_snapshot(self) -> MediaCapacitySnapshot:
-        return self._capacity_snapshot_unlocked()
+    def capacity_snapshot(self, *, guild_id: int = 0) -> MediaCapacitySnapshot:
+        return self._capacity_snapshot_unlocked(
+            request_guild_id=int(guild_id),
+        )
 
-    def capacity_status(self) -> dict[str, Any]:
-        snap = self.capacity_snapshot()
+    def capacity_status(self, *, guild_id: int = 0) -> dict[str, Any]:
+        snap = self.capacity_snapshot(guild_id=int(guild_id))
         return {
             "current_rss_mb": snap.current_rss_mb,
             "process_limit_mb": snap.process_limit_mb,
             "protected_reserve_mb": snap.protected_reserve_mb,
             "estimated_session_mb": snap.estimated_session_mb,
+            "memory_samples": snap.memory_samples,
             "hard_session_limit": snap.hard_session_limit,
             "soft_session_limit": snap.soft_session_limit,
+            "per_guild_limit": snap.per_guild_limit,
             "allow_burst": bool(self.allow_burst_sessions),
             "active_unique_sessions": snap.active_unique_sessions,
             "in_flight_starts": snap.in_flight_starts,
@@ -646,6 +752,8 @@ class TorrentMediaManager:
             "memory_headroom_mb": snap.memory_headroom_mb,
             "memory_slots_available": snap.memory_slots_available,
             "session_slots_available": snap.session_slots_available,
+            "guild_unique_sessions": snap.guild_unique_sessions,
+            "guild_slots_available": snap.guild_slots_available,
             "free_disk_bytes": snap.free_disk_bytes,
             "disk_reserve_bytes": snap.disk_reserve_bytes,
             "committed_file_bytes": snap.committed_file_bytes,
@@ -698,13 +806,18 @@ class TorrentMediaManager:
 
         await self.cleanup_expired()
         async with self._identity_lock(identity):
-            existing = await self._reuse_session(identity, lease_key=lease_key)
+            existing = await self._reuse_session(
+                identity,
+                lease_key=lease_key,
+                guild_id=int(guild_id),
+            )
             if existing is not None:
                 return existing
 
             await self._reserve_start(
                 replace_token=replace_token,
                 lease_key=lease_key,
+                request_guild_id=int(guild_id),
             )
             token = secrets.token_urlsafe(18)
             save_root = Path(tempfile.mkdtemp(prefix=f"{token}-", dir=str(self.root)))
@@ -725,6 +838,7 @@ class TorrentMediaManager:
                     source_identity=identity,
                     lease_key=lease_key,
                     replace_token=replace_token,
+                    start_rss_mb=start_rss_mb,
                 )
             except Exception:
                 self._safe_remove_handle(handle)
@@ -760,14 +874,17 @@ class TorrentMediaManager:
                 existing = await self._reuse_session(
                     source_identity,
                     lease_key=lease_key,
+                    guild_id=int(guild_id),
                 )
                 if existing is not None:
                     shutil.rmtree(save_root, ignore_errors=True)
                     return existing
 
+                start_rss_mb = current_rss_mb()
                 await self._reserve_start(
                     replace_token=replace_token,
                     lease_key=lease_key,
+                    guild_id=int(guild_id),
                 )
                 reserved = True
                 atp = self.lt.add_torrent_params()
@@ -785,6 +902,7 @@ class TorrentMediaManager:
                     source_identity=source_identity,
                     lease_key=lease_key,
                     replace_token=replace_token,
+                    start_rss_mb=start_rss_mb,
                 )
         except Exception:
             self._safe_remove_handle(handle)
@@ -799,6 +917,7 @@ class TorrentMediaManager:
         *,
         replace_token: str = "",
         lease_key: str = "",
+        guild_id: int = 0,
     ) -> None:
         token = str(replace_token or "")
         async with self._lock:
@@ -894,6 +1013,7 @@ class TorrentMediaManager:
         source_identity: str,
         lease_key: str = "",
         replace_token: str = "",
+        start_rss_mb: float | None = None,
     ) -> TorrentStreamSession:
         candidates = self._playable_candidates(info)
         if not candidates:
@@ -931,6 +1051,11 @@ class TorrentMediaManager:
             created_at=time.monotonic(),
             last_access=time.monotonic(),
             leases={str(lease_key).strip()[:180]} if str(lease_key or "").strip() else set(),
+            lease_guild_ids=(
+                {str(lease_key).strip()[:180]: int(guild_id)}
+                if str(lease_key or "").strip() and int(guild_id) > 0
+                else {}
+            ),
             unleased_hold=not bool(str(lease_key or "").strip()),
         )
         self._select_candidate(session, selected)
@@ -938,6 +1063,7 @@ class TorrentMediaManager:
         async with self._lock:
             self._sessions[token] = session
             self._identity_index[source_identity] = token
+        self._record_session_memory_observation(start_rss_mb)
         return session
 
     def _select_candidate(
@@ -1352,6 +1478,7 @@ class TorrentMediaManager:
             "name": session.file_name,
             "source_identity": session.source_identity,
             "lease_count": len(session.leases),
+            "consumer_guilds": sorted(self._consumer_guild_ids(session)),
             "shared": len(session.leases) > 1,
             "reuse_hits": int(session.reuse_hits),
             "unleased_hold": bool(session.unleased_hold),
@@ -1461,6 +1588,7 @@ class TorrentMediaManager:
                 return False
             existed = key in session.leases
             session.leases.discard(key)
+            session.lease_guild_ids.pop(key, None)
             session.last_access = time.monotonic()
             should_remove = bool(
                 remove_if_unused
