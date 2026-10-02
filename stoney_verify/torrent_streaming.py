@@ -9,6 +9,7 @@ magnet or .torrent source they are authorized to use.
 """
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import mimetypes
@@ -21,7 +22,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 _PLAYABLE_EXTENSIONS = (
     ".mp4",
@@ -72,12 +73,28 @@ def magnet_identity(magnet: str) -> str:
     raw = str(magnet or "").strip()
     if not raw.lower().startswith("magnet:?"):
         return ""
-    query = raw.split("?", 1)[1]
-    match = _BTIH_RE.search(query)
-    if not match:
+    try:
+        query = parse_qs(urlsplit(raw).query)
+    except Exception:
         return ""
-    value = match.group(1).strip().lower()
-    return f"btih:{value}" if value else ""
+
+    values = list(query.get("xt", []) or [])
+    for item in values:
+        text = str(item or "").strip()
+        if not text.lower().startswith("urn:btih:"):
+            continue
+        value = text[9:].strip()
+        if re.fullmatch(r"[A-Fa-f0-9]{40}", value):
+            return f"btih:{value.lower()}"
+        if re.fullmatch(r"[A-Za-z2-7]{32}", value):
+            try:
+                decoded = base64.b32decode(value.upper())
+            except Exception:
+                continue
+            return f"btih:{decoded.hex()}"
+        if value:
+            return f"btih:{value.lower()}"
+    return ""
 
 
 def is_torrent_filename(filename: str) -> bool:
@@ -305,6 +322,8 @@ class TorrentMediaManager:
 
     async def start_magnet(self, magnet: str, *, guild_id: int, owner_id: int) -> TorrentStreamSession:
         raw = str(magnet or "").strip()
+        if len(raw) > 8192:
+            raise ValueError("Magnet link exceeds the configured input limit.")
         identity = magnet_identity(raw)
         if not identity:
             raise ValueError("That is not a valid BitTorrent magnet link.")
