@@ -939,6 +939,15 @@ async def _route_torrent_media(
     if not magnet and not torrent_bytes:
         return None
 
+    if not str(os.getenv("DANK_MEDIA_PUBLIC_BASE_URL", "") or "").strip():
+        raise RuntimeError(
+            "DANK_MEDIA_PUBLIC_BASE_URL is required before Share Router can expose a playable torrent stream."
+        )
+    if not str(os.getenv("DANK_TORRENT_STREAM_SECRET", "") or "").strip():
+        raise RuntimeError(
+            "DANK_TORRENT_STREAM_SECRET is required before Share Router can sign torrent stream URLs."
+        )
+
     manager = get_torrent_manager()
     if magnet:
         identity = magnet_identity(magnet)
