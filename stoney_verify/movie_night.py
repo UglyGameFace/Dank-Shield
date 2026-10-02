@@ -147,6 +147,8 @@ class RoomVote:
     no: set[int] = field(default_factory=set)
     resolved: bool = False
     passed: bool = False
+    executed: bool = False
+    execution_error: str = ""
 
 
 @dataclass
@@ -166,6 +168,8 @@ class MovieNightRoom:
     candidates: dict[str, MovieCandidate] = field(default_factory=dict)
     queue: list[str] = field(default_factory=list)
     approved_search_query: str = ""
+    current_candidate_id: str = ""
+    current_variant_id: str = ""
     ended: bool = False
 
     def current_position(self, now: Optional[float] = None) -> float:
@@ -424,6 +428,49 @@ class MovieNightManager:
         self._resolve_vote(room, vote, current)
         return vote
 
+    def claim_vote_execution(
+        self,
+        room_id: str,
+        vote_id: str,
+    ) -> bool:
+        """Claim one passed vote's external side effect exactly once."""
+
+        room = self._require_room(room_id)
+        vote = room.votes.get(str(vote_id or ""))
+        if vote is None or not vote.resolved or not vote.passed or vote.executed:
+            return False
+        vote.executed = True
+        return True
+
+    def set_vote_execution_error(
+        self,
+        room_id: str,
+        vote_id: str,
+        error: str,
+    ) -> None:
+        room = self._require_room(room_id)
+        vote = room.votes.get(str(vote_id or ""))
+        if vote is not None:
+            vote.execution_error = " ".join(str(error or "").split())[:240]
+
+    def find_candidate_by_title(
+        self,
+        room_id: str,
+        title: str,
+    ) -> Optional[MovieCandidate]:
+        room = self._require_room(room_id)
+        wanted = " ".join(str(title or "").split()).casefold()
+        if not wanted:
+            return None
+        return next(
+            (
+                item
+                for item in room.candidates.values()
+                if item.title.casefold() == wanted
+            ),
+            None,
+        )
+
     def nominate(
         self,
         room_id: str,
@@ -433,6 +480,7 @@ class MovieNightManager:
         source_ref: str = "",
         metadata_ref: str = "",
         metadata: Optional[Mapping[str, Any]] = None,
+        auto_vote: bool = True,
         now: Optional[float] = None,
     ) -> MovieCandidate:
         room = self._require_room(room_id)
@@ -452,7 +500,7 @@ class MovieNightManager:
             metadata_ref=str(metadata_ref or "").strip()[:1000],
             metadata=dict(metadata or {}),
             created_at=current,
-            votes={uid},
+            votes={uid} if auto_vote else set(),
         )
         room.candidates[candidate.candidate_id] = candidate
         return candidate
@@ -471,6 +519,7 @@ class MovieNightManager:
         seeds: int = 0,
         leechers: int = 0,
         metadata: Optional[Mapping[str, Any]] = None,
+        auto_vote: bool = True,
         now: Optional[float] = None,
     ) -> MovieSourceVariant:
         room = self._require_room(room_id)
@@ -487,6 +536,32 @@ class MovieNightManager:
         if not source:
             raise ValueError("A source reference is required.")
 
+        existing_variant = next(
+            (
+                item
+                for item in candidate.variants.values()
+                if item.source_ref == source
+            ),
+            None,
+        )
+        if existing_variant is not None:
+            existing_variant.source_id = str(source_id or existing_variant.source_id).strip()[:48]
+            existing_variant.source_label = " ".join(
+                str(source_label or existing_variant.source_label).split()
+            )[:80]
+            existing_variant.file_size = max(
+                int(existing_variant.file_size),
+                max(0, int(file_size or 0)),
+            )
+            existing_variant.peers = max(0, int(peers or 0))
+            existing_variant.seeds = max(0, int(seeds or 0))
+            existing_variant.leechers = max(0, int(leechers or 0))
+            if metadata:
+                existing_variant.metadata = dict(metadata)
+            if auto_vote:
+                existing_variant.votes.add(uid)
+            return existing_variant
+
         variant = MovieSourceVariant(
             variant_id=secrets.token_urlsafe(9),
             source_ref=source[:2000],
@@ -498,7 +573,7 @@ class MovieNightManager:
             seeds=max(0, int(seeds or 0)),
             leechers=max(0, int(leechers or 0)),
             metadata=dict(metadata or {}),
-            votes={uid},
+            votes={uid} if auto_vote else set(),
         )
         candidate.variants[variant.variant_id] = variant
         if not candidate.selected_variant_id:
@@ -596,6 +671,26 @@ class MovieNightManager:
 
         candidate.selected_variant_id = variant.variant_id
         return variant
+
+    def set_room_media(
+        self,
+        room_id: str,
+        *,
+        host_id: int,
+        stream_token: str,
+        candidate_id: str = "",
+        variant_id: str = "",
+    ) -> MovieNightRoom:
+        room = self._require_room(room_id)
+        if int(host_id) != int(room.host_id):
+            raise PermissionError("Only the Movie Night host may replace room media.")
+        room.stream_token = str(stream_token or "")
+        room.current_candidate_id = str(candidate_id or "")
+        room.current_variant_id = str(variant_id or "")
+        room.playback_position = 0.0
+        room.playback_anchor_monotonic = time.monotonic()
+        room.playback_state = "paused"
+        return room
 
     def vote_candidate(
         self,
