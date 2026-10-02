@@ -209,6 +209,8 @@ async def movie_night_heartbeat(request: web.Request) -> web.Response:
         byte_position=byte_position,
         buffered_until_byte=buffered_byte,
         paused=paused,
+        buffered_until_seconds=buffered,
+        media_duration_seconds=duration,
     )
 
     if session is not None:
