@@ -302,7 +302,7 @@ class TorrentMediaManager:
             maximum=180.0,
         )
         self.min_consume_rate = _env_int(
-            "DANK_TORRENT_MIN_ESTIMATED_PLAYBACK_BYTES",
+            "DANK_TORRENT_MIN_ESTIMATED_PLAYBACK_BYTES_PER_SECOND",
             512 * 1024,
             minimum=128 * 1024,
             maximum=8 * 1024 * 1024,
