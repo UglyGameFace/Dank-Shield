@@ -59,8 +59,8 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
     if request.method == "HEAD":
         return web.Response(status=status_code, headers=headers)
 
-    plan = manager.prepare_playback_request(session, start, end)
     first_end = min(end, start + _STREAM_CHUNK_BYTES - 1)
+    plan = manager.prepare_playback_request(session, start, first_end)
     startup_wait_end = max(first_end, plan.startup_wait_end)
     ready = await manager.wait_range(
         session,
