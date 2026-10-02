@@ -15,11 +15,14 @@ import asyncio
 import json
 import os
 import re
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
+import aiohttp
 import discord
 
 from stoney_verify.share_router_resources import (
@@ -33,6 +36,38 @@ from stoney_verify.share_router_resources import (
 _DATA_LOCK = asyncio.Lock()
 _RECENT_ROUTE_KEYS: dict[tuple[int, int, str], float] = {}
 URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
+_X_STATUS_PATH_RE = re.compile(r"^/([^/]+)/status/(\d+)(?:/.*)?$", re.IGNORECASE)
+_VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov")
+_VIDEO_CONTENT_TYPES = {
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "video/quicktime": ".mov",
+}
+_DEFAULT_VIDEO_MAX_BYTES = 25 * 1024 * 1024
+_DEFAULT_VIDEO_TIMEOUT_SECONDS = 12.0
+_TRUSTED_VIDEO_HOSTS = {
+    "video.twimg.com",
+    "media.tenor.com",
+    "i.giphy.com",
+}
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        value = int(str(os.getenv(name, str(default)) or default).strip())
+    except Exception:
+        value = int(default)
+    return max(int(minimum), min(value, int(maximum)))
+
+
+_X_EXTRACT_CONCURRENCY = _env_int(
+    "DANK_SHARE_ROUTER_X_EXTRACT_CONCURRENCY",
+    2,
+    minimum=1,
+    maximum=4,
+)
+_X_EXTRACT_SEMAPHORE = asyncio.Semaphore(_X_EXTRACT_CONCURRENCY)
+_X_VIDEO_CACHE: dict[str, tuple[float, Optional[str]]] = {}
+_X_VIDEO_CACHE_TTL_SECONDS = 15 * 60.0
+_X_VIDEO_NEGATIVE_CACHE_TTL_SECONDS = 90.0
 
 # Keep the historical path so a deployed guild does not have to rebuild routes
 # merely because ownership moved out of startup_guards.
@@ -62,6 +97,13 @@ class HubRepairResult:
     warnings: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class RoutedVideo:
+    file: discord.File
+    source_url: str
+    size_bytes: int
+
+
 def _log(message: str) -> None:
     try:
         print(f"🔗 share_router {message}")
@@ -85,6 +127,480 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(text) if text else int(default)
     except Exception:
         return int(default)
+
+
+def _x_status_parts(value: str) -> Optional[tuple[str, str]]:
+    raw = _safe_str(value)
+    if not raw:
+        return None
+    try:
+        parsed = urlsplit(raw)
+    except Exception:
+        return None
+    host = str(parsed.hostname or "").lower().strip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    if host == "mobile.twitter.com":
+        host = "twitter.com"
+    if host not in {"x.com", "twitter.com"}:
+        return None
+    match = _X_STATUS_PATH_RE.match(str(parsed.path or ""))
+    if not match:
+        return None
+    handle, status_id = match.groups()
+    return handle, status_id
+
+
+def _canonical_share_url(value: str) -> str:
+    raw = _safe_str(value).rstrip(".,)")
+    if not raw:
+        return ""
+    status = _x_status_parts(raw)
+    if status is not None:
+        handle, status_id = status
+        return f"https://x.com/{handle}/status/{status_id}"
+    try:
+        parsed = urlsplit(raw)
+    except Exception:
+        return raw
+    if str(parsed.scheme or "").lower() not in {"http", "https"}:
+        return raw
+    host = str(parsed.hostname or "").lower()
+    if not host:
+        return raw
+    netloc = host
+    try:
+        port = parsed.port
+    except ValueError:
+        return raw
+    if port:
+        netloc = f"{host}:{port}"
+    return urlunsplit(
+        (
+            str(parsed.scheme or "").lower(),
+            netloc,
+            str(parsed.path or ""),
+            str(parsed.query or ""),
+            "",
+        )
+    )
+
+
+def _url_identity(value: str) -> str:
+    status = _x_status_parts(value)
+    if status is not None:
+        return f"x-status:{status[1]}"
+    return _canonical_share_url(value).lower()
+
+
+def _normalize_share_text_urls(text: str, seen_urls: set[str]) -> str:
+    raw_text = _safe_str(text)
+    if not raw_text:
+        return ""
+
+    chunks: list[str] = []
+    cursor = 0
+    for match in URL_RE.finditer(raw_text):
+        chunks.append(raw_text[cursor : match.start()])
+        original = match.group(0)
+        canonical = _canonical_share_url(original)
+        identity = _url_identity(canonical)
+        if identity and identity not in seen_urls:
+            seen_urls.add(identity)
+            chunks.append(canonical)
+        cursor = match.end()
+    chunks.append(raw_text[cursor:])
+
+    cleaned = "".join(chunks)
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _suppress_url_previews(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        canonical = _canonical_share_url(match.group(0))
+        return f"<{canonical}>" if canonical else match.group(0)
+
+    return URL_RE.sub(replace, text or "")
+
+
+def _trusted_video_url(value: str) -> bool:
+    raw = _safe_str(value)
+    if not raw:
+        return False
+    try:
+        parsed = urlsplit(raw)
+    except Exception:
+        return False
+    if str(parsed.scheme or "").lower() != "https":
+        return False
+    host = str(parsed.hostname or "").lower().strip(".")
+    if not host:
+        return False
+    if host in _TRUSTED_VIDEO_HOSTS:
+        return True
+    if host.endswith(".discordapp.net") or host.endswith(".discordapp.com"):
+        return True
+    if host.endswith(".giphy.com"):
+        return True
+    return False
+
+
+def _video_source_urls(message: discord.Message) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        url = _safe_str(value)
+        if not url or not _trusted_video_url(url):
+            return
+        key = _canonical_share_url(url)
+        if key and key not in seen:
+            seen.add(key)
+            urls.append(url)
+
+    try:
+        for attachment in list(getattr(message, "attachments", []) or []):
+            content_type = _safe_str(getattr(attachment, "content_type", "")).lower()
+            filename = _safe_str(getattr(attachment, "filename", "")).lower()
+            if content_type.startswith("video/") or filename.endswith(_VIDEO_EXTENSIONS):
+                add(getattr(attachment, "proxy_url", None))
+                add(getattr(attachment, "url", None))
+    except Exception:
+        pass
+
+    try:
+        for embed in list(getattr(message, "embeds", []) or []):
+            video = getattr(embed, "video", None)
+            if video is None:
+                continue
+            # Prefer Discord's proxy when available; it avoids re-fetching the
+            # provider directly and keeps the relay on an explicitly trusted host.
+            add(getattr(video, "proxy_url", None))
+            add(getattr(video, "url", None))
+    except Exception:
+        pass
+
+    return urls
+
+
+def _share_video_limit_bytes(guild: discord.Guild) -> int:
+    try:
+        configured = int(
+            str(
+                os.getenv(
+                    "DANK_SHARE_ROUTER_MAX_VIDEO_BYTES",
+                    str(_DEFAULT_VIDEO_MAX_BYTES),
+                )
+                or _DEFAULT_VIDEO_MAX_BYTES
+            ).strip()
+        )
+    except Exception:
+        configured = _DEFAULT_VIDEO_MAX_BYTES
+    configured = max(1024 * 1024, min(configured, 100 * 1024 * 1024))
+    try:
+        guild_limit = int(getattr(guild, "filesize_limit", 0) or 0)
+    except Exception:
+        guild_limit = 0
+    if guild_limit > 0:
+        return max(1024 * 1024, min(configured, guild_limit))
+    return configured
+
+
+def _first_x_status_url(text: str) -> str:
+    for raw in URL_RE.findall(text or ""):
+        canonical = _canonical_share_url(raw)
+        if _x_status_parts(canonical) is not None:
+            return canonical
+    return ""
+
+
+def _iter_extracted_video_entries(info: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(info, Mapping):
+        return []
+    entries = info.get("entries")
+    if isinstance(entries, (list, tuple)):
+        flattened: list[Mapping[str, Any]] = []
+        for entry in entries:
+            flattened.extend(_iter_extracted_video_entries(entry))
+        return flattened
+    return [info]
+
+
+def _select_progressive_video_url(
+    info: Any,
+    *,
+    max_bytes: int,
+) -> str:
+    candidates: list[tuple[tuple[int, int, float, int], str]] = []
+
+    for entry in _iter_extracted_video_entries(info):
+        formats = entry.get("formats")
+        pool: list[Mapping[str, Any]] = []
+        if isinstance(formats, list):
+            pool.extend(item for item in formats if isinstance(item, Mapping))
+        pool.append(entry)
+
+        for fmt in pool:
+            url = _safe_str(fmt.get("url"))
+            if not url or not _trusted_video_url(url):
+                continue
+
+            protocol = _safe_str(fmt.get("protocol")).lower()
+            if protocol and protocol not in {"http", "https"}:
+                continue
+
+            ext = _safe_str(fmt.get("ext")).lower()
+            if ext and ext not in {"mp4", "webm", "mov"}:
+                continue
+
+            vcodec = _safe_str(fmt.get("vcodec")).lower()
+            if vcodec == "none":
+                continue
+
+            known_size = _safe_int(
+                fmt.get("filesize") or fmt.get("filesize_approx"),
+                0,
+            )
+            if known_size > max_bytes > 0:
+                continue
+
+            acodec = _safe_str(fmt.get("acodec")).lower()
+            has_audio = 0 if acodec == "none" else 1
+            height = _safe_int(fmt.get("height"), 0)
+            try:
+                tbr = float(fmt.get("tbr") or 0.0)
+            except Exception:
+                tbr = 0.0
+
+            # Prefer combined A/V, then resolution/bitrate. Unknown-size media
+            # is allowed because the actual relay is still hard-capped while
+            # streaming and fails open to the source link.
+            size_score = -known_size if known_size > 0 else 0
+            candidates.append(((has_audio, height, tbr, size_score), url))
+
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def _extract_x_video_url_sync(status_url: str, max_bytes: int) -> str:
+    canonical = _canonical_share_url(status_url)
+    if _x_status_parts(canonical) is None:
+        return ""
+
+    try:
+        import yt_dlp
+    except Exception:
+        return ""
+
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noplaylist": True,
+        "cachedir": False,
+        "socket_timeout": 6,
+        "retries": 1,
+        "extractor_retries": 1,
+        "fragment_retries": 0,
+    }
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(canonical, download=False)
+    except Exception:
+        return ""
+
+    return _select_progressive_video_url(info, max_bytes=max_bytes)
+
+
+async def _extract_x_video_url(status_url: str, *, max_bytes: int) -> str:
+    canonical = _canonical_share_url(status_url)
+    status = _x_status_parts(canonical)
+    if status is None:
+        return ""
+
+    cache_key = f"x-status:{status[1]}"
+    now = time.monotonic()
+    cached = _X_VIDEO_CACHE.get(cache_key)
+    if cached is not None:
+        expires_at, value = cached
+        if now < expires_at:
+            return value or ""
+        _X_VIDEO_CACHE.pop(cache_key, None)
+
+    async with _X_EXTRACT_SEMAPHORE:
+        # Recheck after waiting for the semaphore so concurrent shares of the
+        # same status do not all hit X independently.
+        now = time.monotonic()
+        cached = _X_VIDEO_CACHE.get(cache_key)
+        if cached is not None:
+            expires_at, value = cached
+            if now < expires_at:
+                return value or ""
+            _X_VIDEO_CACHE.pop(cache_key, None)
+
+        try:
+            extracted = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _extract_x_video_url_sync,
+                    canonical,
+                    int(max_bytes),
+                ),
+                timeout=10.0,
+            )
+        except Exception:
+            extracted = ""
+
+        ttl = (
+            _X_VIDEO_CACHE_TTL_SECONDS
+            if extracted
+            else _X_VIDEO_NEGATIVE_CACHE_TTL_SECONDS
+        )
+        _X_VIDEO_CACHE[cache_key] = (time.monotonic() + ttl, extracted or None)
+        return extracted
+
+
+def _share_video_timeout_seconds() -> float:
+    try:
+        raw = float(
+            str(
+                os.getenv(
+                    "DANK_SHARE_ROUTER_VIDEO_TIMEOUT_SECONDS",
+                    str(_DEFAULT_VIDEO_TIMEOUT_SECONDS),
+                )
+                or _DEFAULT_VIDEO_TIMEOUT_SECONDS
+            ).strip()
+        )
+    except Exception:
+        raw = _DEFAULT_VIDEO_TIMEOUT_SECONDS
+    return max(3.0, min(raw, 30.0))
+
+
+def _video_filename(url: str, content_type: str) -> str:
+    extension = _VIDEO_CONTENT_TYPES.get(str(content_type or "").split(";", 1)[0].strip().lower(), "")
+    if not extension:
+        try:
+            path = str(urlsplit(url).path or "").lower()
+            extension = next((item for item in _VIDEO_EXTENSIONS if path.endswith(item)), "")
+        except Exception:
+            extension = ""
+    return f"share-router-video{extension or '.mp4'}"
+
+
+async def _download_trusted_video(
+    url: str,
+    *,
+    max_bytes: int,
+) -> Optional[RoutedVideo]:
+    if not _trusted_video_url(url):
+        return None
+
+    timeout = aiohttp.ClientTimeout(
+        total=_share_video_timeout_seconds(),
+        connect=4.0,
+        sock_read=8.0,
+    )
+    spool = tempfile.SpooledTemporaryFile(max_size=2 * 1024 * 1024, mode="w+b")
+    current = url
+    try:
+        async with aiohttp.ClientSession(
+            timeout=timeout,
+            headers={"User-Agent": "DankShield-ShareRouter/1.0"},
+        ) as session:
+            for _ in range(4):
+                if not _trusted_video_url(current):
+                    return None
+                async with session.get(current, allow_redirects=False) as response:
+                    if response.status in {301, 302, 303, 307, 308}:
+                        location = _safe_str(response.headers.get("Location"))
+                        if not location:
+                            return None
+                        current = urljoin(current, location)
+                        continue
+                    if response.status != 200:
+                        return None
+                    if not _trusted_video_url(str(response.url)):
+                        return None
+
+                    content_type = _safe_str(response.headers.get("Content-Type")).lower()
+                    media_type = content_type.split(";", 1)[0].strip()
+                    path = str(urlsplit(str(response.url)).path or "").lower()
+                    if not (
+                        media_type.startswith("video/")
+                        or (
+                            media_type in {"", "application/octet-stream"}
+                            and path.endswith(_VIDEO_EXTENSIONS)
+                        )
+                    ):
+                        return None
+
+                    content_length = _safe_int(response.headers.get("Content-Length"), 0)
+                    if content_length > max_bytes > 0:
+                        return None
+
+                    total = 0
+                    async for chunk in response.content.iter_chunked(64 * 1024):
+                        total += len(chunk)
+                        if total > max_bytes:
+                            return None
+                        spool.write(chunk)
+
+                    if total <= 0:
+                        return None
+                    spool.seek(0)
+                    file = discord.File(
+                        spool,
+                        filename=_video_filename(str(response.url), media_type),
+                    )
+                    spool = None
+                    return RoutedVideo(file=file, source_url=str(response.url), size_bytes=total)
+            return None
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError):
+        return None
+    finally:
+        if spool is not None:
+            try:
+                spool.close()
+            except Exception:
+                pass
+
+
+async def _prepare_native_video(
+    message: discord.Message,
+    target: discord.TextChannel,
+    routed_text: str,
+) -> Optional[RoutedVideo]:
+    try:
+        me = target.guild.me
+        if not isinstance(me, discord.Member):
+            return None
+        if not target.permissions_for(me).attach_files:
+            return None
+    except Exception:
+        return None
+
+    max_bytes = _share_video_limit_bytes(message.guild)
+
+    # Fast path: use a real video URL Discord already supplied.
+    for candidate in _video_source_urls(message):
+        routed = await _download_trusted_video(candidate, max_bytes=max_bytes)
+        if routed is not None:
+            return routed
+
+    # X commonly gives Discord only a static preview image. When that happens,
+    # extract the real progressive video URL from the canonical X status itself.
+    status_url = _first_x_status_url(routed_text)
+    if status_url:
+        candidate = await _extract_x_video_url(status_url, max_bytes=max_bytes)
+        if candidate:
+            routed = await _download_trusted_video(candidate, max_bytes=max_bytes)
+            if routed is not None:
+                return routed
+
+    return None
 
 
 def _utc_iso() -> str:
@@ -291,10 +807,16 @@ def route_health(guild: discord.Guild, route: Mapping[str, Any]) -> RouteHealth:
 
     try:
         me = guild.me
-        if isinstance(me, discord.Member) and not target.permissions_for(me).embed_links:
-            warnings.append(f"Dank Shield lacks Embed Links in {target.mention}; URLs can route but previews may be reduced.")
+        if isinstance(me, discord.Member):
+            target_perms = target.permissions_for(me)
+            if not target_perms.embed_links:
+                warnings.append(f"Dank Shield lacks Embed Links in {target.mention}; URLs can route but previews may be reduced.")
+            if not target_perms.attach_files:
+                warnings.append(
+                    f"Dank Shield lacks Attach Files in {target.mention}; routed videos will fall back to provider links instead of native inline playback."
+                )
     except Exception:
-        warnings.append("Could not verify destination Embed Links permission.")
+        warnings.append("Could not verify destination Embed Links / Attach Files permissions.")
 
     if not is_share_router_design_resource(source):
         warnings.append("This is a legacy/custom proxy source outside the canonical Share Routes hub.")
@@ -304,34 +826,47 @@ def route_health(guild: discord.Guild, route: Mapping[str, Any]) -> RouteHealth:
 
 def _message_share_text(message: discord.Message) -> str:
     parts: list[str] = []
-    content = _safe_str(getattr(message, "content", ""))
+    seen_urls: set[str] = set()
+
+    content = _normalize_share_text_urls(
+        _safe_str(getattr(message, "content", "")),
+        seen_urls,
+    )
     if content:
         parts.append(content)
 
+    # Discord's generated embed title/description are derived preview copy, not
+    # human-authored share text. Re-forwarding them caused X shares to include
+    # both the x.com URL and Discord's twitter.com alias plus duplicated titles.
     try:
         for embed in list(getattr(message, "embeds", []) or []):
-            for attr in ("url", "title", "description"):
-                text = _safe_str(getattr(embed, attr, None))
-                if text and text not in parts:
-                    parts.append(text)
+            text = _normalize_share_text_urls(
+                _safe_str(getattr(embed, "url", None)),
+                seen_urls,
+            )
+            if text:
+                parts.append(text)
     except Exception:
         pass
 
     try:
         for attachment in list(getattr(message, "attachments", []) or []):
-            url = _safe_str(getattr(attachment, "url", ""))
-            if url and url not in parts:
-                parts.append(url)
+            text = _normalize_share_text_urls(
+                _safe_str(getattr(attachment, "url", "")),
+                seen_urls,
+            )
+            if text:
+                parts.append(text)
     except Exception:
         pass
 
-    return "\n".join(parts).strip()
+    return "\n".join(part for part in parts if part).strip()
 
 
 def _dedupe_key(text: str) -> str:
     urls = URL_RE.findall(text or "")
     if urls:
-        return urls[0].strip().lower().rstrip(".,)")
+        return _url_identity(urls[0])
     return re.sub(r"\s+", " ", (text or "").strip().lower())[:180]
 
 
@@ -451,11 +986,47 @@ async def route_message(message: discord.Message) -> None:
             _RECENT_ROUTE_KEYS[dedupe] = now
 
         if not duplicate:
-            routed = f"{text}\n\n↪️ Shared by {message.author.mention} via Dank Shield Share Router"
-            await target.send(
-                routed[:2000],
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+            native_video = await _prepare_native_video(message, target, text)
+            routed_text = text
+            if native_video is not None:
+                # Keep the source URL clickable without asking Discord to render
+                # a second provider preview beside the uploaded native player.
+                routed_text = _suppress_url_previews(routed_text)
+            routed = f"{routed_text}\n\n↪️ Shared by {message.author.mention} via Dank Shield Share Router"
+
+            send_payload: dict[str, Any] = {
+                "content": routed[:2000],
+                "allowed_mentions": discord.AllowedMentions.none(),
+            }
+            if native_video is not None:
+                send_payload["file"] = native_video.file
+
+            try:
+                await target.send(**send_payload)
+                if native_video is not None:
+                    _log(
+                        f"native video relayed guild={guild.id} source={message.channel.id} "
+                        f"target={target.id} bytes={native_video.size_bytes}"
+                    )
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                # A provider-link route is still preferable to losing the share
+                # if Discord rejects the file at send time (size/bucket/etc.).
+                if native_video is None:
+                    raise
+                _log(
+                    f"native video send fallback guild={guild.id} target={target.id} "
+                    f"error={type(exc).__name__}"
+                )
+                await target.send(
+                    f"{text}\n\n↪️ Shared by {message.author.mention} via Dank Shield Share Router"[:2000],
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            finally:
+                if native_video is not None:
+                    try:
+                        native_video.file.close()
+                    except Exception:
+                        pass
 
         if bool(route.get("delete_source", True)) and source_perms.manage_messages:
             try:
