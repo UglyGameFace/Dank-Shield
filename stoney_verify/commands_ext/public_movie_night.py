@@ -527,17 +527,46 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
     embed = discord.Embed(
         title="🎞️ Movie Night Sources",
         description=(
-            "Add an authorized **HTTPS JSON search/feed URL** and Dank Shield handles the "
-            "internal source ID for you. Use `{query}` where the movie title belongs, or "
-            "Dank Shield appends `?q=` automatically. Results can point to a magnet link "
-            "or an HTTPS .torrent URL. Plain website/HTML pages are not scraped."
+            "Use this page only if you want **Movie Search** to check one of your own "
+            "movie feeds. If you already have a magnet link or a `.torrent` file, "
+            "you can skip Sources completely and use it directly with `/movie`."
         ),
         color=discord.Color.blurple(),
     )
+    embed.add_field(
+        name="⚡ Quick setup",
+        value=(
+            "1️⃣ Tap **Add Source** below.\n"
+            "2️⃣ Give it any name, like **My Movies**.\n"
+            "3️⃣ Paste the **HTTPS search/feed URL**.\n"
+            "4️⃣ Put `{query}` where the movie title should go.\n"
+            "   Example: `https://media.example.com/search?q={query}`\n"
+            "5️⃣ Submit it, then use **/movie → Search / Vote**."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="✅ What kind of link works?",
+        value=(
+            "The link must return **JSON results**, not a normal website page. "
+            "Each result needs a movie title plus either a **magnet link** or an "
+            "**HTTPS .torrent URL**."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🧪 Tiny example",
+        value=(
+            '`{"results":[{"title":"Example Movie","magnet":"magnet:?xt=..."}]}`\n'
+            "If opening your test URL shows a regular webpage instead of JSON text, "
+            "it is not a compatible search/feed URL."
+        ),
+        inline=False,
+    )
     if not registry.sources:
         embed.add_field(
-            name="Configured sources",
-            value="None yet. Magnet and .torrent playback still works directly.",
+            name="📚 Your sources",
+            value="None added yet. Tap **Add Source** to add the first one.",
             inline=False,
         )
     else:
@@ -545,29 +574,19 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
         for source in registry.sources:
             state = "✅" if source.enabled else "⏸️"
             lines.append(
-                f"{state} **{source.label}** • `{source.source_id}`\n"
+                f"{state} **{source.label}**\n"
                 f"↳ {source.endpoint_url[:180]}"
             )
         embed.add_field(
-            name=f"Configured sources • {len(registry.sources)}",
+            name=f"📚 Your sources • {len(registry.sources)}",
             value="\n".join(lines)[:4000],
             inline=False,
         )
     embed.add_field(
-        name="Expected JSON",
+        name="🔒 One rule",
         value=(
-            'Example: `{"results":[{"title":"Example Movie","magnet":"magnet:?xt=...",'
-            '"seeds":42,"leechers":5}]}`\n'
-            "An HTTPS `.torrent` URL can be returned as `url` instead of `magnet`."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Network safety",
-        value=(
-            "Sources must use HTTPS, return structured JSON, cannot embed credentials, and cannot "
-            "point at localhost/private/reserved addresses. DNS destinations are re-checked before "
-            "every fetch."
+            "Use **HTTPS** and do not put usernames, passwords, API secrets, or other "
+            "private credentials in the URL."
         ),
         inline=False,
     )
@@ -1279,14 +1298,14 @@ class CustomSourceModal(discord.ui.Modal):
         self.source_id = str(source.source_id if source is not None else "")
 
         self.label_input = discord.ui.TextInput(
-            label="Source name",
+            label="Name",
             placeholder="Family Library",
             default=str(source.label if source is not None else "")[:80] or None,
             min_length=1,
             max_length=80,
         )
         self.endpoint_input = discord.ui.TextInput(
-            label="HTTPS JSON search/feed URL",
+            label="Search/feed URL",
             placeholder="https://media.example.com/search?q={query}",
             default=str(source.endpoint_url if source is not None else "")[:1000] or None,
             min_length=8,
