@@ -307,7 +307,12 @@ def test_direct_memes_detects_existing_inline_video_without_relay() -> None:
     )
     static_preview = SimpleNamespace(
         attachments=[],
-        embeds=[SimpleNamespace(video=None, thumbnail=SimpleNamespace(url="https://example.com/x.jpg"))],
+        embeds=[
+            SimpleNamespace(
+                video=None,
+                thumbnail=SimpleNamespace(url="https://example.com/x.jpg"),
+            )
+        ],
     )
 
     assert _message_has_inline_video(attachment_message)
@@ -368,7 +373,29 @@ def test_direct_memes_failure_and_duplicate_are_non_destructive(monkeypatch) -> 
     assert channel.sent == []
 
 
+def test_direct_memes_already_inline_never_calls_native_relay(monkeypatch) -> None:
+    message, routes, channel = _direct_memes_fixture()
+    message.attachments = [
+        SimpleNamespace(
+            content_type="video/mp4",
+            filename="already-inline.mp4",
+            url="https://cdn.discordapp.com/attachments/1/2/already-inline.mp4",
+        )
+    ]
+    share_runtime._RECENT_ROUTE_KEYS.clear()
+
+    async def should_not_run(*_args, **_kwargs):
+        raise AssertionError("already-inline media must not be relayed")
+
+    monkeypatch.setattr(share_runtime, "_prepare_native_video", should_not_run)
+
+    assert asyncio.run(_relay_direct_memes_video(message, routes)) is True
+    assert channel.sent == []
+    assert (101, 22, _dedupe_key(message.content)) in share_runtime._RECENT_ROUTE_KEYS
+
+
 def test_direct_memes_runtime_reuses_one_listener_and_ignores_webhooks() -> None:
+    assert "routes = await guild_routes(int(guild.id))" in RUNTIME
     assert "await _relay_direct_memes_video(message, routes)" in RUNTIME
     assert 'getattr(message, "webhook_id", None) is not None' in RUNTIME
     assert RUNTIME.count('bot.add_listener(route_message, "on_message")') == 1
