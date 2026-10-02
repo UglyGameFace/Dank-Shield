@@ -596,11 +596,11 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
     embed.add_field(
         name="🧩 Dank Provider Lab",
         value=(
-            "Advanced owners can plug in an authorized **HTTPS JSON search API/feed**.\n"
-            "1️⃣ Search it once for **Batman**.\n"
-            "2️⃣ Copy that working search URL.\n"
-            "3️⃣ Tap **Add Provider** and paste it.\n"
-            "Dank Cinema detects common search parameters, tests the endpoint, then keeps the provider plumbing hidden."
+            "Advanced owners can add either kind of custom provider:\n"
+            "• **Add JSON Provider** — authorized HTTPS JSON results feed playable releases into Dank Engine.\n"
+            "• **Add Search Link** — opens the provider's own movie-results page without scraping it.\n"
+            "Paste a working search URL after searching once for **Batman**; Dank Cinema detects common "
+            "query parameters and keeps the internal provider identity hidden."
         ),
         inline=False,
     )
