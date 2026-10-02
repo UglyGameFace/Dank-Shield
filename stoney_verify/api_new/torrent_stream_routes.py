@@ -83,6 +83,8 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
             headers={"Retry-After": "2"},
         )
 
+    manager.schedule_metadata_probe(session)
+
     response = web.StreamResponse(status=status_code, headers=headers)
     await response.prepare(request)
 
