@@ -385,8 +385,16 @@ class ManifestProxy:
         )
 
         app = web.Application(client_max_size=1024)
-        app.router.add_route("*", f"/{self.token}/r/{{resource_id}}", self._handle_exact)
-        app.router.add_route("*", f"/{self.token}/b/{{resource_id}}/{{tail:.*}}", self._handle_base)
+        app.router.add_get(
+            f"/{self.token}/r/{{resource_id}}",
+            self._handle_exact,
+            allow_head=True,
+        )
+        app.router.add_get(
+            f"/{self.token}/b/{{resource_id}}/{{tail:.*}}",
+            self._handle_base,
+            allow_head=True,
+        )
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, "127.0.0.1", 0)
@@ -489,13 +497,17 @@ class ManifestProxy:
     async def _read_manifest(
         self,
         response: aiohttp.ClientResponse,
+        *,
+        prefix: bytes = b"",
     ) -> bytes:
         declared = int(response.headers.get("Content-Length") or 0)
         limit = _manifest_max_bytes()
         if declared > limit > 0:
             raise web.HTTPRequestEntityTooLarge(max_size=limit, actual_size=declared)
 
-        body = await response.content.read(limit + 1)
+        remaining = max(0, limit + 1 - len(prefix))
+        tail = await response.content.read(remaining)
+        body = bytes(prefix) + bytes(tail)
         if len(body) > limit:
             raise web.HTTPRequestEntityTooLarge(max_size=limit, actual_size=len(body))
         await self._budget.consume(len(body))
@@ -516,11 +528,31 @@ class ManifestProxy:
         )
         try:
             content_type = str(response.headers.get("Content-Type") or "")
-            if request.method != "HEAD" and (
-                manifest_hint
-                or _looks_like_manifest(final_url, content_type, b"")
-            ):
-                body = await self._read_manifest(response)
+
+            if request.method == "HEAD":
+                passthrough = {}
+                for key in ("Content-Length", "Content-Type", "Accept-Ranges", "Content-Range"):
+                    value = response.headers.get(key)
+                    if value:
+                        passthrough[key] = value
+                return web.Response(status=response.status, headers=passthrough)
+
+            prefix = b""
+            known_manifest = manifest_hint or _looks_like_manifest(
+                final_url,
+                content_type,
+                b"",
+            )
+            if not known_manifest:
+                prefix = await response.content.read(512)
+                known_manifest = _looks_like_manifest(
+                    final_url,
+                    content_type,
+                    prefix,
+                )
+
+            if known_manifest:
+                body = await self._read_manifest(response, prefix=prefix)
                 if not _looks_like_manifest(final_url, content_type, body[:512]):
                     raise web.HTTPUnsupportedMediaType(text="expected a media manifest")
                 try:
@@ -550,7 +582,6 @@ class ManifestProxy:
                     headers={"Cache-Control": "no-store"},
                 )
 
-            if request.method == "HEAD":
                 passthrough = {}
                 for key in ("Content-Length", "Content-Type", "Accept-Ranges", "Content-Range"):
                     value = response.headers.get(key)
@@ -573,6 +604,10 @@ class ManifestProxy:
                     downstream.headers[key] = value
             downstream.headers["Cache-Control"] = "no-store"
             await downstream.prepare(request)
+
+            if prefix:
+                await self._budget.consume(len(prefix))
+                await downstream.write(prefix)
 
             chunk_size = _env_int(
                 "DANK_SHARE_ROUTER_MANIFEST_PROXY_CHUNK_BYTES",
