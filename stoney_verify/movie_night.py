@@ -30,6 +30,9 @@ class ViewerState:
     buffered_until_seconds: float = 0.0
     media_duration_seconds: float = 0.0
     paused: bool = False
+    sync_ready: bool = True
+    sync_ready_at: float = 0.0
+    sync_target_position: float = 0.0
 
     @property
     def buffered_bytes(self) -> int:
@@ -197,6 +200,9 @@ class MovieNightManager:
         buffer_low_seconds: float = 4.0,
         buffer_resume_seconds: float = 12.0,
         buffer_max_hold_seconds: float = 20.0,
+        late_join_min_buffer_seconds: float = 8.0,
+        late_join_max_buffer_seconds: float = 15.0,
+        late_join_sync_tolerance_seconds: float = 2.5,
     ) -> None:
         self.host_grace_seconds = max(10.0, float(host_grace_seconds))
         self.viewer_ttl_seconds = max(10.0, float(viewer_ttl_seconds))
@@ -207,6 +213,18 @@ class MovieNightManager:
             float(buffer_resume_seconds),
         )
         self.buffer_max_hold_seconds = max(5.0, float(buffer_max_hold_seconds))
+        self.late_join_min_buffer_seconds = max(
+            3.0,
+            float(late_join_min_buffer_seconds),
+        )
+        self.late_join_max_buffer_seconds = max(
+            self.late_join_min_buffer_seconds,
+            float(late_join_max_buffer_seconds),
+        )
+        self.late_join_sync_tolerance_seconds = max(
+            0.5,
+            float(late_join_sync_tolerance_seconds),
+        )
         self._rooms: dict[str, MovieNightRoom] = {}
 
     def create_room(
@@ -236,6 +254,8 @@ class MovieNightManager:
             user_id=int(host_id),
             joined_at=current,
             last_seen=current,
+            sync_ready=True,
+            sync_ready_at=current,
         )
         self._rooms[room.room_id] = room
         return room
@@ -283,10 +303,22 @@ class MovieNightManager:
         uid = int(user_id)
         viewer = room.viewers.get(uid)
         if viewer is None:
+            target = room.current_position(current)
+            ready = bool(
+                uid == int(room.host_id)
+                or not room.stream_token
+                or (
+                    room.playback_state == "paused"
+                    and target <= 1.0
+                )
+            )
             room.viewers[uid] = ViewerState(
                 user_id=uid,
                 joined_at=current,
                 last_seen=current,
+                sync_ready=ready,
+                sync_ready_at=current if ready else 0.0,
+                sync_target_position=target,
             )
         else:
             viewer.last_seen = current
@@ -315,6 +347,7 @@ class MovieNightManager:
         paused: bool,
         buffered_until_seconds: float = 0.0,
         media_duration_seconds: float = 0.0,
+        sync_buffer_target_seconds: float = 0.0,
         now: Optional[float] = None,
     ) -> MovieNightRoom:
         room = self._require_room(room_id)
@@ -341,6 +374,8 @@ class MovieNightManager:
         )
         viewer.paused = bool(paused)
         if uid == int(room.host_id):
+            viewer.sync_ready = True
+            viewer.sync_ready_at = viewer.sync_ready_at or current
             room.host_last_seen = current
             # A returning host immediately regains playback authority. Any
             # unresolved failover-only playback vote is cancelled, while
@@ -349,6 +384,40 @@ class MovieNightManager:
                 if not vote.resolved and vote.action in PLAYBACK_ACTIONS:
                     vote.resolved = True
                     vote.passed = False
+        if not room.stream_token:
+            viewer.sync_ready = True
+            viewer.sync_ready_at = viewer.sync_ready_at or current
+        elif uid != int(room.host_id) and not viewer.sync_ready:
+            target = room.current_position(current)
+            viewer.sync_target_position = target
+            drift = abs(float(viewer.position_seconds) - float(target))
+            buffered_ahead = max(
+                0.0,
+                float(viewer.buffered_until_seconds)
+                - float(viewer.position_seconds),
+            )
+            requested = float(sync_buffer_target_seconds or 0.0)
+            required_buffer = min(
+                self.late_join_max_buffer_seconds,
+                max(self.late_join_min_buffer_seconds, requested),
+            )
+            if viewer.media_duration_seconds > 0:
+                remaining = max(
+                    0.0,
+                    float(viewer.media_duration_seconds)
+                    - float(viewer.position_seconds),
+                )
+                required_buffer = min(
+                    required_buffer,
+                    max(1.0, remaining),
+                )
+            if (
+                drift <= self.late_join_sync_tolerance_seconds
+                and buffered_ahead >= required_buffer
+            ):
+                viewer.sync_ready = True
+                viewer.sync_ready_at = current
+
         self._expire_votes(room, current)
         self._update_group_buffer_hold(room, current)
         return room
@@ -361,7 +430,7 @@ class MovieNightManager:
         if not room.stream_token or room.ended:
             return
 
-        active_ids = self.active_viewers(room, now=now)
+        active_ids = self.buffer_quorum_viewers(room, now=now)
         if len(active_ids) < 2:
             if room.playback_state == "buffering":
                 room.playback_state = "playing"
@@ -446,6 +515,25 @@ class MovieNightManager:
             int(uid)
             for uid, viewer in room.viewers.items()
             if current - float(viewer.last_seen) <= self.viewer_ttl_seconds
+        }
+
+    def buffer_quorum_viewers(
+        self,
+        room: MovieNightRoom,
+        *,
+        now: Optional[float] = None,
+    ) -> set[int]:
+        active = self.active_viewers(room, now=now)
+        return {
+            uid
+            for uid in active
+            if (
+                uid == int(room.host_id)
+                or (
+                    uid in room.viewers
+                    and bool(room.viewers[uid].sync_ready)
+                )
+            )
         }
 
     def required_yes_votes(
@@ -783,6 +871,14 @@ class MovieNightManager:
         room.stream_token = str(stream_token or "")
         room.current_candidate_id = str(candidate_id or "")
         room.current_variant_id = str(variant_id or "")
+        for uid, viewer in room.viewers.items():
+            viewer.sync_target_position = 0.0
+            if int(uid) == int(room.host_id):
+                viewer.sync_ready = True
+                viewer.sync_ready_at = time.monotonic()
+            else:
+                viewer.sync_ready = False
+                viewer.sync_ready_at = 0.0
         room.playback_position = 0.0
         room.playback_anchor_monotonic = time.monotonic()
         room.playback_state = "paused"
@@ -892,7 +988,7 @@ class MovieNightManager:
         max_skew_bytes: int = 64 * 1024 * 1024,
     ) -> Optional[tuple[int, int, int]]:
         room = self._require_room(room_id)
-        active_ids = self.active_viewers(room, now=now)
+        active_ids = self.buffer_quorum_viewers(room, now=now)
         viewers = [
             room.viewers[uid]
             for uid in active_ids
