@@ -783,9 +783,34 @@ def _candidate_embed(room: MovieNightRoom, candidate: Any) -> discord.Embed:
             f"🌱 {health['seeds']} • 🧲 {health['leechers']} • "
             f"👥 {health['peers']} • 🗳️ {len(variant.votes & active)}"
         )
+    catalog = (
+        candidate.metadata.get("catalog")
+        if isinstance(candidate.metadata, Mapping)
+        and isinstance(candidate.metadata.get("catalog"), Mapping)
+        else {}
+    )
+    if catalog:
+        year = _safe_int(catalog.get("year"), 0)
+        overview = _compact(catalog.get("overview"), 900)
+        catalog_id = _compact(catalog.get("catalog_id"), 40)
+        embed.add_field(
+            name="Catalog match",
+            value=(
+                f"TMDB: **{catalog_id or 'unknown'}**"
+                + (f" • **{year}**" if year else "")
+                + (f"\n{overview}" if overview else "")
+            )[:1024],
+            inline=False,
+        )
+        poster_url = str(catalog.get("poster_url") or "").strip()
+        if poster_url.startswith("https://image.tmdb.org/"):
+            embed.set_thumbnail(url=poster_url)
+
     embed.add_field(
         name="Top releases",
-        value="\n".join(lines)[:1024] if lines else "No releases attached yet.",
+        value="\n".join(lines)[:1024] if lines else (
+            "No playable release is attached yet. The host can still provide a magnet or .torrent."
+        ),
         inline=False,
     )
     if candidate.candidate_id in room.queue:
@@ -890,6 +915,7 @@ def _materialize_search_results(
     *,
     proposer_id: int,
     query: str,
+    catalog_metadata: Optional[Mapping[str, Any]] = None,
 ) -> tuple[int, int]:
     manager = get_movie_night_manager()
     candidate_ids: set[str] = set()
@@ -897,14 +923,26 @@ def _materialize_search_results(
 
     for result in outcome.variants:
         candidate = manager.find_candidate_by_title(room.room_id, result.title)
+        catalog = (
+            dict(catalog_metadata)
+            if isinstance(catalog_metadata, Mapping)
+            and _compact(catalog_metadata.get("title")).casefold() == result.title.casefold()
+            else {}
+        )
+        candidate_metadata: dict[str, Any] = {"search_query": query}
+        if catalog:
+            candidate_metadata["catalog"] = catalog
+
         if candidate is None:
             candidate = manager.nominate(
                 room.room_id,
                 user_id=int(proposer_id),
                 title=result.title,
-                metadata={"search_query": query},
+                metadata=candidate_metadata,
                 auto_vote=False,
             )
+        elif catalog:
+            candidate.metadata.update(candidate_metadata)
         candidate_ids.add(candidate.candidate_id)
         manager.add_variant(
             room.room_id,
