@@ -258,8 +258,9 @@ class TorrentMediaManager:
             or str(os.getenv("BOT_API_SHARED_SECRET", "") or "").strip()
         )
         self._sessions: dict[str, TorrentStreamSession] = {}
+        self._starting = 0
         self._lock = asyncio.Lock()
-        self._gate = asyncio.Semaphore(self.max_sessions)
+        self._cleanup_task: Optional[asyncio.Task[Any]] = None
         self._session = self._build_libtorrent_session()
 
     @staticmethod
@@ -310,29 +311,31 @@ class TorrentMediaManager:
             raise ValueError("That is not a valid BitTorrent magnet link.")
 
         await self.cleanup_expired()
-        async with self._gate:
-            token = secrets.token_urlsafe(18)
-            save_root = Path(tempfile.mkdtemp(prefix=f"{token}-", dir=str(self.root)))
-            handle = None
-            try:
-                atp = self.lt.parse_magnet_uri(raw)
-                atp.save_path = str(save_root)
-                handle = self._session.add_torrent(atp)
-                info = await self._wait_metadata(handle)
-                return await self._finalize_session(
-                    token=token,
-                    save_root=save_root,
-                    handle=handle,
-                    info=info,
-                    guild_id=guild_id,
-                    owner_id=owner_id,
-                    source_kind="magnet",
-                    source_identity=identity,
-                )
-            except Exception:
-                self._safe_remove_handle(handle)
-                shutil.rmtree(save_root, ignore_errors=True)
-                raise
+        await self._reserve_start()
+        token = secrets.token_urlsafe(18)
+        save_root = Path(tempfile.mkdtemp(prefix=f"{token}-", dir=str(self.root)))
+        handle = None
+        try:
+            atp = self.lt.parse_magnet_uri(raw)
+            atp.save_path = str(save_root)
+            handle = self._session.add_torrent(atp)
+            info = await self._wait_metadata(handle)
+            return await self._finalize_session(
+                token=token,
+                save_root=save_root,
+                handle=handle,
+                info=info,
+                guild_id=guild_id,
+                owner_id=owner_id,
+                source_kind="magnet",
+                source_identity=identity,
+            )
+        except Exception:
+            self._safe_remove_handle(handle)
+            shutil.rmtree(save_root, ignore_errors=True)
+            raise
+        finally:
+            await self._release_start()
 
     async def start_torrent_bytes(
         self,
@@ -346,33 +349,66 @@ class TorrentMediaManager:
             raise ValueError("The .torrent metadata file is empty or exceeds the configured limit.")
 
         await self.cleanup_expired()
-        async with self._gate:
-            token = secrets.token_urlsafe(18)
-            save_root = Path(tempfile.mkdtemp(prefix=f"{token}-", dir=str(self.root)))
-            torrent_path = save_root / "source.torrent"
-            torrent_path.write_bytes(data)
-            handle = None
-            try:
-                info = self.lt.torrent_info(str(torrent_path))
-                atp = self.lt.add_torrent_params()
-                atp.ti = info
-                atp.save_path = str(save_root)
-                handle = self._session.add_torrent(atp)
-                source_identity = self._info_identity(info)
-                return await self._finalize_session(
-                    token=token,
-                    save_root=save_root,
-                    handle=handle,
-                    info=info,
-                    guild_id=guild_id,
-                    owner_id=owner_id,
-                    source_kind="torrent",
-                    source_identity=source_identity,
+        await self._reserve_start()
+        token = secrets.token_urlsafe(18)
+        save_root = Path(tempfile.mkdtemp(prefix=f"{token}-", dir=str(self.root)))
+        torrent_path = save_root / "source.torrent"
+        torrent_path.write_bytes(data)
+        handle = None
+        try:
+            info = self.lt.torrent_info(str(torrent_path))
+            atp = self.lt.add_torrent_params()
+            atp.ti = info
+            atp.save_path = str(save_root)
+            handle = self._session.add_torrent(atp)
+            source_identity = self._info_identity(info)
+            return await self._finalize_session(
+                token=token,
+                save_root=save_root,
+                handle=handle,
+                info=info,
+                guild_id=guild_id,
+                owner_id=owner_id,
+                source_kind="torrent",
+                source_identity=source_identity,
+            )
+        except Exception:
+            self._safe_remove_handle(handle)
+            shutil.rmtree(save_root, ignore_errors=True)
+            raise
+        finally:
+            await self._release_start()
+
+    async def _reserve_start(self) -> None:
+        async with self._lock:
+            if len(self._sessions) + self._starting >= self.max_sessions:
+                raise RuntimeError(
+                    f"Torrent streaming is at its configured {self.max_sessions}-session capacity."
                 )
-            except Exception:
-                self._safe_remove_handle(handle)
-                shutil.rmtree(save_root, ignore_errors=True)
-                raise
+            self._starting += 1
+
+    async def _release_start(self) -> None:
+        async with self._lock:
+            self._starting = max(0, self._starting - 1)
+
+    def ensure_cleanup_task(self) -> None:
+        try:
+            if self._cleanup_task is not None and not self._cleanup_task.done():
+                return
+            self._cleanup_task = asyncio.create_task(
+                self._cleanup_loop(),
+                name="torrent_stream_cleanup",
+            )
+        except RuntimeError:
+            return
+
+    async def _cleanup_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(60.0)
+                await self.cleanup_expired()
+        except asyncio.CancelledError:
+            return
 
     async def _wait_metadata(self, handle: Any) -> Any:
         deadline = time.monotonic() + self.metadata_wait_seconds
