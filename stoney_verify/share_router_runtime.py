@@ -990,11 +990,16 @@ async def _route_torrent_media(
         )
 
     status = manager.status(session)
+    release_meta = dict(session.release_metadata or {})
+    display_title = str(release_meta.get("title") or session.file_name)
+    display_year = release_meta.get("year")
     embed = discord.Embed(
         title="🎞️ Torrent Stream Ready",
         description=(
-            f"**{discord.utils.escape_markdown(session.file_name)}**\n"
-            "Playback starts progressively; Dank Shield prioritizes requested and upcoming pieces."
+            f"**{discord.utils.escape_markdown(display_title)}"
+            f"{f' ({display_year})' if display_year else ''}**\n"
+            f"`{discord.utils.escape_markdown(session.file_name)}`\n"
+            "Playback starts progressively; Dank Shield adapts buffering to the swarm and viewer."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -1002,6 +1007,25 @@ async def _route_torrent_media(
     embed.add_field(
         name="Media",
         value=f"{session.file_size / (1024 * 1024):.1f} MiB • {status.get('peers', 0)} peer(s)",
+        inline=False,
+    )
+    release_bits = [
+        str(release_meta.get("source") or ""),
+        str(release_meta.get("resolution") or ""),
+        " / ".join(release_meta.get("video_tags") or []),
+        " / ".join(release_meta.get("audio_tags") or []),
+        " / ".join(release_meta.get("hdr_tags") or []),
+    ]
+    release_bits = [bit for bit in release_bits if bit]
+    if release_bits:
+        embed.add_field(
+            name="Release-name metadata",
+            value=" • ".join(release_bits)[:1024],
+            inline=False,
+        )
+    embed.add_field(
+        name="Verified metadata",
+        value="Probed from the real media file after the first playback buffer is available.",
         inline=False,
     )
     embed.add_field(
