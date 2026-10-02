@@ -296,6 +296,12 @@ def _setup_readiness(
     libtorrent_ready = importlib.util.find_spec("libtorrent") is not None
     pyav_ready = importlib.util.find_spec("av") is not None
     runtime_ready = bool(media_server_ready())
+    storage: dict[str, Any] = {}
+    if libtorrent_ready:
+        try:
+            storage = get_torrent_manager().storage_status()
+        except Exception:
+            storage = {}
 
     blockers: list[str] = []
     warnings: list[str] = []
@@ -321,6 +327,12 @@ def _setup_readiness(
         blockers.append("The pinned libtorrent runtime is not installed.")
     if not pyav_ready:
         blockers.append("The pinned PyAV metadata runtime is not installed.")
+    free_bytes = _safe_int(storage.get("free_bytes"), 0)
+    max_file_bytes = _safe_int(storage.get("max_file_bytes"), 0)
+    if free_bytes > 0 and max_file_bytes > 0 and free_bytes < min(max_file_bytes, 2 * 1024 ** 3):
+        warnings.append(
+            "Torrent storage is low; larger Movie Night releases may not fit this host."
+        )
     if public_base and stream_secret and not runtime_ready:
         warnings.append(
             "Media settings exist, but the public media server is not currently reporting started."
@@ -348,6 +360,7 @@ def _setup_readiness(
         "libtorrent_ready": libtorrent_ready,
         "pyav_ready": pyav_ready,
         "runtime_ready": runtime_ready,
+        "storage": storage,
         "bind_host": bind_host,
         "bind_port": bind_port,
         "externally_bound": externally_bound,
@@ -412,8 +425,20 @@ def _setup_embed(
         ),
         inline=False,
     )
+    storage = ready.get("storage") if isinstance(ready.get("storage"), Mapping) else {}
+    if storage:
+        embed.add_field(
+            name="4 • Storage / movie size",
+            value=(
+                f"Per-movie cap: **{_format_bytes(storage.get('max_file_bytes'))}**\n"
+                f"Torrent budget: **{_format_bytes(storage.get('max_torrent_bytes'))}**\n"
+                f"Free disk now: **{_format_bytes(storage.get('free_bytes'))}**"
+            ),
+            inline=False,
+        )
+
     embed.add_field(
-        name="4 • Search / custom sources",
+        name="5 • Search / custom sources",
         value=(
             f"Configured: **{ready['sources']}** • Enabled: **{ready['enabled_sources']}**\n"
             "Custom authorized HTTPS feeds are managed from **Sources**. "
@@ -746,6 +771,21 @@ def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discor
                 f"Video: **{video.get('resolution') or 'unknown'}** • "
                 f"**{video.get('codec') or 'unknown'}**\n"
                 f"Audio tracks: **{len(audio)}**"
+            )[:1024],
+            inline=False,
+        )
+
+    try:
+        file_cap = int(get_torrent_manager().max_file_bytes)
+    except Exception:
+        file_cap = 0
+    if file_cap > 0 and variant.file_size > file_cap:
+        embed.add_field(
+            name="⚠️ Host compatibility",
+            value=(
+                f"This release is **{_format_bytes(variant.file_size)}**, above the current "
+                f"Movie Night per-file cap of **{_format_bytes(file_cap)}**. "
+                "Choose another release or raise the configured cap on a host with enough disk."
             )[:1024],
             inline=False,
         )
@@ -1663,6 +1703,21 @@ async def _start_variant_source(
         await interaction.response.defer(ephemeral=True, thinking=True)
 
     torrent_manager = get_torrent_manager()
+    if variant.file_size and int(variant.file_size) > int(torrent_manager.max_file_bytes):
+        return await _replace(
+            interaction,
+            content=(
+                f"❌ This release is {_format_bytes(variant.file_size)}, above this host's "
+                f"{_format_bytes(torrent_manager.max_file_bytes)} Movie Night file cap."
+            ),
+            embed=_release_embed(current, candidate, variant),
+            view=MovieReleaseView(
+                int(interaction.user.id),
+                current.room_id,
+                candidate.candidate_id,
+                variant.variant_id,
+            ),
+        )
     previous = str(current.stream_token or "")
     source_ref = str(variant.source_ref or "").strip()
 
