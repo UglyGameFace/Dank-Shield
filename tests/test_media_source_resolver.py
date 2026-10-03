@@ -637,6 +637,15 @@ def test_zero_v2_info_hash_is_rejected() -> None:
     assert resolver._item_source_ref(item) == ""
 
 
+
+def test_generic_hash_field_accepts_v2_sha256() -> None:
+    sha256 = "89abcdef01234567" * 4
+    item = {"name": "V2 Generic Hash", "hash": sha256}
+    assert resolver._item_source_ref(item) == (
+        "magnet:?xt=urn:btmh:1220" + sha256
+    )
+
+
 def test_custom_provider_zero_results_are_reported_as_diagnostic(monkeypatch) -> None:
     source = _source()
 
