@@ -5,13 +5,13 @@
 **DANK-SHIELD-408 — Make Dank Cinema movie search actually consume structured torrent providers**
 
 Production baseline:
-`main@be8312ef3568ab39ad23edd915d09c15af303f3e` (PR #411 merged).
+`main@ebe078ac5ea9274f91aa291f0901e77ff2260a30` (PR #412 merged).
 
-Active branch:
-`fix/408-release-first-selection`
+Active validation branch:
+`test/408-release-picker-dispatch`
 
 Status:
-**Post-merge production canary found one remaining release-picker interaction bug on Discord mobile. The provider search path is now returning real releases; the first-ranked release is visibly preselected and cannot be activated like the other choices. A focused fix and regression test are in progress.**
+**The first-release picker correction is merged and its exact PR head passed every required workflow. Production already proves provider search returns ranked playable releases. The only remaining completion gate is the deferred Android production canary for release #1 -> release detail -> torrent start -> Watch playback. A stronger callback-dispatch regression is being added while that live canary is deferred.**
 
 ## Production evidence
 
@@ -185,18 +185,24 @@ Coverage now includes:
 
 ## Validation state
 
-Earlier PR #411 runs exposed only diff-whitespace failures in `tests/test_media_source_resolver.py`; those were corrected. Several additional audit-backed commits have landed since, so those old runs are no longer completion evidence.
-
-Still required on the **final exact head**:
-- `git diff --check` / compile;
-- targeted provider resolver, registry, Movie Night UI, and torrent runtime tests;
-- full Dank Shield CI;
+PR #412 exact head `957293c3ebddcb3f030e576209d8e42cf11665d8` passed all required workflows before merge:
+- Dank Shield CI;
 - Profile Runtime Diagnostics;
 - Dank Design Regression CI;
 - Application Command Size Diagnostics;
-- Ticket Owner Emergency Override;
-- branch 0 behind current `main`;
-- final diff/reference/secret/conflict-artifact review.
+- Ticket Owner Emergency Override.
+
+Merged production source is `main@ebe078ac5ea9274f91aa291f0901e77ff2260a30`.
+
+Post-merge inspection confirms:
+- `_release_picker_choices()` sets every release option to `default=False`;
+- `_open_release_picker()` uses that helper and no longer references `candidate.selected_variant_id` for Discord select defaults;
+- no `default=True` remains in the Movie Night public UI;
+- no duplicate release-picker implementation was found on current `main`;
+- the regression test verifies the first two ranked releases both render unselected;
+- the active validation branch adds a direct callback-dispatch regression proving the first-ranked value reaches the picker action.
+
+Remaining validation is live-only: deploy/current production must confirm Android can select release #1 and continue through release detail -> torrent start -> Watch playback. The owner explicitly deferred that canary until later.
 
 ## Compatibility and deliberate boundaries
 
@@ -217,12 +223,15 @@ Deliberate boundaries:
 
 ## Blockers / risks
 
-No claim of complete/fixed/ready-to-merge is valid until exact-head CI is green. Even after merge, the production requirement is not closed until:
-1. ApiBay returns real releases for a known movie;
-2. a static RSS/Atom/Torznab feed produces a matching release when one exists;
-3. Choose Release starts torrent metadata/download successfully;
-4. the synchronized Watch path plays it;
-5. provider failures show useful diagnostics rather than a generic zero-release dead end.
+The implementation and CI gates are complete for the release-picker correction, but the task is **not closed** because the owner deferred the final Android canary.
+
+Production evidence already confirms ApiBay/provider search is returning ranked releases with swarm data. Still unverified after PR #412:
+1. release #1 can be selected on Android;
+2. release #1 opens the release detail/action surface;
+3. its torrent metadata/download starts successfully;
+4. the Watch path plays it and remains synchronized.
+
+Do not close issue #408 or start a separate implementation task until that canary is completed, unless the user explicitly uses the required FORCE SWITCH syntax.
 
 ## Backlog
 
@@ -232,7 +241,7 @@ Unrelated Dank Shield, Minecraft, Unity, Idle Grow, Captions, AntiNuke, and othe
 
 ## Next step
 
-Validate the focused first-release picker correction on the exact branch head, open a small PR, pass repository CI, merge/deploy, then repeat the Android canary by selecting the first-ranked release and taking it through release detail -> playback start. Do not start the backlogged XXX/adult-content setting until this active task satisfies that production acceptance path.
+Land the stronger first-value dispatch regression from `test/408-release-picker-dispatch` after exact-head CI. Then hold #408 at the production-canary gate until the owner tests current main on Android: select release #1 -> open release detail -> start media -> Watch playback. Do not start the backlogged XXX/adult-content setting or 20-viewer capacity work without the required FORCE SWITCH syntax while #408 remains active.
 
 ---
 
