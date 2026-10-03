@@ -674,7 +674,7 @@ def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
 def test_external_only_provider_stays_admin_only() -> None:
     modal = movie_ui.ExternalSearchProviderModal(owner_id=1, baseline={})
     assert [item.label for item in modal.children] == [
-        "Provider name (optional)",
+        "Reference link name (optional)",
         "External browser search URL",
     ]
 
