@@ -300,8 +300,15 @@ _INFO_HASH_KEYS = (
     "infohash",
     "hash",
 )
+_INFO_HASH_V2_KEYS = (
+    "info_hash_v2",
+    "infohash_v2",
+    "btmh",
+)
 _BTIH_HEX_RE = re.compile(r"^[A-Fa-f0-9]{40}$")
 _BTIH_BASE32_RE = re.compile(r"^[A-Za-z2-7]{32}$")
+_BTMH_SHA256_RE = re.compile(r"^[A-Fa-f0-9]{64}$")
+_BTMH_MULTIHASH_RE = re.compile(r"^1220[A-Fa-f0-9]{64}$")
 _SOURCE_METADATA_KEYS = (
     "quality",
     "resolution",
@@ -344,6 +351,7 @@ def _extract_items(payload: Any, *, _depth: int = 0) -> list[Mapping[str, Any]]:
     if any(payload.get(key) for key in title_keys) and (
         any(payload.get(key) for key in _PLAYABLE_REF_KEYS)
         or any(payload.get(key) for key in _INFO_HASH_KEYS)
+        or any(payload.get(key) for key in _INFO_HASH_V2_KEYS)
     ):
         return [payload]
 
@@ -355,6 +363,7 @@ def _extract_items(payload: Any, *, _depth: int = 0) -> list[Mapping[str, Any]]:
         and (
             any(value.get(key) for key in _PLAYABLE_REF_KEYS)
             or any(value.get(key) for key in _INFO_HASH_KEYS)
+            or any(value.get(key) for key in _INFO_HASH_V2_KEYS)
         )
     ]
     return mapped_rows
@@ -373,6 +382,19 @@ def _magnet_from_info_hash(value: Any) -> str:
     return f"magnet:?xt=urn:btih:{btih}"
 
 
+def _magnet_from_info_hash_v2(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if _BTMH_SHA256_RE.fullmatch(raw):
+        multihash = f"1220{raw}"
+    elif _BTMH_MULTIHASH_RE.fullmatch(raw):
+        multihash = raw
+    else:
+        return ""
+    if multihash[4:] == "0" * 64:
+        return ""
+    return f"magnet:?xt=urn:btmh:{multihash}"
+
+
 def _item_source_ref(item: Mapping[str, Any]) -> str:
     for key in _PLAYABLE_REF_KEYS:
         value = item.get(key)
@@ -383,6 +405,11 @@ def _item_source_ref(item: Mapping[str, Any]) -> str:
 
     for key in _INFO_HASH_KEYS:
         magnet = _magnet_from_info_hash(item.get(key))
+        if magnet:
+            return magnet
+
+    for key in _INFO_HASH_V2_KEYS:
+        magnet = _magnet_from_info_hash_v2(item.get(key))
         if magnet:
             return magnet
     return ""
@@ -609,6 +636,8 @@ def _feed_entry_to_item(entry: ET.Element) -> Mapping[str, Any]:
             return
         if name in {"infohash", "hash"} and not item.get("info_hash"):
             item["info_hash"] = value[:80]
+        elif name in {"infohashv2", "btmh"} and not item.get("info_hash_v2"):
+            item["info_hash_v2"] = value[:96]
         elif name in {"magnet", "magneturi", "magneturl"}:
             set_source(value)
         elif name in {"size", "filesize", "contentlength", "length"}:
@@ -654,6 +683,9 @@ def _feed_entry_to_item(entry: ET.Element) -> Mapping[str, Any]:
         if name in {
             "infohash",
             "info_hash",
+            "infohashv2",
+            "info_hash_v2",
+            "btmh",
             "hash",
             "magneturi",
             "magnet_uri",
