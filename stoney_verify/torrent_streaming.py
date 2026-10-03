@@ -1558,12 +1558,19 @@ class TorrentMediaManager:
         last = global_end // session.piece_length
 
         while time.monotonic() < deadline:
-            if all(bool(session.handle.have_piece(piece)) for piece in range(first, last + 1)):
-                session.last_access = time.monotonic()
-                if session.stall_count > 0:
-                    session.stall_count -= 1
-                return True
-            status = session.handle.status()
+            try:
+                complete = all(
+                    bool(session.handle.have_piece(piece))
+                    for piece in range(first, last + 1)
+                )
+                if complete:
+                    session.last_access = time.monotonic()
+                    if session.stall_count > 0:
+                        session.stall_count -= 1
+                    return True
+                status = session.handle.status()
+            except RuntimeError as exc:
+                self._raise_unavailable_handle(exc)
             error = str(getattr(status, "error", "") or "").strip()
             if error:
                 return False
