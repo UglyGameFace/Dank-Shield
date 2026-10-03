@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -313,3 +314,71 @@ def test_player_explains_reclaimed_media_instead_of_saying_no_movie_chosen() -> 
     assert "media session expired or was reclaimed" in html
     assert "room is still active" in html
     assert "choose the release again" in html
+
+
+def test_private_watch_room_rejects_non_owner_identity(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        mode="private",
+    )
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+
+    monkeypatch.setattr(
+        movie_night_web,
+        "_request_identity",
+        lambda request: (room.room_id, 20),
+    )
+    try:
+        asyncio.run(movie_night_web._room_and_user(SimpleNamespace()))
+    except web.HTTPForbidden as exc:
+        assert "private" in exc.text.lower()
+    else:
+        raise AssertionError("non-owner unexpectedly accessed a private Watch room")
+
+    monkeypatch.setattr(
+        movie_night_web,
+        "_request_identity",
+        lambda request: (room.room_id, 10),
+    )
+    resolved_room, resolved_uid = asyncio.run(
+        movie_night_web._room_and_user(SimpleNamespace())
+    )
+    assert resolved_room is room
+    assert resolved_uid == 10
+
+
+def test_movie_night_state_exposes_private_room_mode(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        mode="private",
+    )
+
+    class _TorrentManager:
+        async def get(self, token: str):
+            _ = token
+            return None
+
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(movie_night_web, "get_torrent_manager", lambda: _TorrentManager())
+
+    payload = asyncio.run(movie_night_web._state_payload(room, 10))
+
+    assert payload["mode"] == "private"
+    assert payload["private"] is True
+    assert payload["viewer_count"] == 1
+    html = movie_night_web._watch_html(
+        room.room_id,
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+    assert "Dank Shield Private Viewing" in html
+    assert 's.private?"Private • "' in html
+    assert 's.private&&s.is_host?"Private Host"' in html

@@ -93,9 +93,12 @@ async def _room_and_user(
     room_id, uid = _request_identity(request)
     if uid is None:
         raise web.HTTPUnauthorized(text="Invalid or expired Movie Night link.")
-    room = get_movie_night_manager().get(room_id)
+    manager = get_movie_night_manager()
+    room = manager.get(room_id)
     if room is None:
         raise web.HTTPNotFound(text="Movie Night room not found.")
+    if not manager.user_can_access(room, uid):
+        raise web.HTTPForbidden(text="This is a private Dank Cinema viewing session.")
     return room, uid
 
 
@@ -225,6 +228,8 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     return {
         "ok": True,
         "room_id": room.room_id,
+        "mode": str(getattr(room, "mode", "watch_party") or "watch_party"),
+        "private": str(getattr(room, "mode", "watch_party") or "watch_party") == "private",
         "title": str(title or "Movie Night"),
         "release_source": source,
         "state": room.playback_state,
@@ -514,7 +519,7 @@ small {{ color:#8994aa; }}
 <body>
 <main>
 <header>
-  <div><h1>🎬 Dank Shield Movie Night</h1><small>Room {safe_room}</small></div>
+  <div><h1 id="heading">🎬 Dank Shield Movie Night</h1><small>Room {safe_room}</small></div>
   <span class="badge" id="role">Connecting…</span>
 </header>
 <section class="card">
@@ -688,10 +693,14 @@ function correctSyncedDrift(target) {{
 async function applyState(s) {{
   lastState=s;
   document.getElementById("title").textContent=(s.title||"Movie Night")+(s.release_source?" • "+s.release_source:"");
-  document.getElementById("state").textContent=s.state||"—";
+  document.getElementById("heading").textContent=
+    s.private?"🔒 Dank Shield Private Viewing":"🎬 Dank Shield Movie Night";
+  document.getElementById("state").textContent=
+    (s.private?"Private • ":"")+(s.state||"—");
   document.getElementById("viewers").textContent=String(s.viewer_count||0);
   document.getElementById("role").textContent=
-    s.is_host?"Host":(s.sync_status==="joining"?"Joining…":"Synced Viewer");
+    s.private&&s.is_host?"Private Host":
+    (s.is_host?"Host":(s.sync_status==="joining"?"Joining…":"Synced Viewer"));
   const t=s.torrent||{{}};
   document.getElementById("progress").textContent=((t.progress||0)*100).toFixed(1)+"% • "+fmtRate(t.download_rate||0);
   const swarmSource=String(t.swarm_source||"");
