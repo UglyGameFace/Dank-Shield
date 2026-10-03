@@ -755,7 +755,7 @@ class MovieNightManager:
             str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
             and proposer != int(room.host_id)
         ):
-            raise PermissionError("Only the Private Viewing host can control this session.")
+            raise PermissionError("Only the Private Session host can control this session.")
 
         if normalized in PLAYBACK_ACTIONS and self.host_active(room, now=current):
             if proposer != int(room.host_id):
@@ -803,7 +803,7 @@ class MovieNightManager:
             str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
             and uid != int(room.host_id)
         ):
-            raise PermissionError("Private Viewing does not use viewer voting.")
+            raise PermissionError("Private Session does not use viewer voting.")
 
         vote.yes.discard(uid)
         vote.no.discard(uid)
@@ -879,7 +879,7 @@ class MovieNightManager:
             str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
             and uid != int(room.host_id)
         ):
-            raise PermissionError("Only the Private Viewing host can choose movies.")
+            raise PermissionError("Only the Private Session host can choose movies.")
         clean_title = " ".join(str(title or "").split())[:180]
         if not clean_title:
             raise ValueError("Movie title is required.")
@@ -923,7 +923,7 @@ class MovieNightManager:
             str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
             and uid != int(room.host_id)
         ):
-            raise PermissionError("Only the Private Viewing host can choose releases.")
+            raise PermissionError("Only the Private Session host can choose releases.")
 
         candidate = room.candidates.get(str(candidate_id or ""))
         if candidate is None:
@@ -993,7 +993,7 @@ class MovieNightManager:
         if uid not in self.active_viewers(room, now=current):
             raise PermissionError("Only active Movie Night viewers may vote on source variants.")
         if str(getattr(room, "mode", "watch_party") or "watch_party") == "private":
-            raise PermissionError("Private Viewing does not use viewer voting.")
+            raise PermissionError("Private Session does not use viewer voting.")
 
         candidate = room.candidates.get(str(candidate_id or ""))
         if candidate is None:
@@ -1116,7 +1116,7 @@ class MovieNightManager:
         if uid not in self.active_viewers(room, now=current):
             raise PermissionError("Only active Movie Night viewers may vote on movies.")
         if str(getattr(room, "mode", "watch_party") or "watch_party") == "private":
-            raise PermissionError("Private Viewing does not use viewer voting.")
+            raise PermissionError("Private Session does not use viewer voting.")
         candidate = room.candidates.get(str(candidate_id or ""))
         if candidate is None:
             raise LookupError("Movie candidate not found.")
@@ -1248,7 +1248,7 @@ class MovieNightManager:
 
         The canonical playback position is snapshotted at transfer time, then
         the existing playback state continues from the same point under the new
-        host. Private Viewing keeps one host/controller and does not transfer.
+        host. Private Session keeps one host/controller and does not transfer.
         """
 
         room = self._require_room(room_id)
