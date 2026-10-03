@@ -855,6 +855,8 @@ def _room_embed(
     )
     ready_to_watch = bool(room.stream_token and current_candidate is not None)
 
+    owner_id = int(getattr(interaction.user, "id", 0) or 0)
+    owner_active = owner_id in active
     embed = discord.Embed(
         title=(
             "🔒 Dank Cinema • Private Viewing"
@@ -862,11 +864,22 @@ def _room_embed(
             else "🍿 Dank Cinema • Watch Party"
         ),
         description=(
-            f"Host: {host_label} • Viewers: **{len(active)}**\n"
+            f"Host: {host_label} • Active now: **{len(active)}**\n"
             f"State: **{room.playback_state.title()}**"
         ),
         color=discord.Color.green() if ready_to_watch else discord.Color.blurple(),
     )
+    if not private_mode and owner_id > 0 and not owner_active:
+        embed.add_field(
+            name="↩️ Rejoin Movie Night",
+            value=(
+                f"Your active-viewer heartbeat expired after about "
+                f"**{int(round(manager.viewer_ttl_seconds))} seconds** without a Watch-page "
+                "heartbeat or fresh Cinema action. **The room, queue, and movie picks were not "
+                "deleted.** Tap **Rejoin Movie Night** or use a Cinema action to become active again."
+            )[:1024],
+            inline=False,
+        )
 
     if current_candidate is None:
         embed.add_field(
@@ -1788,6 +1801,7 @@ async def _open_candidate_detail(
             interaction,
             "❌ This Movie Night room is unavailable or private.",
         )
+    manager.join_room(room.room_id, user_id=int(interaction.user.id))
     candidate = room.candidates.get(str(candidate_id))
     if candidate is None:
         return await _movie_hub_notice(
@@ -1841,6 +1855,7 @@ async def _open_release_picker(
             interaction,
             "❌ This Movie Night room is unavailable or private.",
         )
+    manager.join_room(room.room_id, user_id=int(interaction.user.id))
     candidate = room.candidates.get(str(candidate_id))
     if candidate is None:
         return await _movie_hub_notice(
@@ -1922,6 +1937,7 @@ async def open_movie_results(
             interaction,
             "❌ This Movie Night room is unavailable or private.",
         )
+    manager.join_room(room.room_id, user_id=int(interaction.user.id))
 
     ranked = manager.ranked_candidates(room.room_id)
     if not ranked:
@@ -2957,6 +2973,10 @@ async def _execute_search_vote(
     )
     outcome = _filter_outcome_for_catalog(outcome, catalog_metadata)
 
+    # Provider/TMDB work can legitimately take longer than the short live-viewer
+    # heartbeat window. The Discord interaction is fresh proof that this user is
+    # still here, so renew presence before materializing search results.
+    manager.join_room(room.room_id, user_id=int(interaction.user.id))
     active = manager.active_viewers(room)
     actor_id = (
         int(vote.proposer_id)
@@ -3101,6 +3121,18 @@ async def _propose_movie_search_vote(
     catalog_movie: Optional[CatalogMovie] = None,
 ) -> None:
     manager = get_movie_night_manager()
+    room = _room_by_id_for_interaction(interaction, room_id)
+    if room is None:
+        return await _movie_hub_notice(
+            interaction,
+            "❌ This Movie Night room no longer exists or is private.",
+        )
+
+    # Search modals and catalog pickers can stay open for minutes while the live
+    # viewer heartbeat intentionally expires in seconds. A fresh authenticated
+    # Discord interaction must renew room presence before vote admission.
+    manager.join_room(room.room_id, user_id=int(interaction.user.id))
+
     payload: dict[str, Any] = {"query": _compact(query)}
     if catalog_movie is not None:
         payload["catalog"] = catalog_movie.to_metadata()
@@ -3865,6 +3897,11 @@ async def open_movie_night_more(
     replace_message: bool = True,
 ) -> None:
     room = _room_for_interaction(interaction)
+    if room is not None:
+        get_movie_night_manager().join_room(
+            room.room_id,
+            user_id=int(interaction.user.id),
+        )
     staff = _staff_authorized(interaction)
     embed = _more_embed(interaction, room, staff=staff)
     view = MovieNightMoreView(int(interaction.user.id), room, staff=staff)
@@ -3895,8 +3932,13 @@ class MovieNightHubView(_OwnedView):
             self.remove_item(self.vote_yes)
             self.remove_item(self.vote_no)
         else:
-            self.remove_item(self.start_join)
+            manager = get_movie_night_manager()
+            owner_active = int(owner_id) in manager.active_viewers(room)
             self.remove_item(self.start_private)
+            if private_mode or owner_active:
+                self.remove_item(self.start_join)
+            else:
+                self.start_join.label = "Rejoin Movie Night"
             if private_mode or open_vote is None:
                 self.remove_item(self.vote_yes)
                 self.remove_item(self.vote_no)
@@ -3968,6 +4010,10 @@ class MovieNightHubView(_OwnedView):
                 interaction,
                 "ℹ️ Start a viewing session first.",
             )
+        get_movie_night_manager().join_room(
+            room.room_id,
+            user_id=int(interaction.user.id),
+        )
         await _replace(
             interaction,
             embed=_queue_embed(room),
