@@ -2,203 +2,203 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-422 — Movie Night host handoff + active torrent continuity**
+**DANK-SHIELD-425 — Dank Cinema master audit: setup, UX, lifecycle, playback, providers, and capacity**
 
 Production baseline:
-`main@f87f2829b83b51f0c6e56a8cb8637881f052a163` (PR #423 merged; host handoff + torrent continuity exact-head CI green).
+`main@3c8989e6bfa70fd463e1914bfa96d60e9f3a6233` (PR #424 merged; Discord menu presence/Rejoin follow-up exact-head CI green).
 
 Active branch:
-`fix/422-discord-viewer-presence`
+`audit/425-cinema-master-audit`
 
 Issue:
-**#422 — Dank Cinema: host handoff and active torrent continuity**
+**#425 — Dank Cinema master audit: simplify setup, navigation, lifecycle, and playback**
 
 Status:
-**PR #423 is merged. Production/mobile follow-up exposed a separate continuity bug inside the same Movie Night task: the short live-viewer heartbeat expires while a user is still working through Discord search/catalog/queue menus. The room is not deleted, but programming votes reject the stale user as inactive, the panel can show `Active now: 0`, and there was no explicit Rejoin control. This branch makes authenticated Discord Cinema actions renew presence without weakening the short Watch-page heartbeat used for sync/failover.**
+**Full end-to-end audit is active. The audit covers the real Discord, room, Watch, provider, torrent, persistence, capacity, and test paths. Evidence-backed defects are being repaired on this branch while known environment/architecture limits are documented instead of being mislabeled as fixed. Exact-head CI and live mobile/Discloud canary remain pending.**
 
-## Outcome
+## Audit contract
 
-1. Current host can explicitly pass control to an active Watch Party viewer.
-2. Transfer does not create a new room, media session, queue, release, or playback timeline.
-3. The authoritative movie position is snapshotted at transfer time and continues from the same point.
-4. The new host immediately receives Watch-page Play/Pause/Seek/End authority.
-5. The old host becomes a normal viewer if still connected.
-6. Private Viewing remains owner-only and cannot transfer.
-7. Active leased Movie Night torrents cannot be reclaimed by idle cleanup.
-8. A terminally invalid libtorrent handle becomes a controlled media-missing state rather than an unhandled HTTP traceback.
+Primary viewer path stays:
+`Cinema Home -> Find Movie -> Choose Movie -> Choose Release -> Watch`.
 
-## Production follow-up — Discord menu presence
+Rules:
+- preserve feature depth;
+- show contextual controls only when actionable;
+- keep rare/admin/technical controls under More / Cinema Settings;
+- auto-detect or safely repair setup where possible;
+- optional features must not block core playback;
+- every room-scoped error must preserve useful Cinema navigation;
+- no second provider stack, torrent runtime, media server, or room model;
+- regression-test every production bug class discovered from #408 forward.
 
-Observed production behavior:
-- host was adding movies to the queue;
-- Cinema panel fell from one active viewer to zero;
-- the next search failed with `Only active Movie Night viewers may start votes.`;
-- the room/queue still existed, but the panel offered no explicit way to rejoin.
+Detailed audit record:
+`docs/DANK_CINEMA_MASTER_AUDIT.md`.
 
-Root cause:
-- `MovieNightManager.viewer_ttl_seconds` defaults to **35 seconds**;
-- **Find Movie** renews presence when opening the modal, but a search modal can remain open for up to 300 seconds;
-- TMDB/catalog selection and provider search can also outlive the 35-second active-viewer window;
-- `_propose_movie_search_vote()` previously attempted vote admission without renewing the fresh Discord actor first;
-- the same short TTL is intentionally useful for Watch-page sync/quorum and should not simply be inflated to several minutes.
+## Architecture verified
 
-Repair:
-- renew room presence immediately before Discord search-vote admission;
-- renew again after slow provider/catalog work before materializing candidates/releases;
-- renew on Movie Picks, candidate details, release picker, Queue, and More navigation;
-- show **Rejoin Movie Night** when a public-room panel owner is stale;
-- Rejoin restores active presence without deleting/recreating room, queue, host, media, or playback state;
-- label the compact room count as **Active now** and explain that heartbeat expiry does not delete the session;
-- joining an already-running room no longer unnecessarily re-runs launch-readiness checks.
+Discord:
+`/movie -> MovieNightHubView -> search/catalog -> candidate -> release -> Watch`.
 
-## Architecture verified before edits
-
-Room authority:
-`MovieNightRoom.host_id -> MovieNightManager.host_active/apply_host_action -> Watch state is_host -> browser host controls`.
-
-The room's playback clock is already server-authoritative:
-`playback_position + playback_anchor_monotonic -> current_position()`.
-A host browser disappearing does not inherently need to reset that clock.
-
-Torrent path from the production failure:
-`GET /media/torrent/stream -> prepare_playback_request -> prioritize_range -> libtorrent handle.prioritize_pieces`.
-
-Root lifecycle defect:
-`cleanup_expired()` previously built a stale list of expired sessions under the manager lock, released the lock, then force-removed each token later. It also did not exempt tracked leased sessions. A Movie Night stream could therefore refresh/continue while a previously selected cleanup candidate still had its libtorrent handle removed underneath it.
-
-## Changes implemented
-
-### Lossless Pass Host
-
-Added `MovieNightManager.transfer_host()`.
-
-Transfer:
-- only works in `watch_party`;
-- requires the caller to still be the current host;
-- requires the target to still be an active Movie Night viewer;
-- snapshots the canonical playback position at the exact transfer time;
-- preserves playing/paused state and all room/media/queue/search state;
-- changes only `host_id`/host heartbeat authority;
-- makes the new host immediately sync-ready at the preserved position;
-- keeps the old host as a normal viewer when present;
-- cancels unresolved playback-failover votes because they are obsolete after a deliberate handoff.
-
-### Discord UX
-
-**More** now exposes **👑 Pass Host** only when:
-- this is a shared Watch Party;
-- the panel owner is the current host;
-- at least one other active viewer is available.
-
-The picker contains only active non-host viewers, up to Discord's 25-choice component limit. No Discord OAuth layer is added because the interaction already carries authenticated Discord user identity.
-
-After selection, the same Movie Night panel reports the new host while preserving the same room/movie/queue/torrent/position.
-
-### Watch-page authority
-
-No new web login/session system is required.
-
-Existing signed per-user Watch pages poll canonical room state. When `host_id` changes:
-- the selected viewer's next state poll returns `is_host=true`;
-- their existing page enables Play/Pause/Seek/End;
-- the previous host's next poll returns `is_host=false`;
-- no room or stream URL rotation is required solely for host transfer.
-
-### Torrent cleanup race repair
-
-`cleanup_expired()` now:
-- never reclaims a session while it has tracked leases;
-- selects and removes idle unleased sessions atomically under one lock;
-- removes the libtorrent handle/files only after the registry entry is atomically detached.
-
-A stream refresh/lease can therefore no longer happen between "declared expired" and forced handle removal.
-
-### Dead-handle containment
-
-Added `TorrentSessionUnavailableError` and explicit handle-usability checks.
-
-If libtorrent reports `invalid torrent handle`:
-- range playback converts the first failure into HTTP 410 Gone instead of traceback spam;
-- a failure after response commit closes the range cleanly;
-- the unusable session is removed from the live registry;
-- Movie Night state/heartbeat treats the dead session as `media_missing`, so the existing UI explains that the release must be chosen again instead of pretending playback is healthy.
-
-This is fallback containment. The cleanup race fix is intended to prevent the active leased session from becoming invalid in the first place.
-
-## Compatibility preserved
-
-- #419 progressive-disclosure UI
-- #421 valid Discord component payload
-- Watch Party voting/failover
-- Private Viewing
-- provider search/release ranking
-- queue
-- signed Watch links
-- refresh/reconnect telemetry preservation
-- adaptive buffering
-- torrent sharing/leases/capacity controls
-- End Session cleanup
-- direct magnet/.torrent support
-
-## Validation added
-
-Manager:
-- transfer preserves playback position/state;
-- authority moves to the chosen active viewer;
-- old host loses direct control;
-- unresolved playback failover vote is cancelled;
-- inactive viewer cannot become host;
-- Private Viewing cannot transfer.
-
-Discord UI:
-- Pass Host visible only to current shared-room host;
-- hidden from ordinary viewers;
-- hidden in Private Viewing;
-- host picker contains only active non-host viewers and never preselects one.
+Authority:
+`MovieNightManager -> MovieNightRoom -> host/viewers/votes/queue/playback clock`.
 
 Watch:
-- the same room state flips `is_host` from old to new host after transfer.
+`signed per-user URL -> state/heartbeat/action -> canonical room + torrent runtime`.
 
 Torrent:
-- idle cleanup does not reclaim leased Movie Night media;
-- a refreshed unleased session is rechecked and retained;
-- invalid libtorrent handle becomes the controlled session-unavailable exception and is discardable.
+`TorrentMediaManager -> shared identity/session -> room leases -> signed byte-range route`.
 
-## Exact-head CI failure and repair
+Providers:
+`TMDB/JustWatch + Internet Archive + direct magnet/.torrent + generic JSON/RSS/Atom/Torznab resolver`.
 
-PR #424 exact head `8c331c9e1fa3e8e1ab6c0b23287acf8c642302dd` failed only the main unit-test job:
-- `test_cinema_home_embed_is_simple_and_status_details_are_separate`
-- `test_movie_night_hub_adds_signed_watch_link_when_media_is_active`
+Persistence:
+- guild provider/preferences/config persist;
+- live Movie Night room authority is currently in memory.
 
-Both were compatibility regressions in lightweight test/caller contexts, not the production presence logic:
-- `_room_embed()` assumed every interaction stub exposed `.user`;
-- `MovieNightHubView` assumed every lightweight room object exposed full `.viewers` state.
+## Findings and current repairs
+
+### Critical — abandoned rooms could retain leased media indefinitely
+
+A room previously had no inactivity expiry, while #423 correctly prevents leased torrents from ordinary torrent idle cleanup. With no viewers, that combination could hold a tracked torrent lease until explicit End Movie Night or process restart.
+
+Repair in progress/implemented:
+- `DANK_MOVIE_NIGHT_EMPTY_ROOM_TTL_SECONDS` defaults to **1800 / 30 minutes**;
+- short **35-second** live-viewer TTL remains unchanged for sync/quorum;
+- room expiry uses last real room presence;
+- active viewers prevent expiry;
+- cleanup rechecks eligibility;
+- room is synchronously ended before external lease cleanup;
+- canonical termination releases media and retires room state;
+- cleanup worker starts with Movie Night public routes.
+
+### High — optional notifications blocked Watch Party launch
+
+Notification role, pingability, and Manage Roles were product-enhancement concerns but were treated as core launch blockers.
 
 Repair:
-- use a defensive nested interaction-user lookup for room rendering;
-- preserve established active-room controls when a lightweight compatibility room lacks live-viewer state;
-- no change to real `MovieNightRoom` active-viewer semantics or the 35-second production heartbeat.
+- missing/unpingable notification role is a warning;
+- missing Manage Roles only warns that the optional role cannot be created;
+- public Watch Party still posts a channel announcement without a role;
+- configured valid role is still pinged;
+- Setup action is **Repair Notifications**.
 
-## Blockers / remaining validation
+### High — media-server process readiness was only a warning
 
-Still required:
-1. exact-head CI and diff hygiene;
-2. targeted Movie Night/torrent tests;
-3. verify no component-row overflow with Pass Host present;
-4. production canary: two viewers join, host starts playback, host passes control, new host pauses/resumes/seeks without movie restart;
-5. production canary: host closes page without passing host and the authoritative playback position continues;
-6. confirm no further `invalid torrent handle used [libtorrent:20]` from an active leased room.
+A configured URL/secret could report launch-ready even when the actual Watch media server was not running.
 
-## Backlog
+Repair:
+- live media-server readiness is a launch blocker.
 
-- automatic **Claim Host** majority-vote fallback after an absent host, if desired after explicit Pass Host is proven;
-- 20-viewer capacity/load validation;
-- room persistence across process restarts;
-- unattended-host Movie Ready notification/waiting timeout refinements.
+### Medium — PyAV metadata probing blocked playback
+
+PyAV is used for verified codec/audio metadata, and probe failures already fail soft.
+
+Repair:
+- PyAV is now an optional warning;
+- libtorrent remains required;
+- playback can launch without verified metadata probing.
+
+### Medium — one-person Watch Party exposed pointless voting UI
+
+Repair:
+- solo candidate/release vote buttons hidden;
+- solo queue action says **Add to Queue**;
+- host says **Play This Release**;
+- collaborative controls return when another active viewer joins;
+- non-host action says **Request This Release**.
+
+### Medium — direct-media failures could lose room context
+
+Repair:
+- magnet/.torrent startup and signed-stream errors keep the active room embed/controls;
+- setup errors point to the real **More -> Cinema Settings -> Setup & Diagnostics** path.
+
+### Medium — torrent process-memory fallback exceeded checked-in host RAM
+
+Repair:
+- code fallback changed from 1536 MB to the checked-in Discloud allocation of **1495 MB**.
+
+### Medium — Setup repeated Settings navigation
+
+Repair:
+- Setup & Diagnostics now focuses on **Repair Notifications**, **Test Media Endpoint**, Refresh, Back, Close;
+- Provider Deck and Notifications remain first-class Cinema Settings destinations instead of being duplicated inside Setup.
+
+### Medium — lifecycle copy contradicted lease hardening
+
+Repair:
+- lifecycle text now separately explains live-viewer expiry, 30-minute empty-room expiry, 6-hour signed Watch links, media lease ownership, and process-restart behavior.
+
+## Preserved behavior
+
+- Watch Party announcements and collaborative voting;
+- Private Viewing owner-only isolation;
+- Pass Host and host-away playback fallback;
+- queue;
+- progressive-disclosure Home/More/Settings UI;
+- Rejoin after short Discord/Watch presence expiry;
+- TMDB/JustWatch;
+- generic structured providers;
+- direct magnet/.torrent;
+- adult-content guild setting;
+- first-release mobile selection fix;
+- refresh/reconnect/session-aware sync;
+- adaptive group buffering;
+- shared torrent identities and per-room leases;
+- dynamic memory/disk admission;
+- invalid libtorrent-handle containment;
+- canonical End Movie Night cleanup.
+
+## Validation added/updated
+
+Manager:
+- empty-room timeout starts from last presence;
+- active viewer prevents room expiry.
+
+Session lifecycle:
+- inactive room cleanup releases media and retires only the stale room;
+- cleanup worker registration is part of Movie Night public-route startup.
+
+UI:
+- notification role is optional for launch;
+- public no-role announcement still posts;
+- media server required but PyAV optional;
+- solo/public/private action labels and vote visibility;
+- simplified Setup buttons;
+- accurate viewer/empty-room/link/restart lifecycle text.
+
+Capacity:
+- `.env.example` contains empty-room TTL;
+- torrent memory fallback must match 1495 MB deployment allocation.
+
+## Known limits / not falsely claimed fixed
+
+- live room authority is in memory and does not survive process restart;
+- each Watch viewer receives a separate outbound HTTP stream, so high viewer counts require real load testing;
+- arbitrary direct magnet/.torrent media cannot be reliably adult-classified without trustworthy metadata;
+- external provider availability/metadata quality remains outside Dank Shield's control;
+- `public_movie_night.py` is a maintainability hotspot, but a large mechanical module split is deferred because it would add regression risk during a correctness audit.
+
+## Blockers / remaining work
+
+1. finish static/diff inspection for the final audit branch;
+2. update all expectations affected by simplified Setup/notification/lifecycle semantics;
+3. run targeted Movie Night/provider/torrent tests through repository CI;
+4. patch only evidence-backed failures;
+5. verify Discord component IDs/rows/emoji remain valid;
+6. exact-head full workflow set must be green;
+7. mobile/production canary from the audit document remains operator validation, not an automated success claim.
+
+## Backlog after #425
+
+- optional persistent room snapshot/recovery across process restart;
+- practical 20-viewer load/capacity validation on the actual hosting/network path;
+- optional majority-approved Claim Host fallback when the host disappears without passing control;
+- separate Movie Ready notification refinement if a second notification beyond room-start announcement is still desired.
 
 ## Next step
 
-Re-run exact-head CI after the compatibility repair, merge when clean, then canary: leave the Cinema panel/search picker idle for more than 35 seconds, continue adding movies, verify the fresh Discord action renews presence and no search/queue vote rejects the user as inactive.
+Complete test expectation cleanup, open the focused #425 audit PR, run exact-head CI, repair any evidence-backed failures, then merge only after the final head is clean and green.
 
 
 ---
