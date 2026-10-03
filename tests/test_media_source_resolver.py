@@ -174,3 +174,67 @@ def test_aggregate_search_keeps_builtin_results_without_custom_sources(monkeypat
     )
     assert outcome.variants == (builtin,)
     assert outcome.errors == ()
+
+
+
+def test_extract_items_accepts_common_torrent_api_containers() -> None:
+    row = {"title": "Example", "magnet": "magnet:?xt=urn:btih:ABC"}
+    for payload in (
+        {"torrents": [row]},
+        {"entries": [row]},
+        {"movies": [row]},
+        {"data": [row]},
+        {"data": {"results": [row]}},
+        {"data": {"torrents": [row]}},
+    ):
+        assert resolver._extract_items(payload) == [row]
+
+
+def test_generic_torrent_api_aliases_become_playable_variant() -> None:
+    variant = resolver._variant_from_item(
+        _source(),
+        {
+            "display_name": "Example Movie 2026",
+            "file_name": "Example.Movie.2026.1080p.WEB-DL.x264-GROUP",
+            "magnet_uri": "magnet:?xt=urn:btih:ABCDEF123456",
+            "length": 3_500_000_000,
+            "seed": 88,
+            "leech": 12,
+            "total_peers": 105,
+        },
+    )
+    assert variant is not None
+    assert variant.title == "Example Movie 2026"
+    assert variant.source_ref == "magnet:?xt=urn:btih:ABCDEF123456"
+    assert variant.file_size == 3_500_000_000
+    assert variant.seeds == 88
+    assert variant.leechers == 12
+    assert variant.peers == 105
+    assert variant.metadata["release_name"]["source"] == "WEB-DL"
+
+
+def test_generic_torrent_api_accepts_https_torrent_alias() -> None:
+    variant = resolver._variant_from_item(
+        _source(),
+        {
+            "name": "Public Domain Feature",
+            "torrent_url": "https://downloads.example.org/releases/movie.torrent",
+            "size": 123_456_789,
+            "seed_count": 12,
+            "leech_count": 3,
+        },
+    )
+    assert variant is not None
+    assert variant.source_ref.endswith("/movie.torrent")
+    assert variant.seeds == 12
+    assert variant.leechers == 3
+    assert variant.peers == 15
+
+
+def test_generic_provider_ignores_rows_without_playable_ref() -> None:
+    for item in (
+        {"title": "Only a title"},
+        {"title": "Web page", "url": "file:///tmp/not-allowed"},
+        {"title": "Private", "download_url": "https://127.0.0.1/movie.torrent"},
+    ):
+        assert resolver._variant_from_item(_source(), item) is None

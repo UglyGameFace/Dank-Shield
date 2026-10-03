@@ -2,56 +2,66 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-405 — Fix Dank Cinema viewer sync, skipping, and silent playback**
+**DANK-SHIELD-407 — Make Dank Cinema provider search fully in-app and reusable for torrent APIs**
 
 Production baseline:
-`main@8a8ce4499c09989d262dfa01960557d8657e87d6`
+`main@08084f799f1445657247beaf6bd94fd9e30e5ee5` (PR #406 merged).
 
 Active branch:
-`fix/405-movie-night-viewer-sync`
+`feat/407-in-app-movie-provider-search`
 
 Status:
-**Root causes confirmed; remediation reconciled onto current production main; exact-head validation pending.**
+**Provider architecture audited; in-app capability/UI remediation active.**
 
-### Production symptom
+### User requirement
 
-Host playback is smooth and host audio works, while viewers report:
-- no sound;
-- jumping/skipping when host presses Play;
-- Tap to Sync does not reliably work.
+`/movie -> Find Movie` must stay inside Discord for normal search/playback.
 
-### Confirmed root cause
+The same architecture must support future torrent/search providers without adding one-off Discord commands or provider-specific UI every time.
 
-Current viewer client:
-- polls room state every 2 seconds;
-- hard-seeks on routine poll when drift exceeds 1.75s;
-- Tap to Sync hard-seeks at >0.5s and calls `video.play()`;
-- Tap to Sync does not explicitly complete a server-side sync handshake;
-- a subsequent poll can still report `sync_status=joining`;
-- joining state forcibly pauses the viewer.
+### Existing canonical capability
 
-That creates a poll-driven seek/play/pause loop. Host is exempt, matching production evidence that host playback/audio works.
+Dank Cinema already has one structured provider resolver that accepts normalized results with:
+- title/name/movie;
+- release_name/filename;
+- magnet or safe HTTPS source/.torrent URL;
+- file size;
+- seeders/leechers/peers;
+- source metadata.
+
+Those structured results already flow into Dank Cinema playable release selection.
+
+### Root product problem
+
+The UI currently presents browser-only Search Link providers as part of the same search experience and exposes **Search Elsewhere** on normal candidate results.
+
+That makes `Find Movie` appear to support a provider while actually kicking the member into a browser.
 
 ### Scope
 
-1. Make Tap to Sync a real viewer sync handshake.
-2. Track user playback/audio gesture separately from server buffer readiness.
-3. While joining, seek once to a stable target and do not routine-hard-seek every poll.
-4. Report viewer readiness through the canonical heartbeat/sync owner.
-5. Preserve server validation: a viewer becomes synced only when buffer/drift criteria are satisfied.
-6. Once synced, use soft playback-rate correction for modest drift and reserve hard seeks for large drift.
-7. Prevent host Play from forcing unsynced viewers into play/pause/seek thrash.
-8. Preserve host authority, group-buffer quorum, signed stream URLs, torrent range ownership, and adaptive buffering.
-9. Keep audio diagnosis viewer-specific; do not add transcode unless evidence remains after sync/autoplay repair.
-10. Add deterministic web/server regressions and run exact-head full CI.
+1. Keep one canonical structured provider engine.
+2. Rename/reframe JSON Provider as **In-App Provider / Torrent API** in user-facing setup.
+3. Preserve `provider_type=json` for backward-compatible storage unless a schema migration is materially required.
+4. Make Provider Deck explicitly distinguish:
+   - In-App: structured/playable results rendered by Dank Cinema;
+   - External-only: browser links, not part of primary playable search.
+5. Remove the normal candidate-level Search Elsewhere action.
+6. Ensure primary Find Movie uses built-in playable sources + enabled in-app structured providers only.
+7. Keep external-link providers as an admin/secondary utility rather than the primary user search path.
+8. Probe in-app providers before persistence and report whether playable refs were returned.
+9. Keep generic field aliases so future torrent APIs can integrate without code changes when they follow the contract.
+10. Preserve HTTPS/SSRF/redirect/response-size/result-count/torrent metadata safety.
+11. Preserve TMDB discovery, Internet Archive playable releases, direct magnet/.torrent input, voting/queue behavior, and guild-aware storage.
+12. Add deterministic regressions for capability separation, provider UI, generic torrent results, no browser jump in primary search, and backward compatibility.
+13. Run exact-head full CI and final diff review.
 
-### FORCE SWITCH checkpoint
+### Boundary
 
-#390 Slice 3 landed while #405 was active:
-- PR #404 merged to production `main` as `8a8ce4499c09989d262dfa01960557d8657e87d6`;
-- #405 has been reconciled on top of that production baseline;
-- do not reintroduce or duplicate the already-merged manifest-proxy implementation;
-- after #405 Definition of Done, continue any remaining #390 follow-up from current `main`.
+This task does not add HTML scraping for arbitrary provider websites. A provider that only exposes an HTML search page remains external-only. A provider with a structured HTTPS API/feed can participate in fully in-app search through the generic provider contract.
+
+### Previous task
+
+#405 viewer sync/skipping/audio remediation merged as PR #406 into production `main@08084f799f1445657247beaf6bd94fd9e30e5ee5` after exact-head CI passed.
 
 
 ---

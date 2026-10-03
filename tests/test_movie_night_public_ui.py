@@ -88,8 +88,8 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
         "Close",
     } <= _labels(setup)
     assert {
-        "Add JSON Provider",
-        "Add Search Link",
+        "Add In-App Provider",
+        "Add External-Only Link",
         "Manage Providers",
         "Back",
         "Close",
@@ -105,8 +105,8 @@ def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
     add_modal = movie_ui.CustomSourceModal(owner_id=1, baseline={})
     assert len(add_modal.children) == 2
     assert [item.label for item in add_modal.children] == [
-        "Provider name (optional)",
-        "Provider search URL",
+        "In-app provider name",
+        "HTTPS search API / feed",
     ]
 
     source = CustomMediaSource(
@@ -135,37 +135,17 @@ def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
     } <= _labels(actions)
 
 
-def test_external_search_provider_modal_and_result_links() -> None:
+def test_external_only_provider_stays_admin_only() -> None:
     modal = movie_ui.ExternalSearchProviderModal(owner_id=1, baseline={})
     assert [item.label for item in modal.children] == [
         "Provider name (optional)",
-        "Working provider search URL",
+        "External browser search URL",
     ]
 
-    view = movie_ui.ExternalSearchResultsView(
-        1,
-        room_id="room",
-        query="Blade Runner",
-        links=[
-            ("Public Catalog", "https://catalog.example/search?q=Blade+Runner"),
-            ("Archive Search", "https://archive.example/find?q=Blade+Runner"),
-        ],
-    )
-    link_buttons = [
-        item
-        for item in view.children
-        if getattr(item, "style", None) is discord.ButtonStyle.link
-    ]
-    assert [item.label for item in link_buttons] == [
-        "Public Catalog",
-        "Archive Search",
-    ]
-    assert all(str(item.url).startswith("https://") for item in link_buttons)
-
-
-def test_movie_candidate_view_exposes_search_elsewhere() -> None:
-    view = movie_ui.MovieCandidateView(1, "room", "candidate")
-    assert "Search Elsewhere" in _labels(view)
+    candidate = movie_ui.MovieCandidateView(1, "room", "candidate")
+    assert "Search Elsewhere" not in _labels(candidate)
+    assert not hasattr(movie_ui, "ExternalSearchResultsView")
+    assert not hasattr(movie_ui, "_open_external_search_results")
 
 
 def test_external_search_provider_modal_defers_before_persistence() -> None:
@@ -230,11 +210,15 @@ def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -
     assert ".torrent files" in rendered
     assert "Dank Provider Lab" in rendered
     assert "Dank Engine" in rendered
-    assert "**Add JSON Provider**" in rendered
-    assert "**Add Search Link**" in rendered
-    assert "without scraping it" in rendered
-    assert "Add JSON Provider" in _labels(movie_ui.MovieNightSourcesView(1))
-    assert "Add Search Link" in _labels(movie_ui.MovieNightSourcesView(1))
+    assert "**Add In-App Provider**" in rendered
+    assert "**Add External-Only Link**" in rendered
+    assert "not** part of normal Find Movie results" in rendered
+    assert "same Dank Engine adapter" in rendered
+    assert "In-App Provider Contract" in rendered
+    assert "magnet_uri" in rendered
+    assert "torrent_url" in rendered
+    assert "Add In-App Provider" in _labels(movie_ui.MovieNightSourcesView(1))
+    assert "Add External-Only Link" in _labels(movie_ui.MovieNightSourcesView(1))
 
 
 def test_candidate_embed_shows_tmdb_watch_availability(monkeypatch) -> None:
@@ -605,3 +589,44 @@ def test_passed_end_vote_runs_canonical_session_cleanup(monkeypatch) -> None:
     assert replacements
     assert "ended" in replacements[-1]["content"].lower()
     assert manager.claim_vote_execution(room.room_id, vote.vote_id) is False
+
+
+
+def test_provider_deck_labels_capabilities_not_implementation_jargon() -> None:
+    registry = MediaSourceRegistry(
+        revision=3,
+        sources=(
+            CustomMediaSource(
+                source_id="torrent-api",
+                label="Torrent API",
+                endpoint_url="https://api.example.com/search?q={query}",
+                provider_type=movie_ui.PROVIDER_TYPE_JSON,
+            ),
+            CustomMediaSource(
+                source_id="browser-only",
+                label="Browser Only",
+                endpoint_url="https://search.example.com/?q={query}",
+                provider_type=movie_ui.PROVIDER_TYPE_EXTERNAL,
+            ),
+        ),
+    )
+    embed = movie_ui._sources_embed(registry)
+    rendered = "\n".join(
+        [str(embed.description or "")]
+        + [f"{field.name}\n{field.value}" for field in embed.fields]
+    )
+
+    assert "Torrent API** • In-App • playable API" in rendered
+    assert "Browser Only** • External-only • browser link" in rendered
+    assert "Structured JSON" not in rendered
+    assert "Search Elsewhere" not in rendered
+
+
+def test_primary_candidate_controls_never_open_provider_websites() -> None:
+    labels = _labels(movie_ui.MovieCandidateView(1, "room", "candidate"))
+    assert labels == {
+        "Vote / Unvote Movie",
+        "Choose Release",
+        "Vote to Queue",
+        "Back to Results",
+    }
