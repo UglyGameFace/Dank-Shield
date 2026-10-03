@@ -507,7 +507,7 @@ def _variant_from_item(
     )
 
 
-async def _read_json_limited(response: aiohttp.ClientResponse) -> Any:
+async def _read_limited_body(response: aiohttp.ClientResponse) -> bytes:
     length = _safe_int(response.headers.get("Content-Length"))
     if length > _MAX_RESPONSE_BYTES:
         raise ValueError("source response exceeds the 1 MiB limit")
@@ -517,6 +517,167 @@ async def _read_json_limited(response: aiohttp.ClientResponse) -> Any:
         payload.extend(chunk)
         if len(payload) > _MAX_RESPONSE_BYTES:
             raise ValueError("source response exceeds the 1 MiB limit")
+    return bytes(payload)
+
+
+def _xml_local_name(tag: Any) -> str:
+    raw = str(tag or "")
+    if "}" in raw:
+        raw = raw.rsplit("}", 1)[-1]
+    if ":" in raw:
+        raw = raw.rsplit(":", 1)[-1]
+    return raw.casefold()
+
+
+def _feed_playable_ref(value: Any, *, media_type: str = "") -> str:
+    raw = str(value or "").strip().strip("<>")
+    if not raw:
+        return ""
+    if raw.casefold().startswith("magnet:?"):
+        return _safe_source_ref(raw)
+
+    try:
+        parsed = urlsplit(raw)
+    except Exception:
+        return ""
+    path = str(parsed.path or "").casefold()
+    declared_type = str(media_type or "").casefold()
+    if not path.endswith(".torrent") and "bittorrent" not in declared_type:
+        return ""
+    return _safe_source_ref(raw)
+
+
+def _feed_entry_to_item(entry: ET.Element) -> Mapping[str, Any]:
+    title = ""
+    source_ref = ""
+    info_hash = ""
+    file_size = 0
+    metadata: dict[str, Any] = {}
+
+    for child in entry.iter():
+        name = _xml_local_name(child.tag)
+        text_value = " ".join(str(child.text or "").split())
+
+        if name == "title" and text_value and not title:
+            title = text_value[:180]
+            continue
+
+        if name in {"infohash", "info_hash"} and text_value and not info_hash:
+            info_hash = text_value[:80]
+            continue
+
+        if name in {"magneturi", "magnet_uri", "magnet"} and text_value and not source_ref:
+            source_ref = _feed_playable_ref(text_value)
+            continue
+
+        if name == "enclosure":
+            candidate = str(child.attrib.get("url") or child.attrib.get("href") or "").strip()
+            media_type = str(child.attrib.get("type") or "")
+            if not source_ref:
+                source_ref = _feed_playable_ref(candidate, media_type=media_type)
+            if not file_size:
+                file_size = _safe_int(child.attrib.get("length") or child.attrib.get("size"))
+            continue
+
+        if name == "link":
+            candidate = str(child.attrib.get("href") or text_value or "").strip()
+            rel = str(child.attrib.get("rel") or "").casefold()
+            media_type = str(child.attrib.get("type") or "")
+            if not source_ref and (
+                rel == "enclosure"
+                or candidate.casefold().startswith("magnet:?")
+                or _feed_playable_ref(candidate, media_type=media_type)
+            ):
+                source_ref = _feed_playable_ref(candidate, media_type=media_type)
+            continue
+
+        if name == "guid" and text_value and not source_ref:
+            source_ref = _feed_playable_ref(text_value)
+            continue
+
+        if name in {"category", "author", "creator", "pubdate", "published", "updated"}:
+            if text_value and name not in metadata:
+                metadata[name] = text_value[:180]
+
+    item: dict[str, Any] = {
+        "title": title,
+        "source_ref": source_ref,
+        "file_size": file_size,
+    }
+    if info_hash:
+        item["info_hash"] = info_hash
+    if metadata:
+        item["metadata"] = metadata
+    return item
+
+
+def _feed_query_matches(title: Any, query: str) -> bool:
+    clean_title = " ".join(str(title or "").casefold().split())
+    clean_query = " ".join(str(query or "").casefold().split())
+    if not clean_title or not clean_query:
+        return False
+    if clean_query in clean_title:
+        return True
+    terms = re.findall(r"[a-z0-9]+", clean_query)
+    return bool(terms) and all(term in clean_title for term in terms)
+
+
+def _extract_feed_items(payload: bytes, query: str) -> list[Mapping[str, Any]]:
+    lowered = payload[:4096].casefold()
+    if b"<!doctype" in lowered or b"<!entity" in lowered:
+        raise ValueError("source XML declarations are not allowed")
+
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError as exc:
+        raise ValueError("source did not return valid RSS/Atom XML") from exc
+
+    rows: list[Mapping[str, Any]] = []
+    for entry in root.iter():
+        if _xml_local_name(entry.tag) not in {"item", "entry"}:
+            continue
+        item = _feed_entry_to_item(entry)
+        if not _feed_query_matches(item.get("title"), query):
+            continue
+        if not _item_source_ref(item):
+            continue
+        rows.append(item)
+        if len(rows) >= _MAX_SOURCE_RESULTS:
+            break
+    return rows
+
+
+async def _read_structured_items_limited(
+    response: aiohttp.ClientResponse,
+    query: str,
+) -> list[Mapping[str, Any]]:
+    payload = await _read_limited_body(response)
+    if not payload:
+        raise ValueError("source response was empty")
+
+    content_type = str(response.headers.get("Content-Type") or "").casefold()
+    stripped = payload.lstrip()
+
+    if "json" in content_type or stripped.startswith((b"{", b"[")):
+        try:
+            decoded = json.loads(payload.decode("utf-8"))
+        except Exception as exc:
+            raise ValueError("source did not return valid JSON") from exc
+        return _expand_provider_items(_extract_items(decoded))
+
+    if (
+        "xml" in content_type
+        or "rss" in content_type
+        or "atom" in content_type
+        or stripped.startswith(b"<")
+    ):
+        return _extract_feed_items(payload, query)
+
+    raise ValueError("source must return structured JSON, RSS, or Atom data")
+
+
+async def _read_json_limited(response: aiohttp.ClientResponse) -> Any:
+    payload = await _read_limited_body(response)
     try:
         return json.loads(payload.decode("utf-8"))
     except Exception as exc:
