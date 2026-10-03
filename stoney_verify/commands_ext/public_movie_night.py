@@ -2436,18 +2436,46 @@ async def _start_variant_source(
     room_manager = get_movie_night_manager()
     current = room_manager.get(room.room_id)
     if current is None:
-        return await _private(interaction, "❌ This Movie Night room no longer exists.")
+        return await _movie_hub_notice(
+            interaction,
+            "❌ This Movie Night room no longer exists.",
+        )
+    if not room_manager.user_can_access(current, int(interaction.user.id)):
+        return await _movie_hub_notice(
+            interaction,
+            "❌ This Movie Night room is private.",
+        )
     candidate = current.candidates.get(str(candidate_id))
     if candidate is None:
-        return await _private(interaction, "❌ That movie result no longer exists.")
+        return await _movie_hub_notice(
+            interaction,
+            "❌ That movie result no longer exists.",
+            room=current,
+        )
     variant = candidate.variants.get(str(variant_id))
     if variant is None:
-        return await _private(interaction, "❌ That release no longer exists.")
+        return await _replace(
+            interaction,
+            content="❌ That release no longer exists.",
+            embed=_candidate_embed(current, candidate),
+            view=MovieCandidateView(
+                int(interaction.user.id),
+                current.room_id,
+                candidate.candidate_id,
+            ),
+        )
 
     if not authorized_by_vote and int(interaction.user.id) != int(current.host_id):
-        return await _private(
+        return await _replace(
             interaction,
-            "❌ Only the active host can directly replace the Movie Night media.",
+            content="❌ Only the active host can directly replace the Movie Night media.",
+            embed=_release_embed(current, candidate, variant),
+            view=MovieReleaseView(
+                int(interaction.user.id),
+                current.room_id,
+                candidate.candidate_id,
+                variant.variant_id,
+            ),
         )
 
     if not interaction.response.is_done():
@@ -2607,7 +2635,11 @@ async def _execute_search_vote(
     query = _compact(vote.payload.get("query"))
     if not query:
         manager.set_vote_execution_error(room.room_id, vote.vote_id, "Search query was empty.")
-        return await _private(interaction, "❌ The approved Movie Night search query was empty.")
+        return await _movie_hub_notice(
+            interaction,
+            "❌ The approved Movie Night search query was empty.",
+            room=room,
+        )
 
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -2885,7 +2917,12 @@ class MovieSearchModal(discord.ui.Modal, title="Dank Cinema Search"):
                 )
             movie = movie_by_id.get(value)
             if movie is None:
-                return await _private(pick_interaction, "❌ That catalog result expired.")
+                room = _room_by_id_for_interaction(pick_interaction, self.room_id)
+                return await _movie_hub_notice(
+                    pick_interaction,
+                    "❌ That catalog result expired. Search again from Dank Cinema.",
+                    room=room,
+                )
             await _propose_movie_search_vote(
                 pick_interaction,
                 room_id=self.room_id,
@@ -3088,7 +3125,11 @@ class ConfirmMovieNightEndView(_OwnedView):
         if room is None or room.ended:
             return await open_movie_night(interaction, replace_message=True)
         if int(room.host_id) != int(interaction.user.id):
-            return await _private(interaction, "❌ Only the active Movie Night host can end it immediately.")
+            return await _movie_hub_notice(
+                interaction,
+                "❌ Only the active Movie Night host can end it immediately.",
+                room=room,
+            )
 
         result = await terminate_movie_night_room(room)
         notice = "✅ Movie Night ended and its room media session was released."
