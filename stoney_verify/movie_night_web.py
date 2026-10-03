@@ -513,6 +513,11 @@ button {{ border:1px solid #39445a; background:#20283a; color:#fff; padding:10px
 button:disabled {{ opacity:.45; }}
 #sync {{ background:#315bd8; }}
 #notice {{ margin-top:10px; color:#bec6d7; min-height:1.5em; }}
+.now {{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-top:12px; padding:11px 12px; background:#111620; border-radius:12px; }}
+.now strong {{ display:block; }}
+.now small {{ display:block; margin-top:3px; }}
+details {{ margin-top:10px; border-top:1px solid #2d3546; padding-top:10px; }}
+summary {{ cursor:pointer; color:#c7cede; font-weight:700; user-select:none; }}
 small {{ color:#8994aa; }}
 </style>
 </head>
@@ -531,14 +536,20 @@ small {{ color:#8994aa; }}
     <button id="end" disabled>End Session</button>
   </div>
   <div id="notice"></div>
-  <div class="grid">
-    <div class="stat"><b>Title</b><span id="title">Movie Night</span></div>
-    <div class="stat"><b>Room</b><span id="state">—</span></div>
-    <div class="stat"><b>Viewers</b><span id="viewers">0</span></div>
-    <div class="stat"><b>Torrent</b><span id="progress">0%</span></div>
-    <div class="stat"><b>Seeds / Leechers</b><span id="peers">0 / 0</span></div>
-    <div class="stat"><b>Buffer target</b><span id="buffer">—</span></div>
+  <div class="now">
+    <div>
+      <strong id="title">Movie Night</strong>
+      <small><span id="state">—</span> • <span id="viewers">0</span> viewer(s)</small>
+    </div>
   </div>
+  <details>
+    <summary>Playback Details</summary>
+    <div class="grid">
+      <div class="stat"><b>Torrent</b><span id="progress">0%</span></div>
+      <div class="stat"><b>Seeds / Leechers</b><span id="peers">0 / 0</span></div>
+      <div class="stat"><b>Buffer target</b><span id="buffer">—</span></div>
+    </div>
+  </details>
 </section>
 </main>
 <script>
