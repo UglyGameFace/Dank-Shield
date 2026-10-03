@@ -350,6 +350,41 @@ def test_release_picker_does_not_preselect_first_ranked_release() -> None:
     assert all(option.default is False for option in select.options)
 
 
+def test_release_picker_first_ranked_value_dispatches_pick_action() -> None:
+    picked: list[str] = []
+
+    async def on_pick(interaction, value: str) -> None:
+        _ = interaction
+        picked.append(value)
+
+    choices = [
+        movie_ui.DankChoice(
+            label="BluRay • 1.84 GiB",
+            value="first",
+            description="153 seeds",
+            emoji="🎞️",
+            default=False,
+        ),
+        movie_ui.DankChoice(
+            label="BluRay • 8.13 GiB",
+            value="second",
+            description="47 seeds",
+            emoji="🎞️",
+            default=False,
+        ),
+    ]
+    picker = movie_ui.DankPickerView(
+        author_id=1,
+        choices=choices,
+        on_pick=on_pick,
+        custom_id="dank:test:release-picker-dispatch",
+    )
+
+    asyncio.run(picker.handle_pick(SimpleNamespace(), "first"))
+
+    assert picked == ["first"]
+
+
 def test_search_results_group_releases_without_automatic_votes(monkeypatch) -> None:
     manager = MovieNightManager(viewer_ttl_seconds=120)
     room = manager.create_room(
