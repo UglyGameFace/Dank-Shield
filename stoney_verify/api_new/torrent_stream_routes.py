@@ -8,6 +8,7 @@ from typing import Any
 from aiohttp import web
 
 from stoney_verify.torrent_streaming import (
+    TorrentSessionUnavailableError,
     get_torrent_manager,
     media_content_type,
     parse_http_range,
@@ -66,19 +67,28 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
         return web.Response(status=status_code, headers=headers)
 
     first_end = min(end, start + _STREAM_CHUNK_BYTES - 1)
-    plan = manager.prepare_playback_request(
-        session,
-        start,
-        first_end,
-        consumer_key=consumer_key,
-    )
-    startup_wait_end = max(first_end, plan.startup_wait_end)
-    ready = await manager.wait_range(
-        session,
-        start,
-        startup_wait_end,
-        readahead_bytes=plan.target_bytes,
-    )
+    try:
+        plan = manager.prepare_playback_request(
+            session,
+            start,
+            first_end,
+            consumer_key=consumer_key,
+        )
+        startup_wait_end = max(first_end, plan.startup_wait_end)
+        ready = await manager.wait_range(
+            session,
+            start,
+            startup_wait_end,
+            readahead_bytes=plan.target_bytes,
+        )
+    except TorrentSessionUnavailableError:
+        await manager.discard_unusable_session(token)
+        raise web.HTTPGone(
+            text=(
+                "This torrent media session is no longer available. "
+                "Return to Dank Cinema and choose the release again."
+            )
+        )
     if not ready:
         status = manager.status(session)
         return web.json_response(
@@ -124,6 +134,12 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
                 break
             await response.write(payload)
             cursor += len(payload)
+    except TorrentSessionUnavailableError:
+        # The HTTP response may already be committed at this point, so do not
+        # attempt to replace it with a JSON error. Close this range cleanly and
+        # retire the dead handle so the next state poll reports media_missing.
+        client_disconnected = True
+        await manager.discard_unusable_session(token)
     except (ConnectionError, asyncio.CancelledError):
         # Browser reloads, seeks, tab closes, and mobile media-source swaps all
         # legitimately abandon an in-flight Range request. aiohttp may surface
