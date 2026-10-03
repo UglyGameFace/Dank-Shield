@@ -171,6 +171,33 @@ def test_base32_and_hex_btih_normalize_to_same_identity() -> None:
     ) == f"btih:{zeros_hex}"
 
 
+
+def test_btmh_v2_magnet_identity_and_hybrid_v1_preference() -> None:
+    v2 = "0123456789abcdef" * 4
+    btmh = f"1220{v2}"
+    assert magnet_identity(
+        f"magnet:?xt=urn:btmh:{btmh}"
+    ) == f"btmh:{btmh}"
+
+    v1 = "abcdef0123456789abcdef0123456789abcdef01"
+    hybrid = (
+        f"magnet:?xt=urn:btmh:{btmh}"
+        f"&xt=urn:btih:{v1}"
+    )
+    assert magnet_identity(hybrid) == f"btih:{v1}"
+
+
+def test_info_identity_falls_back_to_v2_for_v2_only_torrent(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    v2 = "0123456789abcdef" * 4
+
+    class _V2Info:
+        def info_hashes(self):
+            return SimpleNamespace(v1="0" * 40, v2=v2)
+
+    assert manager._info_identity(_V2Info()) == f"btmh:1220{v2}"
+
+
 def test_playable_media_detection_and_content_types() -> None:
     for name in ("movie.mp4", "clip.webm", "film.mkv", "old.avi", "scene.mov"):
         assert is_playable_filename(name)
