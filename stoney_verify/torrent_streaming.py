@@ -249,6 +249,7 @@ class TorrentStreamSession:
     adaptive_readahead_bytes: int = 0
     adaptive_target_seconds: float = 0.0
     stall_count: int = 0
+    consumer_playback: dict[str, dict[str, float | int]] = field(default_factory=dict)
     release_metadata: dict[str, Any] = field(default_factory=dict)
     verified_metadata: dict[str, Any] = field(default_factory=dict)
     metadata_probe_running: bool = False
@@ -1334,34 +1335,55 @@ class TorrentMediaManager:
         session: TorrentStreamSession,
         start: int,
         end: int,
+        *,
+        consumer_key: str = "",
     ) -> TorrentBufferPlan:
         now = time.monotonic()
         start = max(0, min(int(start), session.file_size - 1))
         end = max(start, min(int(end), session.file_size - 1))
         request_bytes = end - start + 1
 
+        key = str(consumer_key or "").strip()[:96]
+        playback = None
+        if key:
+            playback = session.consumer_playback.setdefault(
+                key,
+                {
+                    "last_request_at": 0.0,
+                    "last_request_bytes": 0,
+                    "last_request_end": -1,
+                    "smoothed_consume_rate": 0.0,
+                    "last_access": now,
+                },
+            )
+            playback["last_access"] = now
+            if len(session.consumer_playback) > 64:
+                stale = sorted(
+                    session.consumer_playback.items(),
+                    key=lambda item: float(item[1].get("last_access", 0.0) or 0.0),
+                )
+                for stale_key, _state in stale[: len(session.consumer_playback) - 64]:
+                    session.consumer_playback.pop(stale_key, None)
+
+        last_end = int((playback or {}).get("last_request_end", session.last_request_end))
+        last_at = float((playback or {}).get("last_request_at", session.last_request_at))
+        last_bytes = int((playback or {}).get("last_request_bytes", session.last_request_bytes))
+        smoothed_consume = float((playback or {}).get("smoothed_consume_rate", session.smoothed_consume_rate))
+
         seek_threshold = max(session.piece_length * 2, 4 * 1024 * 1024)
-        expected_next = session.last_request_end + 1
-        seek = (
-            session.last_request_end >= 0
-            and abs(start - expected_next) > seek_threshold
-        )
+        expected_next = last_end + 1
+        seek = last_end >= 0 and abs(start - expected_next) > seek_threshold
 
-        if session.last_request_at > 0 and session.last_request_bytes > 0 and not seek:
-            elapsed = now - session.last_request_at
+        if last_at > 0 and last_bytes > 0 and not seek:
+            elapsed = now - last_at
             if 0.10 <= elapsed <= 30.0:
-                observed = session.last_request_bytes / elapsed
-                if session.smoothed_consume_rate <= 0:
-                    session.smoothed_consume_rate = observed
-                else:
-                    session.smoothed_consume_rate = (
-                        session.smoothed_consume_rate * 0.75 + observed * 0.25
-                    )
+                observed = last_bytes / elapsed
+                smoothed_consume = (
+                    observed if smoothed_consume <= 0
+                    else smoothed_consume * 0.75 + observed * 0.25
+                )
 
-        consume_rate = max(
-            float(self.min_consume_rate),
-            float(session.smoothed_consume_rate or 0.0),
-        )
+        consume_rate = max(float(self.min_consume_rate), smoothed_consume)
         download_rate = self._download_rate(session)
         ratio = download_rate / consume_rate if consume_rate > 0 else 0.0
 
@@ -1392,9 +1414,12 @@ class TorrentMediaManager:
         target_bytes = min(self.max_readahead_bytes, target_bytes)
         target_bytes = min(target_bytes, max(0, session.file_size - end - 1))
 
-        first_request = session.last_request_end < 0
+        first_request = last_end < 0
         startup_extra = 0
-        if first_request and start == 0:
+        if first_request and (start == 0 or bool(key)):
+            # A keyed Movie Night consumer may join in the middle of a shared
+            # torrent. Its first Range request is not a seek, but it still
+            # needs a real startup buffer around that late-join position.
             startup_extra = min(
                 max(self.bootstrap_bytes, self.min_readahead_bytes),
                 max(0, session.file_size - end - 1),
@@ -1412,9 +1437,17 @@ class TorrentMediaManager:
 
         session.adaptive_readahead_bytes = target_bytes
         session.adaptive_target_seconds = float(target_seconds)
-        session.last_request_at = now
-        session.last_request_bytes = request_bytes
-        session.last_request_end = end
+        if playback is not None:
+            playback["smoothed_consume_rate"] = smoothed_consume
+            playback["last_request_at"] = now
+            playback["last_request_bytes"] = request_bytes
+            playback["last_request_end"] = end
+            playback["last_access"] = now
+        else:
+            session.smoothed_consume_rate = smoothed_consume
+            session.last_request_at = now
+            session.last_request_bytes = request_bytes
+            session.last_request_end = end
         session.last_access = now
 
         self.prioritize_range(
@@ -1578,23 +1611,44 @@ class TorrentMediaManager:
             session.last_access = time.monotonic()
         return session
 
-    def _signature(self, session: TorrentStreamSession, expires: int) -> str:
+    def _signature(
+        self,
+        session: TorrentStreamSession,
+        expires: int,
+        consumer_key: str = "",
+    ) -> str:
         key = self.stream_secret.encode("utf-8")
-        payload = f"{session.token}:{int(expires)}:{session.secret}".encode("utf-8")
+        consumer = str(consumer_key or "").strip()[:96]
+        suffix = f":{consumer}" if consumer else ""
+        payload = f"{session.token}:{int(expires)}:{session.secret}{suffix}".encode("utf-8")
         return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
-    def stream_url(self, session: TorrentStreamSession, *, ttl_seconds: int = 3600) -> str:
+    def stream_url(
+        self,
+        session: TorrentStreamSession,
+        *,
+        ttl_seconds: int = 3600,
+        consumer_key: str = "",
+    ) -> str:
         if not self.public_base_url or not self.stream_secret:
             return ""
         expires = int(time.time()) + max(60, min(int(ttl_seconds), 21600))
-        signature = self._signature(session, expires)
+        consumer = str(consumer_key or "").strip()[:96]
+        signature = self._signature(session, expires, consumer)
         filename = quote(session.file_name, safe="")
+        consumer_query = f"&cid={quote(consumer, safe='')}" if consumer else ""
         return (
             f"{self.public_base_url}/media/torrent/stream/{session.token}/{filename}"
-            f"?exp={expires}&sig={signature}"
+            f"?exp={expires}&sig={signature}{consumer_query}"
         )
 
-    async def validate_stream_access(self, token: str, expires: str, signature: str) -> bool:
+    async def validate_stream_access(
+        self,
+        token: str,
+        expires: str,
+        signature: str,
+        consumer_key: str = "",
+    ) -> bool:
         session = await self.get(token)
         if session is None or not self.stream_secret:
             return False
@@ -1605,7 +1659,7 @@ class TorrentMediaManager:
         now = int(time.time())
         if exp < now or exp > now + 21660:
             return False
-        expected = self._signature(session, exp)
+        expected = self._signature(session, exp, consumer_key)
         return bool(signature) and hmac.compare_digest(expected, str(signature))
 
     async def cleanup_expired(self) -> int:
