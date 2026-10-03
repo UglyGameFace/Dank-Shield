@@ -404,6 +404,14 @@ def test_info_hash_aliases_support_hex_and_base32_btih() -> None:
         "magnet:?xt=urn:btih:ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
     )
 
+    btih_item = {
+        "name": "BTIH",
+        "btih": "0123456789ABCDEF0123456789ABCDEF01234567",
+    }
+    assert resolver._item_source_ref(btih_item) == (
+        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+    )
+
 
 def test_invalid_info_hash_does_not_become_playable() -> None:
     for value in (
