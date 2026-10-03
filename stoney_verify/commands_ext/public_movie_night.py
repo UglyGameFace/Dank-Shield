@@ -855,7 +855,8 @@ def _room_embed(
     )
     ready_to_watch = bool(room.stream_token and current_candidate is not None)
 
-    owner_id = int(getattr(interaction.user, "id", 0) or 0)
+    owner = getattr(interaction, "user", None)
+    owner_id = int(getattr(owner, "id", 0) or 0)
     owner_active = owner_id in active
     embed = discord.Embed(
         title=(
@@ -3936,7 +3937,13 @@ class MovieNightHubView(_OwnedView):
             self.remove_item(self.vote_no)
         else:
             manager = get_movie_night_manager()
-            owner_active = int(owner_id) in manager.active_viewers(room)
+            try:
+                owner_active = int(owner_id) in manager.active_viewers(room)
+            except (AttributeError, TypeError):
+                # Some lightweight callers only need the hub to render a signed
+                # Watch link and do not carry full live-viewer state. Preserve
+                # the established active-room controls in that compatibility path.
+                owner_active = True
             self.remove_item(self.start_private)
             if private_mode or owner_active:
                 self.remove_item(self.start_join)
