@@ -177,6 +177,18 @@ def test_example_search_url_auto_detects_common_query_parameters() -> None:
     ) == "https://api.example.com/search"
 
 
+    assert prepare_example_search_url(
+        "https://api.example.com/list_movies.json?query_term=batman&sort_by=seeds"
+    ) == (
+        "https://api.example.com/list_movies.json?"
+        "query_term={query}&sort_by=seeds"
+    )
+
+    assert prepare_example_search_url(
+        "https://feeds.example.com/releases?format=rss&token=public"
+    ) == "https://feeds.example.com/releases?format=rss&token=public"
+
+
 def test_example_search_url_rejects_ambiguous_existing_query_string() -> None:
     try:
         prepare_example_search_url(

@@ -215,8 +215,9 @@ def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -
     assert "not** part of normal Find Movie results" in rendered
     assert "same Dank Engine adapter" in rendered
     assert "In-App Provider Contract" in rendered
-    assert "magnet_uri" in rendered
-    assert "torrent_url" in rendered
+    assert "RSS/Atom/Torznab" in rendered
+    assert "v1/v2 info-hashes" in rendered
+    assert "camelCase" in rendered
     assert "Add In-App Provider" in _labels(movie_ui.MovieNightSourcesView(1))
     assert "Add External-Only Link" in _labels(movie_ui.MovieNightSourcesView(1))
 
@@ -364,6 +365,162 @@ def test_search_results_group_releases_without_automatic_votes(monkeypatch) -> N
     assert all(variant.votes == set() for variant in example.variants.values())
     ranked = manager.ranked_variants(room.room_id, example.candidate_id)
     assert ranked[0].seeds == 100
+
+
+def test_catalog_selected_movie_groups_release_style_titles(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+    )
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+
+    outcome = MediaSourceSearchOutcome(
+        variants=(
+            ResolvedMediaVariant(
+                title="The End of Oak Street 2026 1080p WEB-DL x265",
+                source_id="source-a",
+                source_label="Source A",
+                source_ref="magnet:?xt=urn:btih:aaa",
+                file_size=4_000_000_000,
+                seeds=100,
+                leechers=10,
+                peers=110,
+                metadata={"release_name": {"source": "WEB-DL"}},
+            ),
+            ResolvedMediaVariant(
+                title="The End of Oak Street 2026 2160p BluRay",
+                source_id="source-b",
+                source_label="Source B",
+                source_ref="magnet:?xt=urn:btih:bbb",
+                file_size=8_000_000_000,
+                seeds=50,
+                leechers=5,
+                peers=55,
+                metadata={"release_name": {"source": "BluRay"}},
+            ),
+        ),
+    )
+    catalog = {
+        "catalog_id": "1101383",
+        "title": "The End of Oak Street",
+        "year": 2026,
+    }
+
+    movies, releases = movie_ui._materialize_search_results(
+        room,
+        outcome,
+        proposer_id=10,
+        query="The End of Oak Street",
+        catalog_metadata=catalog,
+    )
+
+    assert movies == 1
+    assert releases == 2
+    candidate = manager.find_candidate_by_title(
+        room.room_id,
+        "The End of Oak Street",
+    )
+    assert candidate is not None
+    assert candidate.metadata["catalog"]["catalog_id"] == "1101383"
+    assert len(candidate.variants) == 2
+
+
+def test_catalog_release_match_rejects_conflicting_year() -> None:
+    catalog = {"title": "Example Movie", "year": 2026}
+    assert movie_ui._release_matches_catalog(
+        "Example Movie 2026 1080p WEB-DL",
+        catalog,
+    )
+    assert not movie_ui._release_matches_catalog(
+        "Example Movie 2019 1080p WEB-DL",
+        catalog,
+    )
+
+
+
+def test_catalog_release_match_prefers_explicit_tmdb_identity() -> None:
+    catalog = {
+        "catalog_id": "1101383",
+        "title": "The End of Oak Street",
+        "year": 2026,
+    }
+    assert movie_ui._release_matches_catalog(
+        "Provider Alternate Title 1080p",
+        catalog,
+        {"source_reported": {"tmdbId": "1101383"}},
+    )
+    assert not movie_ui._release_matches_catalog(
+        "The End of Oak Street 2026 1080p",
+        catalog,
+        {"source_reported": {"tmdb_id": "999999"}},
+    )
+
+
+
+def test_catalog_filter_drops_unrelated_provider_releases() -> None:
+    catalog = {
+        "catalog_id": "1101383",
+        "title": "The End of Oak Street",
+        "year": 2026,
+    }
+    matching = ResolvedMediaVariant(
+        title="The End of Oak Street 2026 1080p",
+        source_id="a",
+        source_label="A",
+        source_ref="magnet:?xt=urn:btih:aaa",
+        file_size=1,
+        seeds=1,
+        leechers=0,
+        peers=1,
+        metadata={},
+    )
+    unrelated = ResolvedMediaVariant(
+        title="Completely Different Movie 2026",
+        source_id="b",
+        source_label="B",
+        source_ref="magnet:?xt=urn:btih:bbb",
+        file_size=1,
+        seeds=1,
+        leechers=0,
+        peers=1,
+        metadata={},
+    )
+
+    filtered = movie_ui._filter_outcome_for_catalog(
+        MediaSourceSearchOutcome(variants=(matching, unrelated)),
+        catalog,
+    )
+    assert filtered.variants == (matching,)
+    assert "Ignored 1 provider release(s)" in filtered.errors[-1]
+
+
+def test_catalog_filter_reports_when_provider_results_do_not_match() -> None:
+    catalog = {
+        "catalog_id": "1101383",
+        "title": "The End of Oak Street",
+        "year": 2026,
+    }
+    unrelated = ResolvedMediaVariant(
+        title="Completely Different Movie",
+        source_id="b",
+        source_label="B",
+        source_ref="magnet:?xt=urn:btih:bbb",
+        file_size=1,
+        seeds=1,
+        leechers=0,
+        peers=1,
+        metadata={},
+    )
+
+    filtered = movie_ui._filter_outcome_for_catalog(
+        MediaSourceSearchOutcome(variants=(unrelated,)),
+        catalog,
+    )
+    assert filtered.variants == ()
+    assert "none matched the selected catalog movie" in filtered.errors[-1]
 
 
 def test_movie_night_is_reachable_from_home_registry_and_normal_search_words() -> None:
@@ -616,7 +773,7 @@ def test_provider_deck_labels_capabilities_not_implementation_jargon() -> None:
         + [f"{field.name}\n{field.value}" for field in embed.fields]
     )
 
-    assert "Torrent API** • In-App • playable API" in rendered
+    assert "Torrent API** • In-App • structured" in rendered
     assert "Browser Only** • External-only • browser link" in rendered
     assert "Structured JSON" not in rendered
     assert "Search Elsewhere" not in rendered

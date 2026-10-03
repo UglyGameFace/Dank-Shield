@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 
 from stoney_verify import media_source_resolver as resolver
-from stoney_verify.media_source_registry import CustomMediaSource
+from stoney_verify.media_source_registry import CustomMediaSource, MediaSourceRegistry
 
 
 def _source() -> CustomMediaSource:
@@ -23,6 +23,15 @@ def test_search_url_supports_placeholder_and_query_parameter_modes() -> None:
         "https://media.example.com/search?q={query}",
         "Blade Runner",
     ) == "https://media.example.com/search?q=Blade+Runner"
+
+
+    assert resolver._search_url(
+        "https://media.example.com/search/{query}?kind=movie",
+        "Blade Runner / Final Cut",
+    ) == (
+        "https://media.example.com/search/"
+        "Blade%20Runner%20%2F%20Final%20Cut?kind=movie"
+    )
 
     url = resolver._search_url(
         "https://media.example.com/search?type=movie",
@@ -348,3 +357,452 @@ def test_expand_provider_items_ignores_nested_entries_without_playable_ref() -> 
     assert resolver._expand_provider_items(
         resolver._extract_items(payload)
     ) == []
+
+
+def test_apibay_style_info_hash_result_becomes_playable_magnet() -> None:
+    payload = [
+        {
+            "id": "12345678",
+            "name": "Example Movie 2026 1080p",
+            "info_hash": "0123456789ABCDEF0123456789ABCDEF01234567",
+            "leechers": "12",
+            "seeders": "88",
+            "size": "3500000000",
+            "category": "207",
+        }
+    ]
+
+    items = resolver._expand_provider_items(resolver._extract_items(payload))
+    assert len(items) == 1
+
+    variant = resolver._variant_from_item(_source(), items[0])
+    assert variant is not None
+    assert variant.title == "Example Movie 2026 1080p"
+    assert variant.source_ref == (
+        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+    )
+    assert variant.file_size == 3_500_000_000
+    assert variant.seeds == 88
+    assert variant.leechers == 12
+    assert variant.peers == 100
+
+
+def test_info_hash_aliases_support_hex_and_base32_btih() -> None:
+    hex_item = {
+        "name": "Hex",
+        "infohash": "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+    }
+    assert resolver._item_source_ref(hex_item) == (
+        "magnet:?xt=urn:btih:abcdef0123456789abcdef0123456789abcdef01"
+    )
+
+    base32_item = {
+        "name": "Base32",
+        "hash": "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
+    }
+    assert resolver._item_source_ref(base32_item) == (
+        "magnet:?xt=urn:btih:ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    )
+
+    btih_item = {
+        "name": "BTIH",
+        "btih": "0123456789ABCDEF0123456789ABCDEF01234567",
+    }
+    assert resolver._item_source_ref(btih_item) == (
+        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+    )
+
+
+def test_invalid_info_hash_does_not_become_playable() -> None:
+    for value in (
+        "",
+        "not-a-torrent-hash",
+        "1234",
+        "g" * 40,
+        "0" * 40,
+        "A" * 31,
+        "A" * 32,
+        "A" * 33,
+    ):
+        item = {"name": "Invalid Hash", "info_hash": value}
+        assert resolver._item_source_ref(item) == ""
+        assert resolver._variant_from_item(_source(), item) is None
+
+
+def test_explicit_playable_ref_wins_over_info_hash_fallback() -> None:
+    item = {
+        "name": "Explicit",
+        "magnet": "magnet:?xt=urn:btih:EXPLICIT",
+        "info_hash": "0123456789abcdef0123456789abcdef01234567",
+    }
+    assert resolver._item_source_ref(item) == "magnet:?xt=urn:btih:EXPLICIT"
+
+
+def test_static_xml_feed_endpoint_is_not_rewritten_with_query_parameter() -> None:
+    endpoint = "https://fosstorrents.com/feed/torrents.xml"
+    assert resolver._search_url(endpoint, "Blender") == endpoint
+
+
+def test_rss_torrent_feed_enclosure_becomes_playable_release() -> None:
+    payload = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0">
+      <channel>
+        <title>FOSS Torrents - RSS Feed for Torrent Files</title>
+        <item>
+          <title>Blender 4.5 Linux x64</title>
+          <link>https://example.org/projects/blender</link>
+          <enclosure
+            url="https://downloads.example.org/blender-4.5-linux-x64.torrent"
+            length="123456"
+            type="application/x-bittorrent" />
+          <category>Software</category>
+        </item>
+        <item>
+          <title>Unrelated Project</title>
+          <enclosure
+            url="https://downloads.example.org/unrelated.torrent"
+            type="application/x-bittorrent" />
+        </item>
+      </channel>
+    </rss>
+    """
+
+    items = resolver._extract_feed_items(payload, "Blender")
+    assert len(items) == 1
+    variant = resolver._variant_from_item(_source(), items[0])
+    assert variant is not None
+    assert variant.title == "Blender 4.5 Linux x64"
+    assert variant.source_ref.endswith("blender-4.5-linux-x64.torrent")
+    assert variant.file_size == 123456
+    assert variant.metadata["source_reported"]["category"] == "Software"
+
+
+def test_atom_enclosure_feed_is_supported_without_treating_page_link_as_media() -> None:
+    payload = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <entry>
+        <title>Open Movie 2026</title>
+        <link rel="alternate" href="https://example.org/open-movie" />
+        <link rel="enclosure"
+              type="application/x-bittorrent"
+              href="https://downloads.example.org/open-movie.torrent" />
+      </entry>
+    </feed>
+    """
+
+    items = resolver._extract_feed_items(payload, "Open Movie")
+    assert len(items) == 1
+    assert items[0]["source_ref"] == "https://downloads.example.org/open-movie.torrent"
+
+
+def test_rss_torrent_extension_info_hash_becomes_magnet() -> None:
+    payload = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss xmlns:torrent="http://xmlns.ezrss.it/0.1/">
+      <channel>
+        <item>
+          <title>Public Domain Movie 2026</title>
+          <torrent:infoHash>0123456789ABCDEF0123456789ABCDEF01234567</torrent:infoHash>
+        </item>
+      </channel>
+    </rss>
+    """
+
+    items = resolver._extract_feed_items(payload, "Public Domain Movie")
+    assert len(items) == 1
+    variant = resolver._variant_from_item(_source(), items[0])
+    assert variant is not None
+    assert variant.source_ref == (
+        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+    )
+
+
+def test_rss_feed_rejects_doctype_and_entity_declarations() -> None:
+    payload = b"""<?xml version="1.0"?>
+    <!DOCTYPE rss [<!ENTITY x "unsafe">]>
+    <rss><channel><item><title>&x;</title></item></channel></rss>
+    """
+    try:
+        resolver._extract_feed_items(payload, "unsafe")
+    except ValueError as exc:
+        assert "declarations are not allowed" in str(exc)
+    else:
+        raise AssertionError("unsafe XML declaration should be rejected")
+
+
+def test_static_feed_directory_endpoint_is_not_rewritten() -> None:
+    endpoint = "https://example.org/feed/"
+    assert resolver._search_url(endpoint, "Open Movie") == endpoint
+
+
+def test_single_object_and_keyed_object_json_results_are_supported() -> None:
+    single = {
+        "name": "Single Movie",
+        "info_hash": "0123456789abcdef0123456789abcdef01234567",
+    }
+    assert resolver._extract_items(single) == [single]
+
+    first = {
+        "name": "First Movie",
+        "magnet": "magnet:?xt=urn:btih:FIRST",
+    }
+    second = {
+        "name": "Second Movie",
+        "torrent_url": "https://downloads.example.org/second.torrent",
+    }
+    payload = {"123": first, "456": second, "status": {"ok": True}}
+    assert resolver._extract_items(payload) == [first, second]
+
+
+def test_torznab_attrs_become_swarm_metadata_and_info_hash_magnet() -> None:
+    payload = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss xmlns:torznab="http://torznab.com/schemas/2015/feed">
+      <channel>
+        <item>
+          <title>Open Movie 2026 1080p WEB-DL</title>
+          <guid>https://example.org/details/9001</guid>
+          <torznab:attr name="infohash"
+                        value="0123456789ABCDEF0123456789ABCDEF01234567" />
+          <torznab:attr name="seeders" value="42" />
+          <torznab:attr name="peers" value="13" />
+          <torznab:attr name="size" value="4567890000" />
+          <torznab:attr name="tmdbid" value="12345" />
+        </item>
+      </channel>
+    </rss>
+    """
+
+    items = resolver._extract_feed_items(payload, "Open Movie")
+    assert len(items) == 1
+    variant = resolver._variant_from_item(_source(), items[0])
+    assert variant is not None
+    assert variant.source_ref == (
+        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+    )
+    assert variant.seeds == 42
+    assert variant.peers == 55
+    assert variant.file_size == 4_567_890_000
+    assert variant.metadata["source_reported"]["tmdbid"] == "12345"
+
+
+def test_torrent_namespace_swarm_and_magnet_fields_are_supported() -> None:
+    payload = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss xmlns:torrent="http://xmlns.ezrss.it/0.1/">
+      <channel>
+        <item>
+          <title>Public Domain Feature 1080p</title>
+          <torrent:magnetURI>magnet:?xt=urn:btih:ABCDEF</torrent:magnetURI>
+          <torrent:contentLength>987654321</torrent:contentLength>
+          <torrent:seeders>25</torrent:seeders>
+          <torrent:leechers>5</torrent:leechers>
+          <torrent:peers>35</torrent:peers>
+        </item>
+      </channel>
+    </rss>
+    """
+
+    items = resolver._extract_feed_items(payload, "Public Domain Feature")
+    assert len(items) == 1
+    variant = resolver._variant_from_item(_source(), items[0])
+    assert variant is not None
+    assert variant.source_ref == "magnet:?xt=urn:btih:ABCDEF"
+    assert variant.file_size == 987_654_321
+    assert variant.seeds == 25
+    assert variant.leechers == 5
+    assert variant.peers == 35
+
+
+def test_html_provider_body_is_rejected_not_scraped() -> None:
+    payload = b"<html><body><item><title>Fake Movie</title></item></body></html>"
+    try:
+        resolver._extract_feed_items(payload, "Fake Movie")
+    except ValueError as exc:
+        assert "returned HTML" in str(exc)
+    else:
+        raise AssertionError("HTML provider body should not be treated as a feed")
+
+
+def test_v2_info_hash_alias_becomes_btmh_magnet() -> None:
+    sha256 = "0123456789abcdef" * 4
+    item = {
+        "name": "Hybrid Movie",
+        "info_hash_v2": sha256,
+    }
+    assert resolver._item_source_ref(item) == (
+        "magnet:?xt=urn:btmh:1220" + sha256
+    )
+
+    item = {
+        "name": "Hybrid Movie",
+        "btmh": "1220" + sha256.upper(),
+    }
+    assert resolver._item_source_ref(item) == (
+        "magnet:?xt=urn:btmh:1220" + sha256
+    )
+
+
+def test_zero_v2_info_hash_is_rejected() -> None:
+    item = {"name": "Invalid V2", "info_hash_v2": "0" * 64}
+    assert resolver._item_source_ref(item) == ""
+
+
+
+def test_generic_hash_field_accepts_v2_sha256() -> None:
+    sha256 = "89abcdef01234567" * 4
+    item = {"name": "V2 Generic Hash", "hash": sha256}
+    assert resolver._item_source_ref(item) == (
+        "magnet:?xt=urn:btmh:1220" + sha256
+    )
+
+
+def test_custom_provider_zero_results_are_reported_as_diagnostic(monkeypatch) -> None:
+    source = _source()
+
+    async def fake_load(guild_id: int, refresh: bool = False):
+        assert guild_id == 123
+        assert refresh is True
+        return {}, MediaSourceRegistry(sources=(source,))
+
+    async def fake_search_one(current, query):
+        assert current is source
+        assert query == "Missing Movie"
+        return [], ""
+
+    monkeypatch.setattr(resolver, "load_media_source_registry", fake_load)
+    monkeypatch.setattr(resolver, "_search_one", fake_search_one)
+
+    outcome = asyncio.run(
+        resolver.search_custom_media_sources(123, "Missing Movie")
+    )
+    assert outcome.variants == ()
+    assert outcome.errors == (
+        "Family Library: no playable results for this search.",
+    )
+
+
+def test_common_camel_case_provider_aliases_are_supported() -> None:
+    payload = {
+        "searchResults": [
+            {
+                "displayName": "Camel Movie 2026",
+                "releaseName": "Camel.Movie.2026.1080p.WEB-DL.x265",
+                "infoHash": "0123456789ABCDEF0123456789ABCDEF01234567",
+                "sizeBytes": 2_500_000_000,
+                "seedCount": 70,
+                "leechCount": 10,
+                "totalPeers": 95,
+                "videoCodec": "x265",
+            }
+        ]
+    }
+
+    items = resolver._expand_provider_items(resolver._extract_items(payload))
+    assert len(items) == 1
+    variant = resolver._variant_from_item(_source(), items[0])
+    assert variant is not None
+    assert variant.title == "Camel Movie 2026"
+    assert variant.file_size == 2_500_000_000
+    assert variant.seeds == 70
+    assert variant.leechers == 10
+    assert variant.peers == 95
+    assert variant.metadata["source_reported"]["videoCodec"] == "x265"
+
+
+def test_provider_hash_wins_over_generic_detail_url() -> None:
+    item = {
+        "name": "Example Movie",
+        "url": "https://catalog.example.org/details/123",
+        "hash": "0123456789ABCDEF0123456789ABCDEF01234567",
+    }
+    assert resolver._item_source_ref(item) == (
+        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+    )
+
+
+def test_provider_media_ref_rejects_embedded_credentials() -> None:
+    item = {
+        "name": "Credential Leak",
+        "torrent_url": "https://user:secret@downloads.example.org/movie.torrent",
+    }
+    assert resolver._item_source_ref(item) == ""
+    assert resolver._variant_from_item(_source(), item) is None
+
+
+def test_movie_detail_url_is_not_materialized_when_nested_torrents_exist() -> None:
+    payload = {
+        "data": {
+            "movies": [
+                {
+                    "title": "Example Movie",
+                    "url": "https://catalog.example.org/movies/example",
+                    "torrents": [
+                        {
+                            "url": "https://downloads.example.org/torrent/download/abc",
+                            "hash": "0123456789ABCDEF0123456789ABCDEF01234567",
+                            "quality": "1080p",
+                            "seeds": 40,
+                        },
+                        {
+                            "url": "https://downloads.example.org/torrent/download/def",
+                            "hash": "89ABCDEF0123456789ABCDEF0123456789ABCDEF",
+                            "quality": "2160p",
+                            "seeds": 20,
+                        },
+                    ],
+                }
+            ]
+        }
+    }
+
+    items = resolver._expand_provider_items(resolver._extract_items(payload))
+    assert len(items) == 2
+    assert all(
+        item.get("url") != "https://catalog.example.org/movies/example"
+        for item in items
+    )
+
+    variants = [
+        resolver._variant_from_item(_source(), item)
+        for item in items
+    ]
+    variants = [item for item in variants if item is not None]
+    assert len(variants) == 2
+    assert all(variant.source_ref.startswith("magnet:?xt=urn:btih:") for variant in variants)
+
+
+def test_structured_provider_body_limits_are_bounded_and_feed_aware() -> None:
+    assert resolver._MAX_RESPONSE_BYTES == 1024 * 1024
+    assert resolver._MAX_FEED_RESPONSE_BYTES == 8 * 1024 * 1024
+    assert resolver._MAX_FEED_RESPONSE_BYTES <= 8 * 1024 * 1024
+
+
+def test_limited_body_enforces_selected_response_budget() -> None:
+    payload = b"x" * (80 * 1024)
+
+    class _Content:
+        async def iter_chunked(self, size):
+            assert size == 64 * 1024
+            yield payload
+
+    class _Response:
+        headers = {"Content-Length": str(len(payload))}
+        content = _Content()
+
+    try:
+        asyncio.run(
+            resolver._read_limited_body(
+                _Response(),
+                max_bytes=64 * 1024,
+            )
+        )
+    except ValueError as exc:
+        assert "exceeds" in str(exc)
+    else:
+        raise AssertionError("provider body larger than selected budget was accepted")
+
+    accepted = asyncio.run(
+        resolver._read_limited_body(
+            _Response(),
+            max_bytes=128 * 1024,
+        )
+    )
+    assert accepted == payload

@@ -3,13 +3,15 @@ from __future__ import annotations
 """Safe resolver for guild-configured Movie Night HTTPS media feeds."""
 
 import asyncio
+import base64
 import ipaddress
 import json
 import re
 import socket
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
-from urllib.parse import parse_qsl, quote_plus, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urljoin, urlsplit, urlunsplit
 
 import aiohttp
 
@@ -23,6 +25,7 @@ from stoney_verify.media_source_registry import (
 _MAX_SOURCE_RESULTS = 25
 _MAX_TOTAL_RESULTS = 100
 _MAX_RESPONSE_BYTES = 1024 * 1024
+_MAX_FEED_RESPONSE_BYTES = 8 * 1024 * 1024
 _MAX_CONCURRENCY = 4
 _TIMEOUT_SECONDS = 8.0
 
@@ -193,7 +196,12 @@ def _safe_source_ref(value: Any) -> str:
         parsed = urlsplit(raw)
     except Exception:
         return ""
-    if str(parsed.scheme or "").lower() != "https" or not parsed.hostname:
+    if (
+        str(parsed.scheme or "").lower() != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         return ""
     host = str(parsed.hostname).lower().strip(".")
     if host in {"localhost"} or host.endswith(".localhost") or host.endswith(".local"):
@@ -207,15 +215,52 @@ def _safe_source_ref(value: Any) -> str:
     return raw[:4096]
 
 
+def _looks_like_static_feed_endpoint(endpoint: str) -> bool:
+    parsed = urlsplit(str(endpoint or "").strip())
+    path = str(parsed.path or "").casefold().rstrip("/")
+    if path.endswith((".xml", ".rss", ".atom")):
+        return True
+    leaf = path.rsplit("/", 1)[-1] if path else ""
+    if leaf in {"feed", "feeds", "rss", "atom"}:
+        return True
+
+    query = {
+        str(key or "").casefold(): str(value or "").casefold()
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+    }
+    return query.get("format") in {"rss", "atom", "xml"} or query.get("output") in {
+        "rss",
+        "atom",
+        "xml",
+    }
+
+
 def _search_url(endpoint: str, query: str) -> str:
     clean_query = " ".join(str(query or "").split())[:180]
     if not clean_query:
         raise ValueError("Movie search query is empty.")
 
-    if "{query}" in endpoint:
-        return endpoint.replace("{query}", quote_plus(clean_query))
-
     parsed = urlsplit(endpoint)
+    if "{query}" in endpoint:
+        path = str(parsed.path or "")
+        query = str(parsed.query or "")
+        if "{query}" in path:
+            path = path.replace("{query}", quote(clean_query, safe=""))
+        if "{query}" in query:
+            query = query.replace("{query}", quote_plus(clean_query))
+        return urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                path,
+                query,
+                "",
+            )
+        )
+
+    if _looks_like_static_feed_endpoint(endpoint):
+        return endpoint
+
     pairs = list(parse_qsl(parsed.query, keep_blank_values=True))
     pairs.append(("q", clean_query))
     return urlunsplit(
@@ -249,6 +294,7 @@ def _validate_request_url(value: str) -> str:
 
 _RESULT_LIST_KEYS = (
     "results",
+    "searchResults",
     "items",
     "releases",
     "variants",
@@ -263,20 +309,45 @@ _RESULT_WRAPPER_KEYS = (
 )
 _PLAYABLE_REF_KEYS = (
     "source_ref",
+    "sourceRef",
     "magnet",
     "magnet_uri",
+    "magnetUri",
     "magnet_url",
+    "magnetUrl",
+    "magnetLink",
     "torrent",
     "torrent_url",
+    "torrentUrl",
     "download_url",
+    "downloadUrl",
     "url",
 )
+_INFO_HASH_KEYS = (
+    "info_hash",
+    "infohash",
+    "infoHash",
+    "btih",
+    "hash",
+)
+_INFO_HASH_V2_KEYS = (
+    "info_hash_v2",
+    "infohash_v2",
+    "infoHashV2",
+    "btmh",
+)
+_BTIH_HEX_RE = re.compile(r"^[A-Fa-f0-9]{40}$")
+_BTIH_BASE32_RE = re.compile(r"^[A-Za-z2-7]{32}$")
+_BTMH_SHA256_RE = re.compile(r"^[A-Fa-f0-9]{64}$")
+_BTMH_MULTIHASH_RE = re.compile(r"^1220[A-Fa-f0-9]{64}$")
 _SOURCE_METADATA_KEYS = (
     "quality",
     "resolution",
     "codec",
     "video_codec",
+    "videoCodec",
     "audio_codec",
+    "audioCodec",
     "language",
     "lang",
     "group",
@@ -284,6 +355,14 @@ _SOURCE_METADATA_KEYS = (
     "indexer",
     "category",
     "year",
+    "tmdb",
+    "tmdb_id",
+    "tmdbId",
+    "tmdbid",
+    "imdb",
+    "imdb_id",
+    "imdbId",
+    "imdbid",
 )
 
 
@@ -308,14 +387,101 @@ def _extract_items(payload: Any, *, _depth: int = 0) -> list[Mapping[str, Any]]:
             nested = _extract_items(value, _depth=_depth + 1)
             if nested:
                 return nested
-    return []
+
+    title_keys = (
+        "title",
+        "name",
+        "movie",
+        "display_name",
+        "displayName",
+        "filename",
+        "fileName",
+    )
+    if any(payload.get(key) for key in title_keys) and (
+        any(payload.get(key) for key in _PLAYABLE_REF_KEYS)
+        or any(payload.get(key) for key in _INFO_HASH_KEYS)
+        or any(payload.get(key) for key in _INFO_HASH_V2_KEYS)
+    ):
+        return [payload]
+
+    mapped_rows = [
+        value
+        for value in list(payload.values())[:_MAX_SOURCE_RESULTS]
+        if isinstance(value, Mapping)
+        and any(value.get(key) for key in title_keys)
+        and (
+            any(value.get(key) for key in _PLAYABLE_REF_KEYS)
+            or any(value.get(key) for key in _INFO_HASH_KEYS)
+            or any(value.get(key) for key in _INFO_HASH_V2_KEYS)
+        )
+    ]
+    return mapped_rows
 
 
-def _item_source_ref(item: Mapping[str, Any]) -> str:
-    for key in _PLAYABLE_REF_KEYS:
+def _magnet_from_info_hash(value: Any) -> str:
+    raw = str(value or "").strip()
+    if _BTIH_HEX_RE.fullmatch(raw):
+        btih = raw.lower()
+        if btih == "0" * 40:
+            return ""
+    elif _BTIH_BASE32_RE.fullmatch(raw):
+        btih = raw.upper()
+        try:
+            decoded = base64.b32decode(btih)
+        except Exception:
+            return ""
+        if decoded == b"\x00" * 20:
+            return ""
+    else:
+        return ""
+    return f"magnet:?xt=urn:btih:{btih}"
+
+
+def _magnet_from_info_hash_v2(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if _BTMH_SHA256_RE.fullmatch(raw):
+        multihash = f"1220{raw}"
+    elif _BTMH_MULTIHASH_RE.fullmatch(raw):
+        multihash = raw
+    else:
+        return ""
+    if multihash[4:] == "0" * 64:
+        return ""
+    return f"magnet:?xt=urn:btmh:{multihash}"
+
+
+def _item_source_ref(
+    item: Mapping[str, Any],
+    *,
+    allow_generic_url: bool = True,
+) -> str:
+    # Prefer fields that explicitly claim to be playable media. Generic "url"
+    # is intentionally last because many search APIs use it for a detail page.
+    for key in tuple(key for key in _PLAYABLE_REF_KEYS if key != "url"):
         value = item.get(key)
         if value:
             ref = _safe_source_ref(value)
+            if ref:
+                return ref
+
+    for key in _INFO_HASH_KEYS:
+        raw_hash = item.get(key)
+        magnet = _magnet_from_info_hash(raw_hash)
+        if magnet:
+            return magnet
+        magnet = _magnet_from_info_hash_v2(raw_hash)
+        if magnet:
+            return magnet
+
+    for key in _INFO_HASH_V2_KEYS:
+        magnet = _magnet_from_info_hash_v2(item.get(key))
+        if magnet:
+            return magnet
+
+    if allow_generic_url:
+        generic_url = item.get("url")
+        if generic_url:
+            ref = _safe_source_ref(generic_url)
             if ref:
                 return ref
     return ""
@@ -376,10 +542,19 @@ def _nested_torrent_items(
 def _expand_provider_items(items: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     rows: list[Mapping[str, Any]] = []
     for item in items[:_MAX_SOURCE_RESULTS]:
-        if _item_source_ref(item):
-            rows.append(item)
         torrents = item.get("torrents")
-        if isinstance(torrents, (Mapping, list)):
+        has_nested_torrents = isinstance(torrents, (Mapping, list))
+
+        # A movie-level "url" is commonly a catalog/detail page (for example
+        # APIs that also expose a nested torrents array). Do not turn that page
+        # into a fake release when real nested torrent variants are present.
+        if _item_source_ref(
+            item,
+            allow_generic_url=not has_nested_torrents,
+        ):
+            rows.append(item)
+
+        if has_nested_torrents:
             rows.extend(_nested_torrent_items(item, torrents))
         if len(rows) >= _MAX_SOURCE_RESULTS:
             break
@@ -395,7 +570,9 @@ def _variant_from_item(
         or item.get("name")
         or item.get("movie")
         or item.get("display_name")
+        or item.get("displayName")
         or item.get("filename")
+        or item.get("fileName")
     )
     source_ref = _item_source_ref(item)
     if not title or not source_ref:
@@ -403,8 +580,10 @@ def _variant_from_item(
 
     release_name = _clean_title(
         item.get("release_name")
+        or item.get("releaseName")
         or item.get("filename")
         or item.get("file_name")
+        or item.get("fileName")
         or item.get("name")
         or title
     )
@@ -439,6 +618,7 @@ def _variant_from_item(
         or item.get("seeders")
         or item.get("seed")
         or item.get("seed_count")
+        or item.get("seedCount")
     )
     leechers = _safe_int(
         item.get("leechers")
@@ -446,14 +626,18 @@ def _variant_from_item(
         or item.get("leechers_count")
         or item.get("leech")
         or item.get("leech_count")
+        or item.get("leechCount")
+        or item.get("leecherCount")
     )
     peers = max(
         seeds + leechers,
         _safe_int(
             item.get("peers")
             or item.get("peer_count")
+            or item.get("peerCount")
             or item.get("peer")
             or item.get("total_peers")
+            or item.get("totalPeers")
         ),
     )
 
@@ -464,9 +648,12 @@ def _variant_from_item(
         source_ref=source_ref,
         file_size=_safe_int(
             item.get("file_size")
+            or item.get("fileSize")
             or item.get("size_bytes")
+            or item.get("sizeBytes")
             or item.get("size")
             or item.get("filesize")
+            or item.get("contentLength")
             or item.get("length")
             or item.get("bytes")
         ),
@@ -477,16 +664,281 @@ def _variant_from_item(
     )
 
 
-async def _read_json_limited(response: aiohttp.ClientResponse) -> Any:
+async def _read_limited_body(
+    response: aiohttp.ClientResponse,
+    *,
+    max_bytes: int = _MAX_RESPONSE_BYTES,
+) -> bytes:
+    limit = max(64 * 1024, min(int(max_bytes), 8 * 1024 * 1024))
     length = _safe_int(response.headers.get("Content-Length"))
-    if length > _MAX_RESPONSE_BYTES:
-        raise ValueError("source response exceeds the 1 MiB limit")
+    if length > limit:
+        raise ValueError(f"source response exceeds the {limit} byte limit")
 
     payload = bytearray()
     async for chunk in response.content.iter_chunked(64 * 1024):
         payload.extend(chunk)
-        if len(payload) > _MAX_RESPONSE_BYTES:
-            raise ValueError("source response exceeds the 1 MiB limit")
+        if len(payload) > limit:
+            raise ValueError(f"source response exceeds the {limit} byte limit")
+    return bytes(payload)
+
+
+def _xml_local_name(tag: Any) -> str:
+    raw = str(tag or "")
+    if "}" in raw:
+        raw = raw.rsplit("}", 1)[-1]
+    if ":" in raw:
+        raw = raw.rsplit(":", 1)[-1]
+    return raw.casefold()
+
+
+def _feed_playable_ref(value: Any, *, media_type: str = "") -> str:
+    raw = str(value or "").strip().strip("<>")
+    if not raw:
+        return ""
+    if raw.casefold().startswith("magnet:?"):
+        return _safe_source_ref(raw)
+
+    try:
+        parsed = urlsplit(raw)
+    except Exception:
+        return ""
+    path = str(parsed.path or "").casefold()
+    declared_type = str(media_type or "").casefold()
+    if not path.endswith(".torrent") and "bittorrent" not in declared_type:
+        return ""
+    return _safe_source_ref(raw)
+
+
+def _feed_entry_to_item(entry: ET.Element) -> Mapping[str, Any]:
+    item: dict[str, Any] = {
+        "title": "",
+        "source_ref": "",
+        "file_size": 0,
+        "seeds": 0,
+        "leechers": 0,
+        "peers": 0,
+    }
+    metadata: dict[str, Any] = {}
+
+    def set_source(value: Any, *, media_type: str = "") -> None:
+        if item["source_ref"]:
+            return
+        ref = _feed_playable_ref(value, media_type=media_type)
+        if ref:
+            item["source_ref"] = ref
+
+    def apply_named_value(raw_name: Any, raw_value: Any) -> None:
+        name = re.sub(r"[^a-z0-9]+", "", str(raw_name or "").casefold())
+        value = str(raw_value or "").strip()
+        if not name or not value:
+            return
+        if name in {"infohash", "btih", "hash"} and not item.get("info_hash"):
+            item["info_hash"] = value[:80]
+        elif name in {"infohashv2", "btmh"} and not item.get("info_hash_v2"):
+            item["info_hash_v2"] = value[:96]
+        elif name in {"magnet", "magneturi", "magneturl"}:
+            set_source(value)
+        elif name in {"size", "filesize", "contentlength", "length"}:
+            if not item["file_size"]:
+                item["file_size"] = _safe_int(value)
+        elif name in {"seed", "seeds", "seeders"}:
+            item["seeds"] = max(int(item["seeds"]), _safe_int(value))
+        elif name in {"leech", "leeches", "leechers"}:
+            item["leechers"] = max(int(item["leechers"]), _safe_int(value))
+        elif name in {"peer", "peers", "peercount"}:
+            item["peers"] = max(int(item["peers"]), _safe_int(value))
+        elif name in {
+            "category",
+            "imdb",
+            "imdbid",
+            "tmdb",
+            "tmdbid",
+            "language",
+            "lang",
+            "quality",
+            "resolution",
+            "codec",
+            "group",
+            "indexer",
+        }:
+            metadata.setdefault(name, value[:180])
+
+    for child in entry.iter():
+        name = _xml_local_name(child.tag)
+        text_value = " ".join(str(child.text or "").split())
+
+        if name == "title" and text_value and not item["title"]:
+            item["title"] = text_value[:180]
+            continue
+
+        if name == "attr":
+            attr_name = child.attrib.get("name") or child.attrib.get("key")
+            attr_value = child.attrib.get("value") or text_value
+            normalized_attr = re.sub(
+                r"[^a-z0-9]+",
+                "",
+                str(attr_name or "").casefold(),
+            )
+            if normalized_attr == "peers":
+                item["leechers"] = max(
+                    int(item["leechers"]),
+                    _safe_int(attr_value),
+                )
+            else:
+                apply_named_value(attr_name, attr_value)
+            continue
+
+        if name in {
+            "infohash",
+            "info_hash",
+            "infohashv2",
+            "info_hash_v2",
+            "btih",
+            "btmh",
+            "hash",
+            "magneturi",
+            "magnet_uri",
+            "magneturl",
+            "magnet",
+            "size",
+            "filesize",
+            "contentlength",
+            "length",
+            "seed",
+            "seeds",
+            "seeders",
+            "leech",
+            "leeches",
+            "leechers",
+            "peer",
+            "peers",
+            "peercount",
+        }:
+            apply_named_value(name, text_value)
+            continue
+
+        if name == "enclosure":
+            candidate = str(child.attrib.get("url") or child.attrib.get("href") or "").strip()
+            media_type = str(child.attrib.get("type") or "")
+            set_source(candidate, media_type=media_type)
+            if not item["file_size"]:
+                item["file_size"] = _safe_int(
+                    child.attrib.get("length") or child.attrib.get("size")
+                )
+            continue
+
+        if name == "link":
+            candidate = str(child.attrib.get("href") or text_value or "").strip()
+            rel = str(child.attrib.get("rel") or "").casefold()
+            media_type = str(child.attrib.get("type") or "")
+            playable = _feed_playable_ref(candidate, media_type=media_type)
+            if playable and (
+                rel in {"", "enclosure"}
+                or candidate.casefold().startswith("magnet:?")
+                or "bittorrent" in media_type.casefold()
+                or str(urlsplit(candidate).path or "").casefold().endswith(".torrent")
+            ):
+                set_source(playable, media_type=media_type)
+            continue
+
+        if name == "guid" and text_value:
+            set_source(text_value)
+            continue
+
+        if name in {"category", "author", "creator", "pubdate", "published", "updated"}:
+            if text_value and name not in metadata:
+                metadata[name] = text_value[:180]
+
+    if metadata:
+        item["metadata"] = metadata
+    return item
+
+
+def _feed_query_matches(title: Any, query: str) -> bool:
+    clean_title = " ".join(str(title or "").casefold().split())
+    clean_query = " ".join(str(query or "").casefold().split())
+    if not clean_title or not clean_query:
+        return False
+    if clean_query in clean_title:
+        return True
+    terms = re.findall(r"[a-z0-9]+", clean_query)
+    return bool(terms) and all(term in clean_title for term in terms)
+
+
+def _extract_feed_items(payload: bytes, query: str) -> list[Mapping[str, Any]]:
+    lowered = payload.lower()
+    if b"<!doctype" in lowered or b"<!entity" in lowered:
+        raise ValueError("source XML declarations are not allowed")
+
+    stripped = payload.lstrip().lower()
+    if stripped.startswith(b"<html") or stripped.startswith(b"<!doctype html"):
+        raise ValueError("source returned HTML instead of a structured RSS/Atom feed")
+
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError as exc:
+        raise ValueError("source did not return valid RSS/Atom XML") from exc
+
+    rows: list[Mapping[str, Any]] = []
+    for entry in root.iter():
+        if _xml_local_name(entry.tag) not in {"item", "entry"}:
+            continue
+        item = _feed_entry_to_item(entry)
+        if not _feed_query_matches(item.get("title"), query):
+            continue
+        if not _item_source_ref(item):
+            continue
+        rows.append(item)
+        if len(rows) >= _MAX_SOURCE_RESULTS:
+            break
+    return rows
+
+
+async def _read_structured_items_limited(
+    response: aiohttp.ClientResponse,
+    query: str,
+) -> list[Mapping[str, Any]]:
+    content_type = str(response.headers.get("Content-Type") or "").casefold()
+    response_url = str(getattr(response, "url", "") or "")
+    feed_hint = (
+        "xml" in content_type
+        or "rss" in content_type
+        or "atom" in content_type
+        or _looks_like_static_feed_endpoint(response_url)
+    )
+    payload = await _read_limited_body(
+        response,
+        max_bytes=(
+            _MAX_FEED_RESPONSE_BYTES
+            if feed_hint
+            else _MAX_RESPONSE_BYTES
+        ),
+    )
+    if not payload:
+        raise ValueError("source response was empty")
+
+    stripped = payload.lstrip()
+
+    if "json" in content_type or stripped.startswith((b"{", b"[")):
+        try:
+            decoded = json.loads(payload.decode("utf-8"))
+        except Exception as exc:
+            raise ValueError("source did not return valid JSON") from exc
+        return _expand_provider_items(_extract_items(decoded))
+
+    if (
+        "xml" in content_type
+        or "rss" in content_type
+        or "atom" in content_type
+        or stripped.startswith(b"<")
+    ):
+        return _extract_feed_items(payload, query)
+
+    raise ValueError("source must return structured JSON, RSS, or Atom data")
+
+
+async def _read_json_limited(response: aiohttp.ClientResponse) -> Any:
+    payload = await _read_limited_body(response)
     try:
         return json.loads(payload.decode("utf-8"))
     except Exception as exc:
@@ -516,7 +968,10 @@ async def _search_one(
             connector=connector,
             timeout=timeout,
             headers={
-                "Accept": "application/json",
+                "Accept": (
+                    "application/json, application/rss+xml, application/atom+xml, "
+                    "application/xml, text/xml;q=0.9"
+                ),
                 "User-Agent": "DankShield-MovieNight/1.0",
             },
         ) as session:
@@ -530,8 +985,7 @@ async def _search_one(
                         continue
                     if response.status != 200:
                         return [], f"{source.label}: HTTP {response.status}"
-                    payload = await _read_json_limited(response)
-                    items = _expand_provider_items(_extract_items(payload))
+                    items = await _read_structured_items_limited(response, query)
                     variants = [
                         variant
                         for item in items[:_MAX_SOURCE_RESULTS]
@@ -688,9 +1142,11 @@ async def search_custom_media_sources(
     variants: list[ResolvedMediaVariant] = []
     errors: list[str] = []
     seen: set[tuple[str, str]] = set()
-    for rows, error in results:
+    for source, (rows, error) in zip(sources, results):
         if error:
             errors.append(error)
+        elif not rows:
+            errors.append(f"{source.label}: no playable results for this search.")
         for row in rows:
             key = (row.title.casefold(), row.source_ref)
             if key in seen:
