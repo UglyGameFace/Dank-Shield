@@ -2351,31 +2351,6 @@ async def _execute_search_vote(
                 ),
             )
 
-        external_links = await _external_provider_links(int(room.guild_id), query)
-        if external_links:
-            vote.payload["external_provider_count"] = len(external_links)
-            return await _replace(
-                interaction,
-                content=(
-                    f"🔗 No connected provider returned a playable release for **{query}**, "
-                    "but external search providers are available."
-                )[:2000],
-                embed=discord.Embed(
-                    title="🔗 Dank Cinema • External Search Available",
-                    description=(
-                        "Open a provider's own search-results page below. Dank Cinema does not "
-                        "scrape or ingest those pages."
-                    ),
-                    color=discord.Color.blurple(),
-                ),
-                view=ExternalSearchResultsView(
-                    int(interaction.user.id),
-                    room_id=room.room_id,
-                    query=query,
-                    links=external_links,
-                ),
-            )
-
         detail = "; ".join(outcome.errors[:4]) or "No releases were returned."
         manager.set_vote_execution_error(room.room_id, vote.vote_id, detail)
         return await _replace(
