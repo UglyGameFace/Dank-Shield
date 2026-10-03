@@ -126,7 +126,14 @@ def _variant_is_explicit_adult(variant: ResolvedMediaVariant) -> bool:
         source_reported.get(key)
         for key in ("category", "type", "tags", "classification")
     )
-    return any(_looks_explicit_adult(value) for value in values if value)
+    explicit_labels = {"adult", "xxx", "porn", "pornographic", "adult video"}
+    for value in values:
+        if not value:
+            continue
+        clean = " ".join(str(value).casefold().replace("_", " ").replace("-", " ").split())
+        if clean in explicit_labels or _looks_explicit_adult(clean):
+            return True
+    return False
 
 
 def _filter_adult_provider_results(
@@ -3622,15 +3629,19 @@ class MovieNightSettingsView(_OwnedView):
             updated=updated,
         )
         if not applied:
+            _fresh_raw, fresh_preferences = await load_movie_night_preferences(
+                int(guild.id),
+                refresh=True,
+            )
             return await _replace(
                 interaction,
                 content="⚠️ Cinema Settings changed while you were editing. Refreshed the current values.",
                 embed=_settings_embed(
-                    adult_content_enabled=preferences.adult_content_enabled,
+                    adult_content_enabled=fresh_preferences.adult_content_enabled,
                 ),
                 view=MovieNightSettingsView(
                     self.owner_id,
-                    adult_content_enabled=preferences.adult_content_enabled,
+                    adult_content_enabled=fresh_preferences.adult_content_enabled,
                 ),
             )
         await open_movie_night_settings(interaction, replace_message=True)
