@@ -561,9 +561,10 @@ async def _recover_unowned_private_component(
     """Recover a private component only when discord.py has no ViewStore owner.
 
     This is not a second business handler. It never executes the stale action.
-    It only replaces a dead private menu with the canonical Control Center after
-    discord.py has already failed to find a message, persistent, or dynamic view
-    owner and existing additive listeners have had a short grace period.
+    It replaces a dead private menu with the owning feature's safe entry surface
+    when that feature can be identified, otherwise with the canonical Control
+    Center, after discord.py has failed to find a message, persistent, or dynamic
+    view owner and existing additive listeners have had their required grace.
     """
     try:
         if interaction.type is not discord.InteractionType.component:
