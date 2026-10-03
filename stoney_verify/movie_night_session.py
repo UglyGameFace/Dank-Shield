@@ -143,17 +143,18 @@ async def _movie_night_cleanup_loop() -> None:
 
 def ensure_movie_night_cleanup_task() -> None:
     global _CLEANUP_TASK
-    try:
-        if _CLEANUP_TASK is not None and not _CLEANUP_TASK.done():
-            return
-        _CLEANUP_TASK = asyncio.create_task(
-            _movie_night_cleanup_loop(),
-            name="movie_night_room_cleanup",
-        )
-    except RuntimeError:
-        # No running event loop yet. Public route registration will call this
-        # again once the media server owns a live loop.
+    if _CLEANUP_TASK is not None and not _CLEANUP_TASK.done():
         return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No coroutine is created until a live loop exists, which avoids an
+        # un-awaited-coroutine warning in synchronous route-registration tests.
+        return
+    _CLEANUP_TASK = loop.create_task(
+        _movie_night_cleanup_loop(),
+        name="movie_night_room_cleanup",
+    )
 
 
 __all__ = [
