@@ -964,6 +964,7 @@ def _session_status_embed(
     host = interaction.guild.get_member(room.host_id) if interaction.guild else None
     host_label = host.mention if isinstance(host, discord.Member) else f"<@{room.host_id}>"
     private_mode = _private_viewing(room)
+    collaborative = not private_mode and len(active) > 1
     embed = discord.Embed(
         title="📊 Dank Cinema • Session Status",
         description=(
@@ -1166,13 +1167,14 @@ def _candidate_embed(room: MovieNightRoom, candidate: Any) -> discord.Embed:
     movie_votes = len(candidate.votes & active)
     variants = manager.ranked_variants(room.room_id, candidate.candidate_id)
     private_mode = _private_viewing(room)
+    collaborative = not private_mode and len(active) > 1
 
     embed = discord.Embed(
         title="2/3 • Choose Release",
         description=(
             f"🎬 **{candidate.title}**\n"
             f"Playable releases: **{len(variants)}**"
-            + ("" if private_mode else f" • Movie votes: **{movie_votes}**")
+            + (f" • Movie votes: **{movie_votes}**" if collaborative else "")
             + "\nDank Cinema ranks healthier swarms first. The top option is the recommended starting point."
         ),
         color=discord.Color.blurple(),
@@ -1269,9 +1271,9 @@ def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discor
             f"🎬 **{candidate.title}**\n"
             f"**{hint or source}** • **{_format_bytes(variant.file_size)}**"
             + (
-                ""
-                if private_mode
-                else f" • Release votes: **{len(variant.votes & active)}**"
+                f" • Release votes: **{len(variant.votes & active)}**"
+                if collaborative
+                else ""
             )
         ),
         color=discord.Color.blurple(),
@@ -1501,8 +1503,18 @@ class MovieCandidateView(_OwnedView):
         super().__init__(owner_id)
         self.room_id = str(room_id)
         self.candidate_id = str(candidate_id)
-        room = get_movie_night_manager().get(self.room_id)
-        if _private_viewing(room):
+        manager = get_movie_night_manager()
+        room = manager.get(self.room_id)
+        private_mode = _private_viewing(room)
+        try:
+            collaborative = bool(
+                room is not None
+                and not private_mode
+                and len(manager.active_viewers(room)) > 1
+            )
+        except (AttributeError, TypeError):
+            collaborative = True
+        if private_mode or not collaborative:
             self.remove_item(self.vote_movie)
             self.queue.label = "Add to Queue"
 
@@ -1599,11 +1611,24 @@ class MovieReleaseView(_OwnedView):
         self.room_id = str(room_id)
         self.candidate_id = str(candidate_id)
         self.variant_id = str(variant_id)
-        room = get_movie_night_manager().get(self.room_id)
-        if _private_viewing(room):
+        manager = get_movie_night_manager()
+        room = manager.get(self.room_id)
+        private_mode = _private_viewing(room)
+        try:
+            collaborative = bool(
+                room is not None
+                and not private_mode
+                and len(manager.active_viewers(room)) > 1
+            )
+        except (AttributeError, TypeError):
+            collaborative = True
+        if private_mode or not collaborative:
             self.remove_item(self.vote_release)
-            self.play.label = "Play This Release"
             self.queue.label = "Add to Queue"
+        if room is not None and int(owner_id) == int(room.host_id):
+            self.play.label = "Play This Release"
+        elif not private_mode:
+            self.play.label = "Request This Release"
 
     def _resolve(self) -> tuple[Optional[MovieNightRoom], Any, Any]:
         manager = get_movie_night_manager()
