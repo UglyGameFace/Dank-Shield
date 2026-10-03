@@ -260,6 +260,8 @@ def _setup_readiness(
     channel: Any,
     raw_config: Mapping[str, Any],
     source_registry: MediaSourceRegistry,
+    *,
+    require_notification_role: bool = True,
 ) -> dict[str, Any]:
     role = _movie_role(guild, raw_config)
     perms = _channel_permissions(guild, channel)
@@ -330,11 +332,11 @@ def _setup_readiness(
     blockers: list[str] = []
     warnings: list[str] = []
 
-    if role is None:
+    if require_notification_role and role is None:
         blockers.append("Movie Night notification role is not mapped.")
     if not can_send:
         blockers.append("Dank Shield needs View Channel, Send Messages, and Embed Links here.")
-    if role is not None and not ping_ready:
+    if require_notification_role and role is not None and not ping_ready:
         blockers.append(
             "The Movie Night role is not mentionable and Dank Shield lacks Mention Everyone here."
         )
@@ -373,7 +375,7 @@ def _setup_readiness(
             "Attach Files is missing here. Torrent streaming still uses the media server, "
             "but direct Discord media relay/fallbacks may be reduced."
         )
-    if role is None and not can_manage_roles:
+    if require_notification_role and role is None and not can_manage_roles:
         blockers.append("Dank Shield needs Manage Roles to create the Movie Night role.")
     return {
         "role": role,
@@ -675,9 +677,25 @@ def _room_for_interaction(interaction: discord.Interaction) -> Optional[MovieNig
     channel = interaction.channel
     if guild is None or channel is None:
         return None
-    return get_movie_night_manager().active_room_for_channel(
+    return get_movie_night_manager().active_room_for_user(
         int(guild.id),
         int(getattr(channel, "id", 0) or 0),
+        int(getattr(interaction.user, "id", 0) or 0),
+    )
+
+
+async def _movie_hub_notice(
+    interaction: discord.Interaction,
+    content: str,
+    *,
+    room: Optional[MovieNightRoom] = None,
+) -> None:
+    current = room if room is not None else _room_for_interaction(interaction)
+    await _replace(
+        interaction,
+        content=_compact(content, 1900),
+        embed=_room_embed(interaction, current),
+        view=MovieNightHubView(int(interaction.user.id), current),
     )
 
 
@@ -724,16 +742,32 @@ def _room_embed(
     active = manager.active_viewers(room)
     host = interaction.guild.get_member(room.host_id) if interaction.guild else None
     host_label = host.mention if isinstance(host, discord.Member) else f"<@{room.host_id}>"
+    private_mode = str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
     embed = discord.Embed(
-        title="🍿 Dank Cinema • Now Showing",
+        title=(
+            "🔒 Dank Cinema • Private Viewing"
+            if private_mode
+            else "🍿 Dank Cinema • Now Showing"
+        ),
         description=(
             f"Host: {host_label}\n"
+            f"Mode: **{'Private Viewing' if private_mode else 'Watch Party'}**\n"
             f"State: **{room.playback_state.title()}**\n"
             f"Viewers: **{len(active)}**\n"
             f"Position: **{int(room.current_position())}s**"
         ),
         color=discord.Color.green(),
     )
+    if private_mode:
+        embed.add_field(
+            name="🔒 Privacy",
+            value=(
+                "Owner-only session. Dank Shield does **not** send the Movie Night role ping, "
+                "other members cannot join/control/vote in this room, and only the owner gets "
+                "the signed Watch link from this panel."
+            ),
+            inline=False,
+        )
     if room.approved_search_query:
         embed.add_field(
             name="Approved search",
@@ -2729,6 +2763,8 @@ async def _announce_room(
     *,
     role: discord.Role,
 ) -> None:
+    if str(getattr(room, "mode", "watch_party") or "watch_party") == "private":
+        return
     channel = interaction.channel
     if channel is None or not hasattr(channel, "send"):
         return
@@ -2755,30 +2791,69 @@ async def _announce_room(
     )
 
 
-async def _start_or_join_room(interaction: discord.Interaction) -> None:
+async def _start_or_join_room(
+    interaction: discord.Interaction,
+    *,
+    mode: str = "watch_party",
+) -> None:
     guild = interaction.guild
     channel = interaction.channel
     if guild is None or channel is None:
-        return await _private(interaction, "❌ Movie Night only works inside a server.")
+        return await _movie_hub_notice(
+            interaction,
+            "❌ Movie Night only works inside a server.",
+        )
 
+    normalized_mode = "private" if str(mode).casefold() == "private" else "watch_party"
     raw, _model = await _load_community(guild)
     _source_raw, registry = await _sources_state(int(guild.id))
-    ready = _setup_readiness(guild, channel, raw, registry)
+    ready = _setup_readiness(
+        guild,
+        channel,
+        raw,
+        registry,
+        require_notification_role=normalized_mode != "private",
+    )
     if not ready["launch_ready"]:
-        return await _private(
+        return await _movie_hub_notice(
             interaction,
-            "❌ Movie Night setup is not launch-ready. Open **Setup** and fix the listed blockers.",
+            "❌ Dank Cinema setup is not launch-ready for this mode. "
+            "Open **Setup** and fix the listed blockers.",
         )
 
     manager = get_movie_night_manager()
     room = manager.active_room_for_channel(int(guild.id), int(channel.id))
     if room is not None:
+        if not manager.user_can_access(room, int(interaction.user.id)):
+            return await _movie_hub_notice(
+                interaction,
+                "🔒 A private Dank Cinema session is already active in this channel. "
+                "It cannot be joined.",
+            )
+
+        current_mode = str(getattr(room, "mode", "watch_party") or "watch_party")
+        if current_mode != normalized_mode:
+            return await _movie_hub_notice(
+                interaction,
+                (
+                    "ℹ️ A **Private Viewing** session is already active. End it before "
+                    "starting a Watch Party."
+                    if current_mode == "private"
+                    else "ℹ️ A **Watch Party** is already active. End it before starting "
+                    "Private Viewing."
+                ),
+                room=room,
+            )
+
         manager.join_room(room.room_id, user_id=int(interaction.user.id))
         return await open_movie_night(interaction, replace_message=True)
 
     role = ready["role"]
-    if not isinstance(role, discord.Role):
-        return await _private(interaction, "❌ Movie Night notification role is missing.")
+    if normalized_mode != "private" and not isinstance(role, discord.Role):
+        return await _movie_hub_notice(
+            interaction,
+            "❌ Movie Night notification role is missing.",
+        )
 
     try:
         room = manager.create_room(
@@ -2786,14 +2861,27 @@ async def _start_or_join_room(interaction: discord.Interaction) -> None:
             channel_id=int(channel.id),
             host_id=int(interaction.user.id),
             stream_token="",
+            mode=normalized_mode,
         )
-        await _announce_room(interaction, room, role=role)
+        if normalized_mode != "private" and isinstance(role, discord.Role):
+            await _announce_room(interaction, room, role=role)
     except Exception as exc:
-        return await _private(
+        return await _movie_hub_notice(
             interaction,
-            f"❌ Movie Night room could not start: {type(exc).__name__}: {exc}",
+            f"❌ Dank Cinema room could not start: {type(exc).__name__}: {exc}",
         )
-    await open_movie_night(interaction, replace_message=True)
+
+    notice = (
+        "🔒 **Private Viewing started.** No Movie Night role ping was sent and "
+        "only you can join/control this room."
+        if normalized_mode == "private"
+        else ""
+    )
+    await open_movie_night(
+        interaction,
+        replace_message=True,
+        recovery_notice=notice,
+    )
 
 
 def _latest_open_vote(room: MovieNightRoom) -> Any:
