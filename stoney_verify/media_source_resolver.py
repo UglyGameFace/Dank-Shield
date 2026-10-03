@@ -707,7 +707,10 @@ async def _search_one(
             connector=connector,
             timeout=timeout,
             headers={
-                "Accept": "application/json",
+                "Accept": (
+                    "application/json, application/rss+xml, application/atom+xml, "
+                    "application/xml, text/xml;q=0.9"
+                ),
                 "User-Agent": "DankShield-MovieNight/1.0",
             },
         ) as session:
@@ -721,8 +724,7 @@ async def _search_one(
                         continue
                     if response.status != 200:
                         return [], f"{source.label}: HTTP {response.status}"
-                    payload = await _read_json_limited(response)
-                    items = _expand_provider_items(_extract_items(payload))
+                    items = await _read_structured_items_limited(response, query)
                     variants = [
                         variant
                         for item in items[:_MAX_SOURCE_RESULTS]
