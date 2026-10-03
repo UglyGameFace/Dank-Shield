@@ -804,16 +804,25 @@ def _private_viewing(room: Optional[MovieNightRoom]) -> bool:
 
 
 def _movie_night_lifecycle_text() -> str:
-    torrent_manager = get_torrent_manager()
-    idle_minutes = max(1, int(round(float(torrent_manager.idle_ttl_seconds) / 60.0)))
+    manager = get_movie_night_manager()
+    empty_minutes = max(
+        5,
+        int(round(float(manager.empty_room_ttl_seconds) / 60.0)),
+    )
+    active_seconds = max(10, int(round(float(manager.viewer_ttl_seconds))))
     return (
         f"{private_menu_lifecycle_text()}\n"
+        f"**Active viewer:** a Watch heartbeat or fresh Cinema action keeps you active; "
+        f"the live-viewer marker expires after about **{active_seconds} seconds** without one. "
+        "That does **not** delete the room or queue.\n"
+        f"**Empty room:** after about **{empty_minutes} minutes** with nobody active and no fresh "
+        "Cinema presence, Dank Cinema automatically ends the abandoned room and releases its media.\n"
         "**Watch links:** valid for up to **6 hours** from when the button is created; "
         "reopen `/movie` for a fresh link if needed.\n"
-        "**Movie Night room:** no inactivity timeout; it stays active until **End Session** "
-        "or the bot process restarts.\n"
-        f"**Attached media:** reclaimed after about **{idle_minutes} minutes** with no media access. "
-        "If that happens, the room stays active and the host can choose the release again."
+        "**Attached media:** stays leased to the room while the room is alive. It is released on "
+        "End Movie Night, automatic empty-room cleanup, replacement, or terminal media failure.\n"
+        "**Bot restart:** Movie Night room state is currently in memory, so a process restart ends "
+        "the live room and users must start a new session."
     )
 
 
