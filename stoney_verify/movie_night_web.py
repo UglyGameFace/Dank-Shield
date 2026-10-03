@@ -15,7 +15,10 @@ from aiohttp import web
 
 from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
 from stoney_verify.movie_night_session import terminate_movie_night_room
-from stoney_verify.torrent_streaming import get_torrent_manager
+from stoney_verify.torrent_streaming import (
+    TorrentSessionUnavailableError,
+    get_torrent_manager,
+)
 
 
 def _secret() -> str:
@@ -202,7 +205,15 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         if session is not None
         else ""
     )
-    torrent_status = torrent_manager.status(session) if session is not None else {}
+    try:
+        torrent_status = torrent_manager.status(session) if session is not None else {}
+    except TorrentSessionUnavailableError:
+        if room.stream_token:
+            await torrent_manager.discard_unusable_session(room.stream_token)
+        session = None
+        stream_url = ""
+        consumer_key = ""
+        torrent_status = {}
     swarm = _swarm_display(torrent_status, variant)
     sync_ready = bool(
         int(user_id) == int(room.host_id)
