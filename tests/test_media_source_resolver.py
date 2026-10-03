@@ -509,4 +509,3 @@ def test_rss_feed_rejects_doctype_and_entity_declarations() -> None:
         assert "declarations are not allowed" in str(exc)
     else:
         raise AssertionError("unsafe XML declaration should be rejected")
-
