@@ -271,6 +271,13 @@ _PLAYABLE_REF_KEYS = (
     "download_url",
     "url",
 )
+_INFO_HASH_KEYS = (
+    "info_hash",
+    "infohash",
+    "hash",
+)
+_BTIH_HEX_RE = re.compile(r"^[A-Fa-f0-9]{40}$")
+_BTIH_BASE32_RE = re.compile(r"^[A-Za-z2-7]{32}$")
 _SOURCE_METADATA_KEYS = (
     "quality",
     "resolution",
@@ -311,6 +318,17 @@ def _extract_items(payload: Any, *, _depth: int = 0) -> list[Mapping[str, Any]]:
     return []
 
 
+def _magnet_from_info_hash(value: Any) -> str:
+    raw = str(value or "").strip()
+    if _BTIH_HEX_RE.fullmatch(raw):
+        btih = raw.lower()
+    elif _BTIH_BASE32_RE.fullmatch(raw):
+        btih = raw.upper()
+    else:
+        return ""
+    return f"magnet:?xt=urn:btih:{btih}"
+
+
 def _item_source_ref(item: Mapping[str, Any]) -> str:
     for key in _PLAYABLE_REF_KEYS:
         value = item.get(key)
@@ -318,6 +336,11 @@ def _item_source_ref(item: Mapping[str, Any]) -> str:
             ref = _safe_source_ref(value)
             if ref:
                 return ref
+
+    for key in _INFO_HASH_KEYS:
+        magnet = _magnet_from_info_hash(item.get(key))
+        if magnet:
+            return magnet
     return ""
 
 
