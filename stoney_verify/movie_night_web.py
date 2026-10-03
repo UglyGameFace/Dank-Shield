@@ -519,7 +519,7 @@ small {{ color:#8994aa; }}
 <body>
 <main>
 <header>
-  <div><h1>🎬 Dank Shield Movie Night</h1><small>Room {safe_room}</small></div>
+  <div><h1 id="heading">🎬 Dank Shield Movie Night</h1><small>Room {safe_room}</small></div>
   <span class="badge" id="role">Connecting…</span>
 </header>
 <section class="card">
@@ -693,10 +693,14 @@ function correctSyncedDrift(target) {{
 async function applyState(s) {{
   lastState=s;
   document.getElementById("title").textContent=(s.title||"Movie Night")+(s.release_source?" • "+s.release_source:"");
-  document.getElementById("state").textContent=s.state||"—";
+  document.getElementById("heading").textContent=
+    s.private?"🔒 Dank Shield Private Viewing":"🎬 Dank Shield Movie Night";
+  document.getElementById("state").textContent=
+    (s.private?"Private • ":"")+(s.state||"—");
   document.getElementById("viewers").textContent=String(s.viewer_count||0);
   document.getElementById("role").textContent=
-    s.is_host?"Host":(s.sync_status==="joining"?"Joining…":"Synced Viewer");
+    s.private&&s.is_host?"Private Host":
+    (s.is_host?"Host":(s.sync_status==="joining"?"Joining…":"Synced Viewer"));
   const t=s.torrent||{{}};
   document.getElementById("progress").textContent=((t.progress||0)*100).toFixed(1)+"% • "+fmtRate(t.download_rate||0);
   const swarmSource=String(t.swarm_source||"");
