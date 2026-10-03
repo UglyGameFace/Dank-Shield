@@ -11,6 +11,7 @@ def test_shared_lifecycle_helper_exists():
     assert "PUBLIC_PANEL_LIFECYCLE_TEXT" in HELPER
     assert "Public panel" in HELPER
     assert "temporary by design" in HELPER
+    assert "reopen their own feature" in HELPER
     assert "cannot inspect old dismissed/expired private menus" in HELPER
 
 
