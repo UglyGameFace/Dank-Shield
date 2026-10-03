@@ -157,9 +157,11 @@ def test_torrent_session_keeps_dht_enabled_for_hash_only_magnets(monkeypatch, tm
 
 
 def test_magnet_and_torrent_source_detection() -> None:
-    magnet = "magnet:?xt=urn:btih:ABC123&dn=Public+Domain"
+    btih = "0123456789abcdef0123456789abcdef01234567"
+    magnet = f"magnet:?xt=urn:btih:{btih}&dn=Public+Domain"
     assert find_magnet(f"watch this {magnet}") == magnet
-    assert magnet_identity(magnet) == "btih:abc123"
+    assert magnet_identity(magnet) == f"btih:{btih}"
+    assert magnet_identity("magnet:?xt=urn:btih:ABC123") == ""
     assert magnet_identity("https://example.com/file") == ""
     assert is_torrent_filename("movie.torrent")
     assert is_torrent_filename("MOVIE.TORRENT")
@@ -167,14 +169,16 @@ def test_magnet_and_torrent_source_detection() -> None:
 
 
 def test_base32_and_hex_btih_normalize_to_same_identity() -> None:
-    zeros_hex = "0" * 40
-    zeros_base32 = "A" * 32
+    expected_hex = "0123456789abcdef0123456789abcdef01234567"
+    equivalent_base32 = "AERUKZ4JVPG66AJDIVTYTK6N54ASGRLH"
     assert magnet_identity(
-        f"magnet:?xt=urn:btih:{zeros_hex}"
-    ) == f"btih:{zeros_hex}"
+        f"magnet:?xt=urn:btih:{expected_hex}"
+    ) == f"btih:{expected_hex}"
     assert magnet_identity(
-        f"magnet:?xt=urn:btih:{zeros_base32}"
-    ) == f"btih:{zeros_hex}"
+        f"magnet:?XT=urn:btih:{equivalent_base32}"
+    ) == f"btih:{expected_hex}"
+    assert magnet_identity(f"magnet:?xt=urn:btih:{'0' * 40}") == ""
+    assert magnet_identity(f"magnet:?xt=urn:btih:{'A' * 32}") == ""
 
 
 
