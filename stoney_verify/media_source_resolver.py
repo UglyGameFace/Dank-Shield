@@ -674,10 +674,20 @@ def _feed_entry_to_item(entry: ET.Element) -> Mapping[str, Any]:
             continue
 
         if name == "attr":
-            apply_named_value(
-                child.attrib.get("name") or child.attrib.get("key"),
-                child.attrib.get("value") or text_value,
+            attr_name = child.attrib.get("name") or child.attrib.get("key")
+            attr_value = child.attrib.get("value") or text_value
+            normalized_attr = re.sub(
+                r"[^a-z0-9]+",
+                "",
+                str(attr_name or "").casefold(),
             )
+            if normalized_attr == "peers":
+                item["leechers"] = max(
+                    int(item["leechers"]),
+                    _safe_int(attr_value),
+                )
+            else:
+                apply_named_value(attr_name, attr_value)
             continue
 
         if name in {
