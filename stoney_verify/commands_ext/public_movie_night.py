@@ -3570,6 +3570,9 @@ class ConfirmMovieNightEndView(_OwnedView):
     def __init__(self, owner_id: int, room_id: str) -> None:
         super().__init__(owner_id)
         self.room_id = str(room_id)
+        room = get_movie_night_manager().get(self.room_id)
+        if _private_viewing(room):
+            self.confirm.label = "End Private Session"
 
     @discord.ui.button(label="End Movie Night", emoji="🛑", style=discord.ButtonStyle.danger, custom_id="dank:movie:end:confirm")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3578,20 +3581,33 @@ class ConfirmMovieNightEndView(_OwnedView):
         room = manager.get(self.room_id)
         if room is None or room.ended:
             return await open_movie_night(interaction, replace_message=True)
+        private_mode = _private_viewing(room)
         if int(room.host_id) != int(interaction.user.id):
             return await _movie_hub_notice(
                 interaction,
-                "❌ Only the active Movie Night host can end it immediately.",
+                (
+                    "❌ Only the Private Session host can end this session."
+                    if private_mode
+                    else "❌ Only the active Movie Night host can end it immediately."
+                ),
                 room=room,
             )
 
         result = await terminate_movie_night_room(room)
-        notice = "✅ Movie Night ended and its room media session was released."
+        notice = (
+            "✅ Private Session ended and its streaming media was released."
+            if private_mode
+            else "✅ Movie Night ended and its room media session was released."
+        )
         if result.cleanup_error:
             notice = (
-                "⚠️ Movie Night ended, but torrent cleanup reported an error. "
-                "The idle media cleanup worker can still reclaim it. "
-                f"({result.cleanup_error})"
+                (
+                    "⚠️ Private Session ended, but torrent cleanup reported an error. "
+                    if private_mode
+                    else "⚠️ Movie Night ended, but torrent cleanup reported an error. "
+                )
+                + "The idle media cleanup worker can still reclaim it. "
+                + f"({result.cleanup_error})"
             )
         await _replace(
             interaction,
