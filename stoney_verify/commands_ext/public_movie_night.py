@@ -132,13 +132,11 @@ def _variant_choice_text(variant: Any) -> tuple[str, str]:
     source = _release_source_label(metadata)
     hint = _release_hint_label(metadata)
     health = variant.swarm_health
-    label = f"{source} • {_format_bytes(variant.file_size)}"
+    label = f"{hint or source} • {_format_bytes(variant.file_size)}"
     description = (
-        f"Seeds {health['seeds']} • Leeches {health['leechers']} • "
-        f"{variant.source_label or variant.source_id or 'custom source'}"
+        f"{source} • {health['seeds']} seeds • {health['leechers']} leeches • "
+        f"{variant.source_label or variant.source_id or 'provider'}"
     )
-    if hint:
-        description = f"{hint} • {description}"
     return label[:100], description[:100]
 
 
@@ -1072,26 +1070,19 @@ def _candidate_embed(room: MovieNightRoom, candidate: Any) -> discord.Embed:
     active = manager.active_viewers(room)
     movie_votes = len(candidate.votes & active)
     variants = manager.ranked_variants(room.room_id, candidate.candidate_id)
+    private_mode = _private_viewing(room)
 
     embed = discord.Embed(
-        title=f"🎬 Dank Cinema • {candidate.title}",
+        title="2/3 • Choose Release",
         description=(
-            f"Movie votes: **{movie_votes}** • Releases: **{len(variants)}**\n"
-            "Release ordering favors live seeds and swarm health when votes are tied."
+            f"🎬 **{candidate.title}**\n"
+            f"Playable releases: **{len(variants)}**"
+            + ("" if private_mode else f" • Movie votes: **{movie_votes}**")
+            + "\nDank Cinema ranks healthier swarms first. The top option is the recommended starting point."
         ),
         color=discord.Color.blurple(),
     )
-    lines: list[str] = []
-    for index, variant in enumerate(variants[:8], start=1):
-        health = variant.swarm_health
-        source = _release_source_label(
-            variant.metadata if isinstance(variant.metadata, Mapping) else {}
-        )
-        lines.append(
-            f"**{index}. {source}** • {_format_bytes(variant.file_size)} • "
-            f"🌱 {health['seeds']} • 🧲 {health['leechers']} • "
-            f"👥 {health['peers']} • 🗳️ {len(variant.votes & active)}"
-        )
+
     catalog = (
         candidate.metadata.get("catalog")
         if isinstance(candidate.metadata, Mapping)
@@ -1100,13 +1091,11 @@ def _candidate_embed(room: MovieNightRoom, candidate: Any) -> discord.Embed:
     )
     if catalog:
         year = _safe_int(catalog.get("year"), 0)
-        overview = _compact(catalog.get("overview"), 900)
-        catalog_id = _compact(catalog.get("catalog_id"), 40)
+        overview = _compact(catalog.get("overview"), 700)
         embed.add_field(
-            name="Catalog match",
+            name="Movie",
             value=(
-                f"TMDB: **{catalog_id or 'unknown'}**"
-                + (f" • **{year}**" if year else "")
+                (f"**{year}**" if year else "Catalog match")
                 + (f"\n{overview}" if overview else "")
             )[:1024],
             inline=False,
@@ -1129,27 +1118,38 @@ def _candidate_embed(room: MovieNightRoom, candidate: Any) -> discord.Embed:
                 if isinstance(names, list):
                     clean_names = [_compact(name, 50) for name in names if _compact(name, 50)]
                     if clean_names:
-                        watch_lines.append(f"**{label}:** {', '.join(clean_names[:8])}")
-            link = str(watch.get("link") or "").strip()
-            if link.startswith("https://www.themoviedb.org/"):
-                watch_lines.append(f"[View provider details on TMDB]({link})")
+                        watch_lines.append(f"**{label}:** {', '.join(clean_names[:6])}")
             if watch_lines:
-                watch_lines.append("*Availability data: JustWatch via TMDB.*")
                 embed.add_field(
-                    name=f"📡 Dank Watch • {watch.get('region') or 'region'}",
-                    value="\n".join(watch_lines)[:1024],
+                    name="📡 Other legal availability",
+                    value=("\n".join(watch_lines) + "\n*JustWatch via TMDB.*")[:1024],
                     inline=False,
                 )
 
+    lines: list[str] = []
+    for index, variant in enumerate(variants[:6], start=1):
+        health = variant.swarm_health
+        source = _release_source_label(
+            variant.metadata if isinstance(variant.metadata, Mapping) else {}
+        )
+        hint = _release_hint_label(
+            variant.metadata if isinstance(variant.metadata, Mapping) else {}
+        )
+        prefix = "⭐" if index == 1 else f"**{index}.**"
+        lines.append(
+            f"{prefix} **{hint or source}** • {_format_bytes(variant.file_size)}\n"
+            f"↳ 🌱 {health['seeds']} seeds • 🧲 {health['leechers']} leeches • {source}"
+        )
     embed.add_field(
-        name="Top releases",
+        name="Recommended releases",
         value="\n".join(lines)[:1024] if lines else (
             "No playable release is attached yet. The host can still provide a magnet or .torrent."
         ),
         inline=False,
     )
     if candidate.candidate_id in room.queue:
-        embed.add_field(name="Queue", value="✅ This movie is queued.", inline=False)
+        embed.add_field(name="📺 Queue", value="✅ This movie is already queued.", inline=False)
+    embed.set_footer(text="Step 2 of 3 • choose a release, then Watch")
     return embed
 
 
@@ -1158,7 +1158,6 @@ def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discor
     active = manager.active_viewers(room)
     health = variant.swarm_health
     metadata = variant.metadata if isinstance(variant.metadata, Mapping) else {}
-    release = metadata.get("release_name") if isinstance(metadata.get("release_name"), Mapping) else {}
     source_reported = (
         metadata.get("source_reported")
         if isinstance(metadata.get("source_reported"), Mapping)
@@ -1168,56 +1167,58 @@ def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discor
 
     source = _release_source_label(metadata)
     hint = _release_hint_label(metadata)
+    private_mode = _private_viewing(room)
     embed = discord.Embed(
-        title=f"🎞️ {candidate.title} • {source}",
+        title="2/3 • Release Details",
         description=(
-            f"Release votes: **{len(variant.votes & active)}**\n"
-            f"Source: **{variant.source_label or variant.source_id or 'Custom source'}**"
+            f"🎬 **{candidate.title}**\n"
+            f"**{hint or source}** • **{_format_bytes(variant.file_size)}**"
+            + (
+                ""
+                if private_mode
+                else f" • Release votes: **{len(variant.votes & active)}**"
+            )
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="Swarm",
+        name="Availability",
         value=(
-            f"🌱 Seeds: **{health['seeds']}**\n"
-            f"🧲 Leeches: **{health['leechers']}**\n"
-            f"👥 Peers: **{health['peers']}**\n"
-            f"Health: **{health['label']}** • ratio **{health['seed_leech_ratio']}**"
+            f"🌱 **{health['seeds']}** seeds • 🧲 **{health['leechers']}** leeches • "
+            f"👥 **{health['peers']}** peers\n"
+            f"Swarm: **{health['label']}** • ratio **{health['seed_leech_ratio']}**"
         ),
-        inline=True,
+        inline=False,
     )
     embed.add_field(
-        name="File",
+        name="Source",
         value=(
-            f"Size: **{_format_bytes(variant.file_size)}**\n"
-            f"Release: **{source}** *(inferred)*\n"
-            f"{hint or 'Quality details pending file verification'}"
+            f"**{variant.source_label or variant.source_id or 'Custom provider'}**\n"
+            f"Release label: **{source}**"
         )[:1024],
-        inline=True,
+        inline=False,
     )
-
-    if source_reported:
-        source_lines = [
-            f"• **{_compact(key, 40)}:** {_compact(value, 100)}"
-            for key, value in list(source_reported.items())[:6]
-        ]
-        embed.add_field(
-            name="Source-reported metadata • not yet verified",
-            value="\n".join(source_lines)[:1024],
-            inline=False,
-        )
 
     if verified:
         video = verified.get("video") if isinstance(verified.get("video"), Mapping) else {}
         audio = verified.get("audio_tracks") if isinstance(verified.get("audio_tracks"), list) else []
         embed.add_field(
-            name="Verified from selected media",
+            name="Verified media details",
             value=(
-                f"Duration: **{verified.get('duration') or 'unknown'}**\n"
-                f"Video: **{video.get('resolution') or 'unknown'}** • "
-                f"**{video.get('codec') or 'unknown'}**\n"
+                f"Duration: **{verified.get('duration') or 'unknown'}** • "
+                f"Video: **{video.get('resolution') or 'unknown'} / {video.get('codec') or 'unknown'}** • "
                 f"Audio tracks: **{len(audio)}**"
             )[:1024],
+            inline=False,
+        )
+    elif source_reported:
+        source_lines = [
+            f"• **{_compact(key, 40)}:** {_compact(value, 100)}"
+            for key, value in list(source_reported.items())[:5]
+        ]
+        embed.add_field(
+            name="Technical details",
+            value="\n".join(source_lines)[:1024],
             inline=False,
         )
 
@@ -1230,17 +1231,12 @@ def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discor
             name="⚠️ Host compatibility",
             value=(
                 f"This release is **{_format_bytes(variant.file_size)}**, above the current "
-                f"Movie Night per-file cap of **{_format_bytes(file_cap)}**. "
-                "Choose another release or raise the configured cap on a host with enough disk."
+                f"per-file cap of **{_format_bytes(file_cap)}**. Choose another release."
             )[:1024],
             inline=False,
         )
 
-    embed.set_footer(
-        text=(
-            "Release/source labels are inferred from naming until the actual file is probed."
-        )
-    )
+    embed.set_footer(text="Step 2 of 3 • play/request this release, then Watch")
     return embed
 
 
@@ -1737,14 +1733,16 @@ async def _open_candidate_detail(
 
 def _release_picker_choices(variants: list[Any]) -> list[DankChoice]:
     choices: list[DankChoice] = []
-    for variant in variants[:25]:
+    for index, variant in enumerate(variants[:25]):
         label, description = _variant_choice_text(variant)
+        if index == 0:
+            description = f"Recommended • {description}"
         choices.append(
             DankChoice(
                 label=label,
                 value=variant.variant_id,
-                description=description,
-                emoji="🎞️",
+                description=description[:100],
+                emoji="⭐" if index == 0 else "🎞️",
                 # This picker is an action surface, not a state editor. A default
                 # option renders as already selected in Discord, and mobile clients
                 # may not dispatch a new interaction when the user taps that same
@@ -1820,8 +1818,8 @@ async def _open_release_picker(
         choices=choices,
         on_pick=picked,
         custom_id=f"dank:movie:release:{candidate.candidate_id[:16]}",
-        placeholder="Choose a release / quality…",
-        title=f"Releases • {candidate.title[:70]}",
+        placeholder="Choose a release…",
+        title="2/3 • Choose Release",
         on_home=lambda back_interaction: _open_candidate_detail(
             back_interaction,
             room.room_id,
@@ -1858,7 +1856,7 @@ async def open_movie_results(
                 interaction,
                 content=message,
                 embed=_room_embed(interaction, room),
-                view=_movie_hub_view(interaction, None),
+                view=_movie_hub_view(interaction, room),
             )
         return await _private(
             interaction,
@@ -1899,7 +1897,7 @@ async def open_movie_results(
         on_pick=picked,
         custom_id=f"dank:movie:results:{room.room_id[:16]}",
         placeholder="Choose a movie result…",
-        title="Dank Cinema Results",
+        title="1/3 • Movie Results",
         on_home=lambda back_interaction: open_movie_night(
             back_interaction,
             replace_message=True,
@@ -1907,11 +1905,11 @@ async def open_movie_results(
         home_label="Dank Cinema",
     )
     embed = discord.Embed(
-        title="🔎 Dank Cinema • Search Results",
+        title="1/3 • Choose Movie",
         description=(
-            f"Approved search: **{room.approved_search_query or '—'}**\n"
-            f"Movies: **{len(ranked)}** • "
-            f"Choose a title, then compare releases by seeds, leeches, size, metadata, and votes."
+            f"Search: **{room.approved_search_query or '—'}**\n"
+            f"Found **{len(ranked)}** movie(s). Choose the exact title; Dank Cinema will "
+            "show the healthiest playable releases next."
         ),
         color=discord.Color.blurple(),
     )
@@ -2334,10 +2332,10 @@ class MovieNightSourcesView(_OwnedView):
             return await _private(interaction, "❌ Manage Server or Administrator is required.")
         await _open_source_picker(interaction)
 
-    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:back")
+    @discord.ui.button(label="Back to Settings", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:back")
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await open_movie_night(interaction, replace_message=True)
+        await open_movie_night_settings(interaction, replace_message=True)
 
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2556,10 +2554,10 @@ class MovieNightSetupView(_OwnedView):
         _ = button
         await open_movie_night_setup(interaction, replace_message=True)
 
-    @discord.ui.button(label="Back to Movie Night", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:setup:back")
+    @discord.ui.button(label="Back to Settings", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:setup:back")
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await open_movie_night(interaction, replace_message=True)
+        await open_movie_night_settings(interaction, replace_message=True)
 
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:setup:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3029,7 +3027,7 @@ async def _propose_movie_search_vote(
     )
 
 
-class MovieSearchModal(discord.ui.Modal, title="Dank Cinema Search"):
+class MovieSearchModal(discord.ui.Modal, title="1/3 • Find Movie"):
     query = discord.ui.TextInput(
         label="Movie title",
         placeholder="Interstellar, The Dark Knight, Shrek…",
@@ -3128,7 +3126,7 @@ class MovieSearchModal(discord.ui.Modal, title="Dank Cinema Search"):
             on_pick=picked,
             custom_id=f"dank:movie:catalog:{self.room_id[:16]}",
             placeholder="Choose the exact movie…",
-            title="Dank Cinema • Choose Movie",
+            title="1/3 • Choose Movie",
             on_home=lambda back_interaction: open_movie_night(
                 back_interaction,
                 replace_message=True,
