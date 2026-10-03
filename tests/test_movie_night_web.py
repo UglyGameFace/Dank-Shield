@@ -220,3 +220,53 @@ def test_movie_night_player_labels_seed_leech_source() -> None:
     assert "Seeds / Leechers" in html
     assert "t.swarm_source" in html
     assert "t.leechers" in html
+
+
+def test_same_session_refresh_warmup_preserves_existing_viewer_telemetry() -> None:
+    viewer = type(
+        "Viewer",
+        (),
+        {
+            "client_session_id": "same-tab",
+            "position_seconds": 321.5,
+            "buffered_until_seconds": 339.0,
+            "media_duration_seconds": 7200.0,
+            "paused": False,
+        },
+    )()
+
+    result = movie_night_web._preserve_refresh_telemetry(
+        viewer,
+        position=0.0,
+        duration=0.0,
+        buffered=0.0,
+        paused=True,
+        client_session_id="same-tab",
+        has_stream=True,
+    )
+    assert result == (321.5, 7200.0, 339.0, False, True)
+
+
+def test_new_session_refresh_warmup_does_not_inherit_old_viewer_telemetry() -> None:
+    viewer = type(
+        "Viewer",
+        (),
+        {
+            "client_session_id": "old-tab",
+            "position_seconds": 321.5,
+            "buffered_until_seconds": 339.0,
+            "media_duration_seconds": 7200.0,
+            "paused": False,
+        },
+    )()
+
+    result = movie_night_web._preserve_refresh_telemetry(
+        viewer,
+        position=0.0,
+        duration=0.0,
+        buffered=0.0,
+        paused=True,
+        client_session_id="new-tab",
+        has_stream=True,
+    )
+    assert result == (0.0, 0.0, 0.0, True, False)
