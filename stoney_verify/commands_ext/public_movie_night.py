@@ -753,14 +753,9 @@ def _movie_hub_view(
     interaction: discord.Interaction,
     room: Optional[MovieNightRoom],
 ) -> "MovieNightHubView":
-    try:
-        staff = _staff_authorized(interaction)
-    except Exception:
-        staff = False
     return MovieNightHubView(
         int(interaction.user.id),
         room,
-        staff=staff,
     )
 
 
@@ -3719,8 +3714,6 @@ class MovieNightHubView(_OwnedView):
         self,
         owner_id: int,
         room: Optional[MovieNightRoom] = None,
-        *,
-        staff: bool = False,
     ) -> None:
         super().__init__(owner_id)
         private_mode = _private_viewing(room)
@@ -3816,7 +3809,6 @@ class MovieNightHubView(_OwnedView):
             view=MovieNightHubView(
                 self.owner_id,
                 room,
-                staff=_staff_authorized(interaction),
             ),
         )
 
