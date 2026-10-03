@@ -219,7 +219,7 @@ The code fallback is now 1495 MB.
 
 **Finding**
 
-Setup & Diagnostics repeated Provider Deck and Community & Pings navigation that already exists in Cinema Settings, increasing choice count without adding capability.
+Setup & Diagnostics repeated Movie Sources and Community & Pings navigation that already exists in Cinema Settings, increasing choice count without adding capability.
 
 **Remediation**
 
