@@ -699,3 +699,45 @@ def test_provider_media_ref_rejects_embedded_credentials() -> None:
     assert resolver._item_source_ref(item) == ""
     assert resolver._variant_from_item(_source(), item) is None
 
+
+def test_movie_detail_url_is_not_materialized_when_nested_torrents_exist() -> None:
+    payload = {
+        "data": {
+            "movies": [
+                {
+                    "title": "Example Movie",
+                    "url": "https://catalog.example.org/movies/example",
+                    "torrents": [
+                        {
+                            "url": "https://downloads.example.org/torrent/download/abc",
+                            "hash": "0123456789ABCDEF0123456789ABCDEF01234567",
+                            "quality": "1080p",
+                            "seeds": 40,
+                        },
+                        {
+                            "url": "https://downloads.example.org/torrent/download/def",
+                            "hash": "89ABCDEF0123456789ABCDEF0123456789ABCDEF",
+                            "quality": "2160p",
+                            "seeds": 20,
+                        },
+                    ],
+                }
+            ]
+        }
+    }
+
+    items = resolver._expand_provider_items(resolver._extract_items(payload))
+    assert len(items) == 2
+    assert all(
+        item.get("url") != "https://catalog.example.org/movies/example"
+        for item in items
+    )
+
+    variants = [
+        resolver._variant_from_item(_source(), item)
+        for item in items
+    ]
+    variants = [item for item in variants if item is not None]
+    assert len(variants) == 2
+    assert all(variant.source_ref.startswith("magnet:?xt=urn:btih:") for variant in variants)
+
