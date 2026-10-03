@@ -1611,13 +1611,17 @@ def test_provider_deck_labels_capabilities_not_implementation_jargon() -> None:
 
 
 def test_primary_candidate_controls_never_open_provider_websites() -> None:
-    labels = _labels(movie_ui.MovieCandidateView(1, "room", "candidate"))
+    view = movie_ui.MovieCandidateView(1, "room", "candidate")
+    labels = _labels(view)
     assert labels == {
-        "Vote / Unvote Movie",
         "Choose Release",
-        "Vote to Queue",
+        "Add to Queue",
         "Back to Results",
     }
+    assert all(
+        not isinstance(item, discord.ui.Button) or item.url is None
+        for item in view.children
+    )
 
 
 def test_search_vote_never_falls_back_to_external_browser_providers() -> None:
