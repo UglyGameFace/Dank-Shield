@@ -686,10 +686,14 @@ def _movie_hub_view(
     interaction: discord.Interaction,
     room: Optional[MovieNightRoom],
 ) -> "MovieNightHubView":
+    try:
+        staff = _staff_authorized(interaction)
+    except Exception:
+        staff = False
     return MovieNightHubView(
         int(interaction.user.id),
         room,
-        staff=_staff_authorized(interaction),
+        staff=staff,
     )
 
 
