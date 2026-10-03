@@ -273,6 +273,7 @@ def _validate_request_url(value: str) -> str:
 
 _RESULT_LIST_KEYS = (
     "results",
+    "searchResults",
     "items",
     "releases",
     "variants",
@@ -287,22 +288,30 @@ _RESULT_WRAPPER_KEYS = (
 )
 _PLAYABLE_REF_KEYS = (
     "source_ref",
+    "sourceRef",
     "magnet",
     "magnet_uri",
+    "magnetUri",
     "magnet_url",
+    "magnetUrl",
+    "magnetLink",
     "torrent",
     "torrent_url",
+    "torrentUrl",
     "download_url",
+    "downloadUrl",
     "url",
 )
 _INFO_HASH_KEYS = (
     "info_hash",
     "infohash",
+    "infoHash",
     "hash",
 )
 _INFO_HASH_V2_KEYS = (
     "info_hash_v2",
     "infohash_v2",
+    "infoHashV2",
     "btmh",
 )
 _BTIH_HEX_RE = re.compile(r"^[A-Fa-f0-9]{40}$")
@@ -314,7 +323,9 @@ _SOURCE_METADATA_KEYS = (
     "resolution",
     "codec",
     "video_codec",
+    "videoCodec",
     "audio_codec",
+    "audioCodec",
     "language",
     "lang",
     "group",
@@ -347,7 +358,15 @@ def _extract_items(payload: Any, *, _depth: int = 0) -> list[Mapping[str, Any]]:
             if nested:
                 return nested
 
-    title_keys = ("title", "name", "movie", "display_name", "filename")
+    title_keys = (
+        "title",
+        "name",
+        "movie",
+        "display_name",
+        "displayName",
+        "filename",
+        "fileName",
+    )
     if any(payload.get(key) for key in title_keys) and (
         any(payload.get(key) for key in _PLAYABLE_REF_KEYS)
         or any(payload.get(key) for key in _INFO_HASH_KEYS)
@@ -489,7 +508,9 @@ def _variant_from_item(
         or item.get("name")
         or item.get("movie")
         or item.get("display_name")
+        or item.get("displayName")
         or item.get("filename")
+        or item.get("fileName")
     )
     source_ref = _item_source_ref(item)
     if not title or not source_ref:
@@ -497,8 +518,10 @@ def _variant_from_item(
 
     release_name = _clean_title(
         item.get("release_name")
+        or item.get("releaseName")
         or item.get("filename")
         or item.get("file_name")
+        or item.get("fileName")
         or item.get("name")
         or title
     )
@@ -533,6 +556,7 @@ def _variant_from_item(
         or item.get("seeders")
         or item.get("seed")
         or item.get("seed_count")
+        or item.get("seedCount")
     )
     leechers = _safe_int(
         item.get("leechers")
@@ -540,14 +564,18 @@ def _variant_from_item(
         or item.get("leechers_count")
         or item.get("leech")
         or item.get("leech_count")
+        or item.get("leechCount")
+        or item.get("leecherCount")
     )
     peers = max(
         seeds + leechers,
         _safe_int(
             item.get("peers")
             or item.get("peer_count")
+            or item.get("peerCount")
             or item.get("peer")
             or item.get("total_peers")
+            or item.get("totalPeers")
         ),
     )
 
@@ -558,9 +586,12 @@ def _variant_from_item(
         source_ref=source_ref,
         file_size=_safe_int(
             item.get("file_size")
+            or item.get("fileSize")
             or item.get("size_bytes")
+            or item.get("sizeBytes")
             or item.get("size")
             or item.get("filesize")
+            or item.get("contentLength")
             or item.get("length")
             or item.get("bytes")
         ),
