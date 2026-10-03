@@ -348,3 +348,73 @@ def test_expand_provider_items_ignores_nested_entries_without_playable_ref() -> 
     assert resolver._expand_provider_items(
         resolver._extract_items(payload)
     ) == []
+
+
+def test_apibay_style_info_hash_result_becomes_playable_magnet() -> None:
+    payload = [
+        {
+            "id": "12345678",
+            "name": "Example Movie 2026 1080p",
+            "info_hash": "0123456789ABCDEF0123456789ABCDEF01234567",
+            "leechers": "12",
+            "seeders": "88",
+            "size": "3500000000",
+            "category": "207",
+        }
+    ]
+
+    items = resolver._expand_provider_items(resolver._extract_items(payload))
+    assert len(items) == 1
+
+    variant = resolver._variant_from_item(_source(), items[0])
+    assert variant is not None
+    assert variant.title == "Example Movie 2026 1080p"
+    assert variant.source_ref == (
+        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+    )
+    assert variant.file_size == 3_500_000_000
+    assert variant.seeds == 88
+    assert variant.leechers == 12
+    assert variant.peers == 100
+
+
+def test_info_hash_aliases_support_hex_and_base32_btih() -> None:
+    hex_item = {
+        "name": "Hex",
+        "infohash": "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+    }
+    assert resolver._item_source_ref(hex_item) == (
+        "magnet:?xt=urn:btih:abcdef0123456789abcdef0123456789abcdef01"
+    )
+
+    base32_item = {
+        "name": "Base32",
+        "hash": "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
+    }
+    assert resolver._item_source_ref(base32_item) == (
+        "magnet:?xt=urn:btih:ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    )
+
+
+def test_invalid_info_hash_does_not_become_playable() -> None:
+    for value in (
+        "",
+        "not-a-torrent-hash",
+        "1234",
+        "g" * 40,
+        "A" * 31,
+        "A" * 33,
+    ):
+        item = {"name": "Invalid Hash", "info_hash": value}
+        assert resolver._item_source_ref(item) == ""
+        assert resolver._variant_from_item(_source(), item) is None
+
+
+def test_explicit_playable_ref_wins_over_info_hash_fallback() -> None:
+    item = {
+        "name": "Explicit",
+        "magnet": "magnet:?xt=urn:btih:EXPLICIT",
+        "info_hash": "0123456789abcdef0123456789abcdef01234567",
+    }
+    assert resolver._item_source_ref(item) == "magnet:?xt=urn:btih:EXPLICIT"
+
