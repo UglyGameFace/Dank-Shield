@@ -420,7 +420,11 @@ def _magnet_from_info_hash_v2(value: Any) -> str:
     return f"magnet:?xt=urn:btmh:{multihash}"
 
 
-def _item_source_ref(item: Mapping[str, Any]) -> str:
+def _item_source_ref(
+    item: Mapping[str, Any],
+    *,
+    allow_generic_url: bool = True,
+) -> str:
     # Prefer fields that explicitly claim to be playable media. Generic "url"
     # is intentionally last because many search APIs use it for a detail page.
     for key in tuple(key for key in _PLAYABLE_REF_KEYS if key != "url"):
@@ -440,11 +444,12 @@ def _item_source_ref(item: Mapping[str, Any]) -> str:
         if magnet:
             return magnet
 
-    generic_url = item.get("url")
-    if generic_url:
-        ref = _safe_source_ref(generic_url)
-        if ref:
-            return ref
+    if allow_generic_url:
+        generic_url = item.get("url")
+        if generic_url:
+            ref = _safe_source_ref(generic_url)
+            if ref:
+                return ref
     return ""
 
 
@@ -503,10 +508,19 @@ def _nested_torrent_items(
 def _expand_provider_items(items: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     rows: list[Mapping[str, Any]] = []
     for item in items[:_MAX_SOURCE_RESULTS]:
-        if _item_source_ref(item):
-            rows.append(item)
         torrents = item.get("torrents")
-        if isinstance(torrents, (Mapping, list)):
+        has_nested_torrents = isinstance(torrents, (Mapping, list))
+
+        # A movie-level "url" is commonly a catalog/detail page (for example
+        # APIs that also expose a nested torrents array). Do not turn that page
+        # into a fake release when real nested torrent variants are present.
+        if _item_source_ref(
+            item,
+            allow_generic_url=not has_nested_torrents,
+        ):
+            rows.append(item)
+
+        if has_nested_torrents:
             rows.extend(_nested_torrent_items(item, torrents))
         if len(rows) >= _MAX_SOURCE_RESULTS:
             break
