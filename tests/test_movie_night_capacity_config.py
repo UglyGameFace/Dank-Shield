@@ -21,6 +21,7 @@ def test_env_example_has_movie_night_dynamic_capacity_contract() -> None:
         "DANK_MEDIA_BIND_HOST=0.0.0.0",
         "DANK_MEDIA_PORT=8080",
         "DANK_PROCESS_MEMORY_LIMIT_MB=1495",
+        "DANK_MOVIE_NIGHT_EMPTY_ROOM_TTL_SECONDS=1800",
         "DANK_MOVIE_NIGHT_MEMORY_RESERVE_MB=350",
         "DANK_TORRENT_ESTIMATED_SESSION_MB=96",
         "DANK_TORRENT_SOFT_SESSION_LIMIT=2",
@@ -78,3 +79,12 @@ def test_site_listener_can_start_before_movie_night_signing_is_configured() -> N
     assert '"0.0.0.0"' in source
     assert "health remains available but media/watch access stays fail-closed" in source
     assert "Torrent media server refused to start" not in source
+
+
+def test_torrent_memory_fallback_matches_discloud_ram() -> None:
+    source = (
+        ROOT / "stoney_verify" / "torrent_streaming.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"DANK_PROCESS_MEMORY_LIMIT_MB",\n            1495,' in source
+    assert '"DANK_PROCESS_MEMORY_LIMIT_MB",\n            1536,' not in source
