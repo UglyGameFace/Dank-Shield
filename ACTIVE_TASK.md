@@ -2,181 +2,201 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-417 — Private Viewing + persistent Dank Cinema navigation**
+**DANK-SHIELD-419 — Dank Cinema progressive-disclosure UI/UX revamp**
 
 Production baseline:
-`main@6dbd233bb234d964c99018cc0a063abb393c3733` (PR #416 merged).
+`main@1dcb24cdc0662239aac4c0b86dcc37a7158ce4d4` (PR #418 merged).
 
 Active branch:
-`feat/417-private-viewing`
+`feat/419-cinema-ux-revamp`
 
 Issue:
-**#417 — Dank Cinema: private viewing mode and persistent Movie Night navigation**
+**#419 — Dank Cinema: progressive-disclosure UI/UX revamp without feature loss**
 
 Status:
-**Explicit FORCE SWITCH accepted. The previous #408 lifecycle/playback task is paused. This task adds a true owner-only Private Viewing mode and fixes normal Movie Night interactions that strand users outside the active Dank Cinema menu. Implementation is in progress; exact-head CI and live Discord/Watch validation remain required.**
+**The private-viewing + sticky-navigation work from #417 is merged. The active task now reorganizes Dank Cinema around Home -> Find -> Choose -> Watch, keeping every existing feature but moving low-frequency/admin controls out of the primary viewer path. Implementation is on the active branch; exact-head CI and mobile production validation remain required.**
 
-## User requirements
+## Product contract
 
-1. The user can watch a movie privately without sending the Movie Night role ping or public room announcement.
-2. Private Viewing is owner-only by default.
-3. Other members cannot join, vote, control playback, or obtain a normal Watch link for the private room.
-4. Private Viewing uses the existing provider search, release picker, torrent runtime, signed Watch player, refresh/reconnect logic, cleanup, and lifecycle system.
-5. Normal shared Movie Night remains available as a Watch Party and keeps its collaborative voting/failover behavior.
-6. Running a normal Movie Night must not repeatedly dump the user into dead-end ephemeral notices or make them reopen `/movie`; status/error/vote flows should keep a usable Dank Cinema menu attached.
-7. Keep one room per Discord channel to avoid ambiguous channel-scoped state.
+Primary viewer flow:
+1. **Cinema Home** chooses Watch Party or Watch Alone when no room exists.
+2. Once a room exists, **Find Movie** is the primary action.
+3. Movie selection is **1/3 • Choose Movie**.
+4. Release selection/details are **2/3 • Choose Release**.
+5. An attached release returns to Cinema Home as **3 • Ready to watch** with a direct **Watch Movie** link.
 
-## Architecture verified before edits
+Progressive disclosure:
+- Cinema Home does not show provider/setup/notification/end-session/debug controls.
+- **More** owns session status, notifications, refresh, end-session, and staff entry into settings.
+- **Cinema Settings** owns Provider Deck, Setup & Diagnostics, notification configuration, and session/lifecycle details.
+- Voting buttons only appear while a real shared-room vote is open.
+- Private Viewing never shows collaborative voting controls.
+- Technical torrent/player diagnostics remain available but visually secondary.
 
-Canonical room state:
-`MovieNightManager -> MovieNightRoom -> candidates/releases/viewers/votes -> torrent session token`.
+## Execution path preserved
 
-Discord path:
-`/movie -> MovieNightHubView -> Start / Join -> search/results/release -> Watch`.
+Discord:
+`/movie -> MovieNightHubView -> Find Movie -> catalog picker -> Movie Picks -> candidate -> release picker -> release detail -> Watch`.
 
-Web path:
-`signed per-user Watch URL -> _room_and_user() -> state/heartbeat/action -> canonical MovieNightManager + torrent runtime`.
+Admin:
+`Cinema Home -> More -> Cinema Settings -> Provider Deck / Setup & Diagnostics / Notifications / Session & Lifecycle`.
 
-Public start path currently:
-`_start_or_join_room() -> create_room() -> _announce_room() -> Movie Night role ping`.
+Web:
+`signed Watch URL -> canonical Movie Night state -> canonical torrent stream runtime`.
 
-The room model had no privacy mode before this task, and web access validated the signed token but did not have a room-level owner-only policy because no such mode existed.
-
-Navigation audit also found several runtime status paths still using bare `_private(...)` messages with no cinema controls, especially collaborative search/queue/playback vote notices and stale result errors. That behavior matches the complaint that normal Movie Night can kick the user out of the menu flow.
+No second search path, provider stack, media server, torrent runtime, or room model was introduced.
 
 ## Changes implemented
 
-### Owner-only room mode
+### Cinema Home
 
-`MovieNightRoom.mode` now supports:
-- `watch_party` (default/backward-compatible);
-- `private`.
+Empty state now shows only:
+- **Start Watch Party**
+- **Watch Alone**
+- **More**
 
-`MovieNightManager.create_room()` validates the mode.
+Active room shows:
+- **Find Movie**
+- **Movie Picks**
+- **Queue**
+- **More**
+- contextual **Yes / No** only while a shared vote is actually open
+- **Watch Movie** only when media is attached
 
-Private rooms:
-- only allow the host through `user_can_access()`;
-- reject non-owner `join_room()`;
-- are hidden from `active_room_for_user()` for everyone except the owner;
-- keep active-viewer/quorum membership owner-only;
-- reject unauthorized vote proposals/casts even if a stale viewer reference somehow exists.
+The embed itself is concise:
+- host/viewer/state summary
+- current step
+- current movie/release when selected
+- queue count
+- contextual vote summary when needed
 
-Normal rooms keep the original shared behavior.
+The full timeout/media/session block moved to Session Status.
 
-### Private Viewing entry
+### More
 
-The empty Dank Cinema hub now exposes:
-- **Start / Join Party**;
-- **Private Viewing**.
+Member-facing More contains:
+- Session Status when a room exists
+- Notifications
+- Refresh Cinema
+- End Movie Night when a room exists
+- Back to Cinema
+- Close
 
-Private Viewing:
-- creates the same canonical room object with `mode=private`;
-- does **not** require the notification-role mapping/ping readiness;
-- does **not** call the public Movie Night role announcement;
-- clearly identifies the room as **🔒 Private Viewing**;
-- removes party vote controls from the private hub;
-- removes vote buttons from candidate/release views;
-- relabels private queue/play actions without collaborative-vote wording;
-- keeps the same provider search, release ranking, torrent session, Watch player, and cleanup owners.
+Staff additionally receive **Cinema Settings**.
 
-One room still occupies a channel at a time. A private room cannot be joined or silently converted into a Watch Party; it must be ended before switching modes.
+### Cinema Settings
 
-### Private Watch enforcement
+Staff-only settings contains:
+- Provider Deck
+- Setup & Diagnostics
+- Notifications
+- Session & Lifecycle
+- Back to Cinema
+- Close
 
-The web player now enforces room privacy after validating the signed URL:
-- private owner identity -> allowed;
-- any other user identity -> HTTP 403.
+Provider Deck and Setup now return to Settings instead of dropping back into the viewer hub.
 
-State explicitly exposes `mode` and `private` for the player.
+### Find -> Choose -> Watch
 
-The Discord hub only creates the private Watch button for the private room owner.
+Search modal:
+`1/3 • Find Movie`
 
-As with the existing signed Watch design, the URL itself is a bearer credential. Dank Shield prevents other users from obtaining it through normal UI/access paths; sharing the owner's signed URL outside Dank Shield remains equivalent to sharing a private bearer link.
+Catalog picker/results:
+`1/3 • Choose Movie`
 
-### Sticky normal Movie Night navigation
+Candidate/release flow:
+`2/3 • Choose Release`
+`2/3 • Release Details`
 
-Added a canonical `_movie_hub_notice()` response path that keeps the Dank Cinema embed + hub controls attached while displaying status/error text.
+Release options put quality/size first and seed/leech/provider detail second. The top-ranked release is visibly marked **Recommended** without preselecting it, preserving the mobile first-choice fix.
 
-Converted core shared Movie Night dead ends to stay inside the cinema flow, including:
-- Start / Join setup/conflict failures;
-- no-room hub actions;
-- no-open-vote and vote errors;
-- collaborative search-vote pending/error notices;
-- queue-vote success/pending/error notices;
-- host-active playback notices;
-- host-away playback-vote notices/errors;
-- stale candidate/release/result paths;
-- empty release/result states.
+### Candidate/release readability
 
-Result/candidate/release views retain their own navigation when possible instead of dumping the user into a bare ephemeral message.
+Movie details prioritize:
+- title/year/overview
+- legal watch availability
+- recommended playable releases
 
-The explicit **Close** control still closes the panel because that is the user's requested action.
+Release details prioritize:
+- quality/size
+- seed/leech/peer availability
+- provider/source
 
-## Compatibility
+Source-reported and verified technical metadata remain available lower in the embed rather than dominating the screen.
 
-Preserved:
-- public Movie Night role announcements for Watch Party mode;
-- host-away playback voting;
-- shared queue and search voting;
-- signed Watch URLs;
-- provider and torrent safety/resource limits;
-- refresh/reconnect fixes from PR #415;
-- lifecycle clarity from PR #416;
-- stale-menu recovery back into Dank Cinema;
-- current public command surface.
+### Watch player
 
-No second torrent runtime, private media server, alternate provider stack, or per-guild hardcoding was added.
+The video, sync/playback controls, current title/state/viewer count remain primary.
 
-## Validation added
+Torrent percentage, seed/leech counts, and buffer target moved under a native **Playback Details** disclosure section.
 
-Manager coverage:
-- private room owner access;
-- non-owner join rejection;
-- private room hidden from other users;
-- owner-only active viewer quorum;
-- one-person private search vote resolves immediately;
-- public Watch Party join behavior remains unchanged.
+All refresh/reconnect behavior, swarm fallback, sync rules, signed URLs, and torrent streaming logic remain unchanged.
 
-Discord UI coverage:
-- empty hub exposes Watch Party + Private Viewing;
-- empty hub does not show meaningless vote buttons;
-- public active room keeps vote controls and hides start-mode controls;
-- private active room hides start-mode and vote controls;
-- private candidate/release views remove voting language;
-- private room announcement helper sends nothing;
-- private setup readiness does not require notification-role or Manage Roles readiness;
-- pending normal search votes keep a `MovieNightHubView` attached.
+## Compatibility preserved
 
-Web coverage:
-- non-owner identity is rejected from private Watch room;
-- private owner is accepted;
-- state exposes private mode.
+- Watch Party announcements and voting
+- host-away playback failover
+- Private Viewing owner-only behavior
+- queueing
+- Provider Deck and custom providers
+- setup/repair diagnostics
+- Community & Pings integration
+- direct magnet/.torrent input
+- TMDB/JustWatch metadata
+- torrent safety/resource limits
+- signed Watch links
+- lifecycle clarification
+- stale-menu recovery
+- refresh/reconnect hardening
+
+Features are relocated, not removed.
+
+## Validation added/updated
+
+Discord UI tests now cover:
+- compact empty Cinema Home
+- separate More and Settings surfaces
+- staff-only Settings visibility through More
+- contextual vote controls
+- public vs private active-room controls
+- simplified home vs detailed Session Status
+- explicit Find/Choose/Watch step labels
+- Recommended first release without default selection
+- Provider Deck/Setup returning to Settings
+- existing private-viewing and sticky-navigation guarantees
+
+Web tests now cover:
+- video/player content appearing before Playback Details
+- Playback Details retaining torrent diagnostics
+- existing sync/reconnect/swarm behavior unchanged
+
+## Deliberate non-goals
+
+This task is the presentation/navigation revamp. It does not invent a new adult-content classifier, room persistence layer, or viewer-capacity model. Those remain separate product/runtime work because they change behavior rather than presentation.
 
 ## Blockers / risks
 
 Still required:
-1. exact-head compile/diff/static/test validation;
-2. full repository CI;
-3. confirm no Discord row exceeds component limits after the new Private Viewing button;
-4. confirm private room never emits the Movie Night role ping in live Discord;
-5. confirm a second user in the same channel cannot join/control private viewing;
-6. confirm private owner can search -> choose release -> Watch using the same playback path;
-7. confirm normal Watch Party search/vote/error flows always leave a usable cinema menu attached.
+1. exact-head diff/compile/static validation;
+2. targeted Movie Night UI + web tests;
+3. full repository CI;
+4. confirm Discord component rows remain within limits for empty/public/private/open-vote states;
+5. confirm regular members cannot see Cinema Settings from More;
+6. confirm staff can reach every existing admin feature through Settings;
+7. mobile canary: Home -> Watch Party/Watch Alone -> Find -> Choose -> release -> Watch -> More -> Back without reopening `/movie`.
 
 ## Backlog
 
-Paused from #408 by explicit FORCE SWITCH:
-- remaining production release #1/playback acceptance if still needed after this task;
-- XXX/adult movie visibility admin setting;
-- unattended-host Movie Ready announcement + coherent waiting timeout;
-- 20-viewer capacity validation/hardening;
-- room persistence across process restarts.
+- XXX/adult movie visibility admin setting with enforceable end-to-end catalog/provider classification
+- unattended-host Movie Ready announcement + coherent waiting timeout
+- 20-viewer capacity validation/hardening
+- room persistence across process restarts
 
 Unrelated Dank Shield, Minecraft, Unity, Idle Grow, Captions, AntiNuke, and other work remains outside this single active task.
 
 ## Next step
 
-Finish exact-head validation on `feat/417-private-viewing`, patch only evidence-backed failures, open the focused PR, and run the full workflow set before merge/deploy.
+Open the focused #419 PR, run exact-head workflows, patch only evidence-backed failures, and merge only after the final head is clean and green.
 
 
 ---
