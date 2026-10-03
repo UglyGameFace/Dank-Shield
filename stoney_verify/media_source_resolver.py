@@ -343,9 +343,11 @@ _SOURCE_METADATA_KEYS = (
     "tmdb",
     "tmdb_id",
     "tmdbId",
+    "tmdbid",
     "imdb",
     "imdb_id",
     "imdbId",
+    "imdbid",
 )
 
 
