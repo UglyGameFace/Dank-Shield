@@ -10,103 +10,204 @@ Production baseline:
 Active branch:
 `fix/408-info-hash-provider-results`
 
+Active PR:
+**#411 — Dank Cinema: normalize info-hash and RSS/Atom torrent providers**
+
 Status:
-**Production canary exposed provider-normalization gaps after #410. Remediation implemented; exact-head CI and post-merge Android canary remain required.**
+**Production canary root cause confirmed. Broad provider-compatibility remediation is implemented on the active branch; exact-head CI, final diff hygiene, merge/deploy, and production Android canaries remain required.**
 
 ## Production evidence
 
 The owner configured ApiBay as an enabled **In-App Provider** using:
 `https://apibay.org/q.php?q={query}`.
 
-Provider Deck shows it enabled, but searching a catalog movie still reports:
+Provider Deck showed it enabled, but searching a catalog movie still reported:
 - catalog match found;
 - releases: 0;
 - no connected playback provider returned a release.
 
-The owner also asked for structured torrent feed URLs such as:
+The owner also wants reusable support for other structured torrent sources, including static feeds such as:
 `https://fosstorrents.com/feed/torrents.xml`.
 
-## Root cause
+## Root causes and audit findings
 
-The provider layer was still narrower than the product contract in two ways:
+1. **Info-hash-only JSON rows were discarded.**
+   ApiBay-style responses provide `name`, `info_hash`, `seeders`, `leechers`, and `size`, but no ready-made magnet URL. The old normalizer therefore produced zero releases.
 
-1. **Info-hash-only JSON results were not playable.**
-   ApiBay-style result rows expose fields such as `name`, `info_hash`, `seeders`, `leechers`, and `size`, but no ready-made magnet URL. The resolver therefore discarded otherwise valid torrent rows because it only accepted explicit magnet/HTTPS source fields.
+2. **The supposed API/feed path was still JSON-only.**
+   `_search_one()` requested JSON and decoded JSON only, so RSS/Atom/Torznab feeds could never become releases.
 
-2. **The fetch path still assumed JSON.**
-   The UI called the input an API/feed, but `_search_one()` sent `Accept: application/json` and used the JSON-only decoder. A valid RSS/Atom torrent feed could never become releases.
+3. **The first XML implementation contained a runtime bug.**
+   It attempted `.casefold()` on `bytes`. The audit caught and replaced that before merge; XML preflight now uses bounded byte-safe checks.
 
-This is the same active provider-normalization task, not a separate feature.
+4. **Common provider shapes were still too narrow.**
+   The audit found missing single-object/keyed-object JSON forms, camelCase aliases, path-based query placeholders, `query_term`-style search parameters, Torznab attributes, BitTorrent v2 hashes, and static-feed URLs with query metadata.
 
-## Execution path
+5. **Movie-level detail URLs could masquerade as releases.**
+   APIs that return a movie `url` plus nested `torrents` could materialize the detail page as a fake release. Nested real torrent variants now win and the parent detail URL is excluded.
+
+6. **Catalog matching was too literal.**
+   Release names such as `The End of Oak Street 2026 1080p WEB-DL` did not equal the selected TMDB title exactly, so they could become separate movie candidates instead of releases under the chosen movie. Matching now uses normalized title/year identity and provider TMDB IDs when supplied.
+
+7. **Provider failures were too opaque.**
+   An enabled provider returning zero usable rows looked identical to a provider never being queried. Search now records provider-level zero-result diagnostics and surfaces them in the no-release response.
+
+8. **Hash-only magnets need the existing DHT path.**
+   The canonical libtorrent session already enables DHT. Regression coverage now locks that behavior, and magnet identity validation covers v1, v2, and hybrid torrents.
+
+9. **Provider media refs needed another credential boundary.**
+   HTTPS media refs containing embedded username/password credentials are now rejected before they can become releases.
+
+## Execution path verified
 
 Primary search:
-`/movie -> Find Movie -> approved search -> _execute_search_vote() -> search_movie_sources() -> search_custom_media_sources() -> _search_one() -> structured normalization -> ResolvedMediaVariant -> Choose Release -> torrent runtime`.
+`/movie -> Find Movie -> search vote -> _execute_search_vote() -> search_movie_sources() -> search_custom_media_sources() -> _search_one() -> structured normalization -> catalog filter/grouping -> ResolvedMediaVariant -> Choose Release -> canonical torrent runtime`.
 
 Provider setup:
-`Provider Deck -> Add In-App Provider -> probe_custom_media_source() -> _search_one() -> save canonical guild provider registry`.
+`Provider Deck -> Add In-App Provider -> prepare_example_search_url() -> probe_custom_media_source() -> _search_one() -> canonical guild provider registry`.
 
-Playback remains unchanged:
-- magnet refs start through the canonical torrent manager;
-- HTTPS refs are fetched as bounded .torrent metadata;
-- no second media/torrent runtime is introduced.
+Playback:
+- magnet refs -> `TorrentMediaManager.start_magnet()`;
+- HTTPS torrent refs -> bounded `fetch_torrent_metadata()` -> `start_torrent_bytes()`;
+- no second torrent/media runtime was added.
 
-## Changes on this branch
+## Implemented provider contract
 
-### JSON torrent APIs
+### JSON APIs
 
-- Added generic `info_hash`, `infohash`, and `hash` aliases.
-- Valid 40-character hex BTIH hashes are converted into canonical magnet refs.
-- Valid 32-character base32 BTIH hashes are converted into magnet refs.
-- All-zero hex sentinel hashes are rejected.
-- Explicit magnet/HTTPS refs still win over synthesized info-hash fallback.
-- Existing seed/leech/size metadata normalization remains authoritative.
+Supports:
+- top-level lists;
+- wrappers such as `results`, `searchResults`, `items`, `releases`, `variants`, `torrents`, `movies`, `entries`, `data`, `response`, and `payload`;
+- single result objects;
+- ID-keyed result objects;
+- nested movie/language/quality torrent variants;
+- snake_case and common camelCase field names;
+- strong playable refs such as source/magnet/torrent/download URLs;
+- v1 aliases `info_hash`, `infohash`, `infoHash`, and generic `hash`;
+- v2 aliases `info_hash_v2`, `infohash_v2`, `infoHashV2`, `btmh`, and 64-hex generic `hash`;
+- size, seed, leech, peer, quality, codec, language, category, release-name, and movie-ID metadata.
 
-### RSS / Atom torrent feeds
+Valid v1/v2 hashes become canonical magnets. Invalid and zero-hash sentinels are rejected.
 
-- Added bounded RSS/Atom/XML parsing under the same In-App Provider contract.
-- Static `.xml`, `.rss`, and `.atom` endpoints are fetched as feeds instead of having `?q=` appended.
-- Feed entries are filtered locally by the movie/search query.
-- Supports RSS `<item>` and Atom `<entry>`.
-- Supports torrent enclosures, Atom enclosure links, feed magnet elements, and torrent info-hash extensions.
-- Ordinary webpage links in a feed are not treated as playable torrent refs.
-- XML with DOCTYPE/ENTITY declarations is rejected.
-- Existing 1 MiB provider response bound, HTTPS/public-network resolver, redirect validation, concurrency limit, result cap, dedupe, and ranking remain in place.
-- Provider Deck wording now explicitly documents JSON plus RSS/Atom structured providers.
+Generic `url` is deliberately lower priority than explicit playable refs and hashes so ordinary catalog/detail pages do not steal precedence.
 
-## Validation added
+### RSS / Atom / Torznab
 
-Regression coverage now includes:
-- ApiBay-style `info_hash` row -> playable magnet;
-- hex/base32 info-hash aliases;
-- invalid/zero info-hash rejection;
-- explicit playable ref precedence;
-- static XML feed URL is not rewritten with a query parameter;
-- RSS torrent enclosure normalization;
-- Atom enclosure normalization;
-- RSS torrent info-hash extension -> magnet;
-- normal feed webpage links are not used as playback;
-- DOCTYPE/ENTITY feed rejection;
-- Provider Deck exposes RSS/Atom as part of the structured provider contract.
+Supports:
+- RSS `<item>` and Atom `<entry>`;
+- `.torrent` enclosures;
+- Atom enclosure links;
+- magnet elements;
+- torrent namespace info-hash/magnet/size/swarm fields;
+- Torznab/Newznab-style `attr name=... value=...` fields including info-hash, seed/leech health, size, and movie identity;
+- local title filtering for static feeds.
 
-## Compatibility / cleanup
+Static `.xml`, `.rss`, `.atom`, `/feed`, `/rss`, `/atom`, and recognized `format/output=rss|atom|xml` endpoints are not mutated with an invented `?q=`.
+
+HTML is not scraped. XML with DOCTYPE/ENTITY declarations is rejected.
+
+### Search URL compatibility
+
+Automatic setup recognizes common query parameters including:
+`q`, `query`, `query_term`, `search`, `search_query`, `search_term`, `term`, `keyword`, `keywords`, `title`, and `s`.
+
+Admins can still provide `{query}` explicitly. Query placeholders in URL paths use path-safe percent encoding; query-string placeholders use query encoding.
+
+### BitTorrent runtime compatibility
+
+- strict valid BTIH hex/base32 identity;
+- BitTorrent v2 BTMH identity;
+- hybrid magnets prefer v1 identity for session reuse;
+- zero/invalid hashes fail early;
+- DHT remains enabled for hash-only magnets;
+- existing torrent admission, disk, memory, metadata, session reuse, range streaming, cleanup, and signed playback behavior remain authoritative.
+
+## Safety / resource bounds
+
+Preserved or strengthened:
+- HTTPS-only custom provider requests;
+- embedded-credential rejection;
+- public-network DNS/IP enforcement;
+- redirect destination revalidation;
+- response-size bounds;
+- API payloads remain capped at 1 MiB;
+- recognized structured feeds are capped at 8 MiB;
+- feed parsing rejects HTML, DTD, and ENTITY declarations;
+- max result counts and nested traversal depths remain bounded;
+- per-search provider concurrency remains bounded;
+- torrent metadata fetch remains independently bounded;
+- no provider HTML scraping;
+- no provider-brand-specific parser;
+- no hardcoded guild/provider IDs.
+
+## Regression coverage added
+
+Coverage now includes:
+- ApiBay-style `info_hash` -> magnet;
+- v1 hex/base32 and v2 BTMH hashes;
+- zero/invalid hash rejection;
+- hybrid/v2 torrent identities;
+- DHT enabled for hash-only magnets;
+- explicit ref precedence;
+- generic detail URL vs nested torrent separation;
+- single-object, ID-keyed, nested, snake_case, and camelCase JSON;
+- YTS-style nested torrent structure;
+- RSS torrent enclosures;
+- Atom enclosures;
+- torrent namespace extensions;
+- Torznab attributes;
+- static feed URL handling;
+- path/query placeholder encoding;
+- `query_term` URL preparation;
+- HTML/DTD/ENTITY rejection;
+- provider response budgets;
+- credential-bearing media-ref rejection;
+- provider zero-result diagnostics;
+- release-title/year catalog grouping;
+- TMDB-ID-aware catalog grouping/filtering;
+- unrelated provider-result filtering;
+- Provider Deck structured-format guidance.
+
+## Validation state
+
+Earlier PR #411 runs exposed only diff-whitespace failures in `tests/test_media_source_resolver.py`; those were corrected. Several additional audit-backed commits have landed since, so those old runs are no longer completion evidence.
+
+Still required on the **final exact head**:
+- `git diff --check` / compile;
+- targeted provider resolver, registry, Movie Night UI, and torrent runtime tests;
+- full Dank Shield CI;
+- Profile Runtime Diagnostics;
+- Dank Design Regression CI;
+- Application Command Size Diagnostics;
+- Ticket Owner Emergency Override;
+- branch 0 behind current `main`;
+- final diff/reference/secret/conflict-artifact review.
+
+## Compatibility and deliberate boundaries
 
 Preserved:
-- current provider registry schema and existing `provider_type=json` storage for backward compatibility;
-- TMDB/JustWatch metadata;
+- existing provider registry schema and `provider_type=json` storage;
+- existing saved ApiBay provider should begin working after deploy without re-adding it;
+- TMDB/JustWatch catalog metadata;
 - Internet Archive Feature Films;
 - direct magnet/.torrent input;
-- provider probe/save flow;
-- no browser-search fallback in primary movie search;
-- no provider-specific Discord command/UI branches.
+- Provider Deck management;
+- no external-browser fallback in primary Movie Search.
 
-No HTML scraping or provider-brand-specific parser was added.
+Deliberate boundaries:
+- arbitrary HTML torrent sites are not scraped;
+- POST-only APIs are not auto-adapted from a pasted URL;
+- APIs requiring secret Bearer/custom-header authentication are not treated as safely supported by the current URL-only guild provider model;
+- real DHT reachability and provider availability depend on production networking and the external provider, so live canaries remain mandatory.
 
 ## Blockers / risks
 
-- Exact-head GitHub CI has not passed yet for this follow-up.
-- The actual production ApiBay and RSS-feed canaries must be rerun after merge/deploy.
-- Static feeds that exceed the existing 1 MiB response safety cap will be rejected rather than silently bypassing the bound.
+No claim of complete/fixed/ready-to-merge is valid until exact-head CI is green. Even after merge, the production requirement is not closed until:
+1. ApiBay returns real releases for a known movie;
+2. a static RSS/Atom/Torznab feed produces a matching release when one exists;
+3. Choose Release starts torrent metadata/download successfully;
+4. the synchronized Watch path plays it;
+5. provider failures show useful diagnostics rather than a generic zero-release dead end.
 
 ## Backlog
 
@@ -114,11 +215,7 @@ Unrelated Dank Shield, Minecraft, Unity, Idle Grow, Captions, AntiNuke, and othe
 
 ## Next step
 
-Open the focused PR from `fix/408-info-hash-provider-results`, run exact-head CI, patch only evidence-backed failures, then merge/deploy and rerun:
-1. ApiBay movie search with a title known to have results;
-2. a structured RSS/Atom feed with a matching entry;
-3. Choose Release -> torrent start/playback;
-4. confirm no external-browser fallback reappears.
+Run exact-head validation on PR #411. Patch only evidence-backed failures inside this provider/search task. When the final head is green and the diff is clean, merge/deploy and perform the production canaries above before closing #408.
 
 
 ---
