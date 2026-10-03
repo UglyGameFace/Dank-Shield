@@ -2052,9 +2052,20 @@ class CustomSourceModal(discord.ui.Modal):
         owner_id: int,
         baseline: Mapping[str, Any],
         source: Optional[CustomMediaSource] = None,
+        provider_type: str = PROVIDER_TYPE_JSON,
     ) -> None:
+        self.provider_type = (
+            PROVIDER_TYPE_FEED
+            if provider_type == PROVIDER_TYPE_FEED
+            else PROVIDER_TYPE_JSON
+        )
+        is_feed = self.provider_type == PROVIDER_TYPE_FEED
         super().__init__(
-            title="Edit In-App Provider" if source is not None else "Add In-App Provider",
+            title=(
+                ("Edit RSS Feed" if source is not None else "Add RSS Feed")
+                if is_feed
+                else ("Edit Search Provider" if source is not None else "Add Search Provider")
+            ),
             timeout=300,
         )
         self.owner_id = int(owner_id)
@@ -2062,15 +2073,19 @@ class CustomSourceModal(discord.ui.Modal):
         self.source_id = str(source.source_id if source is not None else "")
 
         self.label_input = discord.ui.TextInput(
-            label="In-app provider name",
-            placeholder="My Torrent API",
+            label="Feed name" if is_feed else "Search provider name",
+            placeholder="EZTV RSS" if is_feed else "My Torrent API",
             default=str(source.label if source is not None else "")[:80] or None,
             required=False,
             max_length=80,
         )
         self.endpoint_input = discord.ui.TextInput(
-            label="HTTPS search API / feed",
-            placeholder="https://api.example.com/search?q={query} or https://site/feed.xml",
+            label="RSS / Atom feed URL" if is_feed else "HTTPS search API",
+            placeholder=(
+                "https://myrss.org/eztv"
+                if is_feed
+                else "https://api.example.com/search?q={query}"
+            ),
             default=str(source.endpoint_url if source is not None else "")[:1000] or None,
             min_length=8,
             max_length=1000,
@@ -2083,25 +2098,32 @@ class CustomSourceModal(discord.ui.Modal):
             return await _private(interaction, "❌ This source editor belongs to another admin.")
         guild = interaction.guild
         if guild is None:
-            return await _private(interaction, "❌ Movie Night sources are configured inside a server.")
+            return await _private(interaction, "❌ Dank Cinema sources are configured inside a server.")
         if not _staff_authorized(interaction):
             return await _private(interaction, "❌ Manage Server or Administrator is required.")
 
         from stoney_verify.media_source_registry import parse_media_source_registry
 
         current = parse_media_source_registry(self.baseline)
+        is_feed = self.provider_type == PROVIDER_TYPE_FEED
         try:
-            prepared_url = prepare_example_search_url(str(self.endpoint_input.value))
+            prepared_url = (
+                prepare_feed_url(str(self.endpoint_input.value))
+                if is_feed
+                else prepare_example_search_url(str(self.endpoint_input.value))
+            )
             host = str(urlsplit(prepared_url).hostname or "").strip(".")
             fallback_label = host.split(".", 1)[0].replace("-", " ").replace("_", " ").title()
-            label = _compact(self.label_input.value, 80) or fallback_label or "In-App Provider"
+            label = _compact(self.label_input.value, 80) or fallback_label or (
+                "RSS Feed" if is_feed else "Search Provider"
+            )
             updated = add_custom_source(
                 current,
                 source_id=self.source_id,
                 label=label,
                 endpoint_url=prepared_url,
                 added_by=int(interaction.user.id),
-                provider_type=PROVIDER_TYPE_JSON,
+                provider_type=self.provider_type,
             )
         except ValueError as exc:
             return await _private(interaction, f"❌ {exc}")
@@ -2116,17 +2138,18 @@ class CustomSourceModal(discord.ui.Modal):
             None,
         )
         if candidate is None:
-            return await _private(interaction, "❌ Dank Cinema could not prepare that provider.")
+            return await _private(interaction, "❌ Dank Cinema could not prepare that movie source.")
 
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True, thinking=True)
 
         probe = await probe_custom_media_source(candidate, query="batman")
         if not probe.reachable:
+            kind = "RSS feed" if is_feed else "search provider"
             return await _replace(
                 interaction,
                 content=(
-                    "❌ **In-App Provider was not saved.** Dank Cinema tested the API/feed and could not use it.\n"
+                    f"❌ **{kind.title()} was not saved.** Dank Cinema tested the source and could not use it.\n"
                     f"{probe.error}"
                 )[:2000],
                 embed=_sources_embed(current),
@@ -2142,25 +2165,40 @@ class CustomSourceModal(discord.ui.Modal):
         except Exception as exc:
             return await _replace(
                 interaction,
-                content=f"❌ Dank Cinema In-App Provider could not save safely: {type(exc).__name__}.",
+                content=f"❌ Dank Cinema movie source could not save safely: {type(exc).__name__}.",
                 embed=_sources_embed(current),
                 view=MovieNightSourcesView(int(interaction.user.id)),
             )
         if not applied:
             return await _replace(
                 interaction,
-                content="❌ Dank Cinema providers changed in another admin session. Refresh and try again.",
+                content="❌ Dank Cinema movie sources changed in another admin session. Refresh and try again.",
                 embed=_sources_embed(current),
                 view=MovieNightSourcesView(int(interaction.user.id)),
             )
 
-        notice = f"✅ In-App Provider tested and saved • {probe.playable_results} playable result(s) in the Batman probe."
-        if probe.playable_results == 0:
+        if is_feed:
             notice = (
-                "⚠️ In-App Provider responded with structured data and was saved, but the Batman "
-                "probe found no matching playable release. That can be normal for a static RSS/Atom "
-                "feed that simply does not contain Batman yet."
+                f"✅ RSS feed tested and saved • {probe.playable_results} Batman-matching playable "
+                "result(s) in the current feed."
             )
+            if probe.playable_results == 0:
+                notice = (
+                    "✅ RSS feed responded with valid structured data and was saved. The current feed "
+                    "does not contain a Batman-matching playable release, which is normal for a rolling "
+                    "feed. Movie searches will filter the feed locally."
+                )
+        else:
+            notice = (
+                f"✅ Search provider tested and saved • {probe.playable_results} playable result(s) "
+                "in the Batman probe."
+            )
+            if probe.playable_results == 0:
+                notice = (
+                    "⚠️ Search provider responded with structured data and was saved, but the Batman "
+                    "probe found no matching playable release."
+                )
+
         await _replace(
             interaction,
             content=notice,
