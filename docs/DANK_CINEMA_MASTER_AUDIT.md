@@ -185,6 +185,26 @@ Some magnet/.torrent failure paths replaced the response with a bare error and a
 Those paths now keep the current room embed and controls attached. Setup guidance points to the real path:
 `More -> Cinema Settings -> Setup & Diagnostics`.
 
+### Medium: announcement failure could disguise a successful room as failed
+
+**Finding**
+
+Room creation and the public channel announcement were inside the same exception boundary. If Discord rejected or transiently failed the announcement after `create_room()` succeeded, the user was told the room could not start even though a live room already existed.
+
+**Remediation**
+
+Room creation now owns its own failure boundary. Announcement delivery is best-effort after the canonical room exists. A notification/announcement failure reports a warning while keeping the real active room visible.
+
+### Medium: slow provider work could outlive the room that requested it
+
+**Finding**
+
+Structured provider/TMDB work crosses network await boundaries. A room could be ended while a search was still in flight, leaving the old room object available to later result-materialization code.
+
+**Remediation**
+
+After provider/catalog work returns, Dank Cinema re-resolves the canonical room and verifies it is still active and accessible before renewing presence or materializing candidates. Stale results are discarded with a usable Cinema Home instead of being attached to dead state.
+
 ### Medium: process memory fallback exceeded checked-in host allocation
 
 **Finding**
@@ -294,6 +314,11 @@ Room/session authority is in memory. A bot process restart ends the live room mo
 ### Viewer scale
 
 The torrent download session is shared, but each viewer receives a separate HTTP byte stream. Outbound bandwidth therefore scales with viewer count. The code has resource controls, but a promise such as “20 viewers with zero issues” requires production load testing on the actual host/network.
+
+### Signed Watch links are bearer credentials
+
+Dank Cinema signs Watch URLs for a specific Discord user identity and expiry, which avoids a separate browser login flow. The URL itself is still a bearer credential: manually forwarding a valid private-room owner's URL can grant that identity until expiry. Adding mandatory Discord OAuth would reduce that sharing risk but would also add login/token/callback complexity to every Movie Night. The audit keeps the current signed-link model and documents this boundary rather than pretending the browser can identify the human holding a forwarded URL.
+
 
 ### Direct media adult classification
 
