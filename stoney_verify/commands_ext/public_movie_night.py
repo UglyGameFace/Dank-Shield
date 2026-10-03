@@ -619,88 +619,71 @@ async def _sources_state(
 def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
     catalog_ready = tmdb_catalog_ready()
     embed = discord.Embed(
-        title="🎞️ Dank Cinema • Provider Deck",
+        title="🎞️ Dank Cinema • Movie Sources",
         description=(
             f"**{_CINEMA_TAGLINE}**\n"
-            "Regular members only use **Find Movie**. Dank Cinema handles catalog matching, "
-            "provider discovery, release ranking, magnets, and .torrent plumbing behind the scenes."
+            "Regular members only use **Find Movie**. Admins can connect searchable APIs, "
+            "static RSS/Atom feeds, and optional browser reference links here. Playable "
+            "results all flow through the same Dank Cinema ranking and streaming engine."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="🔎 Dank Catalog",
+        name="🔎 Built-in Catalog & Search",
         value=(
-            f"{'✅' if catalog_ready else '⚠️'} Exact movie matching "
-            f"{'ready' if catalog_ready else 'needs the bot-owner catalog token'}\n"
-            "**Powered by TMDB** for title, year, poster, overview, and movie identity. "
-            "Catalog metadata never pretends to be the playable movie."
+            f"{'✅' if catalog_ready else '⚠️'} **Dank Catalog** • TMDB title/year/poster identity "
+            f"({'ready' if catalog_ready else 'bot token not configured'})\n"
+            f"✅ **Dank Archive** • {INTERNET_ARCHIVE_SOURCE_LABEL}\n"
+            "🧲 **Dank Direct** • magnet links and .torrent files"
         ),
         inline=False,
     )
     embed.add_field(
-        name="🎬 Dank Archive",
+        name="🧩 Search Providers",
         value=(
-            f"✅ Built-in playable search via **{INTERNET_ARCHIVE_SOURCE_LABEL}** • no API key.\n"
-            "Public-domain-focused playback feeds the same Dank Cinema release, vote, and stream engine."
+            "Structured HTTPS JSON search APIs. Dank Cinema supplies the movie query, normalizes "
+            "results, and keeps playable magnets/.torrent refs inside the normal Find Movie flow."
         ),
         inline=False,
     )
     embed.add_field(
-        name="📡 Dank Watch",
+        name="📡 RSS Feeds",
         value=(
-            f"{'✅' if catalog_ready else '⚠️'} Legal availability discovery "
-            f"{'ready' if catalog_ready else 'activates with Dank Catalog'}\n"
-            "**Availability data by JustWatch via TMDB.** Free/ad-supported, subscription, "
-            "rent, and buy options stay informational and are never disguised as direct streams."
+            "Static RSS/Atom/Torznab feeds are fetched as feeds and filtered locally by movie title. "
+            "The URL does **not** need to end in .rss/.xml or /feed, so clean hosted-feed URLs work "
+            "without Dank Cinema inventing a ?q= parameter."
         ),
         inline=False,
     )
     embed.add_field(
-        name="⚡ Dank Engine",
+        name="🔗 Reference Links",
         value=(
-            "Provider searches run through one Movie Night pipeline: normalize → dedupe → "
-            "rank releases → vote → libtorrent verification/streaming. A provider can fail "
-            "without replacing the direct magnet/.torrent path."
+            "Optional browser-only search links for admins. They never appear as playable Find Movie "
+            "results and are never scraped."
         ),
         inline=False,
     )
-    embed.add_field(
-        name="🧲 Dank Direct",
-        value=(
-            "✅ **Magnet links** • /movie magnet:<link>\n"
-            "✅ **.torrent files** • /movie torrent:<file>\n"
-            "Provider search can fail spectacularly and the host can still feed Dank Cinema media directly."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="🧩 Dank Provider Lab",
-        value=(
-            "Advanced owners can add two clearly different capabilities:\n"
-            "• **Add In-App Provider** — a structured HTTPS JSON search API or RSS/Atom/Torznab "
-            "feed returns playable magnets or .torrent refs directly into Dank Cinema.\n"
-            "• **Add External-Only Link** — saves a browser search URL for admin reference only; "
-            "it is **not** part of normal Find Movie results.\n"
-            "In-App providers all use the same Dank Engine adapter, so future torrent APIs can "
-            "plug in without new Discord commands when they follow the structured result contract."
-        ),
-        inline=False,
-    )
+
     if not registry.sources:
         embed.add_field(
-            name="📚 Custom Providers",
-            value="None added. Built-in search and direct magnet/.torrent playback still work.",
+            name="📚 Configured Movie Sources",
+            value="None added. Built-in catalog/search and direct magnet/.torrent playback still work.",
             inline=False,
         )
     else:
-        rows = []
+        rows: list[str] = []
+        counts = {"search": 0, "feed": 0, "external": 0}
         for source in registry.sources:
             state = "✅" if source.enabled else "⏸️"
-            mode = (
-                "In-App • structured"
-                if source.provider_type == PROVIDER_TYPE_JSON
-                else "External-only • browser link"
-            )
+            if source.provider_type == PROVIDER_TYPE_FEED:
+                mode = "RSS Feed"
+                counts["feed"] += 1
+            elif source.provider_type == PROVIDER_TYPE_JSON:
+                mode = "Search Provider"
+                counts["search"] += 1
+            else:
+                mode = "Reference Link"
+                counts["external"] += 1
             rows.append(
                 f"{state} **{source.label}** • {mode}\n"
                 f"↳ {source.endpoint_url[:180]}"
@@ -709,42 +692,35 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
         visible_rows: list[str] = []
         for index, row in enumerate(rows):
             hidden_after = len(rows) - (index + 1)
-            suffix = f"\n… +{hidden_after} more provider(s)" if hidden_after else ""
+            suffix = f"\n… +{hidden_after} more source(s)" if hidden_after else ""
             candidate = "\n".join([*visible_rows, row])
             if len(candidate) + len(suffix) > 1024:
                 break
             visible_rows.append(row)
 
         hidden = len(rows) - len(visible_rows)
-        provider_value = "\n".join(visible_rows)
+        source_value = "\n".join(visible_rows)
         if hidden:
-            provider_value += f"\n… +{hidden} more provider(s)"
+            source_value += f"\n… +{hidden} more source(s)"
         embed.add_field(
-            name=f"📚 Custom Providers • {len(registry.sources)}",
-            value=provider_value,
+            name=(
+                f"📚 Configured Movie Sources • {len(registry.sources)} "
+                f"(Search {counts['search']} • RSS {counts['feed']} • Links {counts['external']})"
+            )[:256],
+            value=source_value,
             inline=False,
         )
+
     embed.add_field(
-        name="🔌 In-App Provider Contract",
+        name="🔒 Source Safety",
         value=(
-            "**JSON:** common result wrappers, nested torrent variants, snake_case, and camelCase are supported.\n"
-            "**RSS/Atom/Torznab:** item/entry feeds can provide magnets, v1/v2 info-hashes, or .torrent enclosures.\n"
-            "Dank Cinema normalizes titles, source refs, size, swarm health, release metadata, and movie IDs, "
-            "then keeps browser-only links out of primary Movie Search."
+            "Playable sources must use HTTPS and return structured JSON/RSS/Atom data with a magnet, "
+            "info-hash, or .torrent reference. Dank Cinema normalizes and deduplicates releases before "
+            "streaming. Do not put passwords, API secrets, or private-network addresses in source URLs."
         )[:1024],
         inline=False,
     )
-    embed.add_field(
-        name="🔒 Provider Safety",
-        value=(
-            "**In-App providers** must use HTTPS and return structured results with playable media refs. "
-            "Dank Cinema normalizes, dedupes, ranks, and plays those releases inside Discord. "
-            "**External-only links** are never part of primary Find Movie results and are never scraped. "
-            "Do not put passwords, API secrets, or private-network addresses in either URL."
-        ),
-        inline=False,
-    )
-    embed.set_footer(text=f"{_CINEMA_FOOTER} • provider revision {registry.revision}")
+    embed.set_footer(text=f"{_CINEMA_FOOTER} • source revision {registry.revision}")
     return embed
 
 
