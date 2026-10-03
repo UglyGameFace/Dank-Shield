@@ -596,8 +596,8 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
         name="🧩 Dank Provider Lab",
         value=(
             "Advanced owners can add two clearly different capabilities:\n"
-            "• **Add In-App Provider** — a structured HTTPS JSON search API or RSS/Atom feed returns "
-            "playable magnets or .torrent refs directly into Dank Cinema.\n"
+            "• **Add In-App Provider** — a structured HTTPS JSON search API or RSS/Atom/Torznab "
+            "feed returns playable magnets or .torrent refs directly into Dank Cinema.\n"
             "• **Add External-Only Link** — saves a browser search URL for admin reference only; "
             "it is **not** part of normal Find Movie results.\n"
             "In-App providers all use the same Dank Engine adapter, so future torrent APIs can "
@@ -646,10 +646,10 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
     embed.add_field(
         name="🔌 In-App Provider Contract",
         value=(
-            "**JSON:** results / items / releases / variants / torrents / data wrappers are supported.\n"
-            "**RSS/Atom:** item/entry feeds can provide a magnet, torrent info-hash, or .torrent enclosure.\n"
-            "Common aliases include title/name, magnet/magnet_uri/info_hash/torrent_url/source_ref, "
-            "size, seeds, leeches, peers, filename/release_name, and safe metadata. Dank Cinema normalizes the rest."
+            "**JSON:** common result wrappers, nested torrent variants, snake_case, and camelCase are supported.\n"
+            "**RSS/Atom/Torznab:** item/entry feeds can provide magnets, v1/v2 info-hashes, or .torrent enclosures.\n"
+            "Dank Cinema normalizes titles, source refs, size, swarm health, release metadata, and movie IDs, "
+            "then keeps browser-only links out of primary Movie Search."
         )[:1024],
         inline=False,
     )
