@@ -90,7 +90,12 @@ def magnet_identity(magnet: str) -> str:
     except Exception:
         return ""
 
-    values = [str(item or "").strip() for item in list(query.get("xt", []) or [])]
+    values = [
+        str(item or "").strip()
+        for key, entries in query.items()
+        if str(key or "").casefold() == "xt"
+        for item in list(entries or [])
+    ]
 
     # Prefer v1 identity for hybrid magnets so older and hybrid references reuse
     # the same active session when they point at the same v1 swarm.
@@ -99,15 +104,17 @@ def magnet_identity(magnet: str) -> str:
             continue
         value = text[9:].strip()
         if re.fullmatch(r"[A-Fa-f0-9]{40}", value):
-            return f"btih:{value.lower()}"
+            normalized = value.lower()
+            if normalized != "0" * 40:
+                return f"btih:{normalized}"
+            continue
         if re.fullmatch(r"[A-Za-z2-7]{32}", value):
             try:
                 decoded = base64.b32decode(value.upper())
             except Exception:
                 continue
-            return f"btih:{decoded.hex()}"
-        if value:
-            return f"btih:{value.lower()}"
+            if decoded != b"\x00" * 20:
+                return f"btih:{decoded.hex()}"
 
     for text in values:
         if not text.lower().startswith("urn:btmh:"):
