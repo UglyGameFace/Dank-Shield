@@ -646,7 +646,8 @@ def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
     assert "parse_http_range(" in routes
     assert '"Accept-Ranges": "bytes"' in routes
     assert "await manager.wait_range(" in routes
-    assert "manager.prepare_playback_request(session, start, first_end)" in routes
+    assert "consumer_key = str(request.query.get(\"cid\", \"\")" in routes
+    assert "consumer_key=consumer_key" in routes
     assert "plan.target_bytes" in routes
     assert "get_torrent_manager().ensure_cleanup_task()" in routes
     assert "find_magnet(" in router
@@ -963,3 +964,73 @@ def test_per_guild_in_flight_start_reserves_the_guild_slot(monkeypatch, tmp_path
 
     asyncio.run(manager._release_start(guild_id=77))
     assert 77 not in manager._starting_by_guild
+
+
+
+def test_adaptive_playback_state_is_isolated_per_viewer(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.bootstrap_bytes = 8 * 1024 * 1024
+    handle = _FakeHandle()
+    handle.download_rate = 8 * 1024 * 1024
+    session = _shared_session(tmp_path, token="viewer-isolation")
+    session.handle = handle
+
+    first_end = 1024 * 1024 - 1
+    viewer_a_first = manager.prepare_playback_request(
+        session,
+        0,
+        first_end,
+        consumer_key="viewer-a",
+    )
+    viewer_b_first = manager.prepare_playback_request(
+        session,
+        200 * 1024 * 1024,
+        201 * 1024 * 1024 - 1,
+        consumer_key="viewer-b",
+    )
+    viewer_a_seek = manager.prepare_playback_request(
+        session,
+        200 * 1024 * 1024,
+        201 * 1024 * 1024 - 1,
+        consumer_key="viewer-a",
+    )
+
+    assert viewer_a_first.seek is False
+    assert viewer_b_first.seek is False
+    assert viewer_b_first.startup_wait_end > 201 * 1024 * 1024 - 1
+    assert viewer_a_seek.seek is True
+    assert set(session.consumer_playback) == {"viewer-a", "viewer-b"}
+
+
+def test_viewer_consumer_id_is_signed_into_stream_url(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.public_base_url = "https://media.example.com"
+    manager.stream_secret = "stream-secret"
+    session = _shared_session(tmp_path, token="signed-viewer")
+    manager._sessions[session.token] = session
+
+    url = manager.stream_url(
+        session,
+        ttl_seconds=600,
+        consumer_key="movie:20:page-abc",
+    )
+    parsed = urlsplit(url)
+    query = parse_qs(parsed.query)
+
+    assert query["cid"] == ["movie:20:page-abc"]
+    assert asyncio.run(
+        manager.validate_stream_access(
+            session.token,
+            query["exp"][0],
+            query["sig"][0],
+            query["cid"][0],
+        )
+    )
+    assert not asyncio.run(
+        manager.validate_stream_access(
+            session.token,
+            query["exp"][0],
+            query["sig"][0],
+            "movie:99:other-page",
+        )
+    )
