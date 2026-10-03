@@ -195,7 +195,12 @@ def _safe_source_ref(value: Any) -> str:
         parsed = urlsplit(raw)
     except Exception:
         return ""
-    if str(parsed.scheme or "").lower() != "https" or not parsed.hostname:
+    if (
+        str(parsed.scheme or "").lower() != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         return ""
     host = str(parsed.hostname).lower().strip(".")
     if host in {"localhost"} or host.endswith(".localhost") or host.endswith(".local"):
