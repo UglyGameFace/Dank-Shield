@@ -33,6 +33,7 @@ class CatalogMovie:
     overview: str = ""
     poster_url: str = ""
     popularity: float = 0.0
+    adult: bool = False
 
     def to_metadata(self) -> dict[str, Any]:
         return {
@@ -44,6 +45,7 @@ class CatalogMovie:
             "overview": self.overview,
             "poster_url": self.poster_url,
             "popularity": float(self.popularity),
+            "adult": bool(self.adult),
         }
 
 
@@ -129,6 +131,7 @@ def _tmdb_movie_from_item(item: Mapping[str, Any]) -> CatalogMovie | None:
         overview=_clean_text(item.get("overview"), 900),
         poster_url=poster_url,
         popularity=popularity,
+        adult=bool(item.get("adult", False)),
     )
 
 
@@ -191,6 +194,7 @@ async def search_tmdb_movies(
     query: str,
     *,
     limit: int = 8,
+    include_adult: bool = False,
 ) -> CatalogSearchOutcome:
     token = tmdb_read_token()
     if not token:
@@ -205,7 +209,7 @@ async def search_tmdb_movies(
 
     params = {
         "query": clean_query,
-        "include_adult": "false",
+        "include_adult": "true" if include_adult else "false",
         "language": "en-US",
         "page": "1",
     }

@@ -21,6 +21,7 @@ def test_tmdb_movie_parser_keeps_exact_identity_and_safe_poster() -> None:
             "overview": "A space movie.",
             "poster_path": "/poster.jpg",
             "popularity": 42.5,
+            "adult": True,
         }
     )
     assert movie is not None
@@ -29,6 +30,8 @@ def test_tmdb_movie_parser_keeps_exact_identity_and_safe_poster() -> None:
     assert movie.title == "Interstellar"
     assert movie.year == 2014
     assert movie.poster_url == "https://image.tmdb.org/t/p/w342/poster.jpg"
+    assert movie.adult is True
+    assert movie.to_metadata()["adult"] is True
 
 
 def test_watch_region_is_two_letter_operator_default(monkeypatch) -> None:
@@ -82,3 +85,11 @@ def test_watch_availability_rejects_untrusted_detail_link() -> None:
     )
     assert watch.link == ""
     assert watch.free == ("Example",)
+
+
+def test_tmdb_search_has_explicit_adult_toggle_contract() -> None:
+    import inspect
+
+    source = inspect.getsource(movie_catalog.search_tmdb_movies)
+    assert "include_adult: bool = False" in source
+    assert '"include_adult": "true" if include_adult else "false"' in source

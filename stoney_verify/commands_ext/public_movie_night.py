@@ -54,6 +54,11 @@ from stoney_verify.movie_night import (
     get_movie_night_manager,
     movie_room_lease_key,
 )
+from stoney_verify.movie_night_preferences import (
+    load_movie_night_preferences,
+    save_movie_night_preferences,
+    set_adult_content_enabled,
+)
 from stoney_verify.movie_night_session import terminate_movie_night_room
 from stoney_verify.movie_night_web import movie_night_watch_url
 from stoney_verify.panel_lifecycle import (
@@ -94,6 +99,68 @@ def _compact(value: Any, limit: int = 180) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
+_EXPLICIT_ADULT_RE = re.compile(
+    r"(?:^|[^a-z0-9])(?:xxx|porn|pornographic|adult[ _-]?video)(?:$|[^a-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def _looks_explicit_adult(value: Any) -> bool:
+    return bool(_EXPLICIT_ADULT_RE.search(str(value or "")))
+
+
+def _variant_is_explicit_adult(variant: ResolvedMediaVariant) -> bool:
+    if _looks_explicit_adult(variant.title):
+        return True
+    metadata = variant.metadata if isinstance(variant.metadata, Mapping) else {}
+    values: list[Any] = [
+        metadata.get("category"),
+        metadata.get("type"),
+    ]
+    source_reported = (
+        metadata.get("source_reported")
+        if isinstance(metadata.get("source_reported"), Mapping)
+        else {}
+    )
+    values.extend(
+        source_reported.get(key)
+        for key in ("category", "type", "tags", "classification")
+    )
+    explicit_labels = {"adult", "xxx", "porn", "pornographic", "adult video"}
+    for value in values:
+        if not value:
+            continue
+        clean = " ".join(str(value).casefold().replace("_", " ").replace("-", " ").split())
+        if clean in explicit_labels or _looks_explicit_adult(clean):
+            return True
+    return False
+
+
+def _filter_adult_provider_results(
+    outcome: MediaSourceSearchOutcome,
+    *,
+    enabled: bool,
+) -> MediaSourceSearchOutcome:
+    if enabled:
+        return outcome
+    kept = tuple(
+        variant
+        for variant in outcome.variants
+        if not _variant_is_explicit_adult(variant)
+    )
+    removed = len(outcome.variants) - len(kept)
+    if removed <= 0:
+        return outcome
+    errors = list(outcome.errors)
+    errors.append(
+        f"Filtered {removed} explicit adult provider release(s) by server Cinema setting."
+    )
+    return MediaSourceSearchOutcome(
+        variants=kept,
+        errors=tuple(errors[:20]),
+    )
+
+
 def _format_bytes(value: Any) -> str:
     size = max(0, _safe_int(value, 0))
     if size <= 0:
@@ -132,13 +199,11 @@ def _variant_choice_text(variant: Any) -> tuple[str, str]:
     source = _release_source_label(metadata)
     hint = _release_hint_label(metadata)
     health = variant.swarm_health
-    label = f"{source} • {_format_bytes(variant.file_size)}"
+    label = f"{hint or source} • {_format_bytes(variant.file_size)}"
     description = (
-        f"Seeds {health['seeds']} • Leeches {health['leechers']} • "
-        f"{variant.source_label or variant.source_id or 'custom source'}"
+        f"{source} • {health['seeds']} seeds • {health['leechers']} leeches • "
+        f"{variant.source_label or variant.source_id or 'provider'}"
     )
-    if hint:
-        description = f"{hint} • {description}"
     return label[:100], description[:100]
 
 
@@ -417,8 +482,8 @@ def _setup_embed(
     embed = discord.Embed(
         title="🍿 Dank Cinema • Setup",
         description=(
-            "**Home › Community & Engagement › Dank Cinema › Setup**\n"
-            "This page validates the full Dank Cinema chain before a room is allowed to launch."
+            "**Dank Cinema › Settings › Setup & Diagnostics**\n"
+            "Validates permissions, runtime, storage, providers, and public media readiness."
         ),
         color=discord.Color.green() if ready["launch_ready"] else discord.Color.orange(),
         timestamp=discord.utils.utcnow(),
@@ -684,6 +749,16 @@ def _room_for_interaction(interaction: discord.Interaction) -> Optional[MovieNig
     )
 
 
+def _movie_hub_view(
+    interaction: discord.Interaction,
+    room: Optional[MovieNightRoom],
+) -> "MovieNightHubView":
+    return MovieNightHubView(
+        int(interaction.user.id),
+        room,
+    )
+
+
 async def _movie_hub_notice(
     interaction: discord.Interaction,
     content: str,
@@ -695,7 +770,7 @@ async def _movie_hub_notice(
         interaction,
         content=_compact(content, 1900),
         embed=_room_embed(interaction, current),
-        view=MovieNightHubView(int(interaction.user.id), current),
+        view=_movie_hub_view(interaction, current),
     )
 
 
@@ -744,120 +819,284 @@ def _room_embed(
         embed = discord.Embed(
             title="🍿 Dank Cinema",
             description=(
-                "No room is active in this channel. Start a **Watch Party** or "
-                "**Private Viewing**, then use **Find Movie** or "
-                "`/movie magnet:` / `/movie torrent:` to choose the media."
+                "**Choose how you want to watch.**\n"
+                "Start a shared **Watch Party** or an owner-only **Private Viewing** session. "
+                "Once a room exists, **Find Movie** becomes the main action."
             ),
             color=discord.Color.blurple(),
         )
         embed.add_field(
-            name="Room flow",
-            value=(
-                "1. **Start / Join Party** for shared viewing, or **Private Viewing** for owner-only playback\n"
-                "2. **Find Movie** or provide a magnet/.torrent\n"
-                "3. Pick the release/quality using seed, leech, metadata, and votes when shared\n"
-                "4. Watch with the same signed player and torrent runtime"
-            ),
+            name="🎬 Watch Party",
+            value="Shared room • notifications • queue • contextual voting • synchronized Watch player",
             inline=False,
         )
+        embed.add_field(
+            name="🔒 Watch Alone",
+            value="Owner-only room • no server ping • no voting clutter • same movie search and player",
+            inline=False,
+        )
+        embed.set_footer(text=f"{_CINEMA_FOOTER} • choose a viewing mode")
         return embed
 
     manager = get_movie_night_manager()
     active = manager.active_viewers(room)
     host = interaction.guild.get_member(room.host_id) if interaction.guild else None
     host_label = host.mention if isinstance(host, discord.Member) else f"<@{room.host_id}>"
-    private_mode = str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
+    private_mode = _private_viewing(room)
+    current_candidate = (
+        room.candidates.get(room.current_candidate_id)
+        if room.current_candidate_id
+        else None
+    )
+    current_variant = (
+        current_candidate.variants.get(room.current_variant_id)
+        if current_candidate is not None and room.current_variant_id
+        else None
+    )
+    ready_to_watch = bool(room.stream_token and current_candidate is not None)
+
     embed = discord.Embed(
         title=(
             "🔒 Dank Cinema • Private Viewing"
             if private_mode
-            else "🍿 Dank Cinema • Now Showing"
+            else "🍿 Dank Cinema • Watch Party"
         ),
+        description=(
+            f"Host: {host_label} • Viewers: **{len(active)}**\n"
+            f"State: **{room.playback_state.title()}**"
+        ),
+        color=discord.Color.green() if ready_to_watch else discord.Color.blurple(),
+    )
+
+    if current_candidate is None:
+        embed.add_field(
+            name="1 • Find a movie",
+            value=(
+                "No movie is selected yet. Use **Find Movie** to search the catalog and "
+                "connected playable providers."
+            ),
+            inline=False,
+        )
+    else:
+        media_line = f"**{current_candidate.title}**"
+        if current_variant is not None:
+            health = current_variant.swarm_health
+            media_line += (
+                f"\n{_release_source_label(current_variant.metadata)} • "
+                f"{_format_bytes(current_variant.file_size)} • "
+                f"🌱 {health['seeds']} • 🧲 {health['leechers']}"
+            )
+        embed.add_field(
+            name="3 • Ready to watch" if room.stream_token else "2 • Choose a release",
+            value=(
+                media_line
+                + (
+                    "\nUse **Watch** to open the synchronized player."
+                    if room.stream_token
+                    else "\nOpen **Movie Picks** and choose a playable release."
+                )
+            )[:1024],
+            inline=False,
+        )
+
+    if room.queue:
+        embed.add_field(
+            name="📺 Queue",
+            value=f"**{len(room.queue)}** movie(s) waiting.",
+            inline=True,
+        )
+
+    latest = _latest_open_vote(room)
+    if latest is not None and not private_mode:
+        embed.add_field(
+            name="🗳️ Vote in progress",
+            value=(
+                f"**{latest.action.replace('_', ' ').title()}** • "
+                f"✅ {len(latest.yes)} / ❌ {len(latest.no)}\n"
+                "Vote buttons appear only while this decision is open."
+            ),
+            inline=False,
+        )
+
+    if private_mode:
+        embed.set_footer(text=f"{_CINEMA_FOOTER} • private • room {room.room_id}")
+    else:
+        embed.set_footer(text=f"{_CINEMA_FOOTER} • watch party • room {room.room_id}")
+    return embed
+
+
+def _session_status_embed(
+    interaction: discord.Interaction,
+    room: Optional[MovieNightRoom],
+) -> discord.Embed:
+    if room is None:
+        return discord.Embed(
+            title="📊 Dank Cinema • Session Status",
+            description=(
+                "No Movie Night room is active in this channel. Return to Cinema Home "
+                "and choose **Watch Party** or **Private Viewing**."
+            ),
+            color=discord.Color.blurple(),
+        )
+
+    manager = get_movie_night_manager()
+    active = manager.active_viewers(room)
+    host = interaction.guild.get_member(room.host_id) if interaction.guild else None
+    host_label = host.mention if isinstance(host, discord.Member) else f"<@{room.host_id}>"
+    private_mode = _private_viewing(room)
+    embed = discord.Embed(
+        title="📊 Dank Cinema • Session Status",
         description=(
             f"Host: {host_label}\n"
             f"Mode: **{'Private Viewing' if private_mode else 'Watch Party'}**\n"
-            f"State: **{room.playback_state.title()}**\n"
-            f"Viewers: **{len(active)}**\n"
-            f"Position: **{int(room.current_position())}s**"
+            f"Playback: **{room.playback_state.title()}** • "
+            f"Position: **{int(room.current_position())}s** • "
+            f"Active viewers: **{len(active)}**"
         ),
-        color=discord.Color.green(),
+        color=discord.Color.blurple(),
     )
-    if private_mode:
-        embed.add_field(
-            name="🔒 Privacy",
-            value=(
-                "Owner-only session. Dank Shield does **not** send the Movie Night role ping, "
-                "other members cannot join/control/vote in this room, and only the owner gets "
-                "the signed Watch link from this panel."
-            ),
-            inline=False,
-        )
-    if room.approved_search_query:
-        embed.add_field(
-            name="Approved search",
-            value=room.approved_search_query[:1024],
-            inline=False,
-        )
-    if room.queue:
-        embed.add_field(
-            name="Queue",
-            value=f"{len(room.queue)} movie(s) queued.",
-            inline=True,
-        )
-    unresolved = [vote for vote in room.votes.values() if not vote.resolved]
-    if unresolved:
-        latest = max(unresolved, key=lambda item: item.created_at)
-        embed.add_field(
-            name="Open vote",
-            value=(
-                f"**{latest.action}** • ✅ {len(latest.yes)} / ❌ {len(latest.no)}\n"
-                "Use the Vote Yes / Vote No controls in this hub."
-            ),
-            inline=False,
-        )
     embed.add_field(
         name="⏱️ Session timing",
         value=_movie_night_lifecycle_text()[:1024],
         inline=False,
     )
+    if room.queue:
+        embed.add_field(
+            name="📺 Queue",
+            value=f"{len(room.queue)} movie(s) queued.",
+            inline=True,
+        )
+    latest = _latest_open_vote(room)
+    if latest is not None and not private_mode:
+        embed.add_field(
+            name="🗳️ Current vote",
+            value=(
+                f"{latest.action.replace('_', ' ').title()} • "
+                f"✅ {len(latest.yes)} / ❌ {len(latest.no)}"
+            ),
+            inline=False,
+        )
     if room.stream_token:
-        current_candidate = (
+        candidate = (
             room.candidates.get(room.current_candidate_id)
             if room.current_candidate_id
             else None
         )
-        current_variant = (
-            current_candidate.variants.get(room.current_variant_id)
-            if current_candidate is not None and room.current_variant_id
+        variant = (
+            candidate.variants.get(room.current_variant_id)
+            if candidate is not None and room.current_variant_id
             else None
         )
-        if current_candidate is not None and current_variant is not None:
-            health = current_variant.swarm_health
-            media_value = (
-                f"**{current_candidate.title}** • "
-                f"{_release_source_label(current_variant.metadata)} • "
-                f"{_format_bytes(current_variant.file_size)}\n"
-                f"🌱 {health['seeds']} seeds • 🧲 {health['leechers']} leeches • "
-                f"👥 {health['peers']} peers\n"
-                "Use **Watch** for the synchronized full-video player."
+        if candidate is not None and variant is not None:
+            health = variant.swarm_health
+            embed.add_field(
+                name="🎞️ Attached media",
+                value=(
+                    f"**{candidate.title}**\n"
+                    f"{_release_source_label(variant.metadata)} • {_format_bytes(variant.file_size)}\n"
+                    f"🌱 {health['seeds']} seeds • 🧲 {health['leechers']} leeches • "
+                    f"👥 {health['peers']} peers"
+                )[:1024],
+                inline=False,
             )
         else:
-            media_value = (
-                "Torrent/media session attached. Use **Watch** for the synchronized "
-                "full-video player."
+            embed.add_field(
+                name="🎞️ Attached media",
+                value="A torrent/media session is attached to this room.",
+                inline=False,
             )
-        embed.add_field(
-            name="Media",
-            value=media_value[:1024],
-            inline=False,
-        )
     else:
         embed.add_field(
-            name="Media",
-            value="No media attached yet. Search or provide a magnet/.torrent.",
+            name="🎞️ Attached media",
+            value="No media attached yet.",
             inline=False,
         )
-    embed.set_footer(text=f"{_CINEMA_FOOTER} • room {room.room_id}")
+    embed.set_footer(text=f"{_CINEMA_FOOTER} • detailed status")
+    return embed
+
+
+def _more_embed(
+    interaction: discord.Interaction,
+    room: Optional[MovieNightRoom],
+    *,
+    staff: bool,
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="⋯ Dank Cinema • More",
+        description=(
+            "Less-used controls live here so the main Cinema screen can stay focused on "
+            "**Find → Choose → Watch**."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Session",
+        value=(
+            "📊 **Session Status** • timing, viewers, media, queue, and vote details\n"
+            "🔄 **Refresh Cinema** • redraw the current room state"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Community",
+        value="🌿 **Notifications** • Movie Night role and personal ping preferences",
+        inline=False,
+    )
+    if staff:
+        embed.add_field(
+            name="Staff",
+            value=(
+                "⚙️ **Cinema Settings** • providers, setup diagnostics, notifications, runtime"
+            ),
+            inline=False,
+        )
+    if room is not None:
+        embed.add_field(
+            name="Room",
+            value="🛑 **End Movie Night** • end the room and release its media lease",
+            inline=False,
+        )
+    return embed
+
+
+def _settings_embed(*, adult_content_enabled: bool = False) -> discord.Embed:
+    embed = discord.Embed(
+        title="⚙️ Dank Cinema • Settings",
+        description=(
+            "Staff-only configuration. Viewer-facing movie controls stay out of this screen."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="👁️ Viewer Experience",
+        value=(
+            f"🔞 **Adult Content:** {'On' if adult_content_enabled else 'Off'}\n"
+            "Controls TMDB adult catalog results and filters explicit adult-labeled provider results. "
+            "Direct magnets/.torrent files are not content-classified."
+        )[:1024],
+        inline=False,
+    )
+    embed.add_field(
+        name="🎞️ Media Sources",
+        value="Provider Deck • add/manage structured in-app providers and admin reference links",
+        inline=False,
+    )
+    embed.add_field(
+        name="🌿 Notifications",
+        value="Movie Night notification role and Community & Pings configuration",
+        inline=False,
+    )
+    embed.add_field(
+        name="🛠️ Setup & Diagnostics",
+        value="Permissions, media endpoint, storage, capacity, libtorrent/PyAV readiness",
+        inline=False,
+    )
+    embed.add_field(
+        name="📊 Session & Lifecycle",
+        value="Current room status, timeout rules, attached media, and active vote details",
+        inline=False,
+    )
+    embed.set_footer(text=f"{_CINEMA_FOOTER} • staff settings")
     return embed
 
 
@@ -874,8 +1113,8 @@ def _queue_embed(room: MovieNightRoom) -> discord.Embed:
     ]
     if not queued:
         embed.description = (
-            "The shared queue is empty. Open **Movie Picks**, choose a movie, and use "
-            "**Vote to Queue**."
+            "The queue is empty. Open **Movie Picks**, choose a movie, and use "
+            + ("**Add to Queue**." if _private_viewing(room) else "**Vote to Queue**.")
         )
         return embed
 
@@ -906,26 +1145,19 @@ def _candidate_embed(room: MovieNightRoom, candidate: Any) -> discord.Embed:
     active = manager.active_viewers(room)
     movie_votes = len(candidate.votes & active)
     variants = manager.ranked_variants(room.room_id, candidate.candidate_id)
+    private_mode = _private_viewing(room)
 
     embed = discord.Embed(
-        title=f"🎬 Dank Cinema • {candidate.title}",
+        title="2/3 • Choose Release",
         description=(
-            f"Movie votes: **{movie_votes}** • Releases: **{len(variants)}**\n"
-            "Release ordering favors live seeds and swarm health when votes are tied."
+            f"🎬 **{candidate.title}**\n"
+            f"Playable releases: **{len(variants)}**"
+            + ("" if private_mode else f" • Movie votes: **{movie_votes}**")
+            + "\nDank Cinema ranks healthier swarms first. The top option is the recommended starting point."
         ),
         color=discord.Color.blurple(),
     )
-    lines: list[str] = []
-    for index, variant in enumerate(variants[:8], start=1):
-        health = variant.swarm_health
-        source = _release_source_label(
-            variant.metadata if isinstance(variant.metadata, Mapping) else {}
-        )
-        lines.append(
-            f"**{index}. {source}** • {_format_bytes(variant.file_size)} • "
-            f"🌱 {health['seeds']} • 🧲 {health['leechers']} • "
-            f"👥 {health['peers']} • 🗳️ {len(variant.votes & active)}"
-        )
+
     catalog = (
         candidate.metadata.get("catalog")
         if isinstance(candidate.metadata, Mapping)
@@ -934,13 +1166,11 @@ def _candidate_embed(room: MovieNightRoom, candidate: Any) -> discord.Embed:
     )
     if catalog:
         year = _safe_int(catalog.get("year"), 0)
-        overview = _compact(catalog.get("overview"), 900)
-        catalog_id = _compact(catalog.get("catalog_id"), 40)
+        overview = _compact(catalog.get("overview"), 700)
         embed.add_field(
-            name="Catalog match",
+            name="Movie",
             value=(
-                f"TMDB: **{catalog_id or 'unknown'}**"
-                + (f" • **{year}**" if year else "")
+                (f"**{year}**" if year else "Catalog match")
                 + (f"\n{overview}" if overview else "")
             )[:1024],
             inline=False,
@@ -963,27 +1193,38 @@ def _candidate_embed(room: MovieNightRoom, candidate: Any) -> discord.Embed:
                 if isinstance(names, list):
                     clean_names = [_compact(name, 50) for name in names if _compact(name, 50)]
                     if clean_names:
-                        watch_lines.append(f"**{label}:** {', '.join(clean_names[:8])}")
-            link = str(watch.get("link") or "").strip()
-            if link.startswith("https://www.themoviedb.org/"):
-                watch_lines.append(f"[View provider details on TMDB]({link})")
+                        watch_lines.append(f"**{label}:** {', '.join(clean_names[:6])}")
             if watch_lines:
-                watch_lines.append("*Availability data: JustWatch via TMDB.*")
                 embed.add_field(
-                    name=f"📡 Dank Watch • {watch.get('region') or 'region'}",
-                    value="\n".join(watch_lines)[:1024],
+                    name="📡 Other legal availability",
+                    value=("\n".join(watch_lines) + "\n*JustWatch via TMDB.*")[:1024],
                     inline=False,
                 )
 
+    lines: list[str] = []
+    for index, variant in enumerate(variants[:6], start=1):
+        health = variant.swarm_health
+        source = _release_source_label(
+            variant.metadata if isinstance(variant.metadata, Mapping) else {}
+        )
+        hint = _release_hint_label(
+            variant.metadata if isinstance(variant.metadata, Mapping) else {}
+        )
+        prefix = "⭐" if index == 1 else f"**{index}.**"
+        lines.append(
+            f"{prefix} **{hint or source}** • {_format_bytes(variant.file_size)}\n"
+            f"↳ 🌱 {health['seeds']} seeds • 🧲 {health['leechers']} leeches • {source}"
+        )
     embed.add_field(
-        name="Top releases",
+        name="Recommended releases",
         value="\n".join(lines)[:1024] if lines else (
             "No playable release is attached yet. The host can still provide a magnet or .torrent."
         ),
         inline=False,
     )
     if candidate.candidate_id in room.queue:
-        embed.add_field(name="Queue", value="✅ This movie is queued.", inline=False)
+        embed.add_field(name="📺 Queue", value="✅ This movie is already queued.", inline=False)
+    embed.set_footer(text="Step 2 of 3 • choose a release, then Watch")
     return embed
 
 
@@ -992,7 +1233,6 @@ def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discor
     active = manager.active_viewers(room)
     health = variant.swarm_health
     metadata = variant.metadata if isinstance(variant.metadata, Mapping) else {}
-    release = metadata.get("release_name") if isinstance(metadata.get("release_name"), Mapping) else {}
     source_reported = (
         metadata.get("source_reported")
         if isinstance(metadata.get("source_reported"), Mapping)
@@ -1002,56 +1242,58 @@ def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discor
 
     source = _release_source_label(metadata)
     hint = _release_hint_label(metadata)
+    private_mode = _private_viewing(room)
     embed = discord.Embed(
-        title=f"🎞️ {candidate.title} • {source}",
+        title="2/3 • Release Details",
         description=(
-            f"Release votes: **{len(variant.votes & active)}**\n"
-            f"Source: **{variant.source_label or variant.source_id or 'Custom source'}**"
+            f"🎬 **{candidate.title}**\n"
+            f"**{hint or source}** • **{_format_bytes(variant.file_size)}**"
+            + (
+                ""
+                if private_mode
+                else f" • Release votes: **{len(variant.votes & active)}**"
+            )
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="Swarm",
+        name="Availability",
         value=(
-            f"🌱 Seeds: **{health['seeds']}**\n"
-            f"🧲 Leeches: **{health['leechers']}**\n"
-            f"👥 Peers: **{health['peers']}**\n"
-            f"Health: **{health['label']}** • ratio **{health['seed_leech_ratio']}**"
+            f"🌱 **{health['seeds']}** seeds • 🧲 **{health['leechers']}** leeches • "
+            f"👥 **{health['peers']}** peers\n"
+            f"Swarm: **{health['label']}** • ratio **{health['seed_leech_ratio']}**"
         ),
-        inline=True,
+        inline=False,
     )
     embed.add_field(
-        name="File",
+        name="Source",
         value=(
-            f"Size: **{_format_bytes(variant.file_size)}**\n"
-            f"Release: **{source}** *(inferred)*\n"
-            f"{hint or 'Quality details pending file verification'}"
+            f"**{variant.source_label or variant.source_id or 'Custom provider'}**\n"
+            f"Release label: **{source}**"
         )[:1024],
-        inline=True,
+        inline=False,
     )
-
-    if source_reported:
-        source_lines = [
-            f"• **{_compact(key, 40)}:** {_compact(value, 100)}"
-            for key, value in list(source_reported.items())[:6]
-        ]
-        embed.add_field(
-            name="Source-reported metadata • not yet verified",
-            value="\n".join(source_lines)[:1024],
-            inline=False,
-        )
 
     if verified:
         video = verified.get("video") if isinstance(verified.get("video"), Mapping) else {}
         audio = verified.get("audio_tracks") if isinstance(verified.get("audio_tracks"), list) else []
         embed.add_field(
-            name="Verified from selected media",
+            name="Verified media details",
             value=(
-                f"Duration: **{verified.get('duration') or 'unknown'}**\n"
-                f"Video: **{video.get('resolution') or 'unknown'}** • "
-                f"**{video.get('codec') or 'unknown'}**\n"
+                f"Duration: **{verified.get('duration') or 'unknown'}** • "
+                f"Video: **{video.get('resolution') or 'unknown'} / {video.get('codec') or 'unknown'}** • "
                 f"Audio tracks: **{len(audio)}**"
             )[:1024],
+            inline=False,
+        )
+    elif source_reported:
+        source_lines = [
+            f"• **{_compact(key, 40)}:** {_compact(value, 100)}"
+            for key, value in list(source_reported.items())[:5]
+        ]
+        embed.add_field(
+            name="Technical details",
+            value="\n".join(source_lines)[:1024],
             inline=False,
         )
 
@@ -1064,17 +1306,12 @@ def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discor
             name="⚠️ Host compatibility",
             value=(
                 f"This release is **{_format_bytes(variant.file_size)}**, above the current "
-                f"Movie Night per-file cap of **{_format_bytes(file_cap)}**. "
-                "Choose another release or raise the configured cap on a host with enough disk."
+                f"per-file cap of **{_format_bytes(file_cap)}**. Choose another release."
             )[:1024],
             inline=False,
         )
 
-    embed.set_footer(
-        text=(
-            "Release/source labels are inferred from naming until the actual file is probed."
-        )
-    )
+    embed.set_footer(text="Step 2 of 3 • play/request this release, then Watch")
     return embed
 
 
@@ -1571,14 +1808,16 @@ async def _open_candidate_detail(
 
 def _release_picker_choices(variants: list[Any]) -> list[DankChoice]:
     choices: list[DankChoice] = []
-    for variant in variants[:25]:
+    for index, variant in enumerate(variants[:25]):
         label, description = _variant_choice_text(variant)
+        if index == 0:
+            description = f"Recommended • {description}"
         choices.append(
             DankChoice(
                 label=label,
                 value=variant.variant_id,
-                description=description,
-                emoji="🎞️",
+                description=description[:100],
+                emoji="⭐" if index == 0 else "🎞️",
                 # This picker is an action surface, not a state editor. A default
                 # option renders as already selected in Discord, and mobile clients
                 # may not dispatch a new interaction when the user taps that same
@@ -1654,8 +1893,8 @@ async def _open_release_picker(
         choices=choices,
         on_pick=picked,
         custom_id=f"dank:movie:release:{candidate.candidate_id[:16]}",
-        placeholder="Choose a release / quality…",
-        title=f"Releases • {candidate.title[:70]}",
+        placeholder="Choose a release…",
+        title="2/3 • Choose Release",
         on_home=lambda back_interaction: _open_candidate_detail(
             back_interaction,
             room.room_id,
@@ -1692,13 +1931,13 @@ async def open_movie_results(
                 interaction,
                 content=message,
                 embed=_room_embed(interaction, room),
-                view=MovieNightHubView(int(interaction.user.id)),
+                view=_movie_hub_view(interaction, room),
             )
         return await _private(
             interaction,
             message,
             embed=_room_embed(interaction, room),
-            view=MovieNightHubView(int(interaction.user.id), room),
+            view=_movie_hub_view(interaction, room),
         )
 
     active = manager.active_viewers(room)
@@ -1706,21 +1945,24 @@ async def open_movie_results(
     for candidate in ranked[:25]:
         variants = manager.ranked_variants(room.room_id, candidate.candidate_id)
         best = variants[0] if variants else None
+        queued = candidate.candidate_id in room.queue
         if best is None:
-            description = f"{len(candidate.votes & active)} movie vote(s) • no release"
+            description = "No playable release yet"
         else:
             health = best.swarm_health
             description = (
                 f"{len(variants)} releases • {health['seeds']} seeds • "
                 f"{health['leechers']} leeches"
             )
+        if queued:
+            description = f"Queued • {description}"
         choices.append(
             DankChoice(
                 label=candidate.title[:100],
                 value=candidate.candidate_id,
                 description=description[:100],
-                emoji="🎬",
-                default=candidate.candidate_id in room.queue,
+                emoji="📺" if queued else "🎬",
+                default=False,
             )
         )
 
@@ -1733,7 +1975,7 @@ async def open_movie_results(
         on_pick=picked,
         custom_id=f"dank:movie:results:{room.room_id[:16]}",
         placeholder="Choose a movie result…",
-        title="Dank Cinema Results",
+        title="1/3 • Movie Results",
         on_home=lambda back_interaction: open_movie_night(
             back_interaction,
             replace_message=True,
@@ -1741,11 +1983,11 @@ async def open_movie_results(
         home_label="Dank Cinema",
     )
     embed = discord.Embed(
-        title="🔎 Dank Cinema • Search Results",
+        title="1/3 • Choose Movie",
         description=(
-            f"Approved search: **{room.approved_search_query or '—'}**\n"
-            f"Movies: **{len(ranked)}** • "
-            f"Choose a title, then compare releases by seeds, leeches, size, metadata, and votes."
+            f"Search: **{room.approved_search_query or '—'}**\n"
+            f"Found **{len(ranked)}** movie(s). Choose the exact title; Dank Cinema will "
+            "show the healthiest playable releases next."
         ),
         color=discord.Color.blurple(),
     )
@@ -2168,10 +2410,10 @@ class MovieNightSourcesView(_OwnedView):
             return await _private(interaction, "❌ Manage Server or Administrator is required.")
         await _open_source_picker(interaction)
 
-    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:back")
+    @discord.ui.button(label="Back to Settings", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:back")
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await open_movie_night(interaction, replace_message=True)
+        await open_movie_night_settings(interaction, replace_message=True)
 
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2390,10 +2632,10 @@ class MovieNightSetupView(_OwnedView):
         _ = button
         await open_movie_night_setup(interaction, replace_message=True)
 
-    @discord.ui.button(label="Back to Movie Night", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:setup:back")
+    @discord.ui.button(label="Back to Settings", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:setup:back")
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await open_movie_night(interaction, replace_message=True)
+        await open_movie_night_settings(interaction, replace_message=True)
 
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:setup:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2580,7 +2822,7 @@ async def _start_variant_source(
                 "media result was discarded instead of overwriting the newer room state."
             ),
             embed=_room_embed(interaction, latest_room) if latest_room is not None else None,
-            view=MovieNightHubView(int(interaction.user.id), latest_room),
+            view=_movie_hub_view(interaction, latest_room),
         )
 
     room_manager.select_variant(
@@ -2619,7 +2861,7 @@ async def _start_variant_source(
             f"Dank Cinema stream: {stream_url}"
         )[:2000],
         embed=_release_embed(current, candidate, variant),
-        view=MovieNightHubView(int(interaction.user.id), current),
+        view=_movie_hub_view(interaction, current),
     )
 
 
@@ -2644,12 +2886,42 @@ async def _execute_search_vote(
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=True)
 
+    _pref_raw, preferences = await load_movie_night_preferences(
+        int(room.guild_id),
+        refresh=False,
+    )
+    if not preferences.adult_content_enabled and _looks_explicit_adult(query):
+        manager.set_vote_execution_error(
+            room.room_id,
+            vote.vote_id,
+            "Adult-content search is disabled for this server.",
+        )
+        return await _movie_hub_notice(
+            interaction,
+            "🔞 Adult-content movie search is disabled in **Cinema Settings**.",
+            room=room,
+        )
+
     catalog_metadata = (
         dict(vote.payload.get("catalog"))
         if isinstance(vote.payload.get("catalog"), Mapping)
         else {}
     )
     catalog_id = _compact(catalog_metadata.get("catalog_id"), 40)
+    if (
+        not preferences.adult_content_enabled
+        and bool(catalog_metadata.get("adult", False))
+    ):
+        manager.set_vote_execution_error(
+            room.room_id,
+            vote.vote_id,
+            "Adult catalog title is disabled for this server.",
+        )
+        return await _movie_hub_notice(
+            interaction,
+            "🔞 That adult catalog title is disabled in **Cinema Settings**.",
+            room=room,
+        )
 
     try:
         if catalog_id:
@@ -2676,9 +2948,13 @@ async def _execute_search_vote(
             interaction,
             content=f"❌ Movie Night source search failed: {type(exc).__name__}: {exc}",
             embed=_room_embed(interaction, room),
-            view=MovieNightHubView(int(interaction.user.id)),
+            view=_movie_hub_view(interaction, room),
         )
 
+    outcome = _filter_adult_provider_results(
+        outcome,
+        enabled=preferences.adult_content_enabled,
+    )
     outcome = _filter_outcome_for_catalog(outcome, catalog_metadata)
 
     active = manager.active_viewers(room)
@@ -2732,7 +3008,7 @@ async def _execute_search_vote(
             interaction,
             content=f"ℹ️ No playable releases found for **{query}**. {detail}"[:2000],
             embed=_room_embed(interaction, room),
-            view=MovieNightHubView(int(interaction.user.id)),
+            view=_movie_hub_view(interaction, room),
         )
 
     movies, releases = _materialize_search_results(
@@ -2775,7 +3051,7 @@ async def _execute_passed_vote(
             interaction,
             content=notice[:2000],
             embed=_room_embed(interaction, None),
-            view=MovieNightHubView(int(interaction.user.id)),
+            view=_movie_hub_view(interaction, None),
         )
 
     if vote.action == "search":
@@ -2863,7 +3139,7 @@ async def _propose_movie_search_vote(
     )
 
 
-class MovieSearchModal(discord.ui.Modal, title="Dank Cinema Search"):
+class MovieSearchModal(discord.ui.Modal, title="1/3 • Find Movie"):
     query = discord.ui.TextInput(
         label="Movie title",
         placeholder="Interstellar, The Dark Knight, Shrek…",
@@ -2881,6 +3157,22 @@ class MovieSearchModal(discord.ui.Modal, title="Dank Cinema Search"):
             return await _private(interaction, "❌ This search belongs to another member.")
 
         raw_query = _compact(self.query.value)
+        adult_enabled = False
+        if interaction.guild is not None:
+            _raw_preferences, preferences = await load_movie_night_preferences(
+                int(interaction.guild.id),
+                refresh=False,
+            )
+            adult_enabled = bool(preferences.adult_content_enabled)
+
+        if not adult_enabled and _looks_explicit_adult(raw_query):
+            room = _room_by_id_for_interaction(interaction, self.room_id)
+            return await _movie_hub_notice(
+                interaction,
+                "🔞 Adult-content movie search is disabled in **Cinema Settings**.",
+                room=room,
+            )
+
         if not tmdb_catalog_ready():
             return await _propose_movie_search_vote(
                 interaction,
@@ -2889,7 +3181,11 @@ class MovieSearchModal(discord.ui.Modal, title="Dank Cinema Search"):
             )
 
         await interaction.response.defer(ephemeral=True, thinking=True)
-        catalog = await search_tmdb_movies(raw_query, limit=8)
+        catalog = await search_tmdb_movies(
+            raw_query,
+            limit=8,
+            include_adult=adult_enabled,
+        )
         if not catalog.movies:
             return await _propose_movie_search_vote(
                 interaction,
@@ -2962,7 +3258,7 @@ class MovieSearchModal(discord.ui.Modal, title="Dank Cinema Search"):
             on_pick=picked,
             custom_id=f"dank:movie:catalog:{self.room_id[:16]}",
             placeholder="Choose the exact movie…",
-            title="Dank Cinema • Choose Movie",
+            title="1/3 • Choose Movie",
             on_home=lambda back_interaction: open_movie_night(
                 back_interaction,
                 replace_message=True,
@@ -3143,13 +3439,274 @@ class ConfirmMovieNightEndView(_OwnedView):
             interaction,
             content=notice[:2000],
             embed=_room_embed(interaction, None),
-            view=MovieNightHubView(int(interaction.user.id)),
+            view=_movie_hub_view(interaction, None),
         )
 
     @discord.ui.button(label="Keep Watching", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:movie:end:cancel")
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night(interaction, replace_message=True)
+
+
+class MovieNightMoreView(_OwnedView):
+    def __init__(
+        self,
+        owner_id: int,
+        room: Optional[MovieNightRoom],
+        *,
+        staff: bool = False,
+    ) -> None:
+        super().__init__(owner_id)
+        self.room_id = room.room_id if room is not None else ""
+        self.staff = bool(staff)
+        if room is None:
+            self.remove_item(self.end_session)
+            self.remove_item(self.session_status)
+        if not self.staff:
+            self.remove_item(self.settings)
+
+    def _room(self) -> Optional[MovieNightRoom]:
+        if not self.room_id:
+            return None
+        return get_movie_night_manager().get(self.room_id)
+
+    @discord.ui.button(label="Session Status", emoji="📊", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:more:status")
+    async def session_status(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        room = self._room()
+        await _replace(
+            interaction,
+            embed=_session_status_embed(interaction, room),
+            view=MovieNightMoreView(
+                self.owner_id,
+                room,
+                staff=_staff_authorized(interaction),
+            ),
+        )
+
+    @discord.ui.button(label="Notifications", emoji="🌿", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:more:notifications")
+    async def notifications(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if _staff_authorized(interaction):
+            from .public_community_pings import open_community_ping_setup
+            return await open_community_ping_setup(interaction, replace_message=True)
+        from .public_community_pings import open_member_community_pings
+        return await open_member_community_pings(interaction, replace_message=True)
+
+    @discord.ui.button(label="Cinema Settings", emoji="⚙️", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:more:settings")
+    async def settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_movie_night_settings(interaction, replace_message=True)
+
+    @discord.ui.button(label="Refresh Cinema", emoji="🔄", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:more:refresh")
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_movie_night(interaction, replace_message=True)
+
+    @discord.ui.button(label="End Movie Night", emoji="🛑", style=discord.ButtonStyle.danger, row=1, custom_id="dank:movie:more:end")
+    async def end_session(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        room = _room_for_interaction(interaction)
+        if room is None:
+            return await open_movie_night(interaction, replace_message=True)
+
+        manager = get_movie_night_manager()
+        manager.join_room(room.room_id, user_id=int(interaction.user.id))
+        if int(room.host_id) == int(interaction.user.id):
+            return await _replace(
+                interaction,
+                content=(
+                    "🛑 End this Movie Night completely? This stops the room, releases its "
+                    "torrent/media lease, clears the queue, and lets a fresh room start here."
+                ),
+                embed=_session_status_embed(interaction, room),
+                view=ConfirmMovieNightEndView(int(interaction.user.id), room.room_id),
+            )
+
+        existing = next(
+            (
+                item
+                for item in room.votes.values()
+                if not item.resolved and item.action == "end"
+            ),
+            None,
+        )
+        try:
+            if existing is not None:
+                vote = manager.cast_vote(
+                    room.room_id,
+                    existing.vote_id,
+                    user_id=int(interaction.user.id),
+                    approve=True,
+                )
+            else:
+                vote = manager.propose_vote(
+                    room.room_id,
+                    proposer_id=int(interaction.user.id),
+                    action="end",
+                )
+        except Exception as exc:
+            return await _movie_hub_notice(
+                interaction,
+                f"❌ End-session vote could not start: {exc}",
+                room=room,
+            )
+
+        if vote.resolved and vote.passed:
+            return await _execute_passed_vote(interaction, room, vote)
+        await open_movie_night(interaction, replace_message=True)
+
+    @discord.ui.button(label="Back to Cinema", emoji="⬅️", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:more:back")
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_movie_night(interaction, replace_message=True)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:more:close")
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace(interaction, content="Dank Cinema closed.", embed=None, view=None)
+
+
+class MovieNightSettingsView(_OwnedView):
+    def __init__(self, owner_id: int, *, adult_content_enabled: bool = False) -> None:
+        super().__init__(owner_id)
+        self.adult_content_enabled = bool(adult_content_enabled)
+        self.adult_content.label = (
+            "Adult Content: On"
+            if self.adult_content_enabled
+            else "Adult Content: Off"
+        )
+        self.adult_content.style = (
+            discord.ButtonStyle.success
+            if self.adult_content_enabled
+            else discord.ButtonStyle.secondary
+        )
+
+    @discord.ui.button(label="Provider Deck", emoji="🎞️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:settings:providers")
+    async def providers(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_movie_night_sources(interaction, replace_message=True)
+
+    @discord.ui.button(label="Setup & Diagnostics", emoji="🛠️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:settings:setup")
+    async def setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_movie_night_setup(interaction, replace_message=True)
+
+    @discord.ui.button(label="Notifications", emoji="🌿", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:settings:notifications")
+    async def notifications(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_community_pings import open_community_ping_setup
+        await open_community_ping_setup(interaction, replace_message=True)
+
+    @discord.ui.button(label="Adult Content: Off", emoji="🔞", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:settings:adult")
+    async def adult_content(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _staff_authorized(interaction):
+            return await _movie_hub_notice(
+                interaction,
+                "❌ Manage Server or Administrator is required for Cinema Settings.",
+            )
+        guild = interaction.guild
+        if guild is None:
+            return await _private(interaction, "❌ Dank Cinema settings only work inside a server.")
+
+        raw, preferences = await load_movie_night_preferences(
+            int(guild.id),
+            refresh=True,
+        )
+        updated = set_adult_content_enabled(
+            preferences,
+            not preferences.adult_content_enabled,
+        )
+        applied, _saved = await save_movie_night_preferences(
+            int(guild.id),
+            expected_config=raw,
+            updated=updated,
+        )
+        if not applied:
+            _fresh_raw, fresh_preferences = await load_movie_night_preferences(
+                int(guild.id),
+                refresh=True,
+            )
+            return await _replace(
+                interaction,
+                content="⚠️ Cinema Settings changed while you were editing. Refreshed the current values.",
+                embed=_settings_embed(
+                    adult_content_enabled=fresh_preferences.adult_content_enabled,
+                ),
+                view=MovieNightSettingsView(
+                    self.owner_id,
+                    adult_content_enabled=fresh_preferences.adult_content_enabled,
+                ),
+            )
+        await open_movie_night_settings(interaction, replace_message=True)
+
+    @discord.ui.button(label="Session & Lifecycle", emoji="📊", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:settings:status")
+    async def status(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        room = _room_for_interaction(interaction)
+        await _replace(
+            interaction,
+            embed=_session_status_embed(interaction, room),
+            view=MovieNightSettingsView(
+                self.owner_id,
+                adult_content_enabled=self.adult_content_enabled,
+            ),
+        )
+
+    @discord.ui.button(label="Back to Cinema", emoji="⬅️", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:settings:back")
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_movie_night(interaction, replace_message=True)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:settings:close")
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace(interaction, content="Dank Cinema settings closed.", embed=None, view=None)
+
+
+async def open_movie_night_settings(
+    interaction: discord.Interaction,
+    *,
+    replace_message: bool = True,
+) -> None:
+    if interaction.guild is None:
+        return await _private(interaction, "❌ Dank Cinema settings only work inside a server.")
+    if not _staff_authorized(interaction):
+        return await _movie_hub_notice(
+            interaction,
+            "❌ Manage Server or Administrator is required for Cinema Settings.",
+        )
+    _raw, preferences = await load_movie_night_preferences(
+        int(interaction.guild.id),
+        refresh=True,
+    )
+    view = MovieNightSettingsView(
+        int(interaction.user.id),
+        adult_content_enabled=preferences.adult_content_enabled,
+    )
+    embed = _settings_embed(
+        adult_content_enabled=preferences.adult_content_enabled,
+    )
+    if replace_message:
+        await _replace(interaction, embed=embed, view=view)
+    else:
+        await _private(interaction, embed=embed, view=view)
+
+
+async def open_movie_night_more(
+    interaction: discord.Interaction,
+    *,
+    replace_message: bool = True,
+) -> None:
+    room = _room_for_interaction(interaction)
+    staff = _staff_authorized(interaction)
+    embed = _more_embed(interaction, room, staff=staff)
+    view = MovieNightMoreView(int(interaction.user.id), room, staff=staff)
+    if replace_message:
+        await _replace(interaction, embed=embed, view=view)
+    else:
+        await _private(interaction, embed=embed, view=view)
 
 
 class MovieNightHubView(_OwnedView):
@@ -3159,26 +3716,31 @@ class MovieNightHubView(_OwnedView):
         room: Optional[MovieNightRoom] = None,
     ) -> None:
         super().__init__(owner_id)
-        private_mode = bool(
-            room is not None
-            and str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
+        private_mode = _private_viewing(room)
+        open_vote = (
+            _latest_open_vote(room)
+            if room is not None and isinstance(getattr(room, "votes", None), Mapping)
+            else None
         )
 
-        # Keep the active cinema surface focused. Start-mode buttons only belong
-        # on an empty hub; party voting controls have no meaning in owner-only
-        # Private Viewing.
-        if room is not None:
-            self.remove_item(self.start_join)
-            self.remove_item(self.start_private)
-        if room is None or private_mode:
+        if room is None:
+            self.remove_item(self.search)
+            self.remove_item(self.results)
+            self.remove_item(self.queue)
             self.remove_item(self.vote_yes)
             self.remove_item(self.vote_no)
+        else:
+            self.remove_item(self.start_join)
+            self.remove_item(self.start_private)
+            if private_mode or open_vote is None:
+                self.remove_item(self.vote_yes)
+                self.remove_item(self.vote_no)
 
         if (
             room is not None
             and room.stream_token
             and (
-                not _private_viewing(room)
+                not private_mode
                 or int(owner_id) == int(room.host_id)
             )
         ):
@@ -3186,20 +3748,20 @@ class MovieNightHubView(_OwnedView):
             if watch_url:
                 self.add_item(
                     discord.ui.Button(
-                        label="Watch",
+                        label="Watch Movie",
                         emoji="▶️",
                         style=discord.ButtonStyle.link,
                         url=watch_url,
-                        row=3,
+                        row=2,
                     )
                 )
 
-    @discord.ui.button(label="Start / Join Party", emoji="🎬", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:hub:start")
+    @discord.ui.button(label="Start Watch Party", emoji="🎬", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:hub:start")
     async def start_join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _start_or_join_room(interaction, mode="watch_party")
 
-    @discord.ui.button(label="Private Viewing", emoji="🔒", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:hub:private")
+    @discord.ui.button(label="Watch Alone", emoji="🔒", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:hub:private")
     async def start_private(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _start_or_join_room(interaction, mode="private")
@@ -3211,7 +3773,7 @@ class MovieNightHubView(_OwnedView):
         if room is None:
             return await _movie_hub_notice(
                 interaction,
-                "❌ Start or join a Movie Night room first.",
+                "❌ Start a Watch Party or Watch Alone session first.",
             )
         get_movie_night_manager().join_room(
             room.room_id,
@@ -3221,38 +3783,41 @@ class MovieNightHubView(_OwnedView):
             MovieSearchModal(owner_id=self.owner_id, room_id=room.room_id)
         )
 
-    @discord.ui.button(label="Movie Picks", emoji="🎞️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:hub:results")
+    @discord.ui.button(label="Movie Picks", emoji="🎞️", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:hub:results")
     async def results(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room = _room_for_interaction(interaction)
         if room is None:
             return await _movie_hub_notice(
                 interaction,
-                "ℹ️ No Movie Night room is active here.",
+                "ℹ️ Start a viewing session first.",
             )
         await open_movie_results(interaction, room.room_id, replace_message=True)
 
-    @discord.ui.button(label="Watch Queue", emoji="📺", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:hub:queue")
+    @discord.ui.button(label="Queue", emoji="📺", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:hub:queue")
     async def queue(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room = _room_for_interaction(interaction)
         if room is None:
             return await _movie_hub_notice(
                 interaction,
-                "ℹ️ No Movie Night room is active here.",
+                "ℹ️ Start a viewing session first.",
             )
         await _replace(
             interaction,
             embed=_queue_embed(room),
-            view=MovieNightHubView(self.owner_id),
+            view=MovieNightHubView(
+                self.owner_id,
+                room,
+            ),
         )
 
-    @discord.ui.button(label="Vote Yes", emoji="✅", style=discord.ButtonStyle.success, row=1, custom_id="dank:movie:hub:vote-yes")
+    @discord.ui.button(label="Yes", emoji="✅", style=discord.ButtonStyle.success, row=1, custom_id="dank:movie:hub:vote-yes")
     async def vote_yes(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._cast_latest(interaction, True)
 
-    @discord.ui.button(label="Vote No", emoji="❌", style=discord.ButtonStyle.danger, row=1, custom_id="dank:movie:hub:vote-no")
+    @discord.ui.button(label="No", emoji="❌", style=discord.ButtonStyle.danger, row=1, custom_id="dank:movie:hub:vote-no")
     async def vote_no(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._cast_latest(interaction, False)
@@ -3290,98 +3855,10 @@ class MovieNightHubView(_OwnedView):
             return await _execute_passed_vote(interaction, room, vote)
         await open_movie_night(interaction, replace_message=True)
 
-    @discord.ui.button(label="Provider Deck", emoji="🎞️", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:hub:sources")
-    async def sources(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="More", emoji="⋯", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:hub:more")
+    async def more(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await open_movie_night_sources(interaction, replace_message=True)
-
-    @discord.ui.button(label="Setup", emoji="⚙️", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:hub:setup")
-    async def setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await open_movie_night_setup(interaction, replace_message=True)
-
-    @discord.ui.button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:hub:pings")
-    async def pings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if _staff_authorized(interaction):
-            from .public_community_pings import open_community_ping_setup
-            return await open_community_ping_setup(interaction, replace_message=True)
-        from .public_community_pings import open_member_community_pings
-        return await open_member_community_pings(interaction, replace_message=True)
-
-    @discord.ui.button(label="End Session", emoji="🛑", style=discord.ButtonStyle.danger, row=3, custom_id="dank:movie:hub:end")
-    async def end_session(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        room = _room_for_interaction(interaction)
-        if room is None:
-            return await _movie_hub_notice(
-                interaction,
-                "ℹ️ No Movie Night room is active here.",
-            )
-
-        manager = get_movie_night_manager()
-        manager.join_room(room.room_id, user_id=int(interaction.user.id))
-        if int(room.host_id) == int(interaction.user.id):
-            return await _replace(
-                interaction,
-                content=(
-                    "🛑 End this Movie Night completely? This stops the room, releases its "
-                    "torrent/media lease, clears the queue, and lets a fresh room start here."
-                ),
-                embed=_room_embed(interaction, room),
-                view=ConfirmMovieNightEndView(int(interaction.user.id), room.room_id),
-            )
-
-        existing = next(
-            (
-                item
-                for item in room.votes.values()
-                if not item.resolved and item.action == "end"
-            ),
-            None,
-        )
-        try:
-            if existing is not None:
-                vote = manager.cast_vote(
-                    room.room_id,
-                    existing.vote_id,
-                    user_id=int(interaction.user.id),
-                    approve=True,
-                )
-            else:
-                vote = manager.propose_vote(
-                    room.room_id,
-                    proposer_id=int(interaction.user.id),
-                    action="end",
-                )
-        except Exception as exc:
-            return await _movie_hub_notice(
-                interaction,
-                f"❌ End-session vote could not start: {exc}",
-                room=room,
-            )
-
-        if vote.resolved and vote.passed:
-            return await _execute_passed_vote(interaction, room, vote)
-        await _replace(
-            interaction,
-            content=(
-                "🗳️ **End Movie Night** vote opened. Active viewers can use "
-                "**Vote Yes** / **Vote No**."
-            ),
-            embed=_room_embed(interaction, room),
-            view=MovieNightHubView(int(interaction.user.id), room),
-        )
-
-    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3, custom_id="dank:movie:hub:refresh")
-    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await open_movie_night(interaction, replace_message=True)
-
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=3, custom_id="dank:movie:hub:close")
-    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _replace(interaction, content="Movie Night closed.", embed=None, view=None)
+        await open_movie_night_more(interaction, replace_message=True)
 
 
 async def open_movie_night(
@@ -3399,7 +3876,7 @@ async def open_movie_night(
             user_id=int(interaction.user.id),
         )
     embed = _room_embed(interaction, room)
-    view = MovieNightHubView(int(interaction.user.id), room)
+    view = _movie_hub_view(interaction, room)
     notice = _compact(recovery_notice, 1900)
     if replace_message:
         await _replace(interaction, content=notice, embed=embed, view=view)
@@ -3493,7 +3970,7 @@ async def _attach_torrent_media(
         return await interaction.edit_original_response(
             content=f"❌ Torrent could not start: {type(exc).__name__}: {exc}",
             embed=None,
-            view=MovieNightHubView(int(interaction.user.id)),
+            view=_movie_hub_view(interaction, None),
         )
 
     stream_url = manager.stream_url(session)
@@ -3506,7 +3983,7 @@ async def _attach_torrent_media(
         return await interaction.edit_original_response(
             content="❌ Torrent started, but no signed public stream URL could be created. Check Movie Night Setup.",
             embed=None,
-            view=MovieNightHubView(int(interaction.user.id)),
+            view=_movie_hub_view(interaction, None),
         )
 
     latest_room = room_manager.active_room_for_channel(
@@ -3526,7 +4003,7 @@ async def _attach_torrent_media(
                     "The stale media start was discarded safely."
                 ),
                 embed=_room_embed(interaction, latest_room),
-                view=MovieNightHubView(int(interaction.user.id), latest_room),
+                view=_movie_hub_view(interaction, latest_room),
             )
         try:
             room = room_manager.create_room(
@@ -3544,7 +4021,7 @@ async def _attach_torrent_media(
             return await interaction.edit_original_response(
                 content=f"❌ Movie Night room changed while media was loading: {exc}",
                 embed=None,
-                view=MovieNightHubView(int(interaction.user.id)),
+                view=_movie_hub_view(interaction, None),
             )
         role = ready["role"]
         if isinstance(role, discord.Role):
@@ -3571,7 +4048,7 @@ async def _attach_torrent_media(
                     "media result was discarded."
                 ),
                 embed=_room_embed(interaction, latest_room) if latest_room is not None else None,
-                view=MovieNightHubView(int(interaction.user.id), latest_room),
+                view=_movie_hub_view(interaction, latest_room),
             )
         room = latest_room
         room_manager.set_room_media(
@@ -3592,7 +4069,7 @@ async def _attach_torrent_media(
             f"Dank Cinema stream: {stream_url}"
         )[:2000],
         embed=_room_embed(interaction, room),
-        view=MovieNightHubView(int(interaction.user.id), room),
+        view=_movie_hub_view(interaction, room),
         allowed_mentions=_ALLOWED_NONE,
     )
 
