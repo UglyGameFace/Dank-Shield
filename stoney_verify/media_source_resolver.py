@@ -322,6 +322,8 @@ def _magnet_from_info_hash(value: Any) -> str:
     raw = str(value or "").strip()
     if _BTIH_HEX_RE.fullmatch(raw):
         btih = raw.lower()
+        if btih == "0" * 40:
+            return ""
     elif _BTIH_BASE32_RE.fullmatch(raw):
         btih = raw.upper()
     else:
