@@ -401,11 +401,22 @@ def test_adult_provider_filter_is_default_deny_for_explicit_labels() -> None:
         peers=1,
         metadata={"source_reported": {"category": "XXX"}},
     )
-    outcome = MediaSourceSearchOutcome(variants=(safe, adult))
+    adult_category = ResolvedMediaVariant(
+        title="Opaque Provider Release",
+        source_id="adult-category",
+        source_label="Adult Category",
+        source_ref="magnet:?xt=urn:btih:cccccccccccccccccccccccccccccccccccccccc",
+        file_size=1,
+        seeds=1,
+        leechers=0,
+        peers=1,
+        metadata={"source_reported": {"category": "Adult"}},
+    )
+    outcome = MediaSourceSearchOutcome(variants=(safe, adult, adult_category))
 
     filtered = movie_ui._filter_adult_provider_results(outcome, enabled=False)
     assert filtered.variants == (safe,)
-    assert "Filtered 1 explicit adult provider release" in filtered.errors[-1]
+    assert "Filtered 2 explicit adult provider release" in filtered.errors[-1]
 
     unfiltered = movie_ui._filter_adult_provider_results(outcome, enabled=True)
     assert unfiltered is outcome
