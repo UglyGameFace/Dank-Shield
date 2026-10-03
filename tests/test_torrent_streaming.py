@@ -683,6 +683,8 @@ def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
     assert "parse_http_range(" in routes
     assert '"Accept-Ranges": "bytes"' in routes
     assert "await manager.wait_range(" in routes
+    assert "except (ConnectionError, asyncio.CancelledError):" in routes
+    assert "client_disconnected = True" in routes
     assert "consumer_key = str(request.query.get(\"cid\", \"\")" in routes
     assert "consumer_key=consumer_key" in routes
     assert "plan.target_bytes" in routes
