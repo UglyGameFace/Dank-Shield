@@ -2884,12 +2884,42 @@ async def _execute_search_vote(
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=True)
 
+    _pref_raw, preferences = await load_movie_night_preferences(
+        int(room.guild_id),
+        refresh=False,
+    )
+    if not preferences.adult_content_enabled and _looks_explicit_adult(query):
+        manager.set_vote_execution_error(
+            room.room_id,
+            vote.vote_id,
+            "Adult-content search is disabled for this server.",
+        )
+        return await _movie_hub_notice(
+            interaction,
+            "🔞 Adult-content movie search is disabled in **Cinema Settings**.",
+            room=room,
+        )
+
     catalog_metadata = (
         dict(vote.payload.get("catalog"))
         if isinstance(vote.payload.get("catalog"), Mapping)
         else {}
     )
     catalog_id = _compact(catalog_metadata.get("catalog_id"), 40)
+    if (
+        not preferences.adult_content_enabled
+        and bool(catalog_metadata.get("adult", False))
+    ):
+        manager.set_vote_execution_error(
+            room.room_id,
+            vote.vote_id,
+            "Adult catalog title is disabled for this server.",
+        )
+        return await _movie_hub_notice(
+            interaction,
+            "🔞 That adult catalog title is disabled in **Cinema Settings**.",
+            room=room,
+        )
 
     try:
         if catalog_id:
@@ -2916,9 +2946,13 @@ async def _execute_search_vote(
             interaction,
             content=f"❌ Movie Night source search failed: {type(exc).__name__}: {exc}",
             embed=_room_embed(interaction, room),
-            view=_movie_hub_view(interaction, None),
+            view=_movie_hub_view(interaction, room),
         )
 
+    outcome = _filter_adult_provider_results(
+        outcome,
+        enabled=preferences.adult_content_enabled,
+    )
     outcome = _filter_outcome_for_catalog(outcome, catalog_metadata)
 
     active = manager.active_viewers(room)
@@ -2972,7 +3006,7 @@ async def _execute_search_vote(
             interaction,
             content=f"ℹ️ No playable releases found for **{query}**. {detail}"[:2000],
             embed=_room_embed(interaction, room),
-            view=_movie_hub_view(interaction, None),
+            view=_movie_hub_view(interaction, room),
         )
 
     movies, releases = _materialize_search_results(
@@ -3121,6 +3155,22 @@ class MovieSearchModal(discord.ui.Modal, title="1/3 • Find Movie"):
             return await _private(interaction, "❌ This search belongs to another member.")
 
         raw_query = _compact(self.query.value)
+        adult_enabled = False
+        if interaction.guild is not None:
+            _raw_preferences, preferences = await load_movie_night_preferences(
+                int(interaction.guild.id),
+                refresh=False,
+            )
+            adult_enabled = bool(preferences.adult_content_enabled)
+
+        if not adult_enabled and _looks_explicit_adult(raw_query):
+            room = _room_by_id_for_interaction(interaction, self.room_id)
+            return await _movie_hub_notice(
+                interaction,
+                "🔞 Adult-content movie search is disabled in **Cinema Settings**.",
+                room=room,
+            )
+
         if not tmdb_catalog_ready():
             return await _propose_movie_search_vote(
                 interaction,
@@ -3129,7 +3179,11 @@ class MovieSearchModal(discord.ui.Modal, title="1/3 • Find Movie"):
             )
 
         await interaction.response.defer(ephemeral=True, thinking=True)
-        catalog = await search_tmdb_movies(raw_query, limit=8)
+        catalog = await search_tmdb_movies(
+            raw_query,
+            limit=8,
+            include_adult=adult_enabled,
+        )
         if not catalog.movies:
             return await _propose_movie_search_vote(
                 interaction,
