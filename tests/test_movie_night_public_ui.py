@@ -459,6 +459,70 @@ def test_catalog_release_match_prefers_explicit_tmdb_identity() -> None:
     )
 
 
+
+def test_catalog_filter_drops_unrelated_provider_releases() -> None:
+    catalog = {
+        "catalog_id": "1101383",
+        "title": "The End of Oak Street",
+        "year": 2026,
+    }
+    matching = ResolvedMediaVariant(
+        title="The End of Oak Street 2026 1080p",
+        source_id="a",
+        source_label="A",
+        source_ref="magnet:?xt=urn:btih:aaa",
+        file_size=1,
+        seeds=1,
+        leechers=0,
+        peers=1,
+        metadata={},
+    )
+    unrelated = ResolvedMediaVariant(
+        title="Completely Different Movie 2026",
+        source_id="b",
+        source_label="B",
+        source_ref="magnet:?xt=urn:btih:bbb",
+        file_size=1,
+        seeds=1,
+        leechers=0,
+        peers=1,
+        metadata={},
+    )
+
+    filtered = movie_ui._filter_outcome_for_catalog(
+        MediaSourceSearchOutcome(variants=(matching, unrelated)),
+        catalog,
+    )
+    assert filtered.variants == (matching,)
+    assert "Ignored 1 provider release(s)" in filtered.errors[-1]
+
+
+def test_catalog_filter_reports_when_provider_results_do_not_match() -> None:
+    catalog = {
+        "catalog_id": "1101383",
+        "title": "The End of Oak Street",
+        "year": 2026,
+    }
+    unrelated = ResolvedMediaVariant(
+        title="Completely Different Movie",
+        source_id="b",
+        source_label="B",
+        source_ref="magnet:?xt=urn:btih:bbb",
+        file_size=1,
+        seeds=1,
+        leechers=0,
+        peers=1,
+        metadata={},
+    )
+
+    filtered = movie_ui._filter_outcome_for_catalog(
+        MediaSourceSearchOutcome(variants=(unrelated,)),
+        catalog,
+    )
+    assert filtered.variants == ()
+    assert "none matched the selected catalog movie" in filtered.errors[-1]
+
+
 def test_movie_night_is_reachable_from_home_registry_and_normal_search_words() -> None:
     feature = feature_by_key("movie_night")
     assert feature is not None
