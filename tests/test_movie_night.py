@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from stoney_verify.movie_night import MovieNightManager
+from stoney_verify.movie_night import PRIVATE_VIEWER_LIMIT, MovieNightManager
 
 
 def _room_with_three_viewers() -> tuple[MovieNightManager, str]:
@@ -1084,7 +1084,7 @@ def test_host_session_id_never_demotes_host_sync_authority() -> None:
     assert 10 in manager.buffer_quorum_viewers(room, now=102.0)
 
 
-def test_private_room_is_owner_only_and_hidden_from_other_users() -> None:
+def test_private_room_is_invite_only_and_revocation_removes_access() -> None:
     manager = MovieNightManager(viewer_ttl_seconds=120)
     room = manager.create_room(
         guild_id=1,
@@ -1096,19 +1096,55 @@ def test_private_room_is_owner_only_and_hidden_from_other_users() -> None:
     )
 
     assert room.mode == "private"
+    assert room.private_allowed_viewers == {10}
     assert manager.user_can_access(room, 10)
     assert not manager.user_can_access(room, 20)
-    assert manager.active_room_for_user(1, 2, 10) is room
     assert manager.active_room_for_user(1, 2, 20) is None
 
-    try:
-        manager.join_room(room.room_id, user_id=20, now=101.0)
-    except PermissionError as exc:
-        assert "private" in str(exc).lower()
-    else:
-        raise AssertionError("non-owner unexpectedly joined a private viewing room")
+    manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
+    assert manager.user_can_access(room, 20)
+    assert manager.active_room_for_user(1, 2, 20) is room
 
+    manager.join_room(room.room_id, user_id=20, now=101.0)
+    assert set(room.viewers) == {10, 20}
+    assert manager.active_viewers(room, now=101.0) == {10, 20}
+
+    manager.remove_private_viewer(room.room_id, host_id=10, user_id=20)
+    assert not manager.user_can_access(room, 20)
+    assert manager.active_room_for_user(1, 2, 20) is None
     assert set(room.viewers) == {10}
+
+
+def test_private_room_enforces_twenty_authorized_viewer_limit() -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        mode="private",
+        now=100.0,
+    )
+
+    for user_id in range(20, 20 + PRIVATE_VIEWER_LIMIT - 1):
+        manager.invite_private_viewer(
+            room.room_id,
+            host_id=10,
+            user_id=user_id,
+        )
+
+    assert len(room.private_allowed_viewers) == PRIVATE_VIEWER_LIMIT
+
+    try:
+        manager.invite_private_viewer(
+            room.room_id,
+            host_id=10,
+            user_id=999,
+        )
+    except RuntimeError as exc:
+        assert str(PRIVATE_VIEWER_LIMIT) in str(exc)
+    else:
+        raise AssertionError("private viewing accepted more than 20 authorized viewers")
 
 
 def test_private_owner_votes_resolve_without_waiting_for_other_viewers() -> None:
@@ -1122,18 +1158,21 @@ def test_private_owner_votes_resolve_without_waiting_for_other_viewers() -> None
         now=100.0,
     )
 
+    manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
+    manager.join_room(room.room_id, user_id=20, now=101.0)
+
     vote = manager.propose_vote(
         room.room_id,
         proposer_id=10,
         action="search",
         payload={"query": "Blade Runner"},
-        now=101.0,
+        now=102.0,
     )
 
     assert vote.resolved
     assert vote.passed
-    assert manager.required_yes_votes(room, now=101.0) == 1
-    assert manager.active_viewers(room, now=101.0) == {10}
+    assert manager.required_yes_votes(room, now=102.0) == 1
+    assert manager.active_viewers(room, now=102.0) == {10, 20}
     assert room.approved_search_query == "Blade Runner"
 
 
@@ -1153,7 +1192,7 @@ def test_public_watch_party_join_behavior_is_unchanged() -> None:
     assert manager.user_can_access(room, 20)
     assert set(room.viewers) == {10, 20}
 
-def test_private_room_rejects_non_owner_heartbeat() -> None:
+def test_private_room_accepts_invited_heartbeat_and_rejects_uninvited_user() -> None:
     manager = MovieNightManager(viewer_ttl_seconds=120)
     room = manager.create_room(
         guild_id=1,
@@ -1163,23 +1202,62 @@ def test_private_room_rejects_non_owner_heartbeat() -> None:
         mode="private",
         now=100.0,
     )
+    manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
+    manager.join_room(room.room_id, user_id=20, now=101.0)
+    manager.heartbeat(
+        room.room_id,
+        user_id=20,
+        position_seconds=0,
+        byte_position=0,
+        buffered_until_byte=0,
+        paused=True,
+        now=102.0,
+    )
+    assert 20 in room.viewers
 
     try:
         manager.heartbeat(
             room.room_id,
-            user_id=20,
+            user_id=30,
             position_seconds=0,
             byte_position=0,
             buffered_until_byte=0,
             paused=True,
-            now=101.0,
+            now=103.0,
         )
     except PermissionError as exc:
         assert "private" in str(exc).lower()
     else:
-        raise AssertionError("non-owner heartbeat unexpectedly entered private viewing")
+        raise AssertionError("uninvited user heartbeat unexpectedly entered private viewing")
 
-    assert set(room.viewers) == {10}
+    assert set(room.viewers) == {10, 20}
+
+
+def test_private_invited_viewer_cannot_take_programming_control() -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        mode="private",
+        now=100.0,
+    )
+    manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
+    manager.join_room(room.room_id, user_id=20, now=101.0)
+
+    try:
+        manager.propose_vote(
+            room.room_id,
+            proposer_id=20,
+            action="search",
+            payload={"query": "Alien"},
+            now=102.0,
+        )
+    except PermissionError as exc:
+        assert "host" in str(exc).lower()
+    else:
+        raise AssertionError("invited private viewer unexpectedly gained room programming control")
 
 
 def test_host_handoff_preserves_playback_and_moves_authority() -> None:

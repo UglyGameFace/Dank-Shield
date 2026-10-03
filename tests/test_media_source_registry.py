@@ -3,6 +3,7 @@ from __future__ import annotations
 from stoney_verify.media_source_registry import (
     MEDIA_SOURCE_REGISTRY_KEY,
     PROVIDER_TYPE_EXTERNAL,
+    PROVIDER_TYPE_FEED,
     PROVIDER_TYPE_JSON,
     MediaSourceRegistry,
     add_custom_source,
@@ -11,6 +12,7 @@ from stoney_verify.media_source_registry import (
     enabled_structured_sources,
     parse_media_source_registry,
     prepare_example_search_url,
+    prepare_feed_url,
     remove_custom_source,
     render_provider_search_url,
     set_custom_source_enabled,
@@ -187,6 +189,27 @@ def test_example_search_url_auto_detects_common_query_parameters() -> None:
     assert prepare_example_search_url(
         "https://feeds.example.com/releases?format=rss&token=public"
     ) == "https://feeds.example.com/releases?format=rss&token=public"
+
+
+def test_explicit_rss_feed_keeps_clean_url_and_is_structured() -> None:
+    assert prepare_feed_url("https://myrss.org/eztv") == "https://myrss.org/eztv"
+
+    registry = add_custom_source(
+        MediaSourceRegistry(),
+        label="EZTV RSS",
+        endpoint_url=prepare_feed_url("https://myrss.org/eztv"),
+        added_by=7,
+        provider_type=PROVIDER_TYPE_FEED,
+    )
+    parsed = parse_media_source_registry(
+        {MEDIA_SOURCE_REGISTRY_KEY: registry.to_payload()}
+    )
+
+    assert len(parsed.sources) == 1
+    assert parsed.sources[0].provider_type == PROVIDER_TYPE_FEED
+    assert parsed.sources[0].endpoint_url == "https://myrss.org/eztv"
+    assert enabled_structured_sources(parsed) == parsed.sources
+    assert enabled_external_sources(parsed) == ()
 
 
 def test_example_search_url_rejects_ambiguous_existing_query_string() -> None:

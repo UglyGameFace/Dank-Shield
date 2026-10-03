@@ -69,7 +69,7 @@ def test_movie_night_hub_and_admin_surfaces_are_progressively_disclosed() -> Non
 
     assert _labels(hub) == {
         "Start Watch Party",
-        "Watch Alone",
+        "Start Private Session",
         "More",
     }
     more_button = next(
@@ -89,7 +89,7 @@ def test_movie_night_hub_and_admin_surfaces_are_progressively_disclosed() -> Non
     } <= _labels(more)
     assert "Cinema Settings" in _labels(staff_more)
     assert {
-        "Provider Deck",
+        "Movie Sources",
         "Setup & Diagnostics",
         "Notifications",
         "Adult Content: Off",
@@ -105,9 +105,10 @@ def test_movie_night_hub_and_admin_surfaces_are_progressively_disclosed() -> Non
         "Close",
     }
     assert {
-        "Add In-App Provider",
-        "Add External-Only Link",
-        "Manage Providers",
+        "Add Search Provider",
+        "Add RSS Feed",
+        "Add Reference Link",
+        "Manage Sources",
         "Back to Settings",
         "Close",
     } <= _labels(sources)
@@ -146,6 +147,83 @@ def test_pass_host_is_only_visible_to_current_public_host(monkeypatch) -> None:
     )
     private_labels = _labels(movie_ui.MovieNightMoreView(10, private_room, staff=False))
     assert "Pass Host" not in private_labels
+
+
+def test_private_host_gets_viewer_manager_and_invited_viewer_gets_watch_only(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="private-stream",
+        mode="private",
+        now=100.0,
+    )
+    manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
+    manager.join_room(room.room_id, user_id=20, now=101.0)
+
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(
+        movie_ui,
+        "movie_night_watch_url",
+        lambda room_id, user_id: f"https://watch.example/{room_id}?uid={user_id}",
+    )
+
+    host_more = _labels(movie_ui.MovieNightMoreView(10, room, staff=False))
+    assert "Private Viewers" in host_more
+    assert "End Private Session" in host_more
+    assert "Pass Host" not in host_more
+
+    viewer_more = _labels(movie_ui.MovieNightMoreView(20, room, staff=False))
+    assert "Private Viewers" not in viewer_more
+    assert "End Private Session" not in viewer_more
+    assert "Pass Host" not in viewer_more
+    assert "Private Session Status" in viewer_more
+
+    outsider_home = _labels(movie_ui.MovieNightHubView(30, room))
+    assert "Watch Movie" not in outsider_home
+
+    viewer_home = _labels(movie_ui.MovieNightHubView(20, room))
+    assert "Watch Movie" in viewer_home
+    assert "Find Movie" not in viewer_home
+    assert "Movie Picks" not in viewer_home
+    assert "Queue" not in viewer_home
+    assert "Yes" not in viewer_home
+    assert "No" not in viewer_home
+
+
+def test_private_status_and_more_copy_never_call_it_movie_night() -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        mode="private",
+        now=100.0,
+    )
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=10),
+        guild=SimpleNamespace(get_member=lambda _uid: None),
+    )
+
+    status = movie_ui._session_status_embed(interaction, room)
+    status_text = "\n".join(
+        [str(status.title or ""), str(status.description or "")]
+        + [f"{field.name}\n{field.value}" for field in status.fields]
+    )
+    more = movie_ui._more_embed(interaction, room, staff=False)
+    more_text = "\n".join(
+        [str(more.title or ""), str(more.description or "")]
+        + [f"{field.name}\n{field.value}" for field in more.fields]
+    )
+
+    assert "Mode: **Private Session**" in status_text
+    assert "Authorized viewers: **1 / 20**" in status_text
+    assert "End Private Session" in status_text
+    assert "End Movie Night" not in status_text
+    assert "End Private Session" in more_text
+    assert "End Movie Night" not in more_text
 
 
 def test_host_handoff_choices_only_include_active_non_host_viewers(monkeypatch) -> None:
@@ -188,7 +266,7 @@ def test_movie_night_hub_changes_controls_by_room_mode_and_vote_context(monkeypa
     public_labels = _labels(movie_ui.MovieNightHubView(10, public_room))
     assert {"Find Movie", "Movie Picks", "Queue", "More"} <= public_labels
     assert "Start Watch Party" not in public_labels
-    assert "Watch Alone" not in public_labels
+    assert "Start Private Session" not in public_labels
     assert "Yes" not in public_labels
     assert "No" not in public_labels
 
@@ -556,9 +634,19 @@ def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
     add_modal = movie_ui.CustomSourceModal(owner_id=1, baseline={})
     assert len(add_modal.children) == 2
     assert [item.label for item in add_modal.children] == [
-        "In-app provider name",
-        "HTTPS search API / feed",
+        "Search provider name",
+        "HTTPS search API",
     ]
+    feed_modal = movie_ui.CustomSourceModal(
+        owner_id=1,
+        baseline={},
+        provider_type=movie_ui.PROVIDER_TYPE_FEED,
+    )
+    assert [item.label for item in feed_modal.children] == [
+        "Feed name",
+        "RSS / Atom feed URL",
+    ]
+    assert feed_modal.endpoint_input.placeholder == "https://myrss.org/eztv"
 
     source = CustomMediaSource(
         source_id="family-library",
@@ -578,10 +666,10 @@ def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
 
     actions = movie_ui.SourceActionView(1, "family-library")
     assert {
-        "Edit Provider",
-        "Enable Provider",
-        "Pause Provider",
-        "Remove Provider",
+        "Edit Source",
+        "Enable Source",
+        "Pause Source",
+        "Remove Source",
         "Back",
     } <= _labels(actions)
 
@@ -589,7 +677,7 @@ def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
 def test_external_only_provider_stays_admin_only() -> None:
     modal = movie_ui.ExternalSearchProviderModal(owner_id=1, baseline={})
     assert [item.label for item in modal.children] == [
-        "Provider name (optional)",
+        "Reference link name (optional)",
         "External browser search URL",
     ]
 
@@ -608,7 +696,7 @@ def test_external_search_provider_modal_defers_before_persistence() -> None:
     assert "return await _replace(" in source
 
 
-def test_provider_deck_custom_provider_field_stays_within_discord_limit() -> None:
+def test_movie_sources_custom_source_field_stays_within_discord_limit() -> None:
     registry = MediaSourceRegistry(
         revision=20,
         sources=tuple(
@@ -632,10 +720,10 @@ def test_provider_deck_custom_provider_field_stays_within_discord_limit() -> Non
     )
     embed = movie_ui._sources_embed(registry)
     custom = next(
-        field for field in embed.fields if str(field.name).startswith("📚 Custom Providers")
+        field for field in embed.fields if str(field.name).startswith("📚 Configured Movie Sources")
     )
     assert len(str(custom.value)) <= 1024
-    assert "more provider(s)" in str(custom.value)
+    assert "more source(s)" in str(custom.value)
 
 
 def test_cinema_settings_show_adult_content_state() -> None:
@@ -704,39 +792,27 @@ def test_adult_provider_filter_is_default_deny_for_explicit_labels() -> None:
     assert unfiltered is outcome
 
 
-def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -> None:
+def test_movie_sources_page_separates_search_rss_and_reference_links(monkeypatch) -> None:
     monkeypatch.delenv("DANK_TMDB_READ_TOKEN", raising=False)
     embed = movie_ui._sources_embed(MediaSourceRegistry())
     rendered = "\n".join(
         [str(embed.description or "")]
-        + [
-            f"{field.name}\n{field.value}"
-            for field in embed.fields
-        ]
+        + [f"{field.name}\n{field.value}" for field in embed.fields]
     )
 
+    assert str(embed.title) == "🎞️ Dank Cinema • Movie Sources"
     assert "Regular members only use **Find Movie**" in rendered
-    assert "Dank Catalog" in rendered
-    assert "Powered by TMDB" in rendered
-    assert "Dank Watch" in rendered
-    assert "JustWatch via TMDB" in rendered
-    assert "Dank Archive" in rendered
-    assert "Internet Archive Feature Films" in rendered
-    assert "Dank Direct" in rendered
-    assert "Magnet links" in rendered
-    assert ".torrent files" in rendered
-    assert "Dank Provider Lab" in rendered
-    assert "Dank Engine" in rendered
-    assert "**Add In-App Provider**" in rendered
-    assert "**Add External-Only Link**" in rendered
-    assert "not** part of normal Find Movie results" in rendered
-    assert "same Dank Engine adapter" in rendered
-    assert "In-App Provider Contract" in rendered
-    assert "RSS/Atom/Torznab" in rendered
-    assert "v1/v2 info-hashes" in rendered
-    assert "camelCase" in rendered
-    assert "Add In-App Provider" in _labels(movie_ui.MovieNightSourcesView(1))
-    assert "Add External-Only Link" in _labels(movie_ui.MovieNightSourcesView(1))
+    assert "Built-in Catalog & Search" in rendered
+    assert "Search Providers" in rendered
+    assert "RSS Feeds" in rendered
+    assert "does **not** need to end in .rss/.xml or /feed" in rendered
+    assert "Reference Links" in rendered
+    assert "never appear as playable Find Movie results" in rendered
+    assert "In-App Provider" not in rendered
+    assert "Provider Deck" not in rendered
+
+    labels = _labels(movie_ui.MovieNightSourcesView(1))
+    assert {"Add Search Provider", "Add RSS Feed", "Add Reference Link", "Manage Sources"} <= labels
 
 
 def test_candidate_embed_shows_tmdb_watch_availability(monkeypatch) -> None:
@@ -786,7 +862,7 @@ def test_candidate_embed_shows_tmdb_watch_availability(monkeypatch) -> None:
 def test_dank_cinema_branding_is_consistent_across_core_surfaces(monkeypatch) -> None:
     monkeypatch.delenv("DANK_TMDB_READ_TOKEN", raising=False)
     providers = movie_ui._sources_embed(MediaSourceRegistry())
-    assert str(providers.title) == "🎞️ Dank Cinema • Provider Deck"
+    assert str(providers.title) == "🎞️ Dank Cinema • Movie Sources"
     assert "Dank Cinema • powered by Dank Shield" in str(providers.footer.text)
 
     empty_room = movie_ui._room_embed(
@@ -1580,7 +1656,7 @@ def test_passed_end_vote_runs_canonical_session_cleanup(monkeypatch) -> None:
 
 
 
-def test_provider_deck_labels_capabilities_not_implementation_jargon() -> None:
+def test_movie_sources_labels_capabilities_not_implementation_jargon() -> None:
     registry = MediaSourceRegistry(
         revision=3,
         sources=(
@@ -1589,6 +1665,12 @@ def test_provider_deck_labels_capabilities_not_implementation_jargon() -> None:
                 label="Torrent API",
                 endpoint_url="https://api.example.com/search?q={query}",
                 provider_type=movie_ui.PROVIDER_TYPE_JSON,
+            ),
+            CustomMediaSource(
+                source_id="rss-feed",
+                label="Release Feed",
+                endpoint_url="https://feeds.example.com/releases",
+                provider_type=movie_ui.PROVIDER_TYPE_FEED,
             ),
             CustomMediaSource(
                 source_id="browser-only",
@@ -1604,10 +1686,11 @@ def test_provider_deck_labels_capabilities_not_implementation_jargon() -> None:
         + [f"{field.name}\n{field.value}" for field in embed.fields]
     )
 
-    assert "Torrent API** • In-App • structured" in rendered
-    assert "Browser Only** • External-only • browser link" in rendered
-    assert "Structured JSON" not in rendered
-    assert "Search Elsewhere" not in rendered
+    assert "Torrent API** • Search Provider" in rendered
+    assert "Release Feed** • RSS Feed" in rendered
+    assert "Browser Only** • Reference Link" in rendered
+    assert "In-App Provider" not in rendered
+    assert "External-only" not in rendered
 
 
 def test_primary_candidate_controls_never_open_provider_websites() -> None:

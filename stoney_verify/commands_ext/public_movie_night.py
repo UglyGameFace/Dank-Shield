@@ -23,6 +23,7 @@ from stoney_verify.community_pings_service import (
 )
 from stoney_verify.media_source_registry import (
     PROVIDER_TYPE_EXTERNAL,
+    PROVIDER_TYPE_FEED,
     PROVIDER_TYPE_JSON,
     CustomMediaSource,
     MediaSourceRegistry,
@@ -30,6 +31,7 @@ from stoney_verify.media_source_registry import (
     enabled_custom_sources,
     load_media_source_registry,
     prepare_example_search_url,
+    prepare_feed_url,
     remove_custom_source,
     render_provider_search_url,
     save_media_source_registry,
@@ -50,6 +52,7 @@ from stoney_verify.movie_catalog import (
     tmdb_catalog_ready,
 )
 from stoney_verify.movie_night import (
+    PRIVATE_VIEWER_LIMIT,
     MovieNightRoom,
     get_movie_night_manager,
     movie_room_lease_key,
@@ -76,7 +79,7 @@ from stoney_verify.torrent_streaming import (
     get_torrent_manager,
     is_torrent_filename,
 )
-from stoney_verify.ui.picker import DankChoice, DankPickerView
+from stoney_verify.ui.picker import DankChoice, DankPickerView, DankUserSelect
 
 
 _ALLOWED_NONE = discord.AllowedMentions.none()
@@ -573,13 +576,13 @@ def _setup_embed(
         )
 
     embed.add_field(
-        name="6 • Dank Cinema providers",
+        name="6 • Movie Sources",
         value=(
             f"{'✅' if tmdb_catalog_ready() else '⚠️'} **Dank Catalog** • powered by TMDB "
             f"({'ready' if tmdb_catalog_ready() else 'bot token not configured'})\n"
             f"✅ **Dank Archive** • {INTERNET_ARCHIVE_SOURCE_LABEL}\n"
             f"✅ **Dank Direct** • magnet links + .torrent files\n"
-            f"🧩 **Provider Lab** • {ready['sources']} custom configured • {ready['enabled_sources']} enabled"
+            f"🎞️ **Movie Sources** • {ready['sources']} custom configured • {ready['enabled_sources']} enabled"
         ),
         inline=False,
     )
@@ -616,88 +619,71 @@ async def _sources_state(
 def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
     catalog_ready = tmdb_catalog_ready()
     embed = discord.Embed(
-        title="🎞️ Dank Cinema • Provider Deck",
+        title="🎞️ Dank Cinema • Movie Sources",
         description=(
             f"**{_CINEMA_TAGLINE}**\n"
-            "Regular members only use **Find Movie**. Dank Cinema handles catalog matching, "
-            "provider discovery, release ranking, magnets, and .torrent plumbing behind the scenes."
+            "Regular members only use **Find Movie**. Admins can connect searchable APIs, "
+            "static RSS/Atom feeds, and optional browser reference links here. Playable "
+            "results all flow through the same Dank Cinema ranking and streaming engine."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="🔎 Dank Catalog",
+        name="🔎 Built-in Catalog & Search",
         value=(
-            f"{'✅' if catalog_ready else '⚠️'} Exact movie matching "
-            f"{'ready' if catalog_ready else 'needs the bot-owner catalog token'}\n"
-            "**Powered by TMDB** for title, year, poster, overview, and movie identity. "
-            "Catalog metadata never pretends to be the playable movie."
+            f"{'✅' if catalog_ready else '⚠️'} **Dank Catalog** • TMDB title/year/poster identity "
+            f"({'ready' if catalog_ready else 'bot token not configured'})\n"
+            f"✅ **Dank Archive** • {INTERNET_ARCHIVE_SOURCE_LABEL}\n"
+            "🧲 **Dank Direct** • magnet links and .torrent files"
         ),
         inline=False,
     )
     embed.add_field(
-        name="🎬 Dank Archive",
+        name="🧩 Search Providers",
         value=(
-            f"✅ Built-in playable search via **{INTERNET_ARCHIVE_SOURCE_LABEL}** • no API key.\n"
-            "Public-domain-focused playback feeds the same Dank Cinema release, vote, and stream engine."
+            "Structured HTTPS JSON search APIs. Dank Cinema supplies the movie query, normalizes "
+            "results, and keeps playable magnets/.torrent refs inside the normal Find Movie flow."
         ),
         inline=False,
     )
     embed.add_field(
-        name="📡 Dank Watch",
+        name="📡 RSS Feeds",
         value=(
-            f"{'✅' if catalog_ready else '⚠️'} Legal availability discovery "
-            f"{'ready' if catalog_ready else 'activates with Dank Catalog'}\n"
-            "**Availability data by JustWatch via TMDB.** Free/ad-supported, subscription, "
-            "rent, and buy options stay informational and are never disguised as direct streams."
+            "Static RSS/Atom/Torznab feeds are fetched as feeds and filtered locally by movie title. "
+            "The URL does **not** need to end in .rss/.xml or /feed, so clean hosted-feed URLs work "
+            "without Dank Cinema inventing a ?q= parameter."
         ),
         inline=False,
     )
     embed.add_field(
-        name="⚡ Dank Engine",
+        name="🔗 Reference Links",
         value=(
-            "Provider searches run through one Movie Night pipeline: normalize → dedupe → "
-            "rank releases → vote → libtorrent verification/streaming. A provider can fail "
-            "without replacing the direct magnet/.torrent path."
+            "Optional browser-only search links for admins. They never appear as playable Find Movie "
+            "results and are never scraped."
         ),
         inline=False,
     )
-    embed.add_field(
-        name="🧲 Dank Direct",
-        value=(
-            "✅ **Magnet links** • /movie magnet:<link>\n"
-            "✅ **.torrent files** • /movie torrent:<file>\n"
-            "Provider search can fail spectacularly and the host can still feed Dank Cinema media directly."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="🧩 Dank Provider Lab",
-        value=(
-            "Advanced owners can add two clearly different capabilities:\n"
-            "• **Add In-App Provider** — a structured HTTPS JSON search API or RSS/Atom/Torznab "
-            "feed returns playable magnets or .torrent refs directly into Dank Cinema.\n"
-            "• **Add External-Only Link** — saves a browser search URL for admin reference only; "
-            "it is **not** part of normal Find Movie results.\n"
-            "In-App providers all use the same Dank Engine adapter, so future torrent APIs can "
-            "plug in without new Discord commands when they follow the structured result contract."
-        ),
-        inline=False,
-    )
+
     if not registry.sources:
         embed.add_field(
-            name="📚 Custom Providers",
-            value="None added. Built-in search and direct magnet/.torrent playback still work.",
+            name="📚 Configured Movie Sources",
+            value="None added. Built-in catalog/search and direct magnet/.torrent playback still work.",
             inline=False,
         )
     else:
-        rows = []
+        rows: list[str] = []
+        counts = {"search": 0, "feed": 0, "external": 0}
         for source in registry.sources:
             state = "✅" if source.enabled else "⏸️"
-            mode = (
-                "In-App • structured"
-                if source.provider_type == PROVIDER_TYPE_JSON
-                else "External-only • browser link"
-            )
+            if source.provider_type == PROVIDER_TYPE_FEED:
+                mode = "RSS Feed"
+                counts["feed"] += 1
+            elif source.provider_type == PROVIDER_TYPE_JSON:
+                mode = "Search Provider"
+                counts["search"] += 1
+            else:
+                mode = "Reference Link"
+                counts["external"] += 1
             rows.append(
                 f"{state} **{source.label}** • {mode}\n"
                 f"↳ {source.endpoint_url[:180]}"
@@ -706,42 +692,35 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
         visible_rows: list[str] = []
         for index, row in enumerate(rows):
             hidden_after = len(rows) - (index + 1)
-            suffix = f"\n… +{hidden_after} more provider(s)" if hidden_after else ""
+            suffix = f"\n… +{hidden_after} more source(s)" if hidden_after else ""
             candidate = "\n".join([*visible_rows, row])
             if len(candidate) + len(suffix) > 1024:
                 break
             visible_rows.append(row)
 
         hidden = len(rows) - len(visible_rows)
-        provider_value = "\n".join(visible_rows)
+        source_value = "\n".join(visible_rows)
         if hidden:
-            provider_value += f"\n… +{hidden} more provider(s)"
+            source_value += f"\n… +{hidden} more source(s)"
         embed.add_field(
-            name=f"📚 Custom Providers • {len(registry.sources)}",
-            value=provider_value,
+            name=(
+                f"📚 Configured Movie Sources • {len(registry.sources)} "
+                f"(Search {counts['search']} • RSS {counts['feed']} • Links {counts['external']})"
+            )[:256],
+            value=source_value,
             inline=False,
         )
+
     embed.add_field(
-        name="🔌 In-App Provider Contract",
+        name="🔒 Source Safety",
         value=(
-            "**JSON:** common result wrappers, nested torrent variants, snake_case, and camelCase are supported.\n"
-            "**RSS/Atom/Torznab:** item/entry feeds can provide magnets, v1/v2 info-hashes, or .torrent enclosures.\n"
-            "Dank Cinema normalizes titles, source refs, size, swarm health, release metadata, and movie IDs, "
-            "then keeps browser-only links out of primary Movie Search."
+            "Playable sources must use HTTPS and return structured JSON/RSS/Atom data with a magnet, "
+            "info-hash, or .torrent reference. Dank Cinema normalizes and deduplicates releases before "
+            "streaming. Do not put passwords, API secrets, or private-network addresses in source URLs."
         )[:1024],
         inline=False,
     )
-    embed.add_field(
-        name="🔒 Provider Safety",
-        value=(
-            "**In-App providers** must use HTTPS and return structured results with playable media refs. "
-            "Dank Cinema normalizes, dedupes, ranks, and plays those releases inside Discord. "
-            "**External-only links** are never part of primary Find Movie results and are never scraped. "
-            "Do not put passwords, API secrets, or private-network addresses in either URL."
-        ),
-        inline=False,
-    )
-    embed.set_footer(text=f"{_CINEMA_FOOTER} • provider revision {registry.revision}")
+    embed.set_footer(text=f"{_CINEMA_FOOTER} • source revision {registry.revision}")
     return embed
 
 
@@ -805,8 +784,10 @@ def _private_viewing(room: Optional[MovieNightRoom]) -> bool:
     )
 
 
-def _movie_night_lifecycle_text() -> str:
+def _movie_night_lifecycle_text(room: Optional[MovieNightRoom] = None) -> str:
     manager = get_movie_night_manager()
+    private_mode = _private_viewing(room)
+    end_label = "End Private Session" if private_mode else "End Movie Night"
     empty_minutes = max(
         5,
         int(round(float(manager.empty_room_ttl_seconds) / 60.0)),
@@ -822,9 +803,9 @@ def _movie_night_lifecycle_text() -> str:
         "**Watch links:** valid for up to **6 hours** from when the button is created; "
         "reopen `/movie` for a fresh link if needed.\n"
         "**Attached media:** stays leased to the room while the room is alive. It is released on "
-        "End Movie Night, automatic empty-room cleanup, replacement, or terminal media failure.\n"
-        "**Bot restart:** Movie Night room state is currently in memory, so a process restart ends "
-        "the live room and users must start a new session."
+        f"{end_label}, automatic empty-room cleanup, replacement, or terminal media failure.\n"
+        "**Bot restart:** Dank Cinema room state is currently in memory, so a process restart ends "
+        "the live room/session and users must start a new one."
     )
 
 
@@ -837,8 +818,9 @@ def _room_embed(
             title="🍿 Dank Cinema",
             description=(
                 "**Choose how you want to watch.**\n"
-                "Start a shared **Watch Party** or an owner-only **Private Viewing** session. "
-                "Once a room exists, **Find Movie** becomes the main action."
+                f"Start a shared **Watch Party** or an invite-only **Private Session** for up to "
+                f"**{PRIVATE_VIEWER_LIMIT} viewers**. Once a room exists, **Find Movie** becomes "
+                "the main action."
             ),
             color=discord.Color.blurple(),
         )
@@ -848,8 +830,11 @@ def _room_embed(
             inline=False,
         )
         embed.add_field(
-            name="🔒 Watch Alone",
-            value="Owner-only room • no server ping • no voting clutter • same movie search and player",
+            name="🔒 Private Session",
+            value=(
+                f"Invite-only • up to {PRIVATE_VIEWER_LIMIT} total viewers • no server ping • "
+                "host-controlled • same synchronized player"
+            ),
             inline=False,
         )
         embed.set_footer(text=f"{_CINEMA_FOOTER} • choose a viewing mode")
@@ -877,7 +862,7 @@ def _room_embed(
     owner_active = owner_id in active
     embed = discord.Embed(
         title=(
-            "🔒 Dank Cinema • Private Viewing"
+            "🔒 Dank Cinema • Private Session"
             if private_mode
             else "🍿 Dank Cinema • Watch Party"
         ),
@@ -900,11 +885,16 @@ def _room_embed(
         )
 
     if current_candidate is None:
+        waiting_for_host = bool(
+            private_mode and owner_id > 0 and owner_id != int(room.host_id)
+        )
         embed.add_field(
             name="1 • Find a movie",
             value=(
-                "No movie is selected yet. Use **Find Movie** to search the catalog and "
-                "connected playable providers."
+                "No movie is selected yet. The Private Session host is choosing what to watch."
+                if waiting_for_host
+                else "No movie is selected yet. Use **Find Movie** to search the catalog and "
+                "connected Movie Sources."
             ),
             inline=False,
         )
@@ -924,7 +914,11 @@ def _room_embed(
                 + (
                     "\nUse **Watch** to open the synchronized player."
                     if room.stream_token
-                    else "\nOpen **Movie Picks** and choose a playable release."
+                    else (
+                        "\nThe Private Session host is choosing a playable release."
+                        if private_mode and owner_id != int(room.host_id)
+                        else "\nOpen **Movie Picks** and choose a playable release."
+                    )
                 )
             )[:1024],
             inline=False,
@@ -965,7 +959,7 @@ def _session_status_embed(
             title="📊 Dank Cinema • Session Status",
             description=(
                 "No Movie Night room is active in this channel. Return to Cinema Home "
-                "and choose **Watch Party** or **Private Viewing**."
+                "and choose **Watch Party** or **Private Session**."
             ),
             color=discord.Color.blurple(),
         )
@@ -980,7 +974,7 @@ def _session_status_embed(
         title="📊 Dank Cinema • Session Status",
         description=(
             f"Host: {host_label}\n"
-            f"Mode: **{'Private Viewing' if private_mode else 'Watch Party'}**\n"
+            f"Mode: **{'Private Session' if private_mode else 'Watch Party'}**\n"
             f"Playback: **{room.playback_state.title()}** • "
             f"Position: **{int(room.current_position())}s** • "
             f"Active viewers: **{len(active)}**"
@@ -989,9 +983,20 @@ def _session_status_embed(
     )
     embed.add_field(
         name="⏱️ Session timing",
-        value=_movie_night_lifecycle_text()[:1024],
+        value=_movie_night_lifecycle_text(room)[:1024],
         inline=False,
     )
+    if private_mode:
+        allowed = set(getattr(room, "private_allowed_viewers", set()) or set())
+        allowed.add(int(room.host_id))
+        embed.add_field(
+            name="🔒 Private access",
+            value=(
+                f"Authorized viewers: **{len(allowed)} / {PRIVATE_VIEWER_LIMIT}**\n"
+                "Only the host can choose movies, change playback, manage viewers, or end the session."
+            ),
+            inline=False,
+        )
     if room.queue:
         embed.add_field(
             name="📺 Queue",
@@ -1078,14 +1083,21 @@ def _more_embed(
         embed.add_field(
             name="Staff",
             value=(
-                "⚙️ **Cinema Settings** • providers, setup diagnostics, notifications, runtime"
+                "⚙️ **Cinema Settings** • Movie Sources, setup diagnostics, notifications, runtime"
             ),
             inline=False,
         )
     if room is not None:
+        if _private_viewing(room):
+            room_value = (
+                "👥 **Private Viewers** • host manages invite-only access\n"
+                "🛑 **End Private Session** • disconnect invited viewers and release streaming media"
+            )
+        else:
+            room_value = "🛑 **End Movie Night** • end the room and clean up its streaming media"
         embed.add_field(
             name="Room",
-            value="🛑 **End Movie Night** • end the room and clean up its streaming media",
+            value=room_value,
             inline=False,
         )
     return embed
@@ -1109,8 +1121,8 @@ def _settings_embed(*, adult_content_enabled: bool = False) -> discord.Embed:
         inline=False,
     )
     embed.add_field(
-        name="🎞️ Media Sources",
-        value="Provider Deck • add/manage structured in-app providers and admin reference links",
+        name="🎞️ Movie Sources",
+        value="Search Providers • RSS Feeds • admin Reference Links",
         inline=False,
     )
     embed.add_field(
@@ -1529,7 +1541,14 @@ class MovieCandidateView(_OwnedView):
             )
         except (AttributeError, TypeError):
             collaborative = True
-        if private_mode or not collaborative:
+        if private_mode:
+            self.remove_item(self.vote_movie)
+            if room is not None and int(owner_id) == int(room.host_id):
+                self.queue.label = "Add to Queue"
+            else:
+                self.remove_item(self.releases)
+                self.remove_item(self.queue)
+        elif not collaborative:
             self.remove_item(self.vote_movie)
             self.queue.label = "Add to Queue"
 
@@ -1637,12 +1656,24 @@ class MovieReleaseView(_OwnedView):
             )
         except (AttributeError, TypeError):
             collaborative = True
-        if private_mode or not collaborative:
+        if private_mode:
+            self.remove_item(self.vote_release)
+            if room is not None and int(owner_id) == int(room.host_id):
+                self.queue.label = "Add to Queue"
+                self.play.label = "Play This Release"
+            else:
+                self.remove_item(self.play)
+                self.remove_item(self.queue)
+        elif not collaborative:
             self.remove_item(self.vote_release)
             self.queue.label = "Add to Queue"
-        if room is not None and int(owner_id) == int(room.host_id):
+            if room is not None and int(owner_id) == int(room.host_id):
+                self.play.label = "Play This Release"
+            else:
+                self.play.label = "Request This Release"
+        elif room is not None and int(owner_id) == int(room.host_id):
             self.play.label = "Play This Release"
-        elif not private_mode:
+        else:
             self.play.label = "Request This Release"
 
     def _resolve(self) -> tuple[Optional[MovieNightRoom], Any, Any]:
@@ -2067,9 +2098,20 @@ class CustomSourceModal(discord.ui.Modal):
         owner_id: int,
         baseline: Mapping[str, Any],
         source: Optional[CustomMediaSource] = None,
+        provider_type: str = PROVIDER_TYPE_JSON,
     ) -> None:
+        self.provider_type = (
+            PROVIDER_TYPE_FEED
+            if provider_type == PROVIDER_TYPE_FEED
+            else PROVIDER_TYPE_JSON
+        )
+        is_feed = self.provider_type == PROVIDER_TYPE_FEED
         super().__init__(
-            title="Edit In-App Provider" if source is not None else "Add In-App Provider",
+            title=(
+                ("Edit RSS Feed" if source is not None else "Add RSS Feed")
+                if is_feed
+                else ("Edit Search Provider" if source is not None else "Add Search Provider")
+            ),
             timeout=300,
         )
         self.owner_id = int(owner_id)
@@ -2077,15 +2119,19 @@ class CustomSourceModal(discord.ui.Modal):
         self.source_id = str(source.source_id if source is not None else "")
 
         self.label_input = discord.ui.TextInput(
-            label="In-app provider name",
-            placeholder="My Torrent API",
+            label="Feed name" if is_feed else "Search provider name",
+            placeholder="EZTV RSS" if is_feed else "My Torrent API",
             default=str(source.label if source is not None else "")[:80] or None,
             required=False,
             max_length=80,
         )
         self.endpoint_input = discord.ui.TextInput(
-            label="HTTPS search API / feed",
-            placeholder="https://api.example.com/search?q={query} or https://site/feed.xml",
+            label="RSS / Atom feed URL" if is_feed else "HTTPS search API",
+            placeholder=(
+                "https://myrss.org/eztv"
+                if is_feed
+                else "https://api.example.com/search?q={query}"
+            ),
             default=str(source.endpoint_url if source is not None else "")[:1000] or None,
             min_length=8,
             max_length=1000,
@@ -2098,25 +2144,32 @@ class CustomSourceModal(discord.ui.Modal):
             return await _private(interaction, "❌ This source editor belongs to another admin.")
         guild = interaction.guild
         if guild is None:
-            return await _private(interaction, "❌ Movie Night sources are configured inside a server.")
+            return await _private(interaction, "❌ Dank Cinema sources are configured inside a server.")
         if not _staff_authorized(interaction):
             return await _private(interaction, "❌ Manage Server or Administrator is required.")
 
         from stoney_verify.media_source_registry import parse_media_source_registry
 
         current = parse_media_source_registry(self.baseline)
+        is_feed = self.provider_type == PROVIDER_TYPE_FEED
         try:
-            prepared_url = prepare_example_search_url(str(self.endpoint_input.value))
+            prepared_url = (
+                prepare_feed_url(str(self.endpoint_input.value))
+                if is_feed
+                else prepare_example_search_url(str(self.endpoint_input.value))
+            )
             host = str(urlsplit(prepared_url).hostname or "").strip(".")
             fallback_label = host.split(".", 1)[0].replace("-", " ").replace("_", " ").title()
-            label = _compact(self.label_input.value, 80) or fallback_label or "In-App Provider"
+            label = _compact(self.label_input.value, 80) or fallback_label or (
+                "RSS Feed" if is_feed else "Search Provider"
+            )
             updated = add_custom_source(
                 current,
                 source_id=self.source_id,
                 label=label,
                 endpoint_url=prepared_url,
                 added_by=int(interaction.user.id),
-                provider_type=PROVIDER_TYPE_JSON,
+                provider_type=self.provider_type,
             )
         except ValueError as exc:
             return await _private(interaction, f"❌ {exc}")
@@ -2131,17 +2184,18 @@ class CustomSourceModal(discord.ui.Modal):
             None,
         )
         if candidate is None:
-            return await _private(interaction, "❌ Dank Cinema could not prepare that provider.")
+            return await _private(interaction, "❌ Dank Cinema could not prepare that movie source.")
 
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True, thinking=True)
 
         probe = await probe_custom_media_source(candidate, query="batman")
         if not probe.reachable:
+            kind = "RSS feed" if is_feed else "search provider"
             return await _replace(
                 interaction,
                 content=(
-                    "❌ **In-App Provider was not saved.** Dank Cinema tested the API/feed and could not use it.\n"
+                    f"❌ **{kind.title()} was not saved.** Dank Cinema tested the source and could not use it.\n"
                     f"{probe.error}"
                 )[:2000],
                 embed=_sources_embed(current),
@@ -2157,25 +2211,40 @@ class CustomSourceModal(discord.ui.Modal):
         except Exception as exc:
             return await _replace(
                 interaction,
-                content=f"❌ Dank Cinema In-App Provider could not save safely: {type(exc).__name__}.",
+                content=f"❌ Dank Cinema movie source could not save safely: {type(exc).__name__}.",
                 embed=_sources_embed(current),
                 view=MovieNightSourcesView(int(interaction.user.id)),
             )
         if not applied:
             return await _replace(
                 interaction,
-                content="❌ Dank Cinema providers changed in another admin session. Refresh and try again.",
+                content="❌ Dank Cinema movie sources changed in another admin session. Refresh and try again.",
                 embed=_sources_embed(current),
                 view=MovieNightSourcesView(int(interaction.user.id)),
             )
 
-        notice = f"✅ In-App Provider tested and saved • {probe.playable_results} playable result(s) in the Batman probe."
-        if probe.playable_results == 0:
+        if is_feed:
             notice = (
-                "⚠️ In-App Provider responded with structured data and was saved, but the Batman "
-                "probe found no matching playable release. That can be normal for a static RSS/Atom "
-                "feed that simply does not contain Batman yet."
+                f"✅ RSS feed tested and saved • {probe.playable_results} Batman-matching playable "
+                "result(s) in the current feed."
             )
+            if probe.playable_results == 0:
+                notice = (
+                    "✅ RSS feed responded with valid structured data and was saved. The current feed "
+                    "does not contain a Batman-matching playable release, which is normal for a rolling "
+                    "feed. Movie searches will filter the feed locally."
+                )
+        else:
+            notice = (
+                f"✅ Search provider tested and saved • {probe.playable_results} playable result(s) "
+                "in the Batman probe."
+            )
+            if probe.playable_results == 0:
+                notice = (
+                    "⚠️ Search provider responded with structured data and was saved, but the Batman "
+                    "probe found no matching playable release."
+                )
+
         await _replace(
             interaction,
             content=notice,
@@ -2194,7 +2263,7 @@ class ExternalSearchProviderModal(discord.ui.Modal):
         source: Optional[CustomMediaSource] = None,
     ) -> None:
         super().__init__(
-            title="Edit External-Only Link" if source is not None else "Add External-Only Link",
+            title="Edit Reference Link" if source is not None else "Add Reference Link",
             timeout=300,
         )
         self.owner_id = int(owner_id)
@@ -2202,7 +2271,7 @@ class ExternalSearchProviderModal(discord.ui.Modal):
         self.source_id = str(source.source_id if source is not None else "")
 
         self.label_input = discord.ui.TextInput(
-            label="Provider name (optional)",
+            label="Reference link name (optional)",
             placeholder="Public Movie Catalog",
             default=str(source.label if source is not None else "")[:80] or None,
             required=False,
@@ -2220,10 +2289,10 @@ class ExternalSearchProviderModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if int(interaction.user.id) != self.owner_id:
-            return await _private(interaction, "❌ This provider editor belongs to another admin.")
+            return await _private(interaction, "❌ This source editor belongs to another admin.")
         guild = interaction.guild
         if guild is None:
-            return await _private(interaction, "❌ Dank Cinema providers are configured inside a server.")
+            return await _private(interaction, "❌ Dank Cinema Movie Sources are configured inside a server.")
         if not _staff_authorized(interaction):
             return await _private(interaction, "❌ Manage Server or Administrator is required.")
 
@@ -2235,7 +2304,7 @@ class ExternalSearchProviderModal(discord.ui.Modal):
             render_provider_search_url(prepared_url, "x" * 180)
             host = str(urlsplit(prepared_url).hostname or "").strip(".")
             fallback_label = host.split(".", 1)[0].replace("-", " ").replace("_", " ").title()
-            label = _compact(self.label_input.value, 80) or fallback_label or "External-Only Link"
+            label = _compact(self.label_input.value, 80) or fallback_label or "Reference Link"
             updated = add_custom_source(
                 current,
                 source_id=self.source_id,
@@ -2259,14 +2328,14 @@ class ExternalSearchProviderModal(discord.ui.Modal):
         except Exception as exc:
             return await _replace(
                 interaction,
-                content=f"❌ Dank Cinema external-only link could not save safely: {type(exc).__name__}.",
+                content=f"❌ Dank Cinema reference link could not save safely: {type(exc).__name__}.",
                 embed=_sources_embed(current),
                 view=MovieNightSourcesView(int(interaction.user.id)),
             )
         if not applied:
             return await _replace(
                 interaction,
-                content="❌ Dank Cinema providers changed in another admin session. Refresh and try again.",
+                content="❌ Dank Cinema Movie Sources changed in another admin session. Refresh and try again.",
                 embed=_sources_embed(current),
                 view=MovieNightSourcesView(int(interaction.user.id)),
             )
@@ -2274,7 +2343,7 @@ class ExternalSearchProviderModal(discord.ui.Modal):
         await _replace(
             interaction,
             content=(
-                "✅ External-only link saved for admin reference. It will not appear in normal "
+                "✅ Reference link saved for admin use. It will not appear in normal "
                 "Find Movie results and Dank Cinema will not scrape or ingest that page."
             ),
             embed=_sources_embed(updated),
@@ -2322,7 +2391,7 @@ class SourceActionView(_OwnedView):
             )
         await open_movie_night_sources(interaction, replace_message=True)
 
-    @discord.ui.button(label="Edit Provider", emoji="✏️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:source:edit")
+    @discord.ui.button(label="Edit Source", emoji="✏️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:source:edit")
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         guild = interaction.guild
@@ -2347,20 +2416,21 @@ class SourceActionView(_OwnedView):
                 owner_id=self.owner_id,
                 baseline=raw,
                 source=source,
+                provider_type=source.provider_type,
             )
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Enable Provider", emoji="✅", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:source:enable")
+    @discord.ui.button(label="Enable Source", emoji="✅", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:source:enable")
     async def enable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._mutate(interaction, enabled=True)
 
-    @discord.ui.button(label="Pause Provider", emoji="⏸️", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:source:pause")
+    @discord.ui.button(label="Pause Source", emoji="⏸️", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:source:pause")
     async def disable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._mutate(interaction, enabled=False)
 
-    @discord.ui.button(label="Remove Provider", emoji="🗑️", style=discord.ButtonStyle.danger, row=0, custom_id="dank:movie:source:remove")
+    @discord.ui.button(label="Remove Source", emoji="🗑️", style=discord.ButtonStyle.danger, row=0, custom_id="dank:movie:source:remove")
     async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._mutate(interaction, remove=True)
@@ -2374,10 +2444,17 @@ class SourceActionView(_OwnedView):
 async def _open_source_picker(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
-        return await _private(interaction, "❌ Use Movie Night inside a server.")
+        return await _private(interaction, "❌ Use Dank Cinema inside a server.")
     _raw, registry = await _sources_state(int(guild.id))
     if not registry.sources:
-        return await _private(interaction, "ℹ️ No custom Movie Night sources are configured.")
+        return await _private(interaction, "ℹ️ No custom Movie Sources are configured.")
+
+    def source_kind(source: CustomMediaSource) -> str:
+        if source.provider_type == PROVIDER_TYPE_FEED:
+            return "RSS Feed"
+        if source.provider_type == PROVIDER_TYPE_JSON:
+            return "Search Provider"
+        return "Reference Link"
 
     async def picked(pick_interaction: discord.Interaction, value: str) -> None:
         source = next(
@@ -2386,13 +2463,14 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
         )
         if source is None:
             return await _private(pick_interaction, "❌ That source no longer exists.")
+        kind = source_kind(source)
         embed = discord.Embed(
-            title=f"🧩 Dank Provider • {source.label}",
+            title=f"🎞️ Dank Cinema • {source.label}",
             description=(
                 f"State: **{'Enabled' if source.enabled else 'Disabled'}**\n"
-                f"Mode: **{'In-App playable provider' if source.provider_type == PROVIDER_TYPE_JSON else 'External-only browser link'}**\n"
-                f"Search URL: {source.endpoint_url}\n\n"
-                "Use **Edit Provider** to change the name or URL. Dank Cinema keeps the internal "
+                f"Type: **{kind}**\n"
+                f"URL: {source.endpoint_url}\n\n"
+                "Use **Edit Source** to change the name or URL. Dank Cinema keeps the internal "
                 "source identity automatically."
             ),
             color=discord.Color.blurple(),
@@ -2407,10 +2485,7 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
         DankChoice(
             label=source.label,
             value=source.source_id,
-            description=(
-                ("In-App • " if source.provider_type == PROVIDER_TYPE_JSON else "External-only • ")
-                + ("Enabled" if source.enabled else "Disabled")
-            ),
+            description=f"{source_kind(source)} • {'Enabled' if source.enabled else 'Disabled'}",
             emoji="✅" if source.enabled else "⏸️",
         )
         for source in registry.sources
@@ -2420,19 +2495,21 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
         choices=choices,
         on_pick=picked,
         custom_id="dank:movie:sources:manage",
-        placeholder="Choose a Movie Night source…",
-        title="Manage Movie Night Source",
+        placeholder="Choose a Movie Source…",
+        title="Manage Movie Source",
         on_home=lambda back_interaction: open_movie_night_sources(
             back_interaction,
             replace_message=True,
         ),
-        home_label="Provider Deck",
+        home_label="Movie Sources",
     )
     await _replace(
         interaction,
         embed=discord.Embed(
-            title="🧩 Dank Cinema • Provider Lab",
-            description="Manage one advanced custom provider without exposing it to regular members.",
+            title="🎞️ Dank Cinema • Manage Movie Sources",
+            description=(
+                "Choose a Search Provider, RSS Feed, or Reference Link to edit, pause, or remove it."
+            ),
             color=discord.Color.blurple(),
         ),
         view=view,
@@ -2440,38 +2517,59 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
 
 
 class MovieNightSourcesView(_OwnedView):
-    @discord.ui.button(label="Add In-App Provider", emoji="🧩", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:sources:add-inapp")
+    @discord.ui.button(label="Add Search Provider", emoji="🧩", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:sources:add-inapp")
     async def add_json(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not _staff_authorized(interaction):
             return await _private(interaction, "❌ Manage Server or Administrator is required.")
         guild = interaction.guild
         if guild is None:
-            return await _private(interaction, "❌ Use Movie Night inside a server.")
+            return await _private(interaction, "❌ Use Dank Cinema inside a server.")
         raw, _registry = await _sources_state(int(guild.id))
         await interaction.response.send_modal(
-            CustomSourceModal(owner_id=self.owner_id, baseline=raw)
+            CustomSourceModal(
+                owner_id=self.owner_id,
+                baseline=raw,
+                provider_type=PROVIDER_TYPE_JSON,
+            )
         )
 
-    @discord.ui.button(label="Add External-Only Link", emoji="🔗", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:add-external")
+    @discord.ui.button(label="Add RSS Feed", emoji="📡", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:sources:add-rss")
+    async def add_feed(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _staff_authorized(interaction):
+            return await _private(interaction, "❌ Manage Server or Administrator is required.")
+        guild = interaction.guild
+        if guild is None:
+            return await _private(interaction, "❌ Use Dank Cinema inside a server.")
+        raw, _registry = await _sources_state(int(guild.id))
+        await interaction.response.send_modal(
+            CustomSourceModal(
+                owner_id=self.owner_id,
+                baseline=raw,
+                provider_type=PROVIDER_TYPE_FEED,
+            )
+        )
+
+    @discord.ui.button(label="Manage Sources", emoji="🛠️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:sources:manage-button")
+    async def manage(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _staff_authorized(interaction):
+            return await _private(interaction, "❌ Manage Server or Administrator is required.")
+        await _open_source_picker(interaction)
+
+    @discord.ui.button(label="Add Reference Link", emoji="🔗", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:add-external")
     async def add_external(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not _staff_authorized(interaction):
             return await _private(interaction, "❌ Manage Server or Administrator is required.")
         guild = interaction.guild
         if guild is None:
-            return await _private(interaction, "❌ Use Movie Night inside a server.")
+            return await _private(interaction, "❌ Use Dank Cinema inside a server.")
         raw, _registry = await _sources_state(int(guild.id))
         await interaction.response.send_modal(
             ExternalSearchProviderModal(owner_id=self.owner_id, baseline=raw)
         )
-
-    @discord.ui.button(label="Manage Providers", emoji="🛠️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:sources:manage-button")
-    async def manage(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not _staff_authorized(interaction):
-            return await _private(interaction, "❌ Manage Server or Administrator is required.")
-        await _open_source_picker(interaction)
 
     @discord.ui.button(label="Back to Settings", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:back")
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2481,7 +2579,7 @@ class MovieNightSourcesView(_OwnedView):
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _replace(interaction, content="Dank Cinema provider deck closed.", embed=None, view=None)
+        await _replace(interaction, content="Dank Cinema Movie Sources closed.", embed=None, view=None)
 
 
 async def open_movie_night_sources(
@@ -3426,11 +3524,11 @@ async def _start_or_join_room(
             return await _movie_hub_notice(
                 interaction,
                 (
-                    "ℹ️ A **Private Viewing** session is already active. End it before "
+                    "ℹ️ A **Private Session** is already active. End it before "
                     "starting a Watch Party."
                     if current_mode == "private"
                     else "ℹ️ A **Watch Party** is already active. End it before starting "
-                    "Private Viewing."
+                    "a Private Session."
                 ),
                 room=room,
             )
@@ -3496,8 +3594,9 @@ async def _start_or_join_room(
             )
 
     notice = (
-        "🔒 **Private Viewing started.** No Movie Night role ping was sent and "
-        "only you can join/control this room."
+        f"🔒 **Private Session started.** No Movie Night role ping was sent. "
+        f"You control the room and can invite up to **{PRIVATE_VIEWER_LIMIT - 1}** other viewers "
+        "from **More → Private Viewers**."
         if normalized_mode == "private"
         else announcement_notice
     )
@@ -3517,6 +3616,9 @@ class ConfirmMovieNightEndView(_OwnedView):
     def __init__(self, owner_id: int, room_id: str) -> None:
         super().__init__(owner_id)
         self.room_id = str(room_id)
+        room = get_movie_night_manager().get(self.room_id)
+        if _private_viewing(room):
+            self.confirm.label = "End Private Session"
 
     @discord.ui.button(label="End Movie Night", emoji="🛑", style=discord.ButtonStyle.danger, custom_id="dank:movie:end:confirm")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3525,20 +3627,33 @@ class ConfirmMovieNightEndView(_OwnedView):
         room = manager.get(self.room_id)
         if room is None or room.ended:
             return await open_movie_night(interaction, replace_message=True)
+        private_mode = _private_viewing(room)
         if int(room.host_id) != int(interaction.user.id):
             return await _movie_hub_notice(
                 interaction,
-                "❌ Only the active Movie Night host can end it immediately.",
+                (
+                    "❌ Only the Private Session host can end this session."
+                    if private_mode
+                    else "❌ Only the active Movie Night host can end it immediately."
+                ),
                 room=room,
             )
 
         result = await terminate_movie_night_room(room)
-        notice = "✅ Movie Night ended and its room media session was released."
+        notice = (
+            "✅ Private Session ended and its streaming media was released."
+            if private_mode
+            else "✅ Movie Night ended and its room media session was released."
+        )
         if result.cleanup_error:
             notice = (
-                "⚠️ Movie Night ended, but torrent cleanup reported an error. "
-                "The idle media cleanup worker can still reclaim it. "
-                f"({result.cleanup_error})"
+                (
+                    "⚠️ Private Session ended, but torrent cleanup reported an error. "
+                    if private_mode
+                    else "⚠️ Movie Night ended, but torrent cleanup reported an error. "
+                )
+                + "The idle media cleanup worker can still reclaim it. "
+                + f"({result.cleanup_error})"
             )
         await _replace(
             interaction,
@@ -3608,7 +3723,7 @@ async def _open_host_handoff_picker(
     if _private_viewing(room):
         return await _movie_hub_notice(
             interaction,
-            "🔒 Private Viewing stays owner-only and cannot pass host control.",
+            "🔒 Private Sessions keep one host/controller and cannot pass host control.",
             room=room,
         )
 
@@ -3698,6 +3813,152 @@ async def _open_host_handoff_picker(
     )
 
 
+def _private_viewers_embed(
+    interaction: discord.Interaction,
+    room: MovieNightRoom,
+) -> discord.Embed:
+    allowed = set(getattr(room, "private_allowed_viewers", set()) or set())
+    allowed.add(int(room.host_id))
+    invited = sorted(uid for uid in allowed if uid != int(room.host_id))
+
+    host = interaction.guild.get_member(room.host_id) if interaction.guild else None
+    host_label = host.mention if isinstance(host, discord.Member) else f"<@{room.host_id}>"
+
+    lines: list[str] = []
+    for uid in invited[: PRIVATE_VIEWER_LIMIT - 1]:
+        member = interaction.guild.get_member(uid) if interaction.guild else None
+        if isinstance(member, discord.Member):
+            lines.append(member.mention)
+        else:
+            lines.append(f"<@{uid}>")
+
+    embed = discord.Embed(
+        title="🔒 Dank Cinema • Private Viewers",
+        description=(
+            f"Authorized: **{len(allowed)} / {PRIVATE_VIEWER_LIMIT}** total viewers\n"
+            "Only people on this list can open the private room. The host keeps movie, queue, "
+            "playback, and end-session control; invited viewers receive their own signed Watch link."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name="Host", value=host_label, inline=False)
+    embed.add_field(
+        name="Invited Viewers",
+        value="\n".join(lines) if lines else "Nobody invited yet.",
+        inline=False,
+    )
+    embed.set_footer(
+        text="Select a user to add them; select an already invited user to remove them."
+    )
+    return embed
+
+
+class PrivateViewerManagerView(_OwnedView):
+    def __init__(self, owner_id: int, room: MovieNightRoom) -> None:
+        super().__init__(owner_id)
+        self.room_id = str(room.room_id)
+        self.add_item(
+            DankUserSelect(
+                author_id=int(owner_id),
+                on_pick=self._picked,
+                placeholder="Add or remove a private viewer…",
+                row=0,
+            )
+        )
+
+    async def _picked(
+        self,
+        interaction: discord.Interaction,
+        user: discord.User | discord.Member,
+    ) -> None:
+        manager = get_movie_night_manager()
+        room = manager.get(self.room_id)
+        if room is None or room.ended:
+            return await open_movie_night(interaction, replace_message=True)
+        if not _private_viewing(room):
+            return await _movie_hub_notice(
+                interaction,
+                "❌ This room is not a Private Session.",
+                room=room,
+            )
+        if int(interaction.user.id) != int(room.host_id):
+            return await _movie_hub_notice(
+                interaction,
+                "❌ Only the Private Session host can manage viewers.",
+                room=room,
+            )
+
+        uid = int(getattr(user, "id", 0) or 0)
+        if uid <= 0:
+            return await _private(interaction, "❌ Choose a valid server member.")
+        if bool(getattr(user, "bot", False)):
+            return await _private(interaction, "❌ Bots cannot join a Private Session.")
+        if uid == int(room.host_id):
+            return await _private(interaction, "ℹ️ You are already the Private Session host.")
+
+        allowed = set(getattr(room, "private_allowed_viewers", set()) or set())
+        try:
+            if uid in allowed:
+                manager.remove_private_viewer(
+                    room.room_id,
+                    host_id=int(interaction.user.id),
+                    user_id=uid,
+                )
+                notice = f"✅ Removed <@{uid}> from this Private Session."
+            else:
+                manager.invite_private_viewer(
+                    room.room_id,
+                    host_id=int(interaction.user.id),
+                    user_id=uid,
+                )
+                notice = (
+                    f"✅ Added <@{uid}>. They can open **/movie** in this channel and "
+                    "use their own **Watch Movie** link."
+                )
+        except (PermissionError, RuntimeError, ValueError) as exc:
+            return await _private(interaction, f"❌ {exc}")
+
+        await _replace(
+            interaction,
+            content=notice,
+            embed=_private_viewers_embed(interaction, room),
+            view=PrivateViewerManagerView(int(interaction.user.id), room),
+        )
+
+    @discord.ui.button(label="Back to More", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:private-viewers:back")
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_movie_night_more(interaction, replace_message=True)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:private-viewers:close")
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace(interaction, content="Dank Cinema Private Viewer manager closed.", embed=None, view=None)
+
+
+async def _open_private_viewers(
+    interaction: discord.Interaction,
+    room: MovieNightRoom,
+) -> None:
+    if not _private_viewing(room):
+        return await _movie_hub_notice(
+            interaction,
+            "❌ Private viewer management is only available in a Private Session.",
+            room=room,
+        )
+    if int(interaction.user.id) != int(room.host_id):
+        return await _movie_hub_notice(
+            interaction,
+            "❌ Only the Private Session host can manage viewers.",
+            room=room,
+        )
+    await _replace(
+        interaction,
+        embed=_private_viewers_embed(interaction, room),
+        view=PrivateViewerManagerView(int(interaction.user.id), room),
+    )
+
+
 class MovieNightMoreView(_OwnedView):
     def __init__(
         self,
@@ -3713,17 +3974,28 @@ class MovieNightMoreView(_OwnedView):
             self.remove_item(self.end_session)
             self.remove_item(self.session_status)
             self.remove_item(self.pass_host)
+            self.remove_item(self.private_viewers)
         else:
-            can_pass_host = bool(
-                not _private_viewing(room)
-                and int(owner_id) == int(room.host_id)
-                and any(
-                    int(uid) != int(room.host_id)
-                    for uid in get_movie_night_manager().active_viewers(room)
-                )
-            )
-            if not can_pass_host:
+            private_mode = _private_viewing(room)
+            is_host = int(owner_id) == int(room.host_id)
+            if private_mode:
+                self.session_status.label = "Private Session Status"
+                self.end_session.label = "End Private Session"
                 self.remove_item(self.pass_host)
+                if not is_host:
+                    self.remove_item(self.private_viewers)
+                    self.remove_item(self.end_session)
+            else:
+                self.remove_item(self.private_viewers)
+                can_pass_host = bool(
+                    is_host
+                    and any(
+                        int(uid) != int(room.host_id)
+                        for uid in get_movie_night_manager().active_viewers(room)
+                    )
+                )
+                if not can_pass_host:
+                    self.remove_item(self.pass_host)
         if not self.staff:
             self.remove_item(self.settings)
 
@@ -3768,6 +4040,14 @@ class MovieNightMoreView(_OwnedView):
             return await open_movie_night(interaction, replace_message=True)
         await _open_host_handoff_picker(interaction, room)
 
+    @discord.ui.button(label="Private Viewers", emoji="👥", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:more:private-viewers")
+    async def private_viewers(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        room = self._room()
+        if room is None:
+            return await open_movie_night(interaction, replace_message=True)
+        await _open_private_viewers(interaction, room)
+
     @discord.ui.button(label="Refresh Cinema", emoji="🔄", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:more:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -3782,15 +4062,26 @@ class MovieNightMoreView(_OwnedView):
 
         manager = get_movie_night_manager()
         manager.join_room(room.room_id, user_id=int(interaction.user.id))
+        private_mode = _private_viewing(room)
         if int(room.host_id) == int(interaction.user.id):
             return await _replace(
                 interaction,
                 content=(
-                    "🛑 End this Movie Night completely? This stops the room, releases its "
+                    "🛑 End this Private Session? This disconnects invited viewers, releases its "
+                    "streaming media, clears the queue, and lets a fresh session start here."
+                    if private_mode
+                    else "🛑 End this Movie Night completely? This stops the room, releases its "
                     "streaming media, clears the queue, and lets a fresh room start here."
                 ),
                 embed=_session_status_embed(interaction, room),
                 view=ConfirmMovieNightEndView(int(interaction.user.id), room.room_id),
+            )
+
+        if private_mode:
+            return await _movie_hub_notice(
+                interaction,
+                "❌ Only the Private Session host can end this session.",
+                room=room,
             )
 
         existing = next(
@@ -3852,7 +4143,7 @@ class MovieNightSettingsView(_OwnedView):
             else discord.ButtonStyle.secondary
         )
 
-    @discord.ui.button(label="Provider Deck", emoji="🎞️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:settings:providers")
+    @discord.ui.button(label="Movie Sources", emoji="🎞️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:settings:providers")
     async def providers(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night_sources(interaction, replace_message=True)
@@ -3992,6 +4283,11 @@ class MovieNightHubView(_OwnedView):
     ) -> None:
         super().__init__(owner_id)
         private_mode = _private_viewing(room)
+        private_host = bool(
+            private_mode
+            and room is not None
+            and int(owner_id) == int(room.host_id)
+        )
         open_vote = (
             _latest_open_vote(room)
             if room is not None and isinstance(getattr(room, "votes", None), Mapping)
@@ -4009,26 +4305,29 @@ class MovieNightHubView(_OwnedView):
             try:
                 owner_active = int(owner_id) in manager.active_viewers(room)
             except (AttributeError, TypeError):
-                # Some lightweight callers only need the hub to render a signed
-                # Watch link and do not carry full live-viewer state. Preserve
-                # the established active-room controls in that compatibility path.
+                # Lightweight render-only callers may not carry full viewer state.
                 owner_active = True
             self.remove_item(self.start_private)
             if private_mode or owner_active:
                 self.remove_item(self.start_join)
             else:
                 self.start_join.label = "Rejoin Movie Night"
-            if private_mode or open_vote is None:
+
+            if private_mode:
+                self.remove_item(self.vote_yes)
+                self.remove_item(self.vote_no)
+                if not private_host:
+                    self.remove_item(self.search)
+                    self.remove_item(self.results)
+                    self.remove_item(self.queue)
+            elif open_vote is None:
                 self.remove_item(self.vote_yes)
                 self.remove_item(self.vote_no)
 
         if (
             room is not None
             and room.stream_token
-            and (
-                not private_mode
-                or int(owner_id) == int(room.host_id)
-            )
+            and get_movie_night_manager().user_can_access(room, int(owner_id))
         ):
             watch_url = movie_night_watch_url(room.room_id, int(owner_id))
             if watch_url:
@@ -4047,7 +4346,7 @@ class MovieNightHubView(_OwnedView):
         _ = button
         await _start_or_join_room(interaction, mode="watch_party")
 
-    @discord.ui.button(label="Watch Alone", emoji="🔒", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:hub:private")
+    @discord.ui.button(label="Start Private Session", emoji="🔒", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:hub:private")
     async def start_private(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _start_or_join_room(interaction, mode="private")
@@ -4059,7 +4358,7 @@ class MovieNightHubView(_OwnedView):
         if room is None:
             return await _movie_hub_notice(
                 interaction,
-                "❌ Start a Watch Party or Watch Alone session first.",
+                "❌ Start a Watch Party or Private Session first.",
             )
         get_movie_night_manager().join_room(
             room.room_id,

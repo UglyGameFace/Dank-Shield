@@ -41,6 +41,21 @@ def test_search_url_supports_placeholder_and_query_parameter_modes() -> None:
     assert "q=Alien" in url
 
 
+def test_explicit_static_feed_does_not_get_search_query_appended() -> None:
+    endpoint = "https://myrss.org/eztv"
+    assert resolver._search_url(
+        endpoint,
+        "The Nightmare Before Christmas",
+        static_feed=True,
+    ) == endpoint
+
+    # Without an explicit feed type, the legacy generic-provider path still
+    # behaves as a search endpoint unless its URL shape clearly signals a feed.
+    legacy = resolver._search_url(endpoint, "Alien")
+    assert legacy.startswith(endpoint + "?")
+    assert "q=Alien" in legacy
+
+
 def test_source_result_keeps_swarm_health_and_unverified_source_metadata() -> None:
     variant = resolver._variant_from_item(
         _source(),

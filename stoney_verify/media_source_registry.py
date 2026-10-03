@@ -19,8 +19,9 @@ MEDIA_SOURCE_REGISTRY_VERSION = 2
 MAX_CUSTOM_MEDIA_SOURCES = 20
 
 PROVIDER_TYPE_JSON = "json"
+PROVIDER_TYPE_FEED = "feed"
 PROVIDER_TYPE_EXTERNAL = "external"
-_PROVIDER_TYPES = {PROVIDER_TYPE_JSON, PROVIDER_TYPE_EXTERNAL}
+_PROVIDER_TYPES = {PROVIDER_TYPE_JSON, PROVIDER_TYPE_FEED, PROVIDER_TYPE_EXTERNAL}
 _DISCORD_LINK_BUTTON_URL_LIMIT = 512
 _SOURCE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 
@@ -223,6 +224,16 @@ def prepare_example_search_url(value: Any) -> str:
         )
     )
 
+def prepare_feed_url(value: Any) -> str:
+    """Normalize a static RSS/Atom feed URL without inventing search parameters.
+
+    Feed URLs do not need to end in .rss/.xml or /feed. The explicit feed type
+    is authoritative, which keeps clean hosted-feed URLs such as /eztv intact.
+    """
+
+    return _normalize_endpoint_url(value)
+
+
 def render_provider_search_url(endpoint_url: Any, query: Any) -> str:
     """Render a safe provider search URL without fetching or scraping the page."""
 
@@ -421,7 +432,7 @@ def enabled_structured_sources(registry: MediaSourceRegistry) -> tuple[CustomMed
     return tuple(
         item
         for item in registry.sources
-        if item.enabled and item.provider_type == PROVIDER_TYPE_JSON
+        if item.enabled and item.provider_type in {PROVIDER_TYPE_JSON, PROVIDER_TYPE_FEED}
     )
 
 
@@ -468,6 +479,7 @@ __all__ = [
     "enabled_external_sources",
     "enabled_structured_sources",
     "PROVIDER_TYPE_EXTERNAL",
+    "PROVIDER_TYPE_FEED",
     "PROVIDER_TYPE_JSON",
     "CustomMediaSource",
     "MEDIA_SOURCE_REGISTRY_KEY",
@@ -478,6 +490,7 @@ __all__ = [
     "load_media_source_registry",
     "parse_media_source_registry",
     "prepare_example_search_url",
+    "prepare_feed_url",
     "remove_custom_source",
     "save_media_source_registry",
     "set_custom_source_enabled",
