@@ -194,6 +194,10 @@ def parse_http_range(header: str, size: int) -> tuple[int, int, bool]:
     return start, min(end, total - 1), True
 
 
+class TorrentSessionUnavailableError(RuntimeError):
+    """The Python session still exists but its libtorrent handle is unusable."""
+
+
 @dataclass(frozen=True)
 class TorrentFileCandidate:
     index: int
@@ -505,6 +509,33 @@ class TorrentMediaManager:
             # releases its final tracked lease.
             session.unleased_hold = True
         session.last_access = time.monotonic()
+
+    @staticmethod
+    def session_usable(session: TorrentStreamSession) -> bool:
+        handle = getattr(session, "handle", None)
+        if handle is None:
+            return False
+        checker = getattr(handle, "is_valid", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:
+                return False
+        try:
+            handle.status()
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _raise_unavailable_handle(exc: Exception) -> None:
+        message = str(exc or "")
+        if "invalid torrent handle" in message.casefold():
+            raise TorrentSessionUnavailableError(
+                "The torrent media session is no longer available."
+            ) from exc
+        raise exc
+
 
     def _reusable_session_unlocked(self, identity: str) -> Optional[TorrentStreamSession]:
         token = self._identity_index.get(str(identity or ""))
@@ -1342,7 +1373,10 @@ class TorrentMediaManager:
                     updates.append((piece, 6))
 
         if updates:
-            session.handle.prioritize_pieces(updates)
+            try:
+                session.handle.prioritize_pieces(updates)
+            except RuntimeError as exc:
+                self._raise_unavailable_handle(exc)
         session.last_access = time.monotonic()
 
     def _download_rate(self, session: TorrentStreamSession) -> float:
@@ -1577,7 +1611,10 @@ class TorrentMediaManager:
         }
 
     def status(self, session: TorrentStreamSession) -> dict[str, Any]:
-        status = session.handle.status()
+        try:
+            status = session.handle.status()
+        except RuntimeError as exc:
+            self._raise_unavailable_handle(exc)
         try:
             progress = session.handle.file_progress()[session.file_index]
         except Exception:
@@ -1692,18 +1729,49 @@ class TorrentMediaManager:
         return bool(signature) and hmac.compare_digest(expected, str(signature))
 
     async def cleanup_expired(self) -> int:
+        """Reclaim only truly idle, unleased sessions.
+
+        Candidate selection and removal happen under the same lock so a session
+        cannot be refreshed or leased after being declared stale but before its
+        libtorrent handle is removed.
+        """
+
         now = time.monotonic()
+        expired: list[TorrentStreamSession] = []
         async with self._lock:
-            expired = [
-                token
-                for token, session in self._sessions.items()
-                if now - session.last_access > self.idle_ttl_seconds
-            ]
-        removed = 0
-        for token in expired:
-            if await self.remove(token, force=True):
-                removed += 1
-        return removed
+            for token, session in list(self._sessions.items()):
+                if session.leases:
+                    continue
+                if now - float(session.last_access) <= self.idle_ttl_seconds:
+                    continue
+                self._sessions.pop(token, None)
+                if self._identity_index.get(session.source_identity) == token:
+                    self._identity_index.pop(session.source_identity, None)
+                expired.append(session)
+
+        for session in expired:
+            self._safe_remove_handle(session.handle)
+            await asyncio.to_thread(shutil.rmtree, session.save_root, True)
+        return len(expired)
+
+    async def discard_unusable_session(self, token: str) -> bool:
+        """Drop a terminally invalid libtorrent handle from the live registry."""
+
+        clean_token = str(token or "")
+        session: Optional[TorrentStreamSession] = None
+        async with self._lock:
+            current = self._sessions.get(clean_token)
+            if current is None or self.session_usable(current):
+                return False
+            session = self._sessions.pop(clean_token, None)
+            if session is not None and self._identity_index.get(session.source_identity) == clean_token:
+                self._identity_index.pop(session.source_identity, None)
+
+        if session is None:
+            return False
+        self._safe_remove_handle(session.handle)
+        await asyncio.to_thread(shutil.rmtree, session.save_root, True)
+        return True
 
     async def release_lease(
         self,
@@ -1776,6 +1844,7 @@ __all__ = [
     "TorrentFileCandidate",
     "TorrentMediaManager",
     "TorrentStreamSession",
+    "TorrentSessionUnavailableError",
     "find_magnet",
     "get_torrent_manager",
     "is_playable_filename",
