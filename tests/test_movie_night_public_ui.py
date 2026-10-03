@@ -97,15 +97,13 @@ def test_movie_night_hub_and_admin_surfaces_are_progressively_disclosed() -> Non
         "Back to Cinema",
         "Close",
     } <= _labels(settings)
-    assert {
-        "Create / Repair Notify Role",
-        "Provider Deck",
+    assert _labels(setup) == {
+        "Repair Notifications",
         "Test Media Endpoint",
-        "Community & Pings",
         "Refresh",
         "Back to Settings",
         "Close",
-    } <= _labels(setup)
+    }
     assert {
         "Add In-App Provider",
         "Add External-Only Link",
