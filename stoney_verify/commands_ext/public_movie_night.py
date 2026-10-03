@@ -684,6 +684,17 @@ def _room_for_interaction(interaction: discord.Interaction) -> Optional[MovieNig
     )
 
 
+def _movie_hub_view(
+    interaction: discord.Interaction,
+    room: Optional[MovieNightRoom],
+) -> "MovieNightHubView":
+    return MovieNightHubView(
+        int(interaction.user.id),
+        room,
+        staff=_staff_authorized(interaction),
+    )
+
+
 async def _movie_hub_notice(
     interaction: discord.Interaction,
     content: str,
@@ -695,7 +706,7 @@ async def _movie_hub_notice(
         interaction,
         content=_compact(content, 1900),
         embed=_room_embed(interaction, current),
-        view=MovieNightHubView(int(interaction.user.id), current),
+        view=_movie_hub_view(interaction, current),
     )
 
 
@@ -1847,13 +1858,13 @@ async def open_movie_results(
                 interaction,
                 content=message,
                 embed=_room_embed(interaction, room),
-                view=MovieNightHubView(int(interaction.user.id)),
+                view=_movie_hub_view(interaction, None),
             )
         return await _private(
             interaction,
             message,
             embed=_room_embed(interaction, room),
-            view=MovieNightHubView(int(interaction.user.id), room),
+            view=_movie_hub_view(interaction, room),
         )
 
     active = manager.active_viewers(room)
@@ -2735,7 +2746,7 @@ async def _start_variant_source(
                 "media result was discarded instead of overwriting the newer room state."
             ),
             embed=_room_embed(interaction, latest_room) if latest_room is not None else None,
-            view=MovieNightHubView(int(interaction.user.id), latest_room),
+            view=_movie_hub_view(interaction, latest_room),
         )
 
     room_manager.select_variant(
@@ -2774,7 +2785,7 @@ async def _start_variant_source(
             f"Dank Cinema stream: {stream_url}"
         )[:2000],
         embed=_release_embed(current, candidate, variant),
-        view=MovieNightHubView(int(interaction.user.id), current),
+        view=_movie_hub_view(interaction, current),
     )
 
 
@@ -2831,7 +2842,7 @@ async def _execute_search_vote(
             interaction,
             content=f"❌ Movie Night source search failed: {type(exc).__name__}: {exc}",
             embed=_room_embed(interaction, room),
-            view=MovieNightHubView(int(interaction.user.id)),
+            view=_movie_hub_view(interaction, None),
         )
 
     outcome = _filter_outcome_for_catalog(outcome, catalog_metadata)
@@ -2887,7 +2898,7 @@ async def _execute_search_vote(
             interaction,
             content=f"ℹ️ No playable releases found for **{query}**. {detail}"[:2000],
             embed=_room_embed(interaction, room),
-            view=MovieNightHubView(int(interaction.user.id)),
+            view=_movie_hub_view(interaction, None),
         )
 
     movies, releases = _materialize_search_results(
@@ -2930,7 +2941,7 @@ async def _execute_passed_vote(
             interaction,
             content=notice[:2000],
             embed=_room_embed(interaction, None),
-            view=MovieNightHubView(int(interaction.user.id)),
+            view=_movie_hub_view(interaction, None),
         )
 
     if vote.action == "search":
@@ -3298,7 +3309,7 @@ class ConfirmMovieNightEndView(_OwnedView):
             interaction,
             content=notice[:2000],
             embed=_room_embed(interaction, None),
-            view=MovieNightHubView(int(interaction.user.id)),
+            view=_movie_hub_view(interaction, None),
         )
 
     @discord.ui.button(label="Keep Watching", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:movie:end:cancel")
@@ -3664,7 +3675,7 @@ async def open_movie_night(
             user_id=int(interaction.user.id),
         )
     embed = _room_embed(interaction, room)
-    view = MovieNightHubView(int(interaction.user.id), room)
+    view = _movie_hub_view(interaction, room)
     notice = _compact(recovery_notice, 1900)
     if replace_message:
         await _replace(interaction, content=notice, embed=embed, view=view)
@@ -3758,7 +3769,7 @@ async def _attach_torrent_media(
         return await interaction.edit_original_response(
             content=f"❌ Torrent could not start: {type(exc).__name__}: {exc}",
             embed=None,
-            view=MovieNightHubView(int(interaction.user.id)),
+            view=_movie_hub_view(interaction, None),
         )
 
     stream_url = manager.stream_url(session)
@@ -3771,7 +3782,7 @@ async def _attach_torrent_media(
         return await interaction.edit_original_response(
             content="❌ Torrent started, but no signed public stream URL could be created. Check Movie Night Setup.",
             embed=None,
-            view=MovieNightHubView(int(interaction.user.id)),
+            view=_movie_hub_view(interaction, None),
         )
 
     latest_room = room_manager.active_room_for_channel(
@@ -3791,7 +3802,7 @@ async def _attach_torrent_media(
                     "The stale media start was discarded safely."
                 ),
                 embed=_room_embed(interaction, latest_room),
-                view=MovieNightHubView(int(interaction.user.id), latest_room),
+                view=_movie_hub_view(interaction, latest_room),
             )
         try:
             room = room_manager.create_room(
@@ -3809,7 +3820,7 @@ async def _attach_torrent_media(
             return await interaction.edit_original_response(
                 content=f"❌ Movie Night room changed while media was loading: {exc}",
                 embed=None,
-                view=MovieNightHubView(int(interaction.user.id)),
+                view=_movie_hub_view(interaction, None),
             )
         role = ready["role"]
         if isinstance(role, discord.Role):
@@ -3836,7 +3847,7 @@ async def _attach_torrent_media(
                     "media result was discarded."
                 ),
                 embed=_room_embed(interaction, latest_room) if latest_room is not None else None,
-                view=MovieNightHubView(int(interaction.user.id), latest_room),
+                view=_movie_hub_view(interaction, latest_room),
             )
         room = latest_room
         room_manager.set_room_media(
@@ -3857,7 +3868,7 @@ async def _attach_torrent_media(
             f"Dank Cinema stream: {stream_url}"
         )[:2000],
         embed=_room_embed(interaction, room),
-        view=MovieNightHubView(int(interaction.user.id), room),
+        view=_movie_hub_view(interaction, room),
         allowed_mentions=_ALLOWED_NONE,
     )
 
