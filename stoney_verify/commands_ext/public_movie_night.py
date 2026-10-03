@@ -2663,26 +2663,15 @@ async def _test_public_media(interaction: discord.Interaction) -> None:
 
 
 class MovieNightSetupView(_OwnedView):
-    @discord.ui.button(label="Create / Repair Notify Role", emoji="🎬", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:setup:role")
+    @discord.ui.button(label="Repair Notifications", emoji="🔔", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:setup:role")
     async def role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _create_or_repair_movie_role(interaction)
-
-    @discord.ui.button(label="Provider Deck", emoji="🎞️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:setup:sources")
-    async def sources(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await open_movie_night_sources(interaction, replace_message=True)
 
     @discord.ui.button(label="Test Media Endpoint", emoji="🌐", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:setup:test-media")
     async def test_media(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _test_public_media(interaction)
-
-    @discord.ui.button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:setup:pings")
-    async def community(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        from .public_community_pings import open_community_ping_setup
-        await open_community_ping_setup(interaction, replace_message=True)
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:setup:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -3439,8 +3428,13 @@ async def _start_or_join_room(
     if not ready["launch_ready"]:
         return await _movie_hub_notice(
             interaction,
-            "❌ Dank Cinema setup is not launch-ready for this mode. "
-            "Open **Setup** and fix the listed blockers.",
+            (
+                "❌ Dank Cinema cannot launch here yet. Open **More → Cinema Settings → "
+                "Setup & Diagnostics** and fix the red blockers."
+                if _staff_authorized(interaction)
+                else "❌ Dank Cinema cannot launch here yet. Ask a server admin to open "
+                "**Cinema Settings → Setup & Diagnostics** and fix the red blockers."
+            ),
         )
 
     role = ready["role"]
@@ -4189,7 +4183,12 @@ async def _attach_torrent_media(
     if not ready["launch_ready"]:
         return await _movie_hub_notice(
             interaction,
-            "❌ Movie Night setup is not launch-ready. Run /movie → Setup first.",
+            (
+                "❌ Dank Cinema cannot attach media here yet. Open **More → Cinema Settings → "
+                "Setup & Diagnostics** and fix the red blockers."
+                if _staff_authorized(interaction)
+                else "❌ Dank Cinema media setup needs server-admin attention."
+            ),
             room=room,
         )
     previous = str(room.stream_token or "") if room is not None else ""
