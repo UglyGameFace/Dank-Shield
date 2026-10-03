@@ -440,6 +440,25 @@ def test_catalog_release_match_rejects_conflicting_year() -> None:
     )
 
 
+
+def test_catalog_release_match_prefers_explicit_tmdb_identity() -> None:
+    catalog = {
+        "catalog_id": "1101383",
+        "title": "The End of Oak Street",
+        "year": 2026,
+    }
+    assert movie_ui._release_matches_catalog(
+        "Provider Alternate Title 1080p",
+        catalog,
+        {"source_reported": {"tmdbId": "1101383"}},
+    )
+    assert not movie_ui._release_matches_catalog(
+        "The End of Oak Street 2026 1080p",
+        catalog,
+        {"source_reported": {"tmdb_id": "999999"}},
+    )
+
+
 def test_movie_night_is_reachable_from_home_registry_and_normal_search_words() -> None:
     feature = feature_by_key("movie_night")
     assert feature is not None
