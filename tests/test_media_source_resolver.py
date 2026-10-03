@@ -754,7 +754,7 @@ def test_movie_detail_url_is_not_materialized_when_nested_torrents_exist() -> No
 
 def test_structured_provider_body_limits_are_bounded_and_feed_aware() -> None:
     assert resolver._MAX_RESPONSE_BYTES == 1024 * 1024
-    assert resolver._MAX_FEED_RESPONSE_BYTES == 4 * 1024 * 1024
+    assert resolver._MAX_FEED_RESPONSE_BYTES == 8 * 1024 * 1024
     assert resolver._MAX_FEED_RESPONSE_BYTES <= 8 * 1024 * 1024
 
 
