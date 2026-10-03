@@ -3928,17 +3928,28 @@ class MovieNightMoreView(_OwnedView):
             self.remove_item(self.end_session)
             self.remove_item(self.session_status)
             self.remove_item(self.pass_host)
+            self.remove_item(self.private_viewers)
         else:
-            can_pass_host = bool(
-                not _private_viewing(room)
-                and int(owner_id) == int(room.host_id)
-                and any(
-                    int(uid) != int(room.host_id)
-                    for uid in get_movie_night_manager().active_viewers(room)
-                )
-            )
-            if not can_pass_host:
+            private_mode = _private_viewing(room)
+            is_host = int(owner_id) == int(room.host_id)
+            if private_mode:
+                self.session_status.label = "Private Session Status"
+                self.end_session.label = "End Private Session"
                 self.remove_item(self.pass_host)
+                if not is_host:
+                    self.remove_item(self.private_viewers)
+                    self.remove_item(self.end_session)
+            else:
+                self.remove_item(self.private_viewers)
+                can_pass_host = bool(
+                    is_host
+                    and any(
+                        int(uid) != int(room.host_id)
+                        for uid in get_movie_night_manager().active_viewers(room)
+                    )
+                )
+                if not can_pass_host:
+                    self.remove_item(self.pass_host)
         if not self.staff:
             self.remove_item(self.settings)
 
@@ -3983,6 +3994,14 @@ class MovieNightMoreView(_OwnedView):
             return await open_movie_night(interaction, replace_message=True)
         await _open_host_handoff_picker(interaction, room)
 
+    @discord.ui.button(label="Private Viewers", emoji="👥", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:more:private-viewers")
+    async def private_viewers(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        room = self._room()
+        if room is None:
+            return await open_movie_night(interaction, replace_message=True)
+        await _open_private_viewers(interaction, room)
+
     @discord.ui.button(label="Refresh Cinema", emoji="🔄", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:more:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -3997,15 +4016,26 @@ class MovieNightMoreView(_OwnedView):
 
         manager = get_movie_night_manager()
         manager.join_room(room.room_id, user_id=int(interaction.user.id))
+        private_mode = _private_viewing(room)
         if int(room.host_id) == int(interaction.user.id):
             return await _replace(
                 interaction,
                 content=(
-                    "🛑 End this Movie Night completely? This stops the room, releases its "
+                    "🛑 End this Private Session? This disconnects invited viewers, releases its "
+                    "streaming media, clears the queue, and lets a fresh session start here."
+                    if private_mode
+                    else "🛑 End this Movie Night completely? This stops the room, releases its "
                     "streaming media, clears the queue, and lets a fresh room start here."
                 ),
                 embed=_session_status_embed(interaction, room),
                 view=ConfirmMovieNightEndView(int(interaction.user.id), room.room_id),
+            )
+
+        if private_mode:
+            return await _movie_hub_notice(
+                interaction,
+                "❌ Only the Private Session host can end this session.",
+                room=room,
             )
 
         existing = next(
