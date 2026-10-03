@@ -699,6 +699,29 @@ async def _movie_hub_notice(
     )
 
 
+def _room_by_id_for_interaction(
+    interaction: discord.Interaction,
+    room_id: str,
+) -> Optional[MovieNightRoom]:
+    manager = get_movie_night_manager()
+    room = manager.get(str(room_id or ""))
+    if room is None:
+        return None
+    if not manager.user_can_access(
+        room,
+        int(getattr(interaction.user, "id", 0) or 0),
+    ):
+        return None
+    return room
+
+
+def _private_viewing(room: Optional[MovieNightRoom]) -> bool:
+    return bool(
+        room is not None
+        and str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
+    )
+
+
 def _movie_night_lifecycle_text() -> str:
     torrent_manager = get_torrent_manager()
     idle_minutes = max(1, int(round(float(torrent_manager.idle_ttl_seconds) / 60.0)))
@@ -1220,18 +1243,29 @@ class MovieCandidateView(_OwnedView):
         super().__init__(owner_id)
         self.room_id = str(room_id)
         self.candidate_id = str(candidate_id)
+        room = get_movie_night_manager().get(self.room_id)
+        if _private_viewing(room):
+            self.remove_item(self.vote_movie)
+            self.queue.label = "Add to Queue"
 
     @discord.ui.button(label="Vote / Unvote Movie", emoji="🗳️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:candidate:vote")
     async def vote_movie(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         manager = get_movie_night_manager()
-        room = manager.get(self.room_id)
+        room = _room_by_id_for_interaction(interaction, self.room_id)
         if room is None:
-            return await _private(interaction, "❌ This Movie Night room no longer exists.")
+            return await _movie_hub_notice(
+                interaction,
+                "❌ This Movie Night room is unavailable or private.",
+            )
         manager.join_room(self.room_id, user_id=int(interaction.user.id))
         candidate = room.candidates.get(self.candidate_id)
         if candidate is None:
-            return await _private(interaction, "❌ That movie result no longer exists.")
+            return await _movie_hub_notice(
+                interaction,
+                "❌ That movie result no longer exists.",
+                room=room,
+            )
         approve = int(interaction.user.id) not in candidate.votes
         manager.vote_candidate(
             self.room_id,
@@ -1254,9 +1288,12 @@ class MovieCandidateView(_OwnedView):
     async def queue(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         manager = get_movie_night_manager()
-        room = manager.get(self.room_id)
+        room = _room_by_id_for_interaction(interaction, self.room_id)
         if room is None:
-            return await _private(interaction, "❌ This Movie Night room no longer exists.")
+            return await _movie_hub_notice(
+                interaction,
+                "❌ This Movie Night room is unavailable or private.",
+            )
         manager.join_room(self.room_id, user_id=int(interaction.user.id))
         try:
             vote = manager.propose_vote(
@@ -1266,12 +1303,24 @@ class MovieCandidateView(_OwnedView):
                 payload={"candidate_id": self.candidate_id},
             )
         except Exception as exc:
-            return await _private(interaction, f"❌ Queue vote could not start: {exc}")
+            return await _replace(
+                interaction,
+                content=f"❌ Queue action could not start: {exc}",
+                embed=_candidate_embed(room, room.candidates[self.candidate_id]),
+                view=MovieCandidateView(self.owner_id, self.room_id, self.candidate_id),
+            )
         if vote.resolved and vote.passed:
-            return await _private(interaction, "✅ Movie added to the shared queue.")
-        await _private(
+            return await _replace(
+                interaction,
+                content="✅ Movie added to the queue.",
+                embed=_candidate_embed(room, room.candidates[self.candidate_id]),
+                view=MovieCandidateView(self.owner_id, self.room_id, self.candidate_id),
+            )
+        await _replace(
             interaction,
-            "🗳️ Queue vote opened. Other active viewers can vote from /movie.",
+            content="🗳️ Queue vote opened. Other active viewers can vote from this Dank Cinema panel.",
+            embed=_candidate_embed(room, room.candidates[self.candidate_id]),
+            view=MovieCandidateView(self.owner_id, self.room_id, self.candidate_id),
         )
 
     @discord.ui.button(label="Back to Results", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:candidate:back")
@@ -1292,6 +1341,11 @@ class MovieReleaseView(_OwnedView):
         self.room_id = str(room_id)
         self.candidate_id = str(candidate_id)
         self.variant_id = str(variant_id)
+        room = get_movie_night_manager().get(self.room_id)
+        if _private_viewing(room):
+            self.remove_item(self.vote_release)
+            self.play.label = "Play This Release"
+            self.queue.label = "Add to Queue"
 
     def _resolve(self) -> tuple[Optional[MovieNightRoom], Any, Any]:
         manager = get_movie_night_manager()
@@ -1307,8 +1361,16 @@ class MovieReleaseView(_OwnedView):
     async def vote_release(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room, candidate, variant = self._resolve()
-        if room is None or candidate is None or variant is None:
-            return await _private(interaction, "❌ That Movie Night release no longer exists.")
+        if (
+            room is None
+            or candidate is None
+            or variant is None
+            or not get_movie_night_manager().user_can_access(room, int(interaction.user.id))
+        ):
+            return await _movie_hub_notice(
+                interaction,
+                "❌ That Movie Night release is unavailable or private.",
+            )
         manager = get_movie_night_manager()
         manager.join_room(self.room_id, user_id=int(interaction.user.id))
         approve = int(interaction.user.id) not in variant.votes
@@ -1334,8 +1396,16 @@ class MovieReleaseView(_OwnedView):
     async def play(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room, candidate, variant = self._resolve()
-        if room is None or candidate is None or variant is None:
-            return await _private(interaction, "❌ That Movie Night release no longer exists.")
+        if (
+            room is None
+            or candidate is None
+            or variant is None
+            or not get_movie_night_manager().user_can_access(room, int(interaction.user.id))
+        ):
+            return await _movie_hub_notice(
+                interaction,
+                "❌ That Movie Night release is unavailable or private.",
+            )
 
         manager = get_movie_night_manager()
         manager.join_room(self.room_id, user_id=int(interaction.user.id))
@@ -1351,10 +1421,19 @@ class MovieReleaseView(_OwnedView):
             )
 
         if host_active:
-            return await _private(
+            return await _replace(
                 interaction,
-                "ℹ️ The host is active. Vote for this release or queue the movie; "
-                "only the active host can replace what is playing.",
+                content=(
+                    "ℹ️ The host is active. Vote for this release or queue the movie; "
+                    "only the active host can replace what is playing."
+                ),
+                embed=_release_embed(room, candidate, variant),
+                view=MovieReleaseView(
+                    self.owner_id,
+                    self.room_id,
+                    self.candidate_id,
+                    self.variant_id,
+                ),
             )
 
         try:
@@ -1368,24 +1447,46 @@ class MovieReleaseView(_OwnedView):
                 },
             )
         except Exception as exc:
-            return await _private(interaction, f"❌ Playback vote could not start: {exc}")
+            return await _replace(
+                interaction,
+                content=f"❌ Playback vote could not start: {exc}",
+                embed=_release_embed(room, candidate, variant),
+                view=MovieReleaseView(
+                    self.owner_id,
+                    self.room_id,
+                    self.candidate_id,
+                    self.variant_id,
+                ),
+            )
 
         if vote.resolved and vote.passed:
             return await _execute_passed_vote(interaction, room, vote)
 
-        await _private(
+        await _replace(
             interaction,
-            "🗳️ Host-away playback vote opened for this release. "
-            "Other active viewers can approve it from /movie.",
+            content=(
+                "🗳️ Host-away playback vote opened for this release. "
+                "Other active viewers can approve it from this Dank Cinema panel."
+            ),
+            embed=_release_embed(room, candidate, variant),
+            view=MovieReleaseView(
+                self.owner_id,
+                self.room_id,
+                self.candidate_id,
+                self.variant_id,
+            ),
         )
 
     @discord.ui.button(label="Vote to Queue Movie", emoji="📺", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:release:queue")
     async def queue(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         manager = get_movie_night_manager()
-        room = manager.get(self.room_id)
+        room = _room_by_id_for_interaction(interaction, self.room_id)
         if room is None:
-            return await _private(interaction, "❌ This Movie Night room no longer exists.")
+            return await _movie_hub_notice(
+                interaction,
+                "❌ This Movie Night room is unavailable or private.",
+            )
         manager.join_room(self.room_id, user_id=int(interaction.user.id))
         vote = manager.propose_vote(
             self.room_id,
@@ -1393,9 +1494,43 @@ class MovieReleaseView(_OwnedView):
             action="queue",
             payload={"candidate_id": self.candidate_id},
         )
+        candidate = room.candidates.get(self.candidate_id)
+        variant = candidate.variants.get(self.variant_id) if candidate is not None else None
         if vote.resolved and vote.passed:
-            return await _private(interaction, "✅ Movie added to the shared queue.")
-        await _private(interaction, "🗳️ Queue vote opened.")
+            return await _replace(
+                interaction,
+                content="✅ Movie added to the queue.",
+                embed=_release_embed(room, candidate, variant)
+                if candidate is not None and variant is not None
+                else _room_embed(interaction, room),
+                view=(
+                    MovieReleaseView(
+                        self.owner_id,
+                        self.room_id,
+                        self.candidate_id,
+                        self.variant_id,
+                    )
+                    if candidate is not None and variant is not None
+                    else MovieNightHubView(self.owner_id, room)
+                ),
+            )
+        await _replace(
+            interaction,
+            content="🗳️ Queue vote opened.",
+            embed=_release_embed(room, candidate, variant)
+            if candidate is not None and variant is not None
+            else _room_embed(interaction, room),
+            view=(
+                MovieReleaseView(
+                    self.owner_id,
+                    self.room_id,
+                    self.candidate_id,
+                    self.variant_id,
+                )
+                if candidate is not None and variant is not None
+                else MovieNightHubView(self.owner_id, room)
+            ),
+        )
 
     @discord.ui.button(label="Back to Releases", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:release:back")
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
