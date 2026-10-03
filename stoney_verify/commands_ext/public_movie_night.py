@@ -398,12 +398,16 @@ def _setup_readiness(
     warnings: list[str] = []
 
     if require_notification_role and role is None:
-        blockers.append("Movie Night notification role is not mapped.")
+        warnings.append(
+            "Movie Night notifications are not configured. Watch Parties can still start; "
+            "create/repair the optional notify role to ping subscribers."
+        )
     if not can_send:
         blockers.append("Dank Shield needs View Channel, Send Messages, and Embed Links here.")
     if require_notification_role and role is not None and not ping_ready:
-        blockers.append(
-            "The Movie Night role is not mentionable and Dank Shield lacks Mention Everyone here."
+        warnings.append(
+            "The Movie Night notify role cannot currently be pinged. Watch Parties can still start, "
+            "but subscribers will not receive the role notification until it is repaired."
         )
     if not public_base:
         blockers.append("DANK_MEDIA_PUBLIC_BASE_URL is not configured.")
@@ -441,7 +445,9 @@ def _setup_readiness(
             "but direct Discord media relay/fallbacks may be reduced."
         )
     if require_notification_role and role is None and not can_manage_roles:
-        blockers.append("Dank Shield needs Manage Roles to create the Movie Night role.")
+        warnings.append(
+            "Dank Shield lacks Manage Roles, so it cannot create the optional Movie Night notify role."
+        )
     return {
         "role": role,
         "can_send": can_send,
@@ -489,11 +495,11 @@ def _setup_embed(
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(
-        name="1 • Community & Pings role",
+        name="1 • Notifications (optional)",
         value=(
-            f"{'✅' if role else '❌'} Notify role: "
+            f"{'✅' if role else 'ℹ️'} Notify role: "
             f"{role.mention if isinstance(role, discord.Role) else 'Not configured'}\n"
-            f"{'✅' if ready['ping_ready'] else '❌'} Notification ping readiness\n"
+            f"{'✅' if ready['ping_ready'] else 'ℹ️'} Notification ping readiness\n"
             f"{'✅' if ready['can_manage_roles'] else '⚠️'} Manage Roles "
             "(needed only to create/repair the role)"
         ),
@@ -2623,7 +2629,7 @@ async def _test_public_media(interaction: discord.Interaction) -> None:
 
 
 class MovieNightSetupView(_OwnedView):
-    @discord.ui.button(label="Create / Repair Role", emoji="🎬", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:setup:role")
+    @discord.ui.button(label="Create / Repair Notify Role", emoji="🎬", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:setup:role")
     async def role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _create_or_repair_movie_role(interaction)
@@ -3313,7 +3319,7 @@ async def _announce_room(
     interaction: discord.Interaction,
     room: MovieNightRoom,
     *,
-    role: discord.Role,
+    role: Optional[discord.Role] = None,
 ) -> None:
     if str(getattr(room, "mode", "watch_party") or "watch_party") == "private":
         return
@@ -3333,11 +3339,11 @@ async def _announce_room(
     allowed = discord.AllowedMentions(
         everyone=False,
         users=False,
-        roles=[role],
+        roles=[role] if isinstance(role, discord.Role) else False,
         replied_user=False,
     )
     await channel.send(
-        content=role.mention,
+        content=role.mention if isinstance(role, discord.Role) else None,
         embed=embed,
         allowed_mentions=allowed,
     )
@@ -3404,11 +3410,6 @@ async def _start_or_join_room(
         )
 
     role = ready["role"]
-    if normalized_mode != "private" and not isinstance(role, discord.Role):
-        return await _movie_hub_notice(
-            interaction,
-            "❌ Movie Night notification role is missing.",
-        )
 
     try:
         room = manager.create_room(
@@ -3418,8 +3419,12 @@ async def _start_or_join_room(
             stream_token="",
             mode=normalized_mode,
         )
-        if normalized_mode != "private" and isinstance(role, discord.Role):
-            await _announce_room(interaction, room, role=role)
+        if normalized_mode != "private":
+            await _announce_room(
+                interaction,
+                room,
+                role=role if isinstance(role, discord.Role) else None,
+            )
     except Exception as exc:
         return await _movie_hub_notice(
             interaction,
@@ -4245,11 +4250,14 @@ async def _attach_torrent_media(
                 view=_movie_hub_view(interaction, None),
             )
         role = ready["role"]
-        if isinstance(role, discord.Role):
-            try:
-                await _announce_room(interaction, room, role=role)
-            except Exception:
-                pass
+        try:
+            await _announce_room(
+                interaction,
+                room,
+                role=role if isinstance(role, discord.Role) else None,
+            )
+        except Exception:
+            pass
     else:
         if (
             latest_room is None
