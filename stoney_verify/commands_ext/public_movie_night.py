@@ -3855,7 +3855,7 @@ class MovieNightHubView(_OwnedView):
             return await _execute_passed_vote(interaction, room, vote)
         await open_movie_night(interaction, replace_message=True)
 
-    @discord.ui.button(label="More", emoji="⋯", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:hub:more")
+    @discord.ui.button(label="More", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:hub:more")
     async def more(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night_more(interaction, replace_message=True)
