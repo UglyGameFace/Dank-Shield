@@ -11,7 +11,7 @@ import socket
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
-from urllib.parse import parse_qsl, quote_plus, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urljoin, urlsplit, urlunsplit
 
 import aiohttp
 
@@ -240,10 +240,24 @@ def _search_url(endpoint: str, query: str) -> str:
     if not clean_query:
         raise ValueError("Movie search query is empty.")
 
-    if "{query}" in endpoint:
-        return endpoint.replace("{query}", quote_plus(clean_query))
-
     parsed = urlsplit(endpoint)
+    if "{query}" in endpoint:
+        path = str(parsed.path or "")
+        query = str(parsed.query or "")
+        if "{query}" in path:
+            path = path.replace("{query}", quote(clean_query, safe=""))
+        if "{query}" in query:
+            query = query.replace("{query}", quote_plus(clean_query))
+        return urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                path,
+                query,
+                "",
+            )
+        )
+
     if _looks_like_static_feed_endpoint(endpoint):
         return endpoint
 
