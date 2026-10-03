@@ -2263,7 +2263,7 @@ class ExternalSearchProviderModal(discord.ui.Modal):
         source: Optional[CustomMediaSource] = None,
     ) -> None:
         super().__init__(
-            title="Edit External-Only Link" if source is not None else "Add External-Only Link",
+            title="Edit Reference Link" if source is not None else "Add Reference Link",
             timeout=300,
         )
         self.owner_id = int(owner_id)
@@ -2304,7 +2304,7 @@ class ExternalSearchProviderModal(discord.ui.Modal):
             render_provider_search_url(prepared_url, "x" * 180)
             host = str(urlsplit(prepared_url).hostname or "").strip(".")
             fallback_label = host.split(".", 1)[0].replace("-", " ").replace("_", " ").title()
-            label = _compact(self.label_input.value, 80) or fallback_label or "External-Only Link"
+            label = _compact(self.label_input.value, 80) or fallback_label or "Reference Link"
             updated = add_custom_source(
                 current,
                 source_id=self.source_id,
@@ -2328,7 +2328,7 @@ class ExternalSearchProviderModal(discord.ui.Modal):
         except Exception as exc:
             return await _replace(
                 interaction,
-                content=f"❌ Dank Cinema external-only link could not save safely: {type(exc).__name__}.",
+                content=f"❌ Dank Cinema reference link could not save safely: {type(exc).__name__}.",
                 embed=_sources_embed(current),
                 view=MovieNightSourcesView(int(interaction.user.id)),
             )
@@ -2343,7 +2343,7 @@ class ExternalSearchProviderModal(discord.ui.Modal):
         await _replace(
             interaction,
             content=(
-                "✅ External-only link saved for admin reference. It will not appear in normal "
+                "✅ Reference link saved for admin use. It will not appear in normal "
                 "Find Movie results and Dank Cinema will not scrape or ingest that page."
             ),
             embed=_sources_embed(updated),
