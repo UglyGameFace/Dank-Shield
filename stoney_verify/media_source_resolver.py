@@ -7,6 +7,7 @@ import ipaddress
 import json
 import re
 import socket
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 from urllib.parse import parse_qsl, quote_plus, urlencode, urljoin, urlsplit, urlunsplit
@@ -216,6 +217,10 @@ def _search_url(endpoint: str, query: str) -> str:
         return endpoint.replace("{query}", quote_plus(clean_query))
 
     parsed = urlsplit(endpoint)
+    path = str(parsed.path or "").casefold()
+    if path.endswith((".xml", ".rss", ".atom")):
+        return endpoint
+
     pairs = list(parse_qsl(parsed.query, keep_blank_values=True))
     pairs.append(("q", clean_query))
     return urlunsplit(
