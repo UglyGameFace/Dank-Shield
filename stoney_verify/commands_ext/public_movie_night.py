@@ -415,8 +415,8 @@ def _setup_embed(
     embed = discord.Embed(
         title="🍿 Dank Cinema • Setup",
         description=(
-            "**Home › Community & Engagement › Dank Cinema › Setup**\n"
-            "This page validates the full Dank Cinema chain before a room is allowed to launch."
+            "**Dank Cinema › Settings › Setup & Diagnostics**\n"
+            "Validates permissions, runtime, storage, providers, and public media readiness."
         ),
         color=discord.Color.green() if ready["launch_ready"] else discord.Color.orange(),
         timestamp=discord.utils.utcnow(),
@@ -1038,8 +1038,8 @@ def _queue_embed(room: MovieNightRoom) -> discord.Embed:
     ]
     if not queued:
         embed.description = (
-            "The shared queue is empty. Open **Movie Picks**, choose a movie, and use "
-            "**Vote to Queue**."
+            "The queue is empty. Open **Movie Picks**, choose a movie, and use "
+            + ("**Add to Queue**." if _private_viewing(room) else "**Vote to Queue**.")
         )
         return embed
 
@@ -1870,21 +1870,24 @@ async def open_movie_results(
     for candidate in ranked[:25]:
         variants = manager.ranked_variants(room.room_id, candidate.candidate_id)
         best = variants[0] if variants else None
+        queued = candidate.candidate_id in room.queue
         if best is None:
-            description = f"{len(candidate.votes & active)} movie vote(s) • no release"
+            description = "No playable release yet"
         else:
             health = best.swarm_health
             description = (
                 f"{len(variants)} releases • {health['seeds']} seeds • "
                 f"{health['leechers']} leeches"
             )
+        if queued:
+            description = f"Queued • {description}"
         choices.append(
             DankChoice(
                 label=candidate.title[:100],
                 value=candidate.candidate_id,
                 description=description[:100],
-                emoji="🎬",
-                default=candidate.candidate_id in room.queue,
+                emoji="📺" if queued else "🎬",
+                default=False,
             )
         )
 
