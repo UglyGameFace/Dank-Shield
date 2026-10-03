@@ -3356,22 +3356,6 @@ async def _start_or_join_room(
         )
 
     normalized_mode = "private" if str(mode).casefold() == "private" else "watch_party"
-    raw, _model = await _load_community(guild)
-    _source_raw, registry = await _sources_state(int(guild.id))
-    ready = _setup_readiness(
-        guild,
-        channel,
-        raw,
-        registry,
-        require_notification_role=normalized_mode != "private",
-    )
-    if not ready["launch_ready"]:
-        return await _movie_hub_notice(
-            interaction,
-            "❌ Dank Cinema setup is not launch-ready for this mode. "
-            "Open **Setup** and fix the listed blockers.",
-        )
-
     manager = get_movie_night_manager()
     room = manager.active_room_for_channel(int(guild.id), int(channel.id))
     if room is not None:
@@ -3398,6 +3382,25 @@ async def _start_or_join_room(
 
         manager.join_room(room.room_id, user_id=int(interaction.user.id))
         return await open_movie_night(interaction, replace_message=True)
+
+    # Setup readiness is a launch requirement, not a rejoin requirement. An
+    # existing room must stay joinable even if an admin changes configuration
+    # after it was created.
+    raw, _model = await _load_community(guild)
+    _source_raw, registry = await _sources_state(int(guild.id))
+    ready = _setup_readiness(
+        guild,
+        channel,
+        raw,
+        registry,
+        require_notification_role=normalized_mode != "private",
+    )
+    if not ready["launch_ready"]:
+        return await _movie_hub_notice(
+            interaction,
+            "❌ Dank Cinema setup is not launch-ready for this mode. "
+            "Open **Setup** and fix the listed blockers.",
+        )
 
     role = ready["role"]
     if normalized_mode != "private" and not isinstance(role, discord.Role):
