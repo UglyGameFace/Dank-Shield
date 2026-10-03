@@ -903,3 +903,18 @@ Regression coverage proves:
 - adaptive buffer completion graduates the viewer;
 - a graduated viewer can later participate in group buffering;
 - media replacement requalifies non-host viewers for the new stream.
+
+## PR #426 exact-head CI failure and repair
+
+The latest master-audit head reached the full unit suite and failed only two Movie Night UI tests:
+
+1. `_release_embed()` referenced `collaborative` without defining it after the solo-voting simplification.
+2. The provider-browser safety regression still expected the old always-visible voting controls, even though this audit intentionally hides meaningless solo voting and relabels queueing to **Add to Queue**.
+
+Repair:
+- derive release-detail collaborative state from the already computed active-viewer set;
+- keep release-vote counts hidden for solo/private rooms and visible only for true multi-viewer shared rooms;
+- update the provider-safety regression to assert the current solo controls and explicitly verify no primary candidate button carries an external URL.
+
+No provider runtime, torrent runtime, queue semantics, or collaborative multi-viewer voting behavior was weakened.
+
