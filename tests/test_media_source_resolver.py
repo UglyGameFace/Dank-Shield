@@ -798,4 +798,3 @@ def test_limited_body_enforces_selected_response_budget() -> None:
         )
     )
     assert accepted == payload
-
