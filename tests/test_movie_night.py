@@ -1285,3 +1285,33 @@ def test_host_handoff_requires_active_viewer_and_is_disabled_for_private() -> No
         assert "private" in str(exc).lower()
     else:
         raise AssertionError("private viewing unexpectedly allowed host transfer")
+
+
+def test_rejoin_restores_active_presence_without_losing_room_state() -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=35)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="torrent-token",
+        now=100.0,
+    )
+    candidate = manager.nominate(
+        room.room_id,
+        user_id=10,
+        title="Queued Movie",
+        auto_vote=False,
+        now=100.0,
+    )
+    room.queue.append(candidate.candidate_id)
+    room.viewers[10].last_seen = 100.0
+    room.host_last_seen = 100.0
+
+    assert manager.active_viewers(room, now=140.0) == set()
+
+    manager.join_room(room.room_id, user_id=10, now=140.0)
+
+    assert manager.active_viewers(room, now=140.0) == {10}
+    assert room.queue == [candidate.candidate_id]
+    assert room.stream_token == "torrent-token"
+    assert room.host_id == 10
