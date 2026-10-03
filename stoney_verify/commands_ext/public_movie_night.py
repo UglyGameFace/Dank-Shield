@@ -1020,7 +1020,8 @@ def _release_matches_catalog(
         reported_tmdb = _compact(
             reported.get("tmdb")
             or reported.get("tmdb_id")
-            or reported.get("tmdbId"),
+            or reported.get("tmdbId")
+            or reported.get("tmdbid"),
             40,
         )
         if reported_tmdb:
