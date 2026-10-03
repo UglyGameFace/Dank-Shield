@@ -93,9 +93,12 @@ async def _room_and_user(
     room_id, uid = _request_identity(request)
     if uid is None:
         raise web.HTTPUnauthorized(text="Invalid or expired Movie Night link.")
-    room = get_movie_night_manager().get(room_id)
+    manager = get_movie_night_manager()
+    room = manager.get(room_id)
     if room is None:
         raise web.HTTPNotFound(text="Movie Night room not found.")
+    if not manager.user_can_access(room, uid):
+        raise web.HTTPForbidden(text="This is a private Dank Cinema viewing session.")
     return room, uid
 
 
@@ -225,6 +228,8 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     return {
         "ok": True,
         "room_id": room.room_id,
+        "mode": str(getattr(room, "mode", "watch_party") or "watch_party"),
+        "private": str(getattr(room, "mode", "watch_party") or "watch_party") == "private",
         "title": str(title or "Movie Night"),
         "release_source": source,
         "state": room.playback_state,
