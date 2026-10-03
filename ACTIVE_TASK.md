@@ -2,6 +2,71 @@
 
 ## Active task / outcome
 
+**DANK-SHIELD-405-FOLLOWUP — eliminate slow-swarm play/stop glitching and invalid partial stream bodies**
+
+Baseline:
+`main@d7f72c3a7a24fc839671f838366ccdf53bbd284f` (PR #426 merged).
+
+Active branch:
+`fix/405-slow-swarm-playback-stability`
+
+Issue:
+**#405 — Fix Dank Cinema viewer sync, skipping, and silent playback**
+
+Status:
+**Production canary found remaining playback instability around play/pause transitions and lower-seed torrents. Investigation found two concrete buffer/HTTP correctness defects in the existing #405 path. The focused repair is implemented and awaiting exact-head CI plus live host/viewer canary.**
+
+### Root cause / execution path
+
+1. **Browser buffer telemetry was not contiguous at the playhead.**
+   - Watch used the end of the final `video.buffered` range.
+   - Torrent/media browsers can hold disjoint ranges from seeks and metadata/tail probes.
+   - A far-away buffered range could therefore make a viewer appear safely buffered even when a gap existed immediately ahead of playback.
+   - That can prematurely graduate synchronization/group-buffer state and produces visible stalls on weaker swarms.
+
+2. **Slow partial torrent responses could violate their advertised HTTP range length.**
+   - The stream route advertised the client-requested `Content-Length` / `Content-Range`.
+   - After headers were committed, a later 1 MiB chunk could miss `wait_range()` and the route would break/EOF early.
+   - Lower-seed torrents make that path much more likely.
+   - The browser then receives fewer bytes than the 206 response promised, causing range retries/network stalls that look like play/stop glitching.
+
+### Changes
+
+- Watch heartbeat now reports the end of the **buffered range containing the current playhead**, not the last unrelated buffered range.
+- Partial torrent GETs now use RFC 9110's allowed subset behavior:
+  - wait for the adaptive startup corridor first;
+  - advertise only the contiguous byte subset already proven available;
+  - set `Content-Length` and `Content-Range` to that actual subset;
+  - let the browser request the remainder with its next Range request.
+- No second torrent runtime, proxy, retry owner, or playback state model added.
+
+### Validation added
+
+- regression contract for contiguous-at-playhead browser buffer telemetry;
+- direct bounded-partial-range helper coverage;
+- static route contract proving the bounded response path uses the startup-buffer boundary.
+
+### Cleanup / conflicts
+
+- Scope is limited to Movie Night Watch buffer telemetry, torrent byte-range response integrity, their tests, and this task record.
+- Existing adaptive readahead, per-viewer consumer state, group buffering, leases, provider behavior, signed URLs, and invalid-handle containment remain intact.
+- No unrelated backlog work included.
+
+### Remaining Definition of Done
+
+1. exact-head targeted/full CI green;
+2. final diff hygiene review;
+3. production canary with host + viewer on both healthy and low-seed releases;
+4. verify no truncated range/retry loop, repeated play/stop oscillation, viewer audio regression, or Tap-to-Sync regression.
+
+### Next step
+
+Open the focused PR, run exact-head repository workflows, patch only evidence-backed failures, then production-canary before closing #405.
+
+---
+
+## Active task / outcome
+
 **DANK-SHIELD-425 — Dank Cinema master audit: setup, UX, lifecycle, playback, providers, and capacity**
 
 Production baseline:
