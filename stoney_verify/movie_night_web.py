@@ -165,6 +165,9 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     movie_manager = get_movie_night_manager()
     torrent_manager = get_torrent_manager()
     session = await torrent_manager.get(room.stream_token) if room.stream_token else None
+    if session is not None and not torrent_manager.session_usable(session):
+        await torrent_manager.discard_unusable_session(room.stream_token)
+        session = None
 
     candidate = room.candidates.get(room.current_candidate_id) if room.current_candidate_id else None
     variant = (
@@ -338,6 +341,9 @@ async def movie_night_heartbeat(request: web.Request) -> web.Response:
     torrent_manager = get_torrent_manager()
     movie_manager = get_movie_night_manager()
     session = await torrent_manager.get(room.stream_token) if room.stream_token else None
+    if session is not None and not torrent_manager.session_usable(session):
+        await torrent_manager.discard_unusable_session(room.stream_token)
+        session = None
     viewer_before = room.viewers.get(int(uid))
     position, duration, buffered, paused, refresh_warmup = _preserve_refresh_telemetry(
         viewer_before,
