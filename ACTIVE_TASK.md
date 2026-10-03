@@ -164,6 +164,21 @@ Torrent:
 - a refreshed unleased session is rechecked and retained;
 - invalid libtorrent handle becomes the controlled session-unavailable exception and is discardable.
 
+## Exact-head CI failure and repair
+
+PR #424 exact head `8c331c9e1fa3e8e1ab6c0b23287acf8c642302dd` failed only the main unit-test job:
+- `test_cinema_home_embed_is_simple_and_status_details_are_separate`
+- `test_movie_night_hub_adds_signed_watch_link_when_media_is_active`
+
+Both were compatibility regressions in lightweight test/caller contexts, not the production presence logic:
+- `_room_embed()` assumed every interaction stub exposed `.user`;
+- `MovieNightHubView` assumed every lightweight room object exposed full `.viewers` state.
+
+Repair:
+- use a defensive nested interaction-user lookup for room rendering;
+- preserve established active-room controls when a lightweight compatibility room lacks live-viewer state;
+- no change to real `MovieNightRoom` active-viewer semantics or the 35-second production heartbeat.
+
 ## Blockers / remaining validation
 
 Still required:
@@ -183,7 +198,7 @@ Still required:
 
 ## Next step
 
-Run exact-head CI for the Discord-presence follow-up, patch only evidence-backed failures, merge when clean, then canary: leave the Cinema panel/search picker idle for more than 35 seconds, continue adding movies, verify the fresh Discord action renews presence and no search/queue vote rejects the user as inactive.
+Re-run exact-head CI after the compatibility repair, merge when clean, then canary: leave the Cinema panel/search picker idle for more than 35 seconds, continue adding movies, verify the fresh Discord action renews presence and no search/queue vote rejects the user as inactive.
 
 
 ---
