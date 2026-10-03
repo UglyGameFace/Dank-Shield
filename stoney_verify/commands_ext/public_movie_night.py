@@ -4274,6 +4274,11 @@ class MovieNightHubView(_OwnedView):
     ) -> None:
         super().__init__(owner_id)
         private_mode = _private_viewing(room)
+        private_host = bool(
+            private_mode
+            and room is not None
+            and int(owner_id) == int(room.host_id)
+        )
         open_vote = (
             _latest_open_vote(room)
             if room is not None and isinstance(getattr(room, "votes", None), Mapping)
@@ -4291,27 +4296,26 @@ class MovieNightHubView(_OwnedView):
             try:
                 owner_active = int(owner_id) in manager.active_viewers(room)
             except (AttributeError, TypeError):
-                # Some lightweight callers only need the hub to render a signed
-                # Watch link and do not carry full live-viewer state. Preserve
-                # the established active-room controls in that compatibility path.
+                # Lightweight render-only callers may not carry full viewer state.
                 owner_active = True
             self.remove_item(self.start_private)
             if private_mode or owner_active:
                 self.remove_item(self.start_join)
             else:
                 self.start_join.label = "Rejoin Movie Night"
-            if private_mode or open_vote is None:
+
+            if private_mode:
+                self.remove_item(self.vote_yes)
+                self.remove_item(self.vote_no)
+                if not private_host:
+                    self.remove_item(self.search)
+                    self.remove_item(self.results)
+                    self.remove_item(self.queue)
+            elif open_vote is None:
                 self.remove_item(self.vote_yes)
                 self.remove_item(self.vote_no)
 
-        if (
-            room is not None
-            and room.stream_token
-            and (
-                not private_mode
-                or int(owner_id) == int(room.host_id)
-            )
-        ):
+        if room is not None and room.stream_token:
             watch_url = movie_night_watch_url(room.room_id, int(owner_id))
             if watch_url:
                 self.add_item(
