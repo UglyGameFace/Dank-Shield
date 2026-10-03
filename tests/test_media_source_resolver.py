@@ -742,3 +742,42 @@ def test_movie_detail_url_is_not_materialized_when_nested_torrents_exist() -> No
     assert len(variants) == 2
     assert all(variant.source_ref.startswith("magnet:?xt=urn:btih:") for variant in variants)
 
+
+def test_structured_provider_body_limits_are_bounded_and_feed_aware() -> None:
+    assert resolver._MAX_RESPONSE_BYTES == 1024 * 1024
+    assert resolver._MAX_FEED_RESPONSE_BYTES == 4 * 1024 * 1024
+    assert resolver._MAX_FEED_RESPONSE_BYTES <= 8 * 1024 * 1024
+
+
+def test_limited_body_enforces_selected_response_budget() -> None:
+    payload = b"x" * (80 * 1024)
+
+    class _Content:
+        async def iter_chunked(self, size):
+            assert size == 64 * 1024
+            yield payload
+
+    class _Response:
+        headers = {"Content-Length": str(len(payload))}
+        content = _Content()
+
+    try:
+        asyncio.run(
+            resolver._read_limited_body(
+                _Response(),
+                max_bytes=64 * 1024,
+            )
+        )
+    except ValueError as exc:
+        assert "exceeds" in str(exc)
+    else:
+        raise AssertionError("provider body larger than selected budget was accepted")
+
+    accepted = asyncio.run(
+        resolver._read_limited_body(
+            _Response(),
+            max_bytes=128 * 1024,
+        )
+    )
+    assert accepted == payload
+
