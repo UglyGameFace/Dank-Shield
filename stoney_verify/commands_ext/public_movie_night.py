@@ -596,8 +596,8 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
         name="🧩 Dank Provider Lab",
         value=(
             "Advanced owners can add two clearly different capabilities:\n"
-            "• **Add In-App Provider** — a structured HTTPS search API/feed returns playable "
-            "magnets or .torrent/source refs directly into Dank Cinema.\n"
+            "• **Add In-App Provider** — a structured HTTPS JSON search API or RSS/Atom feed returns "
+            "playable magnets or .torrent refs directly into Dank Cinema.\n"
             "• **Add External-Only Link** — saves a browser search URL for admin reference only; "
             "it is **not** part of normal Find Movie results.\n"
             "In-App providers all use the same Dank Engine adapter, so future torrent APIs can "
@@ -616,7 +616,7 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
         for source in registry.sources:
             state = "✅" if source.enabled else "⏸️"
             mode = (
-                "In-App • playable API"
+                "In-App • structured"
                 if source.provider_type == PROVIDER_TYPE_JSON
                 else "External-only • browser link"
             )
@@ -646,11 +646,10 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
     embed.add_field(
         name="🔌 In-App Provider Contract",
         value=(
-            "Response list: **results / items / releases / variants / torrents / data**.\n"
-            "Each release needs a title/name plus **magnet**, **magnet_uri**, **torrent_url**, "
-            "**download_url**, **source_ref**, or equivalent playable ref.\n"
-            "Optional aliases include size/length/bytes, seeds/seeders, leeches/leechers, peers, "
-            "filename/release_name, and metadata. Dank Cinema normalizes the rest."
+            "**JSON:** results / items / releases / variants / torrents / data wrappers are supported.\n"
+            "**RSS/Atom:** item/entry feeds can provide a magnet, torrent info-hash, or .torrent enclosure.\n"
+            "Common aliases include title/name, magnet/info_hash/torrent_url/source_ref, size, seeds, "
+            "leeches, peers, filename/release_name, and safe metadata. Dank Cinema normalizes the rest."
         )[:1024],
         inline=False,
     )
@@ -1444,7 +1443,7 @@ class CustomSourceModal(discord.ui.Modal):
         )
         self.endpoint_input = discord.ui.TextInput(
             label="HTTPS search API / feed",
-            placeholder="https://api.example.com/search?q={query}",
+            placeholder="https://api.example.com/search?q={query} or https://site/feed.xml",
             default=str(source.endpoint_url if source is not None else "")[:1000] or None,
             min_length=8,
             max_length=1000,
@@ -1532,8 +1531,8 @@ class CustomSourceModal(discord.ui.Modal):
         if probe.playable_results == 0:
             notice = (
                 "⚠️ In-App Provider responded with structured data and was saved, but the Batman "
-                "probe returned no playable media refs. It will not contribute releases until its "
-                "result fields match the Dank Cinema provider contract."
+                "probe found no matching playable release. That can be normal for a static RSS/Atom "
+                "feed that simply does not contain Batman yet."
             )
         await _replace(
             interaction,
