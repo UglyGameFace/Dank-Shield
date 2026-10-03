@@ -4220,8 +4220,8 @@ async def _attach_torrent_media(
     except Exception as exc:
         return await interaction.edit_original_response(
             content=f"❌ Torrent could not start: {type(exc).__name__}: {exc}",
-            embed=None,
-            view=_movie_hub_view(interaction, None),
+            embed=_room_embed(interaction, room) if room is not None else _room_embed(interaction, None),
+            view=_movie_hub_view(interaction, room),
         )
 
     stream_url = manager.stream_url(session)
@@ -4232,9 +4232,9 @@ async def _attach_torrent_media(
             remove_if_unused=True,
         )
         return await interaction.edit_original_response(
-            content="❌ Torrent started, but no signed public stream URL could be created. Check Movie Night Setup.",
-            embed=None,
-            view=_movie_hub_view(interaction, None),
+            content="❌ Torrent started, but no signed public stream URL could be created. Check Cinema Settings → Setup & Diagnostics.",
+            embed=_room_embed(interaction, room) if room is not None else _room_embed(interaction, None),
+            view=_movie_hub_view(interaction, room),
         )
 
     latest_room = room_manager.active_room_for_channel(
