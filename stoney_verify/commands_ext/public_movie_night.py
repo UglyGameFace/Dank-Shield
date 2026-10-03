@@ -4324,7 +4324,11 @@ class MovieNightHubView(_OwnedView):
                 self.remove_item(self.vote_yes)
                 self.remove_item(self.vote_no)
 
-        if room is not None and room.stream_token:
+        if (
+            room is not None
+            and room.stream_token
+            and get_movie_night_manager().user_can_access(room, int(owner_id))
+        ):
             watch_url = movie_night_watch_url(room.room_id, int(owner_id))
             if watch_url:
                 self.add_item(
