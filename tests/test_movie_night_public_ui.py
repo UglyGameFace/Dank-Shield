@@ -98,7 +98,7 @@ def test_movie_night_hub_and_admin_surfaces_are_progressively_disclosed() -> Non
         "Close",
     } <= _labels(settings)
     assert {
-        "Create / Repair Role",
+        "Create / Repair Notify Role",
         "Provider Deck",
         "Test Media Endpoint",
         "Community & Pings",
@@ -324,6 +324,96 @@ def test_private_room_announcement_is_suppressed() -> None:
             role=SimpleNamespace(mention="<@&99>"),
         )
     )
+
+
+def test_public_watch_party_announcement_does_not_require_notify_role() -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+    )
+    sent: list[dict] = []
+
+    class _Channel:
+        async def send(self, **kwargs):
+            sent.append(kwargs)
+
+    interaction = SimpleNamespace(
+        channel=_Channel(),
+        user=SimpleNamespace(mention="<@10>"),
+    )
+
+    asyncio.run(movie_ui._announce_room(interaction, room, role=None))
+
+    assert len(sent) == 1
+    assert sent[0]["content"] is None
+    assert "Dank Cinema Started" in str(sent[0]["embed"].title)
+
+
+def test_solo_watch_party_hides_meaningless_votes_and_uses_direct_actions(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+    )
+    candidate = manager.nominate(
+        room.room_id,
+        user_id=10,
+        title="Solo Movie",
+        auto_vote=False,
+    )
+    variant = manager.add_variant(
+        room.room_id,
+        candidate.candidate_id,
+        user_id=10,
+        source_ref="magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+        source_id="source",
+        source_label="Source",
+        file_size=1000,
+        seeds=20,
+        leechers=1,
+        peers=21,
+        auto_vote=False,
+    )
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+
+    candidate_labels = _labels(
+        movie_ui.MovieCandidateView(10, room.room_id, candidate.candidate_id)
+    )
+    release_labels = _labels(
+        movie_ui.MovieReleaseView(
+            10,
+            room.room_id,
+            candidate.candidate_id,
+            variant.variant_id,
+        )
+    )
+    assert "Vote / Unvote Movie" not in candidate_labels
+    assert "Add to Queue" in candidate_labels
+    assert "Vote / Unvote Release" not in release_labels
+    assert "Play This Release" in release_labels
+    assert "Add to Queue" in release_labels
+
+    manager.join_room(room.room_id, user_id=20)
+    candidate_labels = _labels(
+        movie_ui.MovieCandidateView(20, room.room_id, candidate.candidate_id)
+    )
+    release_labels = _labels(
+        movie_ui.MovieReleaseView(
+            20,
+            room.room_id,
+            candidate.candidate_id,
+            variant.variant_id,
+        )
+    )
+    assert "Vote / Unvote Movie" in candidate_labels
+    assert "Vote to Queue" in candidate_labels
+    assert "Vote / Unvote Release" in release_labels
+    assert "Request This Release" in release_labels
 
 
 def test_search_vote_pending_response_keeps_dank_cinema_hub(monkeypatch) -> None:
@@ -695,20 +785,21 @@ def test_search_release_surfaces_show_find_choose_watch_steps(monkeypatch) -> No
 
 
 def test_movie_night_lifecycle_text_explains_distinct_timeouts(monkeypatch) -> None:
-    monkeypatch.setattr(
-        movie_ui,
-        "get_torrent_manager",
-        lambda: SimpleNamespace(idle_ttl_seconds=1800.0),
+    manager = MovieNightManager(
+        viewer_ttl_seconds=35,
+        empty_room_ttl_seconds=1800,
     )
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
 
     rendered = movie_ui._movie_night_lifecycle_text()
 
     assert "15 minutes" in rendered
     assert "6 hours" in rendered
-    assert "no inactivity timeout" in rendered
+    assert "35 seconds" in rendered
     assert "30 minutes" in rendered
-    assert "room stays active" in rendered
-    assert "choose the release again" in rendered
+    assert "does **not** delete the room or queue" in rendered
+    assert "stays leased to the room" in rendered
+    assert "process restart ends the live room" in rendered
 
 
 def test_movie_night_hub_adds_signed_watch_link_when_media_is_active(monkeypatch) -> None:
@@ -1202,8 +1293,10 @@ def test_private_viewing_does_not_require_notification_role(monkeypatch) -> None
         require_notification_role=False,
     )
 
-    assert not public_ready["launch_ready"]
+    assert public_ready["launch_ready"]
     assert private_ready["launch_ready"]
+    assert not public_ready["blockers"]
+    assert any("notifications are not configured" in item.lower() for item in public_ready["warnings"])
     assert not any("notification role" in item.lower() for item in private_ready["blockers"])
     assert not any("manage roles" in item.lower() for item in private_ready["blockers"])
 
