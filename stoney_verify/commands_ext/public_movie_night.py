@@ -1370,6 +1370,27 @@ async def _open_candidate_detail(
     )
 
 
+def _release_picker_choices(variants: list[Any]) -> list[DankChoice]:
+    choices: list[DankChoice] = []
+    for variant in variants[:25]:
+        label, description = _variant_choice_text(variant)
+        choices.append(
+            DankChoice(
+                label=label,
+                value=variant.variant_id,
+                description=description,
+                emoji="🎞️",
+                # This picker is an action surface, not a state editor. A default
+                # option renders as already selected in Discord, and mobile clients
+                # may not dispatch a new interaction when the user taps that same
+                # option. Keeping every option unselected makes the first-ranked
+                # release just as actionable as every other release.
+                default=False,
+            )
+        )
+    return choices
+
+
 async def _open_release_picker(
     interaction: discord.Interaction,
     room_id: str,
@@ -1402,18 +1423,7 @@ async def _open_release_picker(
             ),
         )
 
-    choices: list[DankChoice] = []
-    for variant in variants[:25]:
-        label, description = _variant_choice_text(variant)
-        choices.append(
-            DankChoice(
-                label=label,
-                value=variant.variant_id,
-                description=description,
-                emoji="🎞️",
-                default=variant.variant_id == candidate.selected_variant_id,
-            )
-        )
+    choices = _release_picker_choices(variants)
 
     picker = DankPickerView(
         author_id=int(interaction.user.id),
