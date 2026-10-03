@@ -5,18 +5,33 @@
 **DANK-SHIELD-408 — Make Dank Cinema movie search actually consume structured torrent providers**
 
 Production baseline:
-`main@ff61fa0372972fe4e2b1db622b28ce1f81b03ed5` (PR #410 merged).
+`main@be8312ef3568ab39ad23edd915d09c15af303f3e` (PR #411 merged).
 
 Active branch:
-`fix/408-info-hash-provider-results`
-
-Active PR:
-**#411 — Dank Cinema: normalize info-hash and RSS/Atom torrent providers**
+`fix/408-release-first-selection`
 
 Status:
-**Production canary root cause confirmed. Broad provider-compatibility remediation is implemented on the active branch; exact-head CI, final diff hygiene, merge/deploy, and production Android canaries remain required.**
+**Post-merge production canary found one remaining release-picker interaction bug on Discord mobile. The provider search path is now returning real releases; the first-ranked release is visibly preselected and cannot be activated like the other choices. A focused fix and regression test are in progress.**
 
 ## Production evidence
+
+The provider path now returns real ranked releases in production. The Android canary showed eight releases for the selected movie, including live swarm counts and sizes.
+
+Remaining canary failure:
+- the first-ranked release is rendered as the select menu's default/current value;
+- selecting other releases works;
+- tapping the already-default first release on Discord mobile does not dispatch the intended release action.
+
+Root cause in the real execution path:
+`_open_release_picker() -> candidate.selected_variant_id -> DankChoice(default=True) -> Discord select renders that option already selected`.
+
+`MovieNightManager.add_variant()` assigns `candidate.selected_variant_id` to the first inserted release. The release picker then marks that release as the Discord select default. This picker is an **action picker**, not a state editor, so preselecting an option makes the top release effectively non-actionable on clients that do not submit an unchanged default selection.
+
+Focused correction:
+- keep `candidate.selected_variant_id` semantics intact for Movie Night state;
+- do not mark any release-picker option as a Discord default;
+- preserve ranking/order and all other picker behavior;
+- regression-test that even the first-ranked release renders with `default=False`.
 
 The owner configured ApiBay as an enabled **In-App Provider** using:
 `https://apibay.org/q.php?q={query}`.
@@ -211,12 +226,13 @@ No claim of complete/fixed/ready-to-merge is valid until exact-head CI is green.
 
 ## Backlog
 
+- **XXX/adult movie visibility admin setting (backlogged, not active):** add a guild-scoped admin control to enable or disable adult/XXX movie results. This is a separate feature and will not be investigated or implemented until the active #408 release-selection canary is complete. It must eventually be enforced consistently across catalog search and connected provider results, not just hidden in one UI surface.
+
 Unrelated Dank Shield, Minecraft, Unity, Idle Grow, Captions, AntiNuke, and other work remains outside this single active task.
 
 ## Next step
 
-Run exact-head validation on PR #411. Patch only evidence-backed failures inside this provider/search task. When the final head is green and the diff is clean, merge/deploy and perform the production canaries above before closing #408.
-
+Validate the focused first-release picker correction on the exact branch head, open a small PR, pass repository CI, merge/deploy, then repeat the Android canary by selecting the first-ranked release and taking it through release detail -> playback start. Do not start the backlogged XXX/adult-content setting until this active task satisfies that production acceptance path.
 
 ---
 
