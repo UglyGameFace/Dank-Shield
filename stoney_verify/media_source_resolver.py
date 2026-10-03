@@ -24,6 +24,7 @@ from stoney_verify.media_source_registry import (
 _MAX_SOURCE_RESULTS = 25
 _MAX_TOTAL_RESULTS = 100
 _MAX_RESPONSE_BYTES = 1024 * 1024
+_MAX_FEED_RESPONSE_BYTES = 4 * 1024 * 1024
 _MAX_CONCURRENCY = 4
 _TIMEOUT_SECONDS = 8.0
 
@@ -602,16 +603,21 @@ def _variant_from_item(
     )
 
 
-async def _read_limited_body(response: aiohttp.ClientResponse) -> bytes:
+async def _read_limited_body(
+    response: aiohttp.ClientResponse,
+    *,
+    max_bytes: int = _MAX_RESPONSE_BYTES,
+) -> bytes:
+    limit = max(64 * 1024, min(int(max_bytes), 8 * 1024 * 1024))
     length = _safe_int(response.headers.get("Content-Length"))
-    if length > _MAX_RESPONSE_BYTES:
-        raise ValueError("source response exceeds the 1 MiB limit")
+    if length > limit:
+        raise ValueError(f"source response exceeds the {limit} byte limit")
 
     payload = bytearray()
     async for chunk in response.content.iter_chunked(64 * 1024):
         payload.extend(chunk)
-        if len(payload) > _MAX_RESPONSE_BYTES:
-            raise ValueError("source response exceeds the 1 MiB limit")
+        if len(payload) > limit:
+            raise ValueError(f"source response exceeds the {limit} byte limit")
     return bytes(payload)
 
 
@@ -830,11 +836,25 @@ async def _read_structured_items_limited(
     response: aiohttp.ClientResponse,
     query: str,
 ) -> list[Mapping[str, Any]]:
-    payload = await _read_limited_body(response)
+    content_type = str(response.headers.get("Content-Type") or "").casefold()
+    response_url = str(getattr(response, "url", "") or "")
+    feed_hint = (
+        "xml" in content_type
+        or "rss" in content_type
+        or "atom" in content_type
+        or _looks_like_static_feed_endpoint(response_url)
+    )
+    payload = await _read_limited_body(
+        response,
+        max_bytes=(
+            _MAX_FEED_RESPONSE_BYTES
+            if feed_hint
+            else _MAX_RESPONSE_BYTES
+        ),
+    )
     if not payload:
         raise ValueError("source response was empty")
 
-    content_type = str(response.headers.get("Content-Type") or "").casefold()
     stripped = payload.lstrip()
 
     if "json" in content_type or stripped.startswith((b"{", b"[")):
