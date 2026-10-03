@@ -22,7 +22,7 @@ No second provider stack, torrent runtime, media server, room model, or browser-
 
 `commands_ext/public_movie_night.py` owns:
 - `/movie`;
-- Watch Party / Private Viewing entry;
+- Watch Party / Private Session entry;
 - Find Movie;
 - Movie Picks;
 - release selection;
@@ -32,7 +32,7 @@ No second provider stack, torrent runtime, media server, room model, or browser-
 - Pass Host;
 - More;
 - Cinema Settings;
-- Provider Deck;
+- Movie Sources;
 - Setup & Diagnostics;
 - direct magnet / .torrent attachment.
 
@@ -89,7 +89,7 @@ No second provider stack, torrent runtime, media server, room model, or browser-
 
 - One compact public command doorway.
 - Progressive disclosure already keeps most admin/runtime detail off the viewer home screen.
-- Private Viewing is owner-only in Discord and the Watch player.
+- Private Sessions are invite-only for up to 20 total authorized viewers; the host keeps programming/playback/end authority in Discord and the Watch player.
 - Pass Host changes authority without replacing the room or resetting playback.
 - First-ranked release is not preselected, avoiding the Discord mobile first-option trap.
 - Search/provider work is bounded by timeout, result, response-size, concurrency, and SSRF guards.
@@ -230,7 +230,7 @@ Setup is now focused on repair/diagnostics:
 - Back to Settings;
 - Close.
 
-Provider Deck and Notifications remain first-class Cinema Settings destinations.
+Movie Sources and Notifications remain first-class Cinema Settings destinations.
 
 ### Medium: lifecycle copy no longer matched the actual torrent lease model
 
@@ -262,8 +262,10 @@ No setup controls are shown on the main viewer surface.
 
 - **Viewer Experience**
   - Adult Content
-- **Provider Deck**
-  - optional extra structured providers
+- **Movie Sources**
+  - Search Providers
+  - RSS / Atom feeds
+  - admin Reference Links
 - **Notifications**
   - optional subscription configuration
 - **Setup & Diagnostics**
@@ -286,14 +288,14 @@ Optional enhancements are warnings:
 - Manage Roles for creating that optional role;
 - Attach Files;
 - PyAV verified metadata probing;
-- optional custom providers;
+- optional Movie Sources;
 - temporary capacity pressure is explained at media-admission time.
 
 ## UX reachability contract
 
 Every normal viewer state must preserve a route to a useful next action.
 
-- No room -> Start Watch Party / Watch Alone.
+- No room -> Start Watch Party / Start Private Session.
 - Active, no movie -> Find Movie.
 - Search results -> choose movie or return Home.
 - Candidate -> choose release, queue, or return Results.
