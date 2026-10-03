@@ -1113,6 +1113,70 @@ class MovieNightManager:
         )
         return start, buffered_end, leader
 
+    def transfer_host(
+        self,
+        room_id: str,
+        *,
+        current_host_id: int,
+        new_host_id: int,
+        now: Optional[float] = None,
+    ) -> MovieNightRoom:
+        """Transfer Watch Party playback authority without replacing the room.
+
+        The canonical playback position is snapshotted at transfer time, then
+        the existing playback state continues from the same point under the new
+        host. Private Viewing deliberately remains owner-only and cannot transfer.
+        """
+
+        room = self._require_room(room_id)
+        current = time.monotonic() if now is None else float(now)
+        old_host = int(current_host_id)
+        new_host = int(new_host_id)
+
+        if str(getattr(room, "mode", "watch_party") or "watch_party") != "watch_party":
+            raise PermissionError("Private Viewing host ownership cannot be transferred.")
+        if old_host != int(room.host_id):
+            raise PermissionError("Only the current Movie Night host can pass host control.")
+        if new_host == old_host:
+            raise ValueError("Choose another active viewer to receive host control.")
+
+        active = self.active_viewers(room, now=current)
+        if new_host not in active:
+            raise PermissionError("Host control can only be passed to an active Movie Night viewer.")
+
+        position = room.current_position(current)
+        room.playback_position = position
+        room.playback_anchor_monotonic = current
+        room.host_id = new_host
+        room.host_last_seen = current
+
+        target = room.viewers.get(new_host)
+        if target is None:
+            raise PermissionError("The selected viewer is no longer in Movie Night.")
+        target.last_seen = current
+        target.position_seconds = position
+        target.sync_target_position = position
+        target.sync_ready = True
+        target.sync_ready_at = current
+        target.sync_requested = False
+        target.sync_requested_at = 0.0
+
+        previous = room.viewers.get(old_host)
+        if previous is not None:
+            previous.sync_target_position = position
+            previous.sync_ready = True
+            previous.sync_ready_at = previous.sync_ready_at or current
+
+        # Playback failover votes no longer make sense after a deliberate host
+        # handoff. Collaborative search/queue/end votes keep their normal state.
+        for vote in room.votes.values():
+            if not vote.resolved and vote.action in PLAYBACK_ACTIONS:
+                vote.resolved = True
+                vote.passed = False
+
+        return room
+
+
     def apply_host_action(
         self,
         room_id: str,
