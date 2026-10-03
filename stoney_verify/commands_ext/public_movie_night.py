@@ -1514,7 +1514,14 @@ class MovieCandidateView(_OwnedView):
             )
         except (AttributeError, TypeError):
             collaborative = True
-        if private_mode or not collaborative:
+        if private_mode:
+            self.remove_item(self.vote_movie)
+            if room is not None and int(owner_id) == int(room.host_id):
+                self.queue.label = "Add to Queue"
+            else:
+                self.remove_item(self.releases)
+                self.remove_item(self.queue)
+        elif not collaborative:
             self.remove_item(self.vote_movie)
             self.queue.label = "Add to Queue"
 
@@ -1622,12 +1629,24 @@ class MovieReleaseView(_OwnedView):
             )
         except (AttributeError, TypeError):
             collaborative = True
-        if private_mode or not collaborative:
+        if private_mode:
+            self.remove_item(self.vote_release)
+            if room is not None and int(owner_id) == int(room.host_id):
+                self.queue.label = "Add to Queue"
+                self.play.label = "Play This Release"
+            else:
+                self.remove_item(self.play)
+                self.remove_item(self.queue)
+        elif not collaborative:
             self.remove_item(self.vote_release)
             self.queue.label = "Add to Queue"
-        if room is not None and int(owner_id) == int(room.host_id):
+            if room is not None and int(owner_id) == int(room.host_id):
+                self.play.label = "Play This Release"
+            else:
+                self.play.label = "Request This Release"
+        elif room is not None and int(owner_id) == int(room.host_id):
             self.play.label = "Play This Release"
-        elif not private_mode:
+        else:
             self.play.label = "Request This Release"
 
     def _resolve(self) -> tuple[Optional[MovieNightRoom], Any, Any]:
