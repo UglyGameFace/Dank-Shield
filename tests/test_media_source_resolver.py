@@ -509,3 +509,96 @@ def test_rss_feed_rejects_doctype_and_entity_declarations() -> None:
         assert "declarations are not allowed" in str(exc)
     else:
         raise AssertionError("unsafe XML declaration should be rejected")
+
+
+def test_static_feed_directory_endpoint_is_not_rewritten() -> None:
+    endpoint = "https://example.org/feed/"
+    assert resolver._search_url(endpoint, "Open Movie") == endpoint
+
+
+def test_single_object_and_keyed_object_json_results_are_supported() -> None:
+    single = {
+        "name": "Single Movie",
+        "info_hash": "0123456789abcdef0123456789abcdef01234567",
+    }
+    assert resolver._extract_items(single) == [single]
+
+    first = {
+        "name": "First Movie",
+        "magnet": "magnet:?xt=urn:btih:FIRST",
+    }
+    second = {
+        "name": "Second Movie",
+        "torrent_url": "https://downloads.example.org/second.torrent",
+    }
+    payload = {"123": first, "456": second, "status": {"ok": True}}
+    assert resolver._extract_items(payload) == [first, second]
+
+
+def test_torznab_attrs_become_swarm_metadata_and_info_hash_magnet() -> None:
+    payload = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss xmlns:torznab="http://torznab.com/schemas/2015/feed">
+      <channel>
+        <item>
+          <title>Open Movie 2026 1080p WEB-DL</title>
+          <guid>https://example.org/details/9001</guid>
+          <torznab:attr name="infohash"
+                        value="0123456789ABCDEF0123456789ABCDEF01234567" />
+          <torznab:attr name="seeders" value="42" />
+          <torznab:attr name="peers" value="13" />
+          <torznab:attr name="size" value="4567890000" />
+          <torznab:attr name="tmdbid" value="12345" />
+        </item>
+      </channel>
+    </rss>
+    """
+
+    items = resolver._extract_feed_items(payload, "Open Movie")
+    assert len(items) == 1
+    variant = resolver._variant_from_item(_source(), items[0])
+    assert variant is not None
+    assert variant.source_ref == (
+        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+    )
+    assert variant.seeds == 42
+    assert variant.peers == 55
+    assert variant.file_size == 4_567_890_000
+    assert variant.metadata["source_reported"]["tmdbid"] == "12345"
+
+
+def test_torrent_namespace_swarm_and_magnet_fields_are_supported() -> None:
+    payload = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss xmlns:torrent="http://xmlns.ezrss.it/0.1/">
+      <channel>
+        <item>
+          <title>Public Domain Feature 1080p</title>
+          <torrent:magnetURI>magnet:?xt=urn:btih:ABCDEF</torrent:magnetURI>
+          <torrent:contentLength>987654321</torrent:contentLength>
+          <torrent:seeders>25</torrent:seeders>
+          <torrent:leechers>5</torrent:leechers>
+          <torrent:peers>35</torrent:peers>
+        </item>
+      </channel>
+    </rss>
+    """
+
+    items = resolver._extract_feed_items(payload, "Public Domain Feature")
+    assert len(items) == 1
+    variant = resolver._variant_from_item(_source(), items[0])
+    assert variant is not None
+    assert variant.source_ref == "magnet:?xt=urn:btih:ABCDEF"
+    assert variant.file_size == 987_654_321
+    assert variant.seeds == 25
+    assert variant.leechers == 5
+    assert variant.peers == 35
+
+
+def test_html_provider_body_is_rejected_not_scraped() -> None:
+    payload = b"<html><body><item><title>Fake Movie</title></item></body></html>"
+    try:
+        resolver._extract_feed_items(payload, "Fake Movie")
+    except ValueError as exc:
+        assert "returned HTML" in str(exc)
+    else:
+        raise AssertionError("HTML provider body should not be treated as a feed")
+
