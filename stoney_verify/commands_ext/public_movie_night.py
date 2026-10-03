@@ -1165,7 +1165,7 @@ class MovieCandidateView(_OwnedView):
         self.room_id = str(room_id)
         self.candidate_id = str(candidate_id)
 
-    @discord.ui.button(label="Vote / Unvote Movie", emoji="🗳️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Vote / Unvote Movie", emoji="🗳️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:candidate:vote")
     async def vote_movie(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         manager = get_movie_night_manager()
@@ -1189,12 +1189,12 @@ class MovieCandidateView(_OwnedView):
             view=MovieCandidateView(self.owner_id, self.room_id, self.candidate_id),
         )
 
-    @discord.ui.button(label="Choose Release", emoji="🎞️", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Choose Release", emoji="🎞️", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:candidate:releases")
     async def releases(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _open_release_picker(interaction, self.room_id, self.candidate_id)
 
-    @discord.ui.button(label="Vote to Queue", emoji="📺", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Vote to Queue", emoji="📺", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:candidate:queue")
     async def queue(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         manager = get_movie_night_manager()
@@ -1218,7 +1218,7 @@ class MovieCandidateView(_OwnedView):
             "🗳️ Queue vote opened. Other active viewers can vote from /movie.",
         )
 
-    @discord.ui.button(label="Back to Results", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Back to Results", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:candidate:back")
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_results(interaction, self.room_id, replace_message=True)
@@ -1247,7 +1247,7 @@ class MovieReleaseView(_OwnedView):
             return room, None, None
         return room, candidate, candidate.variants.get(self.variant_id)
 
-    @discord.ui.button(label="Vote / Unvote Release", emoji="🗳️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Vote / Unvote Release", emoji="🗳️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:release:vote")
     async def vote_release(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room, candidate, variant = self._resolve()
@@ -1274,7 +1274,7 @@ class MovieReleaseView(_OwnedView):
             ),
         )
 
-    @discord.ui.button(label="Play / Request This Release", emoji="▶️", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Play / Request This Release", emoji="▶️", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:release:play")
     async def play(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room, candidate, variant = self._resolve()
@@ -1323,7 +1323,7 @@ class MovieReleaseView(_OwnedView):
             "Other active viewers can approve it from /movie.",
         )
 
-    @discord.ui.button(label="Vote to Queue Movie", emoji="📺", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Vote to Queue Movie", emoji="📺", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:release:queue")
     async def queue(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         manager = get_movie_night_manager()
@@ -1341,7 +1341,7 @@ class MovieReleaseView(_OwnedView):
             return await _private(interaction, "✅ Movie added to the shared queue.")
         await _private(interaction, "🗳️ Queue vote opened.")
 
-    @discord.ui.button(label="Back to Releases", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Back to Releases", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:release:back")
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _open_release_picker(interaction, self.room_id, self.candidate_id)
@@ -1785,7 +1785,7 @@ class SourceActionView(_OwnedView):
             )
         await open_movie_night_sources(interaction, replace_message=True)
 
-    @discord.ui.button(label="Edit Provider", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Edit Provider", emoji="✏️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:source:edit")
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         guild = interaction.guild
@@ -1813,22 +1813,22 @@ class SourceActionView(_OwnedView):
             )
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Enable Provider", emoji="✅", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Enable Provider", emoji="✅", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:source:enable")
     async def enable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._mutate(interaction, enabled=True)
 
-    @discord.ui.button(label="Pause Provider", emoji="⏸️", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Pause Provider", emoji="⏸️", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:source:pause")
     async def disable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._mutate(interaction, enabled=False)
 
-    @discord.ui.button(label="Remove Provider", emoji="🗑️", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="Remove Provider", emoji="🗑️", style=discord.ButtonStyle.danger, row=0, custom_id="dank:movie:source:remove")
     async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._mutate(interaction, remove=True)
 
-    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:source:back")
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night_sources(interaction, replace_message=True)
@@ -1903,7 +1903,7 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
 
 
 class MovieNightSourcesView(_OwnedView):
-    @discord.ui.button(label="Add In-App Provider", emoji="🧩", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Add In-App Provider", emoji="🧩", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:sources:add-inapp")
     async def add_json(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not _staff_authorized(interaction):
@@ -1916,7 +1916,7 @@ class MovieNightSourcesView(_OwnedView):
             CustomSourceModal(owner_id=self.owner_id, baseline=raw)
         )
 
-    @discord.ui.button(label="Add External-Only Link", emoji="🔗", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Add External-Only Link", emoji="🔗", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:add-external")
     async def add_external(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not _staff_authorized(interaction):
@@ -1929,19 +1929,19 @@ class MovieNightSourcesView(_OwnedView):
             ExternalSearchProviderModal(owner_id=self.owner_id, baseline=raw)
         )
 
-    @discord.ui.button(label="Manage Providers", emoji="🛠️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Manage Providers", emoji="🛠️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:sources:manage-button")
     async def manage(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not _staff_authorized(interaction):
             return await _private(interaction, "❌ Manage Server or Administrator is required.")
         await _open_source_picker(interaction)
 
-    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:back")
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night(interaction, replace_message=True)
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _replace(interaction, content="Dank Cinema provider deck closed.", embed=None, view=None)
@@ -2132,38 +2132,38 @@ async def _test_public_media(interaction: discord.Interaction) -> None:
 
 
 class MovieNightSetupView(_OwnedView):
-    @discord.ui.button(label="Create / Repair Role", emoji="🎬", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Create / Repair Role", emoji="🎬", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:setup:role")
     async def role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _create_or_repair_movie_role(interaction)
 
-    @discord.ui.button(label="Provider Deck", emoji="🎞️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Provider Deck", emoji="🎞️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:setup:sources")
     async def sources(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night_sources(interaction, replace_message=True)
 
-    @discord.ui.button(label="Test Media Endpoint", emoji="🌐", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Test Media Endpoint", emoji="🌐", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:setup:test-media")
     async def test_media(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _test_public_media(interaction)
 
-    @discord.ui.button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:setup:pings")
     async def community(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         from .public_community_pings import open_community_ping_setup
         await open_community_ping_setup(interaction, replace_message=True)
 
-    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:setup:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night_setup(interaction, replace_message=True)
 
-    @discord.ui.button(label="Back to Movie Night", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Back to Movie Night", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:setup:back")
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night(interaction, replace_message=True)
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:setup:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _replace(interaction, content="Movie Night setup closed.", embed=None, view=None)
@@ -2784,7 +2784,7 @@ class ConfirmMovieNightEndView(_OwnedView):
         super().__init__(owner_id)
         self.room_id = str(room_id)
 
-    @discord.ui.button(label="End Movie Night", emoji="🛑", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="End Movie Night", emoji="🛑", style=discord.ButtonStyle.danger, custom_id="dank:movie:end:confirm")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         manager = get_movie_night_manager()
@@ -2809,7 +2809,7 @@ class ConfirmMovieNightEndView(_OwnedView):
             view=MovieNightHubView(int(interaction.user.id)),
         )
 
-    @discord.ui.button(label="Keep Watching", emoji="↩️", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Keep Watching", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:movie:end:cancel")
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night(interaction, replace_message=True)
@@ -2835,12 +2835,12 @@ class MovieNightHubView(_OwnedView):
                     )
                 )
 
-    @discord.ui.button(label="Start / Join", emoji="🎬", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Start / Join", emoji="🎬", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:hub:start")
     async def start_join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _start_or_join_room(interaction)
 
-    @discord.ui.button(label="Find Movie", emoji="🔎", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Find Movie", emoji="🔎", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:hub:search")
     async def search(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room = _room_for_interaction(interaction)
@@ -2854,7 +2854,7 @@ class MovieNightHubView(_OwnedView):
             MovieSearchModal(owner_id=self.owner_id, room_id=room.room_id)
         )
 
-    @discord.ui.button(label="Movie Picks", emoji="🎞️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Movie Picks", emoji="🎞️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:hub:results")
     async def results(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room = _room_for_interaction(interaction)
@@ -2862,7 +2862,7 @@ class MovieNightHubView(_OwnedView):
             return await _private(interaction, "ℹ️ No Movie Night room is active here.")
         await open_movie_results(interaction, room.room_id, replace_message=True)
 
-    @discord.ui.button(label="Watch Queue", emoji="📺", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Watch Queue", emoji="📺", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:hub:queue")
     async def queue(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room = _room_for_interaction(interaction)
@@ -2874,12 +2874,12 @@ class MovieNightHubView(_OwnedView):
             view=MovieNightHubView(self.owner_id),
         )
 
-    @discord.ui.button(label="Vote Yes", emoji="✅", style=discord.ButtonStyle.success, row=1)
+    @discord.ui.button(label="Vote Yes", emoji="✅", style=discord.ButtonStyle.success, row=1, custom_id="dank:movie:hub:vote-yes")
     async def vote_yes(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._cast_latest(interaction, True)
 
-    @discord.ui.button(label="Vote No", emoji="❌", style=discord.ButtonStyle.danger, row=1)
+    @discord.ui.button(label="Vote No", emoji="❌", style=discord.ButtonStyle.danger, row=1, custom_id="dank:movie:hub:vote-no")
     async def vote_no(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._cast_latest(interaction, False)
@@ -2906,17 +2906,17 @@ class MovieNightHubView(_OwnedView):
             return await _execute_passed_vote(interaction, room, vote)
         await open_movie_night(interaction, replace_message=True)
 
-    @discord.ui.button(label="Provider Deck", emoji="🎞️", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Provider Deck", emoji="🎞️", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:hub:sources")
     async def sources(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night_sources(interaction, replace_message=True)
 
-    @discord.ui.button(label="Setup", emoji="⚙️", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Setup", emoji="⚙️", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:hub:setup")
     async def setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night_setup(interaction, replace_message=True)
 
-    @discord.ui.button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:hub:pings")
     async def pings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if _staff_authorized(interaction):
@@ -2925,7 +2925,7 @@ class MovieNightHubView(_OwnedView):
         from .public_community_pings import open_member_community_pings
         return await open_member_community_pings(interaction, replace_message=True)
 
-    @discord.ui.button(label="End Session", emoji="🛑", style=discord.ButtonStyle.danger, row=3)
+    @discord.ui.button(label="End Session", emoji="🛑", style=discord.ButtonStyle.danger, row=3, custom_id="dank:movie:hub:end")
     async def end_session(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room = _room_for_interaction(interaction)
@@ -2982,12 +2982,12 @@ class MovieNightHubView(_OwnedView):
             view=MovieNightHubView(int(interaction.user.id), room),
         )
 
-    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3, custom_id="dank:movie:hub:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night(interaction, replace_message=True)
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=3, custom_id="dank:movie:hub:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _replace(interaction, content="Movie Night closed.", embed=None, view=None)
@@ -2997,6 +2997,7 @@ async def open_movie_night(
     interaction: discord.Interaction,
     *,
     replace_message: bool = True,
+    recovery_notice: str = "",
 ) -> None:
     if interaction.guild is None:
         return await _private(interaction, "❌ Movie Night only works inside a server.")
@@ -3008,10 +3009,11 @@ async def open_movie_night(
         )
     embed = _room_embed(interaction, room)
     view = MovieNightHubView(int(interaction.user.id), room)
+    notice = _compact(recovery_notice, 1900)
     if replace_message:
-        await _replace(interaction, embed=embed, view=view)
+        await _replace(interaction, content=notice, embed=embed, view=view)
     else:
-        await _private(interaction, embed=embed, view=view)
+        await _private(interaction, notice, embed=embed, view=view)
 
 
 async def _attach_torrent_media(
