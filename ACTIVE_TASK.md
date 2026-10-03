@@ -11,9 +11,35 @@ Active validation branch:
 `test/408-release-picker-dispatch`
 
 Status:
-**The first-release picker correction is merged and its exact PR head passed every required workflow. Production already proves provider search returns ranked playable releases. The only remaining completion gate is the deferred Android production canary for release #1 -> release detail -> torrent start -> Watch playback. A stronger callback-dispatch regression is being added while that live canary is deferred.**
+**PR #412's first-release correction is merged and passed every required workflow. A new Android production canary exposed a same-flow interaction-lifecycle defect: when a private Dank Cinema menu expires or belongs to an older bot process, the global stale-menu guard replaces it with /dank Home / Control Center instead of reopening Dank Cinema. The active PR #413 now fixes that routing and strengthens release #1 dispatch coverage. Live release #1 -> detail -> torrent -> Watch playback remains deferred until the owner tests it.**
 
 ## Production evidence
+
+Android production evidence after PR #412:
+- an expired/stale private Dank Cinema menu was clicked;
+- the global interaction guard correctly detected that the ViewStore no longer owned the component;
+- instead of returning to Dank Cinema, the generic fallback replaced the stale movie message with the full Dank Shield Control Center;
+- the user-visible message said the private menu expired and that Control Center had been refreshed.
+
+Root cause:
+`interaction_guard._recover_unowned_private_component()` had one feature-specific recovery route for Community Hub, but **every other** stale private component fell through to `replace_with_compact_dank_home()`. Movie Night therefore had no stale-menu recovery owner.
+
+Current correction on PR #413:
+- recognize new Movie Night controls through the `dank:movie:` component namespace;
+- recognize already-deployed/legacy Movie Night messages from their Dank Cinema / Dank Provider embed identity, because their old discord.py-generated component IDs are opaque;
+- when the stale component is definitely Movie Night-owned, immediately reopen `open_movie_night(..., replace_message=True)` in the same ephemeral message;
+- never execute the stale state-changing action;
+- only unknown private surfaces keep the generic Control Center fallback;
+- add explicit `dank:movie:` custom IDs to native Movie Night buttons so future stale messages remain attributable even when the message has no embed;
+- preserve generic picker routing and current Movie Night state;
+- update shared lifecycle text so product guidance no longer falsely says every stale private menu goes to Control Center.
+
+Regression coverage now includes:
+- namespaced stale Movie Night control -> fresh Dank Cinema, not Dank Home;
+- legacy opaque Movie Night control identified by existing Dank Cinema embed -> fresh Dank Cinema;
+- known Movie Night recovery skips the generic grace delay;
+- core Movie Night button IDs remain in the `dank:movie:` namespace;
+- release #1 remains unselected by default and dispatches through the canonical picker callback.
 
 The provider path now returns real ranked releases in production. The Android canary showed eight releases for the selected movie, including live swarm counts and sizes.
 
@@ -241,7 +267,11 @@ Unrelated Dank Shield, Minecraft, Unity, Idle Grow, Captions, AntiNuke, and othe
 
 ## Next step
 
-Land the stronger first-value dispatch regression from `test/408-release-picker-dispatch` after exact-head CI. Then hold #408 at the production-canary gate until the owner tests current main on Android: select release #1 -> open release detail -> start media -> Watch playback. Do not start the backlogged XXX/adult-content setting or 20-viewer capacity work without the required FORCE SWITCH syntax while #408 remains active.
+Validate PR #413 on its new exact head with the stale Dank Cinema recovery correction and first-release dispatch regressions. Patch only evidence-backed failures inside #408. After CI is green, merge/deploy, then Android-canary both paths:
+1. let/reproduce a Dank Cinema private menu becoming stale and confirm clicking it refreshes **Dank Cinema in place**, never /dank Home;
+2. select release #1 -> open release detail -> start media -> Watch playback.
+
+Do not start the backlogged XXX/adult-content setting or 20-viewer capacity work without the required FORCE SWITCH syntax while #408 remains active.
 
 ---
 

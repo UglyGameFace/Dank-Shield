@@ -516,6 +516,44 @@ def _message_is_ephemeral(interaction: Any) -> bool:
         return False
 
 
+def _message_looks_like_dank_cinema(interaction: Any) -> bool:
+    """Best-effort ownership hint for legacy Movie Night ephemeral menus.
+
+    Older Movie Night views used discord.py-generated component IDs, so after a
+    restart their stale IDs carry no feature namespace. The visible embed/footer
+    still identifies the surface safely enough to choose a recovery destination;
+    this helper never replays the stale action itself.
+    """
+
+    message = getattr(interaction, "message", None)
+    if message is None:
+        return False
+
+    try:
+        content = str(getattr(message, "content", "") or "").casefold()
+        if "dank cinema" in content:
+            return True
+    except Exception:
+        pass
+
+    try:
+        embeds = list(getattr(message, "embeds", None) or [])
+    except Exception:
+        embeds = []
+
+    for embed in embeds[:10]:
+        try:
+            title = str(getattr(embed, "title", "") or "")
+            footer = getattr(embed, "footer", None)
+            footer_text = str(getattr(footer, "text", "") or "")
+            haystack = " ".join((title, footer_text)).casefold()
+        except Exception:
+            continue
+        if "dank cinema" in haystack or "dank provider" in haystack:
+            return True
+    return False
+
+
 async def _recover_unowned_private_component(
     bot: Any,
     interaction: discord.Interaction,
@@ -523,9 +561,10 @@ async def _recover_unowned_private_component(
     """Recover a private component only when discord.py has no ViewStore owner.
 
     This is not a second business handler. It never executes the stale action.
-    It only replaces a dead private menu with the canonical Control Center after
-    discord.py has already failed to find a message, persistent, or dynamic view
-    owner and existing additive listeners have had a short grace period.
+    It replaces a dead private menu with the owning feature's safe entry surface
+    when that feature can be identified, otherwise with the canonical Control
+    Center, after discord.py has failed to find a message, persistent, or dynamic
+    view owner and existing additive listeners have had their required grace.
     """
     try:
         if interaction.type is not discord.InteractionType.component:
@@ -543,13 +582,18 @@ async def _recover_unowned_private_component(
             custom_id.startswith("dank:hub:")
             and not custom_id.startswith("dank:hub:public:")
         )
+        is_private_movie_night = (
+            custom_id.startswith("dank:movie:")
+            or _message_looks_like_dank_cinema(interaction)
+        )
+        is_known_private_surface = is_private_community_hub or is_private_movie_night
 
-        # A definitely-unowned private Community Hub control has no alternate
-        # business listener. Claim it immediately so a stale panel does not burn
-        # the interaction window waiting on the generic private-menu grace.
-        # Other private surfaces keep the grace period because some still have
-        # additive listeners outside discord.py's ViewStore.
-        if not is_private_community_hub:
+        # Definitely-unowned feature-scoped controls have no alternate business
+        # listener. Claim them immediately so an expired panel does not burn the
+        # interaction window waiting on the generic private-menu grace. Unknown
+        # private surfaces keep the grace period because some still have additive
+        # listeners outside discord.py's ViewStore.
+        if not is_known_private_surface:
             await asyncio.sleep(PRIVATE_MENU_RECOVERY_GRACE_SECONDS)
             if _response_done(interaction):
                 return False
@@ -573,6 +617,17 @@ async def _recover_unowned_private_component(
                     recovery_notice=(
                         "♻️ That Community Hub panel expired or belonged to an older bot session. "
                         "I refreshed Community Hub in place; the stale action was not executed."
+                    ),
+                )
+            elif is_private_movie_night:
+                from .commands_ext.public_movie_night import open_movie_night
+
+                await open_movie_night(
+                    interaction,
+                    replace_message=True,
+                    recovery_notice=(
+                        "♻️ That Dank Cinema menu expired or belonged to an older bot session. "
+                        "I refreshed Dank Cinema in place; the stale action was not executed."
                     ),
                 )
             else:
