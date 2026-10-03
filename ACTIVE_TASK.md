@@ -5,16 +5,16 @@
 **DANK-SHIELD-419 — Dank Cinema progressive-disclosure UI/UX revamp**
 
 Production baseline:
-`main@1dcb24cdc0662239aac4c0b86dcc37a7158ce4d4` (PR #418 merged).
+`main@ecaca754de0f72138c3560d349a44d8ff7dd11b0` (PR #420 merged).
 
 Active branch:
-`feat/419-cinema-ux-revamp`
+`fix/419-invalid-more-emoji`
 
 Issue:
 **#419 — Dank Cinema: progressive-disclosure UI/UX revamp without feature loss**
 
 Status:
-**The private-viewing + sticky-navigation work from #417 is merged. The active task now reorganizes Dank Cinema around Home -> Find -> Choose -> Watch, keeping every existing feature but moving low-frequency/admin controls out of the primary viewer path. Implementation is on the active branch; exact-head CI and mobile production validation remain required.**
+**PR #420 is merged and deployed. The first production `/movie` canary exposed one Discord component-payload regression in the new compact hub: the `More` button used the punctuation glyph `⋯` as its `emoji`, and Discord rejects that value with HTTP 400 / code 50035 (`components.1.components.0.emoji.name: Invalid emoji`). Hotfix branch `fix/419-invalid-more-emoji` removes the invalid emoji and adds regression coverage. Exact-head CI and a production `/movie` canary remain required before #419 is considered complete.**
 
 ## Product contract
 
@@ -182,6 +182,24 @@ Web tests now cover:
 ## Deliberate non-goals
 
 This task does not pretend arbitrary torrent bytes can be reliably content-classified. The Adult Content setting enforces catalog inclusion plus explicit provider/search labels; manually supplied direct magnet/.torrent media remains unclassified. Room persistence and viewer-capacity modeling remain separate runtime work.
+
+## Production canary failure — invalid More button emoji
+
+Production evidence after PR #420:
+- `/movie` reaches `open_movie_night() -> _private() -> interaction.response.send_message()`;
+- Discord returns HTTP 400 / error code 50035;
+- rejected field: `data.components.1.components.0.emoji.name`;
+- the empty Cinema hub places **More** on component row 1 as the first component;
+- its decorator used `emoji="⋯"`, which is punctuation, not a Discord-valid emoji.
+
+Root cause:
+- the UI regression tests validated labels, visibility, row counts, and feature reachability, but did not assert the actual component emoji contract for **More**;
+- discord.py accepted the punctuation value locally, while Discord's API rejected the serialized component payload.
+
+Hotfix:
+- make **More** text-only instead of sending an invalid pseudo-emoji;
+- add a regression assertion that the More button has no emoji unless a real Discord-valid emoji is intentionally chosen later;
+- no search, torrent, provider, adult-content, voting, session, or Watch runtime behavior changes.
 
 ## Blockers / risks
 
