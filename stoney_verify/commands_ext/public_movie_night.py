@@ -56,7 +56,10 @@ from stoney_verify.movie_night import (
 )
 from stoney_verify.movie_night_session import terminate_movie_night_room
 from stoney_verify.movie_night_web import movie_night_watch_url
-from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+from stoney_verify.panel_lifecycle import (
+    PRIVATE_MENU_TTL_SECONDS,
+    private_menu_lifecycle_text,
+)
 from stoney_verify.torrent_media_server import (
     media_bind_host,
     media_bind_port,
@@ -678,6 +681,20 @@ def _room_for_interaction(interaction: discord.Interaction) -> Optional[MovieNig
     )
 
 
+def _movie_night_lifecycle_text() -> str:
+    torrent_manager = get_torrent_manager()
+    idle_minutes = max(1, int(round(float(torrent_manager.idle_ttl_seconds) / 60.0)))
+    return (
+        f"{private_menu_lifecycle_text()}\n"
+        "**Watch links:** valid for up to **6 hours** from when the button is created; "
+        "reopen `/movie` for a fresh link if needed.\n"
+        "**Movie Night room:** no inactivity timeout; it stays active until **End Session** "
+        "or the bot process restarts.\n"
+        f"**Attached media:** reclaimed after about **{idle_minutes} minutes** with no media access. "
+        "If that happens, the room stays active and the host can choose the release again."
+    )
+
+
 def _room_embed(
     interaction: discord.Interaction,
     room: Optional[MovieNightRoom],
@@ -740,6 +757,11 @@ def _room_embed(
             ),
             inline=False,
         )
+    embed.add_field(
+        name="⏱️ Session timing",
+        value=_movie_night_lifecycle_text()[:1024],
+        inline=False,
+    )
     if room.stream_token:
         current_candidate = (
             room.candidates.get(room.current_candidate_id)
