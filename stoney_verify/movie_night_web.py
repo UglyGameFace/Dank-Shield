@@ -268,6 +268,48 @@ def _float(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def _preserve_refresh_telemetry(
+    viewer: Any,
+    *,
+    position: float,
+    duration: float,
+    buffered: float,
+    paused: bool,
+    client_session_id: str,
+    has_stream: bool,
+) -> tuple[float, float, float, bool, bool]:
+    same_client = bool(
+        viewer is not None
+        and client_session_id
+        and str(getattr(viewer, "client_session_id", "") or "") == client_session_id
+    )
+    previous_duration = float(getattr(viewer, "media_duration_seconds", 0.0) or 0.0)
+    warming_after_refresh = bool(
+        has_stream
+        and same_client
+        and duration <= 0.0
+        and previous_duration > 0.0
+    )
+    if not warming_after_refresh:
+        return position, duration, buffered, paused, False
+
+    previous_position = max(
+        0.0,
+        float(getattr(viewer, "position_seconds", position) or 0.0),
+    )
+    previous_buffered = max(
+        previous_position,
+        float(getattr(viewer, "buffered_until_seconds", previous_position) or 0.0),
+    )
+    return (
+        previous_position,
+        previous_duration,
+        previous_buffered,
+        bool(getattr(viewer, "paused", paused)),
+        True,
+    )
+
+
 async def movie_night_heartbeat(request: web.Request) -> web.Response:
     room, uid = await _room_and_user(request)
     if room.ended:
@@ -290,6 +332,15 @@ async def movie_night_heartbeat(request: web.Request) -> web.Response:
     movie_manager = get_movie_night_manager()
     session = await torrent_manager.get(room.stream_token) if room.stream_token else None
     viewer_before = room.viewers.get(int(uid))
+    position, duration, buffered, paused, refresh_warmup = _preserve_refresh_telemetry(
+        viewer_before,
+        position=position,
+        duration=duration,
+        buffered=buffered,
+        paused=paused,
+        client_session_id=client_session_id,
+        has_stream=session is not None,
+    )
     joining = bool(
         session is not None
         and int(uid) != int(room.host_id)
@@ -299,10 +350,17 @@ async def movie_night_heartbeat(request: web.Request) -> web.Response:
     byte_position = 0
     buffered_byte = 0
     sync_buffer_target_seconds = 0.0
-    if session is not None and duration > 0:
+    if session is not None and refresh_warmup and viewer_before is not None:
+        byte_position = max(0, int(viewer_before.byte_position))
+        buffered_byte = max(
+            byte_position,
+            int(viewer_before.buffered_until_byte),
+        )
+    elif session is not None and duration > 0:
         byte_position = int(min(1.0, position / duration) * session.file_size)
         buffered_byte = int(min(1.0, buffered / duration) * session.file_size)
 
+    if session is not None and duration > 0:
         if joining:
             target_seconds = max(0.0, room.current_position())
             target_byte = int(
