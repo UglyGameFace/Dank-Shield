@@ -175,6 +175,7 @@ class MovieNightRoom:
     stream_token: str
     created_at: float
     host_last_seen: float
+    mode: str = "watch_party"
     playback_state: str = "paused"
     playback_position: float = 0.0
     playback_anchor_monotonic: float = 0.0
@@ -244,9 +245,13 @@ class MovieNightManager:
         channel_id: int,
         host_id: int,
         stream_token: str,
+        mode: str = "watch_party",
         now: Optional[float] = None,
     ) -> MovieNightRoom:
         current = time.monotonic() if now is None else float(now)
+        normalized_mode = str(mode or "watch_party").strip().casefold()
+        if normalized_mode not in {"watch_party", "private"}:
+            raise ValueError("Movie Night room mode must be watch_party or private.")
         existing = self.active_room_for_channel(guild_id, channel_id)
         if existing is not None:
             raise RuntimeError("A Movie Night room is already active in this channel.")
@@ -258,6 +263,7 @@ class MovieNightManager:
             stream_token=str(stream_token),
             created_at=current,
             host_last_seen=current,
+            mode=normalized_mode,
             playback_anchor_monotonic=current,
         )
         room.viewers[int(host_id)] = ViewerState(
@@ -301,6 +307,23 @@ class MovieNightManager:
             return None
         return max(matches, key=lambda room: float(room.created_at))
 
+    @staticmethod
+    def user_can_access(room: MovieNightRoom, user_id: int) -> bool:
+        if str(getattr(room, "mode", "watch_party") or "watch_party") != "private":
+            return True
+        return int(user_id) == int(room.host_id)
+
+    def active_room_for_user(
+        self,
+        guild_id: int,
+        channel_id: int,
+        user_id: int,
+    ) -> Optional[MovieNightRoom]:
+        room = self.active_room_for_channel(guild_id, channel_id)
+        if room is None or not self.user_can_access(room, int(user_id)):
+            return None
+        return room
+
     def active_rooms_for_guild(self, guild_id: int) -> tuple[MovieNightRoom, ...]:
         return tuple(
             sorted(
@@ -323,6 +346,8 @@ class MovieNightManager:
         room = self._require_room(room_id)
         current = time.monotonic() if now is None else float(now)
         uid = int(user_id)
+        if not self.user_can_access(room, uid):
+            raise PermissionError("This is a private Dank Cinema viewing session.")
         viewer = room.viewers.get(uid)
         if viewer is None:
             target = room.current_position(current)
@@ -567,11 +592,14 @@ class MovieNightManager:
         now: Optional[float] = None,
     ) -> set[int]:
         current = time.monotonic() if now is None else float(now)
-        return {
+        active = {
             int(uid)
             for uid, viewer in room.viewers.items()
             if current - float(viewer.last_seen) <= self.viewer_ttl_seconds
         }
+        if str(getattr(room, "mode", "watch_party") or "watch_party") == "private":
+            return {int(room.host_id)} & active
+        return active
 
     def buffer_quorum_viewers(
         self,
@@ -618,6 +646,8 @@ class MovieNightManager:
 
         active = self.active_viewers(room, now=current)
         proposer = int(proposer_id)
+        if not self.user_can_access(room, proposer):
+            raise PermissionError("This is a private Dank Cinema viewing session.")
         if proposer not in active:
             raise PermissionError("Only active Movie Night viewers may start votes.")
 
@@ -659,6 +689,8 @@ class MovieNightManager:
             return vote
 
         uid = int(user_id)
+        if not self.user_can_access(room, uid):
+            raise PermissionError("This is a private Dank Cinema viewing session.")
         if uid not in self.active_viewers(room, now=current):
             raise PermissionError("Only active Movie Night viewers may vote.")
 
