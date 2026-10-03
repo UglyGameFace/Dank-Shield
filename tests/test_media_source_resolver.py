@@ -24,6 +24,15 @@ def test_search_url_supports_placeholder_and_query_parameter_modes() -> None:
         "Blade Runner",
     ) == "https://media.example.com/search?q=Blade+Runner"
 
+
+    assert resolver._search_url(
+        "https://media.example.com/search/{query}?kind=movie",
+        "Blade Runner / Final Cut",
+    ) == (
+        "https://media.example.com/search/"
+        "Blade%20Runner%20%2F%20Final%20Cut?kind=movie"
+    )
+
     url = resolver._search_url(
         "https://media.example.com/search?type=movie",
         "Alien",
