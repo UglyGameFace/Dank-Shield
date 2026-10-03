@@ -65,12 +65,11 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
     sources = movie_ui.MovieNightSourcesView(1)
 
     assert {
-        "Start / Join",
+        "Start / Join Party",
+        "Private Viewing",
         "Find Movie",
         "Movie Picks",
         "Watch Queue",
-        "Vote Yes",
-        "Vote No",
         "Provider Deck",
         "Setup",
         "Community & Pings",
@@ -78,6 +77,8 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
         "Refresh",
         "Close",
     } <= _labels(hub)
+    assert "Vote Yes" not in _labels(hub)
+    assert "Vote No" not in _labels(hub)
     assert {
         "Create / Repair Role",
         "Provider Deck",
@@ -99,6 +100,152 @@ def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> Non
     assert len(setup.children) <= 25
     assert len(sources.children) <= 25
 
+
+
+def test_movie_night_hub_changes_controls_by_room_mode(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    public_room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        now=100.0,
+    )
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+
+    public_labels = _labels(movie_ui.MovieNightHubView(10, public_room))
+    assert "Start / Join Party" not in public_labels
+    assert "Private Viewing" not in public_labels
+    assert {"Vote Yes", "Vote No"} <= public_labels
+
+    public_room.ended = True
+    private_room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        mode="private",
+        now=101.0,
+    )
+    private_labels = _labels(movie_ui.MovieNightHubView(10, private_room))
+    assert "Start / Join Party" not in private_labels
+    assert "Private Viewing" not in private_labels
+    assert "Vote Yes" not in private_labels
+    assert "Vote No" not in private_labels
+
+
+def test_private_room_candidate_and_release_controls_drop_voting(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        mode="private",
+    )
+    candidate = manager.nominate(
+        room.room_id,
+        user_id=10,
+        title="Private Movie",
+        auto_vote=False,
+    )
+    variant = manager.add_variant(
+        room.room_id,
+        candidate.candidate_id,
+        user_id=10,
+        source_ref="magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+        source_id="source",
+        source_label="Source",
+        file_size=1000,
+        seeds=10,
+        leechers=2,
+        peers=12,
+        auto_vote=False,
+    )
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+
+    candidate_labels = _labels(
+        movie_ui.MovieCandidateView(10, room.room_id, candidate.candidate_id)
+    )
+    assert "Vote / Unvote Movie" not in candidate_labels
+    assert "Add to Queue" in candidate_labels
+
+    release_labels = _labels(
+        movie_ui.MovieReleaseView(
+            10,
+            room.room_id,
+            candidate.candidate_id,
+            variant.variant_id,
+        )
+    )
+    assert "Vote / Unvote Release" not in release_labels
+    assert "Play This Release" in release_labels
+    assert "Add to Queue" in release_labels
+
+
+def test_private_room_announcement_is_suppressed() -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        mode="private",
+    )
+
+    class _Channel:
+        async def send(self, **kwargs):
+            raise AssertionError(f"private viewing unexpectedly announced: {kwargs}")
+
+    interaction = SimpleNamespace(
+        channel=_Channel(),
+        user=SimpleNamespace(mention="<@10>"),
+    )
+
+    asyncio.run(
+        movie_ui._announce_room(
+            interaction,
+            room,
+            role=SimpleNamespace(mention="<@&99>"),
+        )
+    )
+
+
+def test_search_vote_pending_response_keeps_dank_cinema_hub(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+    )
+    manager.join_room(room.room_id, user_id=20)
+    captured: list[dict] = []
+
+    async def fake_replace(interaction, **kwargs):
+        _ = interaction
+        captured.append(kwargs)
+
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(movie_ui, "_replace", fake_replace)
+
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=10),
+        guild=None,
+        channel=None,
+    )
+    asyncio.run(
+        movie_ui._propose_movie_search_vote(
+            interaction,
+            room_id=room.room_id,
+            query="Blade Runner",
+        )
+    )
+
+    assert captured
+    payload = captured[-1]
+    assert "Search vote opened" in payload["content"]
+    assert isinstance(payload["view"], movie_ui.MovieNightHubView)
 
 
 def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
@@ -743,6 +890,57 @@ def test_setup_readiness_accepts_complete_public_runtime(monkeypatch) -> None:
     assert result["externally_bound"]
     assert result["runtime_ready"]
     assert not any("No custom media sources" in item for item in result["warnings"])
+
+
+def test_private_viewing_does_not_require_notification_role(monkeypatch) -> None:
+    perms = SimpleNamespace(
+        view_channel=True,
+        send_messages=True,
+        embed_links=True,
+        attach_files=True,
+        mention_everyone=False,
+        administrator=False,
+    )
+    guild = SimpleNamespace(
+        me=SimpleNamespace(
+            guild_permissions=SimpleNamespace(
+                administrator=False,
+                manage_roles=False,
+            )
+        )
+    )
+
+    monkeypatch.setattr(movie_ui, "_movie_role", lambda guild, raw: None)
+    monkeypatch.setattr(movie_ui, "_channel_permissions", lambda guild, channel: perms)
+    monkeypatch.setattr(movie_ui, "media_public_base_url", lambda: "https://media.example.com")
+    monkeypatch.setattr(movie_ui, "media_bind_host", lambda: "0.0.0.0")
+    monkeypatch.setattr(movie_ui, "media_bind_port", lambda: 8080)
+    monkeypatch.setattr(movie_ui, "media_server_ready", lambda: True)
+    monkeypatch.setattr(
+        movie_ui.importlib.util,
+        "find_spec",
+        lambda name: object() if name in {"libtorrent", "av"} else None,
+    )
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "test-secret")
+
+    public_ready = movie_ui._setup_readiness(
+        guild,
+        object(),
+        {},
+        MediaSourceRegistry(),
+    )
+    private_ready = movie_ui._setup_readiness(
+        guild,
+        object(),
+        {},
+        MediaSourceRegistry(),
+        require_notification_role=False,
+    )
+
+    assert not public_ready["launch_ready"]
+    assert private_ready["launch_ready"]
+    assert not any("notification role" in item.lower() for item in private_ready["blockers"])
+    assert not any("manage roles" in item.lower() for item in private_ready["blockers"])
 
 
 def test_media_endpoint_check_acknowledges_before_network(monkeypatch) -> None:
