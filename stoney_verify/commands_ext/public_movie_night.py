@@ -1085,7 +1085,7 @@ def _more_embed(
     if room is not None:
         embed.add_field(
             name="Room",
-            value="🛑 **End Movie Night** • end the room and release its media lease",
+            value="🛑 **End Movie Night** • end the room and clean up its streaming media",
             inline=False,
         )
     return embed
@@ -1294,7 +1294,7 @@ def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discor
         value=(
             f"🌱 **{health['seeds']}** seeds • 🧲 **{health['leechers']}** leeches • "
             f"👥 **{health['peers']}** peers\n"
-            f"Swarm: **{health['label']}** • ratio **{health['seed_leech_ratio']}**"
+            f"Health: **{health['label']}** • seed/leech ratio **{health['seed_leech_ratio']}**"
         ),
         inline=False,
     )
@@ -3764,7 +3764,7 @@ class MovieNightMoreView(_OwnedView):
                 interaction,
                 content=(
                     "🛑 End this Movie Night completely? This stops the room, releases its "
-                    "torrent/media lease, clears the queue, and lets a fresh room start here."
+                    "streaming media, clears the queue, and lets a fresh room start here."
                 ),
                 embed=_session_status_embed(interaction, room),
                 view=ConfirmMovieNightEndView(int(interaction.user.id), room.room_id),
