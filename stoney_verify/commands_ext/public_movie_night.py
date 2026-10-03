@@ -519,7 +519,7 @@ def _setup_embed(
         name="3 • Torrent + metadata runtime",
         value=(
             f"{_status(ready['libtorrent_ready'])} • libtorrent\n"
-            f"{_status(ready['pyav_ready'])} • PyAV / FFmpeg metadata\n"
+            f"{'✅ Ready' if ready['pyav_ready'] else '⚠️ Optional'} • PyAV / FFmpeg metadata\n"
             f"{_status(bool(ready['public_base']))} • DANK_MEDIA_PUBLIC_BASE_URL\n"
             f"{_status(ready['stream_secret'])} • DANK_TORRENT_STREAM_SECRET\n"
             f"{_status(ready['externally_bound'])} • bind {ready['bind_host']}:{ready['bind_port']}\n"
