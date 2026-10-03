@@ -3,6 +3,7 @@ from __future__ import annotations
 """Safe resolver for guild-configured Movie Night HTTPS media feeds."""
 
 import asyncio
+import base64
 import ipaddress
 import json
 import re
@@ -402,6 +403,12 @@ def _magnet_from_info_hash(value: Any) -> str:
             return ""
     elif _BTIH_BASE32_RE.fullmatch(raw):
         btih = raw.upper()
+        try:
+            decoded = base64.b32decode(btih)
+        except Exception:
+            return ""
+        if decoded == b"\x00" * 20:
+            return ""
     else:
         return ""
     return f"magnet:?xt=urn:btih:{btih}"
