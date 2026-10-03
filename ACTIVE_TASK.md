@@ -2,128 +2,96 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-408 — Dank Cinema provider playback reliability through real production canaries**
+**DANK-SHIELD-408 — Dank Cinema playback/session reliability and production clarity**
 
 Production baseline:
-`main@5d77eef9d944b2fe6c86eac4a6368297e3e16092` (PR #414 merged).
+`main@11412a3aa48755b250c1fc59eba6c4a29aed83f5` (PR #415 merged).
 
 Active branch:
-`fix/408-refresh-stream-reconnect`
+`fix/408-movie-lifecycle-clarity`
 
 Status:
-**A new production Android canary exposed refresh/reconnect breakage in the Movie Night web player. The exact aiohttp logs show abandoned media Range responses raising `ConnectionError: Connection lost` from `response.write(payload)`. The browser refresh also created a brand-new Movie Night client/consumer identity, which reset viewer sync state and adaptive torrent-consumer state. The old media error handler then reloaded the stream on a fixed timer, amplifying reconnect churn while the torrent was still buffering. Remediation is implemented on this branch; exact-head CI and live refresh/playback validation remain required.**
+**Refresh/reconnect hardening from PR #415 is merged. Follow-up production review exposed a lifecycle UX/correctness gap: Movie Night currently has several different timeouts, but the Discord hub does not explain them and the Watch page reports reclaimed media as if no movie was ever chosen. This branch adds explicit lifecycle guidance and distinguishes a still-active room from an expired media session.**
 
-## Production evidence
+## Current lifecycle contract verified from code
 
-User-visible symptoms:
-- refreshing the Watch page while a movie is loading makes the stream appear to lose its connection;
-- seed/leech display falls to `0 / 0` even though the selected release already had provider-reported swarm health;
-- the video repeatedly looks like it will start, then errors/crashes/reloads.
+- **Discord private Movie Night controls:** about **15 minutes** (`PRIVATE_MENU_TTL_SECONDS = 900`). Expiry of the private controls does **not** end the Movie Night room. Recognizable stale Dank Cinema controls are routed back to Dank Cinema instead of /dank Home.
+- **Watch link signature:** valid for up to **6 hours** from issuance. A fresh `/movie` panel can generate a new Watch link while the room/media still exists.
+- **Movie Night room:** there is currently **no inactivity timeout**. The in-memory room persists until **End Session** or the bot process restarts.
+- **Host presence:** the host is considered away after about **45 seconds** without heartbeat; this changes control/voting authority only and does not end the room.
+- **Viewer activity:** viewers fall out of the active voting/buffer quorum after about **35 seconds** without heartbeat; this also does not end the room.
+- **Torrent/media session:** reclaimed after about **30 minutes** without media access by default (`DANK_TORRENT_IDLE_TTL_SECONDS=1800`). The torrent cleanup is independent of the room object, so the room can remain active after its media session is gone.
 
-Runtime evidence from Discloud:
-- repeated `ConnectionResetError: [Errno 104] Connection reset by peer`;
-- aiohttp then raises `ConnectionError: Connection lost`;
-- the unhandled exception is emitted from `stoney_verify/api_new/torrent_stream_routes.py` at `await response.write(payload)`;
-- several abandoned media requests arrive within seconds of the refresh/retry cycle;
-- the core bot remains healthy at roughly 471 MiB RSS, so this is not a process-memory crash.
+## User-facing ambiguity found
 
-## Root cause / execution path
+Before this branch:
+- the Discord Movie Night hub showed no lifecycle/timer explanation;
+- a user could reasonably assume the 15-minute Discord menu lifetime was the whole Movie Night lifetime;
+- a 6-hour Watch link could outlive the 30-minute idle torrent/media session;
+- if the media session had been reclaimed, the Watch page fell through to **“Waiting for the host to choose media”**, even though a release had already been attached and the room still existed.
 
-Refresh path:
-`Watch page reload -> new CLIENT_SESSION_ID -> heartbeat() -> ViewerState.client_session_id changes -> viewer sync is intentionally demoted -> stream_consumer changes -> newly signed media URL/consumer playback state -> old browser Range requests are abandoned`.
-
-Server path:
-`<video> Range request -> torrent_stream() -> wait_range() -> read_range() -> response.write(payload)`.
-
-The route only caught `ConnectionResetError` and `CancelledError`, but the observed aiohttp write failure is the broader built-in `ConnectionError`. That caused normal browser abandonment during reload/seek/source replacement to be logged as an application failure.
-
-Client retry path:
-`video error -> fixed 2.5 second setTimeout -> assign src again -> video.load()`.
-
-Repeated media errors could therefore create multiple source resets while torrent pieces were still arriving.
-
-Swarm display path:
-`_state_payload() -> torrent_manager.status(session)` used only instantaneous libtorrent counts. During transient reconnect/warm-up, live counts can be zero even though the selected provider release already carries known seed/leech/peer counts.
+That last case made it look like the whole session had reset when only the underlying media session had expired.
 
 ## Changes implemented
 
-### Stable refresh identity
+### Discord hub lifecycle guidance
 
-- Persist the Movie Night client session ID in `sessionStorage`, keyed by room and Discord user.
-- A normal reload in the same tab reuses the same client/consumer identity instead of presenting as a brand-new viewer session.
-- Existing server behavior for genuinely new tabs/sessions remains intact: a truly new client session still requires late-join sync qualification.
-- This preserves the keyed torrent consumer's adaptive playback history across refreshes.
+The active Movie Night hub now includes **⏱️ Session timing** explaining:
+- private controls last about 15 minutes;
+- expired private controls do not end the room and can recover back to Dank Cinema;
+- Watch links last up to 6 hours and can be refreshed from `/movie`;
+- the room itself has no inactivity timeout and ends only via **End Session** or process restart;
+- attached media is reclaimed after the configured idle period (30 minutes on the current production contract);
+- if media is reclaimed, the room stays active and the host only needs to choose the release again.
 
-### Clean abandoned Range handling
+### Watch-page reclaimed-media state
 
-- `torrent_stream()` now treats built-in `ConnectionError` plus `CancelledError` as normal client disconnects.
-- Reload, seek, tab close, and media-source replacement can abandon an HTTP Range request without dumping an aiohttp traceback.
-- The canonical torrent session is not removed or restarted because a single browser connection disappears.
+`_state_payload()` now exposes `media_missing=True` when:
+- the room still has a `stream_token`, but
+- the torrent manager no longer has that media session.
 
-### Controlled media recovery
+The Watch page then tells the user:
+- the media session expired/reclaimed;
+- the Movie Night room is still active;
+- return to Discord and choose the release again.
 
-- Replaced the fixed unconditional 2.5-second `video.src = ...; video.load()` loop.
-- Only one retry timer may exist at a time.
-- Retry delay backs off up to 15 seconds while torrent pieces are still unavailable.
-- Before retrying media, the page refreshes Movie Night state.
-- `waiting` and `stalled` events show buffering status without immediately destroying/recreating the media source.
-- `loadedmetadata` / `canplay` reset retry backoff.
-
-### Swarm display continuity
-
-- Movie Night now distinguishes live libtorrent swarm counts from provider-reported release counts.
-- If live counts are nonzero, the page shows the live seed/leech values.
-- If libtorrent temporarily reports zero during reconnect/warm-up, the selected release's provider seed/leech/peer values are used as a transparent fallback.
-- UI now correctly labels the stat **Seeds / Leechers** and indicates `live` or `provider` source.
+It no longer incorrectly says the host has not chosen media.
 
 ## Validation added
 
-- Web-player contract asserts refresh uses `sessionStorage` for client identity.
-- Web-player contract asserts controlled retry/backoff is present and the old fixed reload loop is gone.
-- Swarm fallback test verifies a selected release with 153 seeds / 6 leechers remains visible when live status temporarily reports zero.
-- Swarm test verifies nonzero live counts override provider fallback.
-- Movie Night manager regression verifies an unchanged client session ID preserves `sync_ready` and `sync_requested` state.
-- Existing new-client regression still proves a genuinely different client session demotes stale sync state.
-- Torrent runtime static contract now requires broad `ConnectionError` handling for abandoned stream writes.
+- Lifecycle guidance regression checks the displayed 15-minute menu, 6-hour Watch link, 30-minute media idle policy, no room inactivity timeout, and release-reselection behavior.
+- Web-state regression verifies reclaimed media does not mark the room ended.
+- Watch-page regression verifies the reclaimed-media message distinguishes the live room from missing media.
 
-## Compatibility / cleanup
+## Compatibility / restart behavior
 
-Preserved:
-- current signed Movie Night URLs and 6-hour watch-link expiry;
-- per-user/per-page stream signatures;
-- host controls and viewer Tap to Sync rules;
-- late-join buffer qualification;
-- torrent session reuse and room leases;
-- adaptive range prioritization;
-- provider search/ranking;
-- stale-menu Movie Night recovery from PR #414.
+- **Menu expiry only:** no room restart required.
+- **Watch-link expiry only:** no room restart required; reopen `/movie` for a fresh Watch link.
+- **Media idle cleanup only:** no room restart required; the host reselects/reattaches the release.
+- **Bot/process restart:** the current Movie Night room manager is in-memory, so the room is lost and a new Movie Night session must be started.
 
-No extra torrent runtime, reconnect daemon, retry worker, or duplicate streaming implementation was added.
-
-## Blockers / risks
-
-Still required before completion:
-1. exact-head targeted + full CI;
-2. deploy current PR head;
-3. start a known seeded movie;
-4. refresh the Watch page while it is still buffering;
-5. confirm the same viewer reconnects without losing sync identity;
-6. confirm seed/leech display remains meaningful instead of transient `0 / 0`;
-7. confirm old abandoned Range requests no longer emit `ConnectionError: Connection lost` tracebacks;
-8. confirm video eventually reaches playable state without reload thrash;
-9. complete the existing release #1 -> detail -> torrent -> Watch playback canary.
+No room persistence layer is added in this task.
 
 ## Backlog
 
 - **XXX/adult movie visibility admin setting:** guild-scoped enable/disable control across catalog and connected provider results.
-- **Unattended-host Movie Ready announcement + coherent waiting timeout:** announce only after media is prepared, preserve paused-at-zero waiting state, and align room/media lifetime.
+- **Unattended-host Movie Ready announcement + coherent waiting timeout:** announce only after media is prepared and choose a deliberate prepared-room/media retention policy.
 - **20-viewer capacity validation/hardening:** sustained range-stream load, bandwidth, late join, RAM, and proxy behavior.
+- **Room persistence across bot/process restarts:** separate durability work; current rooms are in-memory only.
 
-Unrelated Dank Shield, Minecraft, Unity, Idle Grow, Captions, AntiNuke, and other work remains outside this single active task.
+## Blockers / risks
+
+This branch clarifies the current contract but does **not** change the 30-minute idle media policy or add a room timeout. Those are product-policy changes and remain separate from explaining the current behavior.
+
+Still required:
+1. exact-head CI;
+2. final diff hygiene;
+3. deploy and confirm the Session timing field renders cleanly on Discord mobile;
+4. expire/reclaim a test media session and confirm the Watch page says the room is still active and the release must be reselected.
 
 ## Next step
 
-Open the focused refresh/reconnect PR, run exact-head CI, patch only evidence-backed failures, then deploy and repeat the refresh-while-buffering production canary before closing #408.
+Open the focused lifecycle-clarity PR, run exact-head validation, patch only evidence-backed failures, and merge/deploy before closing the remaining #408 UX gap.
 
 
 ---
