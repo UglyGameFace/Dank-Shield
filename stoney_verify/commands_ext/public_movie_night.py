@@ -1005,9 +1005,27 @@ def _normalized_movie_identity(value: Any) -> tuple[str, ...]:
 def _release_matches_catalog(
     release_title: Any,
     catalog_metadata: Optional[Mapping[str, Any]],
+    release_metadata: Optional[Mapping[str, Any]] = None,
 ) -> bool:
     if not isinstance(catalog_metadata, Mapping):
         return False
+
+    catalog_id = _compact(catalog_metadata.get("catalog_id"), 40)
+    if catalog_id and isinstance(release_metadata, Mapping):
+        reported = (
+            release_metadata.get("source_reported")
+            if isinstance(release_metadata.get("source_reported"), Mapping)
+            else {}
+        )
+        reported_tmdb = _compact(
+            reported.get("tmdb")
+            or reported.get("tmdb_id")
+            or reported.get("tmdbId"),
+            40,
+        )
+        if reported_tmdb:
+            return reported_tmdb == catalog_id
+
     catalog_title = _compact(catalog_metadata.get("title"))
     if not catalog_title:
         return False
@@ -1046,7 +1064,11 @@ def _materialize_search_results(
     for result in outcome.variants:
         catalog = (
             dict(catalog_metadata)
-            if _release_matches_catalog(result.title, catalog_metadata)
+            if _release_matches_catalog(
+                result.title,
+                catalog_metadata,
+                result.metadata,
+            )
             else {}
         )
         candidate_title = (
