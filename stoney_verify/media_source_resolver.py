@@ -1019,9 +1019,11 @@ async def search_custom_media_sources(
     variants: list[ResolvedMediaVariant] = []
     errors: list[str] = []
     seen: set[tuple[str, str]] = set()
-    for rows, error in results:
+    for source, (rows, error) in zip(sources, results):
         if error:
             errors.append(error)
+        elif not rows:
+            errors.append(f"{source.label}: no playable results for this search.")
         for row in rows:
             key = (row.title.casefold(), row.source_ref)
             if key in seen:
