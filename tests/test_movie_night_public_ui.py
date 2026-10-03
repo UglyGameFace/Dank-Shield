@@ -180,6 +180,9 @@ def test_private_host_gets_viewer_manager_and_invited_viewer_gets_watch_only(mon
     assert "Pass Host" not in viewer_more
     assert "Private Session Status" in viewer_more
 
+    outsider_home = _labels(movie_ui.MovieNightHubView(30, room))
+    assert "Watch Movie" not in outsider_home
+
     viewer_home = _labels(movie_ui.MovieNightHubView(20, room))
     assert "Watch Movie" in viewer_home
     assert "Find Movie" not in viewer_home
