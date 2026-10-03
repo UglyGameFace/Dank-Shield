@@ -3767,6 +3767,152 @@ async def _open_host_handoff_picker(
     )
 
 
+def _private_viewers_embed(
+    interaction: discord.Interaction,
+    room: MovieNightRoom,
+) -> discord.Embed:
+    allowed = set(getattr(room, "private_allowed_viewers", set()) or set())
+    allowed.add(int(room.host_id))
+    invited = sorted(uid for uid in allowed if uid != int(room.host_id))
+
+    host = interaction.guild.get_member(room.host_id) if interaction.guild else None
+    host_label = host.mention if isinstance(host, discord.Member) else f"<@{room.host_id}>"
+
+    lines: list[str] = []
+    for uid in invited[: PRIVATE_VIEWER_LIMIT - 1]:
+        member = interaction.guild.get_member(uid) if interaction.guild else None
+        if isinstance(member, discord.Member):
+            lines.append(member.mention)
+        else:
+            lines.append(f"<@{uid}>")
+
+    embed = discord.Embed(
+        title="🔒 Dank Cinema • Private Viewers",
+        description=(
+            f"Authorized: **{len(allowed)} / {PRIVATE_VIEWER_LIMIT}** total viewers\n"
+            "Only people on this list can open the private room. The host keeps movie, queue, "
+            "playback, and end-session control; invited viewers receive their own signed Watch link."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name="Host", value=host_label, inline=False)
+    embed.add_field(
+        name="Invited Viewers",
+        value="\n".join(lines) if lines else "Nobody invited yet.",
+        inline=False,
+    )
+    embed.set_footer(
+        text="Select a user to add them; select an already invited user to remove them."
+    )
+    return embed
+
+
+class PrivateViewerManagerView(_OwnedView):
+    def __init__(self, owner_id: int, room: MovieNightRoom) -> None:
+        super().__init__(owner_id)
+        self.room_id = str(room.room_id)
+        self.add_item(
+            DankUserSelect(
+                author_id=int(owner_id),
+                on_pick=self._picked,
+                placeholder="Add or remove a private viewer…",
+                row=0,
+            )
+        )
+
+    async def _picked(
+        self,
+        interaction: discord.Interaction,
+        user: discord.User | discord.Member,
+    ) -> None:
+        manager = get_movie_night_manager()
+        room = manager.get(self.room_id)
+        if room is None or room.ended:
+            return await open_movie_night(interaction, replace_message=True)
+        if not _private_viewing(room):
+            return await _movie_hub_notice(
+                interaction,
+                "❌ This room is not a Private Session.",
+                room=room,
+            )
+        if int(interaction.user.id) != int(room.host_id):
+            return await _movie_hub_notice(
+                interaction,
+                "❌ Only the Private Session host can manage viewers.",
+                room=room,
+            )
+
+        uid = int(getattr(user, "id", 0) or 0)
+        if uid <= 0:
+            return await _private(interaction, "❌ Choose a valid server member.")
+        if bool(getattr(user, "bot", False)):
+            return await _private(interaction, "❌ Bots cannot join a Private Session.")
+        if uid == int(room.host_id):
+            return await _private(interaction, "ℹ️ You are already the Private Session host.")
+
+        allowed = set(getattr(room, "private_allowed_viewers", set()) or set())
+        try:
+            if uid in allowed:
+                manager.remove_private_viewer(
+                    room.room_id,
+                    host_id=int(interaction.user.id),
+                    user_id=uid,
+                )
+                notice = f"✅ Removed <@{uid}> from this Private Session."
+            else:
+                manager.invite_private_viewer(
+                    room.room_id,
+                    host_id=int(interaction.user.id),
+                    user_id=uid,
+                )
+                notice = (
+                    f"✅ Added <@{uid}>. They can open **/movie** in this channel and "
+                    "use their own **Watch Movie** link."
+                )
+        except (PermissionError, RuntimeError, ValueError) as exc:
+            return await _private(interaction, f"❌ {exc}")
+
+        await _replace(
+            interaction,
+            content=notice,
+            embed=_private_viewers_embed(interaction, room),
+            view=PrivateViewerManagerView(int(interaction.user.id), room),
+        )
+
+    @discord.ui.button(label="Back to More", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:private-viewers:back")
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_movie_night_more(interaction, replace_message=True)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:private-viewers:close")
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace(interaction, content="Dank Cinema Private Viewer manager closed.", embed=None, view=None)
+
+
+async def _open_private_viewers(
+    interaction: discord.Interaction,
+    room: MovieNightRoom,
+) -> None:
+    if not _private_viewing(room):
+        return await _movie_hub_notice(
+            interaction,
+            "❌ Private viewer management is only available in a Private Session.",
+            room=room,
+        )
+    if int(interaction.user.id) != int(room.host_id):
+        return await _movie_hub_notice(
+            interaction,
+            "❌ Only the Private Session host can manage viewers.",
+            room=room,
+        )
+    await _replace(
+        interaction,
+        embed=_private_viewers_embed(interaction, room),
+        view=PrivateViewerManagerView(int(interaction.user.id), room),
+    )
+
+
 class MovieNightMoreView(_OwnedView):
     def __init__(
         self,
