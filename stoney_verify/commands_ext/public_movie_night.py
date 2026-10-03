@@ -744,7 +744,8 @@ def _room_embed(
         embed = discord.Embed(
             title="🍿 Dank Cinema",
             description=(
-                "No room is active in this channel. Start one, then use **Find Movie** or "
+                "No room is active in this channel. Start a **Watch Party** or "
+                "**Private Viewing**, then use **Find Movie** or "
                 "`/movie magnet:` / `/movie torrent:` to choose the media."
             ),
             color=discord.Color.blurple(),
@@ -752,10 +753,10 @@ def _room_embed(
         embed.add_field(
             name="Room flow",
             value=(
-                "1. **Start / Join**\n"
+                "1. **Start / Join Party** for shared viewing, or **Private Viewing** for owner-only playback\n"
                 "2. **Find Movie** or provide a magnet/.torrent\n"
-                "3. Pick the release/quality using seed, leech, metadata, and votes\n"
-                "4. Watch together with host controls and vote failover"
+                "3. Pick the release/quality using seed, leech, metadata, and votes when shared\n"
+                "4. Watch with the same signed player and torrent runtime"
             ),
             inline=False,
         )
@@ -1544,12 +1545,19 @@ async def _open_candidate_detail(
     candidate_id: str,
 ) -> None:
     manager = get_movie_night_manager()
-    room = manager.get(room_id)
+    room = _room_by_id_for_interaction(interaction, room_id)
     if room is None:
-        return await _private(interaction, "❌ This Movie Night room no longer exists.")
+        return await _movie_hub_notice(
+            interaction,
+            "❌ This Movie Night room is unavailable or private.",
+        )
     candidate = room.candidates.get(str(candidate_id))
     if candidate is None:
-        return await _private(interaction, "❌ That movie result no longer exists.")
+        return await _movie_hub_notice(
+            interaction,
+            "❌ That movie result no longer exists.",
+            room=room,
+        )
     await _replace(
         interaction,
         embed=_candidate_embed(room, candidate),
@@ -1588,21 +1596,46 @@ async def _open_release_picker(
     candidate_id: str,
 ) -> None:
     manager = get_movie_night_manager()
-    room = manager.get(room_id)
+    room = _room_by_id_for_interaction(interaction, room_id)
     if room is None:
-        return await _private(interaction, "❌ This Movie Night room no longer exists.")
+        return await _movie_hub_notice(
+            interaction,
+            "❌ This Movie Night room is unavailable or private.",
+        )
     candidate = room.candidates.get(str(candidate_id))
     if candidate is None:
-        return await _private(interaction, "❌ That movie result no longer exists.")
+        return await _movie_hub_notice(
+            interaction,
+            "❌ That movie result no longer exists.",
+            room=room,
+        )
 
     variants = manager.ranked_variants(room.room_id, candidate.candidate_id)
     if not variants:
-        return await _private(interaction, "ℹ️ No playable releases were returned for this movie.")
+        return await _replace(
+            interaction,
+            content="ℹ️ No playable releases were returned for this movie.",
+            embed=_candidate_embed(room, candidate),
+            view=MovieCandidateView(
+                int(interaction.user.id),
+                room.room_id,
+                candidate.candidate_id,
+            ),
+        )
 
     async def picked(pick_interaction: discord.Interaction, value: str) -> None:
         variant = candidate.variants.get(value)
         if variant is None:
-            return await _private(pick_interaction, "❌ That release no longer exists.")
+            return await _replace(
+                pick_interaction,
+                content="❌ That release no longer exists.",
+                embed=_candidate_embed(room, candidate),
+                view=MovieCandidateView(
+                    int(pick_interaction.user.id),
+                    room.room_id,
+                    candidate.candidate_id,
+                ),
+            )
         await _replace(
             pick_interaction,
             embed=_release_embed(room, candidate, variant),
@@ -1644,9 +1677,12 @@ async def open_movie_results(
     replace_message: bool = True,
 ) -> None:
     manager = get_movie_night_manager()
-    room = manager.get(room_id)
+    room = _room_by_id_for_interaction(interaction, room_id)
     if room is None:
-        return await _private(interaction, "❌ This Movie Night room no longer exists.")
+        return await _movie_hub_notice(
+            interaction,
+            "❌ This Movie Night room is unavailable or private.",
+        )
 
     ranked = manager.ranked_candidates(room.room_id)
     if not ranked:
@@ -1658,7 +1694,12 @@ async def open_movie_results(
                 embed=_room_embed(interaction, room),
                 view=MovieNightHubView(int(interaction.user.id)),
             )
-        return await _private(interaction, message)
+        return await _private(
+            interaction,
+            message,
+            embed=_room_embed(interaction, room),
+            view=MovieNightHubView(int(interaction.user.id), room),
+        )
 
     active = manager.active_viewers(room)
     choices: list[DankChoice] = []
@@ -3086,12 +3127,20 @@ class MovieNightHubView(_OwnedView):
         # on an empty hub; party voting controls have no meaning in owner-only
         # Private Viewing.
         if room is not None:
+            self.remove_item(self.start_join)
             self.remove_item(self.start_private)
         if room is None or private_mode:
             self.remove_item(self.vote_yes)
             self.remove_item(self.vote_no)
 
-        if room is not None and room.stream_token:
+        if (
+            room is not None
+            and room.stream_token
+            and (
+                not _private_viewing(room)
+                or int(owner_id) == int(room.host_id)
+            )
+        ):
             watch_url = movie_night_watch_url(room.room_id, int(owner_id))
             if watch_url:
                 self.add_item(
