@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from aiohttp import web
 
 from stoney_verify import movie_night_web
+from stoney_verify.movie_night import MovieNightManager
 
 
 def test_movie_night_watch_url_is_signed_to_room_user_and_expiry(monkeypatch) -> None:
@@ -270,3 +272,44 @@ def test_new_session_refresh_warmup_does_not_inherit_old_viewer_telemetry() -> N
         has_stream=True,
     )
     assert result == (0.0, 0.0, 0.0, True, False)
+
+
+def test_state_marks_reclaimed_media_without_ending_room(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="expired-media-token",
+    )
+
+    class _MissingTorrentManager:
+        async def get(self, token: str):
+            assert token == "expired-media-token"
+            return None
+
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(
+        movie_night_web,
+        "get_torrent_manager",
+        lambda: _MissingTorrentManager(),
+    )
+
+    payload = asyncio.run(movie_night_web._state_payload(room, 10))
+
+    assert payload["ended"] is False
+    assert payload["media_missing"] is True
+    assert payload["stream_url"] == ""
+
+
+def test_player_explains_reclaimed_media_instead_of_saying_no_movie_chosen() -> None:
+    html = movie_night_web._watch_html(
+        "room-expired-media",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert "if(s.media_missing)" in html
+    assert "media session expired or was reclaimed" in html
+    assert "room is still active" in html
+    assert "choose the release again" in html

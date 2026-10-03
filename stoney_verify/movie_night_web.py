@@ -186,6 +186,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     if session is not None:
         page_session = str(getattr(viewer, "client_session_id", "") or "").strip()[:64]
         consumer_key = f"movie:{int(user_id)}:{page_session or 'legacy'}"
+    media_missing = bool(room.stream_token and session is None)
     stream_url = (
         torrent_manager.stream_url(
             session,
@@ -239,6 +240,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "stream_token": room.stream_token,
         "stream_consumer": consumer_key,
         "stream_url": stream_url,
+        "media_missing": media_missing,
         "torrent": {
             "name": torrent_status.get("name", ""),
             "size": torrent_status.get("size", 0),
@@ -744,7 +746,12 @@ async function applyState(s) {{
     attachStream(s.stream_url);
   }}
   if(!s.stream_url) {{
-    notice.textContent="Waiting for the host to choose media.";
+    if(s.media_missing) {{
+      notice.textContent=
+        "The attached media session expired or was reclaimed. The Movie Night room is still active; return to Discord and choose the release again.";
+    }} else {{
+      notice.textContent="Waiting for the host to choose media.";
+    }}
     return;
   }}
 
