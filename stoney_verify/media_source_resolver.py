@@ -208,6 +208,26 @@ def _safe_source_ref(value: Any) -> str:
     return raw[:4096]
 
 
+def _looks_like_static_feed_endpoint(endpoint: str) -> bool:
+    parsed = urlsplit(str(endpoint or "").strip())
+    path = str(parsed.path or "").casefold().rstrip("/")
+    if path.endswith((".xml", ".rss", ".atom")):
+        return True
+    leaf = path.rsplit("/", 1)[-1] if path else ""
+    if leaf in {"feed", "feeds", "rss", "atom"}:
+        return True
+
+    query = {
+        str(key or "").casefold(): str(value or "").casefold()
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+    }
+    return query.get("format") in {"rss", "atom", "xml"} or query.get("output") in {
+        "rss",
+        "atom",
+        "xml",
+    }
+
+
 def _search_url(endpoint: str, query: str) -> str:
     clean_query = " ".join(str(query or "").split())[:180]
     if not clean_query:
@@ -217,8 +237,7 @@ def _search_url(endpoint: str, query: str) -> str:
         return endpoint.replace("{query}", quote_plus(clean_query))
 
     parsed = urlsplit(endpoint)
-    path = str(parsed.path or "").casefold()
-    if path.endswith((".xml", ".rss", ".atom")):
+    if _looks_like_static_feed_endpoint(endpoint):
         return endpoint
 
     pairs = list(parse_qsl(parsed.query, keep_blank_values=True))
@@ -320,7 +339,25 @@ def _extract_items(payload: Any, *, _depth: int = 0) -> list[Mapping[str, Any]]:
             nested = _extract_items(value, _depth=_depth + 1)
             if nested:
                 return nested
-    return []
+
+    title_keys = ("title", "name", "movie", "display_name", "filename")
+    if any(payload.get(key) for key in title_keys) and (
+        any(payload.get(key) for key in _PLAYABLE_REF_KEYS)
+        or any(payload.get(key) for key in _INFO_HASH_KEYS)
+    ):
+        return [payload]
+
+    mapped_rows = [
+        value
+        for value in list(payload.values())[:_MAX_SOURCE_RESULTS]
+        if isinstance(value, Mapping)
+        and any(value.get(key) for key in title_keys)
+        and (
+            any(value.get(key) for key in _PLAYABLE_REF_KEYS)
+            or any(value.get(key) for key in _INFO_HASH_KEYS)
+        )
+    ]
+    return mapped_rows
 
 
 def _magnet_from_info_hash(value: Any) -> str:
@@ -548,64 +585,129 @@ def _feed_playable_ref(value: Any, *, media_type: str = "") -> str:
 
 
 def _feed_entry_to_item(entry: ET.Element) -> Mapping[str, Any]:
-    title = ""
-    source_ref = ""
-    info_hash = ""
-    file_size = 0
+    item: dict[str, Any] = {
+        "title": "",
+        "source_ref": "",
+        "file_size": 0,
+        "seeds": 0,
+        "leechers": 0,
+        "peers": 0,
+    }
     metadata: dict[str, Any] = {}
+
+    def set_source(value: Any, *, media_type: str = "") -> None:
+        if item["source_ref"]:
+            return
+        ref = _feed_playable_ref(value, media_type=media_type)
+        if ref:
+            item["source_ref"] = ref
+
+    def apply_named_value(raw_name: Any, raw_value: Any) -> None:
+        name = re.sub(r"[^a-z0-9]+", "", str(raw_name or "").casefold())
+        value = str(raw_value or "").strip()
+        if not name or not value:
+            return
+        if name in {"infohash", "hash"} and not item.get("info_hash"):
+            item["info_hash"] = value[:80]
+        elif name in {"magnet", "magneturi", "magneturl"}:
+            set_source(value)
+        elif name in {"size", "filesize", "contentlength", "length"}:
+            if not item["file_size"]:
+                item["file_size"] = _safe_int(value)
+        elif name in {"seed", "seeds", "seeders"}:
+            item["seeds"] = max(int(item["seeds"]), _safe_int(value))
+        elif name in {"leech", "leeches", "leechers"}:
+            item["leechers"] = max(int(item["leechers"]), _safe_int(value))
+        elif name in {"peer", "peers", "peercount"}:
+            item["peers"] = max(int(item["peers"]), _safe_int(value))
+        elif name in {
+            "category",
+            "imdb",
+            "imdbid",
+            "tmdb",
+            "tmdbid",
+            "language",
+            "lang",
+            "quality",
+            "resolution",
+            "codec",
+            "group",
+            "indexer",
+        }:
+            metadata.setdefault(name, value[:180])
 
     for child in entry.iter():
         name = _xml_local_name(child.tag)
         text_value = " ".join(str(child.text or "").split())
 
-        if name == "title" and text_value and not title:
-            title = text_value[:180]
+        if name == "title" and text_value and not item["title"]:
+            item["title"] = text_value[:180]
             continue
 
-        if name in {"infohash", "info_hash"} and text_value and not info_hash:
-            info_hash = text_value[:80]
+        if name == "attr":
+            apply_named_value(
+                child.attrib.get("name") or child.attrib.get("key"),
+                child.attrib.get("value") or text_value,
+            )
             continue
 
-        if name in {"magneturi", "magnet_uri", "magnet"} and text_value and not source_ref:
-            source_ref = _feed_playable_ref(text_value)
+        if name in {
+            "infohash",
+            "info_hash",
+            "hash",
+            "magneturi",
+            "magnet_uri",
+            "magneturl",
+            "magnet",
+            "size",
+            "filesize",
+            "contentlength",
+            "length",
+            "seed",
+            "seeds",
+            "seeders",
+            "leech",
+            "leeches",
+            "leechers",
+            "peer",
+            "peers",
+            "peercount",
+        }:
+            apply_named_value(name, text_value)
             continue
 
         if name == "enclosure":
             candidate = str(child.attrib.get("url") or child.attrib.get("href") or "").strip()
             media_type = str(child.attrib.get("type") or "")
-            if not source_ref:
-                source_ref = _feed_playable_ref(candidate, media_type=media_type)
-            if not file_size:
-                file_size = _safe_int(child.attrib.get("length") or child.attrib.get("size"))
+            set_source(candidate, media_type=media_type)
+            if not item["file_size"]:
+                item["file_size"] = _safe_int(
+                    child.attrib.get("length") or child.attrib.get("size")
+                )
             continue
 
         if name == "link":
             candidate = str(child.attrib.get("href") or text_value or "").strip()
             rel = str(child.attrib.get("rel") or "").casefold()
             media_type = str(child.attrib.get("type") or "")
-            if not source_ref and (
-                rel == "enclosure"
+            playable = _feed_playable_ref(candidate, media_type=media_type)
+            if playable and (
+                rel in {"", "enclosure"}
                 or candidate.casefold().startswith("magnet:?")
-                or _feed_playable_ref(candidate, media_type=media_type)
+                or "bittorrent" in media_type.casefold()
+                or str(urlsplit(candidate).path or "").casefold().endswith(".torrent")
             ):
-                source_ref = _feed_playable_ref(candidate, media_type=media_type)
+                set_source(playable, media_type=media_type)
             continue
 
-        if name == "guid" and text_value and not source_ref:
-            source_ref = _feed_playable_ref(text_value)
+        if name == "guid" and text_value:
+            set_source(text_value)
             continue
 
         if name in {"category", "author", "creator", "pubdate", "published", "updated"}:
             if text_value and name not in metadata:
                 metadata[name] = text_value[:180]
 
-    item: dict[str, Any] = {
-        "title": title,
-        "source_ref": source_ref,
-        "file_size": file_size,
-    }
-    if info_hash:
-        item["info_hash"] = info_hash
     if metadata:
         item["metadata"] = metadata
     return item
@@ -623,9 +725,13 @@ def _feed_query_matches(title: Any, query: str) -> bool:
 
 
 def _extract_feed_items(payload: bytes, query: str) -> list[Mapping[str, Any]]:
-    lowered = payload[:4096].casefold()
+    lowered = payload.lower()
     if b"<!doctype" in lowered or b"<!entity" in lowered:
         raise ValueError("source XML declarations are not allowed")
+
+    stripped = payload.lstrip().lower()
+    if stripped.startswith(b"<html") or stripped.startswith(b"<!doctype html"):
+        raise ValueError("source returned HTML instead of a structured RSS/Atom feed")
 
     try:
         root = ET.fromstring(payload)
