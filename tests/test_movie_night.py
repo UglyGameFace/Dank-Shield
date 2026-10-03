@@ -1153,3 +1153,30 @@ def test_public_watch_party_join_behavior_is_unchanged() -> None:
     assert manager.user_can_access(room, 20)
     assert set(room.viewers) == {10, 20}
 
+def test_private_room_rejects_non_owner_heartbeat() -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="torrent-token",
+        mode="private",
+        now=100.0,
+    )
+
+    try:
+        manager.heartbeat(
+            room.room_id,
+            user_id=20,
+            position_seconds=0,
+            byte_position=0,
+            buffered_until_byte=0,
+            paused=True,
+            now=101.0,
+        )
+    except PermissionError as exc:
+        assert "private" in str(exc).lower()
+    else:
+        raise AssertionError("non-owner heartbeat unexpectedly entered private viewing")
+
+    assert set(room.viewers) == {10}
