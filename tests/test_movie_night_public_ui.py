@@ -300,6 +300,26 @@ def test_movie_night_hub_adds_signed_watch_link_when_media_is_active(monkeypatch
     )
 
 
+def test_movie_night_core_buttons_use_movie_component_namespace() -> None:
+    views = [
+        movie_ui.MovieNightHubView(1),
+        movie_ui.MovieCandidateView(1, "room", "candidate"),
+        movie_ui.MovieReleaseView(1, "room", "candidate", "variant"),
+    ]
+    for view in views:
+        buttons = [
+            item
+            for item in view.children
+            if isinstance(item, discord.ui.Button)
+            and item.style is not discord.ButtonStyle.link
+        ]
+        assert buttons
+        assert all(
+            str(button.custom_id or "").startswith("dank:movie:")
+            for button in buttons
+        )
+
+
 def test_release_picker_does_not_preselect_first_ranked_release() -> None:
     variants = [
         SimpleNamespace(
