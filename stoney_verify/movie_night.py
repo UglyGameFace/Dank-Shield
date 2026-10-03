@@ -19,6 +19,7 @@ PLAYBACK_ACTIONS = frozenset({"pause", "resume", "seek", "skip"})
 SESSION_ACTIONS = frozenset({"end"})
 PROGRAMMING_ACTIONS = frozenset({"search", "nominate", "queue", "play_next", "play_variant"})
 ALL_ACTIONS = PLAYBACK_ACTIONS | SESSION_ACTIONS | PROGRAMMING_ACTIONS
+PRIVATE_VIEWER_LIMIT = 20
 
 def movie_room_lease_key(guild_id: int, channel_id: int) -> str:
     """Stable tracked torrent consumer identity for one Movie Night room."""
@@ -177,6 +178,7 @@ class MovieNightRoom:
     created_at: float
     host_last_seen: float
     mode: str = "watch_party"
+    private_allowed_viewers: set[int] = field(default_factory=set)
     playback_state: str = "paused"
     playback_position: float = 0.0
     playback_anchor_monotonic: float = 0.0
@@ -267,6 +269,9 @@ class MovieNightManager:
             created_at=current,
             host_last_seen=current,
             mode=normalized_mode,
+            private_allowed_viewers=(
+                {int(host_id)} if normalized_mode == "private" else set()
+            ),
             playback_anchor_monotonic=current,
         )
         room.viewers[int(host_id)] = ViewerState(
@@ -314,7 +319,57 @@ class MovieNightManager:
     def user_can_access(room: MovieNightRoom, user_id: int) -> bool:
         if str(getattr(room, "mode", "watch_party") or "watch_party") != "private":
             return True
-        return int(user_id) == int(room.host_id)
+        uid = int(user_id)
+        if uid == int(room.host_id):
+            return True
+        return uid in set(getattr(room, "private_allowed_viewers", set()) or set())
+
+    def invite_private_viewer(
+        self,
+        room_id: str,
+        *,
+        host_id: int,
+        user_id: int,
+    ) -> MovieNightRoom:
+        room = self._require_room(room_id)
+        if str(getattr(room, "mode", "watch_party") or "watch_party") != "private":
+            raise RuntimeError("Viewer invites are only available for Private Viewing.")
+        if int(host_id) != int(room.host_id):
+            raise PermissionError("Only the Private Viewing host can invite viewers.")
+
+        uid = int(user_id)
+        if uid <= 0:
+            raise ValueError("Choose a valid viewer.")
+        allowed = room.private_allowed_viewers
+        allowed.add(int(room.host_id))
+        if uid in allowed:
+            return room
+        if len(allowed) >= PRIVATE_VIEWER_LIMIT:
+            raise RuntimeError(
+                f"Private Viewing supports up to {PRIVATE_VIEWER_LIMIT} viewers total."
+            )
+        allowed.add(uid)
+        return room
+
+    def remove_private_viewer(
+        self,
+        room_id: str,
+        *,
+        host_id: int,
+        user_id: int,
+    ) -> MovieNightRoom:
+        room = self._require_room(room_id)
+        if str(getattr(room, "mode", "watch_party") or "watch_party") != "private":
+            raise RuntimeError("Viewer management is only available for Private Viewing.")
+        if int(host_id) != int(room.host_id):
+            raise PermissionError("Only the Private Viewing host can remove viewers.")
+
+        uid = int(user_id)
+        if uid == int(room.host_id):
+            raise ValueError("The Private Viewing host cannot remove themselves.")
+        room.private_allowed_viewers.discard(uid)
+        room.viewers.pop(uid, None)
+        return room
 
     def active_room_for_user(
         self,
@@ -640,7 +695,9 @@ class MovieNightManager:
             if current - float(viewer.last_seen) <= self.viewer_ttl_seconds
         }
         if str(getattr(room, "mode", "watch_party") or "watch_party") == "private":
-            return {int(room.host_id)} & active
+            allowed = set(getattr(room, "private_allowed_viewers", set()) or set())
+            allowed.add(int(room.host_id))
+            return allowed & active
         return active
 
     def buffer_quorum_viewers(
@@ -668,6 +725,8 @@ class MovieNightManager:
         *,
         now: Optional[float] = None,
     ) -> int:
+        if str(getattr(room, "mode", "watch_party") or "watch_party") == "private":
+            return 1
         voters = self.active_viewers(room, now=now)
         return max(1, math.floor(len(voters) / 2) + 1)
 
@@ -692,6 +751,11 @@ class MovieNightManager:
             raise PermissionError("This is a private Dank Cinema viewing session.")
         if proposer not in active:
             raise PermissionError("Only active Movie Night viewers may start votes.")
+        if (
+            str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
+            and proposer != int(room.host_id)
+        ):
+            raise PermissionError("Only the Private Viewing host can control this session.")
 
         if normalized in PLAYBACK_ACTIONS and self.host_active(room, now=current):
             if proposer != int(room.host_id):
@@ -735,6 +799,11 @@ class MovieNightManager:
             raise PermissionError("This is a private Dank Cinema viewing session.")
         if uid not in self.active_viewers(room, now=current):
             raise PermissionError("Only active Movie Night viewers may vote.")
+        if (
+            str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
+            and uid != int(room.host_id)
+        ):
+            raise PermissionError("Private Viewing does not use viewer voting.")
 
         vote.yes.discard(uid)
         vote.no.discard(uid)
@@ -806,6 +875,11 @@ class MovieNightManager:
         uid = int(user_id)
         if uid not in self.active_viewers(room, now=current):
             raise PermissionError("Only active Movie Night viewers may nominate movies.")
+        if (
+            str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
+            and uid != int(room.host_id)
+        ):
+            raise PermissionError("Only the Private Viewing host can choose movies.")
         clean_title = " ".join(str(title or "").split())[:180]
         if not clean_title:
             raise ValueError("Movie title is required.")
@@ -845,6 +919,11 @@ class MovieNightManager:
         uid = int(user_id)
         if uid not in self.active_viewers(room, now=current):
             raise PermissionError("Only active Movie Night viewers may add source variants.")
+        if (
+            str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
+            and uid != int(room.host_id)
+        ):
+            raise PermissionError("Only the Private Viewing host can choose releases.")
 
         candidate = room.candidates.get(str(candidate_id or ""))
         if candidate is None:
@@ -913,6 +992,8 @@ class MovieNightManager:
         uid = int(user_id)
         if uid not in self.active_viewers(room, now=current):
             raise PermissionError("Only active Movie Night viewers may vote on source variants.")
+        if str(getattr(room, "mode", "watch_party") or "watch_party") == "private":
+            raise PermissionError("Private Viewing does not use viewer voting.")
 
         candidate = room.candidates.get(str(candidate_id or ""))
         if candidate is None:
@@ -1034,6 +1115,8 @@ class MovieNightManager:
         uid = int(user_id)
         if uid not in self.active_viewers(room, now=current):
             raise PermissionError("Only active Movie Night viewers may vote on movies.")
+        if str(getattr(room, "mode", "watch_party") or "watch_party") == "private":
+            raise PermissionError("Private Viewing does not use viewer voting.")
         candidate = room.candidates.get(str(candidate_id or ""))
         if candidate is None:
             raise LookupError("Movie candidate not found.")
@@ -1165,7 +1248,7 @@ class MovieNightManager:
 
         The canonical playback position is snapshotted at transfer time, then
         the existing playback state continues from the same point under the new
-        host. Private Viewing deliberately remains owner-only and cannot transfer.
+        host. Private Viewing keeps one host/controller and does not transfer.
         """
 
         room = self._require_room(room_id)
@@ -1326,6 +1409,7 @@ def get_movie_night_manager() -> MovieNightManager:
 
 __all__ = [
     "ALL_ACTIONS",
+    "PRIVATE_VIEWER_LIMIT",
     "MovieCandidate",
     "MovieSourceVariant",
     "MovieNightManager",
