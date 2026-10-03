@@ -648,8 +648,8 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
         value=(
             "**JSON:** results / items / releases / variants / torrents / data wrappers are supported.\n"
             "**RSS/Atom:** item/entry feeds can provide a magnet, torrent info-hash, or .torrent enclosure.\n"
-            "Common aliases include title/name, magnet/info_hash/torrent_url/source_ref, size, seeds, "
-            "leeches, peers, filename/release_name, and safe metadata. Dank Cinema normalizes the rest."
+            "Common aliases include title/name, magnet/magnet_uri/info_hash/torrent_url/source_ref, "
+            "size, seeds, leeches, peers, filename/release_name, and safe metadata. Dank Cinema normalizes the rest."
         )[:1024],
         inline=False,
     )
