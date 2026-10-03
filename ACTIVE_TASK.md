@@ -29,7 +29,7 @@ Turn Private Viewing from host-only isolation into an invite-only **Private Sess
 
 ## Status
 
-**Implementation is in progress on the focused branch. Root causes are identified and the core changes are implemented; regression cleanup, exact-head CI, final diff review, and production/mobile canary are still required before completion can be claimed.**
+**Implementation is in progress on the focused branch. PR #429's first full CI attempt exposed two evidence-backed regressions: private host actions were still using the generic active-viewer majority inside `_resolve_vote()`, and one lifecycle wording contract still expected the established "live room" phrase. Both are patched on the current head; new exact-head CI, final diff review, and production/mobile canary are still required before completion can be claimed.**
 
 ## Findings / root cause
 
@@ -86,7 +86,11 @@ Regression coverage added/updated for:
 - private status/end wording;
 - private web-player terminology.
 
-PR #429 is open. Exact-head CI is pending on the final reviewed head; earlier intermediate heads are not accepted as completion evidence.
+PR #429 is open. First full CI on `1e34f6a70d7c491b1645e4cb5f0c1fc9d823d4cc` ran **2,733 tests** and failed only:
+- `test_private_owner_votes_resolve_without_waiting_for_other_viewers`: `_resolve_vote()` duplicated majority math instead of using `required_yes_votes()`, so an invited viewer accidentally raised the private host's threshold;
+- `test_movie_night_lifecycle_text_explains_distinct_timeouts`: wording cleanup changed the established "process restart ends the live room" contract.
+
+The vote resolver now delegates to `required_yes_votes()` (private stays host-only at one yes; Watch Party majority is unchanged), and lifecycle wording preserves the tested room/session contract. A new exact-head run is required; earlier intermediate heads are not completion evidence.
 
 ## Cleanup / conflicts
 
@@ -109,7 +113,7 @@ PR #429 is open. Exact-head CI is pending on the final reviewed head; earlier in
 
 ## Next step
 
-Finish regression and terminology cleanup, inspect the full branch diff, open the focused PR, run the repository's exact-head workflow set, patch only evidence-backed failures, then validate one invited private viewer and one RSS feed on production/mobile before closing #428.
+Run the repository's workflow set on the patched exact head, inspect any evidence-backed failures and the final diff, then validate one invited private viewer and one RSS feed on production/mobile before closing #428.
 
 ---
 
