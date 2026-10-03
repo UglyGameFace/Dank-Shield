@@ -1082,3 +1082,74 @@ def test_host_session_id_never_demotes_host_sync_authority() -> None:
     assert host.sync_ready is True
     assert host.client_session_id == "host-page-b"
     assert 10 in manager.buffer_quorum_viewers(room, now=102.0)
+
+
+def test_private_room_is_owner_only_and_hidden_from_other_users() -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        mode="private",
+        now=100.0,
+    )
+
+    assert room.mode == "private"
+    assert manager.user_can_access(room, 10)
+    assert not manager.user_can_access(room, 20)
+    assert manager.active_room_for_user(1, 2, 10) is room
+    assert manager.active_room_for_user(1, 2, 20) is None
+
+    try:
+        manager.join_room(room.room_id, user_id=20, now=101.0)
+    except PermissionError as exc:
+        assert "private" in str(exc).lower()
+    else:
+        raise AssertionError("non-owner unexpectedly joined a private viewing room")
+
+    assert set(room.viewers) == {10}
+
+
+def test_private_owner_votes_resolve_without_waiting_for_other_viewers() -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        mode="private",
+        now=100.0,
+    )
+
+    vote = manager.propose_vote(
+        room.room_id,
+        proposer_id=10,
+        action="search",
+        payload={"query": "Blade Runner"},
+        now=101.0,
+    )
+
+    assert vote.resolved
+    assert vote.passed
+    assert manager.required_yes_votes(room, now=101.0) == 1
+    assert manager.active_viewers(room, now=101.0) == {10}
+    assert room.approved_search_query == "Blade Runner"
+
+
+def test_public_watch_party_join_behavior_is_unchanged() -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        now=100.0,
+    )
+
+    manager.join_room(room.room_id, user_id=20, now=101.0)
+
+    assert room.mode == "watch_party"
+    assert manager.user_can_access(room, 20)
+    assert set(room.viewers) == {10, 20}
+
