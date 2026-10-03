@@ -744,120 +744,275 @@ def _room_embed(
         embed = discord.Embed(
             title="🍿 Dank Cinema",
             description=(
-                "No room is active in this channel. Start a **Watch Party** or "
-                "**Private Viewing**, then use **Find Movie** or "
-                "`/movie magnet:` / `/movie torrent:` to choose the media."
+                "**Choose how you want to watch.**\n"
+                "Start a shared **Watch Party** or an owner-only **Private Viewing** session. "
+                "Once a room exists, **Find Movie** becomes the main action."
             ),
             color=discord.Color.blurple(),
         )
         embed.add_field(
-            name="Room flow",
-            value=(
-                "1. **Start / Join Party** for shared viewing, or **Private Viewing** for owner-only playback\n"
-                "2. **Find Movie** or provide a magnet/.torrent\n"
-                "3. Pick the release/quality using seed, leech, metadata, and votes when shared\n"
-                "4. Watch with the same signed player and torrent runtime"
-            ),
+            name="🎬 Watch Party",
+            value="Shared room • notifications • queue • contextual voting • synchronized Watch player",
             inline=False,
         )
+        embed.add_field(
+            name="🔒 Watch Alone",
+            value="Owner-only room • no server ping • no voting clutter • same movie search and player",
+            inline=False,
+        )
+        embed.set_footer(text=f"{_CINEMA_FOOTER} • choose a viewing mode")
         return embed
 
     manager = get_movie_night_manager()
     active = manager.active_viewers(room)
     host = interaction.guild.get_member(room.host_id) if interaction.guild else None
     host_label = host.mention if isinstance(host, discord.Member) else f"<@{room.host_id}>"
-    private_mode = str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
+    private_mode = _private_viewing(room)
+    current_candidate = (
+        room.candidates.get(room.current_candidate_id)
+        if room.current_candidate_id
+        else None
+    )
+    current_variant = (
+        current_candidate.variants.get(room.current_variant_id)
+        if current_candidate is not None and room.current_variant_id
+        else None
+    )
+    ready_to_watch = bool(room.stream_token and current_candidate is not None)
+
     embed = discord.Embed(
         title=(
             "🔒 Dank Cinema • Private Viewing"
             if private_mode
-            else "🍿 Dank Cinema • Now Showing"
+            else "🍿 Dank Cinema • Watch Party"
         ),
+        description=(
+            f"Host: {host_label} • Viewers: **{len(active)}**\n"
+            f"State: **{room.playback_state.title()}**"
+        ),
+        color=discord.Color.green() if ready_to_watch else discord.Color.blurple(),
+    )
+
+    if current_candidate is None:
+        embed.add_field(
+            name="1 • Find a movie",
+            value=(
+                "No movie is selected yet. Use **Find Movie** to search the catalog and "
+                "connected playable providers."
+            ),
+            inline=False,
+        )
+    else:
+        media_line = f"**{current_candidate.title}**"
+        if current_variant is not None:
+            health = current_variant.swarm_health
+            media_line += (
+                f"\n{_release_source_label(current_variant.metadata)} • "
+                f"{_format_bytes(current_variant.file_size)} • "
+                f"🌱 {health['seeds']} • 🧲 {health['leechers']}"
+            )
+        embed.add_field(
+            name="3 • Ready to watch" if room.stream_token else "2 • Choose a release",
+            value=(
+                media_line
+                + (
+                    "\nUse **Watch** to open the synchronized player."
+                    if room.stream_token
+                    else "\nOpen **Movie Picks** and choose a playable release."
+                )
+            )[:1024],
+            inline=False,
+        )
+
+    if room.queue:
+        embed.add_field(
+            name="📺 Queue",
+            value=f"**{len(room.queue)}** movie(s) waiting.",
+            inline=True,
+        )
+
+    latest = _latest_open_vote(room)
+    if latest is not None and not private_mode:
+        embed.add_field(
+            name="🗳️ Vote in progress",
+            value=(
+                f"**{latest.action.replace('_', ' ').title()}** • "
+                f"✅ {len(latest.yes)} / ❌ {len(latest.no)}\n"
+                "Vote buttons appear only while this decision is open."
+            ),
+            inline=False,
+        )
+
+    if private_mode:
+        embed.set_footer(text=f"{_CINEMA_FOOTER} • private • room {room.room_id}")
+    else:
+        embed.set_footer(text=f"{_CINEMA_FOOTER} • watch party • room {room.room_id}")
+    return embed
+
+
+def _session_status_embed(
+    interaction: discord.Interaction,
+    room: Optional[MovieNightRoom],
+) -> discord.Embed:
+    if room is None:
+        return discord.Embed(
+            title="📊 Dank Cinema • Session Status",
+            description=(
+                "No Movie Night room is active in this channel. Return to Cinema Home "
+                "and choose **Watch Party** or **Private Viewing**."
+            ),
+            color=discord.Color.blurple(),
+        )
+
+    manager = get_movie_night_manager()
+    active = manager.active_viewers(room)
+    host = interaction.guild.get_member(room.host_id) if interaction.guild else None
+    host_label = host.mention if isinstance(host, discord.Member) else f"<@{room.host_id}>"
+    private_mode = _private_viewing(room)
+    embed = discord.Embed(
+        title="📊 Dank Cinema • Session Status",
         description=(
             f"Host: {host_label}\n"
             f"Mode: **{'Private Viewing' if private_mode else 'Watch Party'}**\n"
-            f"State: **{room.playback_state.title()}**\n"
-            f"Viewers: **{len(active)}**\n"
-            f"Position: **{int(room.current_position())}s**"
+            f"Playback: **{room.playback_state.title()}** • "
+            f"Position: **{int(room.current_position())}s** • "
+            f"Active viewers: **{len(active)}**"
         ),
-        color=discord.Color.green(),
+        color=discord.Color.blurple(),
     )
-    if private_mode:
-        embed.add_field(
-            name="🔒 Privacy",
-            value=(
-                "Owner-only session. Dank Shield does **not** send the Movie Night role ping, "
-                "other members cannot join/control/vote in this room, and only the owner gets "
-                "the signed Watch link from this panel."
-            ),
-            inline=False,
-        )
-    if room.approved_search_query:
-        embed.add_field(
-            name="Approved search",
-            value=room.approved_search_query[:1024],
-            inline=False,
-        )
-    if room.queue:
-        embed.add_field(
-            name="Queue",
-            value=f"{len(room.queue)} movie(s) queued.",
-            inline=True,
-        )
-    unresolved = [vote for vote in room.votes.values() if not vote.resolved]
-    if unresolved:
-        latest = max(unresolved, key=lambda item: item.created_at)
-        embed.add_field(
-            name="Open vote",
-            value=(
-                f"**{latest.action}** • ✅ {len(latest.yes)} / ❌ {len(latest.no)}\n"
-                "Use the Vote Yes / Vote No controls in this hub."
-            ),
-            inline=False,
-        )
     embed.add_field(
         name="⏱️ Session timing",
         value=_movie_night_lifecycle_text()[:1024],
         inline=False,
     )
+    if room.queue:
+        embed.add_field(
+            name="📺 Queue",
+            value=f"{len(room.queue)} movie(s) queued.",
+            inline=True,
+        )
+    latest = _latest_open_vote(room)
+    if latest is not None and not private_mode:
+        embed.add_field(
+            name="🗳️ Current vote",
+            value=(
+                f"{latest.action.replace('_', ' ').title()} • "
+                f"✅ {len(latest.yes)} / ❌ {len(latest.no)}"
+            ),
+            inline=False,
+        )
     if room.stream_token:
-        current_candidate = (
+        candidate = (
             room.candidates.get(room.current_candidate_id)
             if room.current_candidate_id
             else None
         )
-        current_variant = (
-            current_candidate.variants.get(room.current_variant_id)
-            if current_candidate is not None and room.current_variant_id
+        variant = (
+            candidate.variants.get(room.current_variant_id)
+            if candidate is not None and room.current_variant_id
             else None
         )
-        if current_candidate is not None and current_variant is not None:
-            health = current_variant.swarm_health
-            media_value = (
-                f"**{current_candidate.title}** • "
-                f"{_release_source_label(current_variant.metadata)} • "
-                f"{_format_bytes(current_variant.file_size)}\n"
-                f"🌱 {health['seeds']} seeds • 🧲 {health['leechers']} leeches • "
-                f"👥 {health['peers']} peers\n"
-                "Use **Watch** for the synchronized full-video player."
+        if candidate is not None and variant is not None:
+            health = variant.swarm_health
+            embed.add_field(
+                name="🎞️ Attached media",
+                value=(
+                    f"**{candidate.title}**\n"
+                    f"{_release_source_label(variant.metadata)} • {_format_bytes(variant.file_size)}\n"
+                    f"🌱 {health['seeds']} seeds • 🧲 {health['leechers']} leeches • "
+                    f"👥 {health['peers']} peers"
+                )[:1024],
+                inline=False,
             )
         else:
-            media_value = (
-                "Torrent/media session attached. Use **Watch** for the synchronized "
-                "full-video player."
+            embed.add_field(
+                name="🎞️ Attached media",
+                value="A torrent/media session is attached to this room.",
+                inline=False,
             )
-        embed.add_field(
-            name="Media",
-            value=media_value[:1024],
-            inline=False,
-        )
     else:
         embed.add_field(
-            name="Media",
-            value="No media attached yet. Search or provide a magnet/.torrent.",
+            name="🎞️ Attached media",
+            value="No media attached yet.",
             inline=False,
         )
-    embed.set_footer(text=f"{_CINEMA_FOOTER} • room {room.room_id}")
+    embed.set_footer(text=f"{_CINEMA_FOOTER} • detailed status")
+    return embed
+
+
+def _more_embed(
+    interaction: discord.Interaction,
+    room: Optional[MovieNightRoom],
+    *,
+    staff: bool,
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="⋯ Dank Cinema • More",
+        description=(
+            "Less-used controls live here so the main Cinema screen can stay focused on "
+            "**Find → Choose → Watch**."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Session",
+        value=(
+            "📊 **Session Status** • timing, viewers, media, queue, and vote details\n"
+            "🔄 **Refresh Cinema** • redraw the current room state"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Community",
+        value="🌿 **Notifications** • Movie Night role and personal ping preferences",
+        inline=False,
+    )
+    if staff:
+        embed.add_field(
+            name="Staff",
+            value=(
+                "⚙️ **Cinema Settings** • providers, setup diagnostics, notifications, runtime"
+            ),
+            inline=False,
+        )
+    if room is not None:
+        embed.add_field(
+            name="Room",
+            value="🛑 **End Movie Night** • end the room and release its media lease",
+            inline=False,
+        )
+    return embed
+
+
+def _settings_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="⚙️ Dank Cinema • Settings",
+        description=(
+            "Staff-only configuration. Viewer-facing movie controls stay out of this screen."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="🎞️ Media Sources",
+        value="Provider Deck • add/manage structured in-app providers and admin reference links",
+        inline=False,
+    )
+    embed.add_field(
+        name="🌿 Notifications",
+        value="Movie Night notification role and Community & Pings configuration",
+        inline=False,
+    )
+    embed.add_field(
+        name="🛠️ Setup & Diagnostics",
+        value="Permissions, media endpoint, storage, capacity, libtorrent/PyAV readiness",
+        inline=False,
+    )
+    embed.add_field(
+        name="📊 Session & Lifecycle",
+        value="Current room status, timeout rules, attached media, and active vote details",
+        inline=False,
+    )
+    embed.set_footer(text=f"{_CINEMA_FOOTER} • staff settings")
     return embed
 
 
