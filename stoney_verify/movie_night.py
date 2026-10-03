@@ -402,6 +402,8 @@ class MovieNightManager:
         room = self._require_room(room_id)
         current = time.monotonic() if now is None else float(now)
         uid = int(user_id)
+        if not self.user_can_access(room, uid):
+            raise PermissionError("This is a private Dank Cinema viewing session.")
         viewer = room.viewers.get(uid)
         if viewer is None:
             viewer = ViewerState(user_id=uid, joined_at=current, last_seen=current)
