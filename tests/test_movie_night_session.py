@@ -99,3 +99,45 @@ def test_web_player_has_terminal_state_before_missing_room_fallback() -> None:
     assert 'terminated=true;' in source
     assert 'Movie Night room not found' in source
     assert 'if(terminated) return;' in source
+
+
+def test_inactive_room_cleanup_releases_media_and_keeps_fresh_room(monkeypatch) -> None:
+    manager = MovieNightManager(
+        viewer_ttl_seconds=35,
+        empty_room_ttl_seconds=300,
+    )
+    stale = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="stale-token",
+        now=-1_000_000.0,
+    )
+    fresh = manager.create_room(
+        guild_id=1,
+        channel_id=3,
+        host_id=20,
+        stream_token="fresh-token",
+    )
+    torrents = _FakeTorrentManager()
+    monkeypatch.setattr(movie_night_session, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(movie_night_session, "get_torrent_manager", lambda: torrents)
+
+    cleaned = asyncio.run(movie_night_session.cleanup_inactive_movie_night_rooms())
+
+    assert cleaned == 1
+    assert manager.get(stale.room_id) is None
+    assert manager.get(fresh.room_id) is fresh
+    assert torrents.calls == [("stale-token", "movie:1:2", True)]
+
+
+def test_movie_night_cleanup_task_is_registered_with_public_routes() -> None:
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "stoney_verify"
+        / "movie_night_web.py"
+    ).read_text(encoding="utf-8")
+
+    assert "ensure_movie_night_cleanup_task()" in source
