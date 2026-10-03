@@ -1326,7 +1326,7 @@ class MovieNightManager:
         active = self.active_viewers(room, now=now)
         yes = len(vote.yes & active)
         no = len(vote.no & active)
-        required = max(1, math.floor(len(active) / 2) + 1)
+        required = self.required_yes_votes(room, now=now)
 
         if yes >= required:
             vote.resolved = True
