@@ -1,7 +1,7 @@
 # Dank Cinema Master Audit
 
-Issue: #425  
-Baseline audited: `main@3c8989e6bfa70fd463e1914bfa96d60e9f3a6233`  
+Issue: #425
+Baseline audited: `main@3c8989e6bfa70fd463e1914bfa96d60e9f3a6233`
 Audit branch: `audit/425-cinema-master-audit`
 
 ## Audit goal
