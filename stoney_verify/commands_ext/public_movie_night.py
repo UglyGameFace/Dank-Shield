@@ -2932,6 +2932,20 @@ class MovieNightHubView(_OwnedView):
         room: Optional[MovieNightRoom] = None,
     ) -> None:
         super().__init__(owner_id)
+        private_mode = bool(
+            room is not None
+            and str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
+        )
+
+        # Keep the active cinema surface focused. Start-mode buttons only belong
+        # on an empty hub; party voting controls have no meaning in owner-only
+        # Private Viewing.
+        if room is not None:
+            self.remove_item(self.start_private)
+        if room is None or private_mode:
+            self.remove_item(self.vote_yes)
+            self.remove_item(self.vote_no)
+
         if room is not None and room.stream_token:
             watch_url = movie_night_watch_url(room.room_id, int(owner_id))
             if watch_url:
@@ -2945,17 +2959,25 @@ class MovieNightHubView(_OwnedView):
                     )
                 )
 
-    @discord.ui.button(label="Start / Join", emoji="🎬", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:hub:start")
+    @discord.ui.button(label="Start / Join Party", emoji="🎬", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:hub:start")
     async def start_join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _start_or_join_room(interaction)
+        await _start_or_join_room(interaction, mode="watch_party")
+
+    @discord.ui.button(label="Private Viewing", emoji="🔒", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:hub:private")
+    async def start_private(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _start_or_join_room(interaction, mode="private")
 
     @discord.ui.button(label="Find Movie", emoji="🔎", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:hub:search")
     async def search(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room = _room_for_interaction(interaction)
         if room is None:
-            return await _private(interaction, "❌ Start or join a Movie Night room first.")
+            return await _movie_hub_notice(
+                interaction,
+                "❌ Start or join a Movie Night room first.",
+            )
         get_movie_night_manager().join_room(
             room.room_id,
             user_id=int(interaction.user.id),
@@ -2969,7 +2991,10 @@ class MovieNightHubView(_OwnedView):
         _ = button
         room = _room_for_interaction(interaction)
         if room is None:
-            return await _private(interaction, "ℹ️ No Movie Night room is active here.")
+            return await _movie_hub_notice(
+                interaction,
+                "ℹ️ No Movie Night room is active here.",
+            )
         await open_movie_results(interaction, room.room_id, replace_message=True)
 
     @discord.ui.button(label="Watch Queue", emoji="📺", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:hub:queue")
@@ -2977,7 +3002,10 @@ class MovieNightHubView(_OwnedView):
         _ = button
         room = _room_for_interaction(interaction)
         if room is None:
-            return await _private(interaction, "ℹ️ No Movie Night room is active here.")
+            return await _movie_hub_notice(
+                interaction,
+                "ℹ️ No Movie Night room is active here.",
+            )
         await _replace(
             interaction,
             embed=_queue_embed(room),
@@ -2997,12 +3025,19 @@ class MovieNightHubView(_OwnedView):
     async def _cast_latest(self, interaction: discord.Interaction, approve: bool) -> None:
         room = _room_for_interaction(interaction)
         if room is None:
-            return await _private(interaction, "ℹ️ No Movie Night room is active here.")
+            return await _movie_hub_notice(
+                interaction,
+                "ℹ️ No Movie Night room is active here.",
+            )
         manager = get_movie_night_manager()
         manager.join_room(room.room_id, user_id=int(interaction.user.id))
         vote = _latest_open_vote(room)
         if vote is None:
-            return await _private(interaction, "ℹ️ There is no open Movie Night vote.")
+            return await _movie_hub_notice(
+                interaction,
+                "ℹ️ There is no open Movie Night vote.",
+                room=room,
+            )
         try:
             vote = manager.cast_vote(
                 room.room_id,
@@ -3011,7 +3046,11 @@ class MovieNightHubView(_OwnedView):
                 approve=approve,
             )
         except Exception as exc:
-            return await _private(interaction, f"❌ Vote failed: {exc}")
+            return await _movie_hub_notice(
+                interaction,
+                f"❌ Vote failed: {exc}",
+                room=room,
+            )
         if vote.resolved and vote.passed and vote.action in {"search", "play_variant", "end"}:
             return await _execute_passed_vote(interaction, room, vote)
         await open_movie_night(interaction, replace_message=True)
@@ -3040,7 +3079,10 @@ class MovieNightHubView(_OwnedView):
         _ = button
         room = _room_for_interaction(interaction)
         if room is None:
-            return await _private(interaction, "ℹ️ No Movie Night room is active here.")
+            return await _movie_hub_notice(
+                interaction,
+                "ℹ️ No Movie Night room is active here.",
+            )
 
         manager = get_movie_night_manager()
         manager.join_room(room.room_id, user_id=int(interaction.user.id))
@@ -3078,7 +3120,11 @@ class MovieNightHubView(_OwnedView):
                     action="end",
                 )
         except Exception as exc:
-            return await _private(interaction, f"❌ End-session vote could not start: {exc}")
+            return await _movie_hub_notice(
+                interaction,
+                f"❌ End-session vote could not start: {exc}",
+                room=room,
+            )
 
         if vote.resolved and vote.passed:
             return await _execute_passed_vote(interaction, room, vote)
