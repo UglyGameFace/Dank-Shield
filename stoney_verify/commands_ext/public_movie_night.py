@@ -3448,6 +3448,151 @@ class ConfirmMovieNightEndView(_OwnedView):
         await open_movie_night(interaction, replace_message=True)
 
 
+def _host_handoff_choices(
+    interaction: discord.Interaction,
+    room: MovieNightRoom,
+) -> list[DankChoice]:
+    manager = get_movie_night_manager()
+    if _private_viewing(room):
+        return []
+
+    active = manager.active_viewers(room)
+    choices: list[DankChoice] = []
+    for uid in sorted(
+        (int(value) for value in active if int(value) != int(room.host_id)),
+        key=lambda value: float(
+            getattr(room.viewers.get(value), "joined_at", 0.0) or 0.0
+        ),
+    )[:25]:
+        member = interaction.guild.get_member(uid) if interaction.guild else None
+        label = (
+            str(getattr(member, "display_name", "") or getattr(member, "name", "") or "")
+            if member is not None
+            else ""
+        )
+        label = _compact(label, 80) or f"Viewer {uid}"
+        viewer = room.viewers.get(uid)
+        synced = bool(viewer is not None and viewer.sync_ready)
+        choices.append(
+            DankChoice(
+                label=label,
+                value=str(uid),
+                description=(
+                    "Synced viewer • receives Play, Pause, Seek, and End controls"
+                    if synced
+                    else "Active viewer • becomes host at the current movie position"
+                )[:100],
+                emoji="👑",
+                default=False,
+            )
+        )
+    return choices
+
+
+async def _open_host_handoff_picker(
+    interaction: discord.Interaction,
+    room: MovieNightRoom,
+) -> None:
+    manager = get_movie_night_manager()
+    if int(interaction.user.id) != int(room.host_id):
+        return await _movie_hub_notice(
+            interaction,
+            "❌ Only the current Movie Night host can pass host control.",
+            room=room,
+        )
+    if _private_viewing(room):
+        return await _movie_hub_notice(
+            interaction,
+            "🔒 Private Viewing stays owner-only and cannot pass host control.",
+            room=room,
+        )
+
+    choices = _host_handoff_choices(interaction, room)
+    if not choices:
+        return await _replace(
+            interaction,
+            content="ℹ️ No other active Movie Night viewers are available to receive host control.",
+            embed=_session_status_embed(interaction, room),
+            view=MovieNightMoreView(
+                int(interaction.user.id),
+                room,
+                staff=_staff_authorized(interaction),
+            ),
+        )
+
+    async def picked(pick_interaction: discord.Interaction, value: str) -> None:
+        current = manager.get(room.room_id)
+        if current is None or current.ended:
+            return await open_movie_night(pick_interaction, replace_message=True)
+        try:
+            new_host_id = int(value)
+        except Exception:
+            return await _movie_hub_notice(
+                pick_interaction,
+                "❌ That host selection is invalid.",
+                room=current,
+            )
+        try:
+            manager.transfer_host(
+                current.room_id,
+                current_host_id=int(pick_interaction.user.id),
+                new_host_id=new_host_id,
+            )
+        except Exception as exc:
+            return await _replace(
+                pick_interaction,
+                content=f"❌ Host transfer failed: {exc}",
+                embed=_session_status_embed(pick_interaction, current),
+                view=MovieNightMoreView(
+                    int(pick_interaction.user.id),
+                    current,
+                    staff=_staff_authorized(pick_interaction),
+                ),
+            )
+
+        member = (
+            pick_interaction.guild.get_member(new_host_id)
+            if pick_interaction.guild is not None
+            else None
+        )
+        target = member.mention if isinstance(member, discord.Member) else f"<@{new_host_id}>"
+        await _replace(
+            pick_interaction,
+            content=(
+                f"👑 Host control passed to {target}. "
+                "The same room, movie, queue, torrent session, and playback position were preserved."
+            ),
+            embed=_session_status_embed(pick_interaction, current),
+            view=MovieNightMoreView(
+                int(pick_interaction.user.id),
+                current,
+                staff=_staff_authorized(pick_interaction),
+            ),
+        )
+
+    async def home(home_interaction: discord.Interaction) -> None:
+        await open_movie_night_more(home_interaction, replace_message=True)
+
+    await _replace(
+        interaction,
+        content=(
+            "👑 **Pass Host**\n"
+            "Choose an active viewer. They immediately receive playback controls on the existing "
+            "Watch page; the movie does not restart."
+        ),
+        embed=_session_status_embed(interaction, room),
+        view=DankPickerView(
+            author_id=int(interaction.user.id),
+            choices=choices,
+            on_pick=picked,
+            placeholder="Choose the next host…",
+            title="Pass Movie Night Host",
+            custom_id=f"dank:movie:host-pass:{room.room_id[:32]}",
+            on_home=home,
+        ),
+    )
+
+
 class MovieNightMoreView(_OwnedView):
     def __init__(
         self,
@@ -3462,6 +3607,18 @@ class MovieNightMoreView(_OwnedView):
         if room is None:
             self.remove_item(self.end_session)
             self.remove_item(self.session_status)
+            self.remove_item(self.pass_host)
+        else:
+            can_pass_host = bool(
+                not _private_viewing(room)
+                and int(owner_id) == int(room.host_id)
+                and any(
+                    int(uid) != int(room.host_id)
+                    for uid in get_movie_night_manager().active_viewers(room)
+                )
+            )
+            if not can_pass_host:
+                self.remove_item(self.pass_host)
         if not self.staff:
             self.remove_item(self.settings)
 
@@ -3497,6 +3654,14 @@ class MovieNightMoreView(_OwnedView):
     async def settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night_settings(interaction, replace_message=True)
+
+    @discord.ui.button(label="Pass Host", emoji="👑", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:more:pass-host")
+    async def pass_host(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        room = self._room()
+        if room is None:
+            return await open_movie_night(interaction, replace_message=True)
+        await _open_host_handoff_picker(interaction, room)
 
     @discord.ui.button(label="Refresh Cinema", emoji="🔄", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:more:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
