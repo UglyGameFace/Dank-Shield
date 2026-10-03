@@ -215,6 +215,7 @@ def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -
     assert "not** part of normal Find Movie results" in rendered
     assert "same Dank Engine adapter" in rendered
     assert "In-App Provider Contract" in rendered
+    assert "RSS/Atom" in rendered
     assert "magnet_uri" in rendered
     assert "torrent_url" in rendered
     assert "Add In-App Provider" in _labels(movie_ui.MovieNightSourcesView(1))
@@ -616,7 +617,7 @@ def test_provider_deck_labels_capabilities_not_implementation_jargon() -> None:
         + [f"{field.name}\n{field.value}" for field in embed.fields]
     )
 
-    assert "Torrent API** • In-App • playable API" in rendered
+    assert "Torrent API** • In-App • structured" in rendered
     assert "Browser Only** • External-only • browser link" in rendered
     assert "Structured JSON" not in rendered
     assert "Search Elsewhere" not in rendered
