@@ -9,6 +9,7 @@ responsible for returning lawful/authorized playback candidates.
 """
 
 import math
+import os
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -208,6 +209,7 @@ class MovieNightManager:
         host_grace_seconds: float = 45.0,
         viewer_ttl_seconds: float = 35.0,
         vote_ttl_seconds: float = 45.0,
+        empty_room_ttl_seconds: float = 1800.0,
         buffer_low_seconds: float = 4.0,
         buffer_resume_seconds: float = 12.0,
         buffer_max_hold_seconds: float = 20.0,
@@ -218,6 +220,7 @@ class MovieNightManager:
         self.host_grace_seconds = max(10.0, float(host_grace_seconds))
         self.viewer_ttl_seconds = max(10.0, float(viewer_ttl_seconds))
         self.vote_ttl_seconds = max(10.0, float(vote_ttl_seconds))
+        self.empty_room_ttl_seconds = max(300.0, float(empty_room_ttl_seconds))
         self.buffer_low_seconds = max(1.0, float(buffer_low_seconds))
         self.buffer_resume_seconds = max(
             self.buffer_low_seconds + 1.0,
@@ -335,6 +338,43 @@ class MovieNightManager:
                 key=lambda room: float(room.created_at),
             )
         )
+
+    def room_last_presence(self, room: MovieNightRoom) -> float:
+        stamps = [
+            float(room.created_at),
+            float(room.host_last_seen),
+        ]
+        stamps.extend(float(viewer.last_seen) for viewer in room.viewers.values())
+        return max(stamps) if stamps else float(room.created_at)
+
+    def room_empty_expired(
+        self,
+        room: MovieNightRoom,
+        *,
+        now: Optional[float] = None,
+    ) -> bool:
+        if room.ended:
+            return False
+        current = time.monotonic() if now is None else float(now)
+        if self.active_viewers(room, now=current):
+            return False
+        return (
+            current - self.room_last_presence(room)
+            >= self.empty_room_ttl_seconds
+        )
+
+    def inactive_room_candidates(
+        self,
+        *,
+        now: Optional[float] = None,
+    ) -> tuple[MovieNightRoom, ...]:
+        current = time.monotonic() if now is None else float(now)
+        return tuple(
+            room
+            for room in self._rooms.values()
+            if self.room_empty_expired(room, now=current)
+        )
+
 
     def join_room(
         self,
@@ -1272,7 +1312,15 @@ _MANAGER: Optional[MovieNightManager] = None
 def get_movie_night_manager() -> MovieNightManager:
     global _MANAGER
     if _MANAGER is None:
-        _MANAGER = MovieNightManager()
+        try:
+            empty_ttl = float(
+                str(os.getenv("DANK_MOVIE_NIGHT_EMPTY_ROOM_TTL_SECONDS", "1800") or "1800")
+            )
+        except Exception:
+            empty_ttl = 1800.0
+        _MANAGER = MovieNightManager(
+            empty_room_ttl_seconds=empty_ttl,
+        )
     return _MANAGER
 
 

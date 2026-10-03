@@ -313,7 +313,7 @@ class TorrentMediaManager:
         self.allow_burst_sessions = _env_bool("DANK_TORRENT_ALLOW_BURST", False)
         self.process_memory_limit_mb = _env_int(
             "DANK_PROCESS_MEMORY_LIMIT_MB",
-            1536,
+            1495,
             minimum=256,
             maximum=262144,
         )

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-"""Canonical external cleanup for a Movie Night room termination."""
+"""Canonical external cleanup for Movie Night room termination and idle expiry."""
 
+import asyncio
+import logging
 from dataclasses import dataclass
+from typing import Optional
 
 from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager, movie_room_lease_key
 from stoney_verify.torrent_streaming import get_torrent_manager
+
+
+log = logging.getLogger(__name__)
+_CLEANUP_TASK: Optional[asyncio.Task[None]] = None
 
 
 @dataclass(frozen=True)
@@ -73,4 +80,86 @@ async def terminate_movie_night_room(room: MovieNightRoom) -> MovieNightTerminat
     )
 
 
-__all__ = ["MovieNightTerminationResult", "terminate_movie_night_room"]
+
+async def cleanup_inactive_movie_night_rooms() -> int:
+    """End rooms that have had no active viewers/presence for the configured TTL.
+
+    Eligibility is re-checked immediately before the room is marked ended. The
+    ended state transition is synchronous, so a late join cannot race in after
+    the final check while the torrent lease is being released.
+    """
+
+    manager = get_movie_night_manager()
+    cleaned = 0
+    for candidate in manager.inactive_room_candidates():
+        current = manager.get(candidate.room_id)
+        if current is None or current.ended:
+            continue
+        if not manager.room_empty_expired(current):
+            continue
+
+        try:
+            manager.apply_host_action(
+                current.room_id,
+                host_id=int(current.host_id),
+                action="end",
+            )
+            result = await terminate_movie_night_room(current)
+            cleaned += 1
+            if result.cleanup_error:
+                log.warning(
+                    "Dank Cinema inactive-room cleanup completed with media cleanup error "
+                    "room=%s guild=%s channel=%s error=%s",
+                    current.room_id,
+                    current.guild_id,
+                    current.channel_id,
+                    result.cleanup_error,
+                )
+            else:
+                log.info(
+                    "Dank Cinema inactive room auto-ended room=%s guild=%s channel=%s",
+                    current.room_id,
+                    current.guild_id,
+                    current.channel_id,
+                )
+        except Exception:
+            log.exception(
+                "Dank Cinema inactive-room cleanup failed room=%s guild=%s channel=%s",
+                getattr(current, "room_id", "-"),
+                getattr(current, "guild_id", "-"),
+                getattr(current, "channel_id", "-"),
+            )
+    return cleaned
+
+
+async def _movie_night_cleanup_loop() -> None:
+    try:
+        while True:
+            await asyncio.sleep(60.0)
+            await cleanup_inactive_movie_night_rooms()
+    except asyncio.CancelledError:
+        return
+
+
+def ensure_movie_night_cleanup_task() -> None:
+    global _CLEANUP_TASK
+    if _CLEANUP_TASK is not None and not _CLEANUP_TASK.done():
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No coroutine is created until a live loop exists, which avoids an
+        # un-awaited-coroutine warning in synchronous route-registration tests.
+        return
+    _CLEANUP_TASK = loop.create_task(
+        _movie_night_cleanup_loop(),
+        name="movie_night_room_cleanup",
+    )
+
+
+__all__ = [
+    "MovieNightTerminationResult",
+    "cleanup_inactive_movie_night_rooms",
+    "ensure_movie_night_cleanup_task",
+    "terminate_movie_night_room",
+]

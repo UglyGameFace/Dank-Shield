@@ -398,12 +398,16 @@ def _setup_readiness(
     warnings: list[str] = []
 
     if require_notification_role and role is None:
-        blockers.append("Movie Night notification role is not mapped.")
+        warnings.append(
+            "Movie Night notifications are not configured. Watch Parties can still start; "
+            "create/repair the optional notify role to ping subscribers."
+        )
     if not can_send:
         blockers.append("Dank Shield needs View Channel, Send Messages, and Embed Links here.")
     if require_notification_role and role is not None and not ping_ready:
-        blockers.append(
-            "The Movie Night role is not mentionable and Dank Shield lacks Mention Everyone here."
+        warnings.append(
+            "The Movie Night notify role cannot currently be pinged. Watch Parties can still start, "
+            "but subscribers will not receive the role notification until it is repaired."
         )
     if not public_base:
         blockers.append("DANK_MEDIA_PUBLIC_BASE_URL is not configured.")
@@ -417,7 +421,9 @@ def _setup_readiness(
     if not libtorrent_ready:
         blockers.append("The pinned libtorrent runtime is not installed.")
     if not pyav_ready:
-        blockers.append("The pinned PyAV metadata runtime is not installed.")
+        warnings.append(
+            "PyAV metadata probing is unavailable. Playback still works, but verified codec/audio details may be limited."
+        )
     free_bytes = _safe_int(storage.get("free_bytes"), 0)
     max_file_bytes = _safe_int(storage.get("max_file_bytes"), 0)
     if free_bytes > 0 and max_file_bytes > 0 and free_bytes < min(max_file_bytes, 2 * 1024 ** 3):
@@ -432,8 +438,8 @@ def _setup_readiness(
                 + blocker
             )
     if public_base and stream_secret and not runtime_ready:
-        warnings.append(
-            "Media settings exist, but the public media server is not currently reporting started."
+        blockers.append(
+            "The public Dank Cinema media server is not currently running."
         )
     if not can_attach:
         warnings.append(
@@ -441,7 +447,9 @@ def _setup_readiness(
             "but direct Discord media relay/fallbacks may be reduced."
         )
     if require_notification_role and role is None and not can_manage_roles:
-        blockers.append("Dank Shield needs Manage Roles to create the Movie Night role.")
+        warnings.append(
+            "Dank Shield lacks Manage Roles, so it cannot create the optional Movie Night notify role."
+        )
     return {
         "role": role,
         "can_send": can_send,
@@ -489,11 +497,11 @@ def _setup_embed(
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(
-        name="1 • Community & Pings role",
+        name="1 • Notifications (optional)",
         value=(
-            f"{'✅' if role else '❌'} Notify role: "
+            f"{'✅' if role else 'ℹ️'} Notify role: "
             f"{role.mention if isinstance(role, discord.Role) else 'Not configured'}\n"
-            f"{'✅' if ready['ping_ready'] else '❌'} Notification ping readiness\n"
+            f"{'✅' if ready['ping_ready'] else 'ℹ️'} Notification ping readiness\n"
             f"{'✅' if ready['can_manage_roles'] else '⚠️'} Manage Roles "
             "(needed only to create/repair the role)"
         ),
@@ -511,7 +519,7 @@ def _setup_embed(
         name="3 • Torrent + metadata runtime",
         value=(
             f"{_status(ready['libtorrent_ready'])} • libtorrent\n"
-            f"{_status(ready['pyav_ready'])} • PyAV / FFmpeg metadata\n"
+            f"{'✅ Ready' if ready['pyav_ready'] else '⚠️ Optional'} • PyAV / FFmpeg metadata\n"
             f"{_status(bool(ready['public_base']))} • DANK_MEDIA_PUBLIC_BASE_URL\n"
             f"{_status(ready['stream_secret'])} • DANK_TORRENT_STREAM_SECRET\n"
             f"{_status(ready['externally_bound'])} • bind {ready['bind_host']}:{ready['bind_port']}\n"
@@ -798,16 +806,25 @@ def _private_viewing(room: Optional[MovieNightRoom]) -> bool:
 
 
 def _movie_night_lifecycle_text() -> str:
-    torrent_manager = get_torrent_manager()
-    idle_minutes = max(1, int(round(float(torrent_manager.idle_ttl_seconds) / 60.0)))
+    manager = get_movie_night_manager()
+    empty_minutes = max(
+        5,
+        int(round(float(manager.empty_room_ttl_seconds) / 60.0)),
+    )
+    active_seconds = max(10, int(round(float(manager.viewer_ttl_seconds))))
     return (
         f"{private_menu_lifecycle_text()}\n"
+        f"**Active viewer:** a Watch heartbeat or fresh Cinema action keeps you active; "
+        f"the live-viewer marker expires after about **{active_seconds} seconds** without one. "
+        "That does **not** delete the room or queue.\n"
+        f"**Empty room:** after about **{empty_minutes} minutes** with nobody active and no fresh "
+        "Cinema presence, Dank Cinema automatically ends the abandoned room and releases its media.\n"
         "**Watch links:** valid for up to **6 hours** from when the button is created; "
         "reopen `/movie` for a fresh link if needed.\n"
-        "**Movie Night room:** no inactivity timeout; it stays active until **End Session** "
-        "or the bot process restarts.\n"
-        f"**Attached media:** reclaimed after about **{idle_minutes} minutes** with no media access. "
-        "If that happens, the room stays active and the host can choose the release again."
+        "**Attached media:** stays leased to the room while the room is alive. It is released on "
+        "End Movie Night, automatic empty-room cleanup, replacement, or terminal media failure.\n"
+        "**Bot restart:** Movie Night room state is currently in memory, so a process restart ends "
+        "the live room and users must start a new session."
     )
 
 
@@ -958,6 +975,7 @@ def _session_status_embed(
     host = interaction.guild.get_member(room.host_id) if interaction.guild else None
     host_label = host.mention if isinstance(host, discord.Member) else f"<@{room.host_id}>"
     private_mode = _private_viewing(room)
+    collaborative = not private_mode and len(active) > 1
     embed = discord.Embed(
         title="📊 Dank Cinema • Session Status",
         description=(
@@ -1067,7 +1085,7 @@ def _more_embed(
     if room is not None:
         embed.add_field(
             name="Room",
-            value="🛑 **End Movie Night** • end the room and release its media lease",
+            value="🛑 **End Movie Night** • end the room and clean up its streaming media",
             inline=False,
         )
     return embed
@@ -1160,13 +1178,14 @@ def _candidate_embed(room: MovieNightRoom, candidate: Any) -> discord.Embed:
     movie_votes = len(candidate.votes & active)
     variants = manager.ranked_variants(room.room_id, candidate.candidate_id)
     private_mode = _private_viewing(room)
+    collaborative = not private_mode and len(active) > 1
 
     embed = discord.Embed(
         title="2/3 • Choose Release",
         description=(
             f"🎬 **{candidate.title}**\n"
             f"Playable releases: **{len(variants)}**"
-            + ("" if private_mode else f" • Movie votes: **{movie_votes}**")
+            + (f" • Movie votes: **{movie_votes}**" if collaborative else "")
             + "\nDank Cinema ranks healthier swarms first. The top option is the recommended starting point."
         ),
         color=discord.Color.blurple(),
@@ -1257,15 +1276,19 @@ def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discor
     source = _release_source_label(metadata)
     hint = _release_hint_label(metadata)
     private_mode = _private_viewing(room)
+    collaborative = bool(
+        not private_mode
+        and len(active) > 1
+    )
     embed = discord.Embed(
         title="2/3 • Release Details",
         description=(
             f"🎬 **{candidate.title}**\n"
             f"**{hint or source}** • **{_format_bytes(variant.file_size)}**"
             + (
-                ""
-                if private_mode
-                else f" • Release votes: **{len(variant.votes & active)}**"
+                f" • Release votes: **{len(variant.votes & active)}**"
+                if collaborative
+                else ""
             )
         ),
         color=discord.Color.blurple(),
@@ -1275,7 +1298,7 @@ def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discor
         value=(
             f"🌱 **{health['seeds']}** seeds • 🧲 **{health['leechers']}** leeches • "
             f"👥 **{health['peers']}** peers\n"
-            f"Swarm: **{health['label']}** • ratio **{health['seed_leech_ratio']}**"
+            f"Health: **{health['label']}** • seed/leech ratio **{health['seed_leech_ratio']}**"
         ),
         inline=False,
     )
@@ -1495,8 +1518,18 @@ class MovieCandidateView(_OwnedView):
         super().__init__(owner_id)
         self.room_id = str(room_id)
         self.candidate_id = str(candidate_id)
-        room = get_movie_night_manager().get(self.room_id)
-        if _private_viewing(room):
+        manager = get_movie_night_manager()
+        room = manager.get(self.room_id)
+        private_mode = _private_viewing(room)
+        try:
+            collaborative = bool(
+                room is not None
+                and not private_mode
+                and len(manager.active_viewers(room)) > 1
+            )
+        except (AttributeError, TypeError):
+            collaborative = True
+        if private_mode or not collaborative:
             self.remove_item(self.vote_movie)
             self.queue.label = "Add to Queue"
 
@@ -1593,11 +1626,24 @@ class MovieReleaseView(_OwnedView):
         self.room_id = str(room_id)
         self.candidate_id = str(candidate_id)
         self.variant_id = str(variant_id)
-        room = get_movie_night_manager().get(self.room_id)
-        if _private_viewing(room):
+        manager = get_movie_night_manager()
+        room = manager.get(self.room_id)
+        private_mode = _private_viewing(room)
+        try:
+            collaborative = bool(
+                room is not None
+                and not private_mode
+                and len(manager.active_viewers(room)) > 1
+            )
+        except (AttributeError, TypeError):
+            collaborative = True
+        if private_mode or not collaborative:
             self.remove_item(self.vote_release)
-            self.play.label = "Play This Release"
             self.queue.label = "Add to Queue"
+        if room is not None and int(owner_id) == int(room.host_id):
+            self.play.label = "Play This Release"
+        elif not private_mode:
+            self.play.label = "Request This Release"
 
     def _resolve(self) -> tuple[Optional[MovieNightRoom], Any, Any]:
         manager = get_movie_night_manager()
@@ -2623,26 +2669,15 @@ async def _test_public_media(interaction: discord.Interaction) -> None:
 
 
 class MovieNightSetupView(_OwnedView):
-    @discord.ui.button(label="Create / Repair Role", emoji="🎬", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:setup:role")
+    @discord.ui.button(label="Repair Notifications", emoji="🔔", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:setup:role")
     async def role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _create_or_repair_movie_role(interaction)
-
-    @discord.ui.button(label="Provider Deck", emoji="🎞️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:setup:sources")
-    async def sources(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await open_movie_night_sources(interaction, replace_message=True)
 
     @discord.ui.button(label="Test Media Endpoint", emoji="🌐", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:setup:test-media")
     async def test_media(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _test_public_media(interaction)
-
-    @discord.ui.button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:setup:pings")
-    async def community(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        from .public_community_pings import open_community_ping_setup
-        await open_community_ping_setup(interaction, replace_message=True)
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:setup:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2975,8 +3010,27 @@ async def _execute_search_vote(
     outcome = _filter_outcome_for_catalog(outcome, catalog_metadata)
 
     # Provider/TMDB work can legitimately take longer than the short live-viewer
-    # heartbeat window. The Discord interaction is fresh proof that this user is
-    # still here, so renew presence before materializing search results.
+    # heartbeat window. Re-resolve the canonical room after the await boundary:
+    # another viewer may have ended/replaced the session while search was in flight.
+    current_room = manager.get(room.room_id)
+    if (
+        current_room is None
+        or current_room.ended
+        or not manager.user_can_access(current_room, int(interaction.user.id))
+    ):
+        return await _replace(
+            interaction,
+            content=(
+                "ℹ️ Movie Night changed or ended while that search was running. "
+                "The stale results were discarded."
+            ),
+            embed=_room_embed(interaction, None),
+            view=_movie_hub_view(interaction, None),
+        )
+    room = current_room
+
+    # The Discord interaction is fresh proof that this user is still here, so
+    # renew presence before materializing search results.
     manager.join_room(room.room_id, user_id=int(interaction.user.id))
     active = manager.active_viewers(room)
     actor_id = (
@@ -3313,7 +3367,7 @@ async def _announce_room(
     interaction: discord.Interaction,
     room: MovieNightRoom,
     *,
-    role: discord.Role,
+    role: Optional[discord.Role] = None,
 ) -> None:
     if str(getattr(room, "mode", "watch_party") or "watch_party") == "private":
         return
@@ -3333,11 +3387,11 @@ async def _announce_room(
     allowed = discord.AllowedMentions(
         everyone=False,
         users=False,
-        roles=[role],
+        roles=[role] if isinstance(role, discord.Role) else False,
         replied_user=False,
     )
     await channel.send(
-        content=role.mention,
+        content=role.mention if isinstance(role, discord.Role) else None,
         embed=embed,
         allowed_mentions=allowed,
     )
@@ -3399,16 +3453,16 @@ async def _start_or_join_room(
     if not ready["launch_ready"]:
         return await _movie_hub_notice(
             interaction,
-            "❌ Dank Cinema setup is not launch-ready for this mode. "
-            "Open **Setup** and fix the listed blockers.",
+            (
+                "❌ Dank Cinema cannot launch here yet. Open **More → Cinema Settings → "
+                "Setup & Diagnostics** and fix the red blockers."
+                if _staff_authorized(interaction)
+                else "❌ Dank Cinema cannot launch here yet. Ask a server admin to open "
+                "**Cinema Settings → Setup & Diagnostics** and fix the red blockers."
+            ),
         )
 
     role = ready["role"]
-    if normalized_mode != "private" and not isinstance(role, discord.Role):
-        return await _movie_hub_notice(
-            interaction,
-            "❌ Movie Night notification role is missing.",
-        )
 
     try:
         room = manager.create_room(
@@ -3418,19 +3472,34 @@ async def _start_or_join_room(
             stream_token="",
             mode=normalized_mode,
         )
-        if normalized_mode != "private" and isinstance(role, discord.Role):
-            await _announce_room(interaction, room, role=role)
     except Exception as exc:
         return await _movie_hub_notice(
             interaction,
             f"❌ Dank Cinema room could not start: {type(exc).__name__}: {exc}",
         )
 
+    announcement_notice = ""
+    if normalized_mode != "private":
+        try:
+            await _announce_room(
+                interaction,
+                room,
+                role=role if isinstance(role, discord.Role) else None,
+            )
+        except Exception as exc:
+            # Announcement delivery is not room ownership. A transient Discord
+            # send failure must not leave a successfully created room disguised
+            # as a failed launch.
+            announcement_notice = (
+                "⚠️ **Watch Party started**, but the channel announcement could not be posted "
+                f"({type(exc).__name__}). The room itself is active."
+            )
+
     notice = (
         "🔒 **Private Viewing started.** No Movie Night role ping was sent and "
         "only you can join/control this room."
         if normalized_mode == "private"
-        else ""
+        else announcement_notice
     )
     await open_movie_night(
         interaction,
@@ -3718,7 +3787,7 @@ class MovieNightMoreView(_OwnedView):
                 interaction,
                 content=(
                     "🛑 End this Movie Night completely? This stops the room, releases its "
-                    "torrent/media lease, clears the queue, and lets a fresh room start here."
+                    "streaming media, clears the queue, and lets a fresh room start here."
                 ),
                 embed=_session_status_embed(interaction, room),
                 view=ConfirmMovieNightEndView(int(interaction.user.id), room.room_id),
@@ -4150,7 +4219,12 @@ async def _attach_torrent_media(
     if not ready["launch_ready"]:
         return await _movie_hub_notice(
             interaction,
-            "❌ Movie Night setup is not launch-ready. Run /movie → Setup first.",
+            (
+                "❌ Dank Cinema cannot attach media here yet. Open **More → Cinema Settings → "
+                "Setup & Diagnostics** and fix the red blockers."
+                if _staff_authorized(interaction)
+                else "❌ Dank Cinema media setup needs server-admin attention."
+            ),
             room=room,
         )
     previous = str(room.stream_token or "") if room is not None else ""
@@ -4190,8 +4264,8 @@ async def _attach_torrent_media(
     except Exception as exc:
         return await interaction.edit_original_response(
             content=f"❌ Torrent could not start: {type(exc).__name__}: {exc}",
-            embed=None,
-            view=_movie_hub_view(interaction, None),
+            embed=_room_embed(interaction, room) if room is not None else _room_embed(interaction, None),
+            view=_movie_hub_view(interaction, room),
         )
 
     stream_url = manager.stream_url(session)
@@ -4202,9 +4276,9 @@ async def _attach_torrent_media(
             remove_if_unused=True,
         )
         return await interaction.edit_original_response(
-            content="❌ Torrent started, but no signed public stream URL could be created. Check Movie Night Setup.",
-            embed=None,
-            view=_movie_hub_view(interaction, None),
+            content="❌ Torrent started, but no signed public stream URL could be created. Check Cinema Settings → Setup & Diagnostics.",
+            embed=_room_embed(interaction, room) if room is not None else _room_embed(interaction, None),
+            view=_movie_hub_view(interaction, room),
         )
 
     latest_room = room_manager.active_room_for_channel(
@@ -4245,11 +4319,14 @@ async def _attach_torrent_media(
                 view=_movie_hub_view(interaction, None),
             )
         role = ready["role"]
-        if isinstance(role, discord.Role):
-            try:
-                await _announce_room(interaction, room, role=role)
-            except Exception:
-                pass
+        try:
+            await _announce_room(
+                interaction,
+                room,
+                role=role if isinstance(role, discord.Role) else None,
+            )
+        except Exception:
+            pass
     else:
         if (
             latest_room is None

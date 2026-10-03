@@ -1315,3 +1315,43 @@ def test_rejoin_restores_active_presence_without_losing_room_state() -> None:
     assert room.queue == [candidate.candidate_id]
     assert room.stream_token == "torrent-token"
     assert room.host_id == 10
+
+
+def test_empty_room_timeout_starts_from_last_presence_and_keeps_live_room() -> None:
+    manager = MovieNightManager(
+        viewer_ttl_seconds=35,
+        empty_room_ttl_seconds=1800,
+    )
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="torrent-token",
+        now=100.0,
+    )
+
+    assert not manager.room_empty_expired(room, now=1_899.0)
+    assert manager.room_empty_expired(room, now=1_935.0)
+
+    manager.join_room(room.room_id, user_id=20, now=1_930.0)
+    assert not manager.room_empty_expired(room, now=1_940.0)
+    assert manager.inactive_room_candidates(now=1_940.0) == ()
+
+
+def test_empty_room_timeout_uses_latest_discord_or_watch_presence() -> None:
+    manager = MovieNightManager(
+        viewer_ttl_seconds=35,
+        empty_room_ttl_seconds=300,
+    )
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        now=100.0,
+    )
+    manager.join_room(room.room_id, user_id=20, now=350.0)
+
+    assert manager.room_last_presence(room) == 350.0
+    assert not manager.room_empty_expired(room, now=649.0)
+    assert manager.room_empty_expired(room, now=650.0)

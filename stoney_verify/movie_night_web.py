@@ -14,7 +14,10 @@ from urllib.parse import urlencode
 from aiohttp import web
 
 from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
-from stoney_verify.movie_night_session import terminate_movie_night_room
+from stoney_verify.movie_night_session import (
+    ensure_movie_night_cleanup_task,
+    terminate_movie_night_room,
+)
 from stoney_verify.torrent_streaming import (
     TorrentSessionUnavailableError,
     get_torrent_manager,
@@ -1043,6 +1046,7 @@ async def movie_night_watch(request: web.Request) -> web.Response:
 
 
 def register_movie_night_public_routes(app: web.Application) -> None:
+    ensure_movie_night_cleanup_task()
     app.router.add_get("/movie/{room_id}/watch", movie_night_watch)
     app.router.add_get("/movie/{room_id}/state", movie_night_state)
     app.router.add_post("/movie/{room_id}/heartbeat", movie_night_heartbeat)
