@@ -679,3 +679,23 @@ def test_common_camel_case_provider_aliases_are_supported() -> None:
     assert variant.peers == 95
     assert variant.metadata["source_reported"]["videoCodec"] == "x265"
 
+
+def test_provider_hash_wins_over_generic_detail_url() -> None:
+    item = {
+        "name": "Example Movie",
+        "url": "https://catalog.example.org/details/123",
+        "hash": "0123456789ABCDEF0123456789ABCDEF01234567",
+    }
+    assert resolver._item_source_ref(item) == (
+        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+    )
+
+
+def test_provider_media_ref_rejects_embedded_credentials() -> None:
+    item = {
+        "name": "Credential Leak",
+        "torrent_url": "https://user:secret@downloads.example.org/movie.torrent",
+    }
+    assert resolver._item_source_ref(item) == ""
+    assert resolver._variant_from_item(_source(), item) is None
+
