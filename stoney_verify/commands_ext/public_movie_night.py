@@ -1049,6 +1049,41 @@ def _release_matches_catalog(
     return True
 
 
+def _filter_outcome_for_catalog(
+    outcome: MediaSourceSearchOutcome,
+    catalog_metadata: Optional[Mapping[str, Any]],
+) -> MediaSourceSearchOutcome:
+    if not isinstance(catalog_metadata, Mapping) or not catalog_metadata:
+        return outcome
+
+    matched = tuple(
+        variant
+        for variant in outcome.variants
+        if _release_matches_catalog(
+            variant.title,
+            catalog_metadata,
+            variant.metadata,
+        )
+    )
+    if len(matched) == len(outcome.variants):
+        return outcome
+
+    errors = list(outcome.errors)
+    if outcome.variants and not matched:
+        errors.append(
+            "Connected providers returned releases, but none matched the selected catalog movie."
+        )
+    elif len(matched) < len(outcome.variants):
+        errors.append(
+            f"Ignored {len(outcome.variants) - len(matched)} provider release(s) "
+            "that did not match the selected catalog movie."
+        )
+    return MediaSourceSearchOutcome(
+        variants=matched,
+        errors=tuple(errors[:20]),
+    )
+
+
 def _materialize_search_results(
     room: MovieNightRoom,
     outcome: MediaSourceSearchOutcome,
@@ -2368,6 +2403,8 @@ async def _execute_search_vote(
             embed=_room_embed(interaction, room),
             view=MovieNightHubView(int(interaction.user.id)),
         )
+
+    outcome = _filter_outcome_for_catalog(outcome, catalog_metadata)
 
     active = manager.active_viewers(room)
     actor_id = (
