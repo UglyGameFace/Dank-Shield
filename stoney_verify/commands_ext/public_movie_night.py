@@ -885,11 +885,16 @@ def _room_embed(
         )
 
     if current_candidate is None:
+        waiting_for_host = bool(
+            private_mode and owner_id > 0 and owner_id != int(room.host_id)
+        )
         embed.add_field(
             name="1 • Find a movie",
             value=(
-                "No movie is selected yet. Use **Find Movie** to search the catalog and "
-                "connected playable providers."
+                "No movie is selected yet. The Private Session host is choosing what to watch."
+                if waiting_for_host
+                else "No movie is selected yet. Use **Find Movie** to search the catalog and "
+                "connected Movie Sources."
             ),
             inline=False,
         )
@@ -909,7 +914,11 @@ def _room_embed(
                 + (
                     "\nUse **Watch** to open the synchronized player."
                     if room.stream_token
-                    else "\nOpen **Movie Picks** and choose a playable release."
+                    else (
+                        "\nThe Private Session host is choosing a playable release."
+                        if private_mode and owner_id != int(room.host_id)
+                        else "\nOpen **Movie Picks** and choose a playable release."
+                    )
                 )
             )[:1024],
             inline=False,
