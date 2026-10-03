@@ -501,6 +501,57 @@ def test_search_vote_pending_response_keeps_dank_cinema_hub(monkeypatch) -> None
     assert isinstance(payload["view"], movie_ui.MovieNightHubView)
 
 
+def test_search_discards_results_if_room_ends_during_provider_wait(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+    )
+    vote = manager.propose_vote(
+        room.room_id,
+        proposer_id=10,
+        action="search",
+        payload={"query": "Example"},
+    )
+    captured: list[dict] = []
+
+    async def fake_preferences(guild_id: int, *, refresh: bool = False):
+        _ = guild_id, refresh
+        return {}, SimpleNamespace(adult_content_enabled=False)
+
+    async def fake_search(guild_id: int, query: str):
+        _ = guild_id, query
+        manager.apply_host_action(
+            room.room_id,
+            host_id=10,
+            action="end",
+        )
+        return MediaSourceSearchOutcome(variants=(), errors=())
+
+    async def fake_replace(interaction, **kwargs):
+        _ = interaction
+        captured.append(kwargs)
+
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(movie_ui, "load_movie_night_preferences", fake_preferences)
+    monkeypatch.setattr(movie_ui, "search_movie_sources", fake_search)
+    monkeypatch.setattr(movie_ui, "_replace", fake_replace)
+
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=10),
+        response=SimpleNamespace(is_done=lambda: True),
+        guild=None,
+        channel=None,
+    )
+    asyncio.run(movie_ui._execute_search_vote(interaction, room, vote))
+
+    assert captured
+    assert "changed or ended while that search was running" in captured[-1]["content"]
+    assert isinstance(captured[-1]["view"], movie_ui.MovieNightHubView)
+
+
 def test_movie_source_modal_hides_internal_id_and_prefills_edits() -> None:
     add_modal = movie_ui.CustomSourceModal(owner_id=1, baseline={})
     assert len(add_modal.children) == 2
