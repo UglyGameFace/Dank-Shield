@@ -629,8 +629,21 @@ async function jsonFetch(path, options={{}}) {{
   return response.json();
 }}
 function bufferedEnd() {{
-  if(!video.buffered || !video.buffered.length) return video.currentTime || 0;
-  return video.buffered.end(video.buffered.length-1);
+  const current=Number(video.currentTime||0);
+  const ranges=video.buffered;
+  if(!ranges || !ranges.length) return current;
+
+  // Torrent-backed media often has disjoint buffered ranges (for example
+  // metadata/tail probes plus the active playback corridor). Only the range
+  // containing the current playhead is safe to report as playable-ahead.
+  const epsilon=0.25;
+  for(let i=0;i<ranges.length;i++) {{
+    const start=Number(ranges.start(i));
+    const end=Number(ranges.end(i));
+    if(current+epsilon>=start && current<=end+epsilon)
+      return Math.max(current,end);
+  }}
+  return current;
 }}
 function fmtRate(n) {{
   if(!n) return "0 B/s";
