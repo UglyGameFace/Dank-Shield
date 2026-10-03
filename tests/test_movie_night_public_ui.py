@@ -1246,6 +1246,64 @@ def test_setup_readiness_accepts_complete_public_runtime(monkeypatch) -> None:
     assert not any("No custom media sources" in item for item in result["warnings"])
 
 
+def test_setup_readiness_requires_live_media_server_but_not_pyav(monkeypatch) -> None:
+    role = SimpleNamespace(mentionable=True)
+    perms = SimpleNamespace(
+        view_channel=True,
+        send_messages=True,
+        embed_links=True,
+        attach_files=True,
+        mention_everyone=False,
+        administrator=False,
+    )
+    guild = SimpleNamespace(
+        id=1,
+        me=SimpleNamespace(
+            guild_permissions=SimpleNamespace(
+                administrator=False,
+                manage_roles=True,
+            )
+        ),
+    )
+    monkeypatch.setattr(movie_ui, "_movie_role", lambda guild, raw: role)
+    monkeypatch.setattr(movie_ui, "_channel_permissions", lambda guild, channel: perms)
+    monkeypatch.setattr(movie_ui, "media_public_base_url", lambda: "https://media.example.com")
+    monkeypatch.setattr(movie_ui, "media_bind_host", lambda: "0.0.0.0")
+    monkeypatch.setattr(movie_ui, "media_bind_port", lambda: 8080)
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "test-secret")
+
+    monkeypatch.setattr(movie_ui, "media_server_ready", lambda: False)
+    monkeypatch.setattr(
+        movie_ui.importlib.util,
+        "find_spec",
+        lambda name: object() if name in {"libtorrent", "av"} else None,
+    )
+    stopped = movie_ui._setup_readiness(
+        guild,
+        object(),
+        {},
+        MediaSourceRegistry(),
+    )
+    assert not stopped["launch_ready"]
+    assert any("media server is not currently running" in item.lower() for item in stopped["blockers"])
+
+    monkeypatch.setattr(movie_ui, "media_server_ready", lambda: True)
+    monkeypatch.setattr(
+        movie_ui.importlib.util,
+        "find_spec",
+        lambda name: object() if name == "libtorrent" else None,
+    )
+    no_pyav = movie_ui._setup_readiness(
+        guild,
+        object(),
+        {},
+        MediaSourceRegistry(),
+    )
+    assert no_pyav["launch_ready"]
+    assert not no_pyav["blockers"]
+    assert any("pyav metadata probing is unavailable" in item.lower() for item in no_pyav["warnings"])
+
+
 def test_private_viewing_does_not_require_notification_role(monkeypatch) -> None:
     perms = SimpleNamespace(
         view_channel=True,
