@@ -282,6 +282,23 @@ def test_dank_cinema_branding_is_consistent_across_core_surfaces(monkeypatch) ->
     assert str(search_modal.title) == "Dank Cinema Search"
 
 
+def test_movie_night_lifecycle_text_explains_distinct_timeouts(monkeypatch) -> None:
+    monkeypatch.setattr(
+        movie_ui,
+        "get_torrent_manager",
+        lambda: SimpleNamespace(idle_ttl_seconds=1800.0),
+    )
+
+    rendered = movie_ui._movie_night_lifecycle_text()
+
+    assert "15 minutes" in rendered
+    assert "6 hours" in rendered
+    assert "no inactivity timeout" in rendered
+    assert "30 minutes" in rendered
+    assert "room stays active" in rendered
+    assert "choose the release again" in rendered
+
+
 def test_movie_night_hub_adds_signed_watch_link_when_media_is_active(monkeypatch) -> None:
     monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://media.example.com")
     monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "movie-secret")
