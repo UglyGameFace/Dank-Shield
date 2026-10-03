@@ -87,12 +87,20 @@ Staff additionally receive **Cinema Settings**.
 ### Cinema Settings
 
 Staff-only settings contains:
+- **Adult Content: Off/On**
 - Provider Deck
 - Setup & Diagnostics
 - Notifications
 - Session & Lifecycle
 - Back to Cinema
 - Close
+
+Adult Content defaults **Off** per guild. The setting:
+- controls TMDB's adult-catalog inclusion;
+- blocks explicit-adult search text while disabled;
+- filters provider releases explicitly labeled as XXX/porn/adult-video through title/category metadata;
+- is rechecked at vote execution so a stale/open vote cannot bypass a later admin change;
+- intentionally does not claim to classify arbitrary direct magnet/.torrent files that carry no trustworthy content metadata.
 
 Provider Deck and Setup now return to Settings instead of dropping back into the viewer hub.
 
@@ -157,6 +165,7 @@ Discord UI tests now cover:
 - compact empty Cinema Home
 - separate More and Settings surfaces
 - staff-only Settings visibility through More
+- per-guild Adult Content Off/On state, persistence, TMDB inclusion contract, and explicit provider filtering
 - contextual vote controls
 - public vs private active-room controls
 - simplified home vs detailed Session Status
@@ -172,7 +181,7 @@ Web tests now cover:
 
 ## Deliberate non-goals
 
-This task is the presentation/navigation revamp. It does not invent a new adult-content classifier, room persistence layer, or viewer-capacity model. Those remain separate product/runtime work because they change behavior rather than presentation.
+This task does not pretend arbitrary torrent bytes can be reliably content-classified. The Adult Content setting enforces catalog inclusion plus explicit provider/search labels; manually supplied direct magnet/.torrent media remains unclassified. Room persistence and viewer-capacity modeling remain separate runtime work.
 
 ## Blockers / risks
 
@@ -187,7 +196,6 @@ Still required:
 
 ## Backlog
 
-- XXX/adult movie visibility admin setting with enforceable end-to-end catalog/provider classification
 - unattended-host Movie Ready announcement + coherent waiting timeout
 - 20-viewer capacity validation/hardening
 - room persistence across process restarts
