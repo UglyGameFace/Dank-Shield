@@ -374,3 +374,11 @@ def test_movie_night_state_exposes_private_room_mode(monkeypatch) -> None:
     assert payload["mode"] == "private"
     assert payload["private"] is True
     assert payload["viewer_count"] == 1
+    html = movie_night_web._watch_html(
+        room.room_id,
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+    assert "Dank Shield Private Viewing" in html
+    assert 's.private?"Private • "' in html
+    assert 's.private&&s.is_host?"Private Host"' in html
