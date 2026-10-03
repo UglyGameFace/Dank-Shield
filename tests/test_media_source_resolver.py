@@ -602,3 +602,27 @@ def test_html_provider_body_is_rejected_not_scraped() -> None:
     else:
         raise AssertionError("HTML provider body should not be treated as a feed")
 
+
+def test_v2_info_hash_alias_becomes_btmh_magnet() -> None:
+    sha256 = "0123456789abcdef" * 4
+    item = {
+        "name": "Hybrid Movie",
+        "info_hash_v2": sha256,
+    }
+    assert resolver._item_source_ref(item) == (
+        "magnet:?xt=urn:btmh:1220" + sha256
+    )
+
+    item = {
+        "name": "Hybrid Movie",
+        "btmh": "1220" + sha256.upper(),
+    }
+    assert resolver._item_source_ref(item) == (
+        "magnet:?xt=urn:btmh:1220" + sha256
+    )
+
+
+def test_zero_v2_info_hash_is_rejected() -> None:
+    item = {"name": "Invalid V2", "info_hash_v2": "0" * 64}
+    assert resolver._item_source_ref(item) == ""
+
