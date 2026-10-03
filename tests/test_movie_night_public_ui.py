@@ -59,50 +59,59 @@ def test_movie_is_one_compact_public_doorway() -> None:
     assert not bool(getattr(params["torrent"], "required", True))
 
 
-def test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete() -> None:
+def test_movie_night_hub_and_admin_surfaces_are_progressively_disclosed() -> None:
     hub = movie_ui.MovieNightHubView(1)
+    more = movie_ui.MovieNightMoreView(1, None, staff=False)
+    staff_more = movie_ui.MovieNightMoreView(1, None, staff=True)
+    settings = movie_ui.MovieNightSettingsView(1)
     setup = movie_ui.MovieNightSetupView(1)
     sources = movie_ui.MovieNightSourcesView(1)
 
+    assert _labels(hub) == {
+        "Start Watch Party",
+        "Watch Alone",
+        "More",
+    }
+    assert "Cinema Settings" not in _labels(more)
     assert {
-        "Start / Join Party",
-        "Private Viewing",
-        "Find Movie",
-        "Movie Picks",
-        "Watch Queue",
-        "Provider Deck",
-        "Setup",
-        "Community & Pings",
-        "End Session",
-        "Refresh",
+        "Notifications",
+        "Refresh Cinema",
+        "Back to Cinema",
         "Close",
-    } <= _labels(hub)
-    assert "Vote Yes" not in _labels(hub)
-    assert "Vote No" not in _labels(hub)
+    } <= _labels(more)
+    assert "Cinema Settings" in _labels(staff_more)
+    assert {
+        "Provider Deck",
+        "Setup & Diagnostics",
+        "Notifications",
+        "Session & Lifecycle",
+        "Back to Cinema",
+        "Close",
+    } <= _labels(settings)
     assert {
         "Create / Repair Role",
         "Provider Deck",
         "Test Media Endpoint",
         "Community & Pings",
         "Refresh",
-        "Back to Movie Night",
+        "Back to Settings",
         "Close",
     } <= _labels(setup)
     assert {
         "Add In-App Provider",
         "Add External-Only Link",
         "Manage Providers",
-        "Back",
+        "Back to Settings",
         "Close",
     } <= _labels(sources)
 
-    assert len(hub.children) <= 25
-    assert len(setup.children) <= 25
-    assert len(sources.children) <= 25
+    assert len(hub.children) <= 5
+    assert len(more.children) <= 7
+    assert len(settings.children) <= 6
 
 
 
-def test_movie_night_hub_changes_controls_by_room_mode(monkeypatch) -> None:
+def test_movie_night_hub_changes_controls_by_room_mode_and_vote_context(monkeypatch) -> None:
     manager = MovieNightManager(viewer_ttl_seconds=120)
     public_room = manager.create_room(
         guild_id=1,
@@ -114,9 +123,22 @@ def test_movie_night_hub_changes_controls_by_room_mode(monkeypatch) -> None:
     monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
 
     public_labels = _labels(movie_ui.MovieNightHubView(10, public_room))
-    assert "Start / Join Party" not in public_labels
-    assert "Private Viewing" not in public_labels
-    assert {"Vote Yes", "Vote No"} <= public_labels
+    assert {"Find Movie", "Movie Picks", "Queue", "More"} <= public_labels
+    assert "Start Watch Party" not in public_labels
+    assert "Watch Alone" not in public_labels
+    assert "Yes" not in public_labels
+    assert "No" not in public_labels
+
+    manager.join_room(public_room.room_id, user_id=20, now=100.0)
+    manager.propose_vote(
+        public_room.room_id,
+        proposer_id=10,
+        action="search",
+        payload={"query": "Blade Runner"},
+        now=101.0,
+    )
+    voting_labels = _labels(movie_ui.MovieNightHubView(10, public_room))
+    assert {"Yes", "No"} <= voting_labels
 
     public_room.ended = True
     private_room = manager.create_room(
@@ -125,13 +147,12 @@ def test_movie_night_hub_changes_controls_by_room_mode(monkeypatch) -> None:
         host_id=10,
         stream_token="",
         mode="private",
-        now=101.0,
+        now=102.0,
     )
     private_labels = _labels(movie_ui.MovieNightHubView(10, private_room))
-    assert "Start / Join Party" not in private_labels
-    assert "Private Viewing" not in private_labels
-    assert "Vote Yes" not in private_labels
-    assert "Vote No" not in private_labels
+    assert {"Find Movie", "Movie Picks", "Queue", "More"} <= private_labels
+    assert "Yes" not in private_labels
+    assert "No" not in private_labels
 
 
 def test_private_room_candidate_and_release_controls_drop_voting(monkeypatch) -> None:
@@ -406,7 +427,7 @@ def test_candidate_embed_shows_tmdb_watch_availability(monkeypatch) -> None:
 
     embed = movie_ui._candidate_embed(room, candidate)
     fields = {str(field.name): str(field.value) for field in embed.fields}
-    where = next(value for name, value in fields.items() if name.startswith("📡 Dank Watch"))
+    where = next(value for name, value in fields.items() if name.startswith("📡 Other legal availability"))
     assert "Tubi" in where
     assert "Pluto TV" in where
     assert "Plex" in where
@@ -426,7 +447,87 @@ def test_dank_cinema_branding_is_consistent_across_core_surfaces(monkeypatch) ->
     assert str(empty_room.title) == "🍿 Dank Cinema"
 
     search_modal = movie_ui.MovieSearchModal(owner_id=1, room_id="room")
-    assert str(search_modal.title) == "Dank Cinema Search"
+    assert str(search_modal.title) == "1/3 • Find Movie"
+
+
+def test_cinema_home_embed_is_simple_and_status_details_are_separate(monkeypatch) -> None:
+    empty = movie_ui._room_embed(
+        SimpleNamespace(guild=None),
+        None,
+    )
+    rendered_empty = "\n".join(
+        [str(empty.description or "")]
+        + [f"{field.name}\n{field.value}" for field in empty.fields]
+    )
+    assert "Choose how you want to watch" in rendered_empty
+    assert "Session timing" not in rendered_empty
+
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+    )
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(
+        movie_ui,
+        "get_torrent_manager",
+        lambda: SimpleNamespace(idle_ttl_seconds=1800.0),
+    )
+    interaction = SimpleNamespace(guild=None)
+    home = movie_ui._room_embed(interaction, room)
+    status = movie_ui._session_status_embed(interaction, room)
+
+    assert "Session timing" not in {str(field.name) for field in home.fields}
+    assert "⏱️ Session timing" in {str(field.name) for field in status.fields}
+
+
+def test_search_release_surfaces_show_find_choose_watch_steps(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+    )
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+    candidate = manager.nominate(
+        room.room_id,
+        user_id=10,
+        title="Example Movie",
+        auto_vote=False,
+    )
+    variant = manager.add_variant(
+        room.room_id,
+        candidate.candidate_id,
+        user_id=10,
+        source_ref="magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+        source_id="source",
+        source_label="Source",
+        file_size=2_000_000_000,
+        seeds=100,
+        leechers=4,
+        peers=104,
+        metadata={
+            "release_name": {
+                "source": "WEB-DL",
+                "resolution": "1080p",
+                "video_codec": "x265",
+            }
+        },
+        auto_vote=False,
+    )
+
+    candidate_embed = movie_ui._candidate_embed(room, candidate)
+    release_embed = movie_ui._release_embed(room, candidate, variant)
+    choices = movie_ui._release_picker_choices([variant])
+
+    assert str(candidate_embed.title) == "2/3 • Choose Release"
+    assert str(release_embed.title) == "2/3 • Release Details"
+    assert choices[0].emoji == "⭐"
+    assert "Recommended" in choices[0].description
+    assert "1080p" in choices[0].label
 
 
 def test_movie_night_lifecycle_text_explains_distinct_timeouts(monkeypatch) -> None:
@@ -458,7 +559,7 @@ def test_movie_night_hub_adds_signed_watch_link_when_media_is_active(monkeypatch
         if getattr(item, "style", None) is discord.ButtonStyle.link
     ]
     assert len(links) == 1
-    assert links[0].label == "Watch"
+    assert links[0].label == "Watch Movie"
     assert str(links[0].url).startswith(
         "https://media.example.com/movie/room-123/watch?"
     )
