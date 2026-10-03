@@ -90,7 +90,16 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
             )
         )
     if not ready:
-        status = manager.status(session)
+        try:
+            status = manager.status(session)
+        except TorrentSessionUnavailableError:
+            await manager.discard_unusable_session(token)
+            raise web.HTTPGone(
+                text=(
+                    "This torrent media session is no longer available. "
+                    "Return to Dank Cinema and choose the release again."
+                )
+            )
         return web.json_response(
             {
                 "ok": False,
@@ -140,6 +149,10 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
         # retire the dead handle so the next state poll reports media_missing.
         client_disconnected = True
         await manager.discard_unusable_session(token)
+    except FileNotFoundError:
+        # Another request may have just retired a terminally invalid session.
+        # The browser will repoll Movie Night state and receive media_missing.
+        client_disconnected = True
     except (ConnectionError, asyncio.CancelledError):
         # Browser reloads, seeks, tab closes, and mobile media-source swaps all
         # legitimately abandon an in-flight Range request. aiohttp may surface
