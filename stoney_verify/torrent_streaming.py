@@ -1784,9 +1784,10 @@ class TorrentMediaManager:
         if not key:
             return False
 
-        should_remove = False
+        clean_token = str(token or "")
+        detached: Optional[TorrentStreamSession] = None
         async with self._lock:
-            session = self._sessions.get(str(token or ""))
+            session = self._sessions.get(clean_token)
             if session is None:
                 return False
             existed = key in session.leases
@@ -1799,8 +1800,20 @@ class TorrentMediaManager:
                 and not session.leases
                 and not session.unleased_hold
             )
-        if should_remove:
-            return await self.remove(token, force=True)
+            if should_remove:
+                # Detach atomically before releasing the manager lock. Otherwise
+                # another room can reuse this identity between "last lease
+                # released" and remove(), then lose its newly attached handle.
+                detached = self._sessions.pop(clean_token, None)
+                if (
+                    detached is not None
+                    and self._identity_index.get(detached.source_identity) == clean_token
+                ):
+                    self._identity_index.pop(detached.source_identity, None)
+
+        if detached is not None:
+            self._safe_remove_handle(detached.handle)
+            await asyncio.to_thread(shutil.rmtree, detached.save_root, True)
         return existed
 
     async def remove(self, token: str, *, force: bool = False) -> bool:
