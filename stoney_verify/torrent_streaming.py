@@ -90,9 +90,11 @@ def magnet_identity(magnet: str) -> str:
     except Exception:
         return ""
 
-    values = list(query.get("xt", []) or [])
-    for item in values:
-        text = str(item or "").strip()
+    values = [str(item or "").strip() for item in list(query.get("xt", []) or [])]
+
+    # Prefer v1 identity for hybrid magnets so older and hybrid references reuse
+    # the same active session when they point at the same v1 swarm.
+    for text in values:
         if not text.lower().startswith("urn:btih:"):
             continue
         value = text[9:].strip()
@@ -106,6 +108,15 @@ def magnet_identity(magnet: str) -> str:
             return f"btih:{decoded.hex()}"
         if value:
             return f"btih:{value.lower()}"
+
+    for text in values:
+        if not text.lower().startswith("urn:btmh:"):
+            continue
+        value = text[9:].strip().lower()
+        if re.fullmatch(r"1220[A-Fa-f0-9]{64}", value):
+            if value[4:] == "0" * 64:
+                continue
+            return f"btmh:{value}"
     return ""
 
 
@@ -1031,12 +1042,23 @@ class TorrentMediaManager:
     def _info_identity(self, info: Any) -> str:
         try:
             hashes = info.info_hashes()
-            return f"btih:{str(hashes.v1).lower()}"
+            v1 = str(getattr(hashes, "v1", "") or "").strip().lower()
+            if re.fullmatch(r"[a-f0-9]{40}", v1) and v1 != "0" * 40:
+                return f"btih:{v1}"
+
+            v2 = str(getattr(hashes, "v2", "") or "").strip().lower()
+            if re.fullmatch(r"[a-f0-9]{64}", v2) and v2 != "0" * 64:
+                return f"btmh:1220{v2}"
         except Exception:
-            try:
-                return f"btih:{str(info.info_hash()).lower()}"
-            except Exception:
-                return f"torrent:{secrets.token_hex(12)}"
+            pass
+
+        try:
+            legacy = str(info.info_hash()).strip().lower()
+            if legacy:
+                return f"btih:{legacy}"
+        except Exception:
+            pass
+        return f"torrent:{secrets.token_hex(12)}"
 
     def _playable_candidates(self, info: Any) -> list[TorrentFileCandidate]:
         files = info.files()
