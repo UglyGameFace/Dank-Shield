@@ -300,6 +300,56 @@ def test_movie_night_hub_adds_signed_watch_link_when_media_is_active(monkeypatch
     )
 
 
+def test_release_picker_does_not_preselect_first_ranked_release() -> None:
+    variants = [
+        SimpleNamespace(
+            variant_id="first",
+            metadata={"release_name": {"source": "BluRay"}},
+            source_label="ApiBay",
+            source_id="apibay",
+            file_size=1_840_000_000,
+            swarm_health={
+                "seeds": 153,
+                "leechers": 6,
+                "peers": 159,
+                "seed_leech_ratio": 25.5,
+                "label": "strong",
+            },
+        ),
+        SimpleNamespace(
+            variant_id="second",
+            metadata={"release_name": {"source": "BluRay"}},
+            source_label="ApiBay",
+            source_id="apibay",
+            file_size=8_130_000_000,
+            swarm_health={
+                "seeds": 47,
+                "leechers": 4,
+                "peers": 51,
+                "seed_leech_ratio": 11.75,
+                "label": "strong",
+            },
+        ),
+    ]
+
+    choices = movie_ui._release_picker_choices(variants)
+
+    assert [choice.value for choice in choices] == ["first", "second"]
+    assert all(choice.default is False for choice in choices)
+
+    picker = movie_ui.DankPickerView(
+        author_id=1,
+        choices=choices,
+        on_pick=lambda interaction, value: None,
+        custom_id="dank:test:release-picker",
+    )
+    select = next(
+        item for item in picker.children
+        if isinstance(item, discord.ui.Select)
+    )
+    assert all(option.default is False for option in select.options)
+
+
 def test_search_results_group_releases_without_automatic_votes(monkeypatch) -> None:
     manager = MovieNightManager(viewer_ttl_seconds=120)
     room = manager.create_room(
