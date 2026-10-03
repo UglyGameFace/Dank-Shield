@@ -421,7 +421,9 @@ def _magnet_from_info_hash_v2(value: Any) -> str:
 
 
 def _item_source_ref(item: Mapping[str, Any]) -> str:
-    for key in _PLAYABLE_REF_KEYS:
+    # Prefer fields that explicitly claim to be playable media. Generic "url"
+    # is intentionally last because many search APIs use it for a detail page.
+    for key in tuple(key for key in _PLAYABLE_REF_KEYS if key != "url"):
         value = item.get(key)
         if value:
             ref = _safe_source_ref(value)
@@ -437,6 +439,12 @@ def _item_source_ref(item: Mapping[str, Any]) -> str:
         magnet = _magnet_from_info_hash_v2(item.get(key))
         if magnet:
             return magnet
+
+    generic_url = item.get("url")
+    if generic_url:
+        ref = _safe_source_ref(generic_url)
+        if ref:
+            return ref
     return ""
 
 
