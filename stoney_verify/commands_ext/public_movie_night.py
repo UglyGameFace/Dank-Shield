@@ -3307,33 +3307,227 @@ class ConfirmMovieNightEndView(_OwnedView):
         await open_movie_night(interaction, replace_message=True)
 
 
+class MovieNightMoreView(_OwnedView):
+    def __init__(
+        self,
+        owner_id: int,
+        room: Optional[MovieNightRoom],
+        *,
+        staff: bool = False,
+    ) -> None:
+        super().__init__(owner_id)
+        self.room_id = room.room_id if room is not None else ""
+        self.staff = bool(staff)
+        if room is None:
+            self.remove_item(self.end_session)
+            self.remove_item(self.session_status)
+        if not self.staff:
+            self.remove_item(self.settings)
+
+    def _room(self) -> Optional[MovieNightRoom]:
+        if not self.room_id:
+            return None
+        return get_movie_night_manager().get(self.room_id)
+
+    @discord.ui.button(label="Session Status", emoji="📊", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:more:status")
+    async def session_status(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        room = self._room()
+        await _replace(
+            interaction,
+            embed=_session_status_embed(interaction, room),
+            view=MovieNightMoreView(
+                self.owner_id,
+                room,
+                staff=_staff_authorized(interaction),
+            ),
+        )
+
+    @discord.ui.button(label="Notifications", emoji="🌿", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:more:notifications")
+    async def notifications(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if _staff_authorized(interaction):
+            from .public_community_pings import open_community_ping_setup
+            return await open_community_ping_setup(interaction, replace_message=True)
+        from .public_community_pings import open_member_community_pings
+        return await open_member_community_pings(interaction, replace_message=True)
+
+    @discord.ui.button(label="Cinema Settings", emoji="⚙️", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:more:settings")
+    async def settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_movie_night_settings(interaction, replace_message=True)
+
+    @discord.ui.button(label="Refresh Cinema", emoji="🔄", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:more:refresh")
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_movie_night(interaction, replace_message=True)
+
+    @discord.ui.button(label="End Movie Night", emoji="🛑", style=discord.ButtonStyle.danger, row=1, custom_id="dank:movie:more:end")
+    async def end_session(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        room = _room_for_interaction(interaction)
+        if room is None:
+            return await open_movie_night(interaction, replace_message=True)
+
+        manager = get_movie_night_manager()
+        manager.join_room(room.room_id, user_id=int(interaction.user.id))
+        if int(room.host_id) == int(interaction.user.id):
+            return await _replace(
+                interaction,
+                content=(
+                    "🛑 End this Movie Night completely? This stops the room, releases its "
+                    "torrent/media lease, clears the queue, and lets a fresh room start here."
+                ),
+                embed=_session_status_embed(interaction, room),
+                view=ConfirmMovieNightEndView(int(interaction.user.id), room.room_id),
+            )
+
+        existing = next(
+            (
+                item
+                for item in room.votes.values()
+                if not item.resolved and item.action == "end"
+            ),
+            None,
+        )
+        try:
+            if existing is not None:
+                vote = manager.cast_vote(
+                    room.room_id,
+                    existing.vote_id,
+                    user_id=int(interaction.user.id),
+                    approve=True,
+                )
+            else:
+                vote = manager.propose_vote(
+                    room.room_id,
+                    proposer_id=int(interaction.user.id),
+                    action="end",
+                )
+        except Exception as exc:
+            return await _movie_hub_notice(
+                interaction,
+                f"❌ End-session vote could not start: {exc}",
+                room=room,
+            )
+
+        if vote.resolved and vote.passed:
+            return await _execute_passed_vote(interaction, room, vote)
+        await open_movie_night(interaction, replace_message=True)
+
+    @discord.ui.button(label="Back to Cinema", emoji="⬅️", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:more:back")
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_movie_night(interaction, replace_message=True)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:more:close")
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace(interaction, content="Dank Cinema closed.", embed=None, view=None)
+
+
+class MovieNightSettingsView(_OwnedView):
+    @discord.ui.button(label="Provider Deck", emoji="🎞️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:settings:providers")
+    async def providers(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_movie_night_sources(interaction, replace_message=True)
+
+    @discord.ui.button(label="Setup & Diagnostics", emoji="🛠️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:settings:setup")
+    async def setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_movie_night_setup(interaction, replace_message=True)
+
+    @discord.ui.button(label="Notifications", emoji="🌿", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:settings:notifications")
+    async def notifications(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from .public_community_pings import open_community_ping_setup
+        await open_community_ping_setup(interaction, replace_message=True)
+
+    @discord.ui.button(label="Session & Lifecycle", emoji="📊", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:settings:status")
+    async def status(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        room = _room_for_interaction(interaction)
+        await _replace(
+            interaction,
+            embed=_session_status_embed(interaction, room),
+            view=MovieNightSettingsView(self.owner_id),
+        )
+
+    @discord.ui.button(label="Back to Cinema", emoji="⬅️", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:settings:back")
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_movie_night(interaction, replace_message=True)
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:settings:close")
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace(interaction, content="Dank Cinema settings closed.", embed=None, view=None)
+
+
+async def open_movie_night_settings(
+    interaction: discord.Interaction,
+    *,
+    replace_message: bool = True,
+) -> None:
+    if interaction.guild is None:
+        return await _private(interaction, "❌ Dank Cinema settings only work inside a server.")
+    if not _staff_authorized(interaction):
+        return await _movie_hub_notice(
+            interaction,
+            "❌ Manage Server or Administrator is required for Cinema Settings.",
+        )
+    view = MovieNightSettingsView(int(interaction.user.id))
+    if replace_message:
+        await _replace(interaction, embed=_settings_embed(), view=view)
+    else:
+        await _private(interaction, embed=_settings_embed(), view=view)
+
+
+async def open_movie_night_more(
+    interaction: discord.Interaction,
+    *,
+    replace_message: bool = True,
+) -> None:
+    room = _room_for_interaction(interaction)
+    staff = _staff_authorized(interaction)
+    embed = _more_embed(interaction, room, staff=staff)
+    view = MovieNightMoreView(int(interaction.user.id), room, staff=staff)
+    if replace_message:
+        await _replace(interaction, embed=embed, view=view)
+    else:
+        await _private(interaction, embed=embed, view=view)
+
+
 class MovieNightHubView(_OwnedView):
     def __init__(
         self,
         owner_id: int,
         room: Optional[MovieNightRoom] = None,
+        *,
+        staff: bool = False,
     ) -> None:
         super().__init__(owner_id)
-        private_mode = bool(
-            room is not None
-            and str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
-        )
+        private_mode = _private_viewing(room)
+        open_vote = _latest_open_vote(room) if room is not None else None
 
-        # Keep the active cinema surface focused. Start-mode buttons only belong
-        # on an empty hub; party voting controls have no meaning in owner-only
-        # Private Viewing.
-        if room is not None:
-            self.remove_item(self.start_join)
-            self.remove_item(self.start_private)
-        if room is None or private_mode:
+        if room is None:
+            self.remove_item(self.search)
+            self.remove_item(self.results)
+            self.remove_item(self.queue)
             self.remove_item(self.vote_yes)
             self.remove_item(self.vote_no)
+        else:
+            self.remove_item(self.start_join)
+            self.remove_item(self.start_private)
+            if private_mode or open_vote is None:
+                self.remove_item(self.vote_yes)
+                self.remove_item(self.vote_no)
 
         if (
             room is not None
             and room.stream_token
             and (
-                not _private_viewing(room)
+                not private_mode
                 or int(owner_id) == int(room.host_id)
             )
         ):
@@ -3341,20 +3535,20 @@ class MovieNightHubView(_OwnedView):
             if watch_url:
                 self.add_item(
                     discord.ui.Button(
-                        label="Watch",
+                        label="Watch Movie",
                         emoji="▶️",
                         style=discord.ButtonStyle.link,
                         url=watch_url,
-                        row=3,
+                        row=2,
                     )
                 )
 
-    @discord.ui.button(label="Start / Join Party", emoji="🎬", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:hub:start")
+    @discord.ui.button(label="Start Watch Party", emoji="🎬", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:hub:start")
     async def start_join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _start_or_join_room(interaction, mode="watch_party")
 
-    @discord.ui.button(label="Private Viewing", emoji="🔒", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:hub:private")
+    @discord.ui.button(label="Watch Alone", emoji="🔒", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:hub:private")
     async def start_private(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _start_or_join_room(interaction, mode="private")
@@ -3366,7 +3560,7 @@ class MovieNightHubView(_OwnedView):
         if room is None:
             return await _movie_hub_notice(
                 interaction,
-                "❌ Start or join a Movie Night room first.",
+                "❌ Start a Watch Party or Watch Alone session first.",
             )
         get_movie_night_manager().join_room(
             room.room_id,
@@ -3376,38 +3570,42 @@ class MovieNightHubView(_OwnedView):
             MovieSearchModal(owner_id=self.owner_id, room_id=room.room_id)
         )
 
-    @discord.ui.button(label="Movie Picks", emoji="🎞️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:hub:results")
+    @discord.ui.button(label="Movie Picks", emoji="🎞️", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:hub:results")
     async def results(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room = _room_for_interaction(interaction)
         if room is None:
             return await _movie_hub_notice(
                 interaction,
-                "ℹ️ No Movie Night room is active here.",
+                "ℹ️ Start a viewing session first.",
             )
         await open_movie_results(interaction, room.room_id, replace_message=True)
 
-    @discord.ui.button(label="Watch Queue", emoji="📺", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:hub:queue")
+    @discord.ui.button(label="Queue", emoji="📺", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:hub:queue")
     async def queue(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room = _room_for_interaction(interaction)
         if room is None:
             return await _movie_hub_notice(
                 interaction,
-                "ℹ️ No Movie Night room is active here.",
+                "ℹ️ Start a viewing session first.",
             )
         await _replace(
             interaction,
             embed=_queue_embed(room),
-            view=MovieNightHubView(self.owner_id),
+            view=MovieNightHubView(
+                self.owner_id,
+                room,
+                staff=_staff_authorized(interaction),
+            ),
         )
 
-    @discord.ui.button(label="Vote Yes", emoji="✅", style=discord.ButtonStyle.success, row=1, custom_id="dank:movie:hub:vote-yes")
+    @discord.ui.button(label="Yes", emoji="✅", style=discord.ButtonStyle.success, row=1, custom_id="dank:movie:hub:vote-yes")
     async def vote_yes(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._cast_latest(interaction, True)
 
-    @discord.ui.button(label="Vote No", emoji="❌", style=discord.ButtonStyle.danger, row=1, custom_id="dank:movie:hub:vote-no")
+    @discord.ui.button(label="No", emoji="❌", style=discord.ButtonStyle.danger, row=1, custom_id="dank:movie:hub:vote-no")
     async def vote_no(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._cast_latest(interaction, False)
@@ -3445,98 +3643,10 @@ class MovieNightHubView(_OwnedView):
             return await _execute_passed_vote(interaction, room, vote)
         await open_movie_night(interaction, replace_message=True)
 
-    @discord.ui.button(label="Provider Deck", emoji="🎞️", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:hub:sources")
-    async def sources(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+    @discord.ui.button(label="More", emoji="⋯", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:hub:more")
+    async def more(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await open_movie_night_sources(interaction, replace_message=True)
-
-    @discord.ui.button(label="Setup", emoji="⚙️", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:hub:setup")
-    async def setup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await open_movie_night_setup(interaction, replace_message=True)
-
-    @discord.ui.button(label="Community & Pings", emoji="🌿", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:hub:pings")
-    async def pings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if _staff_authorized(interaction):
-            from .public_community_pings import open_community_ping_setup
-            return await open_community_ping_setup(interaction, replace_message=True)
-        from .public_community_pings import open_member_community_pings
-        return await open_member_community_pings(interaction, replace_message=True)
-
-    @discord.ui.button(label="End Session", emoji="🛑", style=discord.ButtonStyle.danger, row=3, custom_id="dank:movie:hub:end")
-    async def end_session(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        room = _room_for_interaction(interaction)
-        if room is None:
-            return await _movie_hub_notice(
-                interaction,
-                "ℹ️ No Movie Night room is active here.",
-            )
-
-        manager = get_movie_night_manager()
-        manager.join_room(room.room_id, user_id=int(interaction.user.id))
-        if int(room.host_id) == int(interaction.user.id):
-            return await _replace(
-                interaction,
-                content=(
-                    "🛑 End this Movie Night completely? This stops the room, releases its "
-                    "torrent/media lease, clears the queue, and lets a fresh room start here."
-                ),
-                embed=_room_embed(interaction, room),
-                view=ConfirmMovieNightEndView(int(interaction.user.id), room.room_id),
-            )
-
-        existing = next(
-            (
-                item
-                for item in room.votes.values()
-                if not item.resolved and item.action == "end"
-            ),
-            None,
-        )
-        try:
-            if existing is not None:
-                vote = manager.cast_vote(
-                    room.room_id,
-                    existing.vote_id,
-                    user_id=int(interaction.user.id),
-                    approve=True,
-                )
-            else:
-                vote = manager.propose_vote(
-                    room.room_id,
-                    proposer_id=int(interaction.user.id),
-                    action="end",
-                )
-        except Exception as exc:
-            return await _movie_hub_notice(
-                interaction,
-                f"❌ End-session vote could not start: {exc}",
-                room=room,
-            )
-
-        if vote.resolved and vote.passed:
-            return await _execute_passed_vote(interaction, room, vote)
-        await _replace(
-            interaction,
-            content=(
-                "🗳️ **End Movie Night** vote opened. Active viewers can use "
-                "**Vote Yes** / **Vote No**."
-            ),
-            embed=_room_embed(interaction, room),
-            view=MovieNightHubView(int(interaction.user.id), room),
-        )
-
-    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3, custom_id="dank:movie:hub:refresh")
-    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await open_movie_night(interaction, replace_message=True)
-
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=3, custom_id="dank:movie:hub:close")
-    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _replace(interaction, content="Movie Night closed.", embed=None, view=None)
+        await open_movie_night_more(interaction, replace_message=True)
 
 
 async def open_movie_night(
