@@ -238,3 +238,113 @@ def test_generic_provider_ignores_rows_without_playable_ref() -> None:
         {"title": "Private", "download_url": "https://127.0.0.1/movie.torrent"},
     ):
         assert resolver._variant_from_item(_source(), item) is None
+
+
+def test_structured_provider_accepts_nested_data_results() -> None:
+    payload = {
+        "data": {
+            "results": [
+                {
+                    "title": "Nested Movie",
+                    "magnet": "magnet:?xt=urn:btih:NESTED",
+                    "seed": 33,
+                    "leech": 4,
+                    "peer": 40,
+                    "filesize": 123456789,
+                    "quality": "1080p",
+                }
+            ]
+        }
+    }
+    items = resolver._expand_provider_items(resolver._extract_items(payload))
+    assert len(items) == 1
+    variant = resolver._variant_from_item(_source(), items[0])
+    assert variant is not None
+    assert variant.title == "Nested Movie"
+    assert variant.seeds == 33
+    assert variant.leechers == 4
+    assert variant.peers == 40
+    assert variant.file_size == 123456789
+    assert variant.metadata["source_reported"]["quality"] == "1080p"
+
+
+def test_structured_provider_flattens_nested_torrent_quality_map() -> None:
+    payload = {
+        "movies": [
+            {
+                "title": "Example Movie",
+                "year": 2026,
+                "torrents": {
+                    "en": {
+                        "1080p": {
+                            "url": "magnet:?xt=urn:btih:QUALITY1080",
+                            "seed": 120,
+                            "peer": 150,
+                            "filesize": 4_000_000_000,
+                            "codec": "x265",
+                        },
+                        "720p": {
+                            "url": "magnet:?xt=urn:btih:QUALITY720",
+                            "seed": 60,
+                            "peer": 80,
+                            "filesize": 2_000_000_000,
+                        },
+                    }
+                },
+            }
+        ]
+    }
+    items = resolver._expand_provider_items(resolver._extract_items(payload))
+    assert len(items) == 2
+
+    variants = [
+        resolver._variant_from_item(_source(), item)
+        for item in items
+    ]
+    variants = [item for item in variants if item is not None]
+    assert len(variants) == 2
+    refs = {item.source_ref for item in variants}
+    assert refs == {
+        "magnet:?xt=urn:btih:QUALITY1080",
+        "magnet:?xt=urn:btih:QUALITY720",
+    }
+
+    high = next(
+        item for item in variants
+        if item.source_ref.endswith("QUALITY1080")
+    )
+    assert high.seeds == 120
+    assert high.peers == 150
+    assert high.metadata["source_reported"]["variant_path"] == "en/1080p"
+    assert high.metadata["source_reported"]["codec"] == "x265"
+    assert high.metadata["source_reported"]["year"] == 2026
+
+
+def test_structured_provider_accepts_torrent_url_alias() -> None:
+    variant = resolver._variant_from_item(
+        _source(),
+        {
+            "movie": "Torrent URL Movie",
+            "torrent_url": "https://cdn.example.com/file.torrent",
+            "seeders": 10,
+        },
+    )
+    assert variant is not None
+    assert variant.source_ref == "https://cdn.example.com/file.torrent"
+    assert variant.seeds == 10
+
+
+def test_expand_provider_items_ignores_nested_entries_without_playable_ref() -> None:
+    payload = {
+        "results": [
+            {
+                "title": "Metadata Only",
+                "torrents": {
+                    "1080p": {"quality": "1080p", "seed": 100}
+                },
+            }
+        ]
+    }
+    assert resolver._expand_provider_items(
+        resolver._extract_items(payload)
+    ) == []

@@ -630,3 +630,11 @@ def test_primary_candidate_controls_never_open_provider_websites() -> None:
         "Vote to Queue",
         "Back to Results",
     }
+
+
+def test_search_vote_never_falls_back_to_external_browser_providers() -> None:
+    source = inspect.getsource(movie_ui._execute_search_vote)
+    assert "_external_provider_links" not in source
+    assert "ExternalSearchResultsView" not in source
+    assert "external_provider_count" not in source
+    assert "External Search Available" not in source

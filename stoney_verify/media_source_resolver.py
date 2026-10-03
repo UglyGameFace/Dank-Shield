@@ -247,42 +247,143 @@ def _validate_request_url(value: str) -> str:
     return parsed.geturl()
 
 
-def _extract_items(payload: Any) -> list[Mapping[str, Any]]:
+_RESULT_LIST_KEYS = (
+    "results",
+    "items",
+    "releases",
+    "variants",
+    "torrents",
+    "movies",
+    "entries",
+)
+_RESULT_WRAPPER_KEYS = (
+    "data",
+    "response",
+    "payload",
+)
+_PLAYABLE_REF_KEYS = (
+    "source_ref",
+    "magnet",
+    "magnet_uri",
+    "magnet_url",
+    "torrent",
+    "torrent_url",
+    "download_url",
+    "url",
+)
+_SOURCE_METADATA_KEYS = (
+    "quality",
+    "resolution",
+    "codec",
+    "video_codec",
+    "audio_codec",
+    "language",
+    "lang",
+    "group",
+    "provider",
+    "indexer",
+    "category",
+    "year",
+)
+
+
+def _extract_items(payload: Any, *, _depth: int = 0) -> list[Mapping[str, Any]]:
+    if _depth > 3:
+        return []
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, Mapping)]
     if not isinstance(payload, Mapping):
         return []
 
-    for key in (
-        "results",
-        "items",
-        "releases",
-        "variants",
-        "torrents",
-        "movies",
-        "entries",
-    ):
+    for key in _RESULT_LIST_KEYS:
         value = payload.get(key)
         if isinstance(value, list):
             return [item for item in value if isinstance(item, Mapping)]
 
-    nested = payload.get("data")
-    if isinstance(nested, list):
-        return [item for item in nested if isinstance(item, Mapping)]
-    if isinstance(nested, Mapping):
-        for key in (
-            "results",
-            "items",
-            "releases",
-            "variants",
-            "torrents",
-            "movies",
-            "entries",
-        ):
-            value = nested.get(key)
-            if isinstance(value, list):
-                return [item for item in value if isinstance(item, Mapping)]
+    for key in _RESULT_WRAPPER_KEYS:
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, Mapping)]
+        if isinstance(value, Mapping):
+            nested = _extract_items(value, _depth=_depth + 1)
+            if nested:
+                return nested
     return []
+
+
+def _item_source_ref(item: Mapping[str, Any]) -> str:
+    for key in _PLAYABLE_REF_KEYS:
+        value = item.get(key)
+        if value:
+            ref = _safe_source_ref(value)
+            if ref:
+                return ref
+    return ""
+
+
+def _nested_torrent_items(
+    parent: Mapping[str, Any],
+    value: Any,
+    *,
+    path: tuple[str, ...] = (),
+    _depth: int = 0,
+) -> list[Mapping[str, Any]]:
+    if _depth > 4:
+        return []
+
+    rows: list[Mapping[str, Any]] = []
+    if isinstance(value, list):
+        for index, child in enumerate(value[:_MAX_SOURCE_RESULTS]):
+            if not isinstance(child, Mapping):
+                continue
+            merged = dict(parent)
+            merged.update(child)
+            merged.setdefault("variant_path", "/".join((*path, str(index))))
+            rows.append(merged)
+        return rows
+
+    if not isinstance(value, Mapping):
+        return rows
+
+    if _item_source_ref(value):
+        merged = dict(parent)
+        merged.update(value)
+        if path:
+            merged.setdefault("variant_path", "/".join(path))
+            if not any(merged.get(key) for key in ("release_name", "filename")):
+                merged["release_name"] = " ".join(
+                    part for part in (str(parent.get("title") or parent.get("name") or ""), *path)
+                    if part
+                )
+        rows.append(merged)
+        return rows
+
+    for key, child in list(value.items())[:64]:
+        if isinstance(child, (Mapping, list)):
+            rows.extend(
+                _nested_torrent_items(
+                    parent,
+                    child,
+                    path=(*path, str(key)[:40]),
+                    _depth=_depth + 1,
+                )
+            )
+            if len(rows) >= _MAX_SOURCE_RESULTS:
+                break
+    return rows[:_MAX_SOURCE_RESULTS]
+
+
+def _expand_provider_items(items: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    rows: list[Mapping[str, Any]] = []
+    for item in items[:_MAX_SOURCE_RESULTS]:
+        if _item_source_ref(item):
+            rows.append(item)
+        torrents = item.get("torrents")
+        if isinstance(torrents, (Mapping, list)):
+            rows.extend(_nested_torrent_items(item, torrents))
+        if len(rows) >= _MAX_SOURCE_RESULTS:
+            break
+    return rows[:_MAX_SOURCE_RESULTS]
 
 
 def _variant_from_item(
@@ -296,16 +397,7 @@ def _variant_from_item(
         or item.get("display_name")
         or item.get("filename")
     )
-    source_ref = _safe_source_ref(
-        item.get("source_ref")
-        or item.get("magnet")
-        or item.get("magnet_uri")
-        or item.get("magnet_url")
-        or item.get("torrent")
-        or item.get("torrent_url")
-        or item.get("download_url")
-        or item.get("url")
-    )
+    source_ref = _item_source_ref(item)
     if not title or not source_ref:
         return None
 
@@ -328,6 +420,14 @@ def _variant_from_item(
             if isinstance(value, (str, int, float, bool)) or value is None:
                 source_reported[clean_key] = value
 
+    for key in _SOURCE_METADATA_KEYS:
+        value = item.get(key)
+        if isinstance(value, (str, int, float, bool)) and str(value).strip():
+            source_reported.setdefault(key, value)
+    variant_path = _clean_title(item.get("variant_path"))[:120]
+    if variant_path:
+        source_reported.setdefault("variant_path", variant_path)
+
     metadata: dict[str, Any] = {
         "release_name": inferred,
         "source_reported": source_reported,
@@ -343,8 +443,8 @@ def _variant_from_item(
     leechers = _safe_int(
         item.get("leechers")
         or item.get("leeches")
-        or item.get("leech")
         or item.get("leechers_count")
+        or item.get("leech")
         or item.get("leech_count")
     )
     peers = max(
@@ -352,6 +452,7 @@ def _variant_from_item(
         _safe_int(
             item.get("peers")
             or item.get("peer_count")
+            or item.get("peer")
             or item.get("total_peers")
         ),
     )
@@ -365,6 +466,7 @@ def _variant_from_item(
             item.get("file_size")
             or item.get("size_bytes")
             or item.get("size")
+            or item.get("filesize")
             or item.get("length")
             or item.get("bytes")
         ),
@@ -429,7 +531,7 @@ async def _search_one(
                     if response.status != 200:
                         return [], f"{source.label}: HTTP {response.status}"
                     payload = await _read_json_limited(response)
-                    items = _extract_items(payload)
+                    items = _expand_provider_items(_extract_items(payload))
                     variants = [
                         variant
                         for item in items[:_MAX_SOURCE_RESULTS]

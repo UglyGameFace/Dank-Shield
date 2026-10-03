@@ -2,66 +2,104 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-407 — Make Dank Cinema provider search fully in-app and reusable for torrent APIs**
+**DANK-SHIELD-408 — Make Dank Cinema movie search fully in-app and extensible across structured torrent/media providers**
 
 Production baseline:
-`main@08084f799f1445657247beaf6bd94fd9e30e5ee5` (PR #406 merged).
+`main@e9e089758dbe38415da5f81abb9621d546923dc8` (PR #409 merged).
 
 Active branch:
-`feat/407-in-app-movie-provider-search`
+`feat/408-in-app-provider-search`
 
 Status:
-**Provider architecture audited; in-app capability/UI remediation active.**
+**PR #410 conflict reconciliation implemented on current production main; exact-head CI and final branch/diff validation remain required before merge.**
 
-### User requirement
+## Scope
 
-`/movie -> Find Movie` must stay inside Discord for normal search/playback.
+1. Keep normal `/movie -> Find Movie` search inside Discord.
+2. Treat a provider as a primary Movie Search provider only when Dank Cinema can query structured results and normalize playable releases.
+3. Keep one provider-neutral resolver so later torrent/media APIs do not need one-off Discord UI code.
+4. Support common structured wrappers, direct result aliases, nested torrent/language/quality maps, swarm fields, file-size aliases, and safe scalar metadata.
+5. Keep browser-only external links as admin compatibility utilities only; they must not appear in candidate/release search or become an automatic no-results fallback.
+6. Preserve TMDB identity/discovery, JustWatch availability metadata, Internet Archive Feature Films, direct magnet/.torrent input, voting/queue flow, guild-aware persistence, provider safety bounds, dedupe, and ranking.
+7. Do not add HTML scraping or undocumented provider-site adapters.
+8. Reconcile rather than overwrite already-merged #409 behavior.
+9. Add regressions for both #409 aliases and #410 nested provider shapes.
+10. Merge only after exact-head validation and final diff hygiene.
 
-The same architecture must support future torrent/search providers without adding one-off Discord commands or provider-specific UI every time.
+## Findings / root cause
 
-### Existing canonical capability
+PR #410 was created from `08084f799f1445657247beaf6bd94fd9e30e5ee5`, while PR #409 later merged to `main` and changed the same five files:
 
-Dank Cinema already has one structured provider resolver that accepts normalized results with:
-- title/name/movie;
-- release_name/filename;
-- magnet or safe HTTPS source/.torrent URL;
-- file size;
-- seeders/leechers/peers;
-- source metadata.
+- `ACTIVE_TASK.md`
+- `stoney_verify/commands_ext/public_movie_night.py`
+- `stoney_verify/media_source_resolver.py`
+- `tests/test_media_source_resolver.py`
+- `tests/test_movie_night_public_ui.py`
 
-Those structured results already flow into Dank Cinema playable release selection.
+GitHub therefore reported #410 as **9 commits ahead / 8 commits behind** with content conflicts.
 
-### Root product problem
+The overlap is not safe to resolve by blindly choosing either side:
+- #409 added useful generic aliases such as `magnet_uri`, `magnet_url`, `seed_count`, `leech_count`, `total_peers`, `length`, display/file-name aliases, provider probe UX, and explicit External-only labeling.
+- #410 adds deeper reusable behavior: `data/response/payload` wrappers, nested torrent/language/quality flattening, safe source metadata, variant-path metadata, and removal of the remaining approved-search external-browser fallback.
+- Current main also contained a stale `_execute_search_vote()` fallback referencing external-search helpers that #409 had already removed, creating a latent no-results runtime failure.
 
-The UI currently presents browser-only Search Link providers as part of the same search experience and exposes **Search Elsewhere** on normal candidate results.
+## Execution path reviewed
 
-That makes `Find Movie` appear to support a provider while actually kicking the member into a browser.
+Primary movie search:
+`/movie` -> candidate search/vote -> `_execute_search_vote()` -> built-in/custom structured provider resolution -> normalized playable variants -> candidate/release UI.
 
-### Scope
+Provider configuration:
+Movie Night Sources -> In-App Provider modal -> pre-save structured probe -> canonical guild-config provider registry.
 
-1. Keep one canonical structured provider engine.
-2. Rename/reframe JSON Provider as **In-App Provider / Torrent API** in user-facing setup.
-3. Preserve `provider_type=json` for backward-compatible storage unless a schema migration is materially required.
-4. Make Provider Deck explicitly distinguish:
-   - In-App: structured/playable results rendered by Dank Cinema;
-   - External-only: browser links, not part of primary playable search.
-5. Remove the normal candidate-level Search Elsewhere action.
-6. Ensure primary Find Movie uses built-in playable sources + enabled in-app structured providers only.
-7. Keep external-link providers as an admin/secondary utility rather than the primary user search path.
-8. Probe in-app providers before persistence and report whether playable refs were returned.
-9. Keep generic field aliases so future torrent APIs can integrate without code changes when they follow the contract.
-10. Preserve HTTPS/SSRF/redirect/response-size/result-count/torrent metadata safety.
-11. Preserve TMDB discovery, Internet Archive playable releases, direct magnet/.torrent input, voting/queue behavior, and guild-aware storage.
-12. Add deterministic regressions for capability separation, provider UI, generic torrent results, no browser jump in primary search, and backward compatibility.
-13. Run exact-head full CI and final diff review.
+Structured provider resolution:
+`_search_one()` -> bounded HTTPS/public-network fetch -> JSON decode -> `_extract_items()` -> `_expand_provider_items()` -> `_variant_from_item()` -> dedupe/ranking.
 
-### Boundary
+External links remain setup/admin data only and have no primary movie-search execution path.
 
-This task does not add HTML scraping for arbitrary provider websites. A provider that only exposes an HTML search page remains external-only. A provider with a structured HTTPS API/feed can participate in fully in-app search through the generic provider contract.
+## Reconciliation changes
 
-### Previous task
+- Rebased the conflict resolution conceptually onto current `main@e9e0897` rather than overwriting production with the older #410 base.
+- Kept #409 provider setup/probe behavior and capability wording.
+- Removed the stale no-results external-browser fallback from `_execute_search_vote()`.
+- Kept #410 recursive structured wrappers and nested torrent-map expansion.
+- Restored/retained the #409 aliases that #410's independent implementation would otherwise regress.
+- Added regression coverage for nested `data.results`, nested language/quality torrent maps, torrent URL aliases, metadata-only nested entries, and the absence of any external-browser fallback in search-vote execution.
+- Historical task material below remains preserved.
 
-#405 viewer sync/skipping/audio remediation merged as PR #406 into production `main@08084f799f1445657247beaf6bd94fd9e30e5ee5` after exact-head CI passed.
+## Validation / results
+
+Completed before branch handoff:
+- repository/PR baseline inspected against real GitHub state;
+- #409 and #410 diffs compared;
+- all five conflict files identified;
+- conflicting resolver behavior reconciled by union rather than side selection;
+- stale external fallback reference removed with a source-level regression;
+- no unrelated project/task changes introduced.
+
+Still required on final #410 head:
+- targeted provider resolver/UI tests;
+- full Dank Shield CI;
+- companion repository workflows;
+- branch must be 0 behind `main`;
+- final PR diff must contain no conflict markers, accidental generated files, secrets, or unrelated changes.
+
+## Cleanup / conflicts
+
+- Do not restore `ExternalSearchResultsView`, `_external_provider_links`, candidate **Search Elsewhere**, or the automatic external-link fallback.
+- Do not drop #409 alias compatibility while keeping #410 nested-provider support.
+- Do not add provider-specific scraping/adapters as part of this reconciliation.
+
+## Blockers / risks
+
+The implementation cannot be called complete until exact-head GitHub validation passes. Production/mobile canary remains post-merge evidence, not pre-merge CI evidence.
+
+## Backlog
+
+Unrelated Dank Shield, Minecraft, Unity, Idle Grow, Captions, AntiNuke, and other project work remains outside this single active task.
+
+## Next step
+
+Move the reconciled commit chain onto `feat/408-in-app-provider-search`, confirm PR #410 becomes mergeable and 0 behind current `main`, then run exact-head checks. Patch only failures that are evidence-backed and inside this task.
 
 
 ---
