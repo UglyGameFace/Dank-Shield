@@ -651,3 +651,31 @@ def test_custom_provider_zero_results_are_reported_as_diagnostic(monkeypatch) ->
         "Family Library: no playable results for this search.",
     )
 
+
+def test_common_camel_case_provider_aliases_are_supported() -> None:
+    payload = {
+        "searchResults": [
+            {
+                "displayName": "Camel Movie 2026",
+                "releaseName": "Camel.Movie.2026.1080p.WEB-DL.x265",
+                "infoHash": "0123456789ABCDEF0123456789ABCDEF01234567",
+                "sizeBytes": 2_500_000_000,
+                "seedCount": 70,
+                "leechCount": 10,
+                "totalPeers": 95,
+                "videoCodec": "x265",
+            }
+        ]
+    }
+
+    items = resolver._expand_provider_items(resolver._extract_items(payload))
+    assert len(items) == 1
+    variant = resolver._variant_from_item(_source(), items[0])
+    assert variant is not None
+    assert variant.title == "Camel Movie 2026"
+    assert variant.file_size == 2_500_000_000
+    assert variant.seeds == 70
+    assert variant.leechers == 10
+    assert variant.peers == 95
+    assert variant.metadata["source_reported"]["videoCodec"] == "x265"
+
