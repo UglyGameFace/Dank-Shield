@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 import stoney_verify.torrent_streaming as torrent_streaming
+from stoney_verify.api_new.torrent_stream_routes import _bounded_partial_response_end
 from stoney_verify.torrent_media_server import _validate_public_base_url
 from stoney_verify.torrent_streaming import (
     TorrentMediaManager,
@@ -757,6 +758,30 @@ def test_public_media_url_requires_https_outside_localhost(monkeypatch) -> None:
         _validate_public_base_url()
 
 
+def test_partial_stream_response_never_advertises_unbuffered_tail() -> None:
+    requested_end = 128 * 1024 * 1024 - 1
+    buffered_end = 8 * 1024 * 1024 - 1
+
+    assert _bounded_partial_response_end(
+        0,
+        requested_end,
+        buffered_end,
+        partial=True,
+    ) == buffered_end
+    assert _bounded_partial_response_end(
+        4 * 1024 * 1024,
+        requested_end,
+        12 * 1024 * 1024 - 1,
+        partial=True,
+    ) == 12 * 1024 * 1024 - 1
+    assert _bounded_partial_response_end(
+        0,
+        requested_end,
+        buffered_end,
+        partial=False,
+    ) == requested_end
+
+
 def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
     root = Path(__file__).resolve().parents[1]
     server = (root / "stoney_verify/api_new/server.py").read_text(encoding="utf-8")
@@ -779,6 +804,9 @@ def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
     assert "consumer_key = str(request.query.get(\"cid\", \"\")" in routes
     assert "consumer_key=consumer_key" in routes
     assert "plan.target_bytes" in routes
+    assert "_bounded_partial_response_end(" in routes
+    assert "requested_end" in routes
+    assert "startup_wait_end" in routes
     assert "get_torrent_manager().ensure_cleanup_task()" in routes
     assert "find_magnet(" in router
     assert "is_torrent_filename(" in router
