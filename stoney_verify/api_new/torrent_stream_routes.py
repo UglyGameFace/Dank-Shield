@@ -21,8 +21,14 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
     token = str(request.match_info.get("token", "") or "")
     expires = str(request.query.get("exp", "") or "")
     signature = str(request.query.get("sig", "") or "")
+    consumer_key = str(request.query.get("cid", "") or "").strip()[:96]
 
-    if not await manager.validate_stream_access(token, expires, signature):
+    if not await manager.validate_stream_access(
+        token,
+        expires,
+        signature,
+        consumer_key,
+    ):
         raise web.HTTPUnauthorized(text="Invalid or expired torrent stream token.")
 
     session = await manager.get(token)
@@ -60,7 +66,12 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
         return web.Response(status=status_code, headers=headers)
 
     first_end = min(end, start + _STREAM_CHUNK_BYTES - 1)
-    plan = manager.prepare_playback_request(session, start, first_end)
+    plan = manager.prepare_playback_request(
+        session,
+        start,
+        first_end,
+        consumer_key=consumer_key,
+    )
     startup_wait_end = max(first_end, plan.startup_wait_end)
     ready = await manager.wait_range(
         session,
@@ -93,7 +104,12 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
         while cursor <= end:
             chunk_end = min(end, cursor + _STREAM_CHUNK_BYTES - 1)
             if cursor != start:
-                plan = manager.prepare_playback_request(session, cursor, chunk_end)
+                plan = manager.prepare_playback_request(
+                    session,
+                    cursor,
+                    chunk_end,
+                    consumer_key=consumer_key,
+                )
                 ready = await manager.wait_range(
                     session,
                     cursor,
