@@ -23,6 +23,7 @@ from stoney_verify.community_pings_service import (
 )
 from stoney_verify.media_source_registry import (
     PROVIDER_TYPE_EXTERNAL,
+    PROVIDER_TYPE_FEED,
     PROVIDER_TYPE_JSON,
     CustomMediaSource,
     MediaSourceRegistry,
@@ -30,6 +31,7 @@ from stoney_verify.media_source_registry import (
     enabled_custom_sources,
     load_media_source_registry,
     prepare_example_search_url,
+    prepare_feed_url,
     remove_custom_source,
     render_provider_search_url,
     save_media_source_registry,
@@ -50,6 +52,7 @@ from stoney_verify.movie_catalog import (
     tmdb_catalog_ready,
 )
 from stoney_verify.movie_night import (
+    PRIVATE_VIEWER_LIMIT,
     MovieNightRoom,
     get_movie_night_manager,
     movie_room_lease_key,
@@ -76,7 +79,7 @@ from stoney_verify.torrent_streaming import (
     get_torrent_manager,
     is_torrent_filename,
 )
-from stoney_verify.ui.picker import DankChoice, DankPickerView
+from stoney_verify.ui.picker import DankChoice, DankPickerView, DankUserSelect
 
 
 _ALLOWED_NONE = discord.AllowedMentions.none()
@@ -805,8 +808,10 @@ def _private_viewing(room: Optional[MovieNightRoom]) -> bool:
     )
 
 
-def _movie_night_lifecycle_text() -> str:
+def _movie_night_lifecycle_text(room: Optional[MovieNightRoom] = None) -> str:
     manager = get_movie_night_manager()
+    private_mode = _private_viewing(room)
+    end_label = "End Private Session" if private_mode else "End Movie Night"
     empty_minutes = max(
         5,
         int(round(float(manager.empty_room_ttl_seconds) / 60.0)),
@@ -822,9 +827,9 @@ def _movie_night_lifecycle_text() -> str:
         "**Watch links:** valid for up to **6 hours** from when the button is created; "
         "reopen `/movie` for a fresh link if needed.\n"
         "**Attached media:** stays leased to the room while the room is alive. It is released on "
-        "End Movie Night, automatic empty-room cleanup, replacement, or terminal media failure.\n"
-        "**Bot restart:** Movie Night room state is currently in memory, so a process restart ends "
-        "the live room and users must start a new session."
+        f"{end_label}, automatic empty-room cleanup, replacement, or terminal media failure.\n"
+        "**Bot restart:** Dank Cinema room state is currently in memory, so a process restart ends "
+        "the live session and users must start a new one."
     )
 
 
@@ -837,8 +842,9 @@ def _room_embed(
             title="🍿 Dank Cinema",
             description=(
                 "**Choose how you want to watch.**\n"
-                "Start a shared **Watch Party** or an owner-only **Private Viewing** session. "
-                "Once a room exists, **Find Movie** becomes the main action."
+                f"Start a shared **Watch Party** or an invite-only **Private Session** for up to "
+                f"**{PRIVATE_VIEWER_LIMIT} viewers**. Once a room exists, **Find Movie** becomes "
+                "the main action."
             ),
             color=discord.Color.blurple(),
         )
@@ -848,8 +854,11 @@ def _room_embed(
             inline=False,
         )
         embed.add_field(
-            name="🔒 Watch Alone",
-            value="Owner-only room • no server ping • no voting clutter • same movie search and player",
+            name="🔒 Private Session",
+            value=(
+                f"Invite-only • up to {PRIVATE_VIEWER_LIMIT} total viewers • no server ping • "
+                "host-controlled • same synchronized player"
+            ),
             inline=False,
         )
         embed.set_footer(text=f"{_CINEMA_FOOTER} • choose a viewing mode")
@@ -877,7 +886,7 @@ def _room_embed(
     owner_active = owner_id in active
     embed = discord.Embed(
         title=(
-            "🔒 Dank Cinema • Private Viewing"
+            "🔒 Dank Cinema • Private Session"
             if private_mode
             else "🍿 Dank Cinema • Watch Party"
         ),
@@ -965,7 +974,7 @@ def _session_status_embed(
             title="📊 Dank Cinema • Session Status",
             description=(
                 "No Movie Night room is active in this channel. Return to Cinema Home "
-                "and choose **Watch Party** or **Private Viewing**."
+                "and choose **Watch Party** or **Private Session**."
             ),
             color=discord.Color.blurple(),
         )
@@ -980,7 +989,7 @@ def _session_status_embed(
         title="📊 Dank Cinema • Session Status",
         description=(
             f"Host: {host_label}\n"
-            f"Mode: **{'Private Viewing' if private_mode else 'Watch Party'}**\n"
+            f"Mode: **{'Private Session' if private_mode else 'Watch Party'}**\n"
             f"Playback: **{room.playback_state.title()}** • "
             f"Position: **{int(room.current_position())}s** • "
             f"Active viewers: **{len(active)}**"
@@ -989,7 +998,7 @@ def _session_status_embed(
     )
     embed.add_field(
         name="⏱️ Session timing",
-        value=_movie_night_lifecycle_text()[:1024],
+        value=_movie_night_lifecycle_text(room)[:1024],
         inline=False,
     )
     if room.queue:
