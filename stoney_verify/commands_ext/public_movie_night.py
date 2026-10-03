@@ -576,13 +576,13 @@ def _setup_embed(
         )
 
     embed.add_field(
-        name="6 • Dank Cinema providers",
+        name="6 • Movie Sources",
         value=(
             f"{'✅' if tmdb_catalog_ready() else '⚠️'} **Dank Catalog** • powered by TMDB "
             f"({'ready' if tmdb_catalog_ready() else 'bot token not configured'})\n"
             f"✅ **Dank Archive** • {INTERNET_ARCHIVE_SOURCE_LABEL}\n"
             f"✅ **Dank Direct** • magnet links + .torrent files\n"
-            f"🧩 **Provider Lab** • {ready['sources']} custom configured • {ready['enabled_sources']} enabled"
+            f"🎞️ **Movie Sources** • {ready['sources']} custom configured • {ready['enabled_sources']} enabled"
         ),
         inline=False,
     )
@@ -1063,7 +1063,7 @@ def _more_embed(
         embed.add_field(
             name="Staff",
             value=(
-                "⚙️ **Cinema Settings** • providers, setup diagnostics, notifications, runtime"
+                "⚙️ **Cinema Settings** • Movie Sources, setup diagnostics, notifications, runtime"
             ),
             inline=False,
         )
@@ -1094,8 +1094,8 @@ def _settings_embed(*, adult_content_enabled: bool = False) -> discord.Embed:
         inline=False,
     )
     embed.add_field(
-        name="🎞️ Media Sources",
-        value="Provider Deck • add/manage structured in-app providers and admin reference links",
+        name="🎞️ Movie Sources",
+        value="Search Providers • RSS Feeds • admin Reference Links",
         inline=False,
     )
     embed.add_field(
@@ -3478,11 +3478,11 @@ async def _start_or_join_room(
             return await _movie_hub_notice(
                 interaction,
                 (
-                    "ℹ️ A **Private Viewing** session is already active. End it before "
+                    "ℹ️ A **Private Session** is already active. End it before "
                     "starting a Watch Party."
                     if current_mode == "private"
                     else "ℹ️ A **Watch Party** is already active. End it before starting "
-                    "Private Viewing."
+                    "a Private Session."
                 ),
                 room=room,
             )
@@ -3548,8 +3548,9 @@ async def _start_or_join_room(
             )
 
     notice = (
-        "🔒 **Private Viewing started.** No Movie Night role ping was sent and "
-        "only you can join/control this room."
+        f"🔒 **Private Session started.** No Movie Night role ping was sent. "
+        f"You control the room and can invite up to **{PRIVATE_VIEWER_LIMIT - 1}** other viewers "
+        "from **More → Private Viewers**."
         if normalized_mode == "private"
         else announcement_notice
     )
@@ -3904,7 +3905,7 @@ class MovieNightSettingsView(_OwnedView):
             else discord.ButtonStyle.secondary
         )
 
-    @discord.ui.button(label="Provider Deck", emoji="🎞️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:settings:providers")
+    @discord.ui.button(label="Movie Sources", emoji="🎞️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:settings:providers")
     async def providers(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night_sources(interaction, replace_message=True)
@@ -4099,7 +4100,7 @@ class MovieNightHubView(_OwnedView):
         _ = button
         await _start_or_join_room(interaction, mode="watch_party")
 
-    @discord.ui.button(label="Watch Alone", emoji="🔒", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:hub:private")
+    @discord.ui.button(label="Start Private Session", emoji="🔒", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:hub:private")
     async def start_private(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _start_or_join_room(interaction, mode="private")
@@ -4111,7 +4112,7 @@ class MovieNightHubView(_OwnedView):
         if room is None:
             return await _movie_hub_notice(
                 interaction,
-                "❌ Start a Watch Party or Watch Alone session first.",
+                "❌ Start a Watch Party or Private Session first.",
             )
         get_movie_night_manager().join_room(
             room.room_id,
