@@ -220,4 +220,3 @@ def test_movie_night_player_labels_seed_leech_source() -> None:
     assert "Seeds / Leechers" in html
     assert "t.swarm_source" in html
     assert "t.leechers" in html
-
