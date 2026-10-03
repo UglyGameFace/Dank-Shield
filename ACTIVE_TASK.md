@@ -5,16 +5,16 @@
 **DANK-SHIELD-422 — Movie Night host handoff + active torrent continuity**
 
 Production baseline:
-`main@88ddc83ed07dd2eda8996ee5fa097dbe9fdf3460` (PR #421 merged; the invalid Cinema More-button emoji hotfix is green and deployed).
+`main@f87f2829b83b51f0c6e56a8cb8637881f052a163` (PR #423 merged; host handoff + torrent continuity exact-head CI green).
 
 Active branch:
-`fix/422-host-handoff-torrent-continuity`
+`fix/422-discord-viewer-presence`
 
 Issue:
 **#422 — Dank Cinema: host handoff and active torrent continuity**
 
 Status:
-**The user explicitly asked to implement the proposed host-transfer and playback-continuity repair after the #419 UI revamp. Production evidence also exposed `RuntimeError: invalid torrent handle used [libtorrent:20]` during active HTTP range playback. This task owns both authority continuity and the evidence-backed torrent lifecycle failure because both directly determine whether an already-running Movie Night survives the host leaving.**
+**PR #423 is merged. Production/mobile follow-up exposed a separate continuity bug inside the same Movie Night task: the short live-viewer heartbeat expires while a user is still working through Discord search/catalog/queue menus. The room is not deleted, but programming votes reject the stale user as inactive, the panel can show `Active now: 0`, and there was no explicit Rejoin control. This branch makes authenticated Discord Cinema actions renew presence without weakening the short Watch-page heartbeat used for sync/failover.**
 
 ## Outcome
 
@@ -26,6 +26,30 @@ Status:
 6. Private Viewing remains owner-only and cannot transfer.
 7. Active leased Movie Night torrents cannot be reclaimed by idle cleanup.
 8. A terminally invalid libtorrent handle becomes a controlled media-missing state rather than an unhandled HTTP traceback.
+
+## Production follow-up — Discord menu presence
+
+Observed production behavior:
+- host was adding movies to the queue;
+- Cinema panel fell from one active viewer to zero;
+- the next search failed with `Only active Movie Night viewers may start votes.`;
+- the room/queue still existed, but the panel offered no explicit way to rejoin.
+
+Root cause:
+- `MovieNightManager.viewer_ttl_seconds` defaults to **35 seconds**;
+- **Find Movie** renews presence when opening the modal, but a search modal can remain open for up to 300 seconds;
+- TMDB/catalog selection and provider search can also outlive the 35-second active-viewer window;
+- `_propose_movie_search_vote()` previously attempted vote admission without renewing the fresh Discord actor first;
+- the same short TTL is intentionally useful for Watch-page sync/quorum and should not simply be inflated to several minutes.
+
+Repair:
+- renew room presence immediately before Discord search-vote admission;
+- renew again after slow provider/catalog work before materializing candidates/releases;
+- renew on Movie Picks, candidate details, release picker, Queue, and More navigation;
+- show **Rejoin Movie Night** when a public-room panel owner is stale;
+- Rejoin restores active presence without deleting/recreating room, queue, host, media, or playback state;
+- label the compact room count as **Active now** and explain that heartbeat expiry does not delete the session;
+- joining an already-running room no longer unnecessarily re-runs launch-readiness checks.
 
 ## Architecture verified before edits
 
@@ -159,7 +183,7 @@ Still required:
 
 ## Next step
 
-Run exact-head CI for #422, patch only evidence-backed failures, merge when clean, then validate Pass Host and leased-torrent continuity in production.
+Run exact-head CI for the Discord-presence follow-up, patch only evidence-backed failures, merge when clean, then canary: leave the Cinema panel/search picker idle for more than 35 seconds, continue adding movies, verify the fresh Discord action renews presence and no search/queue vote rejects the user as inactive.
 
 
 ---
