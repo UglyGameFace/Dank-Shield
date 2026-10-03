@@ -40,6 +40,9 @@ class ViewerState:
     sync_ready: bool = True
     sync_ready_at: float = 0.0
     sync_target_position: float = 0.0
+    client_session_id: str = ""
+    sync_requested: bool = False
+    sync_requested_at: float = 0.0
 
     @property
     def buffered_bytes(self) -> int:
@@ -367,6 +370,8 @@ class MovieNightManager:
         buffered_until_seconds: float = 0.0,
         media_duration_seconds: float = 0.0,
         sync_buffer_target_seconds: float = 0.0,
+        client_session_id: str = "",
+        sync_requested: bool = False,
         now: Optional[float] = None,
     ) -> MovieNightRoom:
         room = self._require_room(room_id)
@@ -377,6 +382,32 @@ class MovieNightManager:
             viewer = ViewerState(user_id=uid, joined_at=current, last_seen=current)
             room.viewers[uid] = viewer
         viewer.last_seen = current
+
+        client_key = str(client_session_id or "").strip()[:96]
+        requires_sync_gesture = bool(
+            client_key
+            and uid != int(room.host_id)
+            and room.stream_token
+        )
+        if client_key and viewer.client_session_id != client_key:
+            viewer.client_session_id = client_key
+            if uid != int(room.host_id) and room.stream_token:
+                viewer.sync_ready = False
+                viewer.sync_ready_at = 0.0
+                viewer.sync_requested = False
+                viewer.sync_requested_at = 0.0
+                viewer.sync_target_position = room.current_position(current)
+
+        if (
+            bool(sync_requested)
+            and uid != int(room.host_id)
+            and room.stream_token
+        ):
+            if not viewer.sync_requested:
+                viewer.sync_target_position = room.current_position(current)
+                viewer.sync_requested_at = current
+            viewer.sync_requested = True
+
         viewer.position_seconds = max(0.0, float(position_seconds))
         viewer.byte_position = max(0, int(byte_position))
         viewer.buffered_until_byte = max(
@@ -408,7 +439,8 @@ class MovieNightManager:
             viewer.sync_ready_at = viewer.sync_ready_at or current
         elif uid != int(room.host_id) and not viewer.sync_ready:
             target = room.current_position(current)
-            viewer.sync_target_position = target
+            if not viewer.sync_requested:
+                viewer.sync_target_position = target
             drift = abs(float(viewer.position_seconds) - float(target))
             buffered_ahead = max(
                 0.0,
@@ -430,8 +462,13 @@ class MovieNightManager:
                     required_buffer,
                     max(1.0, remaining),
                 )
+            sync_intent_ok = bool(
+                viewer.sync_requested
+                or not requires_sync_gesture
+            )
             if (
-                drift <= self.late_join_sync_tolerance_seconds
+                sync_intent_ok
+                and drift <= self.late_join_sync_tolerance_seconds
                 and buffered_ahead >= required_buffer
             ):
                 viewer.sync_ready = True
@@ -896,6 +933,8 @@ class MovieNightManager:
         room.current_variant_id = str(variant_id or "")
         for uid, viewer in room.viewers.items():
             viewer.sync_target_position = 0.0
+            viewer.sync_requested = False
+            viewer.sync_requested_at = 0.0
             if int(uid) == int(room.host_id):
                 viewer.sync_ready = True
                 viewer.sync_ready_at = time.monotonic()
