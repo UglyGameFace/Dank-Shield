@@ -63,7 +63,7 @@ def test_movie_night_hub_and_admin_surfaces_are_progressively_disclosed() -> Non
     hub = movie_ui.MovieNightHubView(1)
     more = movie_ui.MovieNightMoreView(1, None, staff=False)
     staff_more = movie_ui.MovieNightMoreView(1, None, staff=True)
-    settings = movie_ui.MovieNightSettingsView(1)
+    settings = movie_ui.MovieNightSettingsView(1, adult_content_enabled=False)
     setup = movie_ui.MovieNightSetupView(1)
     sources = movie_ui.MovieNightSourcesView(1)
 
@@ -84,6 +84,7 @@ def test_movie_night_hub_and_admin_surfaces_are_progressively_disclosed() -> Non
         "Provider Deck",
         "Setup & Diagnostics",
         "Notifications",
+        "Adult Content: Off",
         "Session & Lifecycle",
         "Back to Cinema",
         "Close",
@@ -107,7 +108,7 @@ def test_movie_night_hub_and_admin_surfaces_are_progressively_disclosed() -> Non
 
     assert len(hub.children) <= 5
     assert len(more.children) <= 7
-    assert len(settings.children) <= 6
+    assert len(settings.children) <= 7
 
 
 
@@ -353,6 +354,61 @@ def test_provider_deck_custom_provider_field_stays_within_discord_limit() -> Non
     )
     assert len(str(custom.value)) <= 1024
     assert "more provider(s)" in str(custom.value)
+
+
+def test_cinema_settings_show_adult_content_state() -> None:
+    off = movie_ui._settings_embed(adult_content_enabled=False)
+    on = movie_ui._settings_embed(adult_content_enabled=True)
+
+    off_text = "\n".join(
+        f"{field.name}\n{field.value}" for field in off.fields
+    )
+    on_text = "\n".join(
+        f"{field.name}\n{field.value}" for field in on.fields
+    )
+
+    assert "Adult Content:** Off" in off_text
+    assert "Adult Content:** On" in on_text
+    assert "Direct magnets/.torrent files are not content-classified" in off_text
+    assert "Adult Content: Off" in _labels(
+        movie_ui.MovieNightSettingsView(1, adult_content_enabled=False)
+    )
+    assert "Adult Content: On" in _labels(
+        movie_ui.MovieNightSettingsView(1, adult_content_enabled=True)
+    )
+
+
+def test_adult_provider_filter_is_default_deny_for_explicit_labels() -> None:
+    safe = ResolvedMediaVariant(
+        title="Public Domain Movie",
+        source_id="safe",
+        source_label="Safe",
+        source_ref="magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        file_size=1,
+        seeds=1,
+        leechers=0,
+        peers=1,
+        metadata={"source_reported": {"category": "Movies"}},
+    )
+    adult = ResolvedMediaVariant(
+        title="Example XXX Release",
+        source_id="adult",
+        source_label="Adult",
+        source_ref="magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        file_size=1,
+        seeds=1,
+        leechers=0,
+        peers=1,
+        metadata={"source_reported": {"category": "XXX"}},
+    )
+    outcome = MediaSourceSearchOutcome(variants=(safe, adult))
+
+    filtered = movie_ui._filter_adult_provider_results(outcome, enabled=False)
+    assert filtered.variants == (safe,)
+    assert "Filtered 1 explicit adult provider release" in filtered.errors[-1]
+
+    unfiltered = movie_ui._filter_adult_provider_results(outcome, enabled=True)
+    assert unfiltered is outcome
 
 
 def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -> None:
