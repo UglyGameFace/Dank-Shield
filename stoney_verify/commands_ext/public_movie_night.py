@@ -805,7 +805,7 @@ def _movie_night_lifecycle_text(room: Optional[MovieNightRoom] = None) -> str:
         "**Attached media:** stays leased to the room while the room is alive. It is released on "
         f"{end_label}, automatic empty-room cleanup, replacement, or terminal media failure.\n"
         "**Bot restart:** Dank Cinema room state is currently in memory, so a process restart ends "
-        "the live session and users must start a new one."
+        "the live room/session and users must start a new one."
     )
 
 
