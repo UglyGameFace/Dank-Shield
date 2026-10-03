@@ -929,6 +929,58 @@ def test_new_client_session_invalidates_stale_viewer_sync_until_requested() -> N
     assert 20 not in manager.buffer_quorum_viewers(room, now=110.0)
 
 
+def test_same_client_session_refresh_preserves_viewer_sync_state() -> None:
+    manager = MovieNightManager(
+        viewer_ttl_seconds=120,
+        late_join_min_buffer_seconds=8,
+        late_join_max_buffer_seconds=15,
+        late_join_sync_tolerance_seconds=2.5,
+    )
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="torrent-token",
+        now=100.0,
+    )
+    manager.apply_host_action(
+        room.room_id,
+        host_id=10,
+        action="resume",
+        now=100.0,
+    )
+    manager.join_room(room.room_id, user_id=20, now=101.0)
+
+    viewer = room.viewers[20]
+    viewer.client_session_id = "persisted-page-session"
+    viewer.sync_requested = True
+    viewer.sync_requested_at = 101.0
+    viewer.sync_ready = True
+    viewer.sync_ready_at = 101.0
+
+    target = room.current_position(110.0)
+    manager.heartbeat(
+        room.room_id,
+        user_id=20,
+        position_seconds=target,
+        byte_position=1000,
+        buffered_until_byte=20_000,
+        paused=False,
+        buffered_until_seconds=target + 20,
+        media_duration_seconds=7200,
+        sync_buffer_target_seconds=8,
+        client_session_id="persisted-page-session",
+        sync_requested=True,
+        now=110.0,
+    )
+
+    assert viewer.client_session_id == "persisted-page-session"
+    assert viewer.sync_requested is True
+    assert viewer.sync_ready is True
+    assert viewer.sync_ready_at == 101.0
+    assert 20 in manager.buffer_quorum_viewers(room, now=110.0)
+
+
 def test_session_aware_viewer_requires_sync_request_before_graduating() -> None:
     manager = MovieNightManager(
         viewer_ttl_seconds=120,

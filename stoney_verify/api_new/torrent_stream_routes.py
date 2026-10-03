@@ -100,6 +100,7 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
     await response.prepare(request)
 
     cursor = start
+    client_disconnected = False
     try:
         while cursor <= end:
             chunk_end = min(end, cursor + _STREAM_CHUNK_BYTES - 1)
@@ -123,13 +124,18 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
                 break
             await response.write(payload)
             cursor += len(payload)
-    except (ConnectionResetError, asyncio.CancelledError):
-        pass
+    except (ConnectionError, asyncio.CancelledError):
+        # Browser reloads, seeks, tab closes, and mobile media-source swaps all
+        # legitimately abandon an in-flight Range request. aiohttp may surface
+        # those as ConnectionError rather than the narrower ConnectionResetError.
+        # Treat that as a normal client disconnect instead of an application error.
+        client_disconnected = True
     finally:
-        try:
-            await response.write_eof()
-        except Exception:
-            pass
+        if not client_disconnected:
+            try:
+                await response.write_eof()
+            except ConnectionError:
+                pass
     return response
 
 

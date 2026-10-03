@@ -2,276 +2,129 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-408 — Make Dank Cinema movie search actually consume structured torrent providers**
+**DANK-SHIELD-408 — Dank Cinema provider playback reliability through real production canaries**
 
 Production baseline:
-`main@ebe078ac5ea9274f91aa291f0901e77ff2260a30` (PR #412 merged).
+`main@5d77eef9d944b2fe6c86eac4a6368297e3e16092` (PR #414 merged).
 
-Active validation branch:
-`test/408-release-picker-dispatch`
+Active branch:
+`fix/408-refresh-stream-reconnect`
 
 Status:
-**PR #412's first-release correction is merged and passed every required workflow. A new Android production canary exposed a same-flow interaction-lifecycle defect: when a private Dank Cinema menu expires or belongs to an older bot process, the global stale-menu guard replaces it with /dank Home / Control Center instead of reopening Dank Cinema. The active PR #413 now fixes that routing and strengthens release #1 dispatch coverage. Live release #1 -> detail -> torrent -> Watch playback remains deferred until the owner tests it.**
+**A new production Android canary exposed refresh/reconnect breakage in the Movie Night web player. The exact aiohttp logs show abandoned media Range responses raising `ConnectionError: Connection lost` from `response.write(payload)`. The browser refresh also created a brand-new Movie Night client/consumer identity, which reset viewer sync state and adaptive torrent-consumer state. The old media error handler then reloaded the stream on a fixed timer, amplifying reconnect churn while the torrent was still buffering. Remediation is implemented on this branch; exact-head CI and live refresh/playback validation remain required.**
 
 ## Production evidence
 
-Android production evidence after PR #412:
-- an expired/stale private Dank Cinema menu was clicked;
-- the global interaction guard correctly detected that the ViewStore no longer owned the component;
-- instead of returning to Dank Cinema, the generic fallback replaced the stale movie message with the full Dank Shield Control Center;
-- the user-visible message said the private menu expired and that Control Center had been refreshed.
+User-visible symptoms:
+- refreshing the Watch page while a movie is loading makes the stream appear to lose its connection;
+- seed/leech display falls to `0 / 0` even though the selected release already had provider-reported swarm health;
+- the video repeatedly looks like it will start, then errors/crashes/reloads.
 
-Root cause:
-`interaction_guard._recover_unowned_private_component()` had one feature-specific recovery route for Community Hub, but **every other** stale private component fell through to `replace_with_compact_dank_home()`. Movie Night therefore had no stale-menu recovery owner.
+Runtime evidence from Discloud:
+- repeated `ConnectionResetError: [Errno 104] Connection reset by peer`;
+- aiohttp then raises `ConnectionError: Connection lost`;
+- the unhandled exception is emitted from `stoney_verify/api_new/torrent_stream_routes.py` at `await response.write(payload)`;
+- several abandoned media requests arrive within seconds of the refresh/retry cycle;
+- the core bot remains healthy at roughly 471 MiB RSS, so this is not a process-memory crash.
 
-Current correction on PR #413:
-- recognize new Movie Night controls through the `dank:movie:` component namespace;
-- recognize already-deployed/legacy Movie Night messages from their Dank Cinema / Dank Provider embed identity, because their old discord.py-generated component IDs are opaque;
-- when the stale component is definitely Movie Night-owned, immediately reopen `open_movie_night(..., replace_message=True)` in the same ephemeral message;
-- never execute the stale state-changing action;
-- only unknown private surfaces keep the generic Control Center fallback;
-- add explicit `dank:movie:` custom IDs to native Movie Night buttons so future stale messages remain attributable even when the message has no embed;
-- preserve generic picker routing and current Movie Night state;
-- update shared lifecycle text so product guidance no longer falsely says every stale private menu goes to Control Center.
+## Root cause / execution path
 
-Regression coverage now includes:
-- namespaced stale Movie Night control -> fresh Dank Cinema, not Dank Home;
-- legacy opaque Movie Night control identified by existing Dank Cinema embed -> fresh Dank Cinema;
-- known Movie Night recovery skips the generic grace delay;
-- core Movie Night button IDs remain in the `dank:movie:` namespace;
-- release #1 remains unselected by default and dispatches through the canonical picker callback.
+Refresh path:
+`Watch page reload -> new CLIENT_SESSION_ID -> heartbeat() -> ViewerState.client_session_id changes -> viewer sync is intentionally demoted -> stream_consumer changes -> newly signed media URL/consumer playback state -> old browser Range requests are abandoned`.
 
-The provider path now returns real ranked releases in production. The Android canary showed eight releases for the selected movie, including live swarm counts and sizes.
+Server path:
+`<video> Range request -> torrent_stream() -> wait_range() -> read_range() -> response.write(payload)`.
 
-Remaining canary failure:
-- the first-ranked release is rendered as the select menu's default/current value;
-- selecting other releases works;
-- tapping the already-default first release on Discord mobile does not dispatch the intended release action.
+The route only caught `ConnectionResetError` and `CancelledError`, but the observed aiohttp write failure is the broader built-in `ConnectionError`. That caused normal browser abandonment during reload/seek/source replacement to be logged as an application failure.
 
-Root cause in the real execution path:
-`_open_release_picker() -> candidate.selected_variant_id -> DankChoice(default=True) -> Discord select renders that option already selected`.
+Client retry path:
+`video error -> fixed 2.5 second setTimeout -> assign src again -> video.load()`.
 
-`MovieNightManager.add_variant()` assigns `candidate.selected_variant_id` to the first inserted release. The release picker then marks that release as the Discord select default. This picker is an **action picker**, not a state editor, so preselecting an option makes the top release effectively non-actionable on clients that do not submit an unchanged default selection.
+Repeated media errors could therefore create multiple source resets while torrent pieces were still arriving.
 
-Focused correction:
-- keep `candidate.selected_variant_id` semantics intact for Movie Night state;
-- do not mark any release-picker option as a Discord default;
-- preserve ranking/order and all other picker behavior;
-- regression-test that even the first-ranked release renders with `default=False`.
+Swarm display path:
+`_state_payload() -> torrent_manager.status(session)` used only instantaneous libtorrent counts. During transient reconnect/warm-up, live counts can be zero even though the selected provider release already carries known seed/leech/peer counts.
 
-The owner configured ApiBay as an enabled **In-App Provider** using:
-`https://apibay.org/q.php?q={query}`.
+## Changes implemented
 
-Provider Deck showed it enabled, but searching a catalog movie still reported:
-- catalog match found;
-- releases: 0;
-- no connected playback provider returned a release.
+### Stable refresh identity
 
-The owner also wants reusable support for other structured torrent sources, including static feeds such as:
-`https://fosstorrents.com/feed/torrents.xml`.
+- Persist the Movie Night client session ID in `sessionStorage`, keyed by room and Discord user.
+- A normal reload in the same tab reuses the same client/consumer identity instead of presenting as a brand-new viewer session.
+- Existing server behavior for genuinely new tabs/sessions remains intact: a truly new client session still requires late-join sync qualification.
+- This preserves the keyed torrent consumer's adaptive playback history across refreshes.
 
-## Root causes and audit findings
+### Clean abandoned Range handling
 
-1. **Info-hash-only JSON rows were discarded.**
-   ApiBay-style responses provide `name`, `info_hash`, `seeders`, `leechers`, and `size`, but no ready-made magnet URL. The old normalizer therefore produced zero releases.
+- `torrent_stream()` now treats built-in `ConnectionError` plus `CancelledError` as normal client disconnects.
+- Reload, seek, tab close, and media-source replacement can abandon an HTTP Range request without dumping an aiohttp traceback.
+- The canonical torrent session is not removed or restarted because a single browser connection disappears.
 
-2. **The supposed API/feed path was still JSON-only.**
-   `_search_one()` requested JSON and decoded JSON only, so RSS/Atom/Torznab feeds could never become releases.
+### Controlled media recovery
 
-3. **The first XML implementation contained a runtime bug.**
-   It attempted `.casefold()` on `bytes`. The audit caught and replaced that before merge; XML preflight now uses bounded byte-safe checks.
+- Replaced the fixed unconditional 2.5-second `video.src = ...; video.load()` loop.
+- Only one retry timer may exist at a time.
+- Retry delay backs off up to 15 seconds while torrent pieces are still unavailable.
+- Before retrying media, the page refreshes Movie Night state.
+- `waiting` and `stalled` events show buffering status without immediately destroying/recreating the media source.
+- `loadedmetadata` / `canplay` reset retry backoff.
 
-4. **Common provider shapes were still too narrow.**
-   The audit found missing single-object/keyed-object JSON forms, camelCase aliases, path-based query placeholders, `query_term`-style search parameters, Torznab attributes, BitTorrent v2 hashes, and static-feed URLs with query metadata.
+### Swarm display continuity
 
-5. **Movie-level detail URLs could masquerade as releases.**
-   APIs that return a movie `url` plus nested `torrents` could materialize the detail page as a fake release. Nested real torrent variants now win and the parent detail URL is excluded.
+- Movie Night now distinguishes live libtorrent swarm counts from provider-reported release counts.
+- If live counts are nonzero, the page shows the live seed/leech values.
+- If libtorrent temporarily reports zero during reconnect/warm-up, the selected release's provider seed/leech/peer values are used as a transparent fallback.
+- UI now correctly labels the stat **Seeds / Leechers** and indicates `live` or `provider` source.
 
-6. **Catalog matching was too literal.**
-   Release names such as `The End of Oak Street 2026 1080p WEB-DL` did not equal the selected TMDB title exactly, so they could become separate movie candidates instead of releases under the chosen movie. Matching now uses normalized title/year identity and provider TMDB IDs when supplied.
+## Validation added
 
-7. **Provider failures were too opaque.**
-   An enabled provider returning zero usable rows looked identical to a provider never being queried. Search now records provider-level zero-result diagnostics and surfaces them in the no-release response.
+- Web-player contract asserts refresh uses `sessionStorage` for client identity.
+- Web-player contract asserts controlled retry/backoff is present and the old fixed reload loop is gone.
+- Swarm fallback test verifies a selected release with 153 seeds / 6 leechers remains visible when live status temporarily reports zero.
+- Swarm test verifies nonzero live counts override provider fallback.
+- Movie Night manager regression verifies an unchanged client session ID preserves `sync_ready` and `sync_requested` state.
+- Existing new-client regression still proves a genuinely different client session demotes stale sync state.
+- Torrent runtime static contract now requires broad `ConnectionError` handling for abandoned stream writes.
 
-8. **Hash-only magnets need the existing DHT path.**
-   The canonical libtorrent session already enables DHT. Regression coverage now locks that behavior, and magnet identity validation covers v1, v2, and hybrid torrents.
-
-9. **Provider media refs needed another credential boundary.**
-   HTTPS media refs containing embedded username/password credentials are now rejected before they can become releases.
-
-## Execution path verified
-
-Primary search:
-`/movie -> Find Movie -> search vote -> _execute_search_vote() -> search_movie_sources() -> search_custom_media_sources() -> _search_one() -> structured normalization -> catalog filter/grouping -> ResolvedMediaVariant -> Choose Release -> canonical torrent runtime`.
-
-Provider setup:
-`Provider Deck -> Add In-App Provider -> prepare_example_search_url() -> probe_custom_media_source() -> _search_one() -> canonical guild provider registry`.
-
-Playback:
-- magnet refs -> `TorrentMediaManager.start_magnet()`;
-- HTTPS torrent refs -> bounded `fetch_torrent_metadata()` -> `start_torrent_bytes()`;
-- no second torrent/media runtime was added.
-
-## Implemented provider contract
-
-### JSON APIs
-
-Supports:
-- top-level lists;
-- wrappers such as `results`, `searchResults`, `items`, `releases`, `variants`, `torrents`, `movies`, `entries`, `data`, `response`, and `payload`;
-- single result objects;
-- ID-keyed result objects;
-- nested movie/language/quality torrent variants;
-- snake_case and common camelCase field names;
-- strong playable refs such as source/magnet/torrent/download URLs;
-- v1 aliases `info_hash`, `infohash`, `infoHash`, and generic `hash`;
-- v2 aliases `info_hash_v2`, `infohash_v2`, `infoHashV2`, `btmh`, and 64-hex generic `hash`;
-- size, seed, leech, peer, quality, codec, language, category, release-name, and movie-ID metadata.
-
-Valid v1/v2 hashes become canonical magnets. Invalid and zero-hash sentinels are rejected.
-
-Generic `url` is deliberately lower priority than explicit playable refs and hashes so ordinary catalog/detail pages do not steal precedence.
-
-### RSS / Atom / Torznab
-
-Supports:
-- RSS `<item>` and Atom `<entry>`;
-- `.torrent` enclosures;
-- Atom enclosure links;
-- magnet elements;
-- torrent namespace info-hash/magnet/size/swarm fields;
-- Torznab/Newznab-style `attr name=... value=...` fields including info-hash, seed/leech health, size, and movie identity;
-- local title filtering for static feeds.
-
-Static `.xml`, `.rss`, `.atom`, `/feed`, `/rss`, `/atom`, and recognized `format/output=rss|atom|xml` endpoints are not mutated with an invented `?q=`.
-
-HTML is not scraped. XML with DOCTYPE/ENTITY declarations is rejected.
-
-### Search URL compatibility
-
-Automatic setup recognizes common query parameters including:
-`q`, `query`, `query_term`, `search`, `search_query`, `search_term`, `term`, `keyword`, `keywords`, `title`, and `s`.
-
-Admins can still provide `{query}` explicitly. Query placeholders in URL paths use path-safe percent encoding; query-string placeholders use query encoding.
-
-### BitTorrent runtime compatibility
-
-- strict valid BTIH hex/base32 identity;
-- BitTorrent v2 BTMH identity;
-- hybrid magnets prefer v1 identity for session reuse;
-- zero/invalid hashes fail early;
-- DHT remains enabled for hash-only magnets;
-- existing torrent admission, disk, memory, metadata, session reuse, range streaming, cleanup, and signed playback behavior remain authoritative.
-
-## Safety / resource bounds
-
-Preserved or strengthened:
-- HTTPS-only custom provider requests;
-- embedded-credential rejection;
-- public-network DNS/IP enforcement;
-- redirect destination revalidation;
-- response-size bounds;
-- API payloads remain capped at 1 MiB;
-- recognized structured feeds are capped at 8 MiB;
-- feed parsing rejects HTML, DTD, and ENTITY declarations;
-- max result counts and nested traversal depths remain bounded;
-- per-search provider concurrency remains bounded;
-- torrent metadata fetch remains independently bounded;
-- no provider HTML scraping;
-- no provider-brand-specific parser;
-- no hardcoded guild/provider IDs.
-
-## Regression coverage added
-
-Coverage now includes:
-- ApiBay-style `info_hash` -> magnet;
-- v1 hex/base32 and v2 BTMH hashes;
-- zero/invalid hash rejection;
-- hybrid/v2 torrent identities;
-- DHT enabled for hash-only magnets;
-- explicit ref precedence;
-- generic detail URL vs nested torrent separation;
-- single-object, ID-keyed, nested, snake_case, and camelCase JSON;
-- YTS-style nested torrent structure;
-- RSS torrent enclosures;
-- Atom enclosures;
-- torrent namespace extensions;
-- Torznab attributes;
-- static feed URL handling;
-- path/query placeholder encoding;
-- `query_term` URL preparation;
-- HTML/DTD/ENTITY rejection;
-- provider response budgets;
-- credential-bearing media-ref rejection;
-- provider zero-result diagnostics;
-- release-title/year catalog grouping;
-- TMDB-ID-aware catalog grouping/filtering;
-- unrelated provider-result filtering;
-- Provider Deck structured-format guidance.
-
-## Validation state
-
-PR #412 exact head `957293c3ebddcb3f030e576209d8e42cf11665d8` passed all required workflows before merge:
-- Dank Shield CI;
-- Profile Runtime Diagnostics;
-- Dank Design Regression CI;
-- Application Command Size Diagnostics;
-- Ticket Owner Emergency Override.
-
-Merged production source is `main@ebe078ac5ea9274f91aa291f0901e77ff2260a30`.
-
-Post-merge inspection confirms:
-- `_release_picker_choices()` sets every release option to `default=False`;
-- `_open_release_picker()` uses that helper and no longer references `candidate.selected_variant_id` for Discord select defaults;
-- no `default=True` remains in the Movie Night public UI;
-- no duplicate release-picker implementation was found on current `main`;
-- the regression test verifies the first two ranked releases both render unselected;
-- the active validation branch adds a direct callback-dispatch regression proving the first-ranked value reaches the picker action.
-
-Remaining validation is live-only: deploy/current production must confirm Android can select release #1 and continue through release detail -> torrent start -> Watch playback. The owner explicitly deferred that canary until later.
-
-## Compatibility and deliberate boundaries
+## Compatibility / cleanup
 
 Preserved:
-- existing provider registry schema and `provider_type=json` storage;
-- existing saved ApiBay provider should begin working after deploy without re-adding it;
-- TMDB/JustWatch catalog metadata;
-- Internet Archive Feature Films;
-- direct magnet/.torrent input;
-- Provider Deck management;
-- no external-browser fallback in primary Movie Search.
+- current signed Movie Night URLs and 6-hour watch-link expiry;
+- per-user/per-page stream signatures;
+- host controls and viewer Tap to Sync rules;
+- late-join buffer qualification;
+- torrent session reuse and room leases;
+- adaptive range prioritization;
+- provider search/ranking;
+- stale-menu Movie Night recovery from PR #414.
 
-Deliberate boundaries:
-- arbitrary HTML torrent sites are not scraped;
-- POST-only APIs are not auto-adapted from a pasted URL;
-- APIs requiring secret Bearer/custom-header authentication are not treated as safely supported by the current URL-only guild provider model;
-- real DHT reachability and provider availability depend on production networking and the external provider, so live canaries remain mandatory.
+No extra torrent runtime, reconnect daemon, retry worker, or duplicate streaming implementation was added.
 
 ## Blockers / risks
 
-The implementation and CI gates are complete for the release-picker correction, but the task is **not closed** because the owner deferred the final Android canary.
-
-Production evidence already confirms ApiBay/provider search is returning ranked releases with swarm data. Still unverified after PR #412:
-1. release #1 can be selected on Android;
-2. release #1 opens the release detail/action surface;
-3. its torrent metadata/download starts successfully;
-4. the Watch path plays it and remains synchronized.
-
-Do not close issue #408 or start a separate implementation task until that canary is completed, unless the user explicitly uses the required FORCE SWITCH syntax.
+Still required before completion:
+1. exact-head targeted + full CI;
+2. deploy current PR head;
+3. start a known seeded movie;
+4. refresh the Watch page while it is still buffering;
+5. confirm the same viewer reconnects without losing sync identity;
+6. confirm seed/leech display remains meaningful instead of transient `0 / 0`;
+7. confirm old abandoned Range requests no longer emit `ConnectionError: Connection lost` tracebacks;
+8. confirm video eventually reaches playable state without reload thrash;
+9. complete the existing release #1 -> detail -> torrent -> Watch playback canary.
 
 ## Backlog
 
-- **XXX/adult movie visibility admin setting (backlogged, not active):** add a guild-scoped admin control to enable or disable adult/XXX movie results. This is a separate feature and will not be investigated or implemented until the active #408 release-selection canary is complete. It must eventually be enforced consistently across catalog search and connected provider results, not just hidden in one UI surface.
+- **XXX/adult movie visibility admin setting:** guild-scoped enable/disable control across catalog and connected provider results.
+- **Unattended-host Movie Ready announcement + coherent waiting timeout:** announce only after media is prepared, preserve paused-at-zero waiting state, and align room/media lifetime.
+- **20-viewer capacity validation/hardening:** sustained range-stream load, bandwidth, late join, RAM, and proxy behavior.
 
 Unrelated Dank Shield, Minecraft, Unity, Idle Grow, Captions, AntiNuke, and other work remains outside this single active task.
 
 ## Next step
 
-Validate PR #413 on its new exact head with the stale Dank Cinema recovery correction and first-release dispatch regressions. Patch only evidence-backed failures inside #408. After CI is green, merge/deploy, then Android-canary both paths:
-1. let/reproduce a Dank Cinema private menu becoming stale and confirm clicking it refreshes **Dank Cinema in place**, never /dank Home;
-2. select release #1 -> open release detail -> start media -> Watch playback.
+Open the focused refresh/reconnect PR, run exact-head CI, patch only evidence-backed failures, then deploy and repeat the refresh-while-buffering production canary before closing #408.
 
-Do not start the backlogged XXX/adult-content setting or 20-viewer capacity work without the required FORCE SWITCH syntax while #408 remains active.
 
 ---
 

@@ -160,3 +160,113 @@ def test_movie_night_stream_reloads_when_signed_consumer_changes() -> None:
     assert 'const streamConsumer=String(s.stream_consumer||"")' in html
     assert 'streamConsumer!==lastStreamConsumer' in html
     assert 'lastStreamConsumer=streamConsumer' in html
+
+
+def test_movie_night_refresh_keeps_same_client_session_and_backoff_retry() -> None:
+    html = movie_night_web._watch_html(
+        "room-refresh",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert "window.sessionStorage.getItem(key)" in html
+    assert "window.sessionStorage.setItem(key,created)" in html
+    assert 'const CLIENT_SESSION_ID=loadClientSessionId();' in html
+    assert "function scheduleStreamRetry()" in html
+    assert "streamRetryTimer!==null" in html
+    assert "Math.min(15000,2500*Math.pow(1.6,step))" in html
+    assert 'video.addEventListener("waiting"' in html
+    assert 'video.addEventListener("stalled"' in html
+    assert 'setTimeout(()=>{{ video.src=lastState.stream_url; video.load(); }},2500);' not in html
+
+
+def test_swarm_display_falls_back_to_selected_release_when_live_swarm_is_transiently_zero() -> None:
+    class _Variant:
+        swarm_health = {
+            "seeds": 153,
+            "leechers": 6,
+            "peers": 159,
+        }
+
+    fallback = movie_night_web._swarm_display(
+        {"seeds": 0, "leechers": 0, "peers": 0},
+        _Variant(),
+    )
+    assert fallback == {
+        "seeds": 153,
+        "leechers": 6,
+        "peers": 159,
+        "source": "provider",
+    }
+
+    live = movie_night_web._swarm_display(
+        {"seeds": 11, "leechers": 3, "peers": 14},
+        _Variant(),
+    )
+    assert live == {
+        "seeds": 11,
+        "leechers": 3,
+        "peers": 14,
+        "source": "live",
+    }
+
+
+def test_movie_night_player_labels_seed_leech_source() -> None:
+    html = movie_night_web._watch_html(
+        "room-swarm",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+    assert "Seeds / Leechers" in html
+    assert "t.swarm_source" in html
+    assert "t.leechers" in html
+
+
+def test_same_session_refresh_warmup_preserves_existing_viewer_telemetry() -> None:
+    viewer = type(
+        "Viewer",
+        (),
+        {
+            "client_session_id": "same-tab",
+            "position_seconds": 321.5,
+            "buffered_until_seconds": 339.0,
+            "media_duration_seconds": 7200.0,
+            "paused": False,
+        },
+    )()
+
+    result = movie_night_web._preserve_refresh_telemetry(
+        viewer,
+        position=0.0,
+        duration=0.0,
+        buffered=0.0,
+        paused=True,
+        client_session_id="same-tab",
+        has_stream=True,
+    )
+    assert result == (321.5, 7200.0, 339.0, False, True)
+
+
+def test_new_session_refresh_warmup_does_not_inherit_old_viewer_telemetry() -> None:
+    viewer = type(
+        "Viewer",
+        (),
+        {
+            "client_session_id": "old-tab",
+            "position_seconds": 321.5,
+            "buffered_until_seconds": 339.0,
+            "media_duration_seconds": 7200.0,
+            "paused": False,
+        },
+    )()
+
+    result = movie_night_web._preserve_refresh_telemetry(
+        viewer,
+        position=0.0,
+        duration=0.0,
+        buffered=0.0,
+        paused=True,
+        client_session_id="new-tab",
+        has_stream=True,
+    )
+    assert result == (0.0, 0.0, 0.0, True, False)

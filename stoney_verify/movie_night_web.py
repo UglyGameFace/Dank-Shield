@@ -115,6 +115,49 @@ def _open_vote(room: MovieNightRoom) -> Optional[dict[str, Any]]:
     }
 
 
+def _swarm_display(torrent_status: dict[str, Any], variant: Any) -> dict[str, Any]:
+    live_seeds = max(0, int(torrent_status.get("seeds", 0) or 0))
+    live_peers = max(0, int(torrent_status.get("peers", 0) or 0))
+    live_leechers = max(
+        0,
+        int(
+            torrent_status.get(
+                "leechers",
+                max(0, live_peers - live_seeds),
+            )
+            or 0
+        ),
+    )
+    if live_seeds or live_peers or live_leechers:
+        return {
+            "seeds": live_seeds,
+            "leechers": live_leechers,
+            "peers": max(live_peers, live_seeds + live_leechers),
+            "source": "live",
+        }
+
+    if variant is not None:
+        try:
+            health = dict(variant.swarm_health)
+        except Exception:
+            health = {}
+        reported_seeds = max(0, int(health.get("seeds", 0) or 0))
+        reported_leechers = max(0, int(health.get("leechers", 0) or 0))
+        reported_peers = max(
+            reported_seeds + reported_leechers,
+            int(health.get("peers", 0) or 0),
+        )
+        if reported_seeds or reported_peers or reported_leechers:
+            return {
+                "seeds": reported_seeds,
+                "leechers": reported_leechers,
+                "peers": reported_peers,
+                "source": "provider",
+            }
+
+    return {"seeds": 0, "leechers": 0, "peers": 0, "source": ""}
+
+
 async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     movie_manager = get_movie_night_manager()
     torrent_manager = get_torrent_manager()
@@ -153,6 +196,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         else ""
     )
     torrent_status = torrent_manager.status(session) if session is not None else {}
+    swarm = _swarm_display(torrent_status, variant)
     sync_ready = bool(
         int(user_id) == int(room.host_id)
         or (viewer is not None and viewer.sync_ready)
@@ -201,8 +245,10 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
             "downloaded": torrent_status.get("downloaded", 0),
             "progress": torrent_status.get("progress", 0.0),
             "download_rate": torrent_status.get("download_rate", 0),
-            "peers": torrent_status.get("peers", 0),
-            "seeds": torrent_status.get("seeds", 0),
+            "peers": swarm["peers"],
+            "seeds": swarm["seeds"],
+            "leechers": swarm["leechers"],
+            "swarm_source": swarm["source"],
             "buffer": torrent_status.get("buffer", {}),
         },
         "open_vote": _open_vote(room),
@@ -220,6 +266,48 @@ def _float(value: Any, default: float = 0.0) -> float:
         return max(0.0, float(value))
     except Exception:
         return float(default)
+
+
+def _preserve_refresh_telemetry(
+    viewer: Any,
+    *,
+    position: float,
+    duration: float,
+    buffered: float,
+    paused: bool,
+    client_session_id: str,
+    has_stream: bool,
+) -> tuple[float, float, float, bool, bool]:
+    same_client = bool(
+        viewer is not None
+        and client_session_id
+        and str(getattr(viewer, "client_session_id", "") or "") == client_session_id
+    )
+    previous_duration = float(getattr(viewer, "media_duration_seconds", 0.0) or 0.0)
+    warming_after_refresh = bool(
+        has_stream
+        and same_client
+        and duration <= 0.0
+        and previous_duration > 0.0
+    )
+    if not warming_after_refresh:
+        return position, duration, buffered, paused, False
+
+    previous_position = max(
+        0.0,
+        float(getattr(viewer, "position_seconds", position) or 0.0),
+    )
+    previous_buffered = max(
+        previous_position,
+        float(getattr(viewer, "buffered_until_seconds", previous_position) or 0.0),
+    )
+    return (
+        previous_position,
+        previous_duration,
+        previous_buffered,
+        bool(getattr(viewer, "paused", paused)),
+        True,
+    )
 
 
 async def movie_night_heartbeat(request: web.Request) -> web.Response:
@@ -244,6 +332,15 @@ async def movie_night_heartbeat(request: web.Request) -> web.Response:
     movie_manager = get_movie_night_manager()
     session = await torrent_manager.get(room.stream_token) if room.stream_token else None
     viewer_before = room.viewers.get(int(uid))
+    position, duration, buffered, paused, refresh_warmup = _preserve_refresh_telemetry(
+        viewer_before,
+        position=position,
+        duration=duration,
+        buffered=buffered,
+        paused=paused,
+        client_session_id=client_session_id,
+        has_stream=session is not None,
+    )
     joining = bool(
         session is not None
         and int(uid) != int(room.host_id)
@@ -253,10 +350,17 @@ async def movie_night_heartbeat(request: web.Request) -> web.Response:
     byte_position = 0
     buffered_byte = 0
     sync_buffer_target_seconds = 0.0
-    if session is not None and duration > 0:
+    if session is not None and refresh_warmup and viewer_before is not None:
+        byte_position = max(0, int(viewer_before.byte_position))
+        buffered_byte = max(
+            byte_position,
+            int(viewer_before.buffered_until_byte),
+        )
+    elif session is not None and duration > 0:
         byte_position = int(min(1.0, position / duration) * session.file_size)
         buffered_byte = int(min(1.0, buffered / duration) * session.file_size)
 
+    if session is not None and duration > 0:
         if joining:
             target_seconds = max(0.0, room.current_position())
             target_byte = int(
@@ -425,7 +529,7 @@ small {{ color:#8994aa; }}
     <div class="stat"><b>Room</b><span id="state">—</span></div>
     <div class="stat"><b>Viewers</b><span id="viewers">0</span></div>
     <div class="stat"><b>Torrent</b><span id="progress">0%</span></div>
-    <div class="stat"><b>Seeds / Peers</b><span id="peers">0 / 0</span></div>
+    <div class="stat"><b>Seeds / Leechers</b><span id="peers">0 / 0</span></div>
     <div class="stat"><b>Buffer target</b><span id="buffer">—</span></div>
   </div>
 </section>
@@ -445,6 +549,9 @@ let syncGestureGranted=false;
 let joinTarget=null;
 let lastJoinRetargetAt=0;
 let lastHardSyncSeekAt=0;
+let streamRetryTimer=null;
+let streamRetryAttempt=0;
+let attachedStreamUrl="";
 const SOFT_DRIFT_START=0.35;
 const SOFT_DRIFT_STOP=0.12;
 const HARD_DRIFT_SECONDS=5.0;
@@ -459,7 +566,19 @@ function makeClientSessionId() {{
   }} catch(_) {{}}
   return String(Date.now())+"-"+Math.random().toString(36).slice(2);
 }}
-const CLIENT_SESSION_ID=makeClientSessionId();
+function loadClientSessionId() {{
+  const key="dank-movie-client:"+BOOT.roomId+":"+BOOT.uid;
+  try {{
+    const existing=window.sessionStorage.getItem(key);
+    if(existing && existing.length>=8 && existing.length<=96) return existing;
+    const created=makeClientSessionId();
+    window.sessionStorage.setItem(key,created);
+    return created;
+  }} catch(_) {{
+    return makeClientSessionId();
+  }}
+}}
+const CLIENT_SESSION_ID=loadClientSessionId();
 
 function api(path) {{ return path+"?"+BOOT.query; }}
 async function jsonFetch(path, options={{}}) {{
@@ -485,6 +604,52 @@ function resetPlaybackRate() {{
   try {{
     if(Math.abs(Number(video.playbackRate||1)-1)>0.001) video.playbackRate=1;
   }} catch(_) {{}}
+}}
+
+
+function cancelStreamRetry() {{
+  if(streamRetryTimer!==null) {{
+    clearTimeout(streamRetryTimer);
+    streamRetryTimer=null;
+  }}
+}}
+
+function attachStream(url, force=false) {{
+  const clean=String(url||"");
+  if(!clean) return;
+  if(!force && attachedStreamUrl===clean && video.getAttribute("src")) return;
+  attachedStreamUrl=clean;
+  resetPlaybackRate();
+  video.src=clean;
+  video.load();
+}}
+
+function scheduleStreamRetry() {{
+  if(
+    terminated ||
+    streamRetryTimer!==null ||
+    !lastState?.stream_url
+  ) return;
+
+  const step=Math.min(streamRetryAttempt,4);
+  const delay=Math.min(15000,2500*Math.pow(1.6,step));
+  streamRetryAttempt+=1;
+  notice.textContent=
+    "Torrent is still buffering. Keeping your Movie Night session and retrying in "+
+    Math.ceil(delay/1000)+"s…";
+
+  streamRetryTimer=setTimeout(async()=>{{
+    streamRetryTimer=null;
+    if(terminated || !lastState?.stream_url) return;
+
+    try {{
+      const fresh=await jsonFetch("/movie/"+BOOT.roomId+"/state");
+      await applyState(fresh);
+    }} catch(_) {{}}
+
+    if(terminated || !lastState?.stream_url) return;
+    attachStream(lastState.stream_url,true);
+  }},delay);
 }}
 
 function safeSeek(target) {{
@@ -527,7 +692,9 @@ async function applyState(s) {{
     s.is_host?"Host":(s.sync_status==="joining"?"Joining…":"Synced Viewer");
   const t=s.torrent||{{}};
   document.getElementById("progress").textContent=((t.progress||0)*100).toFixed(1)+"% • "+fmtRate(t.download_rate||0);
-  document.getElementById("peers").textContent=String(t.seeds||0)+" / "+String(t.peers||0);
+  const swarmSource=String(t.swarm_source||"");
+  document.getElementById("peers").textContent=
+    String(t.seeds||0)+" / "+String(t.leechers||0)+(swarmSource?" • "+swarmSource:"");
   const b=t.buffer||{{}};
   document.getElementById("buffer").textContent=b.target_seconds?Number(b.target_seconds).toFixed(0)+"s":"adaptive";
 
@@ -541,6 +708,7 @@ async function applyState(s) {{
 
   if(s.ended) {{
     terminated=true;
+    cancelStreamRetry();
     resetPlaybackRate();
     video.pause();
     video.removeAttribute("src");
@@ -571,9 +739,9 @@ async function applyState(s) {{
       lastJoinRetargetAt=0;
       lastHardSyncSeekAt=0;
     }}
-    resetPlaybackRate();
-    video.src=s.stream_url;
-    video.load();
+    streamRetryAttempt=0;
+    cancelStreamRetry();
+    attachStream(s.stream_url);
   }}
   if(!s.stream_url) {{
     notice.textContent="Waiting for the host to choose media.";
@@ -773,11 +941,26 @@ video.addEventListener("play",()=>{{
 }});
 video.addEventListener("pause",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("pause"); }});
 video.addEventListener("seeked",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("seek",{{seconds:video.currentTime||0}}); }});
+video.addEventListener("loadedmetadata",()=>{{
+  streamRetryAttempt=0;
+  cancelStreamRetry();
+}});
+video.addEventListener("canplay",()=>{{
+  streamRetryAttempt=0;
+  cancelStreamRetry();
+  if(notice.textContent.startsWith("Torrent is still buffering"))
+    notice.textContent="";
+}});
+video.addEventListener("waiting",()=>{{
+  if(lastState?.stream_url && !terminated)
+    notice.textContent="Buffering torrent pieces… keeping the stream connection stable.";
+}});
+video.addEventListener("stalled",()=>{{
+  if(lastState?.stream_url && !terminated)
+    notice.textContent="Torrent stream stalled briefly… waiting for more pieces.";
+}});
 video.addEventListener("error",()=>{{
-  if(lastState?.stream_url) {{
-    notice.textContent="Buffering source pieces… retrying.";
-    setTimeout(()=>{{ video.src=lastState.stream_url; video.load(); }},2500);
-  }}
+  if(lastState?.stream_url) scheduleStreamRetry();
 }});
 heartbeat(false).then(state=>{{ if(state) applyState(state); else poll(); }});
 setInterval(poll,2000);
