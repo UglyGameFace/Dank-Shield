@@ -13,7 +13,8 @@ Active branch:
 Issue:
 **#428 — Dank Cinema: private rooms up to 20 viewers + Movie Sources/RSS cleanup**
 
-## Active task / outcome
+Pull request:
+**#429 — Dank Cinema: private 20-viewer sessions and Movie Sources RSS**
 
 Turn Private Viewing from host-only isolation into an invite-only **Private Session** for up to **20 total authorized viewers**, while keeping one host/controller. Replace the confusing provider terminology with **Movie Sources**, give RSS/Atom feeds an explicit first-class setup path, fix clean feed URLs that were misread as search APIs, and make all affected private-session controls/copy describe their real behavior.
 
@@ -85,7 +86,7 @@ Regression coverage added/updated for:
 - private status/end wording;
 - private web-player terminology.
 
-Exact-head CI has **not run yet** for this branch.
+PR #429 is open. Exact-head CI is pending on the final reviewed head; earlier intermediate heads are not accepted as completion evidence.
 
 ## Cleanup / conflicts
 
