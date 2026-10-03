@@ -2271,7 +2271,7 @@ class ExternalSearchProviderModal(discord.ui.Modal):
         self.source_id = str(source.source_id if source is not None else "")
 
         self.label_input = discord.ui.TextInput(
-            label="Provider name (optional)",
+            label="Reference link name (optional)",
             placeholder="Public Movie Catalog",
             default=str(source.label if source is not None else "")[:80] or None,
             required=False,
@@ -2289,10 +2289,10 @@ class ExternalSearchProviderModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if int(interaction.user.id) != self.owner_id:
-            return await _private(interaction, "❌ This provider editor belongs to another admin.")
+            return await _private(interaction, "❌ This source editor belongs to another admin.")
         guild = interaction.guild
         if guild is None:
-            return await _private(interaction, "❌ Dank Cinema providers are configured inside a server.")
+            return await _private(interaction, "❌ Dank Cinema Movie Sources are configured inside a server.")
         if not _staff_authorized(interaction):
             return await _private(interaction, "❌ Manage Server or Administrator is required.")
 
@@ -2335,7 +2335,7 @@ class ExternalSearchProviderModal(discord.ui.Modal):
         if not applied:
             return await _replace(
                 interaction,
-                content="❌ Dank Cinema providers changed in another admin session. Refresh and try again.",
+                content="❌ Dank Cinema Movie Sources changed in another admin session. Refresh and try again.",
                 embed=_sources_embed(current),
                 view=MovieNightSourcesView(int(interaction.user.id)),
             )
