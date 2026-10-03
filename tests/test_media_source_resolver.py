@@ -419,3 +419,94 @@ def test_explicit_playable_ref_wins_over_info_hash_fallback() -> None:
     }
     assert resolver._item_source_ref(item) == "magnet:?xt=urn:btih:EXPLICIT"
 
+
+def test_static_xml_feed_endpoint_is_not_rewritten_with_query_parameter() -> None:
+    endpoint = "https://fosstorrents.com/feed/torrents.xml"
+    assert resolver._search_url(endpoint, "Blender") == endpoint
+
+
+def test_rss_torrent_feed_enclosure_becomes_playable_release() -> None:
+    payload = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0">
+      <channel>
+        <title>FOSS Torrents - RSS Feed for Torrent Files</title>
+        <item>
+          <title>Blender 4.5 Linux x64</title>
+          <link>https://example.org/projects/blender</link>
+          <enclosure
+            url="https://downloads.example.org/blender-4.5-linux-x64.torrent"
+            length="123456"
+            type="application/x-bittorrent" />
+          <category>Software</category>
+        </item>
+        <item>
+          <title>Unrelated Project</title>
+          <enclosure
+            url="https://downloads.example.org/unrelated.torrent"
+            type="application/x-bittorrent" />
+        </item>
+      </channel>
+    </rss>
+    """
+
+    items = resolver._extract_feed_items(payload, "Blender")
+    assert len(items) == 1
+    variant = resolver._variant_from_item(_source(), items[0])
+    assert variant is not None
+    assert variant.title == "Blender 4.5 Linux x64"
+    assert variant.source_ref.endswith("blender-4.5-linux-x64.torrent")
+    assert variant.file_size == 123456
+    assert variant.metadata["source_reported"]["category"] == "Software"
+
+
+def test_atom_enclosure_feed_is_supported_without_treating_page_link_as_media() -> None:
+    payload = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <entry>
+        <title>Open Movie 2026</title>
+        <link rel="alternate" href="https://example.org/open-movie" />
+        <link rel="enclosure"
+              type="application/x-bittorrent"
+              href="https://downloads.example.org/open-movie.torrent" />
+      </entry>
+    </feed>
+    """
+
+    items = resolver._extract_feed_items(payload, "Open Movie")
+    assert len(items) == 1
+    assert items[0]["source_ref"] == "https://downloads.example.org/open-movie.torrent"
+
+
+def test_rss_torrent_extension_info_hash_becomes_magnet() -> None:
+    payload = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss xmlns:torrent="http://xmlns.ezrss.it/0.1/">
+      <channel>
+        <item>
+          <title>Public Domain Movie 2026</title>
+          <torrent:infoHash>0123456789ABCDEF0123456789ABCDEF01234567</torrent:infoHash>
+        </item>
+      </channel>
+    </rss>
+    """
+
+    items = resolver._extract_feed_items(payload, "Public Domain Movie")
+    assert len(items) == 1
+    variant = resolver._variant_from_item(_source(), items[0])
+    assert variant is not None
+    assert variant.source_ref == (
+        "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+    )
+
+
+def test_rss_feed_rejects_doctype_and_entity_declarations() -> None:
+    payload = b"""<?xml version="1.0"?>
+    <!DOCTYPE rss [<!ENTITY x "unsafe">]>
+    <rss><channel><item><title>&x;</title></item></channel></rss>
+    """
+    try:
+        resolver._extract_feed_items(payload, "unsafe")
+    except ValueError as exc:
+        assert "declarations are not allowed" in str(exc)
+    else:
+        raise AssertionError("unsafe XML declaration should be rejected")
+
