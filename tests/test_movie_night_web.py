@@ -81,6 +81,9 @@ def test_movie_night_player_contains_sync_heartbeat_and_host_controls() -> None:
     assert "Playback will stay put while the buffer catches up." in html
     assert 's.sync_status==="joining"' in html
     assert "Synced Viewer" in html
+    assert "<summary>Playback Details</summary>" in html
+    assert 'class="now"' in html
+    assert html.index("<video") < html.index("<summary>Playback Details</summary>")
 
 
 def test_public_media_server_registers_movie_night_without_admin_api() -> None:
