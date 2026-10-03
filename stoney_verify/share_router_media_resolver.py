@@ -11,13 +11,17 @@ existing Share Router runtime remains the single route/upload owner.
 """
 
 import asyncio
-import ipaddress
 import os
 import re
 import time
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from stoney_verify.share_router_media_network import (
+    is_public_address,
+    is_safe_media_download_url,
+)
 
 
 MEDIA_URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
@@ -37,14 +41,6 @@ _TRACKING_QUERY_KEYS = {
     "si",
     "source",
 }
-_LOCAL_HOST_SUFFIXES = (
-    ".local",
-    ".localhost",
-    ".internal",
-    ".lan",
-    ".home",
-    ".home.arpa",
-)
 _X_STATUS_PATH_RE = re.compile(r"^/([^/]+)/status/(\d+)(?:/.*)?$", re.IGNORECASE)
 _TIKTOK_VIDEO_RE = re.compile(r"/video/(\d+)(?:/|$)", re.IGNORECASE)
 _INSTAGRAM_MEDIA_RE = re.compile(r"/(?:reel|reels|p|tv)/([^/?#]+)", re.IGNORECASE)
@@ -347,37 +343,6 @@ def media_provider_policy() -> dict[str, bool]:
 def provider_allowed(provider: str) -> bool:
     key = _safe_str(provider).lower()
     return bool(key and media_provider_policy().get(key, False))
-
-
-def is_public_address(value: str) -> bool:
-    try:
-        return bool(ipaddress.ip_address(str(value or "").strip()).is_global)
-    except ValueError:
-        return False
-
-
-def is_safe_media_download_url(value: str) -> bool:
-    parsed = _parsed_http_url(value)
-    if parsed is None:
-        return False
-    if parsed.username or parsed.password:
-        return False
-    try:
-        port = parsed.port
-    except ValueError:
-        return False
-    if port not in {None, 80, 443}:
-        return False
-
-    host = str(parsed.hostname or "").lower().strip(".")
-    if not host or host == "localhost" or host.endswith(_LOCAL_HOST_SUFFIXES):
-        return False
-
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        return "." in host
-    return is_public_address(host)
 
 
 def _iter_entries(info: Any) -> list[Mapping[str, Any]]:

@@ -8,20 +8,21 @@ general video/audio re-encoding.
 """
 
 import asyncio
+from dataclasses import dataclass, replace
 import os
 import shutil
-import socket
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
-from urllib.parse import urlsplit
 
-from stoney_verify.share_router_media_resolver import (
-    MediaResolution,
-    is_public_address,
-    is_safe_media_download_url,
+import aiohttp
+
+from stoney_verify.share_router_manifest_proxy import (
+    ManifestProxy,
+    ManifestProxyError,
 )
+from stoney_verify.share_router_media_network import url_resolves_public
+from stoney_verify.share_router_media_resolver import MediaResolution
 
 
 _DEFAULT_REMUX_CONCURRENCY = 1
@@ -120,11 +121,12 @@ def _append_input(
     *,
     url: str,
     headers: Mapping[str, str] | tuple[tuple[str, str], ...],
+    protocol_whitelist: str = "http,https,tcp,tls,crypto",
 ) -> None:
     command.extend(
         [
             "-protocol_whitelist",
-            "http,https,tcp,tls,crypto",
+            protocol_whitelist,
             "-rw_timeout",
             "12000000",
         ]
@@ -141,6 +143,7 @@ def build_ffmpeg_remux_command(
     *,
     output_path: Path,
     max_bytes: int,
+    manifest_via_proxy: bool = False,
 ) -> list[str]:
     if resolution.delivery not in {"manifest", "merge"}:
         raise ValueError("resolution is not remuxable")
@@ -157,6 +160,11 @@ def build_ffmpeg_remux_command(
         command,
         url=resolution.media_url,
         headers=resolution.request_headers,
+        protocol_whitelist=(
+            "http,tcp,crypto,data"
+            if resolution.delivery == "manifest" and manifest_via_proxy
+            else "http,https,tcp,tls,crypto"
+        ),
     )
 
     if resolution.delivery == "merge":
@@ -208,48 +216,12 @@ def build_ffmpeg_remux_command(
     return command
 
 
-async def _url_resolves_public(value: str) -> bool:
-    if not is_safe_media_download_url(value):
-        return False
-    parsed = urlsplit(value)
-    host = str(parsed.hostname or "").strip()
-    if not host:
-        return False
-    if is_public_address(host):
-        return True
-
-    try:
-        port = int(parsed.port or (443 if parsed.scheme == "https" else 80))
-    except ValueError:
-        return False
-
-    try:
-        infos = await asyncio.wait_for(
-            asyncio.get_running_loop().getaddrinfo(
-                host,
-                port,
-                family=socket.AF_UNSPEC,
-                type=socket.SOCK_STREAM,
-            ),
-            timeout=4.0,
-        )
-    except Exception:
-        return False
-
-    addresses = {
-        str(item[4][0])
-        for item in infos
-        if len(item) >= 5 and item[4]
-    }
-    return bool(addresses) and all(is_public_address(item) for item in addresses)
-
-
 async def _inputs_are_public(resolution: MediaResolution) -> bool:
     urls = [resolution.media_url]
     if resolution.delivery == "merge":
         urls.append(resolution.audio_url)
     for value in urls:
-        if not value or not await _url_resolves_public(value):
+        if not value or not await url_resolves_public(value):
             return False
     return True
 
@@ -302,13 +274,6 @@ async def remux_media_for_discord(
     if resolution.delivery not in {"manifest", "merge"}:
         return None
 
-    # Arbitrary direct manifests may reference nested/private segment URLs.
-    # Provider-extracted manifests are the safe boundary for this slice; direct
-    # manifest support requires a validating manifest/segment proxy.
-    if resolution.delivery == "manifest" and resolution.provider == "direct":
-        _REMUX_STATS["unavailable"] += 1
-        return None
-
     if not await _inputs_are_public(resolution):
         _REMUX_STATS["unavailable"] += 1
         return None
@@ -330,13 +295,34 @@ async def remux_media_for_discord(
         os.close(fd)
         output_path = Path(raw_path)
         keep_output = False
+        proxy: Optional[ManifestProxy] = None
+        active_resolution = resolution
         try:
             output_path.unlink(missing_ok=True)
+
+            if resolution.delivery == "manifest":
+                try:
+                    proxy = ManifestProxy(
+                        resolution.media_url,
+                        headers=resolution.request_headers,
+                        max_output_bytes=limit,
+                    )
+                    await proxy.start()
+                    active_resolution = replace(
+                        resolution,
+                        media_url=proxy.entry_url,
+                        request_headers=(),
+                    )
+                except (ManifestProxyError, OSError, aiohttp.ClientError):
+                    _REMUX_STATS["unavailable"] += 1
+                    return None
+
             command = build_ffmpeg_remux_command(
                 ffmpeg,
-                resolution,
+                active_resolution,
                 output_path=output_path,
                 max_bytes=limit,
+                manifest_via_proxy=proxy is not None,
             )
             try:
                 returncode, _detail, timed_out = await _run_ffmpeg(
@@ -374,6 +360,11 @@ async def remux_media_for_discord(
                 size_bytes=size,
             )
         finally:
+            if proxy is not None:
+                try:
+                    await proxy.close()
+                except Exception:
+                    pass
             # Ownership of a successful file transfers to RemuxedMedia. Every
             # failed/timeout/oversize attempt is removed regardless of history.
             if not keep_output:
