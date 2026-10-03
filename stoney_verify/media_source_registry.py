@@ -141,6 +141,25 @@ def _normalize_endpoint_url(value: Any) -> str:
     )
 
 
+
+def _looks_like_static_feed_url(value: str) -> bool:
+    parsed = urlsplit(str(value or "").strip())
+    path = str(parsed.path or "").casefold().rstrip("/")
+    if path.endswith((".xml", ".rss", ".atom")):
+        return True
+    leaf = path.rsplit("/", 1)[-1] if path else ""
+    if leaf in {"feed", "feeds", "rss", "atom"}:
+        return True
+    query = {
+        str(key or "").casefold(): str(raw_value or "").casefold()
+        for key, raw_value in parse_qsl(parsed.query, keep_blank_values=True)
+    }
+    return query.get("format") in {"rss", "atom", "xml"} or query.get("output") in {
+        "rss",
+        "atom",
+        "xml",
+    }
+
 def prepare_example_search_url(value: Any) -> str:
     """Turn a pasted working search URL into a reusable Movie Night template.
 
@@ -158,7 +177,22 @@ def prepare_example_search_url(value: Any) -> str:
     if not pairs:
         return clean
 
-    common_keys = {"q", "query", "search", "term", "keyword", "keywords", "s"}
+    common_keys = {
+        "q",
+        "query",
+        "query_term",
+        "queryterm",
+        "search",
+        "search_query",
+        "searchquery",
+        "search_term",
+        "searchterm",
+        "term",
+        "keyword",
+        "keywords",
+        "title",
+        "s",
+    }
     updated: list[tuple[str, str]] = []
     replaced = False
     for key, raw_value in pairs:
@@ -169,9 +203,13 @@ def prepare_example_search_url(value: Any) -> str:
             updated.append((key, raw_value))
 
     if not replaced:
+        if _looks_like_static_feed_url(clean):
+            return clean
         raise ValueError(
             "Dank Shield could not find the movie-search part of that URL. "
-            "Paste a search URL that uses q=, query=, search=, term=, keyword=, keywords=, or s=."
+            "Use a common search parameter (for example q=, query=, query_term=, "
+            "search=, term=, keyword=, title=, or s=), include {query} yourself, "
+            "or provide a recognizable RSS/Atom feed URL."
         )
 
     query = urlencode(updated, doseq=True).replace("%7Bquery%7D", "{query}")
