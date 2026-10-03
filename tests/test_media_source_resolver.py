@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 
 from stoney_verify import media_source_resolver as resolver
-from stoney_verify.media_source_registry import CustomMediaSource
+from stoney_verify.media_source_registry import CustomMediaSource, MediaSourceRegistry
 
 
 def _source() -> CustomMediaSource:
@@ -625,4 +625,29 @@ def test_v2_info_hash_alias_becomes_btmh_magnet() -> None:
 def test_zero_v2_info_hash_is_rejected() -> None:
     item = {"name": "Invalid V2", "info_hash_v2": "0" * 64}
     assert resolver._item_source_ref(item) == ""
+
+
+def test_custom_provider_zero_results_are_reported_as_diagnostic(monkeypatch) -> None:
+    source = _source()
+
+    async def fake_load(guild_id: int, refresh: bool = False):
+        assert guild_id == 123
+        assert refresh is True
+        return {}, MediaSourceRegistry(sources=(source,))
+
+    async def fake_search_one(current, query):
+        assert current is source
+        assert query == "Missing Movie"
+        return [], ""
+
+    monkeypatch.setattr(resolver, "load_media_source_registry", fake_load)
+    monkeypatch.setattr(resolver, "_search_one", fake_search_one)
+
+    outcome = asyncio.run(
+        resolver.search_custom_media_sources(123, "Missing Movie")
+    )
+    assert outcome.variants == ()
+    assert outcome.errors == (
+        "Family Library: no playable results for this search.",
+    )
 
