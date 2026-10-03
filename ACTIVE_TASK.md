@@ -65,7 +65,7 @@ Open the focused PR, run exact-head repository workflows, patch only evidence-ba
 
 ---
 
-## Active task / outcome
+## Previous completed task / outcome
 
 **DANK-SHIELD-425 — Dank Cinema master audit: setup, UX, lifecycle, playback, providers, and capacity**
 
