@@ -323,7 +323,7 @@ def test_player_explains_reclaimed_media_instead_of_saying_no_movie_chosen() -> 
     assert "choose the release again" in html
 
 
-def test_private_watch_room_rejects_non_owner_identity(monkeypatch) -> None:
+def test_private_watch_room_allows_invited_identity_and_rejects_uninvited(monkeypatch) -> None:
     manager = MovieNightManager()
     room = manager.create_room(
         guild_id=1,
@@ -344,18 +344,14 @@ def test_private_watch_room_rejects_non_owner_identity(monkeypatch) -> None:
     except web.HTTPForbidden as exc:
         assert "private" in exc.text.lower()
     else:
-        raise AssertionError("non-owner unexpectedly accessed a private Watch room")
+        raise AssertionError("uninvited user unexpectedly accessed a private Watch room")
 
-    monkeypatch.setattr(
-        movie_night_web,
-        "_request_identity",
-        lambda request: (room.room_id, 10),
-    )
+    manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
     resolved_room, resolved_uid = asyncio.run(
         movie_night_web._room_and_user(SimpleNamespace())
     )
     assert resolved_room is room
-    assert resolved_uid == 10
+    assert resolved_uid == 20
 
 
 def test_movie_night_state_exposes_private_room_mode(monkeypatch) -> None:
@@ -386,9 +382,11 @@ def test_movie_night_state_exposes_private_room_mode(monkeypatch) -> None:
         10,
         "uid=10&exp=9999999999&sig=test",
     )
-    assert "Dank Cinema Private Session" in html\n    assert "Private Session Host" in html\n    assert "End this Private Session and release its media?" in html
+    assert "Dank Cinema Private Session" in html
+    assert "Private Session Host" in html
+    assert "End this Private Session and release its media?" in html
     assert 's.private?"Private • "' in html
-    assert 's.private&&s.is_host?"Private Host"' in html
+    assert 's.private&&s.is_host?"Private Session Host"' in html
 
 
 def test_watch_state_flips_host_authority_without_new_room(monkeypatch) -> None:
