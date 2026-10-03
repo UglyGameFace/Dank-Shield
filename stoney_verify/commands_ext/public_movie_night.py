@@ -3195,21 +3195,40 @@ async def _attach_torrent_media(
     if magnet and torrent is not None:
         return await _private(interaction, "❌ Choose either a magnet or a .torrent file, not both.")
 
-    raw, _model = await _load_community(guild)
-    _source_raw, registry = await _sources_state(int(guild.id))
-    ready = _setup_readiness(guild, channel, raw, registry)
-    if not ready["launch_ready"]:
-        return await _private(
-            interaction,
-            "❌ Movie Night setup is not launch-ready. Run /movie → Setup first.",
-        )
-
     room_manager = get_movie_night_manager()
     room = room_manager.active_room_for_channel(int(guild.id), int(channel.id))
+    if room is not None and not room_manager.user_can_access(
+        room,
+        int(interaction.user.id),
+    ):
+        return await _movie_hub_notice(
+            interaction,
+            "🔒 A private Dank Cinema session is active in this channel and cannot be joined.",
+        )
     if room is not None and int(room.host_id) != int(interaction.user.id):
-        return await _private(
+        return await _movie_hub_notice(
             interaction,
             "❌ Only the active Movie Night host can replace the room's media source.",
+            room=room,
+        )
+
+    raw, _model = await _load_community(guild)
+    _source_raw, registry = await _sources_state(int(guild.id))
+    ready = _setup_readiness(
+        guild,
+        channel,
+        raw,
+        registry,
+        require_notification_role=not (
+            room is not None
+            and str(getattr(room, "mode", "watch_party") or "watch_party") == "private"
+        ),
+    )
+    if not ready["launch_ready"]:
+        return await _movie_hub_notice(
+            interaction,
+            "❌ Movie Night setup is not launch-ready. Run /movie → Setup first.",
+            room=room,
         )
     previous = str(room.stream_token or "") if room is not None else ""
     lease_key = movie_room_lease_key(int(guild.id), int(channel.id))
