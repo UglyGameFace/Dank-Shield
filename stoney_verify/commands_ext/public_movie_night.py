@@ -3517,7 +3517,11 @@ class MovieNightHubView(_OwnedView):
     ) -> None:
         super().__init__(owner_id)
         private_mode = _private_viewing(room)
-        open_vote = _latest_open_vote(room) if room is not None else None
+        open_vote = (
+            _latest_open_vote(room)
+            if room is not None and isinstance(getattr(room, "votes", None), Mapping)
+            else None
+        )
 
         if room is None:
             self.remove_item(self.search)
