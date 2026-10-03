@@ -977,6 +977,17 @@ def _session_status_embed(
         value=_movie_night_lifecycle_text(room)[:1024],
         inline=False,
     )
+    if private_mode:
+        allowed = set(getattr(room, "private_allowed_viewers", set()) or set())
+        allowed.add(int(room.host_id))
+        embed.add_field(
+            name="🔒 Private access",
+            value=(
+                f"Authorized viewers: **{len(allowed)} / {PRIVATE_VIEWER_LIMIT}**\n"
+                "Only the host can choose movies, change playback, manage viewers, or end the session."
+            ),
+            inline=False,
+        )
     if room.queue:
         embed.add_field(
             name="📺 Queue",
@@ -1068,9 +1079,16 @@ def _more_embed(
             inline=False,
         )
     if room is not None:
+        if _private_viewing(room):
+            room_value = (
+                "👥 **Private Viewers** • host manages invite-only access\n"
+                "🛑 **End Private Session** • disconnect invited viewers and release streaming media"
+            )
+        else:
+            room_value = "🛑 **End Movie Night** • end the room and clean up its streaming media"
         embed.add_field(
             name="Room",
-            value="🛑 **End Movie Night** • end the room and clean up its streaming media",
+            value=room_value,
             inline=False,
         )
     return embed
@@ -3696,7 +3714,7 @@ async def _open_host_handoff_picker(
     if _private_viewing(room):
         return await _movie_hub_notice(
             interaction,
-            "🔒 Private Viewing stays owner-only and cannot pass host control.",
+            "🔒 Private Sessions keep one host/controller and cannot pass host control.",
             room=room,
         )
 
