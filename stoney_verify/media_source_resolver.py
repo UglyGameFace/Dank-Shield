@@ -17,6 +17,7 @@ import aiohttp
 
 from stoney_verify.media_metadata import parse_release_name
 from stoney_verify.media_source_registry import (
+    PROVIDER_TYPE_FEED,
     CustomMediaSource,
     enabled_structured_sources,
     load_media_source_registry,
@@ -235,7 +236,7 @@ def _looks_like_static_feed_endpoint(endpoint: str) -> bool:
     }
 
 
-def _search_url(endpoint: str, query: str) -> str:
+def _search_url(endpoint: str, query: str, *, static_feed: bool = False) -> str:
     clean_query = " ".join(str(query or "").split())[:180]
     if not clean_query:
         raise ValueError("Movie search query is empty.")
@@ -258,7 +259,7 @@ def _search_url(endpoint: str, query: str) -> str:
             )
         )
 
-    if _looks_like_static_feed_endpoint(endpoint):
+    if static_feed or _looks_like_static_feed_endpoint(endpoint):
         return endpoint
 
     pairs = list(parse_qsl(parsed.query, keep_blank_values=True))
@@ -961,7 +962,13 @@ async def _search_one(
         connect=3.0,
         sock_read=5.0,
     )
-    current = _validate_request_url(_search_url(source.endpoint_url, query))
+    current = _validate_request_url(
+        _search_url(
+            source.endpoint_url,
+            query,
+            static_feed=source.provider_type == PROVIDER_TYPE_FEED,
+        )
+    )
 
     try:
         async with aiohttp.ClientSession(
