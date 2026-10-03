@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 from aiohttp import web
 
 from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
-from stoney_verify.movie_night_session import terminate_movie_night_room
+from stoney_verify.movie_night_session import (\n    ensure_movie_night_cleanup_task,\n    terminate_movie_night_room,\n)
 from stoney_verify.torrent_streaming import (
     TorrentSessionUnavailableError,
     get_torrent_manager,
