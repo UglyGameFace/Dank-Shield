@@ -464,7 +464,11 @@ def _item_source_ref(
                 return ref
 
     for key in _INFO_HASH_KEYS:
-        magnet = _magnet_from_info_hash(item.get(key))
+        raw_hash = item.get(key)
+        magnet = _magnet_from_info_hash(raw_hash)
+        if magnet:
+            return magnet
+        magnet = _magnet_from_info_hash_v2(raw_hash)
         if magnet:
             return magnet
 
