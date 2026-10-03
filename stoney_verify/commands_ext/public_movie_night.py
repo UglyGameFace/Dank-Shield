@@ -998,6 +998,39 @@ def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discor
     return embed
 
 
+def _normalized_movie_identity(value: Any) -> tuple[str, ...]:
+    return tuple(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
+
+
+def _release_matches_catalog(
+    release_title: Any,
+    catalog_metadata: Optional[Mapping[str, Any]],
+) -> bool:
+    if not isinstance(catalog_metadata, Mapping):
+        return False
+    catalog_title = _compact(catalog_metadata.get("title"))
+    if not catalog_title:
+        return False
+
+    catalog_tokens = _normalized_movie_identity(catalog_title)
+    release_tokens = _normalized_movie_identity(release_title)
+    if not catalog_tokens or not release_tokens:
+        return False
+    if not all(token in release_tokens for token in catalog_tokens):
+        return False
+
+    year = _safe_int(catalog_metadata.get("year"), 0)
+    if year:
+        release_years = {
+            int(token)
+            for token in release_tokens
+            if len(token) == 4 and token.isdigit() and 1900 <= int(token) <= 2100
+        }
+        if release_years and year not in release_years:
+            return False
+    return True
+
+
 def _materialize_search_results(
     room: MovieNightRoom,
     outcome: MediaSourceSearchOutcome,
@@ -1011,13 +1044,17 @@ def _materialize_search_results(
     release_count = 0
 
     for result in outcome.variants:
-        candidate = manager.find_candidate_by_title(room.room_id, result.title)
         catalog = (
             dict(catalog_metadata)
-            if isinstance(catalog_metadata, Mapping)
-            and _compact(catalog_metadata.get("title")).casefold() == result.title.casefold()
+            if _release_matches_catalog(result.title, catalog_metadata)
             else {}
         )
+        candidate_title = (
+            _compact(catalog.get("title"))
+            if catalog
+            else result.title
+        )
+        candidate = manager.find_candidate_by_title(room.room_id, candidate_title)
         candidate_metadata: dict[str, Any] = {"search_query": query}
         if catalog:
             candidate_metadata["catalog"] = catalog
@@ -1026,7 +1063,7 @@ def _materialize_search_results(
             candidate = manager.nominate(
                 room.room_id,
                 user_id=int(proposer_id),
-                title=result.title,
+                title=candidate_title,
                 metadata=candidate_metadata,
                 auto_vote=False,
             )
@@ -2341,6 +2378,11 @@ async def _execute_search_vote(
                 content=(
                     f"🎬 Found **{title}** in the movie catalog, but no connected playback "
                     "provider returned a release. The host can still attach a magnet or .torrent."
+                    + (
+                        f"\nProvider status: {'; '.join(outcome.errors[:3])}"
+                        if outcome.errors
+                        else ""
+                    )
                 )[:2000],
                 embed=_candidate_embed(room, candidate),
                 view=MovieCandidateView(
