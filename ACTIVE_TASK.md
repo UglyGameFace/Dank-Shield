@@ -917,4 +917,3 @@ Repair:
 - update the provider-safety regression to assert the current solo controls and explicitly verify no primary candidate button carries an external URL.
 
 No provider runtime, torrent runtime, queue semantics, or collaborative multi-viewer voting behavior was weakened.
-
