@@ -3449,23 +3449,34 @@ async def _start_or_join_room(
             stream_token="",
             mode=normalized_mode,
         )
-        if normalized_mode != "private":
-            await _announce_room(
-                interaction,
-                room,
-                role=role if isinstance(role, discord.Role) else None,
-            )
     except Exception as exc:
         return await _movie_hub_notice(
             interaction,
             f"❌ Dank Cinema room could not start: {type(exc).__name__}: {exc}",
         )
 
+    announcement_notice = ""
+    if normalized_mode != "private":
+        try:
+            await _announce_room(
+                interaction,
+                room,
+                role=role if isinstance(role, discord.Role) else None,
+            )
+        except Exception as exc:
+            # Announcement delivery is not room ownership. A transient Discord
+            # send failure must not leave a successfully created room disguised
+            # as a failed launch.
+            announcement_notice = (
+                "⚠️ **Watch Party started**, but the channel announcement could not be posted "
+                f"({type(exc).__name__}). The room itself is active."
+            )
+
     notice = (
         "🔒 **Private Viewing started.** No Movie Night role ping was sent and "
         "only you can join/control this room."
         if normalized_mode == "private"
-        else ""
+        else announcement_notice
     )
     await open_movie_night(
         interaction,
