@@ -644,6 +644,17 @@ def _sources_embed(registry: MediaSourceRegistry) -> discord.Embed:
             inline=False,
         )
     embed.add_field(
+        name="🔌 In-App Provider Contract",
+        value=(
+            "Response list: **results / items / releases / variants / torrents / data**.\n"
+            "Each release needs a title/name plus **magnet**, **magnet_uri**, **torrent_url**, "
+            "**download_url**, **source_ref**, or equivalent playable ref.\n"
+            "Optional aliases include size/length/bytes, seeds/seeders, leeches/leechers, peers, "
+            "filename/release_name, and metadata. Dank Cinema normalizes the rest."
+        )[:1024],
+        inline=False,
+    )
+    embed.add_field(
         name="🔒 Provider Safety",
         value=(
             "**In-App providers** must use HTTPS and return structured results with playable media refs. "
@@ -1801,7 +1812,7 @@ class MovieNightSourcesView(_OwnedView):
             CustomSourceModal(owner_id=self.owner_id, baseline=raw)
         )
 
-    @discord.ui.button(label="Add External-Only Link", emoji="🔗", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Add External-Only Link", emoji="🔗", style=discord.ButtonStyle.secondary, row=1)
     async def add_external(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not _staff_authorized(interaction):
