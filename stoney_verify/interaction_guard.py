@@ -531,7 +531,7 @@ def _message_looks_like_dank_cinema(interaction: Any) -> bool:
 
     try:
         content = str(getattr(message, "content", "") or "").casefold()
-        if "dank cinema" in content or "movie night" in content:
+        if "dank cinema" in content:
             return True
     except Exception:
         pass
@@ -544,13 +544,12 @@ def _message_looks_like_dank_cinema(interaction: Any) -> bool:
     for embed in embeds[:10]:
         try:
             title = str(getattr(embed, "title", "") or "")
-            description = str(getattr(embed, "description", "") or "")
             footer = getattr(embed, "footer", None)
             footer_text = str(getattr(footer, "text", "") or "")
-            haystack = " ".join((title, description, footer_text)).casefold()
+            haystack = " ".join((title, footer_text)).casefold()
         except Exception:
             continue
-        if "dank cinema" in haystack or "movie night" in haystack:
+        if "dank cinema" in haystack or "dank provider" in haystack:
             return True
     return False
 
