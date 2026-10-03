@@ -75,6 +75,10 @@ def test_movie_night_player_contains_sync_heartbeat_and_host_controls() -> None:
     assert 'hostAction("resume")' in html
     assert 'hostAction("pause")' in html
     assert "bufferedEnd()" in html
+    assert "const ranges=video.buffered" in html
+    assert "ranges.start(i)" in html
+    assert "ranges.end(i)" in html
+    assert "return video.buffered.end(video.buffered.length-1)" not in html
     assert "Tap to Sync" in html
     assert "Buffering the group for smoother playback" in html
     assert "Joining Movie Night" in html

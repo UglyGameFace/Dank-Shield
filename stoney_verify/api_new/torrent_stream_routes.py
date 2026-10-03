@@ -17,6 +17,27 @@ from stoney_verify.torrent_streaming import (
 _STREAM_CHUNK_BYTES = 1024 * 1024
 
 
+def _bounded_partial_response_end(
+    start: int,
+    requested_end: int,
+    buffered_end: int,
+    *,
+    partial: bool,
+) -> int:
+    """Return the byte end we can truthfully advertise for this response.
+
+    RFC 9110 permits a 206 response to satisfy only a subset of the requested
+    range. Movie Night uses that deliberately so a slow torrent never advertises
+    a huge Content-Length and then closes the response early when later pieces
+    are still unavailable.
+    """
+
+    requested = max(int(start), int(requested_end))
+    if not partial:
+        return requested
+    return max(int(start), min(requested, int(buffered_end)))
+
+
 async def torrent_stream(request: web.Request) -> web.StreamResponse:
     manager = get_torrent_manager()
     token = str(request.match_info.get("token", "") or "")
@@ -50,23 +71,26 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
             },
         )
 
-    length = end - start + 1
-    headers = {
-        "Accept-Ranges": "bytes",
-        "Content-Type": media_content_type(session.file_name),
-        "Content-Length": str(length),
-        "Content-Disposition": f'inline; filename="{session.file_name}"',
-        "Cache-Control": "private, no-store",
-        "X-Content-Type-Options": "nosniff",
-    }
+    requested_end = end
     status_code = 206 if partial else 200
-    if partial:
-        headers["Content-Range"] = f"bytes {start}-{end}/{session.file_size}"
 
     if request.method == "HEAD":
+        length = requested_end - start + 1
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Type": media_content_type(session.file_name),
+            "Content-Length": str(length),
+            "Content-Disposition": f'inline; filename="{session.file_name}"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        }
+        if partial:
+            headers["Content-Range"] = (
+                f"bytes {start}-{requested_end}/{session.file_size}"
+            )
         return web.Response(status=status_code, headers=headers)
 
-    first_end = min(end, start + _STREAM_CHUNK_BYTES - 1)
+    first_end = min(requested_end, start + _STREAM_CHUNK_BYTES - 1)
     try:
         plan = manager.prepare_playback_request(
             session,
@@ -112,6 +136,28 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
             status=503,
             headers={"Retry-After": "2"},
         )
+
+    # For a byte-range request, only advertise the contiguous bytes that the
+    # startup wait above has already proven available. Browsers can request the
+    # remainder with the next Range request. This avoids a protocol-invalid
+    # short body when a weak swarm cannot deliver a later chunk in time.
+    end = _bounded_partial_response_end(
+        start,
+        requested_end,
+        startup_wait_end,
+        partial=partial,
+    )
+    length = end - start + 1
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Type": media_content_type(session.file_name),
+        "Content-Length": str(length),
+        "Content-Disposition": f'inline; filename="{session.file_name}"',
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+    }
+    if partial:
+        headers["Content-Range"] = f"bytes {start}-{end}/{session.file_size}"
 
     manager.schedule_metadata_probe(session)
 
