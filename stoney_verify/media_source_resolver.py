@@ -327,6 +327,7 @@ _INFO_HASH_KEYS = (
     "info_hash",
     "infohash",
     "infoHash",
+    "btih",
     "hash",
 )
 _INFO_HASH_V2_KEYS = (
@@ -731,7 +732,7 @@ def _feed_entry_to_item(entry: ET.Element) -> Mapping[str, Any]:
         value = str(raw_value or "").strip()
         if not name or not value:
             return
-        if name in {"infohash", "hash"} and not item.get("info_hash"):
+        if name in {"infohash", "btih", "hash"} and not item.get("info_hash"):
             item["info_hash"] = value[:80]
         elif name in {"infohashv2", "btmh"} and not item.get("info_hash_v2"):
             item["info_hash_v2"] = value[:96]
@@ -792,6 +793,7 @@ def _feed_entry_to_item(entry: ET.Element) -> Mapping[str, Any]:
             "info_hash",
             "infohashv2",
             "info_hash_v2",
+            "btih",
             "btmh",
             "hash",
             "magneturi",
