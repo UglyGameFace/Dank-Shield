@@ -324,6 +324,52 @@ def test_private_room_announcement_is_suppressed() -> None:
     )
 
 
+def test_watch_party_survives_announcement_delivery_failure(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    opened: list[dict] = []
+
+    async def fake_load_community(guild):
+        _ = guild
+        return {}, SimpleNamespace()
+
+    async def fake_sources_state(guild_id):
+        _ = guild_id
+        return {}, MediaSourceRegistry()
+
+    async def broken_announce(interaction, room, *, role=None):
+        _ = interaction, room, role
+        raise RuntimeError("discord send failed")
+
+    async def fake_open(interaction, **kwargs):
+        _ = interaction
+        opened.append(kwargs)
+
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(movie_ui, "_load_community", fake_load_community)
+    monkeypatch.setattr(movie_ui, "_sources_state", fake_sources_state)
+    monkeypatch.setattr(
+        movie_ui,
+        "_setup_readiness",
+        lambda *args, **kwargs: {"launch_ready": True, "role": None},
+    )
+    monkeypatch.setattr(movie_ui, "_announce_room", broken_announce)
+    monkeypatch.setattr(movie_ui, "open_movie_night", fake_open)
+
+    interaction = SimpleNamespace(
+        guild=SimpleNamespace(id=1),
+        channel=SimpleNamespace(id=2),
+        user=SimpleNamespace(id=10),
+    )
+    asyncio.run(movie_ui._start_or_join_room(interaction, mode="watch_party"))
+
+    room = manager.active_room_for_channel(1, 2)
+    assert room is not None
+    assert room.host_id == 10
+    assert opened
+    assert "Watch Party started" in opened[-1]["recovery_notice"]
+    assert "room itself is active" in opened[-1]["recovery_notice"]
+
+
 def test_public_watch_party_announcement_does_not_require_notify_role() -> None:
     manager = MovieNightManager()
     room = manager.create_room(
