@@ -421,7 +421,9 @@ def _setup_readiness(
     if not libtorrent_ready:
         blockers.append("The pinned libtorrent runtime is not installed.")
     if not pyav_ready:
-        blockers.append("The pinned PyAV metadata runtime is not installed.")
+        warnings.append(
+            "PyAV metadata probing is unavailable. Playback still works, but verified codec/audio details may be limited."
+        )
     free_bytes = _safe_int(storage.get("free_bytes"), 0)
     max_file_bytes = _safe_int(storage.get("max_file_bytes"), 0)
     if free_bytes > 0 and max_file_bytes > 0 and free_bytes < min(max_file_bytes, 2 * 1024 ** 3):
@@ -436,8 +438,8 @@ def _setup_readiness(
                 + blocker
             )
     if public_base and stream_secret and not runtime_ready:
-        warnings.append(
-            "Media settings exist, but the public media server is not currently reporting started."
+        blockers.append(
+            "The public Dank Cinema media server is not currently running."
         )
     if not can_attach:
         warnings.append(
