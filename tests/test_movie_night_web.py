@@ -75,7 +75,7 @@ def test_movie_night_player_contains_sync_heartbeat_and_host_controls() -> None:
     assert "Tap to Sync" in html
     assert "Buffering the group for smoother playback" in html
     assert "Joining Movie Night" in html
-    assert "without pausing the room" in html
+    assert "Playback will stay put while the buffer catches up." in html
     assert 's.sync_status==="joining"' in html
     assert "Synced Viewer" in html
 
@@ -95,3 +95,68 @@ def test_public_media_server_registers_movie_night_without_admin_api() -> None:
     assert 'ttl_seconds=21600' in player
     assert "Content-Security-Policy" in player
     assert "frame-ancestors 'none'" in player
+
+
+
+def test_movie_night_viewer_sync_is_explicit_and_drift_safe() -> None:
+    html = movie_night_web._watch_html(
+        "room-sync",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert "CLIENT_SESSION_ID" in html
+    assert "client_session_id:CLIENT_SESSION_ID" in html
+    assert "sync_requested:!!(syncRequested||forceSync)" in html
+    assert "syncButton.onclick=async()" in html
+    assert "heartbeat(true)" in html
+    assert "syncGestureGranted=true" in html
+    assert "safeSeek(joinTarget)" in html
+    assert "SOFT_DRIFT_START=0.35" in html
+    assert "HARD_DRIFT_SECONDS=5.0" in html
+    assert "video.playbackRate=signed<0?1.04:0.96" in html
+    assert "if(drift>1.75" not in html
+    assert "if(Math.abs((video.currentTime||0)-Number(lastState.position_seconds||0))>0.5)" not in html
+
+
+def test_movie_night_native_viewer_play_counts_as_sync_gesture() -> None:
+    html = movie_night_web._watch_html(
+        "room-sync",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert 'video.addEventListener("play",()=>{' in html
+    assert "if(remoteApply) return;" in html
+    assert "syncGestureGranted=true;" in html
+    assert "syncRequested=true;" in html
+    assert "heartbeat(true);" in html
+
+
+def test_movie_night_joining_viewer_is_not_poll_seeked_every_two_seconds() -> None:
+    html = movie_night_web._watch_html(
+        "room-sync",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert 'else if(s.sync_status==="joining")' in html
+    assert "JOIN_RETARGET_SECONDS=12.0" in html
+    assert "JOIN_RETARGET_COOLDOWN_MS=10000" in html
+    assert "HARD_SEEK_COOLDOWN_MS=8000" in html
+    assert "correctSyncedDrift(target)" in html
+    assert "if(drift>1.75" not in html
+
+
+
+def test_movie_night_stream_reloads_when_signed_consumer_changes() -> None:
+    html = movie_night_web._watch_html(
+        "room-sync",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert 'let lastStreamConsumer=""' in html
+    assert 'const streamConsumer=String(s.stream_consumer||"")' in html
+    assert 'streamConsumer!==lastStreamConsumer' in html
+    assert 'lastStreamConsumer=streamConsumer' in html

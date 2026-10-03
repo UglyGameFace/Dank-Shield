@@ -2,49 +2,56 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-390 — Universal Share Router media resolver and stream playback**
+**DANK-SHIELD-405 — Fix Dank Cinema viewer sync, skipping, and silent playback**
 
 Production baseline:
-`main@631bce802b4d2e21f3a7b6ed3177b305af14684b` (PR #403 merged).
+`main@8a8ce4499c09989d262dfa01960557d8657e87d6`
 
 Active branch:
-`feat/390-safe-manifest-proxy`
+`fix/405-movie-night-viewer-sync`
 
 Status:
-**Slice 3 active — safe validating manifest/segment proxy for direct and provider HLS/DASH.**
+**Root causes confirmed; remediation reconciled onto current production main; exact-head validation pending.**
 
-### Slice 3 scope
+### Production symptom
 
-1. Add one localhost-only validating manifest proxy used only by the bounded Share Router remux owner.
-2. Centralize public-network DNS enforcement so normal provider downloads, manifest fetches, redirects, segments, keys, init files, and playlists use one safety owner.
-3. Fetch upstream manifests through the public-DNS guard with bounded redirects, timeout, headers, and byte limits.
-4. Rewrite HLS nested playlist/segment/key/map/media URLs to localhost proxy URLs backed by approved public upstream mappings.
-5. Rewrite DASH BaseURL / Location / SegmentTemplate / SegmentURL / initialization URL references to the localhost proxy so ffmpeg cannot fetch arbitrary nested URLs directly.
-6. Revalidate every proxied upstream request and redirect before opening a socket.
-7. Stream segment/media bytes through bounded chunks without unbounded RAM buffering.
-8. Apply a per-remux total upstream byte budget and reject when exhausted.
-9. Bind the proxy only to 127.0.0.1 with an unguessable per-session token.
-10. Route all manifest remuxes, including provider-extracted manifests, through this proxy. Direct manifests may become remuxable only through this validated path.
-11. Keep live streams link/player-only and preserve all Slice 1/2 fallbacks.
-12. Add HLS/DASH rewrite, redirect, private-target, byte-budget, cleanup, localhost-binding, and remux-integration tests.
-13. Run exact-head full CI and final diff/ownership review.
+Host playback is smooth and host audio works, while viewers report:
+- no sound;
+- jumping/skipping when host presses Play;
+- Tap to Sync does not reliably work.
 
-### Security / resource contract
+### Confirmed root cause
 
-- ffmpeg never receives an upstream manifest URL directly in this slice;
-- nested manifest URLs cannot bypass the public DNS guard;
-- no arbitrary shell execution;
-- no public listener;
-- no permanent proxy/media cache;
-- no unbounded body buffering;
-- no general re-encoding;
-- no second Share Router listener or sender;
-- failures remain non-destructive and fall back to the canonical source link.
+Current viewer client:
+- polls room state every 2 seconds;
+- hard-seeks on routine poll when drift exceeds 1.75s;
+- Tap to Sync hard-seeks at >0.5s and calls `video.play()`;
+- Tap to Sync does not explicitly complete a server-side sync handshake;
+- a subsequent poll can still report `sync_status=joining`;
+- joining state forcibly pauses the viewer.
 
-### Previous slices
+That creates a poll-driven seek/play/pause loop. Host is exempt, matching production evidence that host playback/audio works.
 
-- PR #402: provider-neutral resolver foundation.
-- PR #403: bounded stream-copy remux/merge for provider manifests and separate A/V.
+### Scope
+
+1. Make Tap to Sync a real viewer sync handshake.
+2. Track user playback/audio gesture separately from server buffer readiness.
+3. While joining, seek once to a stable target and do not routine-hard-seek every poll.
+4. Report viewer readiness through the canonical heartbeat/sync owner.
+5. Preserve server validation: a viewer becomes synced only when buffer/drift criteria are satisfied.
+6. Once synced, use soft playback-rate correction for modest drift and reserve hard seeks for large drift.
+7. Prevent host Play from forcing unsynced viewers into play/pause/seek thrash.
+8. Preserve host authority, group-buffer quorum, signed stream URLs, torrent range ownership, and adaptive buffering.
+9. Keep audio diagnosis viewer-specific; do not add transcode unless evidence remains after sync/autoplay repair.
+10. Add deterministic web/server regressions and run exact-head full CI.
+
+### FORCE SWITCH checkpoint
+
+#390 Slice 3 landed while #405 was active:
+- PR #404 merged to production `main` as `8a8ce4499c09989d262dfa01960557d8657e87d6`;
+- #405 has been reconciled on top of that production baseline;
+- do not reintroduce or duplicate the already-merged manifest-proxy implementation;
+- after #405 Definition of Done, continue any remaining #390 follow-up from current `main`.
 
 
 ---

@@ -138,9 +138,21 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         if isinstance(release, dict):
             source = str(release.get("source") or "")
 
-    stream_url = torrent_manager.stream_url(session, ttl_seconds=21600) if session is not None else ""
-    torrent_status = torrent_manager.status(session) if session is not None else {}
     viewer = room.viewers.get(int(user_id))
+    consumer_key = ""
+    if session is not None:
+        page_session = str(getattr(viewer, "client_session_id", "") or "").strip()[:64]
+        consumer_key = f"movie:{int(user_id)}:{page_session or 'legacy'}"
+    stream_url = (
+        torrent_manager.stream_url(
+            session,
+            ttl_seconds=21600,
+            consumer_key=consumer_key,
+        )
+        if session is not None
+        else ""
+    )
+    torrent_status = torrent_manager.status(session) if session is not None else {}
     sync_ready = bool(
         int(user_id) == int(room.host_id)
         or (viewer is not None and viewer.sync_ready)
@@ -152,6 +164,17 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         if sync_ready
         else "joining"
     )
+    sync_requested = bool(
+        viewer is not None
+        and viewer.sync_requested
+    )
+    sync_target = room.current_position()
+    if (
+        viewer is not None
+        and not sync_ready
+        and viewer.sync_requested
+    ):
+        sync_target = float(viewer.sync_target_position)
     buffer_quorum = movie_manager.buffer_quorum_viewers(room)
 
     return {
@@ -167,8 +190,10 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "buffer_quorum_count": len(buffer_quorum),
         "sync_status": sync_status,
         "sync_ready": sync_ready,
-        "sync_target_position": round(room.current_position(), 3),
+        "sync_requested": sync_requested,
+        "sync_target_position": round(sync_target, 3),
         "stream_token": room.stream_token,
+        "stream_consumer": consumer_key,
         "stream_url": stream_url,
         "torrent": {
             "name": torrent_status.get("name", ""),
@@ -212,6 +237,8 @@ async def movie_night_heartbeat(request: web.Request) -> web.Response:
     duration = _float(payload.get("duration_seconds"))
     buffered = max(position, _float(payload.get("buffered_until_seconds"), position))
     paused = bool(payload.get("paused", True))
+    client_session_id = str(payload.get("client_session_id") or "").strip()[:96]
+    sync_requested = bool(payload.get("sync_requested", False))
 
     torrent_manager = get_torrent_manager()
     movie_manager = get_movie_night_manager()
@@ -275,6 +302,8 @@ async def movie_night_heartbeat(request: web.Request) -> web.Response:
         buffered_until_seconds=buffered,
         media_duration_seconds=duration,
         sync_buffer_target_seconds=sync_buffer_target_seconds,
+        client_session_id=client_session_id,
+        sync_requested=sync_requested,
     )
 
     if session is not None:
@@ -405,10 +434,32 @@ small {{ color:#8994aa; }}
 const BOOT={boot};
 const video=document.getElementById("video");
 const notice=document.getElementById("notice");
+const syncButton=document.getElementById("sync");
 let lastToken="";
+let lastStreamConsumer="";
 let remoteApply=false;
 let lastState=null;
 let terminated=false;
+let syncRequested=false;
+let syncGestureGranted=false;
+let joinTarget=null;
+let lastJoinRetargetAt=0;
+let lastHardSyncSeekAt=0;
+const SOFT_DRIFT_START=0.35;
+const SOFT_DRIFT_STOP=0.12;
+const HARD_DRIFT_SECONDS=5.0;
+const HARD_SEEK_COOLDOWN_MS=8000;
+const JOIN_RETARGET_SECONDS=12.0;
+const JOIN_RETARGET_COOLDOWN_MS=10000;
+
+function makeClientSessionId() {{
+  try {{
+    if(window.crypto && typeof window.crypto.randomUUID==="function")
+      return window.crypto.randomUUID();
+  }} catch(_) {{}}
+  return String(Date.now())+"-"+Math.random().toString(36).slice(2);
+}}
+const CLIENT_SESSION_ID=makeClientSessionId();
 
 function api(path) {{ return path+"?"+BOOT.query; }}
 async function jsonFetch(path, options={{}}) {{
@@ -430,6 +481,43 @@ function fmtRate(n) {{
   while(x>=1024&&i<u.length-1){{x/=1024;i++;}}
   return x.toFixed(i?1:0)+" "+u[i];
 }}
+function resetPlaybackRate() {{
+  try {{
+    if(Math.abs(Number(video.playbackRate||1)-1)>0.001) video.playbackRate=1;
+  }} catch(_) {{}}
+}}
+
+function safeSeek(target) {{
+  if(!Number.isFinite(target) || target<0) return false;
+  try {{
+    video.currentTime=target;
+    return true;
+  }} catch(_) {{
+    return false;
+  }}
+}}
+
+function correctSyncedDrift(target) {{
+  if(!Number.isFinite(target)) return;
+  const signed=(video.currentTime||0)-target;
+  const drift=Math.abs(signed);
+  if(drift>=HARD_DRIFT_SECONDS) {{
+    const now=Date.now();
+    if(now-lastHardSyncSeekAt>=HARD_SEEK_COOLDOWN_MS) {{
+      resetPlaybackRate();
+      if(safeSeek(target)) lastHardSyncSeekAt=now;
+    }} else {{
+      video.playbackRate=signed<0?1.04:0.96;
+    }}
+    return;
+  }}
+  if(drift>=SOFT_DRIFT_START) {{
+    video.playbackRate=signed<0?1.04:0.96;
+    return;
+  }}
+  if(drift<=SOFT_DRIFT_STOP) resetPlaybackRate();
+}}
+
 async function applyState(s) {{
   lastState=s;
   document.getElementById("title").textContent=(s.title||"Movie Night")+(s.release_source?" • "+s.release_source:"");
@@ -446,21 +534,44 @@ async function applyState(s) {{
   document.getElementById("play").disabled=!s.is_host;
   document.getElementById("pause").disabled=!s.is_host;
   document.getElementById("end").disabled=!s.is_host;
+  syncButton.disabled=!!s.is_host;
+  if(s.is_host) syncButton.textContent="Host";
+  else if(s.sync_status==="joining") syncButton.textContent=syncRequested?"Syncing…":"Tap to Sync";
+  else syncButton.textContent="Synced";
 
   if(s.ended) {{
     terminated=true;
+    resetPlaybackRate();
     video.pause();
     video.removeAttribute("src");
     video.load();
     document.getElementById("play").disabled=true;
     document.getElementById("pause").disabled=true;
     document.getElementById("end").disabled=true;
+    syncButton.disabled=true;
     notice.textContent="Movie Night has ended.";
     return;
   }}
 
-  if(s.stream_token && s.stream_url && s.stream_token!==lastToken) {{
+  const streamConsumer=String(s.stream_consumer||"");
+  if(
+    s.stream_token &&
+    s.stream_url &&
+    (
+      s.stream_token!==lastToken ||
+      streamConsumer!==lastStreamConsumer
+    )
+  ) {{
     lastToken=s.stream_token;
+    lastStreamConsumer=streamConsumer;
+    if(!s.is_host) {{
+      syncRequested=false;
+      syncGestureGranted=false;
+      joinTarget=null;
+      lastJoinRetargetAt=0;
+      lastHardSyncSeekAt=0;
+    }}
+    resetPlaybackRate();
     video.src=s.stream_url;
     video.load();
   }}
@@ -469,23 +580,76 @@ async function applyState(s) {{
     return;
   }}
 
+  if(!s.is_host && s.sync_requested) syncRequested=true;
+
   const target=Number(s.position_seconds||0);
-  const drift=Math.abs((video.currentTime||0)-target);
   remoteApply=true;
   try {{
-    if(drift>1.75 && Number.isFinite(target)) video.currentTime=target;
-    if(s.sync_status==="joining") {{
-      if(!video.paused) video.pause();
-      notice.textContent=
-        "Joining Movie Night… buffering around "+Math.floor(target/60)+":"+
-        String(Math.floor(target%60)).padStart(2,"0")+
-        " without pausing the room.";
-    }} else {{
+    if(s.is_host) {{
+      resetPlaybackRate();
       if((s.state==="paused" || s.state==="buffering") && !video.paused) video.pause();
-      if(s.state==="buffering") notice.textContent="Buffering the group for smoother playback…";
       if(s.state==="playing" && video.paused) {{
-        try {{ await video.play(); notice.textContent=""; }}
-        catch(_) {{ notice.textContent="Tap Sync once to allow synchronized playback."; }}
+        try {{ await video.play(); }} catch(_) {{}}
+      }}
+    }} else if(s.sync_status==="joining") {{
+      resetPlaybackRate();
+      if(!syncRequested) {{
+        if(!video.paused) video.pause();
+        notice.textContent="Tap to Sync once to join playback with sound.";
+      }} else {{
+        if(joinTarget===null) {{
+          const stable=Number(s.sync_target_position);
+          joinTarget=Number.isFinite(stable)?stable:target;
+        }}
+
+        const liveDrift=Math.abs((video.currentTime||0)-target);
+        const now=Date.now();
+        if(
+          syncGestureGranted &&
+          Number.isFinite(target) &&
+          liveDrift>=JOIN_RETARGET_SECONDS &&
+          now-lastJoinRetargetAt>=JOIN_RETARGET_COOLDOWN_MS
+        ) {{
+          safeSeek(target);
+          joinTarget=target;
+          lastJoinRetargetAt=now;
+        }}
+
+        if(s.state==="paused" || s.state==="buffering") {{
+          if(!video.paused) video.pause();
+        }} else if(s.state==="playing" && video.paused && syncGestureGranted) {{
+          try {{ await video.play(); }}
+          catch(_) {{
+            notice.textContent="Playback is still blocked. Tap Sync again or use the video Play control once.";
+          }}
+        }}
+
+        if(!notice.textContent || notice.textContent.startsWith("Joining Movie Night"))
+          notice.textContent=
+            "Joining Movie Night… buffering around "+Math.floor((joinTarget||0)/60)+":"+
+            String(Math.floor((joinTarget||0)%60)).padStart(2,"0")+
+            ". Playback will stay put while the buffer catches up.";
+      }}
+    }} else {{
+      joinTarget=null;
+      if(s.state==="paused" || s.state==="buffering") {{
+        resetPlaybackRate();
+        if(!video.paused) video.pause();
+        const pausedDrift=Math.abs((video.currentTime||0)-target);
+        if(pausedDrift>0.75) safeSeek(target);
+        if(s.state==="buffering") notice.textContent="Buffering the group for smoother playback…";
+      }} else if(s.state==="playing") {{
+        if(video.paused) {{
+          if(syncGestureGranted) {{
+            try {{ await video.play(); notice.textContent=""; }}
+            catch(_) {{
+              notice.textContent="Tap Sync again or use the video Play control once to restore sound.";
+            }}
+          }} else {{
+            notice.textContent="Tap Sync once to allow synchronized playback with sound.";
+          }}
+        }}
+        if(!video.paused) correctSyncedDrift(target);
       }}
     }}
   }} finally {{
@@ -510,19 +674,23 @@ async function poll() {{
     notice.textContent="Sync error: "+message;
   }}
 }}
-async function heartbeat() {{
-  if(terminated) return;
+async function heartbeat(forceSync=false) {{
+  if(terminated) return null;
   try {{
-    await jsonFetch("/movie/"+BOOT.roomId+"/heartbeat", {{
+    return await jsonFetch("/movie/"+BOOT.roomId+"/heartbeat", {{
       method:"POST",
       body:JSON.stringify({{
         position_seconds:video.currentTime||0,
         duration_seconds:Number.isFinite(video.duration)?video.duration:0,
         buffered_until_seconds:bufferedEnd(),
-        paused:video.paused
+        paused:video.paused,
+        client_session_id:CLIENT_SESSION_ID,
+        sync_requested:!!(syncRequested||forceSync)
       }})
     }});
-  }} catch(_) {{}}
+  }} catch(_) {{
+    return null;
+  }}
 }}
 async function hostAction(action, extra={{}}) {{
   if(!lastState || !lastState.is_host || remoteApply) return;
@@ -533,14 +701,50 @@ async function hostAction(action, extra={{}}) {{
     }}));
   }} catch(err) {{ notice.textContent="Control error: "+String(err.message||err); }}
 }}
-document.getElementById("sync").onclick=async()=>{{
-  if(lastState) {{
-    if(Math.abs((video.currentTime||0)-Number(lastState.position_seconds||0))>0.5)
-      video.currentTime=Number(lastState.position_seconds||0);
+syncButton.onclick=async()=>{{
+  if(!lastState || lastState.is_host || !lastState.stream_url) return;
+
+  syncRequested=true;
+  syncGestureGranted=true;
+  resetPlaybackRate();
+
+  const requestedTarget=Number(
+    lastState.sync_target_position??lastState.position_seconds??0
+  );
+  joinTarget=Number.isFinite(requestedTarget)?requestedTarget:0;
+  lastJoinRetargetAt=Date.now();
+
+  let playbackBlocked=false;
+  remoteApply=true;
+  try {{
+    if(Math.abs((video.currentTime||0)-joinTarget)>0.35)
+      safeSeek(joinTarget);
+
     if(lastState.state==="playing") {{
-      try {{ await video.play(); notice.textContent="Synced."; }} catch(_) {{}}
+      try {{
+        await video.play();
+      }} catch(_) {{
+        playbackBlocked=true;
+        notice.textContent="Your browser blocked playback. Tap the video Play control once, then Tap to Sync again.";
+      }}
+    }} else {{
+      // Prime audible playback inside the real user gesture so a later host Play
+      // is not rejected by mobile autoplay policy.
+      try {{
+        await video.play();
+        video.pause();
+        if(Math.abs((video.currentTime||0)-joinTarget)>0.5)
+          safeSeek(joinTarget);
+      }} catch(_) {{}}
     }}
+  }} finally {{
+    setTimeout(()=>{{remoteApply=false;}},150);
   }}
+
+  if(!playbackBlocked)
+    notice.textContent="Sync requested… building your buffer.";
+  const state=await heartbeat(true);
+  if(state) await applyState(state);
 }};
 document.getElementById("play").onclick=()=>hostAction("resume");
 document.getElementById("pause").onclick=()=>hostAction("pause");
@@ -548,7 +752,25 @@ document.getElementById("end").onclick=()=>{{
   if(confirm("End this Movie Night for everyone and release the room media session?"))
     hostAction("end");
 }};
-video.addEventListener("play",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("resume"); }});
+video.addEventListener("play",()=>{{
+  if(remoteApply) return;
+  if(lastState?.is_host) {{
+    hostAction("resume");
+    return;
+  }}
+  if(lastState?.stream_url) {{
+    syncGestureGranted=true;
+    syncRequested=true;
+    if(joinTarget===null) {{
+      const target=Number(lastState.sync_target_position??lastState.position_seconds??0);
+      joinTarget=Number.isFinite(target)?target:(video.currentTime||0);
+    }}
+    if(Math.abs((video.currentTime||0)-joinTarget)>0.35)
+      safeSeek(joinTarget);
+    lastJoinRetargetAt=Date.now();
+    heartbeat(true);
+  }}
+}});
 video.addEventListener("pause",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("pause"); }});
 video.addEventListener("seeked",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("seek",{{seconds:video.currentTime||0}}); }});
 video.addEventListener("error",()=>{{
@@ -557,9 +779,9 @@ video.addEventListener("error",()=>{{
     setTimeout(()=>{{ video.src=lastState.stream_url; video.load(); }},2500);
   }}
 }});
-poll();
+heartbeat(false).then(state=>{{ if(state) applyState(state); else poll(); }});
 setInterval(poll,2000);
-setInterval(heartbeat,3000);
+setInterval(()=>heartbeat(false),3000);
 </script>
 </body>
 </html>"""
