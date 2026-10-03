@@ -738,12 +738,12 @@ async function applyState(s) {{
   lastState=s;
   document.getElementById("title").textContent=(s.title||"Movie Night")+(s.release_source?" • "+s.release_source:"");
   document.getElementById("heading").textContent=
-    s.private?"🔒 Dank Shield Private Viewing":"🎬 Dank Shield Movie Night";
+    s.private?"🔒 Dank Cinema Private Session":"🎬 Dank Shield Movie Night";
   document.getElementById("state").textContent=
     (s.private?"Private • ":"")+(s.state||"—");
   document.getElementById("viewers").textContent=String(s.viewer_count||0);
   document.getElementById("role").textContent=
-    s.private&&s.is_host?"Private Host":
+    s.private&&s.is_host?"Private Session Host":
     (s.is_host?"Host":(s.sync_status==="joining"?"Joining…":"Synced Viewer"));
   const t=s.torrent||{{}};
   document.getElementById("progress").textContent=((t.progress||0)*100).toFixed(1)+"% • "+fmtRate(t.download_rate||0);
@@ -977,7 +977,7 @@ syncButton.onclick=async()=>{{
 document.getElementById("play").onclick=()=>hostAction("resume");
 document.getElementById("pause").onclick=()=>hostAction("pause");
 document.getElementById("end").onclick=()=>{{
-  if(confirm("End this Movie Night for everyone and release the room media session?"))
+  if(confirm((lastState&&lastState.private)?"End this Private Session and release its media?":"End this Movie Night for everyone and release the room media session?"))
     hostAction("end");
 }};
 video.addEventListener("play",()=>{{
