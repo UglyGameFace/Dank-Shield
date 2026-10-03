@@ -340,6 +340,12 @@ _SOURCE_METADATA_KEYS = (
     "indexer",
     "category",
     "year",
+    "tmdb",
+    "tmdb_id",
+    "tmdbId",
+    "imdb",
+    "imdb_id",
+    "imdbId",
 )
 
 
