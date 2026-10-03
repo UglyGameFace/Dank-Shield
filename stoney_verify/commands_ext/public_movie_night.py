@@ -3512,6 +3512,20 @@ class MovieNightMoreView(_OwnedView):
 
 
 class MovieNightSettingsView(_OwnedView):
+    def __init__(self, owner_id: int, *, adult_content_enabled: bool = False) -> None:
+        super().__init__(owner_id)
+        self.adult_content_enabled = bool(adult_content_enabled)
+        self.adult_content.label = (
+            "Adult Content: On"
+            if self.adult_content_enabled
+            else "Adult Content: Off"
+        )
+        self.adult_content.style = (
+            discord.ButtonStyle.success
+            if self.adult_content_enabled
+            else discord.ButtonStyle.secondary
+        )
+
     @discord.ui.button(label="Provider Deck", emoji="🎞️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:settings:providers")
     async def providers(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -3528,6 +3542,45 @@ class MovieNightSettingsView(_OwnedView):
         from .public_community_pings import open_community_ping_setup
         await open_community_ping_setup(interaction, replace_message=True)
 
+    @discord.ui.button(label="Adult Content: Off", emoji="🔞", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:settings:adult")
+    async def adult_content(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _staff_authorized(interaction):
+            return await _movie_hub_notice(
+                interaction,
+                "❌ Manage Server or Administrator is required for Cinema Settings.",
+            )
+        guild = interaction.guild
+        if guild is None:
+            return await _private(interaction, "❌ Dank Cinema settings only work inside a server.")
+
+        raw, preferences = await load_movie_night_preferences(
+            int(guild.id),
+            refresh=True,
+        )
+        updated = set_adult_content_enabled(
+            preferences,
+            not preferences.adult_content_enabled,
+        )
+        applied, _saved = await save_movie_night_preferences(
+            int(guild.id),
+            expected_config=raw,
+            updated=updated,
+        )
+        if not applied:
+            return await _replace(
+                interaction,
+                content="⚠️ Cinema Settings changed while you were editing. Refreshed the current values.",
+                embed=_settings_embed(
+                    adult_content_enabled=preferences.adult_content_enabled,
+                ),
+                view=MovieNightSettingsView(
+                    self.owner_id,
+                    adult_content_enabled=preferences.adult_content_enabled,
+                ),
+            )
+        await open_movie_night_settings(interaction, replace_message=True)
+
     @discord.ui.button(label="Session & Lifecycle", emoji="📊", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:settings:status")
     async def status(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -3535,7 +3588,10 @@ class MovieNightSettingsView(_OwnedView):
         await _replace(
             interaction,
             embed=_session_status_embed(interaction, room),
-            view=MovieNightSettingsView(self.owner_id),
+            view=MovieNightSettingsView(
+                self.owner_id,
+                adult_content_enabled=self.adult_content_enabled,
+            ),
         )
 
     @discord.ui.button(label="Back to Cinema", emoji="⬅️", style=discord.ButtonStyle.secondary, row=2, custom_id="dank:movie:settings:back")
@@ -3561,11 +3617,21 @@ async def open_movie_night_settings(
             interaction,
             "❌ Manage Server or Administrator is required for Cinema Settings.",
         )
-    view = MovieNightSettingsView(int(interaction.user.id))
+    _raw, preferences = await load_movie_night_preferences(
+        int(interaction.guild.id),
+        refresh=True,
+    )
+    view = MovieNightSettingsView(
+        int(interaction.user.id),
+        adult_content_enabled=preferences.adult_content_enabled,
+    )
+    embed = _settings_embed(
+        adult_content_enabled=preferences.adult_content_enabled,
+    )
     if replace_message:
-        await _replace(interaction, embed=_settings_embed(), view=view)
+        await _replace(interaction, embed=embed, view=view)
     else:
-        await _private(interaction, embed=_settings_embed(), view=view)
+        await _private(interaction, embed=embed, view=view)
 
 
 async def open_movie_night_more(
