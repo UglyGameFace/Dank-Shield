@@ -19,7 +19,7 @@ PRIVATE_MENU_RECOVERY_GRACE_SECONDS = 0.75
 PUBLIC_PANEL_LIFECYCLE_TEXT = (
     "Public panel: **persistent** — buttons stay usable across time and bot restarts.\n"
     "Private menus/dropdowns/builders: **temporary by design** — reopen them from the public panel if they expire.\n"
-    "Stale private controls self-recover to a fresh Dank Shield Control Center instead of silently failing.\n"
+    "Stale private controls reopen their own feature when Dank Shield can identify it; otherwise they fall back to the Control Center.\n"
     "Health checks setup, permissions, roles, and boot registration. It cannot inspect old dismissed/expired private menus."
 )
 
@@ -33,7 +33,7 @@ def public_panel_lifecycle_text(
     return (
         f"{public}: **persistent** — buttons stay usable across time and bot restarts.\n"
         f"{private}: **temporary by design** — reopen them from the public panel if they expire.\n"
-        "Stale private controls self-recover to a fresh Dank Shield Control Center instead of silently failing.\n"
+        "Stale private controls reopen their own feature when Dank Shield can identify it; otherwise they fall back to the Control Center.\n"
         "Health checks setup, permissions, roles, and boot registration. It cannot inspect old dismissed/expired private menus."
     )
 
@@ -42,7 +42,7 @@ def private_menu_lifecycle_text() -> str:
     minutes = max(1, int(PRIVATE_MENU_TTL_SECONDS // 60))
     return (
         f"Private control session: active for about **{minutes} minutes**. "
-        "If it expires or Dank Shield redeploys, pressing an old control opens a fresh Control Center safely."
+        "If it expires or Dank Shield redeploys, pressing an old control reopens that feature when identifiable, or falls back to the Control Center safely."
     )
 
 
