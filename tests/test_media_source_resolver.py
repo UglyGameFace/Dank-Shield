@@ -404,6 +404,7 @@ def test_invalid_info_hash_does_not_become_playable() -> None:
         "g" * 40,
         "0" * 40,
         "A" * 31,
+        "A" * 32,
         "A" * 33,
     ):
         item = {"name": "Invalid Hash", "info_hash": value}
