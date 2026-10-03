@@ -1180,3 +1180,108 @@ def test_private_room_rejects_non_owner_heartbeat() -> None:
         raise AssertionError("non-owner heartbeat unexpectedly entered private viewing")
 
     assert set(room.viewers) == {10}
+
+
+def test_host_handoff_preserves_playback_and_moves_authority() -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="torrent-token",
+        now=100.0,
+    )
+    manager.join_room(room.room_id, user_id=20, now=101.0)
+    manager.apply_host_action(
+        room.room_id,
+        host_id=10,
+        action="seek",
+        payload={"seconds": 120.0},
+        now=102.0,
+    )
+    manager.apply_host_action(
+        room.room_id,
+        host_id=10,
+        action="resume",
+        now=102.0,
+    )
+    vote = manager.propose_vote(
+        room.room_id,
+        proposer_id=10,
+        action="pause",
+        now=103.0,
+    )
+    assert not vote.resolved
+
+    transferred = manager.transfer_host(
+        room.room_id,
+        current_host_id=10,
+        new_host_id=20,
+        now=112.0,
+    )
+
+    assert transferred is room
+    assert room.host_id == 20
+    assert room.playback_state == "playing"
+    assert room.playback_position == 130.0
+    assert room.current_position(now=117.0) == 135.0
+    assert room.viewers[20].sync_ready is True
+    assert room.viewers[20].position_seconds == 130.0
+    assert vote.resolved is True
+    assert vote.passed is False
+
+    manager.apply_host_action(room.room_id, host_id=20, action="pause", now=117.0)
+    assert room.playback_state == "paused"
+    assert room.playback_position == 135.0
+
+    try:
+        manager.apply_host_action(room.room_id, host_id=10, action="resume", now=118.0)
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("previous host unexpectedly kept playback authority")
+
+
+def test_host_handoff_requires_active_viewer_and_is_disabled_for_private() -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=30)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        now=100.0,
+    )
+    manager.join_room(room.room_id, user_id=20, now=100.0)
+
+    try:
+        manager.transfer_host(
+            room.room_id,
+            current_host_id=10,
+            new_host_id=20,
+            now=200.0,
+        )
+    except PermissionError as exc:
+        assert "active" in str(exc).lower()
+    else:
+        raise AssertionError("inactive viewer unexpectedly became host")
+
+    room.ended = True
+    private_room = manager.create_room(
+        guild_id=1,
+        channel_id=3,
+        host_id=10,
+        stream_token="",
+        mode="private",
+        now=201.0,
+    )
+    try:
+        manager.transfer_host(
+            private_room.room_id,
+            current_host_id=10,
+            new_host_id=20,
+            now=202.0,
+        )
+    except PermissionError as exc:
+        assert "private" in str(exc).lower()
+    else:
+        raise AssertionError("private viewing unexpectedly allowed host transfer")
