@@ -402,6 +402,7 @@ def test_invalid_info_hash_does_not_become_playable() -> None:
         "not-a-torrent-hash",
         "1234",
         "g" * 40,
+        "0" * 40,
         "A" * 31,
         "A" * 33,
     ):
