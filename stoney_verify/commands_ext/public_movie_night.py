@@ -2585,9 +2585,10 @@ async def _execute_passed_vote(
                 vote.vote_id,
                 "Approved playback vote had no release identity.",
             )
-            return await _private(
+            return await _movie_hub_notice(
                 interaction,
                 "❌ Approved playback vote did not contain a valid release.",
+                room=room,
             )
         try:
             return await _start_variant_source(
@@ -2627,21 +2628,30 @@ async def _propose_movie_search_vote(
             payload=payload,
         )
     except Exception as exc:
-        return await _private(interaction, f"❌ Search vote could not start: {exc}")
+        return await _movie_hub_notice(
+            interaction,
+            f"❌ Search vote could not start: {exc}",
+        )
 
     room = manager.get(room_id)
     if room is None:
-        return await _private(interaction, "❌ This Movie Night room no longer exists.")
+        return await _movie_hub_notice(
+            interaction,
+            "❌ This Movie Night room no longer exists.",
+        )
     if vote.resolved and vote.passed:
         return await _execute_passed_vote(interaction, room, vote)
 
     selected = catalog_movie.title if catalog_movie is not None else _compact(query)
     if catalog_movie is not None and catalog_movie.year:
         selected = f"{selected} ({catalog_movie.year})"
-    await _private(
+    await _movie_hub_notice(
         interaction,
-        f"🗳️ Search vote opened for **{selected}**. "
-        "Other active viewers can vote from their /movie panel.",
+        (
+            f"🗳️ Search vote opened for **{selected}**. "
+            "Other active viewers can vote from this Dank Cinema panel."
+        ),
+        room=room,
     )
 
 
