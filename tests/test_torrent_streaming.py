@@ -150,6 +150,12 @@ def test_live_torrent_status_exposes_seed_and_leech_counts(monkeypatch, tmp_path
     assert status["seed_leech_ratio"] == 0.5
 
 
+def test_torrent_session_keeps_dht_enabled_for_hash_only_magnets(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    assert manager.lt.settings["enable_dht"] is True
+    assert manager.lt.settings["enable_lsd"] is False
+
+
 def test_magnet_and_torrent_source_detection() -> None:
     magnet = "magnet:?xt=urn:btih:ABC123&dn=Public+Domain"
     assert find_magnet(f"watch this {magnet}") == magnet
