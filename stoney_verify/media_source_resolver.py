@@ -250,9 +250,36 @@ def _validate_request_url(value: str) -> str:
 def _extract_items(payload: Any) -> list[Mapping[str, Any]]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, Mapping)]
-    if isinstance(payload, Mapping):
-        for key in ("results", "items", "releases", "variants"):
-            value = payload.get(key)
+    if not isinstance(payload, Mapping):
+        return []
+
+    for key in (
+        "results",
+        "items",
+        "releases",
+        "variants",
+        "torrents",
+        "movies",
+        "entries",
+    ):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, Mapping)]
+
+    nested = payload.get("data")
+    if isinstance(nested, list):
+        return [item for item in nested if isinstance(item, Mapping)]
+    if isinstance(nested, Mapping):
+        for key in (
+            "results",
+            "items",
+            "releases",
+            "variants",
+            "torrents",
+            "movies",
+            "entries",
+        ):
+            value = nested.get(key)
             if isinstance(value, list):
                 return [item for item in value if isinstance(item, Mapping)]
     return []
@@ -266,10 +293,17 @@ def _variant_from_item(
         item.get("title")
         or item.get("name")
         or item.get("movie")
+        or item.get("display_name")
+        or item.get("filename")
     )
     source_ref = _safe_source_ref(
         item.get("source_ref")
         or item.get("magnet")
+        or item.get("magnet_uri")
+        or item.get("magnet_url")
+        or item.get("torrent")
+        or item.get("torrent_url")
+        or item.get("download_url")
         or item.get("url")
     )
     if not title or not source_ref:
@@ -278,6 +312,7 @@ def _variant_from_item(
     release_name = _clean_title(
         item.get("release_name")
         or item.get("filename")
+        or item.get("file_name")
         or item.get("name")
         or title
     )
@@ -299,15 +334,26 @@ def _variant_from_item(
         "source_reported_verified": False,
     }
 
-    seeds = _safe_int(item.get("seeds") or item.get("seeders"))
+    seeds = _safe_int(
+        item.get("seeds")
+        or item.get("seeders")
+        or item.get("seed")
+        or item.get("seed_count")
+    )
     leechers = _safe_int(
         item.get("leechers")
         or item.get("leeches")
+        or item.get("leech")
         or item.get("leechers_count")
+        or item.get("leech_count")
     )
     peers = max(
         seeds + leechers,
-        _safe_int(item.get("peers") or item.get("peer_count")),
+        _safe_int(
+            item.get("peers")
+            or item.get("peer_count")
+            or item.get("total_peers")
+        ),
     )
 
     return ResolvedMediaVariant(
@@ -319,6 +365,8 @@ def _variant_from_item(
             item.get("file_size")
             or item.get("size_bytes")
             or item.get("size")
+            or item.get("length")
+            or item.get("bytes")
         ),
         seeds=seeds,
         leechers=leechers,
