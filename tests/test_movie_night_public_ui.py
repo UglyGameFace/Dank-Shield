@@ -158,19 +158,10 @@ def test_host_handoff_choices_only_include_active_non_host_viewers(monkeypatch) 
         channel_id=2,
         host_id=10,
         stream_token="",
-        now=100.0,
     )
-    manager.join_room(room.room_id, user_id=20, now=100.0)
-    manager.join_room(room.room_id, user_id=30, now=100.0)
-    manager.heartbeat(
-        room.room_id,
-        user_id=20,
-        position_seconds=0,
-        byte_position=0,
-        buffered_until_byte=0,
-        paused=True,
-        now=130.0,
-    )
+    manager.join_room(room.room_id, user_id=20)
+    manager.join_room(room.room_id, user_id=30)
+    room.viewers[30].last_seen = -1_000_000.0
     monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
 
     guild = SimpleNamespace(
