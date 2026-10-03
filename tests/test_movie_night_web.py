@@ -386,7 +386,7 @@ def test_movie_night_state_exposes_private_room_mode(monkeypatch) -> None:
         10,
         "uid=10&exp=9999999999&sig=test",
     )
-    assert "Dank Shield Private Viewing" in html
+    assert "Dank Cinema Private Session" in html\n    assert "Private Session Host" in html\n    assert "End this Private Session and release its media?" in html
     assert 's.private?"Private • "' in html
     assert 's.private&&s.is_host?"Private Host"' in html
 
