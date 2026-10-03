@@ -72,6 +72,14 @@ def test_movie_night_hub_and_admin_surfaces_are_progressively_disclosed() -> Non
         "Watch Alone",
         "More",
     }
+    more_button = next(
+        item
+        for item in hub.children
+        if isinstance(item, discord.ui.Button) and item.label == "More"
+    )
+    # Discord rejects punctuation masquerading as a component emoji. Keep More
+    # text-only unless it uses a real Unicode/custom emoji accepted by Discord.
+    assert more_button.emoji is None
     assert "Cinema Settings" not in _labels(more)
     assert {
         "Notifications",
