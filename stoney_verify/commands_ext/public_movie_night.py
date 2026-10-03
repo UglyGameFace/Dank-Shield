@@ -2345,7 +2345,7 @@ class SourceActionView(_OwnedView):
             )
         await open_movie_night_sources(interaction, replace_message=True)
 
-    @discord.ui.button(label="Edit Provider", emoji="✏️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:source:edit")
+    @discord.ui.button(label="Edit Source", emoji="✏️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:source:edit")
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         guild = interaction.guild
@@ -2370,20 +2370,21 @@ class SourceActionView(_OwnedView):
                 owner_id=self.owner_id,
                 baseline=raw,
                 source=source,
+                provider_type=source.provider_type,
             )
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Enable Provider", emoji="✅", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:source:enable")
+    @discord.ui.button(label="Enable Source", emoji="✅", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:source:enable")
     async def enable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._mutate(interaction, enabled=True)
 
-    @discord.ui.button(label="Pause Provider", emoji="⏸️", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:source:pause")
+    @discord.ui.button(label="Pause Source", emoji="⏸️", style=discord.ButtonStyle.secondary, row=0, custom_id="dank:movie:source:pause")
     async def disable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._mutate(interaction, enabled=False)
 
-    @discord.ui.button(label="Remove Provider", emoji="🗑️", style=discord.ButtonStyle.danger, row=0, custom_id="dank:movie:source:remove")
+    @discord.ui.button(label="Remove Source", emoji="🗑️", style=discord.ButtonStyle.danger, row=0, custom_id="dank:movie:source:remove")
     async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await self._mutate(interaction, remove=True)
@@ -2397,10 +2398,17 @@ class SourceActionView(_OwnedView):
 async def _open_source_picker(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
-        return await _private(interaction, "❌ Use Movie Night inside a server.")
+        return await _private(interaction, "❌ Use Dank Cinema inside a server.")
     _raw, registry = await _sources_state(int(guild.id))
     if not registry.sources:
-        return await _private(interaction, "ℹ️ No custom Movie Night sources are configured.")
+        return await _private(interaction, "ℹ️ No custom Movie Sources are configured.")
+
+    def source_kind(source: CustomMediaSource) -> str:
+        if source.provider_type == PROVIDER_TYPE_FEED:
+            return "RSS Feed"
+        if source.provider_type == PROVIDER_TYPE_JSON:
+            return "Search Provider"
+        return "Reference Link"
 
     async def picked(pick_interaction: discord.Interaction, value: str) -> None:
         source = next(
@@ -2409,13 +2417,14 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
         )
         if source is None:
             return await _private(pick_interaction, "❌ That source no longer exists.")
+        kind = source_kind(source)
         embed = discord.Embed(
-            title=f"🧩 Dank Provider • {source.label}",
+            title=f"🎞️ Dank Cinema • {source.label}",
             description=(
                 f"State: **{'Enabled' if source.enabled else 'Disabled'}**\n"
-                f"Mode: **{'In-App playable provider' if source.provider_type == PROVIDER_TYPE_JSON else 'External-only browser link'}**\n"
-                f"Search URL: {source.endpoint_url}\n\n"
-                "Use **Edit Provider** to change the name or URL. Dank Cinema keeps the internal "
+                f"Type: **{kind}**\n"
+                f"URL: {source.endpoint_url}\n\n"
+                "Use **Edit Source** to change the name or URL. Dank Cinema keeps the internal "
                 "source identity automatically."
             ),
             color=discord.Color.blurple(),
@@ -2430,10 +2439,7 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
         DankChoice(
             label=source.label,
             value=source.source_id,
-            description=(
-                ("In-App • " if source.provider_type == PROVIDER_TYPE_JSON else "External-only • ")
-                + ("Enabled" if source.enabled else "Disabled")
-            ),
+            description=f"{source_kind(source)} • {'Enabled' if source.enabled else 'Disabled'}",
             emoji="✅" if source.enabled else "⏸️",
         )
         for source in registry.sources
@@ -2443,19 +2449,21 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
         choices=choices,
         on_pick=picked,
         custom_id="dank:movie:sources:manage",
-        placeholder="Choose a Movie Night source…",
-        title="Manage Movie Night Source",
+        placeholder="Choose a Movie Source…",
+        title="Manage Movie Source",
         on_home=lambda back_interaction: open_movie_night_sources(
             back_interaction,
             replace_message=True,
         ),
-        home_label="Provider Deck",
+        home_label="Movie Sources",
     )
     await _replace(
         interaction,
         embed=discord.Embed(
-            title="🧩 Dank Cinema • Provider Lab",
-            description="Manage one advanced custom provider without exposing it to regular members.",
+            title="🎞️ Dank Cinema • Manage Movie Sources",
+            description=(
+                "Choose a Search Provider, RSS Feed, or Reference Link to edit, pause, or remove it."
+            ),
             color=discord.Color.blurple(),
         ),
         view=view,
@@ -2463,38 +2471,59 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
 
 
 class MovieNightSourcesView(_OwnedView):
-    @discord.ui.button(label="Add In-App Provider", emoji="🧩", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:sources:add-inapp")
+    @discord.ui.button(label="Add Search Provider", emoji="🧩", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:sources:add-inapp")
     async def add_json(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not _staff_authorized(interaction):
             return await _private(interaction, "❌ Manage Server or Administrator is required.")
         guild = interaction.guild
         if guild is None:
-            return await _private(interaction, "❌ Use Movie Night inside a server.")
+            return await _private(interaction, "❌ Use Dank Cinema inside a server.")
         raw, _registry = await _sources_state(int(guild.id))
         await interaction.response.send_modal(
-            CustomSourceModal(owner_id=self.owner_id, baseline=raw)
+            CustomSourceModal(
+                owner_id=self.owner_id,
+                baseline=raw,
+                provider_type=PROVIDER_TYPE_JSON,
+            )
         )
 
-    @discord.ui.button(label="Add External-Only Link", emoji="🔗", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:add-external")
+    @discord.ui.button(label="Add RSS Feed", emoji="📡", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:sources:add-rss")
+    async def add_feed(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _staff_authorized(interaction):
+            return await _private(interaction, "❌ Manage Server or Administrator is required.")
+        guild = interaction.guild
+        if guild is None:
+            return await _private(interaction, "❌ Use Dank Cinema inside a server.")
+        raw, _registry = await _sources_state(int(guild.id))
+        await interaction.response.send_modal(
+            CustomSourceModal(
+                owner_id=self.owner_id,
+                baseline=raw,
+                provider_type=PROVIDER_TYPE_FEED,
+            )
+        )
+
+    @discord.ui.button(label="Manage Sources", emoji="🛠️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:sources:manage-button")
+    async def manage(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _staff_authorized(interaction):
+            return await _private(interaction, "❌ Manage Server or Administrator is required.")
+        await _open_source_picker(interaction)
+
+    @discord.ui.button(label="Add Reference Link", emoji="🔗", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:add-external")
     async def add_external(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not _staff_authorized(interaction):
             return await _private(interaction, "❌ Manage Server or Administrator is required.")
         guild = interaction.guild
         if guild is None:
-            return await _private(interaction, "❌ Use Movie Night inside a server.")
+            return await _private(interaction, "❌ Use Dank Cinema inside a server.")
         raw, _registry = await _sources_state(int(guild.id))
         await interaction.response.send_modal(
             ExternalSearchProviderModal(owner_id=self.owner_id, baseline=raw)
         )
-
-    @discord.ui.button(label="Manage Providers", emoji="🛠️", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:sources:manage-button")
-    async def manage(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        if not _staff_authorized(interaction):
-            return await _private(interaction, "❌ Manage Server or Administrator is required.")
-        await _open_source_picker(interaction)
 
     @discord.ui.button(label="Back to Settings", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:back")
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2504,7 +2533,7 @@ class MovieNightSourcesView(_OwnedView):
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:sources:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _replace(interaction, content="Dank Cinema provider deck closed.", embed=None, view=None)
+        await _replace(interaction, content="Dank Cinema Movie Sources closed.", embed=None, view=None)
 
 
 async def open_movie_night_sources(
