@@ -120,6 +120,63 @@ def test_movie_night_hub_and_admin_surfaces_are_progressively_disclosed() -> Non
 
 
 
+def test_pass_host_is_only_visible_to_current_public_host(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+    )
+    manager.join_room(room.room_id, user_id=20)
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+
+    host_labels = _labels(movie_ui.MovieNightMoreView(10, room, staff=False))
+    viewer_labels = _labels(movie_ui.MovieNightMoreView(20, room, staff=False))
+
+    assert "Pass Host" in host_labels
+    assert "Pass Host" not in viewer_labels
+
+    room.ended = True
+    private_room = manager.create_room(
+        guild_id=1,
+        channel_id=3,
+        host_id=10,
+        stream_token="",
+        mode="private",
+        now=102.0,
+    )
+    private_labels = _labels(movie_ui.MovieNightMoreView(10, private_room, staff=False))
+    assert "Pass Host" not in private_labels
+
+
+def test_host_handoff_choices_only_include_active_non_host_viewers(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=40)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+    )
+    manager.join_room(room.room_id, user_id=20)
+    manager.join_room(room.room_id, user_id=30)
+    room.viewers[30].last_seen = -1_000_000.0
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+
+    guild = SimpleNamespace(
+        get_member=lambda uid: SimpleNamespace(
+            display_name={20: "Alex", 30: "Stale Viewer"}.get(uid, str(uid)),
+            name={20: "Alex", 30: "Stale Viewer"}.get(uid, str(uid)),
+        )
+    )
+    interaction = SimpleNamespace(guild=guild)
+    choices = movie_ui._host_handoff_choices(interaction, room)
+
+    assert [choice.value for choice in choices] == ["20"]
+    assert choices[0].label == "Alex"
+    assert choices[0].default is False
+
+
 def test_movie_night_hub_changes_controls_by_room_mode_and_vote_context(monkeypatch) -> None:
     manager = MovieNightManager(viewer_ttl_seconds=120)
     public_room = manager.create_room(

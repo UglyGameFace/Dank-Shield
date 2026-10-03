@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
@@ -11,6 +12,7 @@ import stoney_verify.torrent_streaming as torrent_streaming
 from stoney_verify.torrent_media_server import _validate_public_base_url
 from stoney_verify.torrent_streaming import (
     TorrentMediaManager,
+    TorrentSessionUnavailableError,
     TorrentStreamSession,
     find_magnet,
     is_playable_filename,
@@ -603,6 +605,95 @@ def test_live_session_capacity_counts_existing_sessions(monkeypatch, tmp_path: P
     manager._sessions["existing"] = object()  # type: ignore[assignment]
     with pytest.raises(RuntimeError, match="1-unique-torrent"):
         asyncio.run(manager._reserve_start())
+
+
+def _cleanup_session(
+    tmp_path: Path,
+    *,
+    token: str,
+    handle=None,
+) -> TorrentStreamSession:
+    root = tmp_path / token
+    root.mkdir(parents=True, exist_ok=True)
+    return TorrentStreamSession(
+        token=token,
+        secret="secret",
+        owner_id=2,
+        guild_id=1,
+        source_kind="magnet",
+        source_identity=f"btih:{token}",
+        save_root=root,
+        handle=handle or _FakeHandle(),
+        info=object(),
+        file_index=0,
+        file_path="movie.mp4",
+        file_name="movie.mp4",
+        file_size=4096,
+        file_offset=0,
+        piece_length=1024,
+        first_piece=0,
+        last_piece=3,
+        created_at=0.0,
+        last_access=time.monotonic() - 10_000.0,
+    )
+
+
+def test_idle_cleanup_never_reclaims_leased_movie_night_session(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.idle_ttl_seconds = 120.0
+    session = _cleanup_session(tmp_path, token="leased")
+    session.leases.add("movie:1:2")
+    manager._sessions[session.token] = session
+    manager._identity_index[session.source_identity] = session.token
+
+    removed = asyncio.run(manager.cleanup_expired())
+
+    assert removed == 0
+    assert manager._sessions[session.token] is session
+    assert manager.lt.session_obj.removed == []
+
+
+def test_idle_cleanup_rechecks_refresh_before_reclaim(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.idle_ttl_seconds = 120.0
+    session = _cleanup_session(tmp_path, token="refreshed")
+    manager._sessions[session.token] = session
+    manager._identity_index[session.source_identity] = session.token
+
+    fetched = asyncio.run(manager.get(session.token))
+    assert fetched is session
+    removed = asyncio.run(manager.cleanup_expired())
+
+    assert removed == 0
+    assert session.token in manager._sessions
+
+
+def test_invalid_libtorrent_handle_becomes_controlled_session_error(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+
+    class _DeadHandle(_FakeHandle):
+        def is_valid(self) -> bool:
+            return False
+
+        def prioritize_pieces(self, updates) -> None:
+            _ = updates
+            raise RuntimeError("invalid torrent handle used [libtorrent:20]")
+
+    session = _cleanup_session(
+        tmp_path,
+        token="dead",
+        handle=_DeadHandle(),
+    )
+    manager._sessions[session.token] = session
+    manager._identity_index[session.source_identity] = session.token
+
+    assert manager.session_usable(session) is False
+    with pytest.raises(TorrentSessionUnavailableError):
+        manager.prioritize_range(session, 0, 1023)
+
+    discarded = asyncio.run(manager.discard_unusable_session(session.token))
+    assert discarded is True
+    assert session.token not in manager._sessions
 
 
 def test_stream_url_is_signed_and_expiring(monkeypatch, tmp_path: Path) -> None:

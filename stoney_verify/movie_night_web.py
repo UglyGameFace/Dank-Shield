@@ -15,7 +15,10 @@ from aiohttp import web
 
 from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
 from stoney_verify.movie_night_session import terminate_movie_night_room
-from stoney_verify.torrent_streaming import get_torrent_manager
+from stoney_verify.torrent_streaming import (
+    TorrentSessionUnavailableError,
+    get_torrent_manager,
+)
 
 
 def _secret() -> str:
@@ -165,6 +168,9 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     movie_manager = get_movie_night_manager()
     torrent_manager = get_torrent_manager()
     session = await torrent_manager.get(room.stream_token) if room.stream_token else None
+    if session is not None and not torrent_manager.session_usable(session):
+        await torrent_manager.discard_unusable_session(room.stream_token)
+        session = None
 
     candidate = room.candidates.get(room.current_candidate_id) if room.current_candidate_id else None
     variant = (
@@ -199,7 +205,15 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         if session is not None
         else ""
     )
-    torrent_status = torrent_manager.status(session) if session is not None else {}
+    try:
+        torrent_status = torrent_manager.status(session) if session is not None else {}
+    except TorrentSessionUnavailableError:
+        if room.stream_token:
+            await torrent_manager.discard_unusable_session(room.stream_token)
+        session = None
+        stream_url = ""
+        consumer_key = ""
+        torrent_status = {}
     swarm = _swarm_display(torrent_status, variant)
     sync_ready = bool(
         int(user_id) == int(room.host_id)
@@ -338,6 +352,9 @@ async def movie_night_heartbeat(request: web.Request) -> web.Response:
     torrent_manager = get_torrent_manager()
     movie_manager = get_movie_night_manager()
     session = await torrent_manager.get(room.stream_token) if room.stream_token else None
+    if session is not None and not torrent_manager.session_usable(session):
+        await torrent_manager.discard_unusable_session(room.stream_token)
+        session = None
     viewer_before = room.viewers.get(int(uid))
     position, duration, buffered, paused, refresh_warmup = _preserve_refresh_telemetry(
         viewer_before,

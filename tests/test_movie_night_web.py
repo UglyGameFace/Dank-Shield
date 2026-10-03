@@ -385,3 +385,37 @@ def test_movie_night_state_exposes_private_room_mode(monkeypatch) -> None:
     assert "Dank Shield Private Viewing" in html
     assert 's.private?"Private • "' in html
     assert 's.private&&s.is_host?"Private Host"' in html
+
+
+def test_watch_state_flips_host_authority_without_new_room(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+    )
+    manager.join_room(room.room_id, user_id=20)
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(
+        movie_night_web,
+        "get_torrent_manager",
+        lambda: SimpleNamespace(),
+    )
+
+    before_old = asyncio.run(movie_night_web._state_payload(room, 10))
+    before_new = asyncio.run(movie_night_web._state_payload(room, 20))
+    assert before_old["is_host"] is True
+    assert before_new["is_host"] is False
+
+    manager.transfer_host(
+        room.room_id,
+        current_host_id=10,
+        new_host_id=20,
+    )
+
+    after_old = asyncio.run(movie_night_web._state_payload(room, 10))
+    after_new = asyncio.run(movie_night_web._state_payload(room, 20))
+    assert after_old["is_host"] is False
+    assert after_new["is_host"] is True
+    assert after_old["room_id"] == after_new["room_id"] == room.room_id
