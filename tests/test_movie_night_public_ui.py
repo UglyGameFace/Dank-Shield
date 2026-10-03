@@ -127,9 +127,8 @@ def test_pass_host_is_only_visible_to_current_public_host(monkeypatch) -> None:
         channel_id=2,
         host_id=10,
         stream_token="",
-        now=100.0,
     )
-    manager.join_room(room.room_id, user_id=20, now=101.0)
+    manager.join_room(room.room_id, user_id=20)
     monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
 
     host_labels = _labels(movie_ui.MovieNightMoreView(10, room, staff=False))
