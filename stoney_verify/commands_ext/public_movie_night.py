@@ -54,6 +54,11 @@ from stoney_verify.movie_night import (
     get_movie_night_manager,
     movie_room_lease_key,
 )
+from stoney_verify.movie_night_preferences import (
+    load_movie_night_preferences,
+    save_movie_night_preferences,
+    set_adult_content_enabled,
+)
 from stoney_verify.movie_night_session import terminate_movie_night_room
 from stoney_verify.movie_night_web import movie_night_watch_url
 from stoney_verify.panel_lifecycle import (
@@ -92,6 +97,61 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 def _compact(value: Any, limit: int = 180) -> str:
     return " ".join(str(value or "").split())[:limit]
+
+
+_EXPLICIT_ADULT_RE = re.compile(
+    r"(?:^|[^a-z0-9])(?:xxx|porn|pornographic|adult[ _-]?video)(?:$|[^a-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def _looks_explicit_adult(value: Any) -> bool:
+    return bool(_EXPLICIT_ADULT_RE.search(str(value or "")))
+
+
+def _variant_is_explicit_adult(variant: ResolvedMediaVariant) -> bool:
+    if _looks_explicit_adult(variant.title):
+        return True
+    metadata = variant.metadata if isinstance(variant.metadata, Mapping) else {}
+    values: list[Any] = [
+        metadata.get("category"),
+        metadata.get("type"),
+    ]
+    source_reported = (
+        metadata.get("source_reported")
+        if isinstance(metadata.get("source_reported"), Mapping)
+        else {}
+    )
+    values.extend(
+        source_reported.get(key)
+        for key in ("category", "type", "tags", "classification")
+    )
+    return any(_looks_explicit_adult(value) for value in values if value)
+
+
+def _filter_adult_provider_results(
+    outcome: MediaSourceSearchOutcome,
+    *,
+    enabled: bool,
+) -> MediaSourceSearchOutcome:
+    if enabled:
+        return outcome
+    kept = tuple(
+        variant
+        for variant in outcome.variants
+        if not _variant_is_explicit_adult(variant)
+    )
+    removed = len(outcome.variants) - len(kept)
+    if removed <= 0:
+        return outcome
+    errors = list(outcome.errors)
+    errors.append(
+        f"Filtered {removed} explicit adult provider release(s) by server Cinema setting."
+    )
+    return MediaSourceSearchOutcome(
+        variants=kept,
+        errors=tuple(errors[:20]),
+    )
 
 
 def _format_bytes(value: Any) -> str:
@@ -997,13 +1057,22 @@ def _more_embed(
     return embed
 
 
-def _settings_embed() -> discord.Embed:
+def _settings_embed(*, adult_content_enabled: bool = False) -> discord.Embed:
     embed = discord.Embed(
         title="⚙️ Dank Cinema • Settings",
         description=(
             "Staff-only configuration. Viewer-facing movie controls stay out of this screen."
         ),
         color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="👁️ Viewer Experience",
+        value=(
+            f"🔞 **Adult Content:** {'On' if adult_content_enabled else 'Off'}\n"
+            "Controls TMDB adult catalog results and filters explicit adult-labeled provider results. "
+            "Direct magnets/.torrent files are not content-classified."
+        )[:1024],
+        inline=False,
     )
     embed.add_field(
         name="🎞️ Media Sources",
