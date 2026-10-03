@@ -184,7 +184,6 @@ def test_movie_night_hub_changes_controls_by_room_mode_and_vote_context(monkeypa
         channel_id=2,
         host_id=10,
         stream_token="",
-        now=100.0,
     )
     monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
 
@@ -195,13 +194,12 @@ def test_movie_night_hub_changes_controls_by_room_mode_and_vote_context(monkeypa
     assert "Yes" not in public_labels
     assert "No" not in public_labels
 
-    manager.join_room(public_room.room_id, user_id=20, now=100.0)
+    manager.join_room(public_room.room_id, user_id=20)
     manager.propose_vote(
         public_room.room_id,
         proposer_id=10,
         action="search",
         payload={"query": "Blade Runner"},
-        now=101.0,
     )
     voting_labels = _labels(movie_ui.MovieNightHubView(10, public_room))
     assert {"Yes", "No"} <= voting_labels
@@ -219,6 +217,36 @@ def test_movie_night_hub_changes_controls_by_room_mode_and_vote_context(monkeypa
     assert {"Find Movie", "Movie Picks", "Queue", "More"} <= private_labels
     assert "Yes" not in private_labels
     assert "No" not in private_labels
+
+
+def test_stale_watch_party_member_gets_rejoin_control_and_clear_status(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=35)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+    )
+    room.viewers[10].last_seen = -1_000_000.0
+    room.host_last_seen = -1_000_000.0
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+
+    labels = _labels(movie_ui.MovieNightHubView(10, room))
+    assert "Rejoin Movie Night" in labels
+    assert "Start Watch Party" not in labels
+
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=10),
+        guild=SimpleNamespace(get_member=lambda _uid: None),
+    )
+    embed = movie_ui._room_embed(interaction, room)
+    text = "\n".join(
+        [str(embed.description or "")]
+        + [f"{field.name}\n{field.value}" for field in embed.fields]
+    )
+    assert "Active now: **0**" in text
+    assert "heartbeat expired after about **35 seconds**" in text
+    assert "room, queue, and movie picks were not deleted" in text
 
 
 def test_private_room_candidate_and_release_controls_drop_voting(monkeypatch) -> None:
@@ -307,6 +335,9 @@ def test_search_vote_pending_response_keeps_dank_cinema_hub(monkeypatch) -> None
         stream_token="",
     )
     manager.join_room(room.room_id, user_id=20)
+    room.viewers[10].last_seen = -1_000_000.0
+    room.host_last_seen = -1_000_000.0
+    assert 10 not in manager.active_viewers(room)
     captured: list[dict] = []
 
     async def fake_replace(interaction, **kwargs):
@@ -329,6 +360,7 @@ def test_search_vote_pending_response_keeps_dank_cinema_hub(monkeypatch) -> None
         )
     )
 
+    assert 10 in manager.active_viewers(room)
     assert captured
     payload = captured[-1]
     assert "Search vote opened" in payload["content"]
