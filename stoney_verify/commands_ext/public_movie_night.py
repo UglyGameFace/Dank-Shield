@@ -3006,8 +3006,27 @@ async def _execute_search_vote(
     outcome = _filter_outcome_for_catalog(outcome, catalog_metadata)
 
     # Provider/TMDB work can legitimately take longer than the short live-viewer
-    # heartbeat window. The Discord interaction is fresh proof that this user is
-    # still here, so renew presence before materializing search results.
+    # heartbeat window. Re-resolve the canonical room after the await boundary:
+    # another viewer may have ended/replaced the session while search was in flight.
+    current_room = manager.get(room.room_id)
+    if (
+        current_room is None
+        or current_room.ended
+        or not manager.user_can_access(current_room, int(interaction.user.id))
+    ):
+        return await _replace(
+            interaction,
+            content=(
+                "ℹ️ Movie Night changed or ended while that search was running. "
+                "The stale results were discarded."
+            ),
+            embed=_room_embed(interaction, None),
+            view=_movie_hub_view(interaction, None),
+        )
+    room = current_room
+
+    # The Discord interaction is fresh proof that this user is still here, so
+    # renew presence before materializing search results.
     manager.join_room(room.room_id, user_id=int(interaction.user.id))
     active = manager.active_viewers(room)
     actor_id = (
