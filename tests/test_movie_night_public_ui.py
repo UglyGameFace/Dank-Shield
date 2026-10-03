@@ -214,6 +214,9 @@ def test_movie_provider_page_keeps_search_and_direct_media_simple(monkeypatch) -
     assert "**Add External-Only Link**" in rendered
     assert "not** part of normal Find Movie results" in rendered
     assert "same Dank Engine adapter" in rendered
+    assert "In-App Provider Contract" in rendered
+    assert "magnet_uri" in rendered
+    assert "torrent_url" in rendered
     assert "Add In-App Provider" in _labels(movie_ui.MovieNightSourcesView(1))
     assert "Add External-Only Link" in _labels(movie_ui.MovieNightSourcesView(1))
 
