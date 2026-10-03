@@ -1276,6 +1276,10 @@ def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discor
     source = _release_source_label(metadata)
     hint = _release_hint_label(metadata)
     private_mode = _private_viewing(room)
+    collaborative = bool(
+        not private_mode
+        and len(active) > 1
+    )
     embed = discord.Embed(
         title="2/3 • Release Details",
         description=(
