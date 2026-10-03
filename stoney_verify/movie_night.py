@@ -333,9 +333,9 @@ class MovieNightManager:
     ) -> MovieNightRoom:
         room = self._require_room(room_id)
         if str(getattr(room, "mode", "watch_party") or "watch_party") != "private":
-            raise RuntimeError("Viewer invites are only available for Private Viewing.")
+            raise RuntimeError("Viewer invites are only available for a Private Session.")
         if int(host_id) != int(room.host_id):
-            raise PermissionError("Only the Private Viewing host can invite viewers.")
+            raise PermissionError("Only the Private Session host can invite viewers.")
 
         uid = int(user_id)
         if uid <= 0:
@@ -346,7 +346,7 @@ class MovieNightManager:
             return room
         if len(allowed) >= PRIVATE_VIEWER_LIMIT:
             raise RuntimeError(
-                f"Private Viewing supports up to {PRIVATE_VIEWER_LIMIT} viewers total."
+                f"Private Sessions support up to {PRIVATE_VIEWER_LIMIT} viewers total."
             )
         allowed.add(uid)
         return room
@@ -360,13 +360,13 @@ class MovieNightManager:
     ) -> MovieNightRoom:
         room = self._require_room(room_id)
         if str(getattr(room, "mode", "watch_party") or "watch_party") != "private":
-            raise RuntimeError("Viewer management is only available for Private Viewing.")
+            raise RuntimeError("Viewer management is only available for a Private Session.")
         if int(host_id) != int(room.host_id):
-            raise PermissionError("Only the Private Viewing host can remove viewers.")
+            raise PermissionError("Only the Private Session host can remove viewers.")
 
         uid = int(user_id)
         if uid == int(room.host_id):
-            raise ValueError("The Private Viewing host cannot remove themselves.")
+            raise ValueError("The Private Session host cannot remove themselves.")
         room.private_allowed_viewers.discard(uid)
         room.viewers.pop(uid, None)
         return room
@@ -1257,7 +1257,7 @@ class MovieNightManager:
         new_host = int(new_host_id)
 
         if str(getattr(room, "mode", "watch_party") or "watch_party") != "watch_party":
-            raise PermissionError("Private Viewing host ownership cannot be transferred.")
+            raise PermissionError("Private Session host ownership cannot be transferred.")
         if old_host != int(room.host_id):
             raise PermissionError("Only the current Movie Night host can pass host control.")
         if new_host == old_host:
