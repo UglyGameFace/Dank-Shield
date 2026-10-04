@@ -3558,15 +3558,22 @@ function applyMovieArtwork(movie,s) {{
     document.getElementById("movieInfo").classList.add("no-poster");
   }}
 }}
+function humanSessionStatus(s) {{
+  if(!s) return "Connecting";
+  if(!s.is_host && s.host_active===false) return "Host Away";
+  if(String(s.state||"")==="buffering") return "Buffering";
+  if(s.is_host) return "Host";
+  if(s.sync_status==="joining" || !s.sync_ready) return "Connecting";
+  return "Synced";
+}}
 function renderSiteState(s) {{
   const movie=s.movie||{{}};
   applyModeSurface(s);
   document.getElementById("healthText").textContent="Stream Health: "+streamHealthLabel(s);
-  document.getElementById("hostPresence").textContent=s.host_active?"Host online":"Host away";
+  document.getElementById("hostPresence").textContent=s.host_active?"Host Online":"Host Away";
   document.getElementById("sessionViewers").textContent=String(s.viewer_count||0);
   document.getElementById("sessionRole").textContent=s.is_host?"Host":"Viewer";
-  document.getElementById("sessionSync").textContent=
-    s.is_host?"Host clock":(s.sync_status==="joining"?"Joining":(s.sync_ready?"Synced":"Waiting"));
+  document.getElementById("sessionSync").textContent=humanSessionStatus(s);
   const year=document.getElementById("year");
   const yearWrap=document.getElementById("yearWrap");
   year.textContent=movie.year?String(movie.year):"";
@@ -3839,8 +3846,9 @@ async function applyState(s) {{
     s.private?"🔒 Dank Cinema Private Session":"🎬 Dank Cinema Watch Party";
   document.getElementById("state").textContent=s.state||"—";
   document.getElementById("viewers").textContent=String(s.viewer_count||0);
+  const sessionStatus=humanSessionStatus(s);
   document.getElementById("role").textContent=
-    s.is_host?"Hosted by You":(s.sync_status==="joining"?"Joining…":"Synced Viewer");
+    s.is_host?"Hosted by You":sessionStatus;
   renderSiteState(s);
   const t=s.torrent||{{}};
   document.getElementById("progress").textContent=((t.progress||0)*100).toFixed(1)+"% • "+fmtRate(t.download_rate||0);
@@ -4017,8 +4025,13 @@ async function poll() {{
       return;
     }}
     stateFetchFailures+=1;
-    if(stateFetchFailures>=3)
+    if(stateFetchFailures>=3) {{
       notice.textContent="Sync connection lost. Reconnecting…";
+      const sync=document.getElementById("sessionSync");
+      if(sync) sync.textContent="Reconnecting";
+      const role=document.getElementById("role");
+      if(role && !lastState?.is_host) role.textContent="Reconnecting";
+    }}
   }}
 }}
 async function heartbeat(forceSync=false) {{
