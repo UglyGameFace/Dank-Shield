@@ -860,6 +860,7 @@ video {{
   display:flex; align-items:center; justify-content:space-between; gap:8px;
   pointer-events:none;
   z-index:4;
+  transition:opacity .18s ease,transform .18s ease;
 }}
 .room-pill {{
   display:flex; align-items:center; gap:8px;
@@ -889,6 +890,7 @@ video {{
   color:#fff; background:rgba(5,12,10,.5); backdrop-filter:blur(8px);
   box-shadow:0 10px 38px rgba(0,0,0,.32);
   z-index:4;
+  transition:opacity .18s ease,transform .18s ease;
 }}
 .center-play svg {{ width:34px;height:34px; }}
 .player-chrome {{
@@ -896,7 +898,34 @@ video {{
   padding:44px 14px 13px;
   background:linear-gradient(180deg,transparent 0%,rgba(0,0,0,.58) 32%,rgba(0,0,0,.94) 100%);
   z-index:4;
+  transition:opacity .18s ease,transform .18s ease;
 }}
+.video-stage.controls-hidden {{ cursor:none; }}
+.video-stage.controls-hidden .stage-top,
+.video-stage.controls-hidden .center-play,
+.video-stage.controls-hidden .player-chrome {{
+  opacity:0;
+  pointer-events:none;
+}}
+.video-stage.controls-hidden .stage-top {{ transform:translateY(-6px); }}
+.video-stage.controls-hidden .center-play {{ transform:translate(-50%,-50%) scale(.92); }}
+.video-stage.controls-hidden .player-chrome {{ transform:translateY(9px); }}
+.tap-skip-feedback {{
+  position:absolute;top:50%;z-index:5;
+  min-width:70px;padding:12px 14px;
+  border-radius:999px;
+  display:grid;place-items:center;
+  color:#fff;background:rgba(5,12,10,.72);
+  border:1px solid rgba(255,255,255,.18);
+  backdrop-filter:blur(8px);
+  font-size:.82rem;font-weight:900;
+  opacity:0;transform:translateY(-50%) scale(.88);
+  pointer-events:none;
+  transition:opacity .16s ease,transform .16s ease;
+}}
+.tap-skip-feedback.left {{ left:9%; }}
+.tap-skip-feedback.right {{ right:9%; }}
+.tap-skip-feedback.show {{ opacity:1;transform:translateY(-50%) scale(1); }}
 .timeline-row {{ display:block; }}
 .time-row {{ display:flex;align-items:center;justify-content:space-between;margin-top:6px;font-size:.72rem;font-weight:750; }}
 .timeline {{
@@ -1085,6 +1114,8 @@ video {{
   <section class="theater" aria-label="Dank Cinema player">
     <div class="video-stage" id="videoStage">
       <video id="video" playsinline preload="metadata" controlslist="nodownload" aria-label="Dank Cinema video"></video>
+      <div class="tap-skip-feedback left" id="tapSkipLeft" aria-live="polite">↶ 10s</div>
+      <div class="tap-skip-feedback right" id="tapSkipRight" aria-live="polite">10s ↷</div>
       <div class="stage-top">
         <div class="room-pill"><span class="live-dot"></span><span id="roomMode">Movie Night</span><span>│</span><span id="role">Connecting…</span></div>
         <button class="cast" id="cast" type="button" aria-label="Cast" title="Cast" hidden>
@@ -1226,6 +1257,10 @@ let streamRetryAttempt=0;
 let stateFetchFailures=0;
 let attachedStreamUrl="";
 let hostSheetDismissed=false;
+let controlsHideTimer=null;
+let tapSkipFeedbackTimer=null;
+let lastStageTapAt=0;
+let lastStageTapSide="";
 const SOFT_DRIFT_START=0.35;
 const SOFT_DRIFT_STOP=0.12;
 const HARD_DRIFT_SECONDS=5.0;
@@ -1253,6 +1288,100 @@ function loadClientSessionId() {{
   }}
 }}
 const CLIENT_SESSION_ID=loadClientSessionId();
+const videoStage=document.getElementById("videoStage");
+
+function clearControlsHideTimer() {{
+  if(controlsHideTimer!==null) {{
+    clearTimeout(controlsHideTimer);
+    controlsHideTimer=null;
+  }}
+}}
+function hidePlayerControls() {{
+  clearControlsHideTimer();
+  if(!lastState?.stream_url) return;
+  videoStage.classList.add("controls-hidden");
+}}
+function schedulePlayerControlsHide(delayMs=null) {{
+  clearControlsHideTimer();
+  if(!lastState?.stream_url) return;
+  const delay=Number(delayMs??(video.paused?4500:2600));
+  controlsHideTimer=setTimeout(()=>hidePlayerControls(),Math.max(800,delay));
+}}
+function showPlayerControls(autoHide=true) {{
+  videoStage.classList.remove("controls-hidden");
+  clearControlsHideTimer();
+  if(autoHide) schedulePlayerControlsHide();
+}}
+function stageTargetIsControl(target) {{
+  return !!(
+    target &&
+    typeof target.closest==="function" &&
+    target.closest("button,input,.player-chrome,.stage-top")
+  );
+}}
+function showTapSkipFeedback(delta) {{
+  const target=document.getElementById(delta<0?"tapSkipLeft":"tapSkipRight");
+  if(!target) return;
+  document.getElementById("tapSkipLeft").classList.remove("show");
+  document.getElementById("tapSkipRight").classList.remove("show");
+  target.textContent=delta<0?"↶ 10s":"10s ↷";
+  target.classList.add("show");
+  if(tapSkipFeedbackTimer!==null) clearTimeout(tapSkipFeedbackTimer);
+  tapSkipFeedbackTimer=setTimeout(()=>target.classList.remove("show"),650);
+}}
+function privateTapSkip(delta) {{
+  if(!lastState?.private || !lastState?.is_host || !lastState?.stream_url)
+    return false;
+  const current=Number(video.currentTime||0);
+  const duration=Number.isFinite(video.duration)?Number(video.duration):Infinity;
+  const target=Math.max(0,Math.min(duration,current+Number(delta||0)));
+  if(!safeSeek(target)) return false;
+  showTapSkipFeedback(delta);
+  return true;
+}}
+videoStage.addEventListener("pointermove",event=>{{
+  if(event.pointerType==="mouse") showPlayerControls(true);
+}});
+videoStage.addEventListener("pointerup",event=>{{
+  if(stageTargetIsControl(event.target)) {{
+    showPlayerControls(true);
+    return;
+  }}
+
+  const rect=videoStage.getBoundingClientRect();
+  const ratio=rect.width>0?(Number(event.clientX||0)-rect.left)/rect.width:.5;
+  const side=ratio<.38?"left":ratio>.62?"right":"center";
+  const now=Date.now();
+  const doubleTap=(
+    (side==="left"||side==="right") &&
+    lastStageTapSide===side &&
+    now-lastStageTapAt<=340
+  );
+
+  if(doubleTap && lastState?.private && lastState?.is_host) {{
+    lastStageTapAt=0;
+    lastStageTapSide="";
+    showPlayerControls(false);
+    privateTapSkip(side==="left"?-10:10);
+    schedulePlayerControlsHide(1500);
+    return;
+  }}
+
+  lastStageTapAt=now;
+  lastStageTapSide=side;
+  if(videoStage.classList.contains("controls-hidden"))
+    showPlayerControls(true);
+  else
+    hidePlayerControls();
+}});
+videoStage.addEventListener("pointerdown",event=>{{
+  if(stageTargetIsControl(event.target)) {{
+    showPlayerControls(false);
+    clearControlsHideTimer();
+  }}
+}});
+videoStage.addEventListener("focusin",()=>showPlayerControls(false));
+videoStage.addEventListener("focusout",()=>schedulePlayerControlsHide());
 
 function api(path) {{ return path+"?"+BOOT.query; }}
 async function jsonFetch(path, options={{}}) {{
@@ -2049,6 +2178,7 @@ document.getElementById("end").onclick=()=>{{
     hostAction("end");
 }};
 video.addEventListener("play",()=>{{
+  schedulePlayerControlsHide(2200);
   if(remoteApply) return;
   if(lastState?.is_host) {{
     hostAction("resume");
@@ -2067,7 +2197,10 @@ video.addEventListener("play",()=>{{
     heartbeat(true);
   }}
 }});
-video.addEventListener("pause",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("pause"); }});
+video.addEventListener("pause",()=>{{
+  showPlayerControls(true);
+  if(!remoteApply && lastState?.is_host) hostAction("pause");
+}});
 video.addEventListener("seeked",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("seek",{{seconds:video.currentTime||0}}); }});
 video.addEventListener("loadedmetadata",()=>{{
   streamRetryAttempt=0;
