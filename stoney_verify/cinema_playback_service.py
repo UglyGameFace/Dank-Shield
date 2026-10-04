@@ -15,6 +15,7 @@ from .cinema_media_identity import (
     catalog_metadata,
     episode_catalog_metadata,
     episode_search_query,
+    filter_adult_provider_results,
     filter_outcome_for_catalog,
     release_matches_catalog,
 )
@@ -24,6 +25,7 @@ from .media_source_resolver import (
     search_movie_sources,
 )
 from .movie_night import MovieNightRoom, get_movie_night_manager, movie_room_lease_key
+from .movie_night_preferences import load_movie_night_preferences
 from .torrent_streaming import find_magnet, get_torrent_manager
 
 
@@ -188,6 +190,12 @@ async def search_exact_movie_sources(
     metadata = catalog_metadata(media)
     query = _clean(media.title)
     outcome = await search_movie_sources(int(guild_id), query)
+    try:
+        _raw, preferences = await load_movie_night_preferences(int(guild_id), refresh=False)
+        adult_enabled = bool(preferences.adult_content_enabled)
+    except Exception:
+        adult_enabled = False
+    outcome = filter_adult_provider_results(outcome, enabled=adult_enabled)
     return metadata, query, filter_outcome_for_catalog(outcome, metadata)
 
 
@@ -206,6 +214,12 @@ async def search_exact_episode_sources(
         episode.episode_number,
     )
     outcome = await search_movie_sources(int(guild_id), query)
+    try:
+        _raw, preferences = await load_movie_night_preferences(int(guild_id), refresh=False)
+        adult_enabled = bool(preferences.adult_content_enabled)
+    except Exception:
+        adult_enabled = False
+    outcome = filter_adult_provider_results(outcome, enabled=adult_enabled)
     return metadata, query, filter_outcome_for_catalog(outcome, metadata)
 
 
