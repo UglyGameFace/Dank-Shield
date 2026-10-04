@@ -118,6 +118,8 @@ Regression tests updated/added for:
 
 PR #431 exact-head CI ultimately passed all five workflow families and the PR merged. The production/mobile canary then failed usability because visible controls were not real actions. New regression coverage now asserts the fake navigation/actions/placeholders are absent, Google Cast sender integration is present, and Cast CORS only permits Google receiver origins. Exact-head CI for this remediation branch is pending.
 
+PR #432 head `d9533eb7...` then completed 2,742 tests with **2,741 passing / 1 failing**. The sole failure was the theater contract still requiring player context-menu suppression (`event=>event.preventDefault()`), which had been accidentally dropped while replacing the fake control block. The suppression has been restored on current head `52b6397193...`; fresh exact-head CI is required.
+
 ## Cleanup / conflicts
 
 - No second room model, torrent runtime, queue store, provider stack, or playback API was introduced.
