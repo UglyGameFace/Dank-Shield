@@ -315,6 +315,20 @@ class MovieNightManager:
             return None
         return max(matches, key=lambda room: float(room.created_at))
 
+    def active_rooms_for_guild(self, guild_id: int) -> tuple[MovieNightRoom, ...]:
+        matches = [
+            room
+            for room in self._rooms.values()
+            if not room.ended and int(room.guild_id) == int(guild_id)
+        ]
+        return tuple(
+            sorted(
+                matches,
+                key=lambda room: float(room.created_at),
+                reverse=True,
+            )
+        )
+
     @staticmethod
     def user_can_access(room: MovieNightRoom, user_id: int) -> bool:
         if str(getattr(room, "mode", "watch_party") or "watch_party") != "private":
