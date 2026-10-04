@@ -1627,16 +1627,20 @@ let castContext=null;
 let castActive=false;
 let castWasMuted=false;
 let castLastSyncAt=0;
+let remotePlaybackAvailable=false;
+const airPlayAvailable=typeof video.webkitShowPlaybackTargetPicker==="function";
 
 function setCastVisible(visible) {{
   castButton.hidden=!visible;
   castButton.disabled=!visible;
 }}
 function refreshCastAvailability() {{
+  const googleCastReady=!!(castContext && lastState?.cast_stream_url);
+  const nativeRemoteReady=!!(remotePlaybackAvailable || airPlayAvailable);
   const supported=!!(
-    castContext &&
-    lastState?.cast_stream_url &&
-    lastState?.cast_supported_media
+    lastState?.stream_url &&
+    lastState?.cast_supported_media &&
+    (googleCastReady || nativeRemoteReady)
   );
   setCastVisible(supported);
 }}
@@ -1723,11 +1727,31 @@ function syncCastToRoom(s) {{
   }} catch(_) {{}}
 }}
 setCastVisible(false);
+if(video.remote && typeof video.remote.watchAvailability==="function") {{
+  try {{
+    video.remote.watchAvailability(available=>{{
+      remotePlaybackAvailable=!!available;
+      refreshCastAvailability();
+    }}).catch(()=>{{}});
+  }} catch(_) {{}}
+}}
 window.addEventListener("dank-cast-api",()=>initGoogleCast());
 setTimeout(()=>initGoogleCast(),1200);
 castButton.onclick=async()=>{{
   try {{
-    await startGoogleCast();
+    if(castContext) {{
+      await startGoogleCast();
+      return;
+    }}
+    if(remotePlaybackAvailable && video.remote && typeof video.remote.prompt==="function") {{
+      await video.remote.prompt();
+      return;
+    }}
+    if(airPlayAvailable) {{
+      video.webkitShowPlaybackTargetPicker();
+      return;
+    }}
+    notice.textContent="No compatible casting target is available.";
   }} catch(err) {{
     notice.textContent=String(err?.message||"Casting could not start on this browser/device.");
   }}
