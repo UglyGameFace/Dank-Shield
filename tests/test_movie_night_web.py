@@ -1186,3 +1186,105 @@ def test_player_layout_recovers_from_mobile_desktop_mode_resizes() -> None:
     assert 'window.addEventListener("orientationchange"' in html
     assert 'video.addEventListener(eventName,()=>stabilizePlayerLayout())' in html
     assert 'setTimeout(stabilizePlayerLayout,40)' in html
+
+
+
+def test_dank_cinema_has_real_visual_quality_tiers_and_reduced_motion() -> None:
+    html = movie_night_web._watch_html(
+        "room-quality",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'id="qualityMode"' in html
+    assert 'value="high"' in html
+    assert 'value="standard"' in html
+    assert 'value="lite"' in html
+    assert 'data-quality="high"' in html
+    assert 'data-quality="standard"' in html
+    assert 'data-quality="lite"' in html
+    assert "@media (prefers-reduced-motion:reduce)" in html
+    assert "navigator.connection?.saveData" in html
+    assert "navigator.deviceMemory" in html
+    assert "navigator.hardwareConcurrency" in html
+    assert "Playback features stay identical" in html
+
+
+def test_dank_cinema_player_capability_controls_are_not_placebos() -> None:
+    html = movie_night_web._watch_html(
+        "room-capabilities",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'id="pip"' in html
+    assert 'id="captions"' in html
+    assert "document.pictureInPictureEnabled" in html
+    assert "video.requestPictureInPicture" in html
+    assert "document.exitPictureInPicture" in html
+    assert "video.textTracks" in html
+    assert 'tracks[i].mode="showing"' in html
+    assert 'document.addEventListener("keydown"' in html
+    assert 'key==="arrowleft"' in html
+    assert 'key==="arrowright"' in html
+    assert 'key==="f"' in html
+    assert 'key==="m"' in html
+
+
+def test_dank_cinema_tmdb_art_is_responsive_instead_of_one_size_for_every_device() -> None:
+    html = movie_night_web._watch_html(
+        "room-art",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'loading="lazy" decoding="async"' in html
+    assert 'poster.srcset=w185+" 185w, "+w342+" 342w, "+w500+" 500w"' in html
+    assert 'poster.sizes="(max-width:640px) 78px, (max-width:1079px) 108px, 120px"' in html
+    assert 'return tmdbVariant(url,"w780")||url' in html
+    assert 'return tmdbVariant(url,"w1280")||url' in html
+    assert 'return tmdbVariant(url,"original")||url' in html
+    assert "artworkResizeTimer" in html
+
+
+def test_dank_cinema_desktop_tablet_and_mobile_have_distinct_compositions() -> None:
+    html = movie_night_web._watch_html(
+        "room-responsive",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'class="theater-grid"' in html
+    assert 'class="theater-sidecar"' in html
+    assert "@media (min-width:1080px)" in html
+    assert "grid-template-columns:minmax(0,1fr) minmax(320px,360px)" in html
+    assert "@media (min-width:641px) and (max-width:1079px)" in html
+    assert "@media (max-width:640px)" in html
+    assert "@media (max-width:380px)" in html
+
+
+def test_watch_party_invite_dialog_restores_focus_and_supports_escape() -> None:
+    html = movie_night_web._watch_html(
+        "room-invite-a11y",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'role="dialog"' in html
+    assert 'aria-modal="true"' in html
+    assert 'aria-labelledby="inviteTitle"' in html
+    assert "inviteTrigger=event.currentTarget" in html
+    assert 'if(event.key==="Escape")' in html
+    assert "inviteTrigger.focus()" in html
+
+
+def test_quality_mode_boot_does_not_touch_room_state_before_it_is_declared() -> None:
+    html = movie_night_web._watch_html(
+        "room-quality-boot",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    quality_fn = html.split("function applyQualityMode(preference)", 1)[1].split("let storedQuality", 1)[0]
+    assert "lastState" not in quality_fn
+    assert html.index("applyQualityMode(storedQuality);") < html.index("let lastState=null;")
