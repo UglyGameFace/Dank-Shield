@@ -35,7 +35,14 @@ from .cinema_library_service import (
     set_watchlist,
     update_cinema_preferences,
 )
-from .cinema_site_auth import cinema_site_url, validate_cinema_site_access
+from .cinema_site_auth import (
+    CINEMA_SESSION_COOKIE,
+    CINEMA_SESSION_TTL_SECONDS,
+    cinema_session_value,
+    cinema_site_url,
+    validate_cinema_session,
+    validate_cinema_site_access,
+)
 from .cinema_discovery_service import (
     list_recent_discoveries,
     search_discoveries,
@@ -74,19 +81,51 @@ _CSS_PATH = _ASSET_DIR / "cinema_site.css"
 _JS_PATH = _ASSET_DIR / "cinema_site.js"
 
 
+def _site_member(guild_id: int, user_id: int) -> Any:
+    try:
+        from .globals import bot
+    except Exception:
+        bot = None
+    if bot is None:
+        return None
+    try:
+        guild = bot.get_guild(int(guild_id))
+    except Exception:
+        guild = None
+    if guild is None:
+        return None
+    try:
+        return guild.get_member(int(user_id))
+    except Exception:
+        return None
+
+
 def _site_identity(request: web.Request) -> tuple[int, int]:
     try:
         guild_id = int(request.match_info.get("guild_id") or 0)
     except Exception:
         guild_id = 0
+    if guild_id <= 0:
+        raise web.HTTPUnauthorized(text="Invalid Dank Cinema server.")
+
     uid = validate_cinema_site_access(
         guild_id,
         str(request.query.get("uid", "") or ""),
         str(request.query.get("exp", "") or ""),
         str(request.query.get("sig", "") or ""),
     )
-    if guild_id <= 0 or uid is None:
-        raise web.HTTPUnauthorized(text="Invalid or expired Dank Cinema link.")
+    if uid is None:
+        uid = validate_cinema_session(
+            guild_id,
+            str(request.cookies.get(CINEMA_SESSION_COOKIE, "") or ""),
+        )
+    if uid is None:
+        raise web.HTTPUnauthorized(text="Sign in to Dank Cinema again.")
+
+    if _site_member(guild_id, int(uid)) is None:
+        raise web.HTTPForbidden(
+            text="Dank Cinema requires membership in this Discord server."
+        )
     return guild_id, int(uid)
 
 
@@ -1388,7 +1427,7 @@ def _site_html(guild_id: int, user_id: int) -> str:
 
 async def cinema_site_page(request: web.Request) -> web.Response:
     guild_id, user_id = _site_identity(request)
-    return web.Response(
+    response = web.Response(
         text=_site_html(guild_id, user_id),
         content_type="text/html",
         headers={
@@ -1406,6 +1445,18 @@ async def cinema_site_page(request: web.Request) -> web.Response:
             "X-Content-Type-Options": "nosniff",
         },
     )
+    session = cinema_session_value(guild_id, user_id)
+    if session:
+        response.set_cookie(
+            CINEMA_SESSION_COOKIE,
+            session,
+            max_age=CINEMA_SESSION_TTL_SECONDS,
+            httponly=True,
+            secure=True,
+            samesite="Lax",
+            path=f"/cinema/{int(guild_id)}",
+        )
+    return response
 
 
 async def cinema_site_asset(request: web.Request) -> web.Response:
