@@ -784,6 +784,11 @@ async def cinema_details_api(request: web.Request) -> web.Response:
     details_task = asyncio.create_task(get_details(media_type, tmdb_id))
     library_task = asyncio.create_task(list_user_media(user_id))
     details, rows = await asyncio.gather(details_task, library_task)
+    adult_enabled = await _guild_adult_content_enabled(_guild_id)
+    if bool(details.media.adult) and not adult_enabled:
+        raise web.HTTPNotFound(
+            text="This Cinema title is unavailable under the server content setting."
+        )
 
     source_rows: list[dict[str, Any]] = []
     if media_type == "movie":
@@ -791,6 +796,10 @@ async def cinema_details_api(request: web.Request) -> web.Response:
             source_outcome = await search_movie_sources(
                 int(_guild_id),
                 str(details.media.title),
+            )
+            source_outcome = filter_adult_provider_results(
+                source_outcome,
+                enabled=adult_enabled,
             )
             source_outcome = filter_outcome_for_catalog(
                 source_outcome,
@@ -1004,10 +1013,16 @@ async def cinema_play_api(request: web.Request) -> web.Response:
             raise web.HTTPBadRequest(text="Invalid movie identity.")
         try:
             details = await get_details("movie", tmdb_id)
+            if bool(details.media.adult) and not await _guild_adult_content_enabled(guild_id):
+                raise web.HTTPForbidden(
+                    text="Adult-content Cinema playback is disabled for this server."
+                )
             metadata, query, outcome = await search_exact_movie_sources(
                 int(guild_id),
                 media=details.media,
             )
+        except web.HTTPException:
+            raise
         except Exception as exc:
             raise web.HTTPServiceUnavailable(
                 text="Cinema source search is temporarily unavailable."
