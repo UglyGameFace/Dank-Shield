@@ -882,6 +882,7 @@ html {{ background:var(--bg); scroll-behavior:smooth; }}
 body {{
   margin:0;
   min-height:100vh;
+  overflow-x:hidden;
   color:var(--text);
   background:
     radial-gradient(circle at 78% -10%,rgba(35,115,72,.28),transparent 35%),
