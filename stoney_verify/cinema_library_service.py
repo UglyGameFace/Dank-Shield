@@ -363,6 +363,7 @@ async def create_notification(
     title: str,
     body: str = "",
     action: Optional[Mapping[str, Any]] = None,
+    dedupe_key: str = "",
 ) -> dict[str, Any]:
     payload = {
         "user_id": int(user_id),
@@ -371,12 +372,29 @@ async def create_notification(
         "title": " ".join(str(title or "").split())[:160],
         "body": " ".join(str(body or "").split())[:500],
         "action": dict(action or {}),
+        "dedupe_key": (
+            " ".join(str(dedupe_key or "").split())[:180]
+            if dedupe_key
+            else None
+        ),
         "created_at": _now(),
     }
     if not payload["title"]:
         raise InvalidCinemaState("Cinema notification title is required.")
 
     def write(client: Any):
+        if payload["dedupe_key"]:
+            try:
+                return (
+                    client.table(NOTIFICATION_TABLE)
+                    .upsert(
+                        payload,
+                        on_conflict="user_id,dedupe_key",
+                    )
+                    .execute()
+                )
+            except TypeError:
+                pass
         return client.table(NOTIFICATION_TABLE).insert(payload).execute()
 
     response = await _execute(f"create Cinema notification {user_id}", write)
