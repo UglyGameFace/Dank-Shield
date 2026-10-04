@@ -914,6 +914,8 @@ def test_dank_cinema_center_play_uses_canonical_host_action() -> None:
     assert 'await hostAction(shouldResume?"resume":"pause")' in html
     assert 'document.getElementById("centerPlay").onclick=togglePlayerPlayback' in html
     assert 'document.getElementById("playerToggle").onclick=togglePlayerPlayback' in html
+    assert "if(!lastState || !lastState.is_host) return;" in html
+    assert "if(!lastState || !lastState.is_host || remoteApply) return;" not in html
 
 
 def test_discord_room_context_exposes_cached_guild_channel_and_identity(monkeypatch) -> None:
