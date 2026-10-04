@@ -1,0 +1,249 @@
+name: Dank Cinema SQL
+
+on:
+  pull_request:
+    paths:
+      - "supabase/migrations/20261004123000_dank_cinema_library.sql"
+      - "stoney_verify/cinema_library_service.py"
+      - "stoney_verify/cinema_storage.py"
+      - "stoney_verify/cinema_site.py"
+      - "stoney_verify/movie_night_web.py"
+      - "tests/test_cinema_full_platform.py"
+      - ".github/workflows/cinema-platform-sql.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "supabase/migrations/20261004123000_dank_cinema_library.sql"
+      - "stoney_verify/cinema_library_service.py"
+      - "stoney_verify/cinema_storage.py"
+      - "stoney_verify/cinema_site.py"
+      - "stoney_verify/movie_night_web.py"
+      - "tests/test_cinema_full_platform.py"
+      - ".github/workflows/cinema-platform-sql.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  cinema-library-schema:
+    name: Cinema library migration smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dank_cinema
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dank_cinema"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: dank_cinema
+      MIGRATION: supabase/migrations/20261004123000_dank_cinema_library.sql
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Ensure PostgreSQL client is available
+        shell: bash
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+
+      - name: Prepare Supabase-compatible roles
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create role anon;
+          create role authenticated;
+          create role service_role bypassrls;
+          SQL
+
+      - name: Apply Cinema migration twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            echo "Applying Dank Cinema migration, pass ${pass}"
+            psql -v ON_ERROR_STOP=1 -f "$MIGRATION"
+          done
+
+      - name: Verify Cinema schema and permissions
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $audit$
+          declare
+            required_table text;
+          begin
+            foreach required_table in array array[
+              'dank_cinema_users',
+              'dank_cinema_user_media',
+              'dank_cinema_feed_discoveries',
+              'dank_cinema_notifications'
+            ] loop
+              if to_regclass('public.' || required_table) is null then
+                raise exception 'missing Cinema table: %', required_table;
+              end if;
+
+              if not exists (
+                select 1
+                  from pg_class c
+                  join pg_namespace n on n.oid = c.relnamespace
+                 where n.nspname = 'public'
+                   and c.relname = required_table
+                   and c.relrowsecurity
+              ) then
+                raise exception 'RLS is not enabled for Cinema table: %', required_table;
+              end if;
+
+              if has_table_privilege('anon', 'public.' || required_table, 'SELECT')
+                 or has_table_privilege('anon', 'public.' || required_table, 'INSERT')
+                 or has_table_privilege('anon', 'public.' || required_table, 'UPDATE')
+                 or has_table_privilege('anon', 'public.' || required_table, 'DELETE') then
+                raise exception 'anon unexpectedly has Cinema table privileges: %', required_table;
+              end if;
+
+              if has_table_privilege('authenticated', 'public.' || required_table, 'SELECT')
+                 or has_table_privilege('authenticated', 'public.' || required_table, 'INSERT')
+                 or has_table_privilege('authenticated', 'public.' || required_table, 'UPDATE')
+                 or has_table_privilege('authenticated', 'public.' || required_table, 'DELETE') then
+                raise exception 'authenticated unexpectedly has Cinema table privileges: %', required_table;
+              end if;
+
+              if not has_table_privilege('service_role', 'public.' || required_table, 'SELECT')
+                 or not has_table_privilege('service_role', 'public.' || required_table, 'INSERT')
+                 or not has_table_privilege('service_role', 'public.' || required_table, 'UPDATE')
+                 or not has_table_privilege('service_role', 'public.' || required_table, 'DELETE') then
+                raise exception 'service_role is missing Cinema table privileges: %', required_table;
+              end if;
+            end loop;
+          end;
+          $audit$;
+          SQL
+
+      - name: Exercise Cinema row contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          set role service_role;
+
+          insert into public.dank_cinema_users(user_id, preferences)
+          values (42, '{"autoplay_next":true,"playback_speed":1.25}'::jsonb);
+
+          insert into public.dank_cinema_user_media(
+            user_id, media_type, tmdb_id, season_number, episode_number,
+            title, metadata, progress_seconds, duration_seconds, completed,
+            last_watched_at
+          ) values (
+            42, 'episode', 9001, 3, 7,
+            'Example Show S03E07',
+            '{"series_id":77,"series_title":"Example Show"}'::jsonb,
+            733, 2700, false, now()
+          );
+
+          insert into public.dank_cinema_feed_discoveries(
+            guild_id, source_id, discovery_key, title, media_type, tmdb_id,
+            metadata, playable
+          ) values (
+            100, 'feed-1', 'movie:123', 'Example Movie', 'movie', 123,
+            '{"poster_url":"https://image.tmdb.org/example.jpg"}'::jsonb, true
+          );
+
+          insert into public.dank_cinema_notifications(
+            user_id, guild_id, kind, title, body, dedupe_key
+          ) values (
+            42, 100, 'watch_party_invite', 'Cinema invite', 'Join the Theater.',
+            'invite:room-1'
+          );
+
+          do $audit$
+          begin
+            if not exists (
+              select 1 from public.dank_cinema_user_media
+               where user_id = 42
+                 and media_type = 'episode'
+                 and tmdb_id = 9001
+                 and season_number = 3
+                 and episode_number = 7
+                 and progress_seconds = 733
+            ) then
+              raise exception 'canonical episode progress row did not persist';
+            end if;
+
+            if not exists (
+              select 1 from public.dank_cinema_notifications
+               where user_id = 42 and dedupe_key = 'invite:room-1'
+            ) then
+              raise exception 'Cinema notification row did not persist';
+            end if;
+          end;
+          $audit$;
+
+          reset role;
+          SQL
+
+          if psql -v ON_ERROR_STOP=1 <<'SQL'
+          set role service_role;
+          insert into public.dank_cinema_user_media(
+            user_id, media_type, tmdb_id, progress_seconds
+          ) values (42, 'game', 123, 0);
+          SQL
+          then
+            echo "invalid Cinema media_type unexpectedly passed its constraint" >&2
+            exit 1
+          fi
+
+          if psql -v ON_ERROR_STOP=1 <<'SQL'
+          set role service_role;
+          insert into public.dank_cinema_user_media(
+            user_id, media_type, tmdb_id, progress_seconds
+          ) values (42, 'movie', 124, -1);
+          SQL
+          then
+            echo "negative Cinema progress unexpectedly passed its constraint" >&2
+            exit 1
+          fi
+
+          if psql -v ON_ERROR_STOP=1 <<'SQL'
+          set role service_role;
+          insert into public.dank_cinema_notifications(
+            user_id, guild_id, kind, title, dedupe_key
+          ) values (42, 100, 'watch_party_invite', 'Duplicate', 'invite:room-1');
+          SQL
+          then
+            echo "duplicate Cinema notification dedupe key unexpectedly passed" >&2
+            exit 1
+          fi
+
+      - name: Verify client roles cannot read Cinema tables
+        shell: bash
+        run: |
+          set -euo pipefail
+          for role in anon authenticated; do
+            if psql -v ON_ERROR_STOP=1 <<SQL
+          set role ${role};
+          select * from public.dank_cinema_users limit 1;
+          SQL
+            then
+              echo "${role} unexpectedly read service-only Cinema data" >&2
+              exit 1
+            fi
+          done

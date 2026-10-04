@@ -11,32 +11,46 @@ import os
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 from urllib.parse import urlencode
 
 from aiohttp import web
 from PIL import Image, ImageDraw, ImageFilter
 
-from stoney_verify.media_source_registry import (
-    MEDIA_CATEGORY_ANIME,
-    MEDIA_CATEGORY_CUSTOM,
-    MEDIA_CATEGORY_DOCUMENTARIES,
-    MEDIA_CATEGORY_MOVIES,
-    MEDIA_CATEGORY_TV,
-    PROVIDER_TYPE_EXTERNAL,
-    PROVIDER_TYPE_FEED,
-    PROVIDER_TYPE_JSON,
-    add_custom_source,
-    load_media_source_registry,
-    prepare_example_search_url,
-    prepare_feed_url,
-    remove_custom_source,
-    save_media_source_registry,
-    set_custom_source_category,
-    set_custom_source_enabled,
+from stoney_verify.cinema_feed_service import (
+    CinemaFeedConflict,
+    feed_state as cinema_feed_state,
+    mutate_feed as mutate_cinema_feed,
+    runtime_state as cinema_feed_runtime_state,
 )
-from stoney_verify.media_source_resolver import preview_custom_media_source
+from stoney_verify.cinema_catalog import (
+    get_details as get_cinema_details,
+    get_next_episode,
+    get_season as get_cinema_season,
+    search_catalog as search_cinema_catalog,
+)
+from stoney_verify.cinema_media_identity import (
+    looks_explicit_adult,
+    parse_episode_query,
+)
+from stoney_verify.cinema_library_service import (
+    CinemaStorageUnavailable,
+    get_cinema_user,
+    get_media_state,
+    notify_watch_party_invite,
+    record_progress,
+    update_cinema_preferences,
+)
+from stoney_verify.cinema_playback_service import (
+    find_catalog_candidate,
+    materialize_search_results,
+    search_exact_episode_sources,
+    search_exact_movie_sources,
+    select_preferred_variant,
+    start_room_variant,
+)
 from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
+from stoney_verify.movie_night_preferences import load_movie_night_preferences
 from stoney_verify.movie_night_session import (
     ensure_movie_night_cleanup_task,
     terminate_movie_night_room,
@@ -59,21 +73,9 @@ def _public_base() -> str:
 _BRAND_ASSET_PATH = (
     Path(__file__).with_name("assets") / "dank_cinema_brand_500.webp.b64"
 )
-_BRAND_ASSET_VERSION = "art-system-v3"
+_BRAND_ASSET_VERSION = "art-system-v5"
 
-_FEED_RUNTIME_STATE: dict[tuple[int, str], dict[str, Any]] = {}
-_MEDIA_CATEGORIES = {
-    MEDIA_CATEGORY_MOVIES,
-    MEDIA_CATEGORY_TV,
-    MEDIA_CATEGORY_ANIME,
-    MEDIA_CATEGORY_DOCUMENTARIES,
-    MEDIA_CATEGORY_CUSTOM,
-}
-_MEDIA_PROVIDER_TYPES = {
-    PROVIDER_TYPE_JSON,
-    PROVIDER_TYPE_FEED,
-    PROVIDER_TYPE_EXTERNAL,
-}
+_FEED_RUNTIME_STATE = cinema_feed_runtime_state()
 
 
 
@@ -134,18 +136,76 @@ def _trim_transparent(image: Image.Image, *, padding: int = 2) -> Image.Image:
     return image.crop((left, top, right, bottom))
 
 
+def _brand_split_x(image: Image.Image) -> int:
+    """Find the transparent gutter between the reel emblem and wordmark.
+
+    The approved source art is one horizontal lockup. Earlier fixed-percentage
+    crops overlapped that gutter and rendered a second partial reel on mobile.
+    Detecting the real low-alpha run keeps the two responsive variants mutually
+    exclusive even if the source artwork is re-exported at another size.
+    """
+
+    alpha = image.getchannel("A")
+    bbox = alpha.getbbox()
+    if not bbox:
+        return max(1, round(image.width * 0.30))
+    _left, top, _right, bottom = bbox
+    start = max(1, round(image.width * 0.20))
+    end = min(image.width - 1, round(image.width * 0.40))
+    if end <= start:
+        return max(1, round(image.width * 0.30))
+
+    height = max(1, bottom - top)
+    threshold = max(2, round(height * 0.035))
+    counts: list[int] = []
+    pixels = alpha.load()
+    for x in range(start, end):
+        opaque = 0
+        for y in range(top, bottom):
+            if pixels[x, y] > 18:
+                opaque += 1
+        counts.append(opaque)
+
+    runs: list[tuple[int, int]] = []
+    run_start: Optional[int] = None
+    for offset, count in enumerate(counts):
+        if count <= threshold and run_start is None:
+            run_start = offset
+        elif count > threshold and run_start is not None:
+            runs.append((run_start, offset - 1))
+            run_start = None
+    if run_start is not None:
+        runs.append((run_start, len(counts) - 1))
+
+    if not runs:
+        return max(1, round(image.width * 0.30))
+
+    target = round(image.width * 0.30)
+    best = max(
+        runs,
+        key=lambda run: (
+            run[1] - run[0] + 1,
+            -abs((start + (run[0] + run[1]) // 2) - target),
+        ),
+    )
+    return start + (best[0] + best[1]) // 2
+
+
 @lru_cache(maxsize=8)
 def _dank_cinema_brand_variant(kind: str) -> bytes:
     source = _dank_cinema_brand_rgba()
     normalized = str(kind or "full").strip().lower()
 
+    split_x = _brand_split_x(source)
     if normalized == "mark":
-        # Crowned reel + smoke emblem.
-        crop = source.crop((0, 0, max(1, round(source.width * 0.33)), source.height))
+        # Crowned reel + smoke emblem. Stop at the real gutter so none of the
+        # wordmark can leak into the compact emblem variant.
+        crop = source.crop((0, 0, split_x, source.height))
         target_width = 320
     elif normalized == "wordmark":
-        # DANK CINEMA plus "A feature of The 420 Lobby" lockup.
-        crop = source.crop((max(0, round(source.width * 0.255)), 0, source.width, source.height))
+        # DANK CINEMA plus "A feature of The 420 Lobby" lockup. Start at the
+        # same gutter used by the emblem crop so the reel can never duplicate.
+        crop = source.crop((split_x, 0, source.width, source.height))
         target_width = 1040
     elif normalized == "mono":
         crop = source.copy()
@@ -668,6 +728,34 @@ def _candidate_web_metadata(candidate: Any) -> dict[str, Any]:
         year = max(0, int(source.get("year") or 0))
     except Exception:
         year = 0
+    media_type = str(source.get("media_type") or "").strip().lower()
+    if media_type not in {"movie", "tv", "episode"}:
+        media_type = ""
+    try:
+        tmdb_id = max(
+            0,
+            int(source.get("tmdb_id") or source.get("catalog_id") or 0),
+        )
+    except Exception:
+        tmdb_id = 0
+    if (
+        not media_type
+        and tmdb_id > 0
+        and str(source.get("catalog_provider") or "").strip().lower() == "tmdb"
+    ):
+        media_type = "movie"
+    try:
+        series_id = max(0, int(source.get("series_id") or 0))
+    except Exception:
+        series_id = 0
+    try:
+        season_number = max(0, int(source.get("season_number") or 0))
+    except Exception:
+        season_number = 0
+    try:
+        episode_number = max(0, int(source.get("episode_number") or 0))
+    except Exception:
+        episode_number = 0
     return {
         "title": str(
             source.get("title")
@@ -678,6 +766,15 @@ def _candidate_web_metadata(candidate: Any) -> dict[str, Any]:
         "overview": str(source.get("overview") or "").strip()[:1200],
         "poster_url": _safe_movie_art_url(source.get("poster_url")),
         "backdrop_url": _safe_movie_art_url(source.get("backdrop_url")),
+        "media_type": media_type,
+        "tmdb_id": tmdb_id,
+        "series_id": series_id,
+        "series_title": str(source.get("series_title") or "").strip()[:180],
+        "season_number": season_number,
+        "episode_number": episode_number,
+        "episode_title": str(source.get("episode_title") or "").strip()[:180],
+        "adult": bool(source.get("adult", False)),
+        "runtime_minutes": max(0, int(source.get("runtime") or 0)) if str(source.get("runtime") or "").isdigit() else 0,
     }
 
 
@@ -776,18 +873,37 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     if not movie_metadata["title"]:
         movie_metadata["title"] = str(title or session_fallback_title)
 
+    queued_candidates = [
+        room.candidates.get(str(queued_id))
+        for queued_id in list(room.queue)[:12]
+    ]
+    queued_candidates = [item for item in queued_candidates if item is not None]
+    proposer_ids = {
+        int(getattr(item, "proposer_id", 0) or 0)
+        for item in queued_candidates
+        if int(getattr(item, "proposer_id", 0) or 0) > 0
+    }
+    proposer_names = {
+        int(row.get("user_id") or 0): str(row.get("display_name") or "")
+        for row in _discord_viewer_summaries(room, proposer_ids)
+    }
+
     queue_items: list[dict[str, Any]] = []
-    for queued_id in list(room.queue)[:12]:
-        queued = room.candidates.get(str(queued_id))
-        if queued is None:
-            continue
+    for queued in queued_candidates:
         queued_meta = _candidate_web_metadata(queued)
+        proposer_id = int(getattr(queued, "proposer_id", 0) or 0)
         queue_items.append(
             {
                 "candidate_id": str(queued.candidate_id),
                 "title": queued_meta["title"] or "Untitled",
                 "year": queued_meta["year"],
                 "poster_url": queued_meta["poster_url"],
+                "media_type": queued_meta["media_type"],
+                "tmdb_id": queued_meta["tmdb_id"],
+                "season_number": queued_meta["season_number"],
+                "episode_number": queued_meta["episode_number"],
+                "proposer_id": proposer_id,
+                "added_by": proposer_names.get(proposer_id, "") if proposer_id else "",
                 "is_current": str(queued.candidate_id) == str(room.current_candidate_id or ""),
             }
         )
@@ -803,6 +919,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "release_source": source,
         "state": room.playback_state,
         "position_seconds": round(room.current_position(), 3),
+        "playback_rate": round(float(getattr(room, "playback_rate", 1.0) or 1.0), 2),
         "is_host": int(user_id) == int(room.host_id),
         "host_active": movie_manager.host_active(room),
         "viewer_count": len(active_viewer_ids),
@@ -1048,12 +1165,14 @@ async def movie_night_action(request: web.Request) -> web.Response:
         payload = {}
 
     action = str(payload.get("action") or "").strip().lower()
-    if action not in {"pause", "resume", "seek", "end"}:
+    if action not in {"pause", "resume", "seek", "speed", "end"}:
         raise web.HTTPBadRequest(text="Unsupported Cinema playback action.")
 
     action_payload: dict[str, Any] = {}
     if action == "seek":
         action_payload["seconds"] = _float(payload.get("seconds"))
+    elif action == "speed":
+        action_payload["rate"] = _float(payload.get("rate"), 1.0)
 
     manager = get_movie_night_manager()
     manager.join_room(room.room_id, user_id=uid)
@@ -1165,6 +1284,16 @@ async def movie_night_promote_watch_party(request: web.Request) -> web.Response:
         room,
         invitee_id=invitee_id,
     )
+    try:
+        host_context = _discord_room_context(room, int(uid))
+        await notify_watch_party_invite(
+            invitee_id,
+            guild_id=int(room.guild_id),
+            host_name=str(host_context.get("user_name") or uid),
+            room_id=room.room_id,
+        )
+    except CinemaStorageUnavailable:
+        pass
 
     state = await _state_payload(room, uid)
     state["invite"] = {
@@ -1177,58 +1306,17 @@ async def movie_night_promote_watch_party(request: web.Request) -> web.Response:
     return web.json_response(state)
 
 
-def _media_source_web_payload(
-    source: Any,
-    *,
-    guild_id: int,
-    include_endpoint: bool,
-) -> dict[str, Any]:
-    runtime = _FEED_RUNTIME_STATE.get((int(guild_id), str(source.source_id)), {})
-    provider_type = str(source.provider_type or PROVIDER_TYPE_JSON)
-    category = str(getattr(source, "category", MEDIA_CATEGORY_CUSTOM) or MEDIA_CATEGORY_CUSTOM)
-    payload: dict[str, Any] = {
-        "source_id": str(source.source_id),
-        "label": str(source.label),
-        "provider_type": provider_type,
-        "category": category if category in _MEDIA_CATEGORIES else MEDIA_CATEGORY_CUSTOM,
-        "enabled": bool(source.enabled),
-        "search_capable": provider_type in {PROVIDER_TYPE_JSON, PROVIDER_TYPE_EXTERNAL},
-        "discovery_capable": provider_type in {PROVIDER_TYPE_JSON, PROVIDER_TYPE_FEED},
-        "playback_capable": provider_type in {PROVIDER_TYPE_JSON, PROVIDER_TYPE_FEED},
-        "last_refresh_at": int(runtime.get("refreshed_at") or 0),
-        "last_refresh_ok": runtime.get("ok"),
-        "last_refresh_error": str(runtime.get("error") or "")[:240],
-        "newly_discovered": list(runtime.get("titles") or [])[:8],
-    }
-    if include_endpoint:
-        payload["endpoint_url"] = str(source.endpoint_url)
-    return payload
-
-
 async def _media_source_state(room: MovieNightRoom, uid: int) -> dict[str, Any]:
-    _raw, registry = await load_media_source_registry(int(room.guild_id), refresh=False)
     is_host = int(uid) == int(room.host_id)
-    sources = [
-        _media_source_web_payload(
-            source,
-            guild_id=int(room.guild_id),
-            include_endpoint=is_host,
-        )
-        for source in registry.sources
-        if is_host or source.enabled
-    ]
-    return {
-        "revision": int(registry.revision),
-        "is_host": is_host,
-        "sources": sources,
-        "categories": [
-            MEDIA_CATEGORY_MOVIES,
-            MEDIA_CATEGORY_TV,
-            MEDIA_CATEGORY_ANIME,
-            MEDIA_CATEGORY_DOCUMENTARIES,
-            MEDIA_CATEGORY_CUSTOM,
-        ],
-    }
+    state = await cinema_feed_state(
+        int(room.guild_id),
+        can_manage=is_host,
+        refresh=False,
+    )
+    # Keep the historical key for the Watch-page client while the shared
+    # service uses the clearer permission name.
+    state["is_host"] = is_host
+    return state
 
 
 async def movie_night_sources(request: web.Request) -> web.Response:
@@ -1248,99 +1336,392 @@ async def movie_night_source_action(request: web.Request) -> web.Response:
     if not isinstance(payload, dict):
         payload = {}
 
-    action = str(payload.get("action") or "").strip().lower()
-    source_id = str(payload.get("source_id") or "").strip()
-
-    raw_config, registry = await load_media_source_registry(
-        int(room.guild_id),
-        refresh=True,
-    )
-
-    if action == "refresh":
-        source = next(
-            (item for item in registry.sources if item.source_id == source_id),
-            None,
-        )
-        if source is None:
-            raise web.HTTPNotFound(text="Media source not found.")
-        if not source.enabled:
-            raise web.HTTPBadRequest(text="Enable this source before refreshing it.")
-
-        outcome = await preview_custom_media_source(
-            source,
-            query=str(payload.get("query") or "movie")[:180],
-            limit=8,
-        )
-        error = str(outcome.errors[0]) if outcome.errors else ""
-        _FEED_RUNTIME_STATE[(int(room.guild_id), source.source_id)] = {
-            "refreshed_at": int(time.time()),
-            "ok": not bool(error),
-            "error": error,
-            "titles": [str(item.title)[:180] for item in outcome.variants[:8]],
-        }
-        return web.json_response(await _media_source_state(room, uid))
-
     try:
-        if action == "save":
-            label = " ".join(str(payload.get("label") or "").split())[:80]
-            provider_type = str(payload.get("provider_type") or PROVIDER_TYPE_FEED).strip().lower()
-            if provider_type not in _MEDIA_PROVIDER_TYPES:
-                raise ValueError("Unsupported media source type.")
-            category = str(payload.get("category") or MEDIA_CATEGORY_CUSTOM).strip().lower()
-            if category not in _MEDIA_CATEGORIES:
-                category = MEDIA_CATEGORY_CUSTOM
-            raw_url = str(payload.get("endpoint_url") or "").strip()
-            endpoint_url = (
-                prepare_feed_url(raw_url)
-                if provider_type == PROVIDER_TYPE_FEED
-                else prepare_example_search_url(raw_url)
-            )
-            updated = add_custom_source(
-                registry,
-                source_id=source_id,
-                label=label,
-                endpoint_url=endpoint_url,
-                added_by=uid,
-                provider_type=provider_type,
-                category=category,
-            )
-            actual_id = source_id
-            if not actual_id:
-                before = {item.source_id for item in registry.sources}
-                created = [item for item in updated.sources if item.source_id not in before]
-                actual_id = created[0].source_id if created else ""
-            if actual_id:
-                updated = set_custom_source_category(updated, actual_id, category)
-        elif action == "toggle":
-            source = next((item for item in registry.sources if item.source_id == source_id), None)
-            if source is None:
-                raise LookupError("Media source not found.")
-            updated = set_custom_source_enabled(registry, source_id, not bool(source.enabled))
-        elif action == "remove":
-            updated = remove_custom_source(registry, source_id)
-            _FEED_RUNTIME_STATE.pop((int(room.guild_id), source_id), None)
-        elif action == "category":
-            category = str(payload.get("category") or MEDIA_CATEGORY_CUSTOM).strip().lower()
-            if category not in _MEDIA_CATEGORIES:
-                raise ValueError("Unsupported media category.")
-            updated = set_custom_source_category(registry, source_id, category)
-        else:
-            raise web.HTTPBadRequest(text="Unsupported media source action.")
+        await mutate_cinema_feed(
+            int(room.guild_id),
+            actor_id=int(uid),
+            action=str(payload.get("action") or ""),
+            payload=payload,
+        )
     except LookupError as exc:
         raise web.HTTPNotFound(text=str(exc))
+    except CinemaFeedConflict as exc:
+        raise web.HTTPConflict(text=str(exc))
     except ValueError as exc:
         raise web.HTTPBadRequest(text=str(exc))
 
-    applied, _saved = await save_media_source_registry(
-        int(room.guild_id),
-        expected_config=raw_config,
-        updated=updated,
-    )
-    if not applied:
-        raise web.HTTPConflict(
-            text="Cinema sources changed elsewhere. Refresh the Feed Center and try again."
-        )
     return web.json_response(await _media_source_state(room, uid))
+
+
+async def movie_night_progress(request: web.Request) -> web.Response:
+    room, uid = await _room_and_user(request)
+    candidate = (
+        room.candidates.get(room.current_candidate_id)
+        if room.current_candidate_id
+        else None
+    )
+    media = _candidate_web_metadata(candidate)
+    media_type = str(media.get("media_type") or "").strip().lower()
+    tmdb_id = int(media.get("tmdb_id") or 0)
+    if media_type not in {"movie", "episode"} or tmdb_id <= 0:
+        return web.json_response({"ok": True, "tracked": False, "item": None})
+
+    season_number = int(media.get("season_number") or 0)
+    episode_number = int(media.get("episode_number") or 0)
+    if request.method == "GET":
+        try:
+            row = await get_media_state(
+                int(uid),
+                media_type=media_type,
+                tmdb_id=tmdb_id,
+                season_number=season_number,
+                episode_number=episode_number,
+            )
+        except CinemaStorageUnavailable as exc:
+            raise web.HTTPServiceUnavailable(
+                text="Cinema progress storage is temporarily unavailable."
+            ) from exc
+        return web.json_response({"ok": True, "tracked": True, "item": row})
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    metadata = {
+        "poster_url": str(media.get("poster_url") or ""),
+        "backdrop_url": str(media.get("backdrop_url") or ""),
+        "year": int(media.get("year") or 0),
+        "media_type": media_type,
+        "adult": bool(media.get("adult", False)),
+    }
+    if media_type == "episode":
+        metadata.update(
+            {
+                "series_id": int(media.get("series_id") or 0),
+                "series_title": str(media.get("series_title") or "")[:180],
+                "episode_title": str(media.get("episode_title") or "")[:180],
+                "still_url": str(media.get("backdrop_url") or ""),
+            }
+        )
+    try:
+        row = await record_progress(
+            int(uid),
+            media_type=media_type,
+            tmdb_id=tmdb_id,
+            title=str(media.get("title") or room.current_candidate.title if candidate else ""),
+            progress_seconds=_float(payload.get("progress_seconds"), 0.0),
+            duration_seconds=_float(payload.get("duration_seconds"), 0.0),
+            season_number=season_number,
+            episode_number=episode_number,
+            metadata=metadata,
+            completed=(
+                bool(payload.get("completed"))
+                if "completed" in payload
+                else None
+            ),
+        )
+    except CinemaStorageUnavailable as exc:
+        raise web.HTTPServiceUnavailable(
+            text="Cinema progress storage is temporarily unavailable."
+        ) from exc
+    return web.json_response({"ok": True, "tracked": True, "item": row})
+
+
+
+def _episode_identity(media: Mapping[str, Any]) -> tuple[int, int, int, int] | None:
+    if str(media.get("media_type") or "").strip().lower() != "episode":
+        return None
+    series_id = int(media.get("series_id") or 0)
+    season = int(media.get("season_number") or 0)
+    episode = int(media.get("episode_number") or 0)
+    tmdb_id = int(media.get("tmdb_id") or 0)
+    if series_id <= 0 or tmdb_id <= 0:
+        return None
+    return series_id, season, episode, tmdb_id
+
+
+async def _next_episode_context(
+    room: MovieNightRoom,
+) -> tuple[dict[str, Any], Any, dict[str, Any], str, Any]:
+    candidate = (
+        room.candidates.get(room.current_candidate_id)
+        if room.current_candidate_id
+        else None
+    )
+    media = _candidate_web_metadata(candidate)
+    identity = _episode_identity(media)
+    if identity is None:
+        return media, None, {}, "", None
+
+    series_id, season, episode, _tmdb_id = identity
+    next_episode = await get_next_episode(series_id, season, episode)
+    if next_episode is None:
+        return media, None, {}, "", None
+
+    details = await get_cinema_details("tv", series_id)
+    metadata, query, outcome = await search_exact_episode_sources(
+        int(room.guild_id),
+        series=details.media,
+        episode=next_episode,
+    )
+    return media, next_episode, metadata, query, outcome
+
+
+async def movie_night_next_episode(request: web.Request) -> web.Response:
+    room, uid = await _room_and_user(request)
+    baseline_candidate = (
+        room.candidates.get(room.current_candidate_id)
+        if room.current_candidate_id
+        else None
+    )
+    baseline_media = _candidate_web_metadata(baseline_candidate)
+    baseline_identity = _episode_identity(baseline_media)
+    if baseline_identity is None:
+        return web.json_response(
+            {"available": False, "reason": "not_episode", "next_episode": None}
+        )
+
+    if request.method == "POST" and int(uid) != int(room.host_id):
+        raise web.HTTPForbidden(text="Only the current Cinema host can start the next episode.")
+
+    try:
+        _media, next_episode, metadata, query, outcome = await _next_episode_context(room)
+    except Exception as exc:
+        raise web.HTTPServiceUnavailable(
+            text="Next episode information is temporarily unavailable."
+        ) from exc
+
+    if next_episode is None:
+        return web.json_response(
+            {"available": False, "reason": "series_complete", "next_episode": None}
+        )
+
+    next_payload = {
+        **next_episode.to_payload(),
+        "series_title": str(metadata.get("series_title") or ""),
+        "poster_url": str(metadata.get("poster_url") or ""),
+        "backdrop_url": str(metadata.get("backdrop_url") or ""),
+    }
+    variants = tuple(getattr(outcome, "variants", ()) or ()) if outcome is not None else ()
+    if request.method == "GET":
+        return web.json_response(
+            {
+                "available": bool(variants),
+                "reason": "ready" if variants else "source_unavailable",
+                "next_episode": next_payload,
+                "playable_source_count": len(variants),
+            }
+        )
+
+    if not variants:
+        raise web.HTTPConflict(
+            text="The next episode exists, but no playable source is currently available."
+        )
+
+    manager = get_movie_night_manager()
+    latest = manager.get(room.room_id)
+    latest_candidate = (
+        latest.candidates.get(latest.current_candidate_id)
+        if latest is not None and latest.current_candidate_id
+        else None
+    )
+    latest_media = _candidate_web_metadata(latest_candidate)
+    if (
+        latest is None
+        or latest.ended
+        or int(latest.host_id) != int(uid)
+        or _episode_identity(latest_media) != baseline_identity
+    ):
+        raise web.HTTPConflict(
+            text="Cinema changed while the next episode was being prepared. Try again from the current episode."
+        )
+
+    manager.join_room(latest.room_id, user_id=int(uid))
+    materialize_search_results(
+        latest,
+        outcome,
+        proposer_id=int(uid),
+        query=query,
+        catalog_metadata=metadata,
+    )
+    candidate = find_catalog_candidate(latest, metadata)
+    if candidate is None:
+        raise web.HTTPConflict(text="The next episode could not be attached to this Cinema room.")
+    ranked = manager.ranked_variants(latest.room_id, candidate.candidate_id)
+    selected = await select_preferred_variant(int(uid), ranked)
+    if selected is None:
+        raise web.HTTPConflict(text="No playable next-episode release is available.")
+
+    try:
+        playback = await start_room_variant(
+            latest.room_id,
+            actor_id=int(uid),
+            candidate_id=candidate.candidate_id,
+            variant_id=selected.variant_id,
+        )
+    except Exception as exc:
+        raise web.HTTPBadGateway(
+            text="The next episode source could not be started. Try another source from Cinema."
+        ) from exc
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    autoplay = bool(body.get("autoplay")) if isinstance(body, dict) else False
+    if autoplay:
+        manager.apply_host_action(
+            playback.room.room_id,
+            host_id=int(uid),
+            action="resume",
+        )
+
+    state = await _state_payload(playback.room, int(uid))
+    state["next_episode_transition"] = {
+        "started": True,
+        "autoplay": autoplay,
+        "episode": next_payload,
+    }
+    return web.json_response(state)
+
+
+async def movie_night_preferences(request: web.Request) -> web.Response:
+    _room, uid = await _room_and_user(request)
+    try:
+        if request.method == "GET":
+            row = await get_cinema_user(int(uid))
+        else:
+            try:
+                payload = await request.json()
+            except Exception:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            row = await update_cinema_preferences(int(uid), payload)
+    except CinemaStorageUnavailable as exc:
+        raise web.HTTPServiceUnavailable(
+            text="Cinema preferences are temporarily unavailable."
+        ) from exc
+    return web.json_response(
+        {
+            "preferences": dict(row.get("preferences") or {}),
+        }
+    )
+
+
+async def movie_night_queue_search(request: web.Request) -> web.Response:
+    room, uid = await _room_and_user(request)
+    if int(uid) != int(room.host_id):
+        raise web.HTTPForbidden(text="Only the active Cinema host can search for queued titles.")
+
+    try:
+        _raw, cinema_preferences = await load_movie_night_preferences(
+            int(room.guild_id),
+            refresh=False,
+        )
+        adult_enabled = bool(cinema_preferences.adult_content_enabled)
+    except Exception:
+        adult_enabled = False
+
+    query = " ".join(str(request.query.get("q", "") or "").split())[:180]
+    if not adult_enabled and looks_explicit_adult(query):
+        return web.json_response(
+            {
+                "query": query,
+                "results": [],
+                "adult_content_enabled": False,
+                "hint": "Adult-content Cinema search is disabled for this server.",
+            }
+        )
+    if len(query) < 2:
+        return web.json_response(
+            {
+                "query": query,
+                "results": [],
+                "hint": "Search a movie title or an exact TV episode such as Show S3E7.",
+            }
+        )
+
+    parsed = parse_episode_query(query)
+    results: list[dict[str, Any]] = []
+    try:
+        if parsed is not None:
+            series_query, season_number, episode_number = parsed
+            matches = await search_cinema_catalog(
+                series_query,
+                limit=8,
+                include_adult=adult_enabled,
+            )
+            for series in matches:
+                if str(series.media_type or "") != "tv":
+                    continue
+                try:
+                    episodes = await get_cinema_season(
+                        int(series.tmdb_id),
+                        int(season_number),
+                    )
+                except Exception:
+                    continue
+                episode = next(
+                    (
+                        item
+                        for item in episodes
+                        if int(item.episode_number) == int(episode_number)
+                    ),
+                    None,
+                )
+                if episode is None:
+                    continue
+                results.append(
+                    {
+                        **episode.to_payload(),
+                        "result_kind": "episode",
+                        "media_type": "episode",
+                        "series_id": int(series.tmdb_id),
+                        "series_title": str(series.title),
+                        "series_poster_url": str(series.poster_url or ""),
+                        "poster_url": str(series.poster_url or ""),
+                        "backdrop_url": str(episode.still_url or series.backdrop_url or ""),
+                    }
+                )
+                if len(results) >= 6:
+                    break
+        else:
+            matches = await search_cinema_catalog(
+                query,
+                limit=20,
+                include_adult=adult_enabled,
+            )
+            for media in matches:
+                if str(media.media_type or "") != "movie":
+                    continue
+                results.append(
+                    {
+                        **media.to_payload(),
+                        "result_kind": "movie",
+                    }
+                )
+                if len(results) >= 12:
+                    break
+    except Exception as exc:
+        raise web.HTTPServiceUnavailable(
+            text="Cinema catalog search is temporarily unavailable."
+        ) from exc
+
+    return web.json_response(
+        {
+            "query": query,
+            "results": results,
+            "hint": (
+                "For TV, search an exact episode such as Show S3E7."
+                if parsed is None
+                else ""
+            ),
+        }
+    )
 
 
 async def movie_night_queue_action(request: web.Request) -> web.Response:
@@ -1359,13 +1740,136 @@ async def movie_night_queue_action(request: web.Request) -> web.Response:
     candidate_id = str(payload.get("candidate_id") or "").strip()
     manager = get_movie_night_manager()
 
+    def payload_int(name: str, default: int = 0) -> int:
+        try:
+            return int(payload.get(name) or default)
+        except (TypeError, ValueError) as exc:
+            raise web.HTTPBadRequest(
+                text=f"Invalid Cinema queue field: {name}."
+            ) from exc
+
     try:
-        if action == "remove":
+        if action == "add":
+            media_type = str(payload.get("media_type") or "").strip().lower()
+            metadata: dict[str, Any]
+            query: str
+            outcome: Any
+
+            if media_type == "movie":
+                tmdb_id = payload_int("tmdb_id")
+                if tmdb_id <= 0:
+                    raise web.HTTPBadRequest(text="Invalid movie identity.")
+                details = await get_cinema_details("movie", tmdb_id)
+                try:
+                    _raw, cinema_preferences = await load_movie_night_preferences(
+                        int(room.guild_id),
+                        refresh=False,
+                    )
+                    adult_enabled = bool(cinema_preferences.adult_content_enabled)
+                except Exception:
+                    adult_enabled = False
+                if bool(details.media.adult) and not adult_enabled:
+                    raise web.HTTPForbidden(
+                        text="Adult-content Cinema playback is disabled for this server."
+                    )
+                metadata, query, outcome = await search_exact_movie_sources(
+                    int(room.guild_id),
+                    media=details.media,
+                )
+            elif media_type == "episode":
+                series_id = payload_int("series_id")
+                season_number = payload_int("season_number")
+                episode_number = payload_int("episode_number")
+                requested_tmdb_id = payload_int("tmdb_id")
+                if series_id <= 0 or season_number < 0 or episode_number <= 0:
+                    raise web.HTTPBadRequest(text="Invalid TV episode identity.")
+                details = await get_cinema_details("tv", series_id)
+                try:
+                    _raw, cinema_preferences = await load_movie_night_preferences(
+                        int(room.guild_id),
+                        refresh=False,
+                    )
+                    adult_enabled = bool(cinema_preferences.adult_content_enabled)
+                except Exception:
+                    adult_enabled = False
+                if bool(details.media.adult) and not adult_enabled:
+                    raise web.HTTPForbidden(
+                        text="Adult-content Cinema playback is disabled for this server."
+                    )
+                episodes = await get_cinema_season(series_id, season_number)
+                episode = next(
+                    (
+                        item
+                        for item in episodes
+                        if int(item.episode_number) == episode_number
+                    ),
+                    None,
+                )
+                if episode is None:
+                    raise web.HTTPNotFound(text="That TV episode is not available in the catalog.")
+                if requested_tmdb_id > 0 and int(episode.tmdb_id) != requested_tmdb_id:
+                    raise web.HTTPConflict(
+                        text="The episode identity changed. Search Cinema again."
+                    )
+                metadata, query, outcome = await search_exact_episode_sources(
+                    int(room.guild_id),
+                    series=details.media,
+                    episode=episode,
+                )
+            else:
+                raise web.HTTPBadRequest(
+                    text="Queue Add supports movies or a specific TV episode."
+                )
+
+            if not tuple(outcome.variants or ()):
+                raise web.HTTPConflict(
+                    text="No playable source currently matches this exact Cinema title."
+                )
+
+            latest = manager.get(room.room_id)
+            if (
+                latest is None
+                or latest.ended
+                or int(latest.host_id) != int(uid)
+            ):
+                raise web.HTTPConflict(
+                    text="Cinema changed while that title was being prepared. Try again."
+                )
+
+            manager.join_room(latest.room_id, user_id=int(uid))
+            materialize_search_results(
+                latest,
+                outcome,
+                proposer_id=int(uid),
+                query=query,
+                catalog_metadata=metadata,
+            )
+            candidate = find_catalog_candidate(latest, metadata)
+            if candidate is None:
+                raise web.HTTPConflict(text="Cinema could not attach that title to the queue.")
+            if str(candidate.candidate_id) == str(latest.current_candidate_id or ""):
+                raise web.HTTPConflict(text="That title is already playing.")
+            manager.queue_winner(
+                latest.room_id,
+                candidate_id=candidate.candidate_id,
+            )
+            room = latest
+        elif action == "remove":
             manager.remove_queued(
                 room.room_id,
                 host_id=uid,
                 candidate_id=candidate_id,
             )
+        elif action == "play_next":
+            if candidate_id not in room.queue:
+                raise LookupError("Queued movie not found.")
+            while room.queue and str(room.queue[0]) != candidate_id:
+                manager.move_queued(
+                    room.room_id,
+                    host_id=uid,
+                    candidate_id=candidate_id,
+                    offset=-1,
+                )
         elif action == "move_up":
             manager.move_queued(
                 room.room_id,
@@ -1384,10 +1888,18 @@ async def movie_night_queue_action(request: web.Request) -> web.Response:
             manager.clear_queue(room.room_id, host_id=uid)
         else:
             raise web.HTTPBadRequest(text="Unsupported Cinema queue action.")
+    except web.HTTPException:
+        raise
     except PermissionError as exc:
         raise web.HTTPForbidden(text=str(exc))
     except LookupError as exc:
         raise web.HTTPNotFound(text=str(exc))
+    except Exception as exc:
+        if action == "add":
+            raise web.HTTPServiceUnavailable(
+                text="Cinema could not prepare that queue item right now."
+            ) from exc
+        raise
 
     return web.json_response(await _state_payload(room, uid))
 
@@ -1498,19 +2010,20 @@ button {{ cursor:pointer; }}
   filter:blur(17px);pointer-events:none;
 }}
 .brand-art {{
-  display:grid;
-  grid-template-columns:clamp(92px,15vw,150px) minmax(0,1fr);
+  display:flex;
   align-items:center;
-  gap:clamp(3px,.7vw,10px);
   width:100%;
+  min-width:0;
 }}
-.brand-mark-art,.brand-wordmark-art {{
-  display:block;max-width:100%;height:auto;object-fit:contain;
+.brand-lockup-art {{
+  display:block;
+  width:min(100%,760px);
+  height:auto;
+  object-fit:contain;
+  object-position:left center;
   filter:drop-shadow(0 10px 28px rgba(0,0,0,.42));
   transform:translateZ(0);
 }}
-.brand-mark-art {{ width:100%;justify-self:start; }}
-.brand-wordmark-art {{ width:100%;justify-self:start; }}
 
 .nav {{
   display:flex; align-items:center; gap:5px;
@@ -1859,11 +2372,41 @@ video {{
 .queue-action.danger {{ color:#ff727d;border-color:rgba(255,93,107,.24); }}
 .queue-action:disabled {{ opacity:.28; }}
 .queue-head-actions {{ display:flex;align-items:center;gap:8px; }}
-.queue-clear {{
+.queue-clear,.queue-add-toggle {{
   border:0;background:transparent;color:#b7c2bd;
   padding:4px 0;font-size:.72rem;font-weight:750;
 }}
-.queue-clear[hidden] {{ display:none !important; }}
+.queue-add-toggle {{ color:var(--lime); }}
+.queue-clear[hidden],.queue-add-toggle[hidden] {{ display:none !important; }}
+.queue-add-form {{
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;
+  margin:10px 0 12px;padding:10px;border:1px solid rgba(168,255,103,.12);
+  border-radius:12px;background:#081510;
+}}
+.queue-add-form[hidden] {{ display:none !important; }}
+.queue-search-input {{
+  min-width:0;border:1px solid rgba(255,255,255,.11);border-radius:10px;
+  background:#10201a;color:#f5f8f6;padding:10px 11px;font:inherit;
+}}
+.queue-search-submit {{
+  border:1px solid rgba(167,255,100,.28);border-radius:10px;
+  background:rgba(77,156,45,.18);color:var(--lime);padding:9px 12px;font-weight:850;
+}}
+.queue-search-results {{ grid-column:1 / -1;display:grid;gap:7px;max-height:280px;overflow:auto; }}
+.queue-search-empty {{ color:#8e9b95;font-size:.72rem;line-height:1.4;padding:5px 2px; }}
+.queue-search-result {{
+  display:grid;grid-template-columns:46px minmax(0,1fr) auto;gap:9px;align-items:center;
+  padding:7px;border:1px solid rgba(255,255,255,.07);border-radius:10px;background:#0b1914;
+}}
+.queue-search-art {{ width:46px;aspect-ratio:2/3;border-radius:7px;overflow:hidden;background:#14241e; }}
+.queue-search-art img {{ width:100%;height:100%;object-fit:cover; }}
+.queue-search-title {{ font-size:.78rem;font-weight:850; }}
+.queue-search-meta {{ margin-top:2px;color:#8d9a94;font-size:.66rem; }}
+.queue-search-add {{
+  border:1px solid rgba(167,255,100,.24);border-radius:9px;background:rgba(71,142,43,.14);
+  color:var(--lime);padding:8px 9px;font-size:.68rem;font-weight:850;
+}}
+.queue-action.next {{ width:auto;padding:0 8px;white-space:nowrap;color:var(--lime); }}
 .queue-art {{ width:58px;aspect-ratio:16/10;border-radius:9px;overflow:hidden;background:#13231d; }}
 .queue-art img {{ width:100%;height:100%;object-fit:cover; }}
 .queue-title {{ font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }}
@@ -2081,9 +2624,7 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
   .shell {{ padding-left:14px;padding-right:14px;padding-bottom:160px; }}
   .site-header {{ margin-left:-14px;margin-right:-14px;padding-left:10px;padding-right:10px; }}
   .brand {{ width:100%; }}
-  .brand-art {{ grid-template-columns:clamp(78px,24vw,112px) minmax(0,1fr);gap:0; }}
-  .brand-mark-art {{ transform:translateX(2px) translateZ(0); }}
-  .brand-wordmark-art {{ transform:translateX(-2px) translateZ(0); }}
+  .brand-lockup-art {{ width:min(100%,620px); }}
   .nav {{ margin-top:10px; }}
   .nav-item {{ padding:9px 11px;font-size:.75rem; }}
   .video-stage {{ min-height:0; }}
@@ -2107,6 +2648,11 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
   .tab {{ padding:9px 3px;font-size:clamp(.56rem,2.6vw,.68rem); }}
   .section-head {{ align-items:flex-start; }}
   .queue-head-actions {{ flex-wrap:wrap;justify-content:flex-end; }}
+  .queue-add-form {{ grid-template-columns:1fr; }}
+  .queue-search-submit,.queue-search-results {{ grid-column:1; }}
+  .queue-search-result {{ grid-template-columns:42px minmax(0,1fr); }}
+  .queue-search-art {{ width:42px; }}
+  .queue-search-add {{ grid-column:1 / -1;width:100%; }}
   .queue-item.manageable {{ grid-template-columns:50px minmax(0,1fr); }}
   .queue-item.manageable .queue-actions {{ grid-column:1 / -1;justify-content:flex-end; }}
   .queue-art {{ width:50px; }}
@@ -2131,23 +2677,13 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
 <header class="site-header">
   <div class="brand-row">
     <div class="brand">
-      <div class="brand-art" aria-label="Dank Cinema — A feature of The 420 Lobby">
+      <div class="brand-art">
         <img
-          class="brand-mark-art"
-          src="/movie/assets/dank-cinema-brand-mark.webp?v={_BRAND_ASSET_VERSION}"
-          alt=""
-          aria-hidden="true"
-          width="320"
-          height="245"
-          decoding="async"
-          fetchpriority="high"
-        >
-        <img
-          class="brand-wordmark-art"
-          src="/movie/assets/dank-cinema-brand-wordmark.webp?v={_BRAND_ASSET_VERSION}"
+          class="brand-lockup-art"
+          src="/movie/assets/dank-cinema-brand.webp?v={_BRAND_ASSET_VERSION}"
           alt="Dank Cinema — A feature of The 420 Lobby"
-          width="1040"
-          height="289"
+          width="1200"
+          height="278"
           decoding="async"
           fetchpriority="high"
         >
@@ -2203,6 +2739,9 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
           </button>
           <button class="player-button" id="forward10" type="button" aria-label="Forward 10 seconds">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 7h5V2"/><path d="M20 7a9 9 0 1 0 1 9"/><text x="7.7" y="16.5" fill="currentColor" stroke="none" font-size="8">10</text></svg>
+          </button>
+          <button class="player-button" id="nextEpisode" type="button" aria-label="Next episode" title="Next episode" hidden disabled>
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 4v16l11-8Z"/><path d="M18 4h2v16h-2Z"/></svg>
           </button>
           <span class="control-spacer"></span>
           <div class="volume-wrap">
@@ -2325,15 +2864,23 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
       <h2>Up Next</h2>
       <div class="queue-head-actions">
         <span id="queueCount">0 queued</span>
+        <button class="queue-add-toggle" id="queueAddToggle" type="button" hidden>Add Title</button>
         <button class="queue-clear" id="clearQueue" type="button" hidden>Clear Queue</button>
       </div>
     </div>
+    <form class="queue-add-form" id="queueAddForm" hidden>
+      <input class="queue-search-input" id="queueSearchInput" type="search" maxlength="180"
+        placeholder="Movie title or exact episode, e.g. Show S3E7"
+        aria-label="Search a movie or exact TV episode to add to the queue">
+      <button class="queue-search-submit" id="queueSearchSubmit" type="submit">Search</button>
+      <div class="queue-search-results" id="queueSearchResults" aria-live="polite"></div>
+    </form>
     <div id="queueList">
       <div class="queue-empty">
         <div class="queue-empty-mark" aria-hidden="true">▤</div>
         <div class="queue-empty-copy">
           <div class="queue-empty-title">Your Queue Is Empty</div>
-          <div class="queue-empty-sub">Add a title from Discord Cinema and it will appear here for everyone in the session.</div>
+          <div class="queue-empty-sub">Use Add Title above to search movies or an exact TV episode without leaving the Theater.</div>
         </div>
       </div>
     </div>
@@ -2355,6 +2902,23 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
         <option value="lite">Lite</option>
       </select>
     </div>
+    <div class="quality-control">
+      <label for="playbackSpeed">Playback speed</label>
+      <select class="quality-select" id="playbackSpeed" aria-label="Playback speed">
+        <option value="0.5">0.5×</option>
+        <option value="0.75">0.75×</option>
+        <option value="1" selected>1×</option>
+        <option value="1.25">1.25×</option>
+        <option value="1.5">1.5×</option>
+        <option value="1.75">1.75×</option>
+        <option value="2">2×</option>
+      </select>
+    </div>
+    <div class="quality-control" id="audioControl" hidden>
+      <label for="audioTrack">Audio track</label>
+      <select class="quality-select" id="audioTrack" aria-label="Audio track"></select>
+    </div>
+    <div class="quality-note" id="playbackPreferenceNote">Playback speed is synchronized for everyone when you are the host. Audio selection stays local to each viewer.</div>
     <div class="quality-note" id="qualityNote">Auto balances artwork depth with device and network capability. Playback features stay identical in every mode.</div>
     <div class="keyboard-help" id="keyboardHelp">
       Desktop shortcuts: <kbd>Space</kbd> play/pause, <kbd>←</kbd>/<kbd>→</kbd> seek 10s when you control playback, <kbd>F</kbd> fullscreen, <kbd>M</kbd> mute.
@@ -2474,6 +3038,19 @@ let lastToken="";
 let lastStreamConsumer="";
 let remoteApply=false;
 let lastState=null;
+let cinemaPreferences={{}};
+let preferredAudioLanguage="";
+let preferredSubtitleLanguage="";
+let lastProgressPersistAt=0;
+let lastProgressMediaKey="";
+let lastProgressRestoreKey="";
+let pendingProgressResume=null;
+let progressResumeApplying=false;
+let hostSeekCommitTimer=null;
+let lastNextEpisodeKey="";
+let nextEpisodeState=null;
+let nextEpisodeLoading=false;
+let progressStorageWarned=false;
 let terminated=false;
 let syncRequested=false;
 let syncGestureGranted=false;
@@ -2701,6 +3278,29 @@ function refreshNativePlayerCapabilities() {{
     for(let i=0;i<tracks.length;i++) if(tracks[i].mode==="showing") showing=true;
   }}
   captions.classList.toggle("active",showing);
+
+  const audioControl=document.getElementById("audioControl");
+  const audioSelect=document.getElementById("audioTrack");
+  const audioTracks=video.audioTracks;
+  const count=audioTracks && Number(audioTracks.length||0);
+  audioControl.hidden=!(count>1);
+  if(count>1) {{
+    const previous=audioSelect.value;
+    audioSelect.textContent="";
+    for(let i=0;i<count;i++) {{
+      const track=audioTracks[i];
+      const option=document.createElement("option");
+      option.value=String(i);
+      option.textContent=String(
+        track.label ||
+        track.language ||
+        "Audio "+String(i+1)
+      );
+      if(track.enabled) option.selected=true;
+      audioSelect.appendChild(option);
+    }}
+    if(previous && Number(previous)<count) audioSelect.value=previous;
+  }}
 }}
 function updatePlayerChrome() {{
   const duration=Number.isFinite(video.duration)?video.duration:0;
@@ -2725,8 +3325,12 @@ function renderQueue(items) {{
   list.textContent="";
   const rows=Array.isArray(items)?items:[];
   document.getElementById("queueCount").textContent=rows.length+" queued";
+  const isHost=!!lastState?.is_host;
   const clear=document.getElementById("clearQueue");
-  clear.hidden=!(lastState?.is_host && rows.length);
+  const addToggle=document.getElementById("queueAddToggle");
+  clear.hidden=!(isHost && rows.length);
+  addToggle.hidden=!isHost;
+  if(!isHost) document.getElementById("queueAddForm").hidden=true;
   if(!rows.length) {{
     const empty=document.createElement("div");
     empty.className="queue-empty";
@@ -2743,18 +3347,11 @@ function renderQueue(items) {{
     title.textContent="Your Queue Is Empty";
     const sub=document.createElement("div");
     sub.className="queue-empty-sub";
-    sub.textContent="Add a title from Discord Cinema and it will appear here for everyone in the session.";
+    sub.textContent=isHost
+      ?"Use Add Title above to search movies or an exact TV episode without leaving the Theater."
+      :"The current host can add and arrange titles without leaving playback.";
     copy.append(title,sub);
     empty.append(mark,copy);
-
-    if(lastState?.discord_url) {{
-      const action=document.createElement("button");
-      action.type="button";
-      action.className="queue-empty-action";
-      action.textContent="Open Discord";
-      action.onclick=openDiscordRoom;
-      empty.appendChild(action);
-    }}
     list.appendChild(empty);
     return;
   }}
@@ -2775,7 +3372,13 @@ function renderQueue(items) {{
     title.textContent=String(item.title||"Untitled");
     const sub=document.createElement("div");
     sub.className="queue-sub";
-    sub.textContent=(item.year?String(item.year)+" • ":"")+(item.is_current?"Now playing":"Up next");
+    const queueMeta=[];
+    if(item.year) queueMeta.push(String(item.year));
+    if(item.media_type==="episode")
+      queueMeta.push("S"+String(item.season_number||0)+" E"+String(item.episode_number||0));
+    queueMeta.push(item.is_current?"Now playing":"Up next");
+    if(item.added_by) queueMeta.push("Added by "+String(item.added_by));
+    sub.textContent=queueMeta.join(" • ");
     copy.append(title,sub);
     row.append(art,copy);
 
@@ -2784,14 +3387,15 @@ function renderQueue(items) {{
       const actions=document.createElement("div");
       actions.className="queue-actions";
       const index=rows.indexOf(item);
-      for(const [label,actionName,disabled,danger] of [
-        ["↑","move_up",index===0,false],
-        ["↓","move_down",index===rows.length-1,false],
-        ["×","remove",false,true]
+      for(const [label,actionName,disabled,danger,next] of [
+        ["Play Next","play_next",index===0,false,true],
+        ["↑","move_up",index===0,false,false],
+        ["↓","move_down",index===rows.length-1,false,false],
+        ["×","remove",false,true,false]
       ]) {{
         const button=document.createElement("button");
         button.type="button";
-        button.className="queue-action"+(danger?" danger":"");
+        button.className="queue-action"+(danger?" danger":"")+(next?" next":"");
         button.textContent=label;
         button.disabled=disabled;
         button.setAttribute("aria-label",actionName.replace("_"," ")+" "+String(item.title||"title"));
@@ -3020,15 +3624,22 @@ function applyMovieArtwork(movie,s) {{
     document.getElementById("movieInfo").classList.add("no-poster");
   }}
 }}
+function humanSessionStatus(s) {{
+  if(!s) return "Connecting";
+  if(!s.is_host && s.host_active===false) return "Host Away";
+  if(String(s.state||"")==="buffering") return "Buffering";
+  if(s.is_host) return "Host";
+  if(s.sync_status==="joining" || !s.sync_ready) return "Connecting";
+  return "Synced";
+}}
 function renderSiteState(s) {{
   const movie=s.movie||{{}};
   applyModeSurface(s);
   document.getElementById("healthText").textContent="Stream Health: "+streamHealthLabel(s);
-  document.getElementById("hostPresence").textContent=s.host_active?"Host online":"Host away";
+  document.getElementById("hostPresence").textContent=s.host_active?"Host Online":"Host Away";
   document.getElementById("sessionViewers").textContent=String(s.viewer_count||0);
   document.getElementById("sessionRole").textContent=s.is_host?"Host":"Viewer";
-  document.getElementById("sessionSync").textContent=
-    s.is_host?"Host clock":(s.sync_status==="joining"?"Joining":(s.sync_ready?"Synced":"Waiting"));
+  document.getElementById("sessionSync").textContent=humanSessionStatus(s);
   const year=document.getElementById("year");
   const yearWrap=document.getElementById("yearWrap");
   year.textContent=movie.year?String(movie.year):"";
@@ -3044,14 +3655,31 @@ function renderSiteState(s) {{
   document.getElementById("rewind10").disabled=hostOnly;
   document.getElementById("forward10").disabled=hostOnly;
   document.getElementById("timeline").disabled=hostOnly;
+  updateNextEpisodeControl();
+  updatePlaybackPreferenceControls();
   updatePlayerChrome();
   refreshCastAvailability();
   syncCastToRoom(s);
 }}
+function canonicalPlaybackRate() {{
+  const raw=Number(lastState?.playback_rate||1);
+  const allowed=[0.5,0.75,1,1.25,1.5,1.75,2];
+  return allowed.reduce((best,value)=>Math.abs(value-raw)<Math.abs(best-raw)?value:best,1);
+}}
 function resetPlaybackRate() {{
+  const rate=canonicalPlaybackRate();
   try {{
-    if(Math.abs(Number(video.playbackRate||1)-1)>0.001) video.playbackRate=1;
+    if(Math.abs(Number(video.playbackRate||1)-rate)>0.001) video.playbackRate=rate;
   }} catch(_) {{}}
+}}
+function updatePlaybackPreferenceControls() {{
+  const speed=document.getElementById("playbackSpeed");
+  const rate=canonicalPlaybackRate();
+  speed.value=String(rate);
+  speed.disabled=!lastState?.is_host;
+  speed.title=lastState?.is_host
+    ?"Playback speed is synchronized for the Cinema session."
+    :"Only the current host can change synchronized playback speed.";
 }}
 
 
@@ -3110,6 +3738,152 @@ function safeSeek(target) {{
   }}
 }}
 
+function progressIdentity(movie=lastState?.movie) {{
+  const media=movie||{{}};
+  const kind=String(media.media_type||"").toLowerCase();
+  const tmdb=Number(media.tmdb_id||0);
+  if(!["movie","episode"].includes(kind) || tmdb<=0) return "";
+  return kind+":"+String(tmdb)+":"+String(Number(media.season_number||0))+":"+String(Number(media.episode_number||0));
+}}
+
+async function applyPendingProgressResume() {{
+  const pending=pendingProgressResume;
+  if(!pending || progressResumeApplying || !lastState?.is_host || !lastState?.stream_url) return;
+  if(progressIdentity()!==pending.key) {{
+    pendingProgressResume=null;
+    return;
+  }}
+  const canonical=Number(lastState.position_seconds||0);
+  if(canonical>2.5) {{
+    pendingProgressResume=null;
+    return;
+  }}
+  if(video.readyState<1 || !Number.isFinite(video.duration) || video.duration<=0) return;
+  const completionPoint=Math.max(30,Number(video.duration)*.92);
+  const target=Math.max(0,Math.min(Number(pending.seconds||0),Math.max(0,video.duration-1)));
+  pendingProgressResume=null;
+  if(target<5 || target>=completionPoint) return;
+
+  progressResumeApplying=true;
+  try {{
+    if(!safeSeek(target)) return;
+    await hostAction("seek",{{seconds:target}});
+    notice.textContent="Resumed from "+fmtClock(target)+".";
+  }} finally {{
+    setTimeout(()=>{{progressResumeApplying=false;}},300);
+  }}
+}}
+
+async function maybeRestoreWatchProgress(s) {{
+  if(!s?.is_host || !s?.stream_url) return;
+  const key=progressIdentity(s.movie);
+  if(!key || key===lastProgressRestoreKey) return;
+  lastProgressRestoreKey=key;
+  if(Number(s.position_seconds||0)>2.5) return;
+  try {{
+    const saved=await jsonFetch("/movie/"+BOOT.roomId+"/progress");
+    if(
+      progressIdentity()!==key ||
+      !lastState?.is_host ||
+      Number(lastState.position_seconds||0)>2.5
+    ) return;
+    const item=saved?.item;
+    if(!item || item.completed) return;
+    const seconds=Math.max(0,Number(item.progress_seconds||0));
+    if(seconds<5) return;
+    pendingProgressResume={{key,seconds}};
+    await applyPendingProgressResume();
+  }} catch(_) {{
+    // Playback remains available when durable Cinema storage is temporarily down.
+  }}
+}}
+
+function scheduleHostSeekCommit() {{
+  if(remoteApply || progressResumeApplying || !lastState?.is_host) return;
+  if(hostSeekCommitTimer!==null) clearTimeout(hostSeekCommitTimer);
+  hostSeekCommitTimer=setTimeout(async()=>{{
+    hostSeekCommitTimer=null;
+    if(remoteApply || progressResumeApplying || !lastState?.is_host) return;
+    const seconds=Math.max(0,Number(video.currentTime||0));
+    await hostAction("seek",{{seconds}});
+    persistWatchProgress(true);
+  }},250);
+}}
+
+function updateNextEpisodeControl() {{
+  const button=document.getElementById("nextEpisode");
+  const isEpisode=String(lastState?.movie?.media_type||"")==="episode";
+  const show=!!(
+    lastState?.is_host &&
+    isEpisode &&
+    nextEpisodeState?.available
+  );
+  button.hidden=!show;
+  button.disabled=!show || nextEpisodeLoading;
+  if(show) {{
+    const item=nextEpisodeState.next_episode||{{}};
+    const season=Number(item.season_number||0);
+    const episode=Number(item.episode_number||0);
+    button.title="Play next • S"+String(season)+" E"+String(episode);
+    button.setAttribute("aria-label",button.title);
+  }}
+}}
+
+async function loadNextEpisodeAvailability(s=lastState) {{
+  const key=progressIdentity(s?.movie);
+  const isEpisode=String(s?.movie?.media_type||"")==="episode";
+  if(!s?.is_host || !isEpisode || !key) {{
+    nextEpisodeState=null;
+    lastNextEpisodeKey="";
+    updateNextEpisodeControl();
+    return;
+  }}
+  if(key===lastNextEpisodeKey) {{
+    updateNextEpisodeControl();
+    return;
+  }}
+  lastNextEpisodeKey=key;
+  nextEpisodeState=null;
+  nextEpisodeLoading=true;
+  updateNextEpisodeControl();
+  try {{
+    const response=await jsonFetch("/movie/"+BOOT.roomId+"/next-episode");
+    if(progressIdentity()!==key || !lastState?.is_host) return;
+    nextEpisodeState=response||null;
+  }} catch(_) {{
+    if(progressIdentity()===key) nextEpisodeState=null;
+  }} finally {{
+    if(progressIdentity()===key) {{
+      nextEpisodeLoading=false;
+      updateNextEpisodeControl();
+    }}
+  }}
+}}
+
+async function playNextEpisode(autoplay=true) {{
+  if(!lastState?.is_host || !nextEpisodeState?.available || nextEpisodeLoading) return;
+  nextEpisodeLoading=true;
+  updateNextEpisodeControl();
+  const item=nextEpisodeState.next_episode||{{}};
+  const label=String(item.title||"next episode");
+  notice.textContent="Preparing "+label+"…";
+  try {{
+    const state=await jsonFetch("/movie/"+BOOT.roomId+"/next-episode", {{
+      method:"POST",
+      body:JSON.stringify({{autoplay:!!autoplay}})
+    }});
+    nextEpisodeState=null;
+    lastNextEpisodeKey="";
+    await applyState(state);
+    notice.textContent=autoplay?"Next episode started.":"Next episode is ready.";
+  }} catch(err) {{
+    notice.textContent="Next episode could not start: "+String(err?.message||err);
+  }} finally {{
+    nextEpisodeLoading=false;
+    updateNextEpisodeControl();
+  }}
+}}
+
 function correctSyncedDrift(target) {{
   if(!Number.isFinite(target)) return;
   const signed=(video.currentTime||0)-target;
@@ -3120,12 +3894,12 @@ function correctSyncedDrift(target) {{
       resetPlaybackRate();
       if(safeSeek(target)) lastHardSyncSeekAt=now;
     }} else {{
-      video.playbackRate=signed<0?1.04:0.96;
+      video.playbackRate=signed<0?Math.min(2,canonicalPlaybackRate()*1.04):Math.max(0.25,canonicalPlaybackRate()*0.96);
     }}
     return;
   }}
   if(drift>=SOFT_DRIFT_START) {{
-    video.playbackRate=signed<0?1.04:0.96;
+    video.playbackRate=signed<0?Math.min(2,canonicalPlaybackRate()*1.04):Math.max(0.25,canonicalPlaybackRate()*0.96);
     return;
   }}
   if(drift<=SOFT_DRIFT_STOP) resetPlaybackRate();
@@ -3138,8 +3912,9 @@ async function applyState(s) {{
     s.private?"🔒 Dank Cinema Private Session":"🎬 Dank Cinema Watch Party";
   document.getElementById("state").textContent=s.state||"—";
   document.getElementById("viewers").textContent=String(s.viewer_count||0);
+  const sessionStatus=humanSessionStatus(s);
   document.getElementById("role").textContent=
-    s.is_host?"Hosted by You":(s.sync_status==="joining"?"Joining…":"Synced Viewer");
+    s.is_host?"Hosted by You":sessionStatus;
   renderSiteState(s);
   const t=s.torrent||{{}};
   document.getElementById("progress").textContent=((t.progress||0)*100).toFixed(1)+"% • "+fmtRate(t.download_rate||0);
@@ -3199,8 +3974,13 @@ async function applyState(s) {{
     streamRetryAttempt=0;
     cancelStreamRetry();
     attachStream(s.stream_url);
+    void maybeRestoreWatchProgress(s);
+    void loadNextEpisodeAvailability(s);
   }}
+  if(s.stream_url) void loadNextEpisodeAvailability(s);
   if(!s.stream_url) {{
+    nextEpisodeState=null;
+    updateNextEpisodeControl();
     if(s.media_missing) {{
       notice.textContent=s.private
         ?"The attached media session expired or was reclaimed. Your Private Session is still active; return to Discord and choose the release again."
@@ -3311,8 +4091,13 @@ async function poll() {{
       return;
     }}
     stateFetchFailures+=1;
-    if(stateFetchFailures>=3)
+    if(stateFetchFailures>=3) {{
       notice.textContent="Sync connection lost. Reconnecting…";
+      const sync=document.getElementById("sessionSync");
+      if(sync) sync.textContent="Reconnecting";
+      const role=document.getElementById("role");
+      if(role && !lastState?.is_host) role.textContent="Reconnecting";
+    }}
   }}
 }}
 async function heartbeat(forceSync=false) {{
@@ -3344,6 +4129,104 @@ async function queueAction(action, candidateId="") {{
     await applyState(state);
   }} catch(err) {{
     notice.textContent="Queue update failed: "+String(err?.message||err);
+  }}
+}}
+function renderQueueSearchResults(data) {{
+  const root=document.getElementById("queueSearchResults");
+  root.textContent="";
+  const rows=Array.isArray(data?.results)?data.results:[];
+  if(!rows.length) {{
+    const empty=document.createElement("div");
+    empty.className="queue-search-empty";
+    empty.textContent=String(data?.hint||"No Cinema titles matched that search.");
+    root.appendChild(empty);
+    return;
+  }}
+  for(const item of rows) {{
+    const row=document.createElement("div");
+    row.className="queue-search-result";
+    const art=document.createElement("div");
+    art.className="queue-search-art";
+    const artUrl=String(item.poster_url||item.series_poster_url||"");
+    if(artUrl.startsWith("https://image.tmdb.org/")) {{
+      const img=document.createElement("img");
+      img.src=artUrl;img.alt="";img.loading="lazy";img.decoding="async";
+      art.appendChild(img);
+    }}
+    const copy=document.createElement("div");
+    const title=document.createElement("div");
+    title.className="queue-search-title";
+    title.textContent=String(item.media_type==="episode"
+      ?(item.series_title||"TV")+" • "+(item.title||"Episode")
+      :(item.title||"Untitled"));
+    const meta=document.createElement("div");
+    meta.className="queue-search-meta";
+    const bits=[];
+    if(item.year) bits.push(String(item.year));
+    if(item.media_type==="episode")
+      bits.push("S"+String(item.season_number||0)+" E"+String(item.episode_number||0));
+    else bits.push("Movie");
+    if(Number(item.rating||0)>0) bits.push("★ "+Number(item.rating).toFixed(1));
+    meta.textContent=bits.join(" • ");
+    copy.append(title,meta);
+
+    const add=document.createElement("button");
+    add.type="button";add.className="queue-search-add";add.textContent="Add";
+    add.onclick=async()=>{{
+      if(!lastState?.is_host || add.disabled) return;
+      add.disabled=true;add.textContent="Checking…";
+      try {{
+        const payload={{
+          action:"add",
+          media_type:String(item.media_type||""),
+          tmdb_id:Number(item.tmdb_id||0),
+          series_id:Number(item.series_id||0),
+          season_number:Number(item.season_number||0),
+          episode_number:Number(item.episode_number||0)
+        }};
+        const state=await jsonFetch("/movie/"+BOOT.roomId+"/queue",{{
+          method:"POST",body:JSON.stringify(payload)
+        }});
+        await applyState(state);
+        document.getElementById("queueAddForm").hidden=true;
+        document.getElementById("queueSearchInput").value="";
+        root.textContent="";
+        notice.textContent="Added "+String(item.title||item.series_title||"title")+" to Up Next.";
+      }} catch(err) {{
+        notice.textContent="Could not add title: "+String(err?.message||err);
+        add.disabled=false;add.textContent="Add";
+      }}
+    }};
+    row.append(art,copy,add);
+    root.appendChild(row);
+  }}
+}}
+async function searchQueueCatalog() {{
+  if(!lastState?.is_host) return;
+  const input=document.getElementById("queueSearchInput");
+  const root=document.getElementById("queueSearchResults");
+  const query=String(input.value||"").trim();
+  if(query.length<2) {{
+    root.textContent="";
+    const hint=document.createElement("div");
+    hint.className="queue-search-empty";
+    hint.textContent="Enter a movie title or exact TV episode such as Show S3E7.";
+    root.appendChild(hint);
+    return;
+  }}
+  root.textContent="";
+  const loading=document.createElement("div");
+  loading.className="queue-search-empty";loading.textContent="Searching Cinema…";
+  root.appendChild(loading);
+  try {{
+    const data=await jsonFetch("/movie/"+BOOT.roomId+"/queue-search?q="+encodeURIComponent(query));
+    renderQueueSearchResults(data);
+  }} catch(err) {{
+    root.textContent="";
+    const error=document.createElement("div");
+    error.className="queue-search-empty";
+    error.textContent="Queue search failed: "+String(err?.message||err);
+    root.appendChild(error);
   }}
 }}
 async function hostAction(action, extra={{}}) {{
@@ -3444,6 +4327,7 @@ document.getElementById("rewind10").onclick=()=>{{
 document.getElementById("forward10").onclick=()=>{{
   if(lastState?.is_host) safeSeek(Math.min(Number.isFinite(video.duration)?video.duration:Infinity,(video.currentTime||0)+10));
 }};
+document.getElementById("nextEpisode").onclick=()=>playNextEpisode(true);
 document.getElementById("timeline").addEventListener("input",event=>{{
   if(!lastState?.is_host || !Number.isFinite(video.duration) || video.duration<=0) return;
   safeSeek((Number(event.target.value||0)/1000)*video.duration);
@@ -3468,7 +4352,18 @@ document.getElementById("captions").onclick=()=>{{
   if(!tracks || !tracks.length) return;
   let anyShowing=false;
   for(let i=0;i<tracks.length;i++) if(tracks[i].mode==="showing") anyShowing=true;
-  for(let i=0;i<tracks.length;i++) tracks[i].mode=(i===0 && !anyShowing)?"showing":"disabled";
+  let preferredIndex=0;
+  if(preferredSubtitleLanguage) {{
+    for(let i=0;i<tracks.length;i++) {{
+      const lang=String(tracks[i].language||tracks[i].label||"").toLowerCase();
+      if(lang.includes(preferredSubtitleLanguage.toLowerCase())) {{
+        preferredIndex=i;
+        break;
+      }}
+    }}
+  }}
+  for(let i=0;i<tracks.length;i++)
+    tracks[i].mode=(i===preferredIndex && !anyShowing)?"showing":"disabled";
   refreshNativePlayerCapabilities();
 }};
 video.addEventListener("enterpictureinpicture",refreshNativePlayerCapabilities);
@@ -3680,8 +4575,18 @@ document.getElementById("passHost").onclick=()=>{{
 document.getElementById("discordLive").onclick=openDiscordRoom;
 document.getElementById("manageQueue").onclick=()=>{{
   document.getElementById("queuePanel").scrollIntoView({{behavior:"smooth",block:"nearest"}});
-  notice.textContent="Queue manager is active. Use ↑ ↓ or × on queued titles.";
+  notice.textContent="Queue manager is active. Add a title, choose Play Next, reorder with ↑ ↓, or remove with ×.";
 }};
+document.getElementById("queueAddToggle").onclick=()=>{{
+  if(!lastState?.is_host) return;
+  const form=document.getElementById("queueAddForm");
+  form.hidden=!form.hidden;
+  if(!form.hidden) document.getElementById("queueSearchInput").focus();
+}};
+document.getElementById("queueAddForm").addEventListener("submit",event=>{{
+  event.preventDefault();
+  searchQueueCatalog();
+}});
 document.getElementById("clearQueue").onclick=()=>queueAction("clear");
 
 const qualitySelect=document.getElementById("qualityMode");
@@ -3690,6 +4595,54 @@ qualitySelect.addEventListener("change",()=>{{
   try {{ localStorage.setItem(QUALITY_STORAGE_KEY,value); }} catch(_) {{}}
   applyQualityMode(value);
   if(lastState?.movie) applyMovieArtwork(lastState.movie,lastState);
+}});
+async function saveCinemaPreferences(updates) {{
+  try {{
+    const response=await jsonFetch("/movie/"+BOOT.roomId+"/preferences", {{
+      method:"POST",
+      body:JSON.stringify(updates)
+    }});
+    cinemaPreferences=response.preferences||cinemaPreferences;
+  }} catch(_) {{}}
+}}
+async function loadCinemaPreferences() {{
+  try {{
+    const response=await jsonFetch("/movie/"+BOOT.roomId+"/preferences");
+    cinemaPreferences=response.preferences||{{}};
+    preferredAudioLanguage=String(cinemaPreferences.default_audio_language||"");
+    preferredSubtitleLanguage=String(cinemaPreferences.default_subtitle_language||"");
+    const quality=String(cinemaPreferences.visual_quality||"auto");
+    if(["auto","high","standard","lite"].includes(quality)) {{
+      qualitySelect.value=quality;
+      applyQualityMode(quality);
+    }}
+    refreshNativePlayerCapabilities();
+  }} catch(_) {{}}
+}}
+qualitySelect.addEventListener("change",()=>{{
+  saveCinemaPreferences({{visual_quality:String(qualitySelect.value||"auto")}});
+}});
+document.getElementById("playbackSpeed").addEventListener("change",async event=>{{
+  if(!lastState?.is_host) {{
+    updatePlaybackPreferenceControls();
+    return;
+  }}
+  const rate=Number(event.target.value||1);
+  await hostAction("speed",{{rate}});
+  saveCinemaPreferences({{playback_speed:rate}});
+}});
+document.getElementById("audioTrack").addEventListener("change",event=>{{
+  const tracks=video.audioTracks;
+  if(!tracks || !tracks.length) return;
+  const selected=Number(event.target.value||0);
+  for(let i=0;i<tracks.length;i++) {{
+    try {{ tracks[i].enabled=i===selected; }} catch(_) {{}}
+  }}
+  const track=tracks[selected];
+  preferredAudioLanguage=String(track?.language||track?.label||"");
+  if(preferredAudioLanguage)
+    saveCinemaPreferences({{default_audio_language:preferredAudioLanguage}});
+  refreshNativePlayerCapabilities();
 }});
 window.addEventListener("resize",()=>{{
   if(document.documentElement.dataset.qualityPreference==="auto") applyQualityMode("auto");
@@ -3801,8 +4754,19 @@ function renderFeedCenter(state) {{
       name.className="feed-card-name";
       name.textContent=String(source.label||source.source_id||"Media source");
       const stateBadge=document.createElement("span");
-      stateBadge.className="feed-badge "+(source.enabled?"good":"off");
-      stateBadge.textContent=source.enabled?"Enabled":"Disabled";
+      const healthState=String(source.health_state||"");
+      const healthLabel={{
+        online:"Online",
+        offline:"Offline",
+        unchecked:"Not checked",
+        reference:"Reference link",
+        disabled:"Disabled"
+      }}[healthState]||(source.enabled?"Not checked":"Disabled");
+      stateBadge.className="feed-badge "+(
+        healthState==="online"?"good":
+        healthState==="offline"||healthState==="disabled"?"off":""
+      );
+      stateBadge.textContent=healthLabel;
       top.append(name,stateBadge);
       card.appendChild(top);
 
@@ -3820,6 +4784,16 @@ function renderFeedCenter(state) {{
         badges.appendChild(badge);
       }}
       card.appendChild(badges);
+
+      const supported=Array.isArray(source.supported_media_types)
+        ?source.supported_media_types.map(item=>FEED_CATEGORY_LABELS[String(item||"")]||"Custom")
+        :[];
+      if(supported.length) {{
+        const support=document.createElement("div");
+        support.className="feed-meta";
+        support.textContent="Supports: "+supported.join(", ");
+        card.appendChild(support);
+      }}
 
       const meta=document.createElement("div");
       meta.className="feed-meta";
@@ -4199,11 +5173,23 @@ video.addEventListener("pause",()=>{{
   showPlayerControls(true);
   if(!remoteApply && lastState?.is_host) hostAction("pause");
 }});
-video.addEventListener("seeked",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("seek",{{seconds:video.currentTime||0}}); }});
+video.addEventListener("seeked",scheduleHostSeekCommit);
 video.addEventListener("loadedmetadata",()=>{{
   streamRetryAttempt=0;
   cancelStreamRetry();
   updatePlayerChrome();
+  refreshNativePlayerCapabilities();
+  const tracks=video.audioTracks;
+  if(tracks && tracks.length && preferredAudioLanguage) {{
+    const target=preferredAudioLanguage.toLowerCase();
+    for(let i=0;i<tracks.length;i++) {{
+      const label=String(tracks[i].language||tracks[i].label||"").toLowerCase();
+      if(label.includes(target)) {{
+        try {{ tracks[i].enabled=true; }} catch(_) {{}}
+      }}
+    }}
+  }}
+  void applyPendingProgressResume();
 }});
 video.addEventListener("durationchange",updatePlayerChrome);
 video.addEventListener("timeupdate",updatePlayerChrome);
@@ -4226,6 +5212,58 @@ video.addEventListener("stalled",()=>{{
 video.addEventListener("error",()=>{{
   if(lastState?.stream_url) scheduleStreamRetry();
 }});
+async function persistWatchProgress(force=false) {{
+  const movie=lastState?.movie||{{}};
+  const mediaType=String(movie.media_type||"");
+  const tmdbId=Number(movie.tmdb_id||0);
+  if(!["movie","episode"].includes(mediaType) || tmdbId<=0) return;
+  const now=Date.now();
+  const key=progressIdentity(movie);
+  if(!key) return;
+  if(key!==lastProgressMediaKey) lastProgressPersistAt=0;
+  if(!force && now-lastProgressPersistAt<30000) return;
+  const duration=Number.isFinite(video.duration)?Number(video.duration):0;
+  const position=Math.max(0,Number(video.currentTime||0));
+  if(duration<=0 && position<=0) return;
+  lastProgressMediaKey=key;
+  lastProgressPersistAt=now;
+  try {{
+    const response=await fetch(api("/movie/"+BOOT.roomId+"/progress"), {{
+      method:"POST",
+      headers:{{"Content-Type":"application/json"}},
+      body:JSON.stringify({{
+        progress_seconds:position,
+        duration_seconds:duration,
+        completed:duration>0 && position>=Math.max(30,duration*.92)
+      }}),
+      keepalive:!!force
+    }});
+    if(!response.ok && !progressStorageWarned) {{
+      progressStorageWarned=true;
+      notice.textContent="Playback is continuing, but Continue Watching could not be saved right now.";
+    }}
+  }} catch(_) {{
+    if(!progressStorageWarned) {{
+      progressStorageWarned=true;
+      notice.textContent="Playback is continuing, but Continue Watching could not be saved right now.";
+    }}
+  }}
+}}
+video.addEventListener("timeupdate",()=>persistWatchProgress(false));
+video.addEventListener("pause",()=>persistWatchProgress(true));
+video.addEventListener("ended",async()=>{{
+  await persistWatchProgress(true);
+  if(
+    lastState?.is_host &&
+    cinemaPreferences.autoplay_next!==false &&
+    nextEpisodeState?.available
+  ) await playNextEpisode(true);
+}});
+window.addEventListener("pagehide",()=>persistWatchProgress(true));
+document.addEventListener("visibilitychange",()=>{{
+  if(document.hidden) persistWatchProgress(true);
+}});
+loadCinemaPreferences();
 heartbeat(false).then(state=>{{ if(state) applyState(state); else poll(); }});
 setInterval(poll,2000);
 setInterval(()=>heartbeat(false),3000);
@@ -4280,7 +5318,14 @@ def register_movie_night_public_routes(app: web.Application) -> None:
     app.router.add_post("/movie/{room_id}/host", movie_night_transfer_host)
     app.router.add_get("/movie/{room_id}/invite-options", movie_night_invite_options)
     app.router.add_post("/movie/{room_id}/promote", movie_night_promote_watch_party)
+    app.router.add_get("/movie/{room_id}/queue-search", movie_night_queue_search)
     app.router.add_post("/movie/{room_id}/queue", movie_night_queue_action)
+    app.router.add_get("/movie/{room_id}/progress", movie_night_progress)
+    app.router.add_post("/movie/{room_id}/progress", movie_night_progress)
+    app.router.add_get("/movie/{room_id}/next-episode", movie_night_next_episode)
+    app.router.add_post("/movie/{room_id}/next-episode", movie_night_next_episode)
+    app.router.add_get("/movie/{room_id}/preferences", movie_night_preferences)
+    app.router.add_post("/movie/{room_id}/preferences", movie_night_preferences)
     app.router.add_get("/movie/{room_id}/sources", movie_night_sources)
     app.router.add_post("/movie/{room_id}/sources", movie_night_source_action)
 
@@ -4288,8 +5333,12 @@ def register_movie_night_public_routes(app: web.Application) -> None:
 __all__ = [
     "dank_cinema_brand_asset",
     "movie_night_invite_options",
+    "movie_night_next_episode",
+    "movie_night_preferences",
+    "movie_night_progress",
     "movie_night_promote_watch_party",
     "movie_night_queue_action",
+    "movie_night_queue_search",
     "movie_night_source_action",
     "movie_night_sources",
     "movie_night_transfer_host",

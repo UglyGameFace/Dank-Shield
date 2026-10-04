@@ -2,186 +2,177 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-430 — Dank Cinema Private → Watch Party promotion, responsive player recovery, and integrated branding**
+**DANK-SHIELD-430 — Complete Dank Cinema as a full premium streaming platform**
 
 Production baseline:
-`main@e088a74dd4499bc535459c8153d77bdebc9ca03a` (PR #435 merged green).
+`main@c785c5eefc9e9f0b1c6792e7546eca3c8f9703a5` (PR #436 merged green).
 
 Active branch:
-`fix/430-cinema-invite-responsive-brand`
+`feat/430-cinema-full-platform`
 
 Issue:
-**#430 — Dank Cinema: match premium 420 Lobby theater website mockup**
-
-Current pull request:
-**#436 — Dank Cinema: promote Private Sessions and harden responsive theater**
+**#430 — Dank Cinema premium theater / full-platform work**
 
 Outcome:
-Finish the evidence-backed production gaps from the latest Samsung canary: let a Private Session host invite a real Discord member and promote the live room into a Watch Party without restarting playback, recover cleanly when mobile browsers switch desktop mode/viewport geometry, and make the approved Cinema branding read as integrated artwork instead of a pasted black rectangle.
+Finish the full Cinema product contract on top of PR #436 without replacing the existing MovieNightRoom, torrent runtime, provider registry, Watch sync authority, Private/Watch Party lifecycle, Pass Host, or real browser capability controls.
 
 ## Scope
 
-- canonical `MovieNightRoom.mode` transition from `private` to `watch_party` in place;
-- real Discord member invitation from both website and Discord Cinema UI;
-- signed per-user Watch link generation and DM/fallback behavior;
-- preserve current room id, media lease/token, movie, playback clock, host, active viewers, and queue during promotion;
-- website controls/copy update from canonical room mode on the next state response;
-- Samsung/Chromium desktop-mode, viewport, orientation, and fullscreen player layout recovery without reloading media;
-- preserve full movie framing rather than cropping;
-- recreate the existing approved crowned-reel/graffiti banner as transparent responsive brand artwork at runtime from the repository-owned source, eliminating the visible black rectangle without adding an external asset dependency;
-- premium design-token system with distinct desktop, tablet, phone, and ultrawide-aware composition rather than a widened mobile page;
-- High / Standard / Lite visual-quality tiers with automatic low-resource / reduced-motion selection and manual override;
-- responsive TMDB artwork sizing so phones do not decode desktop-sized poster/backdrop assets;
-- real player capabilities only: PiP and subtitle controls render only when the browser/media exposes them; Cast remains capability-driven;
-- first-class Feed Center backed by the existing Media Source registry/resolver, grouped as Movies / TV Shows / Anime / Documentaries / Custom with real add/edit/enable/disable/delete/refresh actions;
-- focused regression coverage, exact-head CI, and live Android/desktop Discloud validation.
+This remains one active implementation task covering:
+
+- signed Discord-linked full Cinema site;
+- movie + TV + season + episode catalog identity;
+- durable watchlist, playback progress, history, Continue Watching, Watch Again, preferences, and notifications;
+- canonical movie/episode playback from website and Discord;
+- exact TV resume / next episode / autoplay-next;
+- Home, Search, Details, My Stuff, Profile, Notifications, Feed Center, and responsive navigation;
+- real Queue Add / Remove / Reorder / Play Next / Clear inside the Theater;
+- unified TMDB/provider identity and guild adult-content policy;
+- truthful source health/capabilities;
+- High / Standard / Lite visual quality with automatic capability selection;
+- responsive TMDB artwork;
+- single composed Cinema branding lockup;
+- responsive phone / tablet / desktop / ultrawide Theater and full-site behavior;
+- focused regressions, migration validation, exact-head CI, final diff cleanup, and Discloud canary.
 
 ## Status
 
-**Implementation is active in PR #436. PR #435 is already merged and green in production. The new premium-product contract is being applied without inventing placeholder surfaces: only features with real backend/browser capability are visible. PR #436 now includes Private → Watch Party promotion, responsive theater recovery, integrated brand variants, real Discord invitation, Feed Center/source management, desktop/tablet/mobile composition, quality tiers, responsive TMDB art, and real player capability controls. Exact-head CI and the real Samsung Browser + desktop-mode Discloud canary remain required before completion can be claimed.**
+**Implementation is substantially complete in PR #437. Exact-head CI remediation/validation is active.**
+
+The branch is currently based exactly on production `main@c785c5e...` and is **0 commits behind**. The repository's canonical Python/unit CI and the new Cinema SQL workflow trigger on pull requests/main, not feature-branch pushes, so executable exact-head CI is still pending until the PR is opened. No completion/merge claim is valid before that CI and the production canary.
 
 ## Findings / root cause
 
-1. **Private viewer authorization was not the requested Watch Party transition.**
-   - the backend already supported inviting users into an invite-only Private Session;
-   - that left the room in `private` mode, so Watch Party collaboration/voting semantics never activated;
-   - the product request is an explicit in-place promotion to `watch_party`, not merely adding another private viewer.
+1. **PR #436 completed the Theater slice, not the full platform contract.**
+   - durable user library/profile/history and full-site discovery surfaces were still missing;
+   - TV identity existed only partially at playback boundaries.
 
-2. **The correct promotion boundary is MovieNightManager.**
-   - room mode controls access, voting, search/release collaboration, UI wording, and sync semantics;
-   - recreating the room would lose or race the current torrent lease, queue, position, viewers, and signed links;
-   - promotion therefore mutates only canonical room mode while preserving all other room authority.
+2. **The new Cinema library service initially contained latent runtime failures.**
+   - preference defaults, cache/lock state, and `InvalidCinemaState` were referenced but undefined;
+   - the module imported successfully while first real persistence calls could fail.
 
-3. **Discord invitation must use real guild identity.**
-   - website search reads the bot's current guild member cache and excludes bots/the current host;
-   - selected targets are revalidated through `guild.get_member` before promotion;
-   - Discord-native flow uses `DankUserSelect`;
-   - each target receives their own signed Watch URL when possible, with truthful DM/fallback behavior.
+3. **Progress writing existed but resume restoration did not.**
+   - Watch already checkpointed durable progress;
+   - new sessions did not restore it into canonical room authority;
+   - restoring per viewer would conflict with Watch Party sync, so only the host applies saved resume and updates the shared room clock.
 
-4. **Mobile → desktop-mode glitches are player layout/compositor state, not torrent state.**
-   - changing Samsung/Chromium viewport mode can resize the CSS box while the composited video layer retains stale geometry;
-   - fullscreen rebuilds that layer, explaining why the glitch disappears there;
-   - the Watch player now reasserts explicit 16:9 stage geometry and the absolute video layer on ResizeObserver, window/visualViewport resize, orientation, pageshow/visibility, fullscreen changes, and media readiness events without replacing the media source.
+4. **TV needed canonical episode lifecycle instead of title arithmetic.**
+   - Series → Season → Episode now resolves from TMDB identity;
+   - next episode crosses real season boundaries;
+   - Next Episode only appears when the exact episode has a playable source.
 
-5. **The banner's black export background is the pasted-on look.**
-   - CSS screen blending is browser/compositor dependent and remained visibly rectangular in production;
-   - Pillow is already a production dependency;
-   - the site now flood-removes only the dark background connected to the image edges, preserving enclosed dark reel details, feathers the cut edge, and caches responsive full / mark / wordmark / monochrome WebP variants served by the existing same-origin brand route;
-   - the page composes the mark and wordmark as artwork rather than displaying one black rectangular banner.
+5. **Media identity had duplicate authorities.**
+   - Discord-specific release matching and title-based candidate reuse could diverge from the website;
+   - same-title remakes could collide;
+   - shared Cinema identity/playback services now own TMDB identity, exact provider matching, preferred-source selection, and candidate lookup.
 
-6. **The old page treated desktop as a larger phone.**
-   - the new layout uses a bounded cinematic primary region plus a sticky session sidecar on desktop, an independent tablet composition, and touch-first mobile stacking;
-   - ultrawide expansion is capped so controls and text do not stretch indefinitely.
+6. **Several visible surfaces were technically populated but not truthful.**
+   - Watch Party Picks were Top Rated movies rather than real party media;
+   - full-site source health referenced a nonexistent property;
+   - an external/reference source was labeled as in-app Search capable;
+   - one Search button changed text without triggering search;
+   - Queue Add required leaving the Theater;
+   - notification invite actions were persisted but ignored by the UI.
 
-7. **Graphics and performance must be the same decision.**
-   - quality tiers now reduce secondary layers/backdrop effects without removing features;
-   - reduced-motion, Save-Data, device memory, CPU count, and viewport size participate in Auto selection;
-   - TMDB poster/backdrop requests are sized for the actual presentation instead of one image size for every device.
+7. **The duplicated/sliced branding defect was structural.**
+   - the visible header reconstructed one approved lockup from separate mark/wordmark crops;
+   - Theater and full site now render one transparent composed 1200x278 lockup; split variants remain only for icon/favicon contexts.
 
-8. **The prompt requires real product controls, not decorative buttons.**
-   - Picture-in-Picture is hidden unless the browser exposes the real API;
-   - subtitles are hidden unless the active media exposes text tracks;
-   - Cast remains tied to actual Google Cast/Remote Playback availability;
-   - broader Home/Browse/My Stuff surfaces remain hidden until real persisted data/actions back them.
-
-9. **Feeds already have a canonical backend and should not remain a flat hidden RSS concept.**
-   - the existing Media Source registry/resolver is authoritative;
-   - the website Feed Center groups real sources by Movies / TV / Anime / Documentaries / Custom and exposes only real management/refresh operations.
+8. **Guild adult-content policy was Discord-only.**
+   - the full site, provider rows, Queue search/add, direct Details/Play, and saved library needed the same owner;
+   - the existing `movie_night_preferences` toggle is now consumed across surfaces and canonical adult identity is persisted with library rows.
 
 ## Execution path
 
-Promotion:
-`Private Session host -> website Discord member search OR Discord DankUserSelect -> validate real guild member -> MovieNightManager.promote_private_to_watch_party -> same room/media/playback/queue -> state poll redraws Watch Party controls`.
+Catalog identity:
+`Cinema UI / Discord / Theater Queue -> cinema_catalog -> TMDB -> cinema_media_identity`.
 
-Invite:
-`target Discord user -> user-specific signed Watch URL -> DM when allowed; website retains signed link fallback / Discord native flow directs user back through /movie when DMs are blocked`.
+Provider/playback:
+`canonical media identity -> cinema_playback_service -> media_source_resolver -> MovieNightRoom -> TorrentMediaManager -> signed Watch stream`.
 
-Player recovery:
-`viewport/orientation/desktop-mode change -> ResizeObserver/visualViewport/window events -> stabilizePlayerLayout() -> current video layer is resized in place; no stream reload`.
+User state:
+`signed Discord Cinema identity -> cinema_library_service -> service-role Supabase`.
 
-Brand:
-`repository source banner -> cached Pillow edge-background removal -> transparent full/mark/wordmark/mono WebP variants -> same-origin asset routes -> composed responsive header artwork`.
+Watch progress:
+`Watch player checkpoints -> /movie/{room}/progress -> cinema_library_service`;
+new playback restores only through host authority -> canonical room seek -> viewers follow room sync.
 
-Feed Center:
-`signed Cinema user -> canonical guild Media Source registry -> grouped website source cards -> existing safe resolver preview/refresh -> compare-and-swap registry persistence`.
-
-Responsive art/performance:
-`TMDB canonical art URL -> device/quality-aware w185/w342/w500 poster srcset + w780/w1280/original backdrop choice -> browser lazy/async decode`.
+TV continuation:
+`episode identity -> cinema_catalog.get_next_episode -> exact SxxExx provider search -> shared playback service -> same MovieNightRoom`.
 
 ## Changes
 
-- Added canonical host-only Private Session → Watch Party promotion without room recreation.
-- Promotion clears obsolete private allowlist state after the room becomes public/collaborative.
-- Added website signed endpoints for real Discord invite candidates and promotion.
-- Added real Discord member revalidation, target-specific Watch links, DM attempt, and room-channel promotion announcement.
-- Added website Invite to Watch Party modal with Discord member search, native-Discord fallback, signed-link fallback, and live state transition.
-- Added Discord-native Invite to Watch Party under Cinema More using `DankUserSelect`.
-- Discord promotion and website promotion share MovieNightManager authority.
-- Added player layout stabilization for ResizeObserver, desktop-mode viewport changes, visualViewport, orientation, fullscreen, page resume, and media readiness.
-- Kept the movie frame `object-fit: contain` so recovery never fixes layout by cropping content.
-- Reworked banner serving to generate transparent integrated artwork from the existing source instead of relying on `mix-blend-mode: screen`.
-- Removed an incomplete intermediate transparent-asset payload from the branch.
-- Added a tokenized dark cinematic design system and separate desktop/tablet/mobile breakpoints.
-- Desktop now uses a bounded theater + sticky sidecar composition instead of centering the phone layout.
-- Added High / Standard / Lite visual tiers plus Auto selection and reduced-motion behavior.
-- Added responsive TMDB poster srcset/sizes and device-aware backdrop variants.
-- Added real browser PiP/subtitle controls that remain hidden when unsupported/unavailable.
-- Added desktop keyboard shortcuts for actual playback/fullscreen/mute/host seeking.
-- Added accessible Discord invite dialog Escape/focus-return behavior.
-- Added a real Feed Center backed by the existing Media Source registry/resolver with categorized source cards and host-only add/edit/toggle/delete/refresh actions.
-- Added focused manager, website, Discord UI, invite, promotion, responsive-player, brand, quality-tier, artwork-performance, capability-control, Feed Center, and accessibility regression coverage.
+- Added/extended `cinema_catalog.py` for normalized movie/TV identity, Home discovery, Details, seasons/episodes, recommendations, and real cross-season next-episode resolution.
+- Added `cinema_media_identity.py` as the shared movie/episode/provider identity owner, including exact episode notation and shared adult filtering.
+- Added `cinema_playback_service.py` as backend-neutral playback orchestration used by Discord, website Play, Queue Add, and TV transitions.
+- Fixed `cinema_library_service.py` runtime defaults/caches/locks and added canonical media lookup.
+- Added durable host-controlled resume restoration and debounced seek/checkpoint behavior to the existing Watch progress route.
+- Added proper TV Next Episode availability, transition, autoplay-next, episode progress, and preferred-source behavior.
+- Added real signed full-site playback into an existing host-owned Cinema room; website session creation remains Discord-owned.
+- Added real Home rails with empty-section suppression, including real Watch Party Picks rather than recycled catalog rows.
+- Added full movie/TV Details, exact episode continuation/navigation, Search, My Stuff, Profile, Notifications, and Feed Center.
+- Completed in-Theater Queue management: Add Title search, exact TV episode search, playable-source validation, Added By, Play Next, reorder, remove, and clear.
+- Made notifications guild-scoped and live Watch Party invites actionable through fresh signed Join Theater URLs.
+- Unified the existing guild adult-content setting across Discord, full-site Search/Details/Play, provider releases, Theater Queue, and saved library surfaces.
+- Made source capabilities/health truthful and category-aware across Theater and full-site Feed Center.
+- Applied persisted playback speed, preferred source, audio/subtitle language, autoplay-next, and visual-quality preferences to real runtime paths.
+- Added adaptive High/Standard/Lite visual behavior and responsive TMDB `srcset/sizes`.
+- Replaced split visible branding composition with one composed transparent Cinema lockup on Theater and full site.
+- Removed the unused full-site generic progress-write API so Watch remains the sole playback-progress authority.
+- Added dedicated `.github/workflows/cinema-platform-sql.yml` to replay and validate the new Cinema migration on PostgreSQL without touching production.
+- Added focused regressions in `tests/test_cinema_full_platform.py` and `tests/test_movie_night_web.py`.
 
-## Validation / results so far
+## Validation / results
 
-Added/updated regression coverage for:
-- in-place promotion preserving stream token, queue, position, host, viewers, and room id;
-- non-host promotion rejection;
-- private-host-only Invite to Watch Party control;
-- Discord native picker promotion + signed DM link;
-- website invite/promotion routes;
-- real cached Discord member filtering and target validation;
-- website mode update after promotion;
-- desktop-mode responsive player recovery hooks;
-- full-frame video rendering;
-- recreated transparent WEBP brand output and removal of screen-blend dependency;
-- responsive full/mark/wordmark brand composition;
-- High / Standard / Lite quality tiers and reduced-motion contract;
-- distinct desktop/tablet/mobile layout breakpoints;
-- real PiP/text-track capability controls and desktop keyboard shortcuts;
-- responsive TMDB srcset/backdrop sizing;
-- Feed Center source categorization/management and legacy source-category compatibility;
-- invite dialog keyboard/focus accessibility and startup quality-mode state safety.
+Completed pre-PR evidence:
 
-Exact-head CI is pending.
+- current `main` remains exactly the branch merge base: `c785c5eefc9e9f0b1c6792e7546eca3c8f9703a5`;
+- feature branch is 0 behind main;
+- final scope inspection shows only #430 Cinema files, tests, migration, workflow, and this task record;
+- full-site `cinema_site.js` has been parsed successfully with a JavaScript parser after the major UI/Feed/notification changes;
+- stale split-brand selectors/visible mark+wordmark composition removed;
+- stale title-based catalog candidate lookup removed from website/TV playback paths;
+- stale custom-only full-site provider-search path removed;
+- stale Feed Center test ownership repaired around the shared service;
+- migration security reviewed against current Supabase guidance: service-only tables use explicit grants/revokes plus RLS;
+- no production Supabase project was mutated because the connected account exposed only an unrelated/ambiguous project;
+- dedicated Cinema SQL smoke workflow now verifies migration idempotence, constraints, RLS, grants, representative rows, notification dedupe, and client-role denial.
+
+Pending executable evidence:
+
+- Python compile/unit suite cannot run locally in this tool environment because the repo cannot be cloned over network here;
+- canonical `ci.yml` does not support feature-branch dispatch; PR #437 now supplies the required exact-head CI trigger;
+- the first `Dank Cinema SQL` PR run proved migration replay/RLS/grants, then failed because the disposable test `service_role` lacked Supabase's RLS-bypass behavior; the harness was corrected to use `BYPASSRLS` without weakening production RLS;
+- live Discloud + Android/Samsung + desktop/tablet/ultrawide canary remains required after a CI-green deploy.
 
 ## Cleanup / conflicts
 
-- No second room, playback clock, queue, provider stack, Discord identity store, or torrent runtime was introduced.
-- Private Viewer management remains available for owners who want an invite-only session; Invite to Watch Party is a distinct explicit transition.
-- Existing signed Watch URLs remain valid after promotion because the room id and secret-bound identity do not change.
-- Private-only double-tap seek naturally disables after promotion because live canonical state reports `private=false`.
-- Watch Party vote/collaboration behavior activates through existing mode checks instead of duplicate website logic.
-- The abandoned partial binary banner experiment was removed; production branding remains reproducible from the repository source asset.
+- One canonical `MovieNightRoom` authority remains.
+- One torrent/media runtime remains.
+- One provider registry/resolver remains.
+- One Cinema Feed service owns Feed Center state/mutations.
+- One Cinema library service owns persisted user state.
+- Watch is the sole durable playback-progress writer.
+- Shared Cinema identity/playback services replaced duplicate Discord/site matching logic.
+- No title-only candidate reuse for canonical TMDB media.
+- No visible fake Cast/PiP/subtitle/audio/Next Episode controls were introduced.
+- No unrelated Dank Shield feature files are present in the branch diff.
 
 ## Blockers / risks
 
-- Discord DMs can be disabled; both web and Discord flows must remain useful when delivery fails.
-- Web member discovery depends on the bot's current guild cache; the native Discord picker is the authoritative fallback.
-- Samsung Browser desktop-mode compositor behavior still requires the real-device canary.
-- Google Cast/Remote Playback and orientation lock remain browser/device capability dependent and are unchanged by this slice.
-- The dynamically recreated transparent banner must be visually checked on production desktop and mobile, not accepted solely because its alpha contract passes tests.
+- Exact-head repository CI is not yet available because workflows run on pull requests/main; PR creation is required for that validation.
+- The Supabase migration must be deployed before durable library features work in production.
+- Live MovieNightRoom state still remains process-memory authority across bot restarts; that is pre-existing architecture and not disguised as solved by the user-library migration.
+- Provider availability and swarm health remain external conditions; UI now reports real availability rather than inventing it.
+- Final real-device/Discloud canary is still required for Samsung Browser desktop-mode transitions, fullscreen/orientation, background/foreground, sync, and production migration/runtime acceptance.
 
 ## Backlog
 
-- **Discord Feed Center parity:** mirror the new categorized website Feed Center management UX into Discord without duplicating the Media Source registry/resolver.
-- **TMDB identity normalization:** every playable movie/TV item should receive a conservative canonical TMDB identity before library presentation, with explicit confirmation for ambiguous raw torrent/provider names.
-- **TV Shows / Continue Watching:** first-class TV identity, seasons/episodes, persistent per-user progress, resume, Up Next, watched state, season progress, and source matching without creating a second player/runtime.
-- **Full website discovery surfaces:** Home, Browse, My Stuff, search, notifications, profile, watchlist/history, and other mockup surfaces only when backed by real data/actions.
-- **Viewer-value follow-up:** audio-track selection, playback speed, persistent source/quality preference, history/favorites, and other real-data controls. Subtitle UI now appears only when the active media exposes real text tracks.
+No required #430 master-contract item has been moved to backlog to make this branch appear complete. Unrelated Dank Shield projects remain outside the active task.
 
-## Next step
+## Exact next step
 
-Run exact-head repository workflows for PR #436, repair only evidence-backed failures, inspect the final diff for stale/conflicting Cinema behavior, then run the Samsung Browser + desktop canary including **mobile → desktop mode → mobile**, normal/fullscreen transitions, Private → Watch Party promotion, signed Discord invite delivery/fallback, live UI mode changes, composed brand artwork, Feed Center CRUD/refresh, quality-tier switching, PiP/subtitle capability visibility, responsive TMDB artwork, Cast truthfulness, and preserved synchronized playback. Merge only after exact-head CI is green and the production canary passes these affected paths.
+Use PR #437's exact current head for canonical Dank Shield CI plus Dank Cinema SQL validation, repair only evidence-backed failures, verify the final head remains mergeable/green, then perform the Discloud production canary before any completion or merge-ready claim.
 
 ---
 

@@ -41,7 +41,6 @@ from stoney_verify.media_source_resolver import (
     INTERNET_ARCHIVE_SOURCE_LABEL,
     MediaSourceSearchOutcome,
     ResolvedMediaVariant,
-    fetch_torrent_metadata,
     probe_custom_media_source,
     search_movie_sources,
 )
@@ -50,6 +49,25 @@ from stoney_verify.movie_catalog import (
     get_tmdb_watch_availability,
     search_tmdb_movies,
     tmdb_catalog_ready,
+)
+from stoney_verify.cinema_catalog import (
+    CinemaEpisode,
+    CinemaMedia,
+    get_details as get_cinema_details,
+    get_season as get_cinema_season,
+    search_catalog as search_cinema_catalog,
+)
+from stoney_verify.cinema_media_identity import (
+    catalog_metadata as _cinema_catalog_metadata,
+    episode_catalog_metadata as _cinema_episode_catalog_metadata,
+    filter_adult_provider_results as _filter_adult_provider_results,
+    filter_outcome_for_catalog as _filter_outcome_for_catalog,
+    looks_explicit_adult as _looks_explicit_adult,
+    release_matches_catalog as _release_matches_catalog,
+)
+from stoney_verify.cinema_playback_service import (
+    materialize_search_results as _shared_materialize_search_results,
+    start_room_variant,
 )
 from stoney_verify.movie_night import (
     PRIVATE_VIEWER_LIMIT,
@@ -64,6 +82,7 @@ from stoney_verify.movie_night_preferences import (
 )
 from stoney_verify.movie_night_session import terminate_movie_night_room
 from stoney_verify.movie_night_web import movie_night_watch_url
+from stoney_verify.cinema_site_auth import cinema_site_url
 from stoney_verify.panel_lifecycle import (
     PRIVATE_MENU_TTL_SECONDS,
     private_menu_lifecycle_text,
@@ -102,65 +121,21 @@ def _compact(value: Any, limit: int = 180) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
-_EXPLICIT_ADULT_RE = re.compile(
-    r"(?:^|[^a-z0-9])(?:xxx|porn|pornographic|adult[ _-]?video)(?:$|[^a-z0-9])",
-    re.IGNORECASE,
-)
-
-
-def _looks_explicit_adult(value: Any) -> bool:
-    return bool(_EXPLICIT_ADULT_RE.search(str(value or "")))
-
-
-def _variant_is_explicit_adult(variant: ResolvedMediaVariant) -> bool:
-    if _looks_explicit_adult(variant.title):
-        return True
-    metadata = variant.metadata if isinstance(variant.metadata, Mapping) else {}
-    values: list[Any] = [
-        metadata.get("category"),
-        metadata.get("type"),
-    ]
-    source_reported = (
-        metadata.get("source_reported")
-        if isinstance(metadata.get("source_reported"), Mapping)
-        else {}
-    )
-    values.extend(
-        source_reported.get(key)
-        for key in ("category", "type", "tags", "classification")
-    )
-    explicit_labels = {"adult", "xxx", "porn", "pornographic", "adult video"}
-    for value in values:
-        if not value:
-            continue
-        clean = " ".join(str(value).casefold().replace("_", " ").replace("-", " ").split())
-        if clean in explicit_labels or _looks_explicit_adult(clean):
-            return True
-    return False
-
-
-def _filter_adult_provider_results(
+def _materialize_search_results(
+    room: MovieNightRoom,
     outcome: MediaSourceSearchOutcome,
     *,
-    enabled: bool,
-) -> MediaSourceSearchOutcome:
-    if enabled:
-        return outcome
-    kept = tuple(
-        variant
-        for variant in outcome.variants
-        if not _variant_is_explicit_adult(variant)
-    )
-    removed = len(outcome.variants) - len(kept)
-    if removed <= 0:
-        return outcome
-    errors = list(outcome.errors)
-    errors.append(
-        f"Filtered {removed} explicit adult provider release(s) by server Cinema setting."
-    )
-    return MediaSourceSearchOutcome(
-        variants=kept,
-        errors=tuple(errors[:20]),
+    proposer_id: int,
+    query: str,
+    catalog_metadata: Optional[Mapping[str, Any]] = None,
+) -> tuple[int, int]:
+    return _shared_materialize_search_results(
+        room,
+        outcome,
+        proposer_id=proposer_id,
+        query=query,
+        catalog_metadata=catalog_metadata,
+        manager=get_movie_night_manager(),
     )
 
 
@@ -740,9 +715,11 @@ def _movie_hub_view(
     interaction: discord.Interaction,
     room: Optional[MovieNightRoom],
 ) -> "MovieNightHubView":
+    guild_id = int(getattr(getattr(interaction, "guild", None), "id", 0) or 0)
     return MovieNightHubView(
         int(interaction.user.id),
         room,
+        guild_id=guild_id,
     )
 
 
@@ -1364,155 +1341,6 @@ def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discor
 
     embed.set_footer(text="Step 2 of 3 • play/request this release, then Watch")
     return embed
-
-
-def _normalized_movie_identity(value: Any) -> tuple[str, ...]:
-    return tuple(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
-
-
-def _release_matches_catalog(
-    release_title: Any,
-    catalog_metadata: Optional[Mapping[str, Any]],
-    release_metadata: Optional[Mapping[str, Any]] = None,
-) -> bool:
-    if not isinstance(catalog_metadata, Mapping):
-        return False
-
-    catalog_id = _compact(catalog_metadata.get("catalog_id"), 40)
-    if catalog_id and isinstance(release_metadata, Mapping):
-        reported = (
-            release_metadata.get("source_reported")
-            if isinstance(release_metadata.get("source_reported"), Mapping)
-            else {}
-        )
-        reported_tmdb = _compact(
-            reported.get("tmdb")
-            or reported.get("tmdb_id")
-            or reported.get("tmdbId")
-            or reported.get("tmdbid"),
-            40,
-        )
-        if reported_tmdb:
-            return reported_tmdb == catalog_id
-
-    catalog_title = _compact(catalog_metadata.get("title"))
-    if not catalog_title:
-        return False
-
-    catalog_tokens = _normalized_movie_identity(catalog_title)
-    release_tokens = _normalized_movie_identity(release_title)
-    if not catalog_tokens or not release_tokens:
-        return False
-    if not all(token in release_tokens for token in catalog_tokens):
-        return False
-
-    year = _safe_int(catalog_metadata.get("year"), 0)
-    if year:
-        release_years = {
-            int(token)
-            for token in release_tokens
-            if len(token) == 4 and token.isdigit() and 1900 <= int(token) <= 2100
-        }
-        if release_years and year not in release_years:
-            return False
-    return True
-
-
-def _filter_outcome_for_catalog(
-    outcome: MediaSourceSearchOutcome,
-    catalog_metadata: Optional[Mapping[str, Any]],
-) -> MediaSourceSearchOutcome:
-    if not isinstance(catalog_metadata, Mapping) or not catalog_metadata:
-        return outcome
-
-    matched = tuple(
-        variant
-        for variant in outcome.variants
-        if _release_matches_catalog(
-            variant.title,
-            catalog_metadata,
-            variant.metadata,
-        )
-    )
-    if len(matched) == len(outcome.variants):
-        return outcome
-
-    errors = list(outcome.errors)
-    if outcome.variants and not matched:
-        errors.append(
-            "Connected providers returned releases, but none matched the selected catalog movie."
-        )
-    elif len(matched) < len(outcome.variants):
-        errors.append(
-            f"Ignored {len(outcome.variants) - len(matched)} provider release(s) "
-            "that did not match the selected catalog movie."
-        )
-    return MediaSourceSearchOutcome(
-        variants=matched,
-        errors=tuple(errors[:20]),
-    )
-
-
-def _materialize_search_results(
-    room: MovieNightRoom,
-    outcome: MediaSourceSearchOutcome,
-    *,
-    proposer_id: int,
-    query: str,
-    catalog_metadata: Optional[Mapping[str, Any]] = None,
-) -> tuple[int, int]:
-    manager = get_movie_night_manager()
-    candidate_ids: set[str] = set()
-    release_count = 0
-
-    for result in outcome.variants:
-        catalog = (
-            dict(catalog_metadata)
-            if _release_matches_catalog(
-                result.title,
-                catalog_metadata,
-                result.metadata,
-            )
-            else {}
-        )
-        candidate_title = (
-            _compact(catalog.get("title"))
-            if catalog
-            else result.title
-        )
-        candidate = manager.find_candidate_by_title(room.room_id, candidate_title)
-        candidate_metadata: dict[str, Any] = {"search_query": query}
-        if catalog:
-            candidate_metadata["catalog"] = catalog
-
-        if candidate is None:
-            candidate = manager.nominate(
-                room.room_id,
-                user_id=int(proposer_id),
-                title=candidate_title,
-                metadata=candidate_metadata,
-                auto_vote=False,
-            )
-        elif catalog:
-            candidate.metadata.update(candidate_metadata)
-        candidate_ids.add(candidate.candidate_id)
-        manager.add_variant(
-            room.room_id,
-            candidate.candidate_id,
-            user_id=int(proposer_id),
-            source_ref=result.source_ref,
-            source_id=result.source_id,
-            source_label=result.source_label,
-            file_size=result.file_size,
-            peers=result.peers,
-            seeds=result.seeds,
-            leechers=result.leechers,
-            metadata=result.metadata,
-            auto_vote=False,
-        )
-        release_count += 1
-
-    return len(candidate_ids), release_count
 
 
 class _OwnedView(discord.ui.View):
@@ -2891,38 +2719,14 @@ async def _start_variant_source(
                 variant.variant_id,
             ),
         )
-    previous = str(current.stream_token or "")
-    lease_key = movie_room_lease_key(int(current.guild_id), int(current.channel_id))
-    source_ref = str(variant.source_ref or "").strip()
-
     try:
-        if source_ref.lower().startswith("magnet:?"):
-            clean_magnet = find_magnet(source_ref)
-            if not clean_magnet:
-                raise ValueError("This source returned an invalid magnet link.")
-            session = await torrent_manager.start_magnet(
-                clean_magnet,
-                guild_id=int(guild.id),
-                owner_id=int(current.host_id),
-                replace_token=previous,
-                lease_key=lease_key,
-            )
-        elif source_ref.lower().startswith("https://"):
-            payload = await fetch_torrent_metadata(
-                source_ref,
-                max_bytes=torrent_manager.max_metadata_bytes,
-            )
-            session = await torrent_manager.start_torrent_bytes(
-                payload,
-                guild_id=int(guild.id),
-                owner_id=int(current.host_id),
-                replace_token=previous,
-                lease_key=lease_key,
-            )
-        else:
-            raise ValueError(
-                "This release is not a supported magnet or HTTPS .torrent source."
-            )
+        playback = await start_room_variant(
+            current.room_id,
+            actor_id=int(interaction.user.id),
+            candidate_id=candidate.candidate_id,
+            variant_id=variant.variant_id,
+            authorized_by_vote=authorized_by_vote,
+        )
     except Exception as exc:
         return await _replace(
             interaction,
@@ -2936,81 +2740,15 @@ async def _start_variant_source(
             ),
         )
 
-    stream_url = torrent_manager.stream_url(session)
-    if not stream_url:
-        await torrent_manager.release_lease(
-            session.token,
-            lease_key,
-            remove_if_unused=True,
-        )
-        return await _replace(
-            interaction,
-            content="❌ The torrent started but no signed public stream URL could be created.",
-            embed=_release_embed(current, candidate, variant),
-            view=MovieReleaseView(
-                int(interaction.user.id),
-                current.room_id,
-                candidate.candidate_id,
-                variant.variant_id,
-            ),
-        )
-
-    latest_room = room_manager.get(current.room_id)
-    if (
-        latest_room is None
-        or latest_room.ended
-        or int(latest_room.host_id) != int(current.host_id)
-        or str(latest_room.stream_token or "") != previous
-    ):
-        await torrent_manager.release_lease(
-            session.token,
-            lease_key,
-            remove_if_unused=True,
-        )
-        return await _replace(
-            interaction,
-            content=(
-                "❌ Movie Night changed while this release was loading, so the stale "
-                "media result was discarded instead of overwriting the newer room state."
-            ),
-            embed=_room_embed(interaction, latest_room) if latest_room is not None else None,
-            view=_movie_hub_view(interaction, latest_room),
-        )
-
-    room_manager.select_variant(
-        latest_room.room_id,
-        candidate.candidate_id,
-        variant_id=variant.variant_id,
-    )
-    room_manager.set_room_media(
-        latest_room.room_id,
-        host_id=int(latest_room.host_id),
-        stream_token=session.token,
-        candidate_id=candidate.candidate_id,
-        variant_id=variant.variant_id,
-    )
-    current = latest_room
-
-    merged_meta = dict(variant.metadata or {})
-    merged_meta["release_name"] = dict(session.release_metadata or merged_meta.get("release_name") or {})
-    if session.verified_metadata:
-        merged_meta["verified"] = dict(session.verified_metadata)
-    variant.metadata = merged_meta
-    variant.file_size = int(session.file_size or variant.file_size)
-
-    if previous and previous != session.token:
-        await torrent_manager.release_lease(
-            previous,
-            lease_key,
-            remove_if_unused=True,
-        )
-
+    current = playback.room
+    candidate = playback.candidate
+    variant = playback.variant
     await _replace(
         interaction,
         content=(
             f"✅ Now playing **{candidate.title}** • "
             f"{_release_source_label(variant.metadata)} • {_format_bytes(variant.file_size)}\n"
-            f"Dank Cinema stream: {stream_url}"
+            f"Dank Cinema stream: {playback.stream_url}"
         )[:2000],
         embed=_release_embed(current, candidate, variant),
         view=_movie_hub_view(interaction, current),
@@ -3075,8 +2813,9 @@ async def _execute_search_vote(
             room=room,
         )
 
+    catalog_media_type = str(catalog_metadata.get("media_type") or "movie").strip().lower()
     try:
-        if catalog_id:
+        if catalog_id and catalog_media_type == "movie":
             outcome, watch = await asyncio.gather(
                 search_movie_sources(int(room.guild_id), query),
                 get_tmdb_watch_availability(catalog_id),
@@ -3161,7 +2900,7 @@ async def _execute_search_vote(
             return await _replace(
                 interaction,
                 content=(
-                    f"🎬 Found **{title}** in the movie catalog, but no connected playback "
+                    f"🎬 Found **{title}** in the Cinema catalog, but no connected playback "
                     "provider returned a release. The host can still attach a magnet or .torrent."
                     + (
                         f"\nProvider status: {'; '.join(outcome.errors[:3])}"
@@ -3274,6 +3013,7 @@ async def _propose_movie_search_vote(
     room_id: str,
     query: str,
     catalog_movie: Optional[CatalogMovie] = None,
+    catalog_metadata: Optional[Mapping[str, Any]] = None,
 ) -> None:
     manager = get_movie_night_manager()
     room = _room_by_id_for_interaction(interaction, room_id)
@@ -3289,8 +3029,17 @@ async def _propose_movie_search_vote(
     manager.join_room(room.room_id, user_id=int(interaction.user.id))
 
     payload: dict[str, Any] = {"query": _compact(query)}
-    if catalog_movie is not None:
-        payload["catalog"] = catalog_movie.to_metadata()
+    selected_catalog = (
+        dict(catalog_metadata)
+        if isinstance(catalog_metadata, Mapping)
+        else (
+            catalog_movie.to_metadata()
+            if catalog_movie is not None
+            else {}
+        )
+    )
+    if selected_catalog:
+        payload["catalog"] = selected_catalog
     try:
         vote = manager.propose_vote(
             room_id,
@@ -3313,9 +3062,10 @@ async def _propose_movie_search_vote(
     if vote.resolved and vote.passed:
         return await _execute_passed_vote(interaction, room, vote)
 
-    selected = catalog_movie.title if catalog_movie is not None else _compact(query)
-    if catalog_movie is not None and catalog_movie.year:
-        selected = f"{selected} ({catalog_movie.year})"
+    selected = _compact(selected_catalog.get("title")) if selected_catalog else _compact(query)
+    selected_year = _safe_int(selected_catalog.get("year"), 0) if selected_catalog else 0
+    if selected_year and str(selected_catalog.get("media_type") or "") != "episode":
+        selected = f"{selected} ({selected_year})"
     await _movie_hub_notice(
         interaction,
         (
@@ -3326,10 +3076,446 @@ async def _propose_movie_search_vote(
     )
 
 
-class MovieSearchModal(discord.ui.Modal, title="1/3 • Find Movie"):
+class _TVSeasonSelect(discord.ui.Select):
+    def __init__(self, owner: "_TVSeasonPickerView") -> None:
+        self.owner_view = owner
+        start = owner.page * owner.PAGE_SIZE
+        rows = owner.seasons[start : start + owner.PAGE_SIZE]
+        options = [
+            discord.SelectOption(
+                label=str(row.get("name") or f"Season {row.get('season_number')}")[:100],
+                value=str(int(row.get("season_number") or 0)),
+                description=(
+                    f"{int(row.get('episode_count') or 0)} episodes"
+                    + (
+                        f" • {str(row.get('air_date') or '')[:10]}"
+                        if row.get("air_date")
+                        else ""
+                    )
+                )[:100],
+                emoji="📺",
+            )
+            for row in rows
+        ]
+        super().__init__(
+            placeholder="Choose a season…",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        try:
+            season_number = int((self.values or ["0"])[0])
+        except Exception:
+            return await _private(interaction, "❌ Choose a valid season.")
+        await self.owner_view.open_season(interaction, season_number)
+
+
+class _TVSeasonPickerView(_OwnedView):
+    PAGE_SIZE = 25
+
+    def __init__(
+        self,
+        *,
+        owner_id: int,
+        room_id: str,
+        series: CinemaMedia,
+        seasons: list[Mapping[str, Any]],
+        page: int = 0,
+    ) -> None:
+        super().__init__(owner_id)
+        self.room_id = str(room_id)
+        self.series = series
+        self.seasons = list(seasons)
+        max_page = max(0, (len(self.seasons) - 1) // self.PAGE_SIZE)
+        self.page = max(0, min(int(page), max_page))
+        self.add_item(_TVSeasonSelect(self))
+        self.previous.disabled = self.page <= 0
+        self.next.disabled = self.page >= max_page
+
+    async def open_season(
+        self,
+        interaction: discord.Interaction,
+        season_number: int,
+    ) -> None:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            episodes = await get_cinema_season(
+                int(self.series.tmdb_id),
+                int(season_number),
+            )
+        except Exception:
+            return await _private(
+                interaction,
+                "❌ Episode metadata is temporarily unavailable. Try the season again.",
+            )
+        if not episodes:
+            return await _private(
+                interaction,
+                "ℹ️ TMDB does not list any episodes for that season.",
+            )
+        await _replace(
+            interaction,
+            embed=_tv_episode_picker_embed(
+                self.series,
+                int(season_number),
+                episodes,
+                page=0,
+            ),
+            view=_TVEpisodePickerView(
+                owner_id=self.owner_id,
+                room_id=self.room_id,
+                series=self.series,
+                season_number=int(season_number),
+                episodes=episodes,
+                page=0,
+            ),
+        )
+
+    @discord.ui.button(
+        label="Previous",
+        emoji="⬅️",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+        custom_id="dank:cinema:tv-season:previous",
+    )
+    async def previous(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _replace(
+            interaction,
+            embed=_tv_season_picker_embed(
+                self.series,
+                self.seasons,
+                page=self.page - 1,
+            ),
+            view=_TVSeasonPickerView(
+                owner_id=self.owner_id,
+                room_id=self.room_id,
+                series=self.series,
+                seasons=self.seasons,
+                page=self.page - 1,
+            ),
+        )
+
+    @discord.ui.button(
+        label="Next",
+        emoji="➡️",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+        custom_id="dank:cinema:tv-season:next",
+    )
+    async def next(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _replace(
+            interaction,
+            embed=_tv_season_picker_embed(
+                self.series,
+                self.seasons,
+                page=self.page + 1,
+            ),
+            view=_TVSeasonPickerView(
+                owner_id=self.owner_id,
+                room_id=self.room_id,
+                series=self.series,
+                seasons=self.seasons,
+                page=self.page + 1,
+            ),
+        )
+
+    @discord.ui.button(
+        label="Back to Cinema",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+        custom_id="dank:cinema:tv-season:back",
+    )
+    async def back(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await open_movie_night(interaction, replace_message=True)
+
+
+class _TVEpisodeSelect(discord.ui.Select):
+    def __init__(self, owner: "_TVEpisodePickerView") -> None:
+        self.owner_view = owner
+        start = owner.page * owner.PAGE_SIZE
+        rows = owner.episodes[start : start + owner.PAGE_SIZE]
+        options = [
+            discord.SelectOption(
+                label=(
+                    f"E{episode.episode_number} • {episode.title}"
+                )[:100],
+                value=str(int(episode.episode_number)),
+                description=(
+                    (
+                        f"{episode.runtime}m • "
+                        if int(episode.runtime or 0) > 0
+                        else ""
+                    )
+                    + (
+                        episode.overview
+                        or episode.air_date
+                        or "TMDB episode"
+                    )
+                )[:100],
+                emoji="🎞️",
+            )
+            for episode in rows
+        ]
+        super().__init__(
+            placeholder="Choose an episode…",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
+        try:
+            number = int((self.values or ["0"])[0])
+        except Exception:
+            return await _private(interaction, "❌ Choose a valid episode.")
+        episode = next(
+            (
+                row
+                for row in self.owner_view.episodes
+                if int(row.episode_number) == number
+            ),
+            None,
+        )
+        if episode is None:
+            return await _private(interaction, "❌ That episode is no longer available.")
+        metadata = _cinema_episode_catalog_metadata(
+            series=self.owner_view.series,
+            episode=episode,
+        )
+        query = (
+            f"{self.owner_view.series.title} "
+            f"S{int(episode.season_number):02d}E{int(episode.episode_number):02d}"
+        )
+        await _propose_movie_search_vote(
+            interaction,
+            room_id=self.owner_view.room_id,
+            query=query,
+            catalog_metadata=metadata,
+        )
+
+
+class _TVEpisodePickerView(_OwnedView):
+    PAGE_SIZE = 25
+
+    def __init__(
+        self,
+        *,
+        owner_id: int,
+        room_id: str,
+        series: CinemaMedia,
+        season_number: int,
+        episodes: tuple[CinemaEpisode, ...],
+        page: int = 0,
+    ) -> None:
+        super().__init__(owner_id)
+        self.room_id = str(room_id)
+        self.series = series
+        self.season_number = int(season_number)
+        self.episodes = tuple(episodes)
+        max_page = max(0, (len(self.episodes) - 1) // self.PAGE_SIZE)
+        self.page = max(0, min(int(page), max_page))
+        self.add_item(_TVEpisodeSelect(self))
+        self.previous.disabled = self.page <= 0
+        self.next.disabled = self.page >= max_page
+
+    @discord.ui.button(
+        label="Previous",
+        emoji="⬅️",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+        custom_id="dank:cinema:tv-episode:previous",
+    )
+    async def previous(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _replace(
+            interaction,
+            embed=_tv_episode_picker_embed(
+                self.series,
+                self.season_number,
+                self.episodes,
+                page=self.page - 1,
+            ),
+            view=_TVEpisodePickerView(
+                owner_id=self.owner_id,
+                room_id=self.room_id,
+                series=self.series,
+                season_number=self.season_number,
+                episodes=self.episodes,
+                page=self.page - 1,
+            ),
+        )
+
+    @discord.ui.button(
+        label="Next",
+        emoji="➡️",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+        custom_id="dank:cinema:tv-episode:next",
+    )
+    async def next(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _replace(
+            interaction,
+            embed=_tv_episode_picker_embed(
+                self.series,
+                self.season_number,
+                self.episodes,
+                page=self.page + 1,
+            ),
+            view=_TVEpisodePickerView(
+                owner_id=self.owner_id,
+                room_id=self.room_id,
+                series=self.series,
+                season_number=self.season_number,
+                episodes=self.episodes,
+                page=self.page + 1,
+            ),
+        )
+
+    @discord.ui.button(
+        label="Back to Seasons",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+        custom_id="dank:cinema:tv-episode:back",
+    )
+    async def back(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _open_tv_season_picker(
+            interaction,
+            self.room_id,
+            self.series,
+        )
+
+
+def _tv_season_picker_embed(
+    series: CinemaMedia,
+    seasons: list[Mapping[str, Any]],
+    *,
+    page: int,
+) -> discord.Embed:
+    total_pages = max(1, (len(seasons) + 24) // 25)
+    embed = discord.Embed(
+        title=f"📺 {series.title}",
+        description=(
+            "**Choose a season.** Dank Cinema keeps TV identity separate from "
+            "the playback provider, then searches connected sources for the exact episode."
+        ),
+        color=discord.Color.blurple(),
+    )
+    if series.poster_url:
+        embed.set_thumbnail(url=series.poster_url)
+    embed.set_footer(
+        text=f"TV • season page {max(1, page + 1)}/{total_pages} • TMDB metadata"
+    )
+    return embed
+
+
+def _tv_episode_picker_embed(
+    series: CinemaMedia,
+    season_number: int,
+    episodes: tuple[CinemaEpisode, ...],
+    *,
+    page: int,
+) -> discord.Embed:
+    total_pages = max(1, (len(episodes) + 24) // 25)
+    embed = discord.Embed(
+        title=f"🎞️ {series.title} • Season {int(season_number)}",
+        description=(
+            "**Choose the exact episode.** The next step searches the same configured "
+            "Cinema playback sources using the series + SxxExx identity."
+        ),
+        color=discord.Color.blurple(),
+    )
+    if series.poster_url:
+        embed.set_thumbnail(url=series.poster_url)
+    embed.set_footer(
+        text=f"TV • episode page {max(1, page + 1)}/{total_pages} • TMDB metadata"
+    )
+    return embed
+
+
+async def _open_tv_season_picker(
+    interaction: discord.Interaction,
+    room_id: str,
+    series: CinemaMedia,
+) -> None:
+    room = _room_by_id_for_interaction(interaction, room_id)
+    if room is None:
+        return await _movie_hub_notice(
+            interaction,
+            "❌ This Cinema room no longer exists or is private.",
+        )
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        details = await get_cinema_details("tv", int(series.tmdb_id))
+    except Exception:
+        return await _private(
+            interaction,
+            "❌ TV season metadata is temporarily unavailable. Try this title again.",
+        )
+    seasons = [
+        dict(row)
+        for row in details.seasons
+        if int(row.get("season_number") or 0) > 0
+        and int(row.get("episode_count") or 0) > 0
+    ]
+    if not seasons:
+        return await _private(
+            interaction,
+            "ℹ️ TMDB does not list playable seasons for this series.",
+        )
+    await _replace(
+        interaction,
+        embed=_tv_season_picker_embed(series, seasons, page=0),
+        view=_TVSeasonPickerView(
+            owner_id=int(interaction.user.id),
+            room_id=room_id,
+            series=series,
+            seasons=seasons,
+            page=0,
+        ),
+    )
+
+
+class MovieSearchModal(discord.ui.Modal, title="1/3 • Find Movie or TV"):
     query = discord.ui.TextInput(
-        label="Movie title",
-        placeholder="Interstellar, The Dark Knight, Shrek…",
+        label="Movie or TV title",
+        placeholder="Interstellar, Fallout, The Office, Shrek…",
         min_length=1,
         max_length=180,
     )
@@ -3341,7 +3527,10 @@ class MovieSearchModal(discord.ui.Modal, title="1/3 • Find Movie"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if int(interaction.user.id) != self.owner_id:
-            return await _private(interaction, "❌ This search belongs to another member.")
+            return await _private(
+                interaction,
+                "❌ This search belongs to another member.",
+            )
 
         raw_query = _compact(self.query.value)
         adult_enabled = False
@@ -3356,7 +3545,7 @@ class MovieSearchModal(discord.ui.Modal, title="1/3 • Find Movie"):
             room = _room_by_id_for_interaction(interaction, self.room_id)
             return await _movie_hub_notice(
                 interaction,
-                "🔞 Adult-content movie search is disabled in **Cinema Settings**.",
+                "🔞 Adult-content Cinema search is disabled in **Cinema Settings**.",
                 room=room,
             )
 
@@ -3368,73 +3557,90 @@ class MovieSearchModal(discord.ui.Modal, title="1/3 • Find Movie"):
             )
 
         await interaction.response.defer(ephemeral=True, thinking=True)
-        catalog = await search_tmdb_movies(
-            raw_query,
-            limit=8,
-            include_adult=adult_enabled,
-        )
-        if not catalog.movies:
+        try:
+            catalog = await search_cinema_catalog(
+                raw_query,
+                limit=12,
+                include_adult=adult_enabled,
+            )
+        except Exception:
+            catalog = ()
+
+        if not catalog:
             return await _propose_movie_search_vote(
                 interaction,
                 room_id=self.room_id,
                 query=raw_query,
             )
 
-        if len(catalog.movies) == 1:
-            movie = catalog.movies[0]
-            return await _propose_movie_search_vote(
-                interaction,
-                room_id=self.room_id,
-                query=movie.title,
-                catalog_movie=movie,
-            )
+        by_key = {media.key: media for media in catalog}
 
-        movie_by_id = {movie.provider_id: movie for movie in catalog.movies}
-
-        async def picked(pick_interaction: discord.Interaction, value: str) -> None:
+        async def picked(
+            pick_interaction: discord.Interaction,
+            value: str,
+        ) -> None:
             if value == "__raw__":
                 return await _propose_movie_search_vote(
                     pick_interaction,
                     room_id=self.room_id,
                     query=raw_query,
                 )
-            movie = movie_by_id.get(value)
-            if movie is None:
-                room = _room_by_id_for_interaction(pick_interaction, self.room_id)
+            media = by_key.get(value)
+            if media is None:
+                room = _room_by_id_for_interaction(
+                    pick_interaction,
+                    self.room_id,
+                )
                 return await _movie_hub_notice(
                     pick_interaction,
                     "❌ That catalog result expired. Search again from Dank Cinema.",
                     room=room,
                 )
+            if media.media_type == "tv":
+                return await _open_tv_season_picker(
+                    pick_interaction,
+                    self.room_id,
+                    media,
+                )
             await _propose_movie_search_vote(
                 pick_interaction,
                 room_id=self.room_id,
-                query=movie.title,
-                catalog_movie=movie,
+                query=media.title,
+                catalog_metadata=_cinema_catalog_metadata(media),
             )
 
         choices = [
             DankChoice(
                 label=(
-                    f"{movie.title} ({movie.year})"
-                    if movie.year
-                    else movie.title
+                    f"{media.title} ({media.year})"
+                    if media.year
+                    else media.title
                 )[:100],
-                value=movie.provider_id,
+                value=media.key,
                 description=(
-                    movie.overview
-                    or movie.original_title
-                    or "TMDB movie result"
+                    (
+                        "TV Series • "
+                        if media.media_type == "tv"
+                        else "Movie • "
+                    )
+                    + (
+                        media.overview
+                        or media.original_title
+                        or "TMDB title"
+                    )
                 )[:100],
-                emoji="🎬",
+                emoji="📺" if media.media_type == "tv" else "🎬",
             )
-            for movie in catalog.movies
+            for media in catalog[:24]
         ]
         choices.append(
             DankChoice(
                 label=f'Use exactly "{raw_query}"'[:100],
                 value="__raw__",
-                description="Skip catalog matching and search providers with the text you typed.",
+                description=(
+                    "Skip catalog matching and search connected providers "
+                    "with the text you typed."
+                ),
                 emoji="🔎",
             )
         )
@@ -3443,9 +3649,9 @@ class MovieSearchModal(discord.ui.Modal, title="1/3 • Find Movie"):
             author_id=int(interaction.user.id),
             choices=choices,
             on_pick=picked,
-            custom_id=f"dank:movie:catalog:{self.room_id[:16]}",
-            placeholder="Choose the exact movie…",
-            title="1/3 • Choose Movie",
+            custom_id=f"dank:cinema:catalog:{self.room_id[:16]}",
+            placeholder="Choose the exact movie or series…",
+            title="1/3 • Choose Title",
             on_home=lambda back_interaction: open_movie_night(
                 back_interaction,
                 replace_message=True,
@@ -3455,13 +3661,13 @@ class MovieSearchModal(discord.ui.Modal, title="1/3 • Find Movie"):
         await _replace(
             interaction,
             content=(
-                "🔎 **Choose the exact movie.** This identifies the title only; playback "
-                "still comes from connected providers or a host-supplied magnet/.torrent."
+                "🔎 **Choose the exact movie or TV series.** TV results continue to "
+                "season and episode selection. Playback still comes only from connected "
+                "providers or a host-supplied magnet/.torrent."
             ),
             embed=None,
             view=picker,
         )
-
 
 async def _announce_room(
     interaction: discord.Interaction,
@@ -4454,8 +4660,15 @@ class MovieNightHubView(_OwnedView):
         self,
         owner_id: int,
         room: Optional[MovieNightRoom] = None,
+        *,
+        guild_id: int = 0,
     ) -> None:
         super().__init__(owner_id)
+        resolved_guild_id = int(
+            guild_id
+            or (getattr(room, "guild_id", 0) if room is not None else 0)
+            or 0
+        )
         private_mode = _private_viewing(room)
         private_host = bool(
             private_mode
@@ -4515,6 +4728,18 @@ class MovieNightHubView(_OwnedView):
                     )
                 )
 
+        site_url = cinema_site_url(resolved_guild_id, int(owner_id))
+        if site_url:
+            self.add_item(
+                discord.ui.Button(
+                    label="Open Dank Cinema",
+                    emoji="🍿",
+                    style=discord.ButtonStyle.link,
+                    url=site_url,
+                    row=2,
+                )
+            )
+
     @discord.ui.button(label="Start Watch Party", emoji="🎬", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:hub:start")
     async def start_join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -4525,7 +4750,7 @@ class MovieNightHubView(_OwnedView):
         _ = button
         await _start_or_join_room(interaction, mode="private")
 
-    @discord.ui.button(label="Find Movie", emoji="🔎", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:hub:search")
+    @discord.ui.button(label="Find Movie / TV", emoji="🔎", style=discord.ButtonStyle.primary, row=0, custom_id="dank:movie:hub:search")
     async def search(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         room = _room_for_interaction(interaction)

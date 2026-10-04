@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from aiohttp import web
 
-from stoney_verify import movie_night_web
+from stoney_verify import cinema_library_service, movie_night_web
 from stoney_verify.movie_night import MovieNightManager
 
 
@@ -59,8 +59,132 @@ def test_movie_night_public_routes_are_media_only() -> None:
     assert "/movie/{room_id}/action" in rendered
     assert "/movie/{room_id}/invite-options" in rendered
     assert "/movie/{room_id}/promote" in rendered
+    assert "/movie/{room_id}/queue-search" in rendered
+    progress_methods = {
+        method
+        for method, resource in routes
+        if "/movie/{room_id}/progress" in resource
+    }
+    assert {"GET", "POST"} <= progress_methods
     assert "/api/" not in rendered
     assert "/guild/" not in rendered
+
+
+
+
+
+def test_cinema_library_runtime_defaults_and_episode_lookup(monkeypatch) -> None:
+    defaults = cinema_library_service._normalize_preferences({})
+    assert defaults == {
+        "autoplay_next": True,
+        "playback_speed": 1.0,
+        "preferred_source": "",
+        "default_audio_language": "",
+        "default_subtitle_language": "",
+        "visual_quality": "auto",
+    }
+    assert issubclass(cinema_library_service.InvalidCinemaState, ValueError)
+
+    async def rows(_user_id: int, *, refresh: bool = False):
+        assert refresh is False
+        return [
+            {
+                "user_id": 42,
+                "media_type": "episode",
+                "tmdb_id": 9001,
+                "season_number": 3,
+                "episode_number": 7,
+                "progress_seconds": 733.0,
+            },
+            {
+                "user_id": 42,
+                "media_type": "movie",
+                "tmdb_id": 123,
+                "season_number": 0,
+                "episode_number": 0,
+            },
+        ]
+
+    monkeypatch.setattr(cinema_library_service, "list_user_media", rows)
+    state = asyncio.run(
+        cinema_library_service.get_media_state(
+            42,
+            media_type="episode",
+            tmdb_id=9001,
+            season_number=3,
+            episode_number=7,
+        )
+    )
+    assert state is not None
+    assert state["progress_seconds"] == 733.0
+
+
+def test_movie_night_progress_get_uses_current_canonical_media(monkeypatch) -> None:
+    candidate = SimpleNamespace(
+        title="Example Show S03E07",
+        metadata={
+            "catalog": {
+                "media_type": "episode",
+                "tmdb_id": 9001,
+                "series_id": 77,
+                "series_title": "Example Show",
+                "season_number": 3,
+                "episode_number": 7,
+                "title": "Example Show S03E07",
+            }
+        },
+    )
+    room = SimpleNamespace(
+        current_candidate_id="candidate-1",
+        candidates={"candidate-1": candidate},
+    )
+
+    async def room_and_user(_request):
+        return room, 42
+
+    async def media_state(user_id: int, **kwargs):
+        assert user_id == 42
+        assert kwargs == {
+            "media_type": "episode",
+            "tmdb_id": 9001,
+            "season_number": 3,
+            "episode_number": 7,
+        }
+        return {
+            "media_type": "episode",
+            "tmdb_id": 9001,
+            "season_number": 3,
+            "episode_number": 7,
+            "progress_seconds": 733.0,
+            "completed": False,
+        }
+
+    monkeypatch.setattr(movie_night_web, "_room_and_user", room_and_user)
+    monkeypatch.setattr(movie_night_web, "get_media_state", media_state)
+    response = asyncio.run(
+        movie_night_web.movie_night_progress(SimpleNamespace(method="GET"))
+    )
+    payload = json.loads(response.text)
+
+    assert payload["tracked"] is True
+    assert payload["item"]["progress_seconds"] == 733.0
+
+
+def test_movie_night_player_restores_progress_only_through_host_authority() -> None:
+    html = movie_night_web._watch_html(
+        "room-progress",
+        42,
+        "uid=42&exp=9999999999&sig=test",
+    )
+
+    assert "async function maybeRestoreWatchProgress(s)" in html
+    assert "if(!s?.is_host || !s?.stream_url) return;" in html
+    assert 'const saved=await jsonFetch("/movie/"+BOOT.roomId+"/progress")' in html
+    assert 'await hostAction("seek",{seconds:target})' in html
+    assert 'video.addEventListener("seeked",scheduleHostSeekCommit)' in html
+    assert "hostSeekCommitTimer=setTimeout" in html
+    assert "persistWatchProgress(true)" in html
+    assert "if(key!==lastProgressMediaKey) lastProgressPersistAt=0;" in html
 
 
 def test_movie_night_player_contains_sync_heartbeat_and_host_controls() -> None:
@@ -89,7 +213,7 @@ def test_movie_night_player_contains_sync_heartbeat_and_host_controls() -> None:
     assert '"Joining "+joiningLabel+"… buffering around "' in html
     assert "Playback will stay put while the buffer catches up." in html
     assert 's.sync_status==="joining"' in html
-    assert "Synced Viewer" in html
+    assert 'return "Synced"' in html
     assert "<summary>Advanced Stream Details</summary>" in html
     assert 'class="theater"' in html
     assert html.index("<video") < html.index("<summary>Advanced Stream Details</summary>")
@@ -129,7 +253,8 @@ def test_movie_night_viewer_sync_is_explicit_and_drift_safe() -> None:
     assert "safeSeek(joinTarget)" in html
     assert "SOFT_DRIFT_START=0.35" in html
     assert "HARD_DRIFT_SECONDS=5.0" in html
-    assert "video.playbackRate=signed<0?1.04:0.96" in html
+    assert "canonicalPlaybackRate()*1.04" in html
+    assert "canonicalPlaybackRate()*0.96" in html
     assert "if(drift>1.75" not in html
     assert "if(Math.abs((video.currentTime||0)-Number(lastState.position_seconds||0))>0.5)" not in html
 
@@ -445,10 +570,11 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
 
     assert "Dank Cinema • The 420 Lobby" in html
     assert 'class="brand-art"' in html
-    assert 'class="brand-mark-art"' in html
-    assert 'class="brand-wordmark-art"' in html
-    assert '/movie/assets/dank-cinema-brand-mark.webp?v=art-system-v3' in html
-    assert '/movie/assets/dank-cinema-brand-wordmark.webp?v=art-system-v3' in html
+    assert 'class="brand-lockup-art"' in html
+    assert '/movie/assets/dank-cinema-brand.webp?v=art-system-v5' in html
+    assert '<link rel="icon" type="image/webp" href="/movie/assets/dank-cinema-brand-mark.webp?v=art-system-v5">' in html
+    assert '<img src="/movie/assets/dank-cinema-brand-mark.webp?v=' not in html
+    assert '/movie/assets/dank-cinema-brand-wordmark.webp?v=' not in html
     assert 'alt="Dank Cinema — A feature of The 420 Lobby"' in html
     assert 'class="wordmark"' not in html
     assert "family=Lacquer" not in html
@@ -499,6 +625,15 @@ def test_candidate_web_metadata_allows_only_tmdb_artwork() -> None:
         "overview": "Example overview",
         "poster_url": "https://image.tmdb.org/t/p/w342/example.jpg",
         "backdrop_url": "",
+        "media_type": "",
+        "tmdb_id": 0,
+        "series_id": 0,
+        "series_title": "",
+        "season_number": 0,
+        "episode_number": 0,
+        "episode_title": "",
+        "adult": False,
+        "runtime_minutes": 0,
     }
 
     candidate.metadata["poster_url"] = "https://example.invalid/poster.jpg"
@@ -528,6 +663,15 @@ def test_candidate_web_metadata_reads_canonical_catalog_envelope() -> None:
         "overview": "Art the Clown returns.",
         "poster_url": "https://image.tmdb.org/t/p/w342/terrifier3.jpg",
         "backdrop_url": "https://image.tmdb.org/t/p/w780/terrifier3-bg.jpg",
+        "media_type": "movie",
+        "tmdb_id": 1034541,
+        "series_id": 0,
+        "series_title": "",
+        "season_number": 0,
+        "episode_number": 0,
+        "episode_title": "",
+        "adult": False,
+        "runtime_minutes": 0,
     }
 
 
@@ -926,8 +1070,11 @@ def test_dank_cinema_brand_is_recreated_as_transparent_header_art() -> None:
     assert "drop-shadow(0 10px 28px rgba(0,0,0,.42))" in html
     assert "rgba(2,7,6,.88)" in html
     assert 'class="brand-art"' in html
-    assert '/movie/assets/dank-cinema-brand-mark.webp?v=art-system-v3' in html
-    assert '/movie/assets/dank-cinema-brand-wordmark.webp?v=art-system-v3' in html
+    assert 'class="brand-lockup-art"' in html
+    assert '/movie/assets/dank-cinema-brand.webp?v=art-system-v5' in html
+    assert '<link rel="icon" type="image/webp" href="/movie/assets/dank-cinema-brand-mark.webp?v=art-system-v5">' in html
+    assert '<img src="/movie/assets/dank-cinema-brand-mark.webp?v=' not in html
+    assert '/movie/assets/dank-cinema-brand-wordmark.webp?v=' not in html
 
     source = Path(movie_night_web.__file__).read_text(encoding="utf-8")
     assert "ImageDraw.floodfill" in source
@@ -1242,7 +1389,7 @@ def test_dank_cinema_player_capability_controls_are_not_placebos() -> None:
     assert "video.requestPictureInPicture" in html
     assert "document.exitPictureInPicture" in html
     assert "video.textTracks" in html
-    assert 'tracks[i].mode=(i===0 && !anyShowing)?"showing":"disabled"' in html
+    assert 'tracks[i].mode=(i===preferredIndex && !anyShowing)?"showing":"disabled"' in html
     assert 'document.addEventListener("keydown"' in html
     assert 'key==="arrowleft"' in html
     assert 'key==="arrowright"' in html
@@ -1311,32 +1458,43 @@ def test_quality_mode_boot_does_not_touch_room_state_before_it_is_declared() -> 
 
 
 def test_feed_center_state_groups_real_sources_and_hides_urls_from_viewers(monkeypatch) -> None:
-    source_enabled = SimpleNamespace(
-        source_id="anime-feed",
-        label="Anime Feed",
-        endpoint_url="https://feeds.example.org/anime.xml",
-        provider_type="feed",
-        category="anime",
-        enabled=True,
-    )
-    source_disabled = SimpleNamespace(
-        source_id="private-json",
-        label="Private JSON",
-        endpoint_url="https://feeds.example.org/private.json",
-        provider_type="json",
-        category="movies",
-        enabled=False,
-    )
-    registry = SimpleNamespace(
-        revision=7,
-        sources=(source_enabled, source_disabled),
-    )
-
-    async def load_registry(_guild_id, *, refresh=False):
+    async def shared_state(_guild_id, *, can_manage, refresh=False):
         _ = refresh
-        return {}, registry
+        enabled = {
+            "source_id": "anime-feed",
+            "label": "Anime Feed",
+            "provider_type": "feed",
+            "category": "anime",
+            "enabled": True,
+            "search_capable": False,
+            "discovery_capable": True,
+            "playback_capable": True,
+            "supported_media_types": ["anime"],
+            "health_state": "unchecked",
+        }
+        disabled = {
+            "source_id": "private-json",
+            "label": "Private JSON",
+            "provider_type": "json",
+            "category": "movies",
+            "enabled": False,
+            "search_capable": True,
+            "discovery_capable": True,
+            "playback_capable": True,
+            "supported_media_types": ["movies"],
+            "health_state": "disabled",
+        }
+        if can_manage:
+            enabled["endpoint_url"] = "https://feeds.example.org/anime.xml"
+            disabled["endpoint_url"] = "https://feeds.example.org/private.json"
+        return {
+            "revision": 7,
+            "can_manage": can_manage,
+            "sources": [enabled, disabled] if can_manage else [enabled],
+            "categories": ["movies", "tv", "anime", "documentaries", "custom"],
+        }
 
-    monkeypatch.setattr(movie_night_web, "load_media_source_registry", load_registry)
+    monkeypatch.setattr(movie_night_web, "cinema_feed_state", shared_state)
     room = SimpleNamespace(guild_id=123, host_id=10)
 
     viewer_state = asyncio.run(movie_night_web._media_source_state(room, 20))
@@ -1345,6 +1503,10 @@ def test_feed_center_state_groups_real_sources_and_hides_urls_from_viewers(monke
     assert "endpoint_url" not in viewer_state["sources"][0]
     assert viewer_state["sources"][0]["category"] == "anime"
     assert viewer_state["sources"][0]["discovery_capable"] is True
+    assert viewer_state["sources"][0]["search_capable"] is False
+    assert viewer_state["sources"][0]["playback_capable"] is True
+    assert viewer_state["sources"][0]["health_state"] == "unchecked"
+    assert viewer_state["sources"][0]["supported_media_types"] == ["anime"]
 
     host_state = asyncio.run(movie_night_web._media_source_state(room, 10))
     assert host_state["is_host"] is True
@@ -1409,19 +1571,18 @@ def test_feed_center_ui_exposes_real_source_management_without_fake_catalog_card
 
 
 
-def test_brand_art_reserves_real_variant_aspect_ratios_to_avoid_header_cls() -> None:
+def test_brand_art_reserves_composed_lockup_ratio_to_avoid_header_cls() -> None:
     html = movie_night_web._watch_html(
         "room-brand-ratio",
         10,
         "uid=10&exp=9999999999&sig=test",
     )
 
-    assert 'class="brand-mark-art"' in html
-    assert 'width="320"' in html
-    assert 'height="245"' in html
-    assert 'class="brand-wordmark-art"' in html
-    assert 'width="1040"' in html
-    assert 'height="289"' in html
+    assert 'class="brand-lockup-art"' in html
+    assert 'width="1200"' in html
+    assert 'height="278"' in html
+    assert 'brand-mark-art' not in html
+    assert 'brand-wordmark-art' not in html
 
 
 
@@ -1453,7 +1614,7 @@ def test_desktop_host_controls_use_compact_floating_panel_instead_of_full_width_
 
 
 
-def test_queue_empty_state_is_branded_and_only_offers_real_discord_action() -> None:
+def test_queue_empty_state_keeps_queue_management_inside_theater() -> None:
     html = movie_night_web._watch_html(
         "room-empty-queue",
         10,
@@ -1461,8 +1622,45 @@ def test_queue_empty_state_is_branded_and_only_offers_real_discord_action() -> N
     )
 
     assert "Your Queue Is Empty" in html
-    assert "Add a title from Discord Cinema" in html
-    assert 'if(lastState?.discord_url)' in html
-    assert 'action.textContent="Open Discord"' in html
-    assert "action.onclick=openDiscordRoom" in html
+    assert 'id="queueAddToggle"' in html
+    assert 'id="queueAddForm"' in html
+    assert 'id="queueSearchInput"' in html
+    assert "without leaving the Theater" in html
+    assert "Add a title from Discord Cinema" not in html
+    assert 'action.textContent="Open Discord"' not in html
     assert "Nothing queued yet." not in html
+
+
+def test_queue_manager_exposes_real_add_play_next_reorder_and_remove_controls() -> None:
+    html = movie_night_web._watch_html(
+        "room-queue-controls",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert '"/movie/"+BOOT.roomId+"/queue-search?q="+encodeURIComponent(query)' in html
+    assert 'action:"add"' in html
+    assert '["Play Next","play_next"' in html
+    assert '["↑","move_up"' in html
+    assert '["↓","move_down"' in html
+    assert '["×","remove"' in html
+    assert 'document.getElementById("clearQueue").onclick=()=>queueAction("clear")' in html
+    assert '"Added by "+String(item.added_by)' in html
+    assert "Movie title or exact episode, e.g. Show S3E7" in html
+
+
+
+def test_theater_uses_human_session_connection_states() -> None:
+    html = movie_night_web._watch_html(
+        "room-human-status",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'function humanSessionStatus(s)' in html
+    assert 'return "Host Away"' in html
+    assert 'return "Buffering"' in html
+    assert 'return "Connecting"' in html
+    assert 'return "Synced"' in html
+    assert 'sync.textContent="Reconnecting"' in html
+    assert 'role.textContent="Reconnecting"' in html
