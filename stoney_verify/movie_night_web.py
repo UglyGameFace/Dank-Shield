@@ -1770,6 +1770,55 @@ video {{
   border:1px solid rgba(255,255,255,.09);border-radius:16px;
   background:rgba(8,18,14,.72);
 }}
+.feed-panel[hidden] {{ display:none !important; }}
+.feed-toolbar {{ display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap; }}
+.feed-toolbar h2 {{ margin:0;font-size:1rem; }}
+.feed-toolbar-copy {{ color:var(--muted);font-size:.7rem;line-height:1.35;max-width:50ch; }}
+.feed-groups {{ display:grid;gap:12px;margin-top:12px; }}
+.feed-group {{ display:grid;gap:7px; }}
+.feed-group-title {{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  color:#dce5e1;font-size:.72rem;font-weight:900;text-transform:uppercase;letter-spacing:.08em;
+}}
+.feed-card {{
+  border:1px solid rgba(255,255,255,.075);border-radius:13px;background:#0c1915;padding:10px;
+}}
+.feed-card-top {{ display:flex;align-items:flex-start;justify-content:space-between;gap:9px; }}
+.feed-card-name {{ min-width:0;font-size:.82rem;font-weight:900;overflow-wrap:anywhere; }}
+.feed-badges {{ display:flex;gap:5px;flex-wrap:wrap;margin-top:5px; }}
+.feed-badge {{
+  display:inline-flex;align-items:center;gap:4px;border:1px solid rgba(255,255,255,.09);
+  border-radius:999px;padding:3px 7px;color:#aebbb5;font-size:.61rem;font-weight:800;
+}}
+.feed-badge.good {{ color:var(--lime);border-color:rgba(167,255,100,.25); }}
+.feed-badge.off {{ color:#909b96; }}
+.feed-meta {{ margin-top:7px;color:#85938d;font-size:.66rem;line-height:1.4;overflow-wrap:anywhere; }}
+.feed-discovered {{ margin-top:8px;display:flex;gap:5px;flex-wrap:wrap; }}
+.feed-title-chip {{
+  max-width:100%;border-radius:999px;background:#10241d;padding:4px 7px;
+  color:#cdd7d2;font-size:.63rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}}
+.feed-actions {{ display:flex;gap:5px;flex-wrap:wrap;margin-top:9px; }}
+.feed-action {{
+  border:1px solid rgba(255,255,255,.09);border-radius:9px;background:#10201b;
+  color:#dce5e1;padding:7px 8px;font-size:.66rem;font-weight:850;
+}}
+.feed-action.primary {{ color:var(--lime);border-color:rgba(167,255,100,.28); }}
+.feed-action.danger {{ color:#ff7a84;border-color:rgba(255,102,114,.24); }}
+.feed-empty {{ padding:14px;border:1px dashed rgba(255,255,255,.1);border-radius:12px;color:#8d9a94;font-size:.74rem; }}
+.feed-form {{
+  display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;padding-top:12px;
+  border-top:1px solid rgba(255,255,255,.07);
+}}
+.feed-form .wide {{ grid-column:1 / -1; }}
+.feed-field {{ display:grid;gap:4px; }}
+.feed-field label {{ color:#93a19b;font-size:.63rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em; }}
+.feed-input,.feed-select {{
+  min-width:0;width:100%;box-sizing:border-box;border:1px solid rgba(255,255,255,.11);
+  border-radius:10px;background:#0d1b17;color:#f4f7f5;padding:9px;font-size:.72rem;
+}}
+.feed-form-actions {{ grid-column:1 / -1;display:flex;gap:7px;justify-content:flex-end; }}
+
 .section-head {{ display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px; }}
 .section-head h2 {{ margin:0;font-size:1.04rem; }}
 .section-head span {{ color:#9ca8a3;font-size:.76rem; }}
@@ -2036,7 +2085,10 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
   .host-sheet {{ padding-left:12px;padding-right:12px; }}
   .host-actions {{ grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible; }}
   .host-action {{ min-width:0;min-height:104px;font-size:.74rem; }}
+  .feed-form {{ grid-template-columns:1fr; }}
+  .feed-form .wide,.feed-form-actions {{ grid-column:1; }}
 }}
+
 @media (max-width:380px) {{
   .room-pill {{ gap:5px;padding:7px 8px;font-size:.68rem; }}
   .cast {{ width:42px;height:42px; }}
@@ -2082,6 +2134,9 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
     </button>
     <button class="nav-item" type="button" data-nav="details">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 10v6M12 7h.01"/></svg>Details
+    </button>
+    <button class="nav-item" type="button" data-nav="feeds" id="feedNav">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 19a2 2 0 1 0 0 .01"/><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 5a15 15 0 0 1 15 15"/></svg>Feeds
     </button>
     <button class="nav-item" type="button" data-nav="discord">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 8c2-1 6-1 8 0M7 16c3 2 7 2 10 0"/><path d="M5 5c5-2 9-2 14 0l2 12c-3 2-6 3-9 3s-6-1-9-3Z"/></svg>Discord
@@ -2176,6 +2231,49 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
   </div>
 
   <aside class="theater-sidecar" aria-label="Cinema session tools">
+  <section class="queue-panel feed-panel" id="feedPanel" hidden>
+    <div class="feed-toolbar">
+      <div>
+        <h2>Feed Center</h2>
+        <div class="feed-toolbar-copy">Server feeds and media sources, grouped by what they discover. Refreshes use Cinema's existing safe source resolver.</div>
+      </div>
+      <button class="feed-action primary" id="feedAddToggle" type="button">Add Source</button>
+    </div>
+    <div class="feed-groups" id="feedGroups"></div>
+    <form class="feed-form" id="feedForm" hidden>
+      <input type="hidden" id="feedSourceId">
+      <div class="feed-field">
+        <label for="feedLabel">Name</label>
+        <input class="feed-input" id="feedLabel" maxlength="80" required placeholder="EZTV">
+      </div>
+      <div class="feed-field">
+        <label for="feedCategory">Category</label>
+        <select class="feed-select" id="feedCategory">
+          <option value="movies">Movies</option>
+          <option value="tv">TV Shows</option>
+          <option value="anime">Anime</option>
+          <option value="documentaries">Documentaries</option>
+          <option value="custom">Custom</option>
+        </select>
+      </div>
+      <div class="feed-field wide">
+        <label for="feedUrl">HTTPS source URL</label>
+        <input class="feed-input" id="feedUrl" type="url" required placeholder="https://example.com/feed.xml">
+      </div>
+      <div class="feed-field">
+        <label for="feedType">Source type</label>
+        <select class="feed-select" id="feedType">
+          <option value="feed">RSS / Atom Feed</option>
+          <option value="json">Search Provider</option>
+          <option value="external">Reference Link</option>
+        </select>
+      </div>
+      <div class="feed-form-actions">
+        <button class="feed-action" id="feedCancel" type="button">Cancel</button>
+        <button class="feed-action primary" type="submit">Save Source</button>
+      </div>
+    </form>
+  </section>
   <section class="queue-panel" id="sessionPanel" hidden>
     <div class="section-head"><h2>Session</h2><span id="sessionMode">Connecting…</span></div>
     <div class="grid">
