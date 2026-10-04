@@ -181,13 +181,13 @@
     brand.href = "#home";
     brand.setAttribute("aria-label", "Dank Cinema home");
     const mark = node("img", "brand-mark");
-    mark.src = "/movie/assets/dank-cinema-brand-mark.webp?v=art-system-v3";
+    mark.src = "/movie/assets/dank-cinema-brand-mark.webp?v=art-system-v4";
     mark.alt = "";
     mark.width = 54;
     mark.height = 42;
     mark.decoding = "async";
     const word = node("img", "brand-word");
-    word.src = "/movie/assets/dank-cinema-brand-wordmark.webp?v=art-system-v3";
+    word.src = "/movie/assets/dank-cinema-brand-wordmark.webp?v=art-system-v4";
     word.alt = "Dank Cinema";
     word.width = 330;
     word.height = 92;
