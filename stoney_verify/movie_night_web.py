@@ -1460,6 +1460,8 @@ video {{
 .player-button svg {{ width:22px;height:22px; }}
 .player-button.primary {{ width:44px;height:44px; }}
 .player-button:disabled {{ opacity:.32; }}
+.player-button[hidden] {{ display:none !important; }}
+.player-button.active {{ color:var(--lime);background:rgba(120,220,67,.11); }}
 .control-spacer {{ flex:1; }}
 .volume-wrap {{ display:flex;align-items:center;gap:6px; }}
 .volume {{ width:70px; accent-color:var(--lime); }}
@@ -1567,6 +1569,22 @@ video {{
 .grid {{ display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px; }}
 .stat {{ min-height:62px;padding:10px;border-radius:11px;background:#0d1916; }}
 .stat b {{ display:block;margin-bottom:5px;color:#84928c;font-size:.68rem;text-transform:uppercase;letter-spacing:.07em; }}
+.quality-control {{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  margin-top:12px;padding:10px;border-radius:11px;background:#0d1916;
+}}
+.quality-control label {{ color:#cbd5d0;font-size:.76rem;font-weight:800; }}
+.quality-select {{
+  border:1px solid rgba(255,255,255,.11);border-radius:9px;
+  background:#10201b;color:#f4f7f5;padding:7px 9px;font-weight:750;
+}}
+.quality-note {{ margin-top:8px;color:#84928c;font-size:.68rem;line-height:1.35; }}
+.keyboard-help {{ margin-top:10px;color:#84928c;font-size:.68rem;line-height:1.45; }}
+.keyboard-help kbd {{
+  display:inline-block;min-width:22px;padding:2px 5px;margin:0 2px;
+  border:1px solid rgba(255,255,255,.12);border-radius:5px;background:#101a17;
+  color:#dce5e1;text-align:center;font:inherit;font-size:.64rem;
+}}
 .host-sheet {{
   position:fixed;left:50%;bottom:0;z-index:40;transform:translateX(-50%);
   width:min(1120px,100%);max-height:min(72vh,560px);
@@ -1861,6 +1879,12 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
             </button>
             <input class="volume" id="volume" type="range" min="0" max="1" value="1" step=".05" aria-label="Volume">
           </div>
+          <button class="player-button" id="captions" type="button" aria-label="Subtitles" title="Subtitles" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M6.5 10h4M6.5 14h4M13.5 10h4M13.5 14h4"/></svg>
+          </button>
+          <button class="player-button" id="pip" type="button" aria-label="Picture in picture" title="Picture in picture" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2.5" y="4" width="19" height="16" rx="2"/><rect x="12.5" y="11" width="7" height="5.5" rx="1"/></svg>
+          </button>
           <button class="player-button" id="fullscreen" type="button" aria-label="Fullscreen">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
           </button>
@@ -1939,6 +1963,19 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
       <div class="stat"><b>Seeds / Leechers</b><span id="peers">0 / 0</span></div>
       <div class="stat"><b>Buffer target</b><span id="buffer">—</span></div>
     </div>
+    <div class="quality-control">
+      <label for="qualityMode">Visual quality</label>
+      <select class="quality-select" id="qualityMode" aria-label="Visual quality">
+        <option value="auto">Auto</option>
+        <option value="high">High</option>
+        <option value="standard">Standard</option>
+        <option value="lite">Lite</option>
+      </select>
+    </div>
+    <div class="quality-note" id="qualityNote">Auto balances artwork depth with device and network capability. Playback features stay identical in every mode.</div>
+    <div class="keyboard-help" id="keyboardHelp">
+      Desktop shortcuts: <kbd>Space</kbd> play/pause, <kbd>←</kbd>/<kbd>→</kbd> seek 10s when you control playback, <kbd>F</kbd> fullscreen, <kbd>M</kbd> mute.
+    </div>
   </details>
   </aside>
 
@@ -1979,6 +2016,33 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
 </div>
 <script>
 const BOOT={boot};
+const QUALITY_STORAGE_KEY="dank-cinema-quality-v1";
+
+function autoQualityMode() {{
+  const reduced=window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+  const saveData=!!navigator.connection?.saveData;
+  const memory=Number(navigator.deviceMemory||0);
+  const cores=Number(navigator.hardwareConcurrency||0);
+  if(reduced || saveData || (memory>0 && memory<=2) || (cores>0 && cores<=2)) return "lite";
+  if((memory>0 && memory<=4) || (cores>0 && cores<=4) || window.innerWidth<430) return "standard";
+  return "high";
+}}
+function applyQualityMode(preference) {{
+  const requested=["auto","high","standard","lite"].includes(preference)?preference:"auto";
+  const effective=requested==="auto"?autoQualityMode():requested;
+  document.documentElement.dataset.quality=effective;
+  document.documentElement.dataset.qualityPreference=requested;
+  const select=document.getElementById("qualityMode");
+  if(select && select.value!==requested) select.value=requested;
+  const note=document.getElementById("qualityNote");
+  if(note) note.textContent=requested==="auto"
+    ?"Auto selected "+effective+". Playback features stay identical in every mode."
+    :requested[0].toUpperCase()+requested.slice(1)+" visual mode. Playback features stay identical.";
+}}
+let storedQuality="auto";
+try {{ storedQuality=localStorage.getItem(QUALITY_STORAGE_KEY)||"auto"; }} catch(_) {{}}
+applyQualityMode(storedQuality);
+
 window.__dankCastApiAvailable=false;
 window.__onGCastApiAvailable=function(isAvailable){{
   window.__dankCastApiAvailable=!!isAvailable;
@@ -2210,6 +2274,20 @@ function fmtClock(seconds) {{
   const m=Math.floor((total%3600)/60);
   const s=String(total%60).padStart(2,"0");
   return h?String(h)+":"+String(m).padStart(2,"0")+":"+s:String(m)+":"+s;
+}}
+function refreshNativePlayerCapabilities() {{
+  const pip=document.getElementById("pip");
+  pip.hidden=!Boolean(document.pictureInPictureEnabled && typeof video.requestPictureInPicture==="function");
+  pip.classList.toggle("active",document.pictureInPictureElement===video);
+
+  const captions=document.getElementById("captions");
+  const tracks=video.textTracks;
+  captions.hidden=!(tracks && tracks.length);
+  let showing=false;
+  if(tracks) {{
+    for(let i=0;i<tracks.length;i++) if(tracks[i].mode==="showing") showing=true;
+  }}
+  captions.classList.toggle("active",showing);
 }}
 function updatePlayerChrome() {{
   const duration=Number.isFinite(video.duration)?video.duration:0;
@@ -2912,6 +2990,27 @@ document.getElementById("volume").addEventListener("input",event=>{{
   video.muted=video.volume===0;
 }});
 document.getElementById("mute").onclick=()=>{{ video.muted=!video.muted; }};
+document.getElementById("pip").onclick=async()=>{{
+  try {{
+    if(document.pictureInPictureElement===video) await document.exitPictureInPicture();
+    else if(document.pictureInPictureEnabled && typeof video.requestPictureInPicture==="function")
+      await video.requestPictureInPicture();
+  }} catch(err) {{
+    notice.textContent="Picture-in-picture is unavailable: "+String(err?.message||err);
+  }}
+  refreshNativePlayerCapabilities();
+}};
+document.getElementById("captions").onclick=()=>{{
+  const tracks=video.textTracks;
+  if(!tracks || !tracks.length) return;
+  let anyShowing=false;
+  for(let i=0;i<tracks.length;i++) if(tracks[i].mode==="showing") anyShowing=true;
+  for(let i=0;i<tracks.length;i++) tracks[i].mode=(i===0 && !anyShowing)?"showing":"disabled";
+  refreshNativePlayerCapabilities();
+}};
+video.addEventListener("enterpictureinpicture",refreshNativePlayerCapabilities);
+video.addEventListener("leavepictureinpicture",refreshNativePlayerCapabilities);
+video.addEventListener("loadedmetadata",refreshNativePlayerCapabilities);
 video.addEventListener("contextmenu",event=>event.preventDefault());
 for(const eventName of ["loadedmetadata","loadeddata","canplay","playing","emptied"]) {{
   video.addEventListener(eventName,()=>stabilizePlayerLayout());
@@ -3109,6 +3208,37 @@ document.getElementById("manageQueue").onclick=()=>{{
   notice.textContent="Queue manager is active. Use ↑ ↓ or × on queued titles.";
 }};
 document.getElementById("clearQueue").onclick=()=>queueAction("clear");
+
+const qualitySelect=document.getElementById("qualityMode");
+qualitySelect.addEventListener("change",()=>{{
+  const value=String(qualitySelect.value||"auto");
+  try {{ localStorage.setItem(QUALITY_STORAGE_KEY,value); }} catch(_) {{}}
+  applyQualityMode(value);
+}});
+window.addEventListener("resize",()=>{{
+  if(document.documentElement.dataset.qualityPreference==="auto") applyQualityMode("auto");
+}},{{passive:true}});
+
+document.addEventListener("keydown",event=>{{
+  if(event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+  const target=event.target;
+  if(target && /INPUT|TEXTAREA|SELECT|BUTTON/.test(String(target.tagName||""))) return;
+  const key=String(event.key||"").toLowerCase();
+  if(key===" "){{
+    event.preventDefault();
+    togglePlayerPlayback();
+  }} else if(key==="f"){{
+    event.preventDefault();
+    enterTheaterFullscreen();
+  }} else if(key==="m"){{
+    event.preventDefault();
+    video.muted=!video.muted;
+  }} else if((key==="arrowleft"||key==="arrowright") && lastState?.is_host){{
+    event.preventDefault();
+    const delta=key==="arrowleft"?-10:10;
+    safeSeek(Math.max(0,Math.min(Number.isFinite(video.duration)?video.duration:Infinity,(video.currentTime||0)+delta)));
+  }}
+}});
 
 for(const item of document.querySelectorAll("[data-nav]")) {{
   item.addEventListener("click",()=>{{
