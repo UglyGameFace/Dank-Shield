@@ -330,6 +330,89 @@ def _discord_invite_options(
     return rows
 
 
+def _discord_invite_target(
+    room: MovieNightRoom,
+    user_id: int,
+) -> Optional[dict[str, Any]]:
+    try:
+        from stoney_verify.globals import bot
+    except Exception:
+        bot = None
+    if bot is None:
+        return None
+    try:
+        guild = bot.get_guild(int(room.guild_id))
+    except Exception:
+        guild = None
+    if guild is None:
+        return None
+    try:
+        member = guild.get_member(int(user_id))
+    except Exception:
+        member = None
+    if member is None or bool(getattr(member, "bot", False)):
+        return None
+    uid = int(getattr(member, "id", 0) or 0)
+    if uid <= 0 or uid == int(room.host_id):
+        return None
+    display_name = str(
+        getattr(member, "display_name", "")
+        or getattr(member, "global_name", "")
+        or getattr(member, "name", "")
+        or uid
+    ).strip()[:80]
+    username = str(getattr(member, "name", "") or "").strip()[:80]
+    avatar_url = ""
+    try:
+        avatar_url = _safe_discord_avatar_url(
+            getattr(getattr(member, "display_avatar", None), "url", "")
+        )
+    except Exception:
+        avatar_url = ""
+    return {
+        "user_id": uid,
+        "display_name": display_name or str(uid),
+        "username": username,
+        "avatar_url": avatar_url,
+    }
+
+
+async def _announce_watch_party_promotion(
+    room: MovieNightRoom,
+    *,
+    invitee_id: int,
+) -> bool:
+    try:
+        from stoney_verify.globals import bot
+    except Exception:
+        bot = None
+    if bot is None:
+        return False
+    try:
+        guild = bot.get_guild(int(room.guild_id))
+    except Exception:
+        guild = None
+    if guild is None:
+        return False
+    try:
+        channel = guild.get_channel(int(room.channel_id))
+    except Exception:
+        channel = None
+    if channel is None or not hasattr(channel, "send"):
+        return False
+    try:
+        await channel.send(
+            (
+                f"🍿 <@{int(invitee_id)}> was invited. "
+                "This Dank Cinema room is now a **Watch Party** without restarting playback."
+            ),
+            allowed_mentions=__import__("discord").AllowedMentions(users=True, roles=False, everyone=False),
+        )
+        return True
+    except Exception:
+        return False
+
+
 async def _dm_watch_party_invite(
     room: MovieNightRoom,
     *,
@@ -935,8 +1018,8 @@ async def movie_night_promote_watch_party(request: web.Request) -> web.Response:
     if invitee_id <= 0 or invitee_id == int(room.host_id):
         raise web.HTTPBadRequest(text="Choose another Discord member to invite.")
 
-    options = _discord_invite_options(room, str(invitee_id), limit=20)
-    if not any(int(row.get("user_id", 0) or 0) == invitee_id for row in options):
+    target = _discord_invite_target(room, invitee_id)
+    if target is None:
         raise web.HTTPBadRequest(
             text="That Discord member is not available in the bot's current server cache. "
             "Use the Discord Cinema picker instead."
@@ -953,12 +1036,18 @@ async def movie_night_promote_watch_party(request: web.Request) -> web.Response:
         user_id=invitee_id,
         watch_url=watch_url,
     )
+    announced = await _announce_watch_party_promotion(
+        room,
+        invitee_id=invitee_id,
+    )
 
     state = await _state_payload(room, uid)
     state["invite"] = {
         "user_id": invitee_id,
+        "display_name": str(target.get("display_name") or invitee_id),
         "watch_url": watch_url,
         "dm_sent": dm_sent,
+        "announced": announced,
     }
     return web.json_response(state)
 
