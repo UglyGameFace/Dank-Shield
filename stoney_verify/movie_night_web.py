@@ -659,6 +659,12 @@ def _candidate_web_metadata(candidate: Any) -> dict[str, Any]:
         )
     except Exception:
         tmdb_id = 0
+    if (
+        not media_type
+        and tmdb_id > 0
+        and str(source.get("catalog_provider") or "").strip().lower() == "tmdb"
+    ):
+        media_type = "movie"
     try:
         series_id = max(0, int(source.get("series_id") or 0))
     except Exception:
