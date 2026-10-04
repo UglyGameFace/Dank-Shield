@@ -1044,7 +1044,7 @@ def test_private_watch_page_has_real_invite_to_watch_party_flow() -> None:
     assert 'id="inviteModal"' in html
     assert '"/movie/"+BOOT.roomId+"/invite-options?q="' in html
     assert '"/movie/"+BOOT.roomId+"/promote"' in html
-    assert "convert this Private Session into a Watch Party" in html
+    assert "turn this Private Session into a Watch Party" in html
     assert 'inviteWatchParty.hidden=!(s.is_host && privateMode)' in html
     assert "privateTapSkip" in html
 
