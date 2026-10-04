@@ -32,7 +32,6 @@ from .cinema_library_service import (
     list_notifications,
     list_user_media,
     mark_notification_read,
-    record_progress,
     set_watchlist,
     update_cinema_preferences,
 )
@@ -1231,29 +1230,6 @@ async def cinema_library_api(request: web.Request) -> web.Response:
                 "adult": bool(details.media.adult),
             },
             enabled=bool(payload.get("enabled", True)),
-        )
-        return web.json_response({"ok": True, "item": row})
-
-    if action == "progress":
-        row = await record_progress(
-            user_id,
-            media_type=str(payload.get("media_type") or ""),
-            tmdb_id=int(payload.get("tmdb_id") or 0),
-            title=str(payload.get("title") or ""),
-            progress_seconds=float(payload.get("progress_seconds") or 0.0),
-            duration_seconds=float(payload.get("duration_seconds") or 0.0),
-            season_number=int(payload.get("season_number") or 0),
-            episode_number=int(payload.get("episode_number") or 0),
-            metadata=(
-                payload.get("metadata")
-                if isinstance(payload.get("metadata"), Mapping)
-                else {}
-            ),
-            completed=(
-                bool(payload.get("completed"))
-                if "completed" in payload
-                else None
-            ),
         )
         return web.json_response({"ok": True, "item": row})
 
