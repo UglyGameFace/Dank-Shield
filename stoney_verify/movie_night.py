@@ -182,6 +182,7 @@ class MovieNightRoom:
     playback_state: str = "paused"
     playback_position: float = 0.0
     playback_anchor_monotonic: float = 0.0
+    playback_rate: float = 1.0
     viewers: dict[int, ViewerState] = field(default_factory=dict)
     votes: dict[str, RoomVote] = field(default_factory=dict)
     candidates: dict[str, MovieCandidate] = field(default_factory=dict)
@@ -197,10 +198,11 @@ class MovieNightRoom:
         if self.playback_state != "playing":
             return max(0.0, float(self.playback_position))
         current = time.monotonic() if now is None else float(now)
+        rate = min(2.0, max(0.5, float(self.playback_rate or 1.0)))
         return max(
             0.0,
             float(self.playback_position)
-            + max(0.0, current - float(self.playback_anchor_monotonic)),
+            + max(0.0, current - float(self.playback_anchor_monotonic)) * rate,
         )
 
 
@@ -1462,6 +1464,19 @@ class MovieNightManager:
             room.playback_anchor_monotonic = now
         elif action == "seek":
             room.playback_position = max(0.0, float(payload.get("seconds", 0.0) or 0.0))
+            room.playback_anchor_monotonic = now
+        elif action == "speed":
+            position = room.current_position(now)
+            try:
+                requested = float(payload.get("rate", 1.0) or 1.0)
+            except Exception:
+                requested = 1.0
+            allowed = (0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0)
+            room.playback_position = position
+            room.playback_rate = min(
+                allowed,
+                key=lambda value: abs(value - requested),
+            )
             room.playback_anchor_monotonic = now
         elif action in {"skip", "play_next"}:
             if room.queue:
