@@ -292,6 +292,7 @@ def test_catalog_search_uses_visual_tmdb_result_browser() -> None:
     assert str(embed.thumbnail.url).endswith("/us-office.jpg")
     assert str(embed.image.url).endswith("/us-office.jpg")
     assert "Result 1 of 2" in str(embed.footer.text)
+    assert "Dank Cinema" in str(embed.footer.text)
     assert {
         "Previous",
         "Select This Title",
