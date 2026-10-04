@@ -28,7 +28,6 @@ from .cinema_catalog import (
 )
 from .cinema_library_service import (
     CinemaStorageUnavailable,
-    create_notification,
     get_cinema_user,
     library_snapshot,
     list_notifications,
