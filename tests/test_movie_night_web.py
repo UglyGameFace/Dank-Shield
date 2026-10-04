@@ -1119,17 +1119,25 @@ def test_web_promote_endpoint_keeps_room_and_returns_target_watch_link(monkeypat
     monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
     monkeypatch.setattr(
         movie_night_web,
-        "_discord_invite_options",
-        lambda _room, _query="", limit=20: [
+        "_discord_invite_target",
+        lambda _room, user_id: (
             {
                 "user_id": 20,
                 "display_name": "Alice",
                 "username": "alice",
                 "avatar_url": "",
             }
-        ],
+            if int(user_id) == 20
+            else None
+        ),
     )
     monkeypatch.setattr(movie_night_web, "_dm_watch_party_invite", dm_invite)
+
+    async def announce(_room, *, invitee_id):
+        assert invitee_id == 20
+        return True
+
+    monkeypatch.setattr(movie_night_web, "_announce_watch_party_promotion", announce)
     monkeypatch.setattr(
         movie_night_web,
         "movie_night_watch_url",
@@ -1148,6 +1156,8 @@ def test_web_promote_endpoint_keeps_room_and_returns_target_watch_link(monkeypat
     assert room.playback_position == 42.0
     assert payload["private"] is False
     assert payload["invite"]["dm_sent"] is True
+    assert payload["invite"]["announced"] is True
+    assert payload["invite"]["display_name"] == "Alice"
     assert payload["invite"]["watch_url"].endswith("uid=20")
 
 
