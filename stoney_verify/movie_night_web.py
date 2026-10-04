@@ -2109,7 +2109,7 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
           alt=""
           aria-hidden="true"
           width="320"
-          height="256"
+          height="245"
           decoding="async"
           fetchpriority="high"
         >
@@ -2118,7 +2118,7 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
           src="/movie/assets/dank-cinema-brand-wordmark.webp?v={_BRAND_ASSET_VERSION}"
           alt="Dank Cinema — A feature of The 420 Lobby"
           width="1040"
-          height="250"
+          height="289"
           decoding="async"
           fetchpriority="high"
         >
