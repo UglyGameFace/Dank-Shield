@@ -633,6 +633,12 @@ button {{ -webkit-tap-highlight-color:transparent; }}
   color:#edf4f1; background:rgba(12,24,20,.74);
 }}
 .icon-button svg {{ width:21px; height:21px; }}
+.bell-button {{ position:relative; }}
+.bell-button::after {{
+  content:""; position:absolute; top:8px; right:8px;
+  width:7px; height:7px; border-radius:50%; background:var(--lime);
+  box-shadow:0 0 9px rgba(167,255,100,.72);
+}}
 .profile-dot {{
   width:44px; height:44px; border-radius:50%;
   border:1px solid var(--line-strong);
@@ -873,8 +879,11 @@ video {{
       </div>
     </div>
     <div class="header-actions">
-      <button class="icon-button search-only" type="button" aria-label="Search" title="Movie search lives in Discord">
+      <button class="icon-button search-only" type="button" data-header-action="search" aria-label="Search" title="Movie search lives in Discord">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      </button>
+      <button class="icon-button bell-button" type="button" data-header-action="notifications" aria-label="Cinema notifications" title="Cinema notifications">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>
       </button>
       <div class="profile-dot" aria-label="Dank Cinema profile"></div>
     </div>
@@ -1563,6 +1572,13 @@ document.getElementById("passHost").onclick=()=>{{
 document.getElementById("manageQueue").onclick=()=>{{
   notice.textContent="Add, remove, and reorder titles from the Dank Cinema panel in Discord.";
 }};
+for(const action of document.querySelectorAll("[data-header-action]")) {{
+  action.addEventListener("click",()=>{{
+    notice.textContent=action.dataset.headerAction==="search"
+      ?"Use /movie in Discord for full Dank Cinema search."
+      :"Cinema notifications are managed from your Discord server.";
+  }});
+}}
 for(const item of document.querySelectorAll("[data-nav]")) {{
   item.addEventListener("click",()=>{{
     if(item.dataset.nav==="movie-nights") return;
