@@ -3588,17 +3588,25 @@ class _CinemaCatalogResultView(_OwnedView):
         self.raw_query = _compact(raw_query)
         self.catalog = tuple(catalog)
         self.index = max(0, min(int(index), max(0, len(self.catalog) - 1)))
+        self._sync_navigation_state()
+
+    def _sync_navigation_state(self) -> None:
         self.previous.disabled = self.index <= 0
         self.next.disabled = self.index >= len(self.catalog) - 1
 
-    def _replacement(self, index: int) -> "_CinemaCatalogResultView":
-        return _CinemaCatalogResultView(
-            owner_id=self.owner_id,
-            room_id=self.room_id,
-            raw_query=self.raw_query,
-            catalog=self.catalog,
-            index=index,
-        )
+    def _set_index(self, index: int) -> None:
+        self.index = max(0, min(int(index), max(0, len(self.catalog) - 1)))
+        self._sync_navigation_state()
+
+    async def _show_index(
+        self,
+        interaction: discord.Interaction,
+        index: int,
+    ) -> None:
+        self._set_index(index)
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        await _replace(interaction, embed=self._embed(), view=self)
 
     def _embed(self) -> discord.Embed:
         return _catalog_result_embed(
@@ -3621,8 +3629,7 @@ class _CinemaCatalogResultView(_OwnedView):
         button: discord.ui.Button,
     ) -> None:
         _ = button
-        view = self._replacement(self.index - 1)
-        await _replace(interaction, embed=view._embed(), view=view)
+        await self._show_index(interaction, self.index - 1)
 
     @discord.ui.button(
         label="Select This Title",
@@ -3656,8 +3663,7 @@ class _CinemaCatalogResultView(_OwnedView):
         button: discord.ui.Button,
     ) -> None:
         _ = button
-        view = self._replacement(self.index + 1)
-        await _replace(interaction, embed=view._embed(), view=view)
+        await self._show_index(interaction, self.index + 1)
 
     @discord.ui.button(
         label="Use Exact Search Text",
