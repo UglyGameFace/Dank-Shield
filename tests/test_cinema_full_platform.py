@@ -294,7 +294,11 @@ def test_cinema_site_play_requires_existing_host_room(monkeypatch) -> None:
         stream_token="",
     )
     monkeypatch.setattr(cinema_site, "get_movie_night_manager", lambda: manager)
-    monkeypatch.setattr(cinema_site, "_site_identity", lambda _request: (100, 99))
+
+    async def site_identity(_request):
+        return (100, 99)
+
+    monkeypatch.setattr(cinema_site, "_site_identity", site_identity)
 
     class Request:
         async def json(self):
