@@ -437,6 +437,11 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
     assert 'class="wordmark"' in html
     assert 'class="brand-mark"' in html
     assert "The 420 Lobby" in html
+    assert 'family=Lacquer' in html
+    assert 'viewBox="0 0 132 106"' in html
+    assert 'id="videoStage"' in html
+    assert 'screen.orientation.lock("landscape")' in html
+    assert 'screen.orientation.unlock()' in html
     assert 'id="cast"' in html
     assert "cast_sender.js?loadCastFramework=1" in html
     assert "history.replaceState" not in html
@@ -444,8 +449,10 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
     assert "requestSession()" in html
     assert "session.loadMedia(request)" in html
     assert "lastState.cast_stream_url" in html
-    assert "video.remote.watchAvailability" in html
-    assert "remotePlaybackAvailable" in html
+    assert "CAST_STATE_CHANGED" in html
+    assert "NO_DEVICES_AVAILABLE" in html
+    assert "video.remote.watchAvailability" not in html
+    assert "remotePlaybackAvailable" not in html
     assert 'controlslist="nodownload"' in html
     assert '<video id="video" controls' not in html
     assert '<video id="video" playsinline preload="metadata" controls>' not in html
@@ -477,6 +484,7 @@ def test_candidate_web_metadata_allows_only_tmdb_artwork() -> None:
         "year": 2026,
         "overview": "Example overview",
         "poster_url": "https://image.tmdb.org/t/p/w342/example.jpg",
+        "backdrop_url": "",
     }
 
     candidate.metadata["poster_url"] = "https://example.invalid/poster.jpg"
@@ -495,6 +503,7 @@ def test_candidate_web_metadata_reads_canonical_catalog_envelope() -> None:
                 "year": 2024,
                 "overview": "Art the Clown returns.",
                 "poster_url": "https://image.tmdb.org/t/p/w342/terrifier3.jpg",
+                "backdrop_url": "https://image.tmdb.org/t/p/w780/terrifier3-bg.jpg",
             },
         },
     )
@@ -504,6 +513,7 @@ def test_candidate_web_metadata_reads_canonical_catalog_envelope() -> None:
         "year": 2024,
         "overview": "Art the Clown returns.",
         "poster_url": "https://image.tmdb.org/t/p/w342/terrifier3.jpg",
+        "backdrop_url": "https://image.tmdb.org/t/p/w780/terrifier3-bg.jpg",
     }
 
 
@@ -516,11 +526,14 @@ def test_candidate_web_metadata_catalog_artwork_stays_tmdb_only() -> None:
                 "year": 2026,
                 "overview": "Catalog metadata.",
                 "poster_url": "https://example.invalid/not-tmdb.jpg",
+                "backdrop_url": "https://example.invalid/not-tmdb-bg.jpg",
             },
         },
     )
 
-    assert movie_night_web._candidate_web_metadata(candidate)["poster_url"] == ""
+    metadata = movie_night_web._candidate_web_metadata(candidate)
+    assert metadata["poster_url"] == ""
+    assert metadata["backdrop_url"] == ""
 
 
 def test_movie_night_watch_csp_allows_only_tmdb_remote_images(monkeypatch) -> None:
@@ -589,3 +602,50 @@ def test_cast_stream_uses_separate_consumer_identity() -> None:
     assert 'cast_consumer_key = f"cast:' in source
     assert '"cast_stream_url": cast_stream_url' in source
     assert "consumer_key=cast_consumer_key" in source
+
+
+
+def test_dank_cinema_player_uses_real_tmdb_backdrop_and_landscape_fullscreen() -> None:
+    html = movie_night_web._watch_html(
+        "room-mockup-parity",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert "--backdrop-image" in html
+    assert "movie.backdrop_url||movie.poster_url" in html
+    assert "video.poster=backdrop" in html
+    assert 'document.getElementById("videoStage")' in html
+    assert 'requestFullscreen({navigationUI:"hide"})' in html
+    assert 'screen.orientation.lock("landscape")' in html
+    assert "document.fullscreenElement" in html
+
+
+def test_dank_cinema_cast_button_requires_real_google_cast_device_state() -> None:
+    html = movie_night_web._watch_html(
+        "room-real-cast",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert "castContext.getCastState()" in html
+    assert "CastContextEventType.CAST_STATE_CHANGED" in html
+    assert "CastState.NO_DEVICES_AVAILABLE" in html
+    assert "typeof castContext.requestSession" in html
+    assert "setCastVisible(false)" in html
+    assert "video.remote.prompt" not in html
+    assert "webkitShowPlaybackTargetPicker" not in html
+
+
+
+def test_dank_cinema_polling_does_not_show_broken_sync_on_one_transient_fetch() -> None:
+    html = movie_night_web._watch_html(
+        "room-transient-fetch",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert "stateFetchFailures+=1" in html
+    assert "stateFetchFailures>=3" in html
+    assert "Sync connection lost. Reconnecting…" in html
+    assert 'notice.textContent="Sync error: "+message' not in html

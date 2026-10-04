@@ -202,6 +202,7 @@ def _candidate_web_metadata(candidate: Any) -> dict[str, Any]:
         "year": year,
         "overview": str(source.get("overview") or "").strip()[:1200],
         "poster_url": _safe_movie_art_url(source.get("poster_url")),
+        "backdrop_url": _safe_movie_art_url(source.get("backdrop_url")),
     }
 
 
@@ -602,10 +603,10 @@ def _watch_html(room_id: str, uid: int, query: str) -> str:
 <meta name="color-scheme" content="dark">
 <title>Dank Cinema • The 420 Lobby</title>
 <style>
-@import url("https://fonts.googleapis.com/css2?family=Permanent+Marker&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=Lacquer&display=swap");
 :root {{
   color-scheme:dark;
-  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-family:"Inter",ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
   --bg:#06100d;
   --panel:#0b1714;
   --panel-2:#0f1d19;
@@ -633,50 +634,64 @@ button,input {{ font:inherit; }}
 button {{ -webkit-tap-highlight-color:transparent; }}
 .shell {{ width:min(1120px,100%); margin:0 auto; padding:0 18px 140px; }}
 .site-header {{ position:relative; z-index:20; padding:18px 0 6px; }}
-.brand-row {{ display:flex; align-items:center; justify-content:space-between; gap:12px; }}
-.brand {{ display:flex; align-items:center; gap:10px; min-width:0; }}
+.brand-row {{ display:flex; align-items:center; justify-content:space-between; gap:16px; }}
+.brand {{ display:flex; align-items:center; gap:12px; min-width:0; }}
 .brand-mark {{
-  width:68px; height:68px; flex:0 0 auto;
-  filter:drop-shadow(0 0 16px rgba(132,255,80,.18));
+  width:112px; height:92px; flex:0 0 auto;
+  overflow:visible;
+  filter:drop-shadow(0 0 18px rgba(126,255,65,.24));
 }}
 .brand-copy {{ min-width:0; }}
 .wordmark {{
   margin:0;
   display:flex;
-  align-items:baseline;
+  align-items:flex-end;
   gap:8px;
-  font-family:"Permanent Marker","Segoe Print","Brush Script MT","Arial Black",sans-serif;
-  font-size:clamp(1.62rem,6.6vw,2.55rem);
-  font-weight:900;
-  letter-spacing:-.055em;
-  line-height:.9;
+  font-family:"Lacquer","Arial Black",Impact,sans-serif;
+  font-size:clamp(2.15rem,7.8vw,3.65rem);
+  font-weight:400;
+  letter-spacing:-.06em;
+  line-height:.82;
   text-transform:uppercase;
-  transform:rotate(-1deg);
-  text-shadow:1px 1px 0 rgba(255,255,255,.06),0 0 20px rgba(125,255,70,.08);
+  transform:rotate(-1.2deg);
+  filter:drop-shadow(0 4px 0 rgba(0,0,0,.38));
 }}
-.wordmark .dank {{ color:#fff; }}
-.wordmark .cinema {{ color:var(--lime); }}
+.wordmark span {{ position:relative; display:inline-block; }}
+.wordmark .dank {{
+  color:#fff;
+  text-shadow:-1px 1px 0 rgba(255,255,255,.22),2px 3px 0 rgba(0,0,0,.52);
+}}
+.wordmark .cinema {{
+  color:#9cff5c;
+  text-shadow:0 0 20px rgba(142,255,80,.14),2px 3px 0 rgba(0,0,0,.5);
+}}
+.wordmark .cinema::after {{
+  content:"";
+  position:absolute;
+  right:8%;
+  bottom:-12px;
+  width:5px;
+  height:19px;
+  border-radius:0 0 6px 6px;
+  background:#9cff5c;
+  box-shadow:-34px 6px 0 -1px #9cff5c, -78px 2px 0 -1px #9cff5c;
+  opacity:.86;
+}}
 .subbrand {{
-  margin-top:7px;
+  margin-top:10px;
   display:flex;
   align-items:center;
-  gap:6px;
-  color:#c2cbc7;
+  gap:7px;
+  color:#d3d9d6;
   font-size:.68rem;
   font-weight:800;
-  letter-spacing:.13em;
+  letter-spacing:.18em;
   text-transform:uppercase;
 }}
-.subbrand strong {{ color:var(--lime); letter-spacing:.02em; text-transform:none; font-size:.76rem; }}
-.header-status {{
-  border:1px solid rgba(255,255,255,.1);
-  border-radius:999px;
-  padding:8px 11px;
-  color:#b8c3be;
-  background:rgba(8,18,14,.68);
-  font-size:.72rem;
-  font-weight:800;
+.subbrand .discord-mark {{
+  width:19px;height:15px;display:inline-block;color:#7389ff;
 }}
+.subbrand strong {{ color:var(--lime); letter-spacing:.01em; text-transform:none; font-size:.79rem; }}
 .nav {{
   display:flex; align-items:center; gap:5px;
   overflow-x:auto; scrollbar-width:none; margin:15px -4px 9px; padding:0 4px 5px;
@@ -702,15 +717,59 @@ button {{ -webkit-tap-highlight-color:transparent; }}
   background:#000;
   box-shadow:var(--shadow);
 }}
-.video-stage {{ position:relative; aspect-ratio:16/9; min-height:228px; background:#000; }}
+.video-stage {{
+  position:relative;
+  aspect-ratio:16/9;
+  min-height:228px;
+  overflow:hidden;
+  background-color:#000;
+  background-image:
+    linear-gradient(180deg,rgba(0,0,0,.06),rgba(0,0,0,.14)),
+    var(--backdrop-image,none);
+  background-size:cover;
+  background-position:center;
+}}
+.video-stage::before {{
+  content:"";
+  position:absolute; inset:0;
+  pointer-events:none;
+  background:linear-gradient(180deg,rgba(0,0,0,.04) 0%,rgba(0,0,0,.08) 48%,rgba(0,0,0,.38) 100%);
+  z-index:1;
+}}
 video {{
+  position:relative; z-index:0;
   display:block; width:100%; height:100%;
-  object-fit:contain; background:#000;
+  object-fit:contain; background:transparent;
+}}
+.video-stage:fullscreen,
+.video-stage:-webkit-full-screen {{
+  width:100vw;
+  height:100vh;
+  min-height:100vh;
+  max-height:none;
+  aspect-ratio:auto;
+  border-radius:0;
+  background:#000;
+}}
+.video-stage:fullscreen video,
+.video-stage:-webkit-full-screen video {{
+  width:100vw;
+  height:100vh;
+  object-fit:contain;
+}}
+.video-stage:fullscreen .stage-top,
+.video-stage:-webkit-full-screen .stage-top {{
+  inset:calc(12px + env(safe-area-inset-top)) 18px auto 18px;
+}}
+.video-stage:fullscreen .player-chrome,
+.video-stage:-webkit-full-screen .player-chrome {{
+  padding:52px max(22px,env(safe-area-inset-right)) calc(18px + env(safe-area-inset-bottom)) max(22px,env(safe-area-inset-left));
 }}
 .stage-top {{
   position:absolute; inset:12px 12px auto 12px;
   display:flex; align-items:center; justify-content:space-between; gap:8px;
   pointer-events:none;
+  z-index:4;
 }}
 .room-pill {{
   display:flex; align-items:center; gap:8px;
@@ -729,6 +788,7 @@ video {{
   border-radius:50%; border:1px solid rgba(255,255,255,.18);
   color:#fff; background:rgba(3,10,8,.72); backdrop-filter:blur(12px);
 }}
+.cast[hidden] {{ display:none !important; }}
 .cast:disabled {{ opacity:.35; }}
 .cast.connected {{ color:var(--lime); border-color:var(--line-strong); }}
 .cast svg {{ width:23px;height:23px; }}
@@ -738,14 +798,17 @@ video {{
   border-radius:50%; border:2px solid rgba(255,255,255,.6);
   color:#fff; background:rgba(5,12,10,.5); backdrop-filter:blur(8px);
   box-shadow:0 10px 38px rgba(0,0,0,.32);
+  z-index:4;
 }}
 .center-play svg {{ width:34px;height:34px; }}
 .player-chrome {{
   position:absolute; inset:auto 0 0;
   padding:44px 14px 13px;
-  background:linear-gradient(180deg,transparent 0%,rgba(0,0,0,.72) 42%,rgba(0,0,0,.93) 100%);
+  background:linear-gradient(180deg,transparent 0%,rgba(0,0,0,.58) 32%,rgba(0,0,0,.94) 100%);
+  z-index:4;
 }}
-.timeline-row {{ display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:10px; font-size:.72rem; font-weight:750; }}
+.timeline-row {{ display:block; }}
+.time-row {{ display:flex;align-items:center;justify-content:space-between;margin-top:6px;font-size:.72rem;font-weight:750; }}
 .timeline {{
   width:100%; appearance:none; height:4px; border-radius:999px; outline:none;
   background:linear-gradient(90deg,var(--lime) 0 var(--progress,0%),rgba(255,255,255,.38) var(--progress,0%) 100%);
@@ -855,9 +918,13 @@ video {{
 .sr-only {{ position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }}
 @media (max-width:640px) {{
   .shell {{ padding-left:14px;padding-right:14px; }}
-  .brand-mark {{ width:58px;height:58px; }}
+  .brand-mark {{ width:86px;height:72px; }}
+  .brand {{ gap:8px; }}
+  .wordmark {{ font-size:clamp(1.7rem,8.4vw,2.45rem);gap:5px; }}
+  .subbrand {{ margin-top:7px;font-size:.54rem;letter-spacing:.13em;gap:4px; }}
+  .subbrand strong {{ font-size:.66rem; }}
   .nav-item {{ padding:9px 11px;font-size:.78rem; }}
-  .video-stage {{ min-height:215px; }}
+  .video-stage {{ min-height:0; }}
   .center-play {{ width:72px;height:72px; }}
   .player-chrome {{ padding-left:10px;padding-right:10px; }}
   .volume {{ display:none; }}
@@ -878,27 +945,34 @@ video {{
 <header class="site-header">
   <div class="brand-row">
     <div class="brand">
-      <svg class="brand-mark" viewBox="0 0 96 96" aria-hidden="true">
+      <svg class="brand-mark" viewBox="0 0 132 106" aria-hidden="true">
         <defs>
-          <filter id="glow"><feGaussianBlur stdDeviation="1.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+          <filter id="brandGlow"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
         </defs>
-        <path d="M18 25 27 9l9 10L48 5l9 14 12-10 7 18" fill="none" stroke="#a7ff64" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
-        <path d="M13 60c7-27 55-31 69-5-5 25-54 34-69 5Z" fill="#0e1a17" stroke="#eef5f1" stroke-width="4"/>
-        <circle cx="48" cy="55" r="18" fill="#192620" stroke="#a7ff64" stroke-width="3"/>
-        <circle cx="48" cy="55" r="4" fill="#eef5f1"/>
-        <circle cx="48" cy="43" r="4" fill="#eef5f1"/>
-        <circle cx="59" cy="51" r="4" fill="#eef5f1"/>
-        <circle cx="55" cy="63" r="4" fill="#eef5f1"/>
-        <circle cx="41" cy="64" r="4" fill="#eef5f1"/>
-        <circle cx="36" cy="51" r="4" fill="#eef5f1"/>
-        <path d="M10 69c18 10 58 10 76-1M21 78c18 9 41 8 57-1" fill="none" stroke="#79ef45" stroke-width="3" stroke-linecap="round"/>
+        <g fill="none" stroke="#61d52f" stroke-width="4.5" stroke-linecap="round" opacity=".68" filter="url(#brandGlow)">
+          <path d="M18 55c-13-12-6-25 10-21-10-14 1-25 15-16-1-17 16-21 24-7 8-13 25-9 24 8 15-10 27 2 17 16 17-3 23 15 9 25"/>
+          <path d="M18 70c-14 3-13 17 2 18M112 66c15 1 17 16 3 20"/>
+        </g>
+        <path d="M42 22 49 7l11 10 10-14 8 15 15-10 2 20" fill="none" stroke="#9cff5c" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="49" cy="7" r="3.2" fill="#9cff5c"/><circle cx="70" cy="3" r="3.2" fill="#9cff5c"/><circle cx="93" cy="8" r="3.2" fill="#9cff5c"/>
+        <path d="M25 75c7-34 70-43 84-7-10 26-68 31-84 7Z" fill="#0a0f0d" stroke="#f4f7f5" stroke-width="4"/>
+        <circle cx="67" cy="61" r="24" fill="#e7e9e8" stroke="#0b0e0d" stroke-width="4"/>
+        <circle cx="67" cy="61" r="5" fill="#101311"/>
+        <circle cx="67" cy="45" r="5.5" fill="#101311"/>
+        <circle cx="82" cy="56" r="5.5" fill="#101311"/>
+        <circle cx="76" cy="74" r="5.5" fill="#101311"/>
+        <circle cx="57" cy="74" r="5.5" fill="#101311"/>
+        <circle cx="51" cy="56" r="5.5" fill="#101311"/>
+        <path d="M20 82c24 14 75 14 97-2M31 93c22 10 54 10 76-1" fill="none" stroke="#9cff5c" stroke-width="4" stroke-linecap="round"/>
       </svg>
       <div class="brand-copy">
         <h1 class="wordmark"><span class="dank">Dank</span><span class="cinema">Cinema</span></h1>
-        <div class="subbrand">A feature of <strong>☁ The 420 Lobby</strong></div>
+        <div class="subbrand">A feature of
+          <svg class="discord-mark" viewBox="0 0 24 18" aria-hidden="true"><path fill="currentColor" d="M19.8 2.1A16 16 0 0 0 15.8.9l-.5 1a14 14 0 0 0-6.6 0l-.5-1a16 16 0 0 0-4 1.2C1.7 5.8.9 9.4 1.2 13c2.1 1.6 4.1 2.5 6 3.1l1.5-2c-.8-.3-1.6-.7-2.3-1.2l.6-.5c4.4 2 9.2 2 13.6 0l.7.5c-.8.5-1.5.9-2.4 1.2l1.5 2c1.9-.6 3.9-1.5 6-3.1.4-4.1-.7-7.7-3.1-10.9ZM8.5 11.1c-1.3 0-2.4-1.2-2.4-2.6S7.2 6 8.5 6s2.4 1.2 2.4 2.6-1.1 2.5-2.4 2.5Zm7 0c-1.3 0-2.4-1.2-2.4-2.6S14.2 6 15.5 6s2.4 1.2 2.4 2.6-1.1 2.5-2.4 2.5Z"/></svg>
+          <strong>The 420 Lobby</strong>
+        </div>
       </div>
     </div>
-    <div class="header-status" id="headerStatus">Connecting…</div>
   </div>
   <nav class="nav" aria-label="Dank Cinema">
     <button class="nav-item active" type="button" data-nav="theater">
@@ -918,7 +992,7 @@ video {{
 
 <main>
   <section class="theater" aria-label="Dank Cinema player">
-    <div class="video-stage">
+    <div class="video-stage" id="videoStage">
       <video id="video" playsinline preload="metadata" controlslist="nodownload" aria-label="Dank Cinema video"></video>
       <div class="stage-top">
         <div class="room-pill"><span class="live-dot"></span><span id="roomMode">Movie Night</span><span>│</span><span id="role">Connecting…</span></div>
@@ -931,9 +1005,8 @@ video {{
       </button>
       <div class="player-chrome">
         <div class="timeline-row">
-          <span id="currentTime">0:00</span>
           <input class="timeline" id="timeline" type="range" min="0" max="1000" value="0" aria-label="Playback position">
-          <span id="duration">0:00</span>
+          <div class="time-row"><span id="currentTime">0:00</span><span id="duration">0:00</span></div>
         </div>
         <div class="control-row">
           <button class="player-button" id="rewind10" type="button" aria-label="Back 10 seconds">
@@ -1057,6 +1130,7 @@ let lastJoinRetargetAt=0;
 let lastHardSyncSeekAt=0;
 let streamRetryTimer=null;
 let streamRetryAttempt=0;
+let stateFetchFailures=0;
 let attachedStreamUrl="";
 let hostSheetDismissed=false;
 const SOFT_DRIFT_START=0.35;
@@ -1194,8 +1268,6 @@ function renderSiteState(s) {{
   document.getElementById("endLabel").textContent=s.private?"End Private Session":"End Movie Night";
   document.getElementById("hostSheet").classList.toggle("show",!!s.is_host && !hostSheetDismissed);
   document.getElementById("healthText").textContent="Stream Health: "+streamHealthLabel(s);
-  document.getElementById("headerStatus").textContent=
-    (s.private?"Private":"Movie Night")+" • "+String(s.viewer_count||0)+" watching";
   document.getElementById("hostPresence").textContent=s.host_active?"Host online":"Host away";
   document.getElementById("sessionMode").textContent=s.private?"Private Session":"Movie Night";
   document.getElementById("sessionViewers").textContent=String(s.viewer_count||0);
@@ -1211,6 +1283,15 @@ function renderSiteState(s) {{
   overview.hidden=!movie.overview;
   const poster=document.getElementById("poster");
   const posterWrap=document.getElementById("posterWrap");
+  const stage=document.getElementById("videoStage");
+  const backdrop=String(movie.backdrop_url||movie.poster_url||"");
+  if(backdrop.startsWith("https://image.tmdb.org/")) {{
+    stage.style.setProperty("--backdrop-image",'url("'+backdrop.replace(/"/g,"%22")+'")');
+    if(video.poster!==backdrop) video.poster=backdrop;
+  }} else {{
+    stage.style.removeProperty("--backdrop-image");
+    video.removeAttribute("poster");
+  }}
   if(String(movie.poster_url||"").startsWith("https://image.tmdb.org/")) {{
     if(poster.src!==movie.poster_url) poster.src=movie.poster_url;
     poster.alt=(movie.title||s.title||"Movie")+" poster";
@@ -1472,7 +1553,13 @@ async function applyState(s) {{
 }}
 async function poll() {{
   if(terminated) return;
-  try {{ await applyState(await jsonFetch("/movie/"+BOOT.roomId+"/state")); }}
+  try {{
+    const state=await jsonFetch("/movie/"+BOOT.roomId+"/state");
+    stateFetchFailures=0;
+    if(notice.textContent.startsWith("Sync connection lost"))
+      notice.textContent="";
+    await applyState(state);
+  }}
   catch(err) {{
     const message=String(err.message||err);
     if(message.includes("Movie Night room not found")) {{
@@ -1481,7 +1568,9 @@ async function poll() {{
       notice.textContent="Movie Night has ended.";
       return;
     }}
-    notice.textContent="Sync error: "+message;
+    stateFetchFailures+=1;
+    if(stateFetchFailures>=3)
+      notice.textContent="Sync connection lost. Reconnecting…";
   }}
 }}
 async function heartbeat(forceSync=false) {{
@@ -1583,14 +1672,38 @@ document.getElementById("volume").addEventListener("input",event=>{{
 }});
 document.getElementById("mute").onclick=()=>{{ video.muted=!video.muted; }};
 video.addEventListener("contextmenu",event=>event.preventDefault());
-document.getElementById("fullscreen").onclick=async()=>{{
-  const target=document.querySelector(".theater");
+async function enterTheaterFullscreen() {{
+  const target=document.getElementById("videoStage");
   try {{
-    if(document.fullscreenElement) await document.exitFullscreen();
-    else if(target?.requestFullscreen) await target.requestFullscreen();
-    else if(typeof video.webkitEnterFullscreen==="function") video.webkitEnterFullscreen();
-  }} catch(err) {{ notice.textContent="Fullscreen is not available here."; }}
-}};
+    if(document.fullscreenElement) {{
+      await document.exitFullscreen();
+      return;
+    }}
+    if(target?.requestFullscreen) {{
+      await target.requestFullscreen({{navigationUI:"hide"}});
+      if(screen.orientation && typeof screen.orientation.lock==="function") {{
+        try {{ await screen.orientation.lock("landscape"); }}
+        catch(_) {{
+          notice.textContent="Fullscreen is active. This browser blocked automatic landscape rotation.";
+        }}
+      }}
+      return;
+    }}
+    if(typeof video.webkitEnterFullscreen==="function") {{
+      video.webkitEnterFullscreen();
+      return;
+    }}
+    notice.textContent="Fullscreen is not supported by this browser.";
+  }} catch(err) {{
+    notice.textContent="Fullscreen could not start: "+String(err?.message||err);
+  }}
+}}
+document.getElementById("fullscreen").onclick=enterTheaterFullscreen;
+document.addEventListener("fullscreenchange",()=>{{
+  if(!document.fullscreenElement && screen.orientation && typeof screen.orientation.unlock==="function") {{
+    try {{ screen.orientation.unlock(); }} catch(_) {{}}
+  }}
+}});
 document.getElementById("closeHostSheet").onclick=()=>{{
   hostSheetDismissed=true;
   document.getElementById("hostSheet").classList.remove("show");
@@ -1636,57 +1749,80 @@ for(const tab of document.querySelectorAll("[data-panel]")) {{
 
 const castButton=document.getElementById("cast");
 let castContext=null;
+let castState="NO_DEVICES_AVAILABLE";
 let castActive=false;
 let castWasMuted=false;
 let castLastSyncAt=0;
-let remotePlaybackAvailable=false;
-const airPlayAvailable=typeof video.webkitShowPlaybackTargetPicker==="function";
 
 function setCastVisible(visible) {{
   castButton.hidden=!visible;
   castButton.disabled=!visible;
 }}
 function refreshCastAvailability() {{
-  const googleCastReady=!!(castContext && lastState?.cast_stream_url);
-  const nativeRemoteReady=!!(remotePlaybackAvailable || airPlayAvailable);
-  const supported=!!(
-    lastState?.stream_url &&
-    lastState?.cast_supported_media &&
-    (googleCastReady || nativeRemoteReady)
+  const noDevices=window.cast?.framework
+    ?cast.framework.CastState.NO_DEVICES_AVAILABLE
+    :"NO_DEVICES_AVAILABLE";
+  const realDeviceAvailable=!!(
+    castContext &&
+    typeof castContext.requestSession==="function" &&
+    castState &&
+    castState!==noDevices
   );
-  setCastVisible(supported);
+  setCastVisible(!!(
+    realDeviceAvailable &&
+    lastState?.cast_stream_url &&
+    lastState?.cast_supported_media
+  ));
 }}
 function initGoogleCast() {{
   try {{
-    if(!window.__dankCastApiAvailable || !window.cast?.framework || !window.chrome?.cast?.media) return false;
+    if(!window.__dankCastApiAvailable || !window.cast?.framework || !window.chrome?.cast?.media) {{
+      setCastVisible(false);
+      return false;
+    }}
     castContext=cast.framework.CastContext.getInstance();
     castContext.setOptions({{
       receiverApplicationId:chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
       autoJoinPolicy:chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED
     }});
+    castState=castContext.getCastState();
+    castContext.addEventListener(
+      cast.framework.CastContextEventType.CAST_STATE_CHANGED,
+      event=>{{
+        castState=event.castState;
+        refreshCastAvailability();
+      }}
+    );
     castContext.addEventListener(
       cast.framework.CastContextEventType.SESSION_STATE_CHANGED,
       event=>{{
         const state=String(event.sessionState||"");
         const connected=state.includes("STARTED")||state.includes("RESUMED");
-        if(!connected && state.includes("ENDED")) {{
+        if(connected) {{
+          castActive=true;
+          castButton.classList.add("connected");
+        }} else if(state.includes("ENDED") || state.includes("FAILED")) {{
           castActive=false;
           castButton.classList.remove("connected");
           video.muted=castWasMuted;
-          notice.textContent="Cast session ended.";
         }}
+        refreshCastAvailability();
       }}
     );
     refreshCastAvailability();
     return true;
   }} catch(_) {{
+    castContext=null;
+    castState="NO_DEVICES_AVAILABLE";
+    setCastVisible(false);
     return false;
   }}
 }}
 function castLoadCurrentMedia() {{
-  if(!castContext || !lastState?.cast_stream_url) return Promise.reject(new Error("No playable Cinema stream is ready."));
+  if(!castContext || !lastState?.cast_stream_url)
+    return Promise.reject(new Error("No playable Cinema stream is ready."));
   if(!lastState?.cast_supported_media)
-    return Promise.reject(new Error("This release uses a container Chromecast cannot play directly. Choose an MP4/WebM release to cast."));
+    return Promise.reject(new Error("This release cannot be played directly by Chromecast."));
   const session=castContext.getCurrentSession();
   if(!session) return Promise.reject(new Error("No Cast device is connected."));
   const mediaInfo=new chrome.cast.media.MediaInfo(
@@ -1694,11 +1830,11 @@ function castLoadCurrentMedia() {{
     lastState.media_content_type||"video/mp4"
   );
   const metadata=new chrome.cast.media.GenericMediaMetadata();
-  metadata.title=String(lastState.title||"Dank Cinema");
+  metadata.title=String(lastState.movie?.title||lastState.title||"Dank Cinema");
   metadata.subtitle="The 420 Lobby";
-  const poster=String(lastState.movie?.poster_url||"");
-  if(poster.startsWith("https://image.tmdb.org/"))
-    metadata.images=[new chrome.cast.Image(poster)];
+  const artwork=String(lastState.movie?.backdrop_url||lastState.movie?.poster_url||"");
+  if(artwork.startsWith("https://image.tmdb.org/"))
+    metadata.images=[new chrome.cast.Image(artwork)];
   mediaInfo.metadata=metadata;
   const request=new chrome.cast.media.LoadRequest(mediaInfo);
   request.currentTime=Math.max(0,Number(video.currentTime||lastState.position_seconds||0));
@@ -1706,14 +1842,15 @@ function castLoadCurrentMedia() {{
   return session.loadMedia(request);
 }}
 async function startGoogleCast() {{
-  if(!initGoogleCast()) throw new Error("Google Cast is not supported by this browser.");
+  if(!initGoogleCast() || castButton.hidden)
+    throw new Error("No Chromecast device is currently available in this browser.");
   await castContext.requestSession();
   await castLoadCurrentMedia();
   castWasMuted=video.muted;
   video.muted=true;
   castActive=true;
   castButton.classList.add("connected");
-  notice.textContent="Casting "+String(lastState?.title||"Dank Cinema")+". This page remains the sync controller.";
+  notice.textContent="Casting "+String(lastState?.movie?.title||lastState?.title||"Dank Cinema")+".";
 }}
 function syncCastToRoom(s) {{
   if(!castActive || !castContext) return;
@@ -1739,33 +1876,13 @@ function syncCastToRoom(s) {{
   }} catch(_) {{}}
 }}
 setCastVisible(false);
-if(video.remote && typeof video.remote.watchAvailability==="function") {{
-  try {{
-    video.remote.watchAvailability(available=>{{
-      remotePlaybackAvailable=!!available;
-      refreshCastAvailability();
-    }}).catch(()=>{{}});
-  }} catch(_) {{}}
-}}
 window.addEventListener("dank-cast-api",()=>initGoogleCast());
 setTimeout(()=>initGoogleCast(),1200);
 castButton.onclick=async()=>{{
-  try {{
-    if(castContext) {{
-      await startGoogleCast();
-      return;
-    }}
-    if(remotePlaybackAvailable && video.remote && typeof video.remote.prompt==="function") {{
-      await video.remote.prompt();
-      return;
-    }}
-    if(airPlayAvailable) {{
-      video.webkitShowPlaybackTargetPicker();
-      return;
-    }}
-    notice.textContent="No compatible casting target is available.";
-  }} catch(err) {{
-    notice.textContent=String(err?.message||"Casting could not start on this browser/device.");
+  try {{ await startGoogleCast(); }}
+  catch(err) {{
+    setCastVisible(false);
+    notice.textContent=String(err?.message||"Casting could not start.");
   }}
 }};
 document.getElementById("end").onclick=()=>{{

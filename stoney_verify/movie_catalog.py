@@ -19,6 +19,7 @@ import aiohttp
 _TMDB_SEARCH_URL = "https://api.themoviedb.org/3/search/movie"
 _TMDB_WATCH_URL = "https://api.themoviedb.org/3/movie/{movie_id}/watch/providers"
 _TMDB_POSTER_BASE = "https://image.tmdb.org/t/p/w342"
+_TMDB_BACKDROP_BASE = "https://image.tmdb.org/t/p/w780"
 _TMDB_TIMEOUT_SECONDS = 7.0
 _TMDB_MAX_RESPONSE_BYTES = 512 * 1024
 
@@ -32,6 +33,7 @@ class CatalogMovie:
     year: int = 0
     overview: str = ""
     poster_url: str = ""
+    backdrop_url: str = ""
     popularity: float = 0.0
     adult: bool = False
 
@@ -44,6 +46,7 @@ class CatalogMovie:
             "year": int(self.year),
             "overview": self.overview,
             "poster_url": self.poster_url,
+            "backdrop_url": self.backdrop_url,
             "popularity": float(self.popularity),
             "adult": bool(self.adult),
         }
@@ -117,6 +120,11 @@ def _tmdb_movie_from_item(item: Mapping[str, Any]) -> CatalogMovie | None:
     if poster_path.startswith("/") and len(poster_path) <= 200:
         poster_url = f"{_TMDB_POSTER_BASE}{poster_path}"
 
+    backdrop_path = str(item.get("backdrop_path") or "").strip()
+    backdrop_url = ""
+    if backdrop_path.startswith("/") and len(backdrop_path) <= 200:
+        backdrop_url = f"{_TMDB_BACKDROP_BASE}{backdrop_path}"
+
     try:
         popularity = max(0.0, float(item.get("popularity") or 0.0))
     except Exception:
@@ -130,6 +138,7 @@ def _tmdb_movie_from_item(item: Mapping[str, Any]) -> CatalogMovie | None:
         year=_safe_year(item.get("release_date")),
         overview=_clean_text(item.get("overview"), 900),
         poster_url=poster_url,
+        backdrop_url=backdrop_url,
         popularity=popularity,
         adult=bool(item.get("adult", False)),
     )

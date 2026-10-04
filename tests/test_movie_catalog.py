@@ -20,6 +20,7 @@ def test_tmdb_movie_parser_keeps_exact_identity_and_safe_poster() -> None:
             "release_date": "2014-11-05",
             "overview": "A space movie.",
             "poster_path": "/poster.jpg",
+            "backdrop_path": "/backdrop.jpg",
             "popularity": 42.5,
             "adult": True,
         }
@@ -30,6 +31,8 @@ def test_tmdb_movie_parser_keeps_exact_identity_and_safe_poster() -> None:
     assert movie.title == "Interstellar"
     assert movie.year == 2014
     assert movie.poster_url == "https://image.tmdb.org/t/p/w342/poster.jpg"
+    assert movie.backdrop_url == "https://image.tmdb.org/t/p/w780/backdrop.jpg"
+    assert movie.to_metadata()["backdrop_url"] == "https://image.tmdb.org/t/p/w780/backdrop.jpg"
     assert movie.adult is True
     assert movie.to_metadata()["adult"] is True
 
