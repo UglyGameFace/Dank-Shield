@@ -320,8 +320,6 @@ html[data-quality="standard"] .hero-grain{opacity:.035}
 @media(max-width:820px){
   :root{--content:calc(100% - 24px)}
   .topbar-inner{min-height:64px}
-  .brand-word{width:205px;height:44px}
-  .brand-mark{width:46px;height:36px}
   .desktop-nav{display:none}
   .page{padding-top:12px;padding-bottom:104px}
   .hero{min-height:520px}
