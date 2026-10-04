@@ -557,7 +557,7 @@ def _watch_html(room_id: str, uid: int, query: str) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>Dank Shield Movie Night</title>
+<title>Dank Cinema • The 420 Lobby</title>
 <style>
 :root {{
   color-scheme:dark;
@@ -1074,6 +1074,123 @@ function fmtRate(n) {{
   while(x>=1024&&i<u.length-1){{x/=1024;i++;}}
   return x.toFixed(i?1:0)+" "+u[i];
 }}
+function fmtClock(seconds) {{
+  const total=Math.max(0,Math.floor(Number(seconds)||0));
+  const h=Math.floor(total/3600);
+  const m=Math.floor((total%3600)/60);
+  const s=String(total%60).padStart(2,"0");
+  return h?String(h)+":"+String(m).padStart(2,"0")+":"+s:String(m)+":"+s;
+}}
+function updatePlayerChrome() {{
+  const duration=Number.isFinite(video.duration)?video.duration:0;
+  const current=Number(video.currentTime||0);
+  document.getElementById("currentTime").textContent=fmtClock(current);
+  document.getElementById("duration").textContent=duration?fmtClock(duration):"0:00";
+  document.getElementById("runtime").textContent=duration?fmtClock(duration):"—";
+  const timeline=document.getElementById("timeline");
+  const ratio=duration>0?Math.max(0,Math.min(1,current/duration)):0;
+  timeline.value=String(Math.round(ratio*1000));
+  timeline.style.setProperty("--progress",(ratio*100).toFixed(2)+"%");
+  const paused=video.paused;
+  const icon=paused?'<path d="M8 5v14l11-7Z"/>':'<path d="M7 5h4v14H7ZM14 5h4v14h-4Z"/>';
+  document.getElementById("centerPlayIcon").innerHTML=icon;
+  document.getElementById("playerToggleIcon").innerHTML=icon;
+}}
+function renderAvatars(count) {{
+  const holder=document.getElementById("avatars");
+  holder.textContent="";
+  const visible=Math.min(5,Math.max(0,Number(count)||0));
+  for(let i=0;i<visible;i++) {{
+    const el=document.createElement("span");
+    el.className="avatar";
+    el.textContent=i===0?"★":String(i+1);
+    holder.appendChild(el);
+  }}
+  if(Number(count)>visible) {{
+    const more=document.createElement("span");
+    more.className="avatar";
+    more.textContent="+"+String(Number(count)-visible);
+    holder.appendChild(more);
+  }}
+}}
+function renderQueue(items) {{
+  const list=document.getElementById("queueList");
+  list.textContent="";
+  const rows=Array.isArray(items)?items:[];
+  document.getElementById("queueCount").textContent=rows.length+" queued";
+  if(!rows.length) {{
+    const empty=document.createElement("div");
+    empty.className="queue-empty";
+    empty.textContent="Nothing queued yet.";
+    list.appendChild(empty);
+    return;
+  }}
+  for(const item of rows) {{
+    const row=document.createElement("div");
+    row.className="queue-item";
+    const art=document.createElement("div");
+    art.className="queue-art";
+    if(String(item.poster_url||"").startsWith("https://image.tmdb.org/")) {{
+      const img=document.createElement("img");
+      img.src=item.poster_url;
+      img.alt="";
+      art.appendChild(img);
+    }}
+    const copy=document.createElement("div");
+    const title=document.createElement("div");
+    title.className="queue-title";
+    title.textContent=String(item.title||"Untitled");
+    const sub=document.createElement("div");
+    sub.className="queue-sub";
+    sub.textContent=(item.year?String(item.year)+" • ":"")+(item.is_current?"Now playing":"Up next");
+    copy.append(title,sub);
+    const grip=document.createElement("div");
+    grip.className="queue-grip";
+    grip.textContent="☰";
+    row.append(art,copy,grip);
+    list.appendChild(row);
+  }}
+}}
+function streamHealthLabel(s) {{
+  if(s.media_missing) return "Source unavailable";
+  if(!s.stream_url) return "Waiting for source";
+  if(s.state==="buffering") return "Preparing stream";
+  const t=s.torrent||{{}};
+  const seeds=Number(t.seeds||0);
+  const rate=Number(t.download_rate||0);
+  if(seeds>=5 || rate>=512*1024) return "Excellent";
+  if(seeds>0 || rate>0) return "Good";
+  return "Connected";
+}}
+function renderSiteState(s) {{
+  const movie=s.movie||{{}};
+  document.getElementById("roomMode").textContent=s.private?"Private Room":"Movie Night";
+  document.getElementById("endLabel").textContent=s.private?"End Private Session":"End Movie Night";
+  document.getElementById("hostSheet").classList.toggle("show",!!s.is_host);
+  document.getElementById("healthText").textContent="Stream Health: "+streamHealthLabel(s);
+  document.getElementById("year").textContent=movie.year?String(movie.year):"—";
+  document.getElementById("overview").textContent=movie.overview||"A synchronized Dank Cinema session in The 420 Lobby.";
+  const poster=document.getElementById("poster");
+  const fallback=document.getElementById("posterFallback");
+  if(String(movie.poster_url||"").startsWith("https://image.tmdb.org/")) {{
+    if(poster.src!==movie.poster_url) poster.src=movie.poster_url;
+    poster.alt=(movie.title||s.title||"Movie")+" poster";
+    poster.hidden=false;
+    fallback.hidden=true;
+  }} else {{
+    poster.hidden=true;
+    fallback.hidden=false;
+  }}
+  renderAvatars(s.viewer_count||0);
+  renderQueue(s.queue||[]);
+  const hostOnly=!s.is_host;
+  document.getElementById("rewind10").disabled=hostOnly;
+  document.getElementById("forward10").disabled=hostOnly;
+  document.getElementById("timeline").disabled=hostOnly;
+  document.getElementById("passHost").setAttribute("aria-disabled",s.private?"true":"false");
+  document.getElementById("syncHint").textContent=s.is_host?"You control synchronized playback.":"";
+  updatePlayerChrome();
+}}
 function resetPlaybackRate() {{
   try {{
     if(Math.abs(Number(video.playbackRate||1)-1)>0.001) video.playbackRate=1;
@@ -1159,15 +1276,14 @@ function correctSyncedDrift(target) {{
 
 async function applyState(s) {{
   lastState=s;
-  document.getElementById("title").textContent=(s.title||"Movie Night")+(s.release_source?" • "+s.release_source:"");
+  document.getElementById("title").textContent=s.title||"Movie Night";
   document.getElementById("heading").textContent=
-    s.private?"🔒 Dank Cinema Private Session":"🎬 Dank Shield Movie Night";
-  document.getElementById("state").textContent=
-    (s.private?"Private • ":"")+(s.state||"—");
+    s.private?"🔒 Dank Cinema Private Session":"🎬 Dank Cinema Movie Night";
+  document.getElementById("state").textContent=s.state||"—";
   document.getElementById("viewers").textContent=String(s.viewer_count||0);
   document.getElementById("role").textContent=
-    s.private&&s.is_host?"Private Session Host":
-    (s.is_host?"Host":(s.sync_status==="joining"?"Joining…":"Synced Viewer"));
+    s.is_host?"Hosted by You":(s.sync_status==="joining"?"Joining…":"Synced Viewer");
+  renderSiteState(s);
   const t=s.torrent||{{}};
   document.getElementById("progress").textContent=((t.progress||0)*100).toFixed(1)+"% • "+fmtRate(t.download_rate||0);
   const swarmSource=String(t.swarm_source||"");
@@ -1195,7 +1311,8 @@ async function applyState(s) {{
     document.getElementById("pause").disabled=true;
     document.getElementById("end").disabled=true;
     syncButton.disabled=true;
-    notice.textContent="Movie Night has ended.";
+    notice.textContent=s.private?"Private Session has ended.":"Movie Night has ended.";
+    document.getElementById("hostSheet").classList.remove("show");
     return;
   }}
 
@@ -1399,6 +1516,88 @@ syncButton.onclick=async()=>{{
 }};
 document.getElementById("play").onclick=()=>hostAction("resume");
 document.getElementById("pause").onclick=()=>hostAction("pause");
+document.getElementById("centerPlay").onclick=async()=>{{
+  if(!lastState?.stream_url) return;
+  if(video.paused) {{
+    try {{ await video.play(); }} catch(err) {{ notice.textContent="Playback could not start: "+String(err?.message||err); }}
+  }} else {{
+    video.pause();
+  }}
+}};
+document.getElementById("playerToggle").onclick=document.getElementById("centerPlay").onclick;
+document.getElementById("rewind10").onclick=()=>{{
+  if(lastState?.is_host) safeSeek(Math.max(0,(video.currentTime||0)-10));
+}};
+document.getElementById("forward10").onclick=()=>{{
+  if(lastState?.is_host) safeSeek(Math.min(Number.isFinite(video.duration)?video.duration:Infinity,(video.currentTime||0)+10));
+}};
+document.getElementById("timeline").addEventListener("input",event=>{{
+  if(!lastState?.is_host || !Number.isFinite(video.duration) || video.duration<=0) return;
+  safeSeek((Number(event.target.value||0)/1000)*video.duration);
+}});
+document.getElementById("volume").addEventListener("input",event=>{{
+  video.volume=Math.max(0,Math.min(1,Number(event.target.value||1)));
+  video.muted=video.volume===0;
+}});
+document.getElementById("mute").onclick=()=>{{ video.muted=!video.muted; }};
+document.getElementById("fullscreen").onclick=async()=>{{
+  const target=document.querySelector(".theater");
+  try {{
+    if(document.fullscreenElement) await document.exitFullscreen();
+    else if(target?.requestFullscreen) await target.requestFullscreen();
+    else if(typeof video.webkitEnterFullscreen==="function") video.webkitEnterFullscreen();
+  }} catch(err) {{ notice.textContent="Fullscreen is not available here."; }}
+}};
+document.getElementById("closeHostSheet").onclick=()=>document.getElementById("hostSheet").classList.remove("show");
+document.getElementById("passHost").onclick=()=>{{
+  notice.textContent=lastState?.private
+    ?"Private Session ownership stays with its host. Viewer management is in the Discord Cinema panel."
+    :"Choose the new host from the Dank Cinema panel in Discord.";
+}};
+document.getElementById("manageQueue").onclick=()=>{{
+  notice.textContent="Add, remove, and reorder titles from the Dank Cinema panel in Discord.";
+}};
+for(const item of document.querySelectorAll("[data-nav]")) {{
+  item.addEventListener("click",()=>{{
+    if(item.dataset.nav==="movie-nights") return;
+    notice.textContent="Movie discovery and your saved Cinema controls currently open from /movie in Discord.";
+  }});
+}}
+for(const tab of document.querySelectorAll("[data-panel]")) {{
+  tab.addEventListener("click",()=>{{
+    document.querySelectorAll("[data-panel]").forEach(x=>x.classList.toggle("active",x===tab));
+    if(tab.dataset.panel==="queue") document.getElementById("queuePanel").scrollIntoView({{behavior:"smooth",block:"nearest"}});
+    else if(tab.dataset.panel==="settings") {{
+      const details=document.querySelector(".diagnostics");
+      details.open=true;
+      details.scrollIntoView({{behavior:"smooth",block:"nearest"}});
+    }} else if(tab.dataset.panel==="viewers") notice.textContent=String(lastState?.viewer_count||0)+" viewer(s) are connected to this Cinema session.";
+    else notice.textContent="The live conversation stays in your Discord movie channel.";
+  }});
+}}
+const castButton=document.getElementById("cast");
+const supportsRemotePlayback=!!(video.remote && typeof video.remote.prompt==="function");
+const supportsAirPlay=typeof video.webkitShowPlaybackTargetPicker==="function";
+castButton.disabled=!(supportsRemotePlayback||supportsAirPlay);
+castButton.title=castButton.disabled?"Casting is not supported by this browser/device.":"Cast to a supported device";
+castButton.onclick=async()=>{{
+  try {{
+    if(supportsRemotePlayback) await video.remote.prompt();
+    else if(supportsAirPlay) video.webkitShowPlaybackTargetPicker();
+    else notice.textContent="Casting is not supported by this browser/device.";
+  }} catch(err) {{
+    if(String(err?.name||"")!=="NotAllowedError")
+      notice.textContent="No cast target was selected.";
+  }}
+}};
+if(video.remote) {{
+  video.remote.addEventListener("connect",()=>castButton.classList.add("connected"));
+  video.remote.addEventListener("disconnect",()=>castButton.classList.remove("connected"));
+}}
+video.addEventListener("webkitcurrentplaybacktargetiswirelesschanged",()=>{{
+  castButton.classList.toggle("connected",!!video.webkitCurrentPlaybackTargetIsWireless);
+}});
+video.addEventListener("contextmenu",event=>event.preventDefault());
 document.getElementById("end").onclick=()=>{{
   if(confirm((lastState&&lastState.private)?"End this Private Session and release its media?":"End this Movie Night for everyone and release the room media session?"))
     hostAction("end");
@@ -1427,7 +1626,12 @@ video.addEventListener("seeked",()=>{{ if(!remoteApply && lastState?.is_host) ho
 video.addEventListener("loadedmetadata",()=>{{
   streamRetryAttempt=0;
   cancelStreamRetry();
+  updatePlayerChrome();
 }});
+video.addEventListener("durationchange",updatePlayerChrome);
+video.addEventListener("timeupdate",updatePlayerChrome);
+video.addEventListener("play",updatePlayerChrome);
+video.addEventListener("pause",updatePlayerChrome);
 video.addEventListener("canplay",()=>{{
   streamRetryAttempt=0;
   cancelStreamRetry();
@@ -1475,7 +1679,7 @@ async def movie_night_watch(request: web.Request) -> web.Response:
                 "style-src 'unsafe-inline'; "
                 "media-src 'self'; "
                 "connect-src 'self'; "
-                "img-src 'none'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+                "img-src 'self' https://image.tmdb.org; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"
             ),
         },
     )
