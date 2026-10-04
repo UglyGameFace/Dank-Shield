@@ -8,7 +8,7 @@ Baseline:
 `main@2397a03626bf49d48ee87dbd7b83480e99baa305` (PR #429 merged).
 
 Active branch:
-`feat/dank-cinema-theater-site`
+`fix/430-cinema-real-controls`
 
 Issue:
 **#430 — Dank Cinema: match premium 420 Lobby theater website mockup**
@@ -31,7 +31,7 @@ Rebuild the signed Dank Cinema Watch page to match the owner-approved premium da
 
 ## Status
 
-**Implementation is in progress on the focused branch. The first full PR run reached 2,736 tests with 2,735 passing and one stale markup assertion failing after the approved custom End Session control replaced the old plain button. That assertion is now updated on the current head. New exact-head CI, final diff inspection, and a real mobile/Discloud canary are still required before completion can be claimed.**
+**Production canary failed the UX Definition of Done after PR #431 merged as `5783dcfdc0a1d4d1e817e6ccf8881e0ccf8bde5e`. The page looked like a mockup rather than a real product because several visible controls only wrote instructional text instead of performing actions, placeholder poster/avatar/profile elements rendered as if they were real data, and the Cast button relied on generic Remote Playback feature detection rather than a real Google Cast sender session. Issue #430 is reopened and remediation is active on `fix/430-cinema-real-controls`.**
 
 ## Findings / root cause
 
@@ -53,6 +53,16 @@ Rebuild the signed Dank Cinema Watch page to match the owner-approved premium da
    - room queue candidate IDs can be projected into a safe queue view;
    - no duplicate movie/session store is needed.
 
+5. **Production exposed fake affordances.**
+   - Home/Browse/My Stuff, header search/notifications, Viewers/Chat, Pass Host, and Manage Queue were visible buttons whose handlers only displayed notices;
+   - blank poster cards and synthetic viewer/avatar/profile visuals made missing data look fabricated;
+   - these controls are being removed or replaced with actions that actually navigate, open Discord, reveal live session state, or control playback.
+
+6. **The first Cast implementation was not Chromecast integration.**
+   - `HTMLMediaElement.remote.prompt()` / AirPlay feature detection does not create a Google Cast sender session;
+   - the remediation uses Google's Web Sender SDK with the Default Media Receiver and signed media URL;
+   - Cast is hidden unless the SDK actually initializes, so unsupported browsers no longer get a decorative dead Cast button.
+
 ## Execution path
 
 `signed Watch URL -> _room_and_user -> _state_payload -> custom Dank Cinema theater UI -> heartbeat/state/action -> canonical MovieNightManager + TorrentMediaManager`.
@@ -61,7 +71,7 @@ Artwork:
 `candidate.metadata.poster_url -> strict image.tmdb.org allowlist -> CSP-authorized poster rendering`.
 
 Casting:
-`explicit Cast button -> HTMLMediaElement.remote.prompt() when available -> WebKit playback target picker fallback`.
+`Google Cast Web Sender SDK -> Default Media Receiver -> signed torrent media URL -> room state continues as playback authority`.
 
 ## Changes
 
@@ -76,6 +86,13 @@ Casting:
 - Added stream-health presentation while keeping progress, seeds/leechers, rate, and buffer target under Advanced Stream Details.
 - Preserved signed access, sync/heartbeat, host action API, progressive torrent playback, and existing room authority.
 - Pass Host and queue programming remain Discord-owned; the web mockup buttons route users back to the canonical Cinema panel rather than creating duplicate authority.
+- Production follow-up removes the fake header/profile/search/notification affordances and fake Home/Browse/My Stuff actions.
+- Navigation now exposes only real Theater, Queue, Details, and Discord actions.
+- Session tab renders real room/viewer/sync state; Chat opens the actual Discord channel.
+- Missing TMDB poster/overview data is hidden instead of replaced with fabricated placeholder content.
+- Host sheet keeps only working Discord Controls, Fullscreen, Pause for Everyone, and End Session actions.
+- Chromecast support now uses Google's Web Sender SDK and Default Media Receiver, with the Cast button hidden until the SDK genuinely initializes.
+- Signed torrent stream responses now expose narrowly scoped gstatic CORS for Cast receiver fetches; the HMAC URL remains required.
 
 ## Validation / results so far
 
@@ -88,7 +105,7 @@ Regression tests updated/added for:
 - CSP allowing only the trusted TMDB image host;
 - mode-correct private wording.
 
-First PR CI completed with 2,735 passing tests and one failure in `test_web_player_has_terminal_state_before_missing_room_fallback`; the test still required the retired literal `id="end" disabled>End Session</button>` markup. The redesigned control still preserves the same `id="end"`, `hostAction("end")`, terminal-state handling, and missing-room fallback. The regression test now checks the new host-sheet control instead. A new exact-head run is required.
+PR #431 exact-head CI ultimately passed all five workflow families and the PR merged. The production/mobile canary then failed usability because visible controls were not real actions. New regression coverage now asserts the fake navigation/actions/placeholders are absent, Google Cast sender integration is present, and Cast CORS only permits Google receiver origins. Exact-head CI for this remediation branch is pending.
 
 ## Cleanup / conflicts
 
@@ -99,8 +116,9 @@ First PR CI completed with 2,735 passing tests and one failure in `test_web_play
 
 ## Blockers / risks
 
-- Remote Playback support is browser/device dependent; unsupported browsers cannot be forced to expose a cast target picker.
-- Custom controls need real Android Chrome/Discloud validation for fullscreen, audio gesture, sync, and cast behavior.
+- Google Cast Web Sender support is browser/device dependent. Unsupported browsers get no Cast button rather than a fake one.
+- Chromecast receiver codec support can still reject a selected release even when local browser playback works.
+- Custom controls need real Android/Discloud validation for fullscreen, audio gesture, sync, Google Cast discovery/load, and fallback behavior.
 - A determined authorized viewer can still inspect network requests for the signed media URL; hiding the browser Download control is UI hardening, not DRM.
 
 ## Backlog
@@ -111,7 +129,7 @@ First PR CI completed with 2,735 passing tests and one failure in `test_web_play
 
 ## Next step
 
-Open the focused PR, run exact-head repository workflows, repair only evidence-backed failures, inspect the final diff for accidental changes, then run an Android/Discloud Watch-page canary covering host playback, viewer sync/audio, fullscreen, casting availability, private wording, queue display, and end-session behavior.
+Open the focused remediation PR, run exact-head repository workflows, repair only evidence-backed failures, inspect the final diff, then repeat the Android/Discloud canary. The canary must verify that every visible control performs a real action, unsupported Cast is hidden, supported Google Cast actually opens device discovery and loads the signed stream, missing metadata does not render fake content, and core host/viewer sync remains intact.
 
 ---
 
