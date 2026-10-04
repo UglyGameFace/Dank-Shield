@@ -1235,6 +1235,89 @@ async def movie_night_source_action(request: web.Request) -> web.Response:
     return web.json_response(await _media_source_state(room, uid))
 
 
+async def movie_night_progress(request: web.Request) -> web.Response:
+    room, uid = await _room_and_user(request)
+    candidate = (
+        room.candidates.get(room.current_candidate_id)
+        if room.current_candidate_id
+        else None
+    )
+    media = _candidate_web_metadata(candidate)
+    media_type = str(media.get("media_type") or "").strip().lower()
+    tmdb_id = int(media.get("tmdb_id") or 0)
+    if media_type not in {"movie", "episode"} or tmdb_id <= 0:
+        return web.json_response({"ok": True, "tracked": False})
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    metadata = {
+        "poster_url": str(media.get("poster_url") or ""),
+        "backdrop_url": str(media.get("backdrop_url") or ""),
+        "year": int(media.get("year") or 0),
+        "media_type": media_type,
+    }
+    if media_type == "episode":
+        metadata.update(
+            {
+                "series_id": int(media.get("series_id") or 0),
+                "series_title": str(media.get("series_title") or "")[:180],
+                "episode_title": str(media.get("episode_title") or "")[:180],
+                "still_url": str(media.get("backdrop_url") or ""),
+            }
+        )
+    try:
+        row = await record_progress(
+            int(uid),
+            media_type=media_type,
+            tmdb_id=tmdb_id,
+            title=str(media.get("title") or room.current_candidate.title if candidate else ""),
+            progress_seconds=_float(payload.get("progress_seconds"), 0.0),
+            duration_seconds=_float(payload.get("duration_seconds"), 0.0),
+            season_number=int(media.get("season_number") or 0),
+            episode_number=int(media.get("episode_number") or 0),
+            metadata=metadata,
+            completed=(
+                bool(payload.get("completed"))
+                if "completed" in payload
+                else None
+            ),
+        )
+    except CinemaStorageUnavailable as exc:
+        raise web.HTTPServiceUnavailable(
+            text="Cinema progress storage is temporarily unavailable."
+        ) from exc
+    return web.json_response({"ok": True, "tracked": True, "item": row})
+
+
+async def movie_night_preferences(request: web.Request) -> web.Response:
+    _room, uid = await _room_and_user(request)
+    try:
+        if request.method == "GET":
+            row = await get_cinema_user(int(uid))
+        else:
+            try:
+                payload = await request.json()
+            except Exception:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            row = await update_cinema_preferences(int(uid), payload)
+    except CinemaStorageUnavailable as exc:
+        raise web.HTTPServiceUnavailable(
+            text="Cinema preferences are temporarily unavailable."
+        ) from exc
+    return web.json_response(
+        {
+            "preferences": dict(row.get("preferences") or {}),
+        }
+    )
+
+
 async def movie_night_queue_action(request: web.Request) -> web.Response:
     room, uid = await _room_and_user(request)
     if int(uid) != int(room.host_id):
@@ -4173,6 +4256,9 @@ def register_movie_night_public_routes(app: web.Application) -> None:
     app.router.add_get("/movie/{room_id}/invite-options", movie_night_invite_options)
     app.router.add_post("/movie/{room_id}/promote", movie_night_promote_watch_party)
     app.router.add_post("/movie/{room_id}/queue", movie_night_queue_action)
+    app.router.add_post("/movie/{room_id}/progress", movie_night_progress)
+    app.router.add_get("/movie/{room_id}/preferences", movie_night_preferences)
+    app.router.add_post("/movie/{room_id}/preferences", movie_night_preferences)
     app.router.add_get("/movie/{room_id}/sources", movie_night_sources)
     app.router.add_post("/movie/{room_id}/sources", movie_night_source_action)
 
@@ -4180,6 +4266,8 @@ def register_movie_night_public_routes(app: web.Application) -> None:
 __all__ = [
     "dank_cinema_brand_asset",
     "movie_night_invite_options",
+    "movie_night_preferences",
+    "movie_night_progress",
     "movie_night_promote_watch_party",
     "movie_night_queue_action",
     "movie_night_source_action",
