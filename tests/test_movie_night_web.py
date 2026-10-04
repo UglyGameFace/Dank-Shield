@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from aiohttp import web
 
-from stoney_verify import movie_night_web
+from stoney_verify import cinema_library_service, movie_night_web
 from stoney_verify.movie_night import MovieNightManager
 
 
@@ -59,8 +59,127 @@ def test_movie_night_public_routes_are_media_only() -> None:
     assert "/movie/{room_id}/action" in rendered
     assert "/movie/{room_id}/invite-options" in rendered
     assert "/movie/{room_id}/promote" in rendered
+    assert ("GET", "<DynamicResource  /movie/{room_id}/progress>") in routes
+    assert ("POST", "<DynamicResource  /movie/{room_id}/progress>") in routes
     assert "/api/" not in rendered
     assert "/guild/" not in rendered
+
+
+
+
+
+def test_cinema_library_runtime_defaults_and_episode_lookup(monkeypatch) -> None:
+    defaults = cinema_library_service._normalize_preferences({})
+    assert defaults == {
+        "autoplay_next": True,
+        "playback_speed": 1.0,
+        "preferred_source": "",
+        "default_audio_language": "",
+        "default_subtitle_language": "",
+        "visual_quality": "auto",
+    }
+    assert issubclass(cinema_library_service.InvalidCinemaState, ValueError)
+
+    async def rows(_user_id: int, *, refresh: bool = False):
+        assert refresh is False
+        return [
+            {
+                "user_id": 42,
+                "media_type": "episode",
+                "tmdb_id": 9001,
+                "season_number": 3,
+                "episode_number": 7,
+                "progress_seconds": 733.0,
+            },
+            {
+                "user_id": 42,
+                "media_type": "movie",
+                "tmdb_id": 123,
+                "season_number": 0,
+                "episode_number": 0,
+            },
+        ]
+
+    monkeypatch.setattr(cinema_library_service, "list_user_media", rows)
+    state = asyncio.run(
+        cinema_library_service.get_media_state(
+            42,
+            media_type="episode",
+            tmdb_id=9001,
+            season_number=3,
+            episode_number=7,
+        )
+    )
+    assert state is not None
+    assert state["progress_seconds"] == 733.0
+
+
+def test_movie_night_progress_get_uses_current_canonical_media(monkeypatch) -> None:
+    candidate = SimpleNamespace(
+        title="Example Show S03E07",
+        metadata={
+            "catalog": {
+                "media_type": "episode",
+                "tmdb_id": 9001,
+                "series_id": 77,
+                "series_title": "Example Show",
+                "season_number": 3,
+                "episode_number": 7,
+                "title": "Example Show S03E07",
+            }
+        },
+    )
+    room = SimpleNamespace(
+        current_candidate_id="candidate-1",
+        candidates={"candidate-1": candidate},
+    )
+
+    async def room_and_user(_request):
+        return room, 42
+
+    async def media_state(user_id: int, **kwargs):
+        assert user_id == 42
+        assert kwargs == {
+            "media_type": "episode",
+            "tmdb_id": 9001,
+            "season_number": 3,
+            "episode_number": 7,
+        }
+        return {
+            "media_type": "episode",
+            "tmdb_id": 9001,
+            "season_number": 3,
+            "episode_number": 7,
+            "progress_seconds": 733.0,
+            "completed": False,
+        }
+
+    monkeypatch.setattr(movie_night_web, "_room_and_user", room_and_user)
+    monkeypatch.setattr(movie_night_web, "get_media_state", media_state)
+    response = asyncio.run(
+        movie_night_web.movie_night_progress(SimpleNamespace(method="GET"))
+    )
+    payload = json.loads(response.text)
+
+    assert payload["tracked"] is True
+    assert payload["item"]["progress_seconds"] == 733.0
+
+
+def test_movie_night_player_restores_progress_only_through_host_authority() -> None:
+    html = movie_night_web._watch_html(
+        "room-progress",
+        42,
+        "uid=42&exp=9999999999&sig=test",
+    )
+
+    assert "async function maybeRestoreWatchProgress(s)" in html
+    assert "if(!s?.is_host || !s?.stream_url) return;" in html
+    assert 'const saved=await jsonFetch("/movie/"+BOOT.roomId+"/progress")' in html
+    assert 'await hostAction("seek",{seconds:target})' in html
+    assert "video.addEventListener("seeked",scheduleHostSeekCommit)" in html
+    assert "hostSeekCommitTimer=setTimeout" in html
+    assert "persistWatchProgress(true)" in html
+    assert "if(key!==lastProgressMediaKey) lastProgressPersistAt=0;" in html
 
 
 def test_movie_night_player_contains_sync_heartbeat_and_host_controls() -> None:
