@@ -57,6 +57,8 @@ def test_movie_night_public_routes_are_media_only() -> None:
     assert "/movie/{room_id}/state" in rendered
     assert "/movie/{room_id}/heartbeat" in rendered
     assert "/movie/{room_id}/action" in rendered
+    assert "/movie/{room_id}/invite-options" in rendered
+    assert "/movie/{room_id}/promote" in rendered
     assert "/api/" not in rendered
     assert "/guild/" not in rendered
 
@@ -1019,3 +1021,149 @@ def test_public_room_fallback_title_is_watch_party(monkeypatch) -> None:
     assert payload["mode"] == "watch_party"
     assert payload["title"] == "Watch Party"
     assert payload["movie"]["title"] == "Watch Party"
+
+
+
+def test_private_watch_page_has_real_invite_to_watch_party_flow() -> None:
+    html = movie_night_web._watch_html(
+        "room-promote",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'id="inviteWatchParty"' in html
+    assert 'id="inviteModal"' in html
+    assert '"/movie/"+BOOT.roomId+"/invite-options?q="' in html
+    assert '"/movie/"+BOOT.roomId+"/promote"' in html
+    assert "convert this Private Session into a Watch Party" in html
+    assert 'inviteWatchParty.hidden=!(s.is_host && privateMode)' in html
+    assert "privateTapSkip" in html
+
+
+def test_discord_invite_options_are_real_cached_non_bot_members(monkeypatch) -> None:
+    from stoney_verify import globals as globals_module
+
+    class Avatar:
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+    host = SimpleNamespace(
+        id=10,
+        bot=False,
+        display_name="Host",
+        name="host",
+        display_avatar=Avatar("https://cdn.discordapp.com/avatars/10/host.webp"),
+    )
+    alice = SimpleNamespace(
+        id=20,
+        bot=False,
+        display_name="Alice Moviefan",
+        name="alice",
+        display_avatar=Avatar("https://cdn.discordapp.com/avatars/20/alice.webp"),
+    )
+    bot_member = SimpleNamespace(
+        id=30,
+        bot=True,
+        display_name="Movie Bot",
+        name="moviebot",
+        display_avatar=Avatar(""),
+    )
+    guild = SimpleNamespace(members=[host, alice, bot_member])
+    monkeypatch.setattr(
+        globals_module,
+        "bot",
+        SimpleNamespace(get_guild=lambda guild_id: guild if int(guild_id) == 123 else None),
+    )
+    room = SimpleNamespace(guild_id=123, host_id=10)
+
+    rows = movie_night_web._discord_invite_options(room, "alice")
+
+    assert [row["user_id"] for row in rows] == [20]
+    assert rows[0]["display_name"] == "Alice Moviefan"
+    assert rows[0]["avatar_url"].startswith("https://cdn.discordapp.com/")
+
+
+def test_web_promote_endpoint_keeps_room_and_returns_target_watch_link(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=123,
+        channel_id=456,
+        host_id=10,
+        stream_token="stream-token",
+        mode="private",
+    )
+    room.playback_position = 42.0
+
+    async def room_and_user(_request):
+        return room, 10
+
+    async def request_json():
+        return {"user_id": 20}
+
+    async def state_payload(current_room, user_id):
+        return {
+            "room_id": current_room.room_id,
+            "mode": current_room.mode,
+            "private": current_room.mode == "private",
+            "is_host": int(user_id) == int(current_room.host_id),
+            "position_seconds": current_room.current_position(),
+        }
+
+    async def dm_invite(_room, *, user_id, watch_url):
+        assert user_id == 20
+        assert "uid=20" in watch_url
+        return True
+
+    monkeypatch.setattr(movie_night_web, "_room_and_user", room_and_user)
+    monkeypatch.setattr(movie_night_web, "_state_payload", state_payload)
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(
+        movie_night_web,
+        "_discord_invite_options",
+        lambda _room, _query="", limit=20: [
+            {
+                "user_id": 20,
+                "display_name": "Alice",
+                "username": "alice",
+                "avatar_url": "",
+            }
+        ],
+    )
+    monkeypatch.setattr(movie_night_web, "_dm_watch_party_invite", dm_invite)
+    monkeypatch.setattr(
+        movie_night_web,
+        "movie_night_watch_url",
+        lambda room_id, user_id: f"https://watch.example/{room_id}?uid={user_id}",
+    )
+
+    response = asyncio.run(
+        movie_night_web.movie_night_promote_watch_party(
+            SimpleNamespace(json=request_json)
+        )
+    )
+    payload = json.loads(response.text)
+
+    assert room.mode == "watch_party"
+    assert room.stream_token == "stream-token"
+    assert room.playback_position == 42.0
+    assert payload["private"] is False
+    assert payload["invite"]["dm_sent"] is True
+    assert payload["invite"]["watch_url"].endswith("uid=20")
+
+
+def test_player_layout_recovers_from_mobile_desktop_mode_resizes() -> None:
+    html = movie_night_web._watch_html(
+        "room-layout",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert "position:absolute; inset:0; z-index:0" in html
+    assert "object-fit:cover" in html
+    assert "contain:layout paint" in html
+    assert "new ResizeObserver(()=>stabilizePlayerLayout())" in html
+    assert 'window.addEventListener("resize",stabilizePlayerLayout' in html
+    assert 'window.visualViewport?.addEventListener("resize",stabilizePlayerLayout' in html
+    assert 'window.addEventListener("orientationchange"' in html
+    assert 'video.addEventListener(eventName,()=>stabilizePlayerLayout())' in html
+    assert 'setTimeout(stabilizePlayerLayout,40)' in html
