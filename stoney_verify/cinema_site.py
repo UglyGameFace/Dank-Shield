@@ -270,6 +270,64 @@ def _active_rooms_payload(guild_id: int, user_id: int) -> list[dict[str, Any]]:
     return rows
 
 
+def _watch_party_picks(guild_id: int, user_id: int, *, limit: int = 14) -> list[dict[str, Any]]:
+    """Return real canonical titles currently playing or queued in accessible rooms."""
+
+    manager = get_movie_night_manager()
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_candidate(candidate: Any) -> None:
+        if candidate is None or not isinstance(getattr(candidate, "metadata", None), Mapping):
+            return
+        raw = candidate.metadata.get("catalog")
+        metadata = raw if isinstance(raw, Mapping) else {}
+        kind = str(metadata.get("media_type") or "").strip().lower()
+        tmdb_id = int(metadata.get("tmdb_id") or metadata.get("catalog_id") or 0)
+        if kind not in {"movie", "tv", "episode"} or tmdb_id <= 0:
+            return
+        series_id = int(metadata.get("series_id") or 0)
+        if kind == "episode" and series_id <= 0:
+            return
+        identity = (
+            f"episode:{series_id}:{int(metadata.get('season_number') or 0)}:"
+            f"{int(metadata.get('episode_number') or 0)}"
+            if kind == "episode"
+            else f"{kind}:{tmdb_id}"
+        )
+        if identity in seen:
+            return
+        seen.add(identity)
+        output.append(
+            {
+                "result_kind": "watch_party_pick",
+                "media_type": kind,
+                "tmdb_id": tmdb_id,
+                "series_id": series_id,
+                "series_title": str(metadata.get("series_title") or "")[:180],
+                "season_number": int(metadata.get("season_number") or 0),
+                "episode_number": int(metadata.get("episode_number") or 0),
+                "title": str(metadata.get("title") or getattr(candidate, "title", "") or "Cinema title")[:180],
+                "year": int(metadata.get("year") or 0),
+                "rating": float(metadata.get("rating") or 0.0),
+                "overview": str(metadata.get("overview") or "")[:900],
+                "poster_url": str(metadata.get("poster_url") or ""),
+                "backdrop_url": str(metadata.get("backdrop_url") or ""),
+                "watch_party_active": True,
+            }
+        )
+
+    for room in manager.active_rooms_for_guild(int(guild_id)):
+        if not manager.user_can_access(room, int(user_id)):
+            continue
+        add_candidate(room.current_candidate)
+        for candidate_id in list(room.queue):
+            add_candidate(room.candidates.get(str(candidate_id or "")))
+            if len(output) >= max(1, min(int(limit), 30)):
+                return output
+    return output
+
+
 async def _feed_discovery(guild_id: int, *, limit: int = 14) -> list[dict[str, Any]]:
     try:
         _raw, registry = await load_media_source_registry(int(guild_id), refresh=False)
@@ -452,6 +510,7 @@ async def cinema_home_api(request: web.Request) -> web.Response:
         recommended = ()
     new_episodes = await _next_episode_rows(library)
     active_rooms = _active_rooms_payload(guild_id, user_id)
+    watch_party_picks = _watch_party_picks(guild_id, user_id)
 
     sections: list[dict[str, Any]] = []
 
@@ -499,7 +558,7 @@ async def cinema_home_api(request: web.Request) -> web.Response:
     add(
         "watch_party_picks",
         "Watch Party Picks",
-        [item.to_payload() for item in catalog.get("top_movies", ())[:14]],
+        watch_party_picks,
     )
     add("feeds", "From Your Feeds", feeds)
     add(
@@ -714,16 +773,25 @@ async def cinema_details_api(request: web.Request) -> web.Response:
                 catalog_metadata(details.media),
             )
             for variant in source_outcome.variants[:8]:
-                health = variant.swarm_health
+                seeds = max(0, int(variant.seeds or 0))
+                leechers = max(0, int(variant.leechers or 0))
+                if seeds >= 20:
+                    health = "Strong"
+                elif seeds >= 5:
+                    health = "Good"
+                elif seeds > 0:
+                    health = "Limited"
+                else:
+                    health = "No active seeds reported"
                 source_rows.append(
                     {
                         "source_id": str(variant.source_id or ""),
                         "source_label": str(variant.source_label or "Cinema source"),
                         "title": str(variant.title or "")[:180],
                         "file_size": int(variant.file_size or 0),
-                        "seeds": int(health.get("seeds") or 0),
-                        "leechers": int(health.get("leechers") or 0),
-                        "health": str(health.get("label") or ""),
+                        "seeds": seeds,
+                        "leechers": leechers,
+                        "health": health,
                         "playable": True,
                     }
                 )
