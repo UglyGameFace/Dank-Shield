@@ -887,18 +887,27 @@ body {{
 }}
 button,input {{ font:inherit; }}
 button {{ -webkit-tap-highlight-color:transparent; }}
-.shell {{ width:min(1120px,100%); margin:0 auto; padding:0 18px 140px; }}
-.site-header {{ position:relative; z-index:20; padding:18px 0 6px; }}
-.brand-row {{ display:flex; align-items:center; width:100%; }}
-.brand {{ width:100%; min-width:0; }}
+.shell {{ width:min(1120px,100%); margin:0 auto; padding:0 18px 150px; overflow-x:hidden; }}
+.site-header {{
+  position:relative; z-index:20;
+  margin:0 -18px;
+  padding:12px 18px 6px;
+  overflow:hidden;
+  background:
+    radial-gradient(circle at 17% 32%,rgba(69,143,54,.16),transparent 28%),
+    linear-gradient(180deg,#020706 0%,#06110e 72%,transparent 100%);
+}}
+.brand-row {{ display:flex; align-items:center; width:100%; min-width:0; }}
+.brand {{ width:100%; min-width:0; overflow:hidden; isolation:isolate; }}
 .brand-banner {{
   display:block;
-  width:min(500px,100%);
+  width:min(620px,100%);
   height:auto;
-  max-height:116px;
   object-fit:contain;
   object-position:left center;
-  filter:drop-shadow(0 0 18px rgba(126,255,65,.12));
+  mix-blend-mode:screen;
+  filter:contrast(1.05) saturate(1.04) drop-shadow(0 0 18px rgba(126,255,65,.10));
+  transform:translateZ(0);
 }}
 .nav {{
   display:flex; align-items:center; gap:5px;
@@ -982,7 +991,7 @@ video {{
 }}
 .room-pill {{
   display:flex; align-items:center; gap:8px;
-  max-width:calc(100% - 58px); padding:8px 11px;
+  min-width:0; max-width:calc(100% - 58px); padding:8px 11px;
   border:1px solid rgba(255,255,255,.12);
   border-radius:12px;
   background:rgba(3,10,8,.78);
@@ -990,15 +999,21 @@ video {{
   font-size:.78rem; font-weight:800;
 }}
 .room-pill .live-dot {{ width:8px;height:8px;border-radius:50%;background:var(--lime);box-shadow:0 0 12px rgba(159,255,86,.75); }}
-#role {{ color:#d7dfdc; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+#role {{ color:#d7dfdc; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
 .cast {{
   pointer-events:auto;
+  position:relative;
   width:46px;height:46px; display:grid; place-items:center;
   border-radius:50%; border:1px solid rgba(255,255,255,.18);
   color:#fff; background:rgba(3,10,8,.72); backdrop-filter:blur(12px);
 }}
 .cast[hidden] {{ display:none !important; }}
 .cast:disabled {{ opacity:.35; }}
+.cast.unavailable {{ opacity:.5; border-style:dashed; }}
+.cast.unavailable::after {{
+  content:""; position:absolute; width:28px; height:2px;
+  background:currentColor; transform:rotate(-43deg); border-radius:999px;
+}}
 .cast.connected {{ color:var(--lime); border-color:var(--line-strong); }}
 .cast svg {{ width:23px;height:23px; }}
 .center-play {{
@@ -1086,9 +1101,10 @@ video {{
 .synopsis {{ color:#d4dbd8; margin:11px 0 0; line-height:1.46; font-size:.92rem; }}
 .health {{
   display:flex;align-items:center;gap:7px;
+  max-width:100%;
   border:1px solid rgba(152,255,82,.34);border-radius:999px;
   padding:8px 11px;color:var(--lime);font-size:.76rem;font-weight:850;
-  background:rgba(72,128,44,.08);white-space:nowrap;
+  background:rgba(72,128,44,.08);white-space:normal;overflow-wrap:anywhere;
 }}
 .health-dot {{ width:8px;height:8px;border-radius:50%;background:var(--lime);box-shadow:0 0 10px rgba(159,255,86,.6); }}
 .viewer-strip {{ display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;flex-wrap:wrap; }}
@@ -1122,8 +1138,10 @@ video {{
   border:1px solid rgba(255,255,255,.09);border-radius:16px;background:rgba(10,21,17,.72);
 }}
 .tab {{
-  border:0;border-radius:12px;padding:10px 7px;color:#d8dfdc;background:transparent;
-  font-size:.72rem;font-weight:850;white-space:nowrap;
+  min-width:0;
+  border:0;border-radius:12px;padding:10px 6px;color:#d8dfdc;background:transparent;
+  font-size:clamp(.6rem,2.2vw,.72rem);font-weight:850;
+  white-space:normal;overflow-wrap:anywhere;line-height:1.15;text-align:center;
 }}
 .tab.active {{ color:var(--lime); background:linear-gradient(180deg,rgba(86,176,50,.22),rgba(38,77,30,.22)); box-shadow:inset 0 0 0 1px rgba(148,255,80,.28); }}
 #notice {{ min-height:1.35em; margin:12px 3px 0;color:#bdc8c3;font-size:.82rem; }}
@@ -1166,9 +1184,11 @@ video {{
 .stat b {{ display:block;margin-bottom:5px;color:#84928c;font-size:.68rem;text-transform:uppercase;letter-spacing:.07em; }}
 .host-sheet {{
   position:fixed;left:50%;bottom:0;z-index:40;transform:translateX(-50%);
-  width:min(1120px,100%);padding:9px 18px calc(18px + env(safe-area-inset-bottom));
+  width:min(1120px,100%);max-height:min(72vh,560px);
+  padding:9px 18px calc(18px + env(safe-area-inset-bottom));
+  overflow-y:auto;overscroll-behavior:contain;
   border:1px solid rgba(197,255,175,.17);border-bottom:0;border-radius:22px 22px 0 0;
-  background:rgba(9,20,16,.96);backdrop-filter:blur(18px);box-shadow:0 -20px 55px rgba(0,0,0,.5);
+  background:rgba(9,20,16,.97);backdrop-filter:blur(18px);box-shadow:0 -20px 55px rgba(0,0,0,.5);
   display:none;
 }}
 .host-sheet.show {{ display:block; }}
@@ -1178,12 +1198,37 @@ video {{
 .close-sheet {{ border:0;background:transparent;color:#d8dfdc;font-size:1.25rem; }}
 .host-actions {{ display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px; }}
 .host-action {{
-  min-height:94px;border:1px solid rgba(255,255,255,.1);border-radius:14px;
+  min-width:0;min-height:94px;border:1px solid rgba(255,255,255,.1);border-radius:14px;
   background:#101b18;color:#f5f7f6;padding:10px 7px;font-weight:850;font-size:.72rem;
+  overflow-wrap:anywhere;line-height:1.15;
 }}
-.host-action small {{ display:block;color:#95a29c;font-size:.63rem;font-weight:650;margin-top:5px;line-height:1.25; }}
+.host-action small {{
+  display:block;color:#95a29c;font-size:.63rem;font-weight:650;margin-top:5px;
+  line-height:1.25;overflow-wrap:anywhere;
+}}
 .host-action.danger {{ color:#ff737c;border-color:rgba(255,82,96,.32);background:rgba(91,23,29,.28); }}
 #play {{ position:absolute;left:-9999px; }}
+.host-launcher {{
+  position:fixed;right:max(14px,env(safe-area-inset-right));
+  bottom:calc(14px + env(safe-area-inset-bottom));z-index:39;
+  display:flex;align-items:center;gap:7px;
+  border:1px solid rgba(160,255,92,.42);border-radius:999px;
+  padding:10px 13px;background:rgba(9,20,16,.94);color:var(--lime);
+  box-shadow:0 10px 30px rgba(0,0,0,.42);backdrop-filter:blur(14px);
+  font-size:.75rem;font-weight:900;
+}}
+.host-launcher[hidden] {{ display:none !important; }}
+.discord-context {{
+  display:flex;align-items:center;gap:10px;margin-top:12px;padding:10px;
+  border:1px solid rgba(115,137,255,.22);border-radius:12px;
+  background:rgba(32,40,74,.18);
+}}
+.discord-context-copy {{ min-width:0;flex:1; }}
+.discord-context-title {{ font-size:.78rem;font-weight:900;color:#dfe4ff; }}
+.discord-context-sub {{
+  margin-top:2px;color:#aeb8c8;font-size:.69rem;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}}
 .sync-row {{ display:flex;align-items:center;gap:8px;margin-top:12px; }}
 #sync {{
   border:1px solid rgba(143,255,75,.32);border-radius:999px;background:rgba(86,170,52,.12);
@@ -1192,22 +1237,45 @@ video {{
 #sync:disabled {{ opacity:.72; }}
 .sr-only {{ position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }}
 @media (max-width:640px) {{
-  .shell {{ padding-left:14px;padding-right:14px; }}
-  .brand-banner {{ width:100%;max-height:none; }}
-  .nav-item {{ padding:9px 11px;font-size:.78rem; }}
+  .shell {{ padding-left:14px;padding-right:14px;padding-bottom:160px; }}
+  .site-header {{ margin-left:-14px;margin-right:-14px;padding-left:10px;padding-right:10px; }}
+  .brand-banner {{ width:100%;max-height:none;object-position:center; }}
+  .nav {{ margin-top:10px; }}
+  .nav-item {{ padding:9px 11px;font-size:.75rem; }}
   .video-stage {{ min-height:0; }}
-  .center-play {{ width:72px;height:72px; }}
-  .player-chrome {{ padding-left:10px;padding-right:10px; }}
+  .center-play {{
+    width:66px;height:66px;border-width:1.5px;
+    background:rgba(2,8,6,.56);box-shadow:0 8px 28px rgba(0,0,0,.34);
+  }}
+  .center-play svg {{ width:29px;height:29px; }}
+  .player-chrome {{ padding:38px 9px 10px; }}
+  .control-row {{ gap:8px; }}
+  .player-button {{ width:34px;height:34px; }}
   .volume {{ display:none; }}
   .info {{ grid-template-columns:78px minmax(0,1fr);gap:12px; }}
   .poster {{ width:78px; }}
   .title-row {{ display:block; }}
-  .health {{ margin-top:10px;width:max-content;max-width:100%; }}
-  .synopsis {{ font-size:.84rem; }}
-  .quick-tabs {{ grid-template-columns:repeat(4,minmax(72px,1fr));overflow-x:auto; }}
+  .movie-title {{ font-size:clamp(1.85rem,11vw,2.65rem);overflow-wrap:anywhere; }}
+  .health {{ margin-top:10px;width:fit-content;max-width:100%; }}
+  .synopsis {{ font-size:.84rem;overflow-wrap:anywhere; }}
+  .viewer-strip {{ align-items:flex-start; }}
+  .quick-tabs {{ grid-template-columns:repeat(4,minmax(0,1fr));overflow:visible;gap:3px;padding:5px; }}
+  .tab {{ padding:9px 3px;font-size:clamp(.56rem,2.6vw,.68rem); }}
+  .section-head {{ align-items:flex-start; }}
+  .queue-head-actions {{ flex-wrap:wrap;justify-content:flex-end; }}
+  .queue-item.manageable {{ grid-template-columns:50px minmax(0,1fr); }}
+  .queue-item.manageable .queue-actions {{ grid-column:1 / -1;justify-content:flex-end; }}
+  .queue-art {{ width:50px; }}
   .grid {{ grid-template-columns:1fr; }}
-  .host-actions {{ grid-template-columns:repeat(4,minmax(82px,1fr));overflow-x:auto; }}
-  .host-action {{ min-width:82px; }}
+  .host-sheet {{ padding-left:12px;padding-right:12px; }}
+  .host-actions {{ grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible; }}
+  .host-action {{ min-width:0;min-height:104px;font-size:.74rem; }}
+}}
+@media (max-width:380px) {{
+  .room-pill {{ gap:5px;padding:7px 8px;font-size:.68rem; }}
+  .cast {{ width:42px;height:42px; }}
+  .quick-tabs {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
+  .host-actions {{ grid-template-columns:1fr 1fr; }}
 }}
 </style>
 </head>
