@@ -173,6 +173,36 @@ def _safe_discord_context(guild_id: int, user_id: int) -> dict[str, Any]:
     }
 
 
+def _row_is_adult(row: Mapping[str, Any]) -> bool:
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), Mapping) else {}
+    return bool(metadata.get("adult", False))
+
+
+def _filter_library_snapshot_for_policy(
+    snapshot: Mapping[str, Any],
+    *,
+    adult_enabled: bool,
+) -> dict[str, Any]:
+    output = dict(snapshot)
+    if adult_enabled:
+        return output
+    for key in (
+        "watchlist",
+        "continue_watching",
+        "recently_watched",
+        "watch_again",
+        "series_progress",
+    ):
+        rows = output.get(key)
+        if isinstance(rows, list):
+            output[key] = [
+                row
+                for row in rows
+                if not (isinstance(row, Mapping) and _row_is_adult(row))
+            ]
+    return output
+
+
 def _media_payload(row: Mapping[str, Any]) -> dict[str, Any]:
     metadata = row.get("metadata") if isinstance(row.get("metadata"), Mapping) else {}
     payload = {
@@ -187,6 +217,7 @@ def _media_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         "watchlisted": bool(row.get("watchlisted")),
         "last_watched_at": str(row.get("last_watched_at") or ""),
         "watchlisted_at": str(row.get("watchlisted_at") or ""),
+        "adult": bool(metadata.get("adult", False)),
         "metadata": dict(metadata),
     }
     if payload["duration_seconds"] > 0:
@@ -507,6 +538,11 @@ async def cinema_home_api(request: web.Request) -> web.Response:
     except RuntimeError as exc:
         raise web.HTTPServiceUnavailable(text=str(exc)) from exc
 
+    adult_enabled = await _guild_adult_content_enabled(guild_id)
+    library = _filter_library_snapshot_for_policy(
+        library,
+        adult_enabled=adult_enabled,
+    )
     recent = list(library.get("recently_watched") or [])
     try:
         recommended = await recommendations_for_history(recent, limit=20)
@@ -712,6 +748,8 @@ async def cinema_search_api(request: web.Request) -> web.Response:
     needle = query.casefold()
     if not isinstance(user_rows, Exception):
         for row in user_rows:
+            if not adult_enabled and _row_is_adult(row):
+                continue
             title = str(row.get("title") or "")
             if needle not in title.casefold():
                 continue
@@ -1142,7 +1180,14 @@ async def cinema_play_api(request: web.Request) -> web.Response:
 async def cinema_library_api(request: web.Request) -> web.Response:
     _guild_id, user_id = _site_identity(request)
     if request.method == "GET":
-        return web.json_response(await library_snapshot(user_id))
+        snapshot = await library_snapshot(user_id)
+        adult_enabled = await _guild_adult_content_enabled(_guild_id)
+        return web.json_response(
+            _filter_library_snapshot_for_policy(
+                snapshot,
+                adult_enabled=adult_enabled,
+            )
+        )
 
     try:
         payload = await request.json()
@@ -1153,16 +1198,33 @@ async def cinema_library_api(request: web.Request) -> web.Response:
     action = str(payload.get("action") or "").strip().lower()
 
     if action == "watchlist":
+        media_type = str(payload.get("media_type") or "").strip().lower()
+        tmdb_id = int(payload.get("tmdb_id") or 0)
+        if media_type not in {"movie", "tv"} or tmdb_id <= 0:
+            raise web.HTTPBadRequest(text="Watchlist requires a canonical movie or TV title.")
+        try:
+            details = await get_details(media_type, tmdb_id)
+        except Exception as exc:
+            raise web.HTTPServiceUnavailable(
+                text="Cinema metadata is temporarily unavailable."
+            ) from exc
+        adult_enabled = await _guild_adult_content_enabled(_guild_id)
+        if bool(details.media.adult) and not adult_enabled:
+            raise web.HTTPForbidden(
+                text="Adult-content Cinema titles are disabled for this server."
+            )
         row = await set_watchlist(
             user_id,
-            media_type=str(payload.get("media_type") or ""),
-            tmdb_id=int(payload.get("tmdb_id") or 0),
-            title=str(payload.get("title") or ""),
-            metadata=(
-                payload.get("metadata")
-                if isinstance(payload.get("metadata"), Mapping)
-                else {}
-            ),
+            media_type=media_type,
+            tmdb_id=tmdb_id,
+            title=str(details.media.title),
+            metadata={
+                "poster_url": str(details.media.poster_url or ""),
+                "backdrop_url": str(details.media.backdrop_url or ""),
+                "year": int(details.media.year or 0),
+                "media_type": media_type,
+                "adult": bool(details.media.adult),
+            },
             enabled=bool(payload.get("enabled", True)),
         )
         return web.json_response({"ok": True, "item": row})
