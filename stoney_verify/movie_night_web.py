@@ -1582,6 +1582,7 @@ document.getElementById("volume").addEventListener("input",event=>{{
   video.muted=video.volume===0;
 }});
 document.getElementById("mute").onclick=()=>{{ video.muted=!video.muted; }};
+video.addEventListener("contextmenu",event=>event.preventDefault());
 document.getElementById("fullscreen").onclick=async()=>{{
   const target=document.querySelector(".theater");
   try {{
