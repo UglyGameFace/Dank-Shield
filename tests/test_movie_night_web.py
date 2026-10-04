@@ -444,11 +444,13 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
     )
 
     assert "Dank Cinema • The 420 Lobby" in html
-    assert 'class="brand-banner"' in html
-    assert 'src="/movie/assets/dank-cinema-brand.webp?v=transparent-v2"' in html
+    assert 'class="brand-art"' in html
+    assert 'class="brand-mark-art"' in html
+    assert 'class="brand-wordmark-art"' in html
+    assert '/movie/assets/dank-cinema-brand-mark.webp?v=art-system-v3' in html
+    assert '/movie/assets/dank-cinema-brand-wordmark.webp?v=art-system-v3' in html
     assert 'alt="Dank Cinema — A feature of The 420 Lobby"' in html
     assert 'class="wordmark"' not in html
-    assert 'class="brand-mark"' not in html
     assert "family=Lacquer" not in html
     assert 'id="videoStage"' in html
     assert 'screen.orientation.lock("landscape")' in html
@@ -671,8 +673,10 @@ def test_dank_cinema_polling_does_not_show_broken_sync_on_one_transient_fetch() 
 
 
 def test_dank_cinema_approved_brand_asset_is_real_webp() -> None:
-    movie_night_web._dank_cinema_brand_bytes.cache_clear()
-    payload = movie_night_web._dank_cinema_brand_bytes()
+    movie_night_web._dank_cinema_brand_source_bytes.cache_clear()
+    movie_night_web._dank_cinema_brand_rgba.cache_clear()
+    movie_night_web._dank_cinema_brand_variant.cache_clear()
+    payload = movie_night_web._dank_cinema_brand_variant("full")
 
     assert len(payload) > 5_000
     assert payload[:4] == b"RIFF"
@@ -681,7 +685,9 @@ def test_dank_cinema_approved_brand_asset_is_real_webp() -> None:
     assert payload != movie_night_web._dank_cinema_brand_source_bytes()
 
     response = asyncio.run(
-        movie_night_web.dank_cinema_brand_asset(SimpleNamespace())
+        movie_night_web.dank_cinema_brand_asset(
+            SimpleNamespace(match_info={})
+        )
     )
     assert response.content_type == "image/webp"
     assert response.body == payload
@@ -691,6 +697,7 @@ def test_dank_cinema_approved_brand_asset_is_real_webp() -> None:
 def test_dank_cinema_brand_asset_route_is_registered() -> None:
     source = Path(movie_night_web.__file__).read_text(encoding="utf-8")
     assert '"/movie/assets/dank-cinema-brand.webp"' in source
+    assert '"/movie/assets/dank-cinema-brand-{variant}.webp"' in source
     assert "dank_cinema_brand_asset" in source
 
 
@@ -894,7 +901,9 @@ def test_dank_cinema_mobile_layout_wraps_controls_instead_of_overflowing() -> No
         "uid=456&exp=9999999999&sig=test",
     )
 
-    assert ".shell { width:min(1120px,100%); margin:0 auto; padding:0 18px 150px; overflow-x:hidden; }" in html
+    assert ".shell { width:min(1480px,100%); margin:0 auto; padding:0 22px 160px; overflow-x:hidden; }" in html
+    assert "@media (min-width:641px) and (max-width:1079px)" in html
+    assert "@media (min-width:1080px)" in html
     assert ".tab {" in html
     assert "white-space:normal;overflow-wrap:anywhere" in html
     assert ".host-actions { grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible; }" in html
@@ -911,14 +920,18 @@ def test_dank_cinema_brand_is_recreated_as_transparent_header_art() -> None:
 
     assert "mix-blend-mode:screen" not in html
     assert "ImageDraw.floodfill" not in html
-    assert "drop-shadow(0 8px 22px rgba(0,0,0,.38))" in html
-    assert "rgba(2,7,6,.72)" in html
-    assert 'src="/movie/assets/dank-cinema-brand.webp?v=transparent-v2"' in html
+    assert "drop-shadow(0 10px 28px rgba(0,0,0,.42))" in html
+    assert "rgba(2,7,6,.88)" in html
+    assert 'class="brand-art"' in html
+    assert '/movie/assets/dank-cinema-brand-mark.webp?v=art-system-v3' in html
+    assert '/movie/assets/dank-cinema-brand-wordmark.webp?v=art-system-v3' in html
 
     source = Path(movie_night_web.__file__).read_text(encoding="utf-8")
     assert "ImageDraw.floodfill" in source
     assert "source.putalpha(alpha)" in source
-    assert "target_width = 1000" in source
+    assert "target_width = 320" in source
+    assert "target_width = 1040" in source
+    assert "target_width = 1200" in source
 
 
 def test_dank_cinema_center_play_uses_canonical_host_action() -> None:
