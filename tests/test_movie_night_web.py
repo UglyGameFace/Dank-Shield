@@ -568,10 +568,10 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
 
     assert "Dank Cinema • The 420 Lobby" in html
     assert 'class="brand-art"' in html
-    assert 'class="brand-mark-art"' in html
-    assert 'class="brand-wordmark-art"' in html
-    assert '/movie/assets/dank-cinema-brand-mark.webp?v=art-system-v4' in html
-    assert '/movie/assets/dank-cinema-brand-wordmark.webp?v=art-system-v4' in html
+    assert 'class="brand-lockup-art"' in html
+    assert '/movie/assets/dank-cinema-brand.webp?v=art-system-v5' in html
+    assert '/movie/assets/dank-cinema-brand-mark.webp?v=' not in html
+    assert '/movie/assets/dank-cinema-brand-wordmark.webp?v=' not in html
     assert 'alt="Dank Cinema — A feature of The 420 Lobby"' in html
     assert 'class="wordmark"' not in html
     assert "family=Lacquer" not in html
@@ -1049,8 +1049,10 @@ def test_dank_cinema_brand_is_recreated_as_transparent_header_art() -> None:
     assert "drop-shadow(0 10px 28px rgba(0,0,0,.42))" in html
     assert "rgba(2,7,6,.88)" in html
     assert 'class="brand-art"' in html
-    assert '/movie/assets/dank-cinema-brand-mark.webp?v=art-system-v4' in html
-    assert '/movie/assets/dank-cinema-brand-wordmark.webp?v=art-system-v4' in html
+    assert 'class="brand-lockup-art"' in html
+    assert '/movie/assets/dank-cinema-brand.webp?v=art-system-v5' in html
+    assert '/movie/assets/dank-cinema-brand-mark.webp?v=' not in html
+    assert '/movie/assets/dank-cinema-brand-wordmark.webp?v=' not in html
 
     source = Path(movie_night_web.__file__).read_text(encoding="utf-8")
     assert "ImageDraw.floodfill" in source
@@ -1532,19 +1534,18 @@ def test_feed_center_ui_exposes_real_source_management_without_fake_catalog_card
 
 
 
-def test_brand_art_reserves_real_variant_aspect_ratios_to_avoid_header_cls() -> None:
+def test_brand_art_reserves_composed_lockup_ratio_to_avoid_header_cls() -> None:
     html = movie_night_web._watch_html(
         "room-brand-ratio",
         10,
         "uid=10&exp=9999999999&sig=test",
     )
 
-    assert 'class="brand-mark-art"' in html
-    assert 'width="320"' in html
-    assert 'height="245"' in html
-    assert 'class="brand-wordmark-art"' in html
-    assert 'width="1040"' in html
-    assert 'height="289"' in html
+    assert 'class="brand-lockup-art"' in html
+    assert 'width="1200"' in html
+    assert 'height="278"' in html
+    assert 'brand-mark-art' not in html
+    assert 'brand-wordmark-art' not in html
 
 
 
