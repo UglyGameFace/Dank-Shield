@@ -83,7 +83,8 @@ def test_movie_night_player_contains_sync_heartbeat_and_host_controls() -> None:
     assert "Tap to Sync" in html
     assert "syncButton.hidden=!!s.is_host" in html
     assert "Buffering the group for smoother playback" in html
-    assert "Joining Movie Night" in html
+    assert 'const joiningLabel=s.private?"Private Session":"Watch Party"' in html
+    assert '"Joining "+joiningLabel+"… buffering around "' in html
     assert "Playback will stay put while the buffer catches up." in html
     assert 's.sync_status==="joining"' in html
     assert "Synced Viewer" in html
@@ -321,7 +322,8 @@ def test_player_explains_reclaimed_media_instead_of_saying_no_movie_chosen() -> 
 
     assert "if(s.media_missing)" in html
     assert "media session expired or was reclaimed" in html
-    assert "room is still active" in html
+    assert "Private Session is still active" in html
+    assert "Watch Party is still active" in html
     assert "choose the release again" in html
 
 
@@ -587,7 +589,9 @@ def test_dank_cinema_navigation_only_exposes_real_actions() -> None:
     assert 'data-nav="my-stuff"' not in html
     assert "openDiscordRoom()" in html
     assert 'id="sessionPanel"' in html
-    assert 'data-panel="chat">💬 Open Discord' in html
+    assert 'data-panel="chat">💬 Discord' in html
+    assert 'id="discordLive"' in html
+    assert 'document.getElementById("discordLive").onclick=openDiscordRoom' in html
 
 
 def test_dank_cinema_hides_placeholder_art_and_fake_avatars() -> None:
@@ -873,7 +877,8 @@ def test_dank_cinema_host_controls_can_be_reopened_after_close() -> None:
     assert 'id="hostLauncher"' in html
     assert "function openHostControls()" in html
     assert "function closeHostControls()" in html
-    assert "hostLauncher.hidden=!hostSheetDismissed" in html
+    assert "launcher.hidden=!hostSheetDismissed" in html
+    assert 'document.getElementById("hostLauncher").onclick=openHostControls' in html
     assert 'contextAction.dataset.panel="host"' in html
     assert 'else if(tab.dataset.panel==="host")' in html
 
