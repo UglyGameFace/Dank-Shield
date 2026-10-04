@@ -9,7 +9,6 @@ movie_night_web remain the playback/session authority.
 
 import asyncio
 import json
-import re
 from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -55,6 +54,7 @@ from .media_source_resolver import (
 from .cinema_media_identity import (
     catalog_metadata,
     filter_outcome_for_catalog,
+    parse_episode_query,
 )
 from .cinema_playback_service import (
     materialize_search_results,
@@ -591,30 +591,8 @@ async def cinema_home_api(request: web.Request) -> web.Response:
     )
 
 
-def _parse_episode_query(query: str) -> Optional[tuple[str, int, int]]:
-    clean = " ".join(str(query or "").split())
-    patterns = (
-        re.compile(r"^(.+?)\s+s(\d{1,2})\s*e(\d{1,3})(?:\b|$)", re.IGNORECASE),
-        re.compile(r"^(.+?)\s+(\d{1,2})x(\d{1,3})(?:\b|$)", re.IGNORECASE),
-        re.compile(
-            r"^(.+?)\s+season\s+(\d{1,2})\s+episode\s+(\d{1,3})(?:\b|$)",
-            re.IGNORECASE,
-        ),
-    )
-    for pattern in patterns:
-        match = pattern.search(clean)
-        if not match:
-            continue
-        title = " ".join(match.group(1).split())[:160]
-        season = int(match.group(2))
-        episode = int(match.group(3))
-        if title and season >= 0 and episode > 0:
-            return title, season, episode
-    return None
-
-
 async def _search_episode_query(query: str) -> list[dict[str, Any]]:
-    parsed = _parse_episode_query(query)
+    parsed = parse_episode_query(query)
     if parsed is None:
         return []
     series_query, season_number, episode_number = parsed
