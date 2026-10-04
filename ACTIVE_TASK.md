@@ -2,7 +2,7 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-430 — Complete Dank Cinema platform: Home, library, TV, search, profiles, details, discovery, and persisted viewing state**
+**DANK-SHIELD-430 — Complete Dank Cinema as a full premium streaming platform**
 
 Production baseline:
 `main@c785c5eefc9e9f0b1c6792e7546eca3c8f9703a5` (PR #436 merged green).
@@ -11,94 +11,168 @@ Active branch:
 `feat/430-cinema-full-platform`
 
 Issue:
-**#430 — Dank Cinema: match premium 420 Lobby theater website mockup**
+**#430 — Dank Cinema premium theater / full-platform work**
 
 Outcome:
-Finish the full premium Dank Cinema product contract instead of stopping at the theater/watch surface. This branch must add the real persisted/library/catalog foundations and the missing website surfaces the owner explicitly required, while preserving PR #436's production player, Discord integration, Private → Watch Party transition, Feed Center, and performance work.
+Finish the full Cinema product contract on top of PR #436 without replacing the existing MovieNightRoom, torrent runtime, provider registry, Watch sync authority, Private/Watch Party lifecycle, Pass Host, or real browser capability controls.
 
 ## Scope
 
-This is one active implementation task. It includes all work needed for:
+This remains one active implementation task covering:
 
-- Discord-linked signed Cinema site identity, not a fake unauthenticated profile;
-- full Home/discovery experience with real sections that hide when empty;
-- Continue Watching, Recently Watched, Watch Again, Watchlist, Trending, Popular Movies, Popular TV, New Episodes, Watch Party Picks, From Your Feeds, and personalized recommendations;
-- persistent per-user movie/episode progress, watch history, watchlist, preferences, and notification inbox;
-- first-class Movies + TV series + seasons + episodes;
-- resume `Sx Ey`, next episode, watched/completed state, and season progress;
-- full movie/TV details with real TMDB backdrop/poster/tagline/rating/runtime/genres/cast/director/creator/trailer/recommendations;
-- real website search across TMDB movies/TV plus known/persisted episodes, watchlist/history, and feed-discovered items;
-- real user profile/preferences surface using Discord identity and persisted Cinema preferences;
-- playback speed, PiP, real subtitle/text-track visibility, audio metadata/selection where the browser actually exposes selectable tracks, and persistent visual/source preferences;
-- notifications backed by durable state rather than decorative counters;
-- existing Feed Center, queue, Pass Host, sync, Cast, signed access, and Private/Watch Party semantics;
-- branded empty/error states, accessibility, responsive desktop/tablet/mobile/ultrawide behavior, and visual-quality tiers;
-- focused regression coverage, migration validation, exact-head CI, cleanup, and production canary.
+- signed Discord-linked full Cinema site;
+- movie + TV + season + episode catalog identity;
+- durable watchlist, playback progress, history, Continue Watching, Watch Again, preferences, and notifications;
+- canonical movie/episode playback from website and Discord;
+- exact TV resume / next episode / autoplay-next;
+- Home, Search, Details, My Stuff, Profile, Notifications, Feed Center, and responsive navigation;
+- real Queue Add / Remove / Reorder / Play Next / Clear inside the Theater;
+- unified TMDB/provider identity and guild adult-content policy;
+- truthful source health/capabilities;
+- High / Standard / Lite visual quality with automatic capability selection;
+- responsive TMDB artwork;
+- single composed Cinema branding lockup;
+- responsive phone / tablet / desktop / ultrawide Theater and full-site behavior;
+- focused regressions, migration validation, exact-head CI, final diff cleanup, and Discloud canary.
 
 ## Status
 
-**Implementation active.** The persistence/catalog foundation is now being built on top of merged PR #436. Do not claim the full prompt is complete until all missing product surfaces are implemented and validated.
+**Implementation is substantially complete on the feature branch. Pre-PR cleanup/static validation is active.**
+
+The branch is currently based exactly on production `main@c785c5e...` and is **0 commits behind**. The repository's canonical Python/unit CI and the new Cinema SQL workflow trigger on pull requests/main, not feature-branch pushes, so executable exact-head CI is still pending until the PR is opened. No completion/merge claim is valid before that CI and the production canary.
 
 ## Findings / root cause
 
-1. **PR #436 was a strong theater/watch slice, not the whole product contract.**
-   - it delivered the responsive player, branding, Discord promotion/invite flow, Feed Center, quality modes, and real capability controls;
-   - it did not add the persisted library, TV lifecycle, discovery/search/details/profile/notification surfaces required by the master prompt.
+1. **PR #436 completed the Theater slice, not the full platform contract.**
+   - durable user library/profile/history and full-site discovery surfaces were still missing;
+   - TV identity existed only partially at playback boundaries.
 
-2. **The missing features need durable user state, not client-only localStorage.**
-   - watchlist, progress, history, episode state, preferences, and notifications must survive device/browser changes;
-   - the canonical Dank Shield persistence stack remains service-role Supabase with committed migrations;
-   - the new `dank_cinema_users`, `dank_cinema_user_media`, and `dank_cinema_notifications` tables own Cinema user state.
+2. **The new Cinema library service initially contained latent runtime failures.**
+   - preference defaults, cache/lock state, and `InvalidCinemaState` were referenced but undefined;
+   - the module imported successfully while first real persistence calls could fail.
 
-3. **TMDB identity must remain separate from playback media.**
-   - the new Cinema catalog layer supplies movies, TV, seasons, episodes, details, cast, trailer identity, and recommendations;
-   - the existing media-source/torrent runtime still owns actual playback availability and streaming.
+3. **Progress writing existed but resume restoration did not.**
+   - Watch already checkpointed durable progress;
+   - new sessions did not restore it into canonical room authority;
+   - restoring per viewer would conflict with Watch Party sync, so only the host applies saved resume and updates the shared room clock.
 
-4. **No fake surfaces.**
-   - Home rails render only when backed by actual TMDB, user-library, feed, or live-room data;
-   - PiP/subtitles/audio controls remain capability-driven;
-   - unavailable persisted/storage features must show a designed error/next action instead of silently pretending to save.
+4. **TV needed canonical episode lifecycle instead of title arithmetic.**
+   - Series → Season → Episode now resolves from TMDB identity;
+   - next episode crosses real season boundaries;
+   - Next Episode only appears when the exact episode has a playable source.
+
+5. **Media identity had duplicate authorities.**
+   - Discord-specific release matching and title-based candidate reuse could diverge from the website;
+   - same-title remakes could collide;
+   - shared Cinema identity/playback services now own TMDB identity, exact provider matching, preferred-source selection, and candidate lookup.
+
+6. **Several visible surfaces were technically populated but not truthful.**
+   - Watch Party Picks were Top Rated movies rather than real party media;
+   - full-site source health referenced a nonexistent property;
+   - an external/reference source was labeled as in-app Search capable;
+   - one Search button changed text without triggering search;
+   - Queue Add required leaving the Theater;
+   - notification invite actions were persisted but ignored by the UI.
+
+7. **The duplicated/sliced branding defect was structural.**
+   - the visible header reconstructed one approved lockup from separate mark/wordmark crops;
+   - Theater and full site now render one transparent composed 1200x278 lockup; split variants remain only for icon/favicon contexts.
+
+8. **Guild adult-content policy was Discord-only.**
+   - the full site, provider rows, Queue search/add, direct Details/Play, and saved library needed the same owner;
+   - the existing `movie_night_preferences` toggle is now consumed across surfaces and canonical adult identity is persisted with library rows.
 
 ## Execution path
 
-Catalog:
-`Cinema website -> cinema_catalog -> TMDB metadata APIs -> normalized movie/TV/season/episode identity`.
+Catalog identity:
+`Cinema UI / Discord / Theater Queue -> cinema_catalog -> TMDB -> cinema_media_identity`.
+
+Provider/playback:
+`canonical media identity -> cinema_playback_service -> media_source_resolver -> MovieNightRoom -> TorrentMediaManager -> signed Watch stream`.
 
 User state:
-`Discord-linked signed Cinema identity -> cinema_library_service -> service-role Supabase -> watchlist/progress/history/preferences/notifications`.
+`signed Discord Cinema identity -> cinema_library_service -> service-role Supabase`.
 
-Playback:
-`catalog identity -> existing Cinema source selection / MovieNightRoom / torrent runtime -> signed Watch player`.
+Watch progress:
+`Watch player checkpoints -> /movie/{room}/progress -> cinema_library_service`;
+new playback restores only through host authority -> canonical room seek -> viewers follow room sync.
 
-## Changes so far
+TV continuation:
+`episode identity -> cinema_catalog.get_next_episode -> exact SxxExx provider search -> shared playback service -> same MovieNightRoom`.
 
-- Added `cinema_catalog.py` with normalized movie + TV identity, multi-search, Trending/Popular/Top Rated discovery, movie/TV details, cast/directors/creators, real YouTube trailer identity, recommendations, seasons, and episodes.
-- Added migration `20261004123000_dank_cinema_library.sql` for durable Cinema user preferences, watchlist/history/progress/episode state, and notification inbox.
-- Added `cinema_library_service.py` as the single persistence owner for Cinema preferences, watchlist, progress/history, library snapshots, and notifications.
+## Changes
 
-## Validation / results so far
+- Added/extended `cinema_catalog.py` for normalized movie/TV identity, Home discovery, Details, seasons/episodes, recommendations, and real cross-season next-episode resolution.
+- Added `cinema_media_identity.py` as the shared movie/episode/provider identity owner, including exact episode notation and shared adult filtering.
+- Added `cinema_playback_service.py` as backend-neutral playback orchestration used by Discord, website Play, Queue Add, and TV transitions.
+- Fixed `cinema_library_service.py` runtime defaults/caches/locks and added canonical media lookup.
+- Added durable host-controlled resume restoration and debounced seek/checkpoint behavior to the existing Watch progress route.
+- Added proper TV Next Episode availability, transition, autoplay-next, episode progress, and preferred-source behavior.
+- Added real signed full-site playback into an existing host-owned Cinema room; website session creation remains Discord-owned.
+- Added real Home rails with empty-section suppression, including real Watch Party Picks rather than recycled catalog rows.
+- Added full movie/TV Details, exact episode continuation/navigation, Search, My Stuff, Profile, Notifications, and Feed Center.
+- Completed in-Theater Queue management: Add Title search, exact TV episode search, playable-source validation, Added By, Play Next, reorder, remove, and clear.
+- Made notifications guild-scoped and live Watch Party invites actionable through fresh signed Join Theater URLs.
+- Unified the existing guild adult-content setting across Discord, full-site Search/Details/Play, provider releases, Theater Queue, and saved library surfaces.
+- Made source capabilities/health truthful and category-aware across Theater and full-site Feed Center.
+- Applied persisted playback speed, preferred source, audio/subtitle language, autoplay-next, and visual-quality preferences to real runtime paths.
+- Added adaptive High/Standard/Lite visual behavior and responsive TMDB `srcset/sizes`.
+- Replaced split visible branding composition with one composed transparent Cinema lockup on Theater and full site.
+- Removed the unused full-site generic progress-write API so Watch remains the sole playback-progress authority.
+- Added dedicated `.github/workflows/cinema-platform-sql.yml` to replay and validate the new Cinema migration on PostgreSQL without touching production.
+- Added focused regressions in `tests/test_cinema_full_platform.py` and `tests/test_movie_night_web.py`.
 
-Pending focused tests for the new catalog/service/schema and subsequent website/API surfaces.
+## Validation / results
+
+Completed pre-PR evidence:
+
+- current `main` remains exactly the branch merge base: `c785c5eefc9e9f0b1c6792e7546eca3c8f9703a5`;
+- feature branch is 0 behind main;
+- final scope inspection shows only #430 Cinema files, tests, migration, workflow, and this task record;
+- full-site `cinema_site.js` has been parsed successfully with a JavaScript parser after the major UI/Feed/notification changes;
+- stale split-brand selectors/visible mark+wordmark composition removed;
+- stale title-based catalog candidate lookup removed from website/TV playback paths;
+- stale custom-only full-site provider-search path removed;
+- stale Feed Center test ownership repaired around the shared service;
+- migration security reviewed against current Supabase guidance: service-only tables use explicit grants/revokes plus RLS;
+- no production Supabase project was mutated because the connected account exposed only an unrelated/ambiguous project;
+- dedicated Cinema SQL smoke workflow now verifies migration idempotence, constraints, RLS, grants, representative rows, notification dedupe, and client-role denial.
+
+Pending executable evidence:
+
+- Python compile/unit suite cannot run locally in this tool environment because the repo cannot be cloned over network here;
+- canonical `ci.yml` does not support feature-branch dispatch and therefore has no branch run to inspect;
+- opening the PR is the next correct mechanism to obtain exact-head Python/unit/SQL workflow evidence;
+- live Discloud + Android/Samsung + desktop/tablet/ultrawide canary remains required after a CI-green deploy.
 
 ## Cleanup / conflicts
 
-- No second playback engine, room model, queue store, source registry, or torrent runtime is being introduced.
-- PR #436 behavior remains the baseline and must not regress.
-- Cinema persistence is centralized in one service rather than scattered across web handlers.
+- One canonical `MovieNightRoom` authority remains.
+- One torrent/media runtime remains.
+- One provider registry/resolver remains.
+- One Cinema Feed service owns Feed Center state/mutations.
+- One Cinema library service owns persisted user state.
+- Watch is the sole durable playback-progress writer.
+- Shared Cinema identity/playback services replaced duplicate Discord/site matching logic.
+- No title-only candidate reuse for canonical TMDB media.
+- No visible fake Cast/PiP/subtitle/audio/Next Episode controls were introduced.
+- No unrelated Dank Shield feature files are present in the branch diff.
 
 ## Blockers / risks
 
-- The new Supabase migration must be applied before durable user-library features work in production.
-- TMDB remains metadata only and does not imply playback availability.
-- Full-site identity must remain signed/Discord-linked without exposing the bot's service-role credentials.
+- Exact-head repository CI is not yet available because workflows run on pull requests/main; PR creation is required for that validation.
+- The Supabase migration must be deployed before durable library features work in production.
+- Live MovieNightRoom state still remains process-memory authority across bot restarts; that is pre-existing architecture and not disguised as solved by the user-library migration.
+- Provider availability and swarm health remain external conditions; UI now reports real availability rather than inventing it.
+- Final real-device/Discloud canary is still required for Samsung Browser desktop-mode transitions, fullscreen/orientation, background/foreground, sync, and production migration/runtime acceptance.
 
 ## Backlog
 
-None of the prompt items listed in this active task may be moved to backlog merely to make the PR look complete. Unrelated Dank Shield work remains outside this task.
+No required #430 master-contract item has been moved to backlog to make this branch appear complete. Unrelated Dank Shield projects remain outside the active task.
 
-## Next step
+## Exact next step
 
-Add signed general-Cinema site identity, the full website API/shell, Home/search/details/library/profile/notifications/TV episode flows, integrate progress updates with the existing Watch player, then add focused tests and run the full validation matrix before opening the PR.
+Finish the last static regression/diff check, open the focused #430 full-platform PR, use that PR's exact current head to run canonical Dank Shield CI plus Dank Cinema SQL validation, repair only evidence-backed failures, then perform the Discloud production canary before any completion or merge-ready claim.
 
 ---
 
