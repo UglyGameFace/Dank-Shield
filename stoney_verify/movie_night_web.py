@@ -23,6 +23,12 @@ from stoney_verify.cinema_feed_service import (
     mutate_feed as mutate_cinema_feed,
     runtime_state as cinema_feed_runtime_state,
 )
+from stoney_verify.cinema_library_service import (
+    CinemaStorageUnavailable,
+    get_cinema_user,
+    record_progress,
+    update_cinema_preferences,
+)
 from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
 from stoney_verify.movie_night_session import (
     ensure_movie_night_cleanup_task,
@@ -643,6 +649,28 @@ def _candidate_web_metadata(candidate: Any) -> dict[str, Any]:
         year = max(0, int(source.get("year") or 0))
     except Exception:
         year = 0
+    media_type = str(source.get("media_type") or "").strip().lower()
+    if media_type not in {"movie", "tv", "episode"}:
+        media_type = ""
+    try:
+        tmdb_id = max(
+            0,
+            int(source.get("tmdb_id") or source.get("catalog_id") or 0),
+        )
+    except Exception:
+        tmdb_id = 0
+    try:
+        series_id = max(0, int(source.get("series_id") or 0))
+    except Exception:
+        series_id = 0
+    try:
+        season_number = max(0, int(source.get("season_number") or 0))
+    except Exception:
+        season_number = 0
+    try:
+        episode_number = max(0, int(source.get("episode_number") or 0))
+    except Exception:
+        episode_number = 0
     return {
         "title": str(
             source.get("title")
@@ -653,6 +681,14 @@ def _candidate_web_metadata(candidate: Any) -> dict[str, Any]:
         "overview": str(source.get("overview") or "").strip()[:1200],
         "poster_url": _safe_movie_art_url(source.get("poster_url")),
         "backdrop_url": _safe_movie_art_url(source.get("backdrop_url")),
+        "media_type": media_type,
+        "tmdb_id": tmdb_id,
+        "series_id": series_id,
+        "series_title": str(source.get("series_title") or "").strip()[:180],
+        "season_number": season_number,
+        "episode_number": episode_number,
+        "episode_title": str(source.get("episode_title") or "").strip()[:180],
+        "runtime_minutes": max(0, int(source.get("runtime") or 0)) if str(source.get("runtime") or "").isdigit() else 0,
     }
 
 
