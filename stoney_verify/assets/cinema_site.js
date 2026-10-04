@@ -1336,6 +1336,24 @@
             node("div", "notification-time", notification.created_at ? new Date(notification.created_at).toLocaleString() : ""),
           );
           item.appendChild(copy);
+          const action = notification.action && typeof notification.action === "object"
+            ? notification.action
+            : {};
+          if (action.kind === "room" && action.watch_url) {
+            item.appendChild(button("Join Theater", "btn primary", async () => {
+              if (!notification.read_at) {
+                try {
+                  await api("/notifications", {
+                    method: "POST",
+                    body: JSON.stringify({ notification_id: notification.id }),
+                  });
+                } catch (_) {
+                  // A transient inbox write must not block a still-valid room invite.
+                }
+              }
+              location.href = action.watch_url;
+            }));
+          }
           if (!notification.read_at) {
             item.appendChild(button("Mark Read", "btn ghost", async () => {
               try {
