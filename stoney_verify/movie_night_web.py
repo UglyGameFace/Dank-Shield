@@ -36,6 +36,7 @@ from stoney_verify.cinema_library_service import (
     update_cinema_preferences,
 )
 from stoney_verify.cinema_playback_service import (
+    find_catalog_candidate,
     materialize_search_results,
     search_exact_episode_sources,
     start_room_variant,
@@ -1516,10 +1517,7 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
         query=query,
         catalog_metadata=metadata,
     )
-    candidate = manager.find_candidate_by_title(
-        latest.room_id,
-        str(metadata.get("title") or ""),
-    )
+    candidate = find_catalog_candidate(latest, metadata)
     if candidate is None:
         raise web.HTTPConflict(text="The next episode could not be attached to this Cinema room.")
     ranked = manager.ranked_variants(latest.room_id, candidate.candidate_id)
