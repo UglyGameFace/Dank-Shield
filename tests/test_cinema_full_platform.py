@@ -8,6 +8,7 @@ from stoney_verify.cinema_catalog import CinemaDetails, CinemaEpisode, CinemaMed
 from stoney_verify.cinema_media_identity import (
     episode_catalog_metadata,
     filter_outcome_for_catalog,
+    parse_episode_query,
     release_matches_catalog,
 )
 from stoney_verify import cinema_playback_service
@@ -399,15 +400,15 @@ def test_notifications_keep_truthful_unread_badge_after_mark_read() -> None:
 
 
 def test_episode_search_parser_accepts_shared_cinema_notation() -> None:
-    assert cinema_site._parse_episode_query("Example Show S3E7") == ("Example Show", 3, 7)
-    assert cinema_site._parse_episode_query("Example Show S3 E7") == ("Example Show", 3, 7)
-    assert cinema_site._parse_episode_query("Example Show 3x07") == ("Example Show", 3, 7)
-    assert cinema_site._parse_episode_query("Example Show season 3 episode 7") == (
+    assert parse_episode_query("Example Show S3E7") == ("Example Show", 3, 7)
+    assert parse_episode_query("Example Show S3 E7") == ("Example Show", 3, 7)
+    assert parse_episode_query("Example Show 3x07") == ("Example Show", 3, 7)
+    assert parse_episode_query("Example Show season 3 episode 7") == (
         "Example Show",
         3,
         7,
     )
-    assert cinema_site._parse_episode_query("Example Show") is None
+    assert parse_episode_query("Example Show") is None
 
 
 
