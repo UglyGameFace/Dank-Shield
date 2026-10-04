@@ -3076,7 +3076,7 @@ const AUDIO_STORAGE_KEY="dank-cinema-audio:"+BOOT.uid;
 let userMuted=false;
 let preferredVolume=1;
 try {{
-  const saved=JSON.parse(localStorage.getItem(AUDIO_STORAGE_KEY)||"{}");
+  const saved=JSON.parse(localStorage.getItem(AUDIO_STORAGE_KEY)||"{{}}");
   userMuted=!!saved.muted;
   const savedVolume=Number(saved.volume);
   if(Number.isFinite(savedVolume) && savedVolume>0 && savedVolume<=1)
