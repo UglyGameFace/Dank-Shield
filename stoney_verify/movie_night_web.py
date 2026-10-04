@@ -1013,6 +1013,7 @@ let lastHardSyncSeekAt=0;
 let streamRetryTimer=null;
 let streamRetryAttempt=0;
 let attachedStreamUrl="";
+let hostSheetDismissed=false;
 const SOFT_DRIFT_START=0.35;
 const SOFT_DRIFT_STOP=0.12;
 const HARD_DRIFT_SECONDS=5.0;
@@ -1166,7 +1167,7 @@ function renderSiteState(s) {{
   const movie=s.movie||{{}};
   document.getElementById("roomMode").textContent=s.private?"Private Room":"Movie Night";
   document.getElementById("endLabel").textContent=s.private?"End Private Session":"End Movie Night";
-  document.getElementById("hostSheet").classList.toggle("show",!!s.is_host);
+  document.getElementById("hostSheet").classList.toggle("show",!!s.is_host && !hostSheetDismissed);
   document.getElementById("healthText").textContent="Stream Health: "+streamHealthLabel(s);
   document.getElementById("year").textContent=movie.year?String(movie.year):"—";
   document.getElementById("overview").textContent=movie.overview||"A synchronized Dank Cinema session in The 420 Lobby.";
@@ -1226,7 +1227,7 @@ function scheduleStreamRetry() {{
   const delay=Math.min(15000,2500*Math.pow(1.6,step));
   streamRetryAttempt+=1;
   notice.textContent=
-    "Torrent is still buffering. Keeping your Movie Night session and retrying in "+
+    "The source is still preparing. Keeping your Cinema session and retrying in "+
     Math.ceil(delay/1000)+"s…";
 
   streamRetryTimer=setTimeout(async()=>{{
@@ -1340,8 +1341,9 @@ async function applyState(s) {{
   }}
   if(!s.stream_url) {{
     if(s.media_missing) {{
-      notice.textContent=
-        "The attached media session expired or was reclaimed. The Movie Night room is still active; return to Discord and choose the release again.";
+      notice.textContent=s.private
+        ?"The attached media session expired or was reclaimed. Your Private Session is still active; return to Discord and choose the release again."
+        :"The attached media session expired or was reclaimed. The Movie Night is still active; return to Discord and choose the release again.";
     }} else {{
       notice.textContent="Waiting for the host to choose media.";
     }}
@@ -1548,7 +1550,10 @@ document.getElementById("fullscreen").onclick=async()=>{{
     else if(typeof video.webkitEnterFullscreen==="function") video.webkitEnterFullscreen();
   }} catch(err) {{ notice.textContent="Fullscreen is not available here."; }}
 }};
-document.getElementById("closeHostSheet").onclick=()=>document.getElementById("hostSheet").classList.remove("show");
+document.getElementById("closeHostSheet").onclick=()=>{{
+  hostSheetDismissed=true;
+  document.getElementById("hostSheet").classList.remove("show");
+}};
 document.getElementById("passHost").onclick=()=>{{
   notice.textContent=lastState?.private
     ?"Private Session ownership stays with its host. Viewer management is in the Discord Cinema panel."
@@ -1635,16 +1640,16 @@ video.addEventListener("pause",updatePlayerChrome);
 video.addEventListener("canplay",()=>{{
   streamRetryAttempt=0;
   cancelStreamRetry();
-  if(notice.textContent.startsWith("Torrent is still buffering"))
+  if(notice.textContent.startsWith("The source is still preparing"))
     notice.textContent="";
 }});
 video.addEventListener("waiting",()=>{{
   if(lastState?.stream_url && !terminated)
-    notice.textContent="Buffering torrent pieces… keeping the stream connection stable.";
+    notice.textContent="Preparing the stream… keeping playback stable.";
 }});
 video.addEventListener("stalled",()=>{{
   if(lastState?.stream_url && !terminated)
-    notice.textContent="Torrent stream stalled briefly… waiting for more pieces.";
+    notice.textContent="The stream paused briefly… waiting for enough data to continue smoothly.";
 }});
 video.addEventListener("error",()=>{{
   if(lastState?.stream_url) scheduleStreamRetry();
