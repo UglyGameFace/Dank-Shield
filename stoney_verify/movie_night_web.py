@@ -559,6 +559,7 @@ def _watch_html(room_id: str, uid: int, query: str) -> str:
 <meta name="color-scheme" content="dark">
 <title>Dank Cinema • The 420 Lobby</title>
 <style>
+@import url("https://fonts.googleapis.com/css2?family=Permanent+Marker&display=swap");
 :root {{
   color-scheme:dark;
   font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
@@ -601,7 +602,7 @@ button {{ -webkit-tap-highlight-color:transparent; }}
   display:flex;
   align-items:baseline;
   gap:8px;
-  font-family:"Segoe Print","Brush Script MT","Arial Black",sans-serif;
+  font-family:"Permanent Marker","Segoe Print","Brush Script MT","Arial Black",sans-serif;
   font-size:clamp(1.62rem,6.6vw,2.55rem);
   font-weight:900;
   letter-spacing:-.055em;
@@ -1681,7 +1682,8 @@ async def movie_night_watch(request: web.Request) -> web.Response:
             "Content-Security-Policy": (
                 "default-src 'self'; "
                 "script-src 'unsafe-inline'; "
-                "style-src 'unsafe-inline'; "
+                "style-src 'unsafe-inline' https://fonts.googleapis.com; "
+                "font-src https://fonts.gstatic.com; "
                 "media-src 'self'; "
                 "connect-src 'self'; "
                 "img-src 'self' https://image.tmdb.org; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"
