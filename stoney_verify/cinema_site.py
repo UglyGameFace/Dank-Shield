@@ -354,7 +354,12 @@ def _watch_party_picks(guild_id: int, user_id: int, *, limit: int = 14) -> list[
     for room in manager.active_rooms_for_guild(int(guild_id)):
         if not manager.user_can_access(room, int(user_id)):
             continue
-        add_candidate(room.current_candidate)
+        current = (
+            room.candidates.get(str(room.current_candidate_id))
+            if room.current_candidate_id
+            else None
+        )
+        add_candidate(current)
         for candidate_id in list(room.queue):
             add_candidate(room.candidates.get(str(candidate_id or "")))
             if len(output) >= max(1, min(int(limit), 30)):
