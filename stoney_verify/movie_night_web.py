@@ -26,6 +26,7 @@ from stoney_verify.cinema_feed_service import (
 from stoney_verify.cinema_library_service import (
     CinemaStorageUnavailable,
     get_cinema_user,
+    notify_watch_party_invite,
     record_progress,
     update_cinema_preferences,
 )
@@ -1185,6 +1186,16 @@ async def movie_night_promote_watch_party(request: web.Request) -> web.Response:
         room,
         invitee_id=invitee_id,
     )
+    try:
+        host_context = _discord_room_context(room, int(uid))
+        await notify_watch_party_invite(
+            invitee_id,
+            guild_id=int(room.guild_id),
+            host_name=str(host_context.get("user_name") or uid),
+            room_id=room.room_id,
+        )
+    except CinemaStorageUnavailable:
+        pass
 
     state = await _state_payload(room, uid)
     state["invite"] = {
