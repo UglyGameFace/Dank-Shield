@@ -41,7 +41,6 @@ from stoney_verify.media_source_resolver import (
     INTERNET_ARCHIVE_SOURCE_LABEL,
     MediaSourceSearchOutcome,
     ResolvedMediaVariant,
-    fetch_torrent_metadata,
     probe_custom_media_source,
     search_movie_sources,
 )
@@ -62,7 +61,10 @@ from stoney_verify.cinema_media_identity import (
     catalog_metadata as _cinema_catalog_metadata,
     episode_catalog_metadata as _cinema_episode_catalog_metadata,
     filter_outcome_for_catalog as _filter_outcome_for_catalog,
-    release_matches_catalog as _release_matches_catalog,
+)
+from stoney_verify.cinema_playback_service import (
+    materialize_search_results as _materialize_search_results,
+    start_room_variant,
 )
 from stoney_verify.movie_night import (
     PRIVATE_VIEWER_LIMIT,
@@ -1380,68 +1382,6 @@ def _release_embed(room: MovieNightRoom, candidate: Any, variant: Any) -> discor
 
     embed.set_footer(text="Step 2 of 3 • play/request this release, then Watch")
     return embed
-
-
-def _materialize_search_results(
-    room: MovieNightRoom,
-    outcome: MediaSourceSearchOutcome,
-    *,
-    proposer_id: int,
-    query: str,
-    catalog_metadata: Optional[Mapping[str, Any]] = None,
-) -> tuple[int, int]:
-    manager = get_movie_night_manager()
-    candidate_ids: set[str] = set()
-    release_count = 0
-
-    for result in outcome.variants:
-        catalog = (
-            dict(catalog_metadata)
-            if _release_matches_catalog(
-                result.title,
-                catalog_metadata,
-                result.metadata,
-            )
-            else {}
-        )
-        candidate_title = (
-            _compact(catalog.get("title"))
-            if catalog
-            else result.title
-        )
-        candidate = manager.find_candidate_by_title(room.room_id, candidate_title)
-        candidate_metadata: dict[str, Any] = {"search_query": query}
-        if catalog:
-            candidate_metadata["catalog"] = catalog
-
-        if candidate is None:
-            candidate = manager.nominate(
-                room.room_id,
-                user_id=int(proposer_id),
-                title=candidate_title,
-                metadata=candidate_metadata,
-                auto_vote=False,
-            )
-        elif catalog:
-            candidate.metadata.update(candidate_metadata)
-        candidate_ids.add(candidate.candidate_id)
-        manager.add_variant(
-            room.room_id,
-            candidate.candidate_id,
-            user_id=int(proposer_id),
-            source_ref=result.source_ref,
-            source_id=result.source_id,
-            source_label=result.source_label,
-            file_size=result.file_size,
-            peers=result.peers,
-            seeds=result.seeds,
-            leechers=result.leechers,
-            metadata=result.metadata,
-            auto_vote=False,
-        )
-        release_count += 1
-
-    return len(candidate_ids), release_count
 
 
 class _OwnedView(discord.ui.View):
@@ -2820,38 +2760,14 @@ async def _start_variant_source(
                 variant.variant_id,
             ),
         )
-    previous = str(current.stream_token or "")
-    lease_key = movie_room_lease_key(int(current.guild_id), int(current.channel_id))
-    source_ref = str(variant.source_ref or "").strip()
-
     try:
-        if source_ref.lower().startswith("magnet:?"):
-            clean_magnet = find_magnet(source_ref)
-            if not clean_magnet:
-                raise ValueError("This source returned an invalid magnet link.")
-            session = await torrent_manager.start_magnet(
-                clean_magnet,
-                guild_id=int(guild.id),
-                owner_id=int(current.host_id),
-                replace_token=previous,
-                lease_key=lease_key,
-            )
-        elif source_ref.lower().startswith("https://"):
-            payload = await fetch_torrent_metadata(
-                source_ref,
-                max_bytes=torrent_manager.max_metadata_bytes,
-            )
-            session = await torrent_manager.start_torrent_bytes(
-                payload,
-                guild_id=int(guild.id),
-                owner_id=int(current.host_id),
-                replace_token=previous,
-                lease_key=lease_key,
-            )
-        else:
-            raise ValueError(
-                "This release is not a supported magnet or HTTPS .torrent source."
-            )
+        playback = await start_room_variant(
+            current.room_id,
+            actor_id=int(interaction.user.id),
+            candidate_id=candidate.candidate_id,
+            variant_id=variant.variant_id,
+            authorized_by_vote=authorized_by_vote,
+        )
     except Exception as exc:
         return await _replace(
             interaction,
@@ -2865,81 +2781,15 @@ async def _start_variant_source(
             ),
         )
 
-    stream_url = torrent_manager.stream_url(session)
-    if not stream_url:
-        await torrent_manager.release_lease(
-            session.token,
-            lease_key,
-            remove_if_unused=True,
-        )
-        return await _replace(
-            interaction,
-            content="❌ The torrent started but no signed public stream URL could be created.",
-            embed=_release_embed(current, candidate, variant),
-            view=MovieReleaseView(
-                int(interaction.user.id),
-                current.room_id,
-                candidate.candidate_id,
-                variant.variant_id,
-            ),
-        )
-
-    latest_room = room_manager.get(current.room_id)
-    if (
-        latest_room is None
-        or latest_room.ended
-        or int(latest_room.host_id) != int(current.host_id)
-        or str(latest_room.stream_token or "") != previous
-    ):
-        await torrent_manager.release_lease(
-            session.token,
-            lease_key,
-            remove_if_unused=True,
-        )
-        return await _replace(
-            interaction,
-            content=(
-                "❌ Movie Night changed while this release was loading, so the stale "
-                "media result was discarded instead of overwriting the newer room state."
-            ),
-            embed=_room_embed(interaction, latest_room) if latest_room is not None else None,
-            view=_movie_hub_view(interaction, latest_room),
-        )
-
-    room_manager.select_variant(
-        latest_room.room_id,
-        candidate.candidate_id,
-        variant_id=variant.variant_id,
-    )
-    room_manager.set_room_media(
-        latest_room.room_id,
-        host_id=int(latest_room.host_id),
-        stream_token=session.token,
-        candidate_id=candidate.candidate_id,
-        variant_id=variant.variant_id,
-    )
-    current = latest_room
-
-    merged_meta = dict(variant.metadata or {})
-    merged_meta["release_name"] = dict(session.release_metadata or merged_meta.get("release_name") or {})
-    if session.verified_metadata:
-        merged_meta["verified"] = dict(session.verified_metadata)
-    variant.metadata = merged_meta
-    variant.file_size = int(session.file_size or variant.file_size)
-
-    if previous and previous != session.token:
-        await torrent_manager.release_lease(
-            previous,
-            lease_key,
-            remove_if_unused=True,
-        )
-
+    current = playback.room
+    candidate = playback.candidate
+    variant = playback.variant
     await _replace(
         interaction,
         content=(
             f"✅ Now playing **{candidate.title}** • "
             f"{_release_source_label(variant.metadata)} • {_format_bytes(variant.file_size)}\n"
-            f"Dank Cinema stream: {stream_url}"
+            f"Dank Cinema stream: {playback.stream_url}"
         )[:2000],
         embed=_release_embed(current, candidate, variant),
         view=_movie_hub_view(interaction, current),
