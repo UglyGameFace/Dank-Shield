@@ -53,7 +53,7 @@ def _public_base() -> str:
 _BRAND_ASSET_PATH = (
     Path(__file__).with_name("assets") / "dank_cinema_brand_500.webp.b64"
 )
-_BRAND_ASSET_VERSION = "art-system-v3"
+_BRAND_ASSET_VERSION = "art-system-v4"
 
 _FEED_RUNTIME_STATE = cinema_feed_runtime_state()
 
@@ -116,18 +116,76 @@ def _trim_transparent(image: Image.Image, *, padding: int = 2) -> Image.Image:
     return image.crop((left, top, right, bottom))
 
 
+def _brand_split_x(image: Image.Image) -> int:
+    """Find the transparent gutter between the reel emblem and wordmark.
+
+    The approved source art is one horizontal lockup. Earlier fixed-percentage
+    crops overlapped that gutter and rendered a second partial reel on mobile.
+    Detecting the real low-alpha run keeps the two responsive variants mutually
+    exclusive even if the source artwork is re-exported at another size.
+    """
+
+    alpha = image.getchannel("A")
+    bbox = alpha.getbbox()
+    if not bbox:
+        return max(1, round(image.width * 0.30))
+    _left, top, _right, bottom = bbox
+    start = max(1, round(image.width * 0.20))
+    end = min(image.width - 1, round(image.width * 0.40))
+    if end <= start:
+        return max(1, round(image.width * 0.30))
+
+    height = max(1, bottom - top)
+    threshold = max(2, round(height * 0.035))
+    counts: list[int] = []
+    pixels = alpha.load()
+    for x in range(start, end):
+        opaque = 0
+        for y in range(top, bottom):
+            if pixels[x, y] > 18:
+                opaque += 1
+        counts.append(opaque)
+
+    runs: list[tuple[int, int]] = []
+    run_start: Optional[int] = None
+    for offset, count in enumerate(counts):
+        if count <= threshold and run_start is None:
+            run_start = offset
+        elif count > threshold and run_start is not None:
+            runs.append((run_start, offset - 1))
+            run_start = None
+    if run_start is not None:
+        runs.append((run_start, len(counts) - 1))
+
+    if not runs:
+        return max(1, round(image.width * 0.30))
+
+    target = round(image.width * 0.30)
+    best = max(
+        runs,
+        key=lambda run: (
+            run[1] - run[0] + 1,
+            -abs((start + (run[0] + run[1]) // 2) - target),
+        ),
+    )
+    return start + (best[0] + best[1]) // 2
+
+
 @lru_cache(maxsize=8)
 def _dank_cinema_brand_variant(kind: str) -> bytes:
     source = _dank_cinema_brand_rgba()
     normalized = str(kind or "full").strip().lower()
 
+    split_x = _brand_split_x(source)
     if normalized == "mark":
-        # Crowned reel + smoke emblem.
-        crop = source.crop((0, 0, max(1, round(source.width * 0.33)), source.height))
+        # Crowned reel + smoke emblem. Stop at the real gutter so none of the
+        # wordmark can leak into the compact emblem variant.
+        crop = source.crop((0, 0, split_x, source.height))
         target_width = 320
     elif normalized == "wordmark":
-        # DANK CINEMA plus "A feature of The 420 Lobby" lockup.
-        crop = source.crop((max(0, round(source.width * 0.255)), 0, source.width, source.height))
+        # DANK CINEMA plus "A feature of The 420 Lobby" lockup. Start at the
+        # same gutter used by the emblem crop so the reel can never duplicate.
+        crop = source.crop((split_x, 0, source.width, source.height))
         target_width = 1040
     elif normalized == "mono":
         crop = source.copy()
@@ -1494,9 +1552,9 @@ button {{ cursor:pointer; }}
 }}
 .brand-art {{
   display:grid;
-  grid-template-columns:clamp(92px,15vw,150px) minmax(0,1fr);
+  grid-template-columns:clamp(86px,14vw,136px) minmax(0,1fr);
   align-items:center;
-  gap:clamp(3px,.7vw,10px);
+  gap:clamp(9px,1.15vw,18px);
   width:100%;
 }}
 .brand-mark-art,.brand-wordmark-art {{
