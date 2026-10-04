@@ -461,12 +461,11 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
     assert 'event=>event.preventDefault()' in html
     assert "Stream Health:" in html
     assert "<summary>Advanced Stream Details</summary>" in html
-    assert "Discord Controls" in html
     assert "Fullscreen" in html
     assert "Pause for Everyone" in html
     assert "End Private Session" in html
-    assert "Pass Host" not in html
-    assert "Manage Queue" not in html
+    assert "Pass Host" in html
+    assert "Manage Queue" in html
     assert "Cinema notifications are managed" not in html
     assert "Movie discovery and your saved Cinema controls" not in html
 
@@ -781,3 +780,72 @@ def test_dank_cinema_web_host_transfer_endpoint_uses_canonical_manager(monkeypat
     assert room.host_id == 20
     assert payload["host_id"] == 20
     assert payload["is_host"] is False
+
+
+
+def test_dank_cinema_web_queue_endpoint_uses_canonical_manager(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=123,
+        channel_id=456,
+        host_id=10,
+        stream_token="",
+    )
+    first = manager.nominate(
+        room.room_id,
+        user_id=10,
+        title="First",
+        auto_vote=False,
+    )
+    second = manager.nominate(
+        room.room_id,
+        user_id=10,
+        title="Second",
+        auto_vote=False,
+    )
+    room.queue[:] = [first.candidate_id, second.candidate_id]
+
+    async def room_and_user(_request):
+        return room, 10
+
+    async def state_payload(current_room, user_id):
+        return {
+            "ok": True,
+            "queue": list(current_room.queue),
+            "is_host": int(user_id) == int(current_room.host_id),
+        }
+
+    async def request_json():
+        return {
+            "action": "move_up",
+            "candidate_id": second.candidate_id,
+        }
+
+    monkeypatch.setattr(movie_night_web, "_room_and_user", room_and_user)
+    monkeypatch.setattr(movie_night_web, "_state_payload", state_payload)
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+
+    response = asyncio.run(
+        movie_night_web.movie_night_queue_action(
+            SimpleNamespace(json=request_json)
+        )
+    )
+    payload = json.loads(response.text)
+
+    assert payload["queue"] == [second.candidate_id, first.candidate_id]
+
+
+def test_dank_cinema_queue_ui_has_real_host_management_actions() -> None:
+    html = movie_night_web._watch_html(
+        "room-queue-manager",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert 'id="manageQueue"' in html
+    assert 'id="clearQueue"' in html
+    assert '"/movie/"+BOOT.roomId+"/queue"' in html
+    assert '"move_up"' in html
+    assert '"move_down"' in html
+    assert '"remove"' in html
+    assert 'queueAction("clear")' in html
