@@ -57,6 +57,7 @@ from .cinema_media_identity import (
     parse_episode_query,
 )
 from .cinema_playback_service import (
+    find_catalog_candidate,
     materialize_search_results,
     search_exact_episode_sources,
     search_exact_movie_sources,
@@ -1035,10 +1036,7 @@ async def cinema_play_api(request: web.Request) -> web.Response:
         query=query,
         catalog_metadata=metadata,
     )
-    candidate = manager.find_candidate_by_title(
-        room_id,
-        str(metadata.get("title") or ""),
-    )
+    candidate = find_catalog_candidate(latest, metadata)
     if candidate is None:
         raise web.HTTPConflict(text="Cinema could not attach that title to the current room.")
 
