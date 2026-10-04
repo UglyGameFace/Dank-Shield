@@ -34,8 +34,12 @@ _EXPLICIT_ADULT_RE = re.compile(
 )
 
 
+def looks_explicit_adult(value: Any) -> bool:
+    return bool(_EXPLICIT_ADULT_RE.search(str(value or "")))
+
+
 def variant_is_explicit_adult(variant: Any) -> bool:
-    if _EXPLICIT_ADULT_RE.search(str(getattr(variant, "title", "") or "")):
+    if looks_explicit_adult(getattr(variant, "title", "")):
         return True
     metadata = getattr(variant, "metadata", None)
     metadata = metadata if isinstance(metadata, Mapping) else {}
@@ -56,7 +60,7 @@ def variant_is_explicit_adult(variant: Any) -> bool:
         clean = " ".join(
             str(value).casefold().replace("_", " ").replace("-", " ").split()
         )
-        if clean in explicit_labels or _EXPLICIT_ADULT_RE.search(clean):
+        if clean in explicit_labels or looks_explicit_adult(clean):
             return True
     return False
 
@@ -288,6 +292,7 @@ __all__ = [
     "episode_search_query",
     "filter_adult_provider_results",
     "filter_outcome_for_catalog",
+    "looks_explicit_adult",
     "normalized_title_tokens",
     "parse_episode_query",
     "release_matches_catalog",
