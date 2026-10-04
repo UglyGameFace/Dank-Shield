@@ -3546,7 +3546,7 @@ def _catalog_result_embed(
     embed.set_footer(
         text=(
             f"Result {max(1, index + 1)} of {max(1, total)} • "
-            f'Search: "{_compact(raw_query, 80)}" • TMDB metadata'
+            f'Search: "{_compact(raw_query, 80)}" • Dank Cinema • TMDB metadata'
         )
     )
     return embed
