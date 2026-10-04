@@ -395,3 +395,16 @@ def test_notifications_keep_truthful_unread_badge_after_mark_read() -> None:
     assert "const unreadCount = notifications.filter((item) => !item.read_at).length;" in script
     assert "notifications_unread: unreadCount" in script
     assert "state.home = null;\n                renderNotifications();" not in script
+
+
+
+def test_episode_search_parser_accepts_shared_cinema_notation() -> None:
+    assert cinema_site._parse_episode_query("Example Show S3E7") == ("Example Show", 3, 7)
+    assert cinema_site._parse_episode_query("Example Show S3 E7") == ("Example Show", 3, 7)
+    assert cinema_site._parse_episode_query("Example Show 3x07") == ("Example Show", 3, 7)
+    assert cinema_site._parse_episode_query("Example Show season 3 episode 7") == (
+        "Example Show",
+        3,
+        7,
+    )
+    assert cinema_site._parse_episode_query("Example Show") is None
