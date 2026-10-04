@@ -1823,7 +1823,28 @@ video {{
 .section-head h2 {{ margin:0;font-size:1.04rem; }}
 .section-head span {{ color:#9ca8a3;font-size:.76rem; }}
 #queueList {{ display:grid;gap:8px; }}
-.queue-empty {{ color:#9ba7a2;font-size:.84rem;padding:6px 0; }}
+.queue-empty {{
+  display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:11px;
+  padding:12px;border:1px dashed rgba(177,255,125,.16);border-radius:12px;
+  background:linear-gradient(135deg,rgba(18,36,29,.64),rgba(7,16,13,.66));
+}}
+.queue-empty-mark {{
+  width:38px;height:38px;border-radius:11px;display:grid;place-items:center;
+  border:1px solid rgba(167,255,100,.18);color:var(--lime);
+  background:rgba(90,170,55,.08);font-size:1rem;
+}}
+.queue-empty-copy {{ min-width:0; }}
+.queue-empty-title {{ color:#e7edea;font-size:.82rem;font-weight:850; }}
+.queue-empty-sub {{ margin-top:3px;color:#8d9a94;font-size:.7rem;line-height:1.35; }}
+.queue-empty-action {{
+  border:1px solid rgba(142,160,255,.25);border-radius:10px;
+  background:rgba(83,96,164,.11);color:#cdd4ff;padding:8px 10px;
+  font-size:.68rem;font-weight:850;white-space:nowrap;
+}}
+@media (max-width:480px) {{
+  .queue-empty {{ grid-template-columns:auto minmax(0,1fr); }}
+  .queue-empty-action {{ grid-column:1 / -1;width:100%; }}
+}}
 .queue-item {{
   display:grid;grid-template-columns:58px minmax(0,1fr);gap:10px;align-items:center;
   padding:8px;border:1px solid rgba(255,255,255,.07);border-radius:12px;background:#0a1512;
@@ -2307,7 +2328,15 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
         <button class="queue-clear" id="clearQueue" type="button" hidden>Clear Queue</button>
       </div>
     </div>
-    <div id="queueList"><div class="queue-empty">Nothing queued yet.</div></div>
+    <div id="queueList">
+      <div class="queue-empty">
+        <div class="queue-empty-mark" aria-hidden="true">▤</div>
+        <div class="queue-empty-copy">
+          <div class="queue-empty-title">Your Queue Is Empty</div>
+          <div class="queue-empty-sub">Add a title from Discord Cinema and it will appear here for everyone in the session.</div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <details class="diagnostics">
@@ -2701,7 +2730,31 @@ function renderQueue(items) {{
   if(!rows.length) {{
     const empty=document.createElement("div");
     empty.className="queue-empty";
-    empty.textContent="Nothing queued yet.";
+
+    const mark=document.createElement("div");
+    mark.className="queue-empty-mark";
+    mark.setAttribute("aria-hidden","true");
+    mark.textContent="▤";
+
+    const copy=document.createElement("div");
+    copy.className="queue-empty-copy";
+    const title=document.createElement("div");
+    title.className="queue-empty-title";
+    title.textContent="Your Queue Is Empty";
+    const sub=document.createElement("div");
+    sub.className="queue-empty-sub";
+    sub.textContent="Add a title from Discord Cinema and it will appear here for everyone in the session.";
+    copy.append(title,sub);
+    empty.append(mark,copy);
+
+    if(lastState?.discord_url) {{
+      const action=document.createElement("button");
+      action.type="button";
+      action.className="queue-empty-action";
+      action.textContent="Open Discord";
+      action.onclick=openDiscordRoom;
+      empty.appendChild(action);
+    }}
     list.appendChild(empty);
     return;
   }}
