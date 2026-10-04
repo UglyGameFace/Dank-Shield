@@ -22,7 +22,25 @@ USER_TABLE = "dank_cinema_users"
 MEDIA_TABLE = "dank_cinema_user_media"
 NOTIFICATION_TABLE = "dank_cinema_notifications"
 
+DEFAULT_PREFERENCES: dict[str, Any] = {
+    "autoplay_next": True,
+    "playback_speed": 1.0,
+    "preferred_source": "",
+    "default_audio_language": "",
+    "default_subtitle_language": "",
+    "visual_quality": "auto",
+}
+
 _CACHE_TTL = 20.0
+_USER_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
+_MEDIA_CACHE: dict[int, tuple[float, list[dict[str, Any]]]] = {}
+_LOCKS: dict[int, asyncio.Lock] = {}
+
+
+class InvalidCinemaState(ValueError):
+    """Raised when a Cinema library operation receives invalid media state."""
+
+
 def _normalize_preferences(value: Any) -> dict[str, Any]:
     raw = dict(value) if isinstance(value, Mapping) else {}
     result = dict(DEFAULT_PREFERENCES)
@@ -200,6 +218,36 @@ async def list_user_media(user_id: int, *, refresh: bool = False) -> list[dict[s
     rows = _rows(await _execute(f"read Cinema library {uid}", read))
     _cache_media(uid, rows)
     return [dict(row) for row in rows]
+
+
+async def get_media_state(
+    user_id: int,
+    *,
+    media_type: str,
+    tmdb_id: int,
+    season_number: int = 0,
+    episode_number: int = 0,
+    refresh: bool = False,
+) -> Optional[dict[str, Any]]:
+    """Return one canonical per-user media row without bypassing service caching."""
+
+    key = _media_key_payload(
+        user_id=user_id,
+        media_type=media_type,
+        tmdb_id=tmdb_id,
+        season_number=season_number,
+        episode_number=episode_number,
+    )
+    rows = await list_user_media(int(user_id), refresh=refresh)
+    for row in rows:
+        if (
+            str(row.get("media_type") or "") == key["media_type"]
+            and int(row.get("tmdb_id") or 0) == key["tmdb_id"]
+            and int(row.get("season_number") or 0) == key["season_number"]
+            and int(row.get("episode_number") or 0) == key["episode_number"]
+        ):
+            return dict(row)
+    return None
 
 
 async def set_watchlist(
@@ -469,6 +517,7 @@ __all__ = [
     "InvalidCinemaState",
     "create_notification",
     "get_cinema_user",
+    "get_media_state",
     "invalidate_cinema_user_cache",
     "library_snapshot",
     "list_notifications",
