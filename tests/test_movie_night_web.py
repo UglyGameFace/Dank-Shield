@@ -59,8 +59,12 @@ def test_movie_night_public_routes_are_media_only() -> None:
     assert "/movie/{room_id}/action" in rendered
     assert "/movie/{room_id}/invite-options" in rendered
     assert "/movie/{room_id}/promote" in rendered
-    assert ("GET", "<DynamicResource  /movie/{room_id}/progress>") in routes
-    assert ("POST", "<DynamicResource  /movie/{room_id}/progress>") in routes
+    progress_methods = {
+        method
+        for method, resource in routes
+        if "/movie/{room_id}/progress" in resource
+    }
+    assert {"GET", "POST"} <= progress_methods
     assert "/api/" not in rendered
     assert "/guild/" not in rendered
 
