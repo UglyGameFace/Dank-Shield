@@ -8,10 +8,13 @@ Baseline:
 `main@2397a03626bf49d48ee87dbd7b83480e99baa305` (PR #429 merged).
 
 Active branch:
-`feat/dank-cinema-theater-site`
+`fix/430-cinema-real-controls`
 
 Issue:
 **#430 — Dank Cinema: match premium 420 Lobby theater website mockup**
+
+Pull request:
+**#432 — Dank Cinema: replace mockup controls with real web actions**
 
 Outcome:
 Rebuild the signed Dank Cinema Watch page to match the owner-approved premium dark-green 420 Lobby theater mockup while preserving the canonical synchronized playback, signed access, torrent runtime, and Discord-owned movie programming paths.
@@ -31,7 +34,7 @@ Rebuild the signed Dank Cinema Watch page to match the owner-approved premium da
 
 ## Status
 
-**Implementation is in progress on the focused branch. The first full PR run reached 2,736 tests with 2,735 passing and one stale markup assertion failing after the approved custom End Session control replaced the old plain button. That assertion is now updated on the current head. New exact-head CI, final diff inspection, and a real mobile/Discloud canary are still required before completion can be claimed.**
+**Production canary failed the UX Definition of Done after PR #431 merged as `5783dcfdc0a1d4d1e817e6ccf8881e0ccf8bde5e`. The page looked like a mockup rather than a real product because several visible controls only wrote instructional text instead of performing actions, placeholder poster/avatar/profile elements rendered as if they were real data, and the Cast button relied on generic Remote Playback feature detection rather than a real Google Cast sender session. Issue #430 is reopened and remediation is active on `fix/430-cinema-real-controls`.**
 
 ## Findings / root cause
 
@@ -53,6 +56,23 @@ Rebuild the signed Dank Cinema Watch page to match the owner-approved premium da
    - room queue candidate IDs can be projected into a safe queue view;
    - no duplicate movie/session store is needed.
 
+5. **Production exposed fake affordances.**
+   - Home/Browse/My Stuff, header search/notifications, Viewers/Chat, Pass Host, and Manage Queue were visible buttons whose handlers only displayed notices;
+   - blank poster cards and synthetic viewer/avatar/profile visuals made missing data look fabricated;
+   - these controls are being removed or replaced with actions that actually navigate, open Discord, reveal live session state, or control playback.
+
+6. **The first Cast implementation was not Chromecast integration.**
+   - `HTMLMediaElement.remote.prompt()` / AirPlay feature detection does not create a Google Cast sender session;
+   - the remediation uses Google's Web Sender SDK with the Default Media Receiver and a separately signed Cast media URL;
+   - native Remote Playback/AirPlay are only used as fallbacks after the browser reports a real available target;
+   - Cast is hidden unless at least one real casting transport is available and the selected media container is directly castable.
+
+7. **TMDB metadata existed but the Watch page was reading the wrong shape.**
+   - canonical Movie Night candidates store TMDB identity under `candidate.metadata["catalog"]`;
+   - the Watch serializer was incorrectly reading `year`, `overview`, and `poster_url` only from the candidate metadata root;
+   - this is why a correctly TMDB-matched title could still show a blank poster/description on the website;
+   - the serializer now reads the canonical catalog envelope first and keeps the strict TMDB image-host allowlist.
+
 ## Execution path
 
 `signed Watch URL -> _room_and_user -> _state_payload -> custom Dank Cinema theater UI -> heartbeat/state/action -> canonical MovieNightManager + TorrentMediaManager`.
@@ -61,7 +81,7 @@ Artwork:
 `candidate.metadata.poster_url -> strict image.tmdb.org allowlist -> CSP-authorized poster rendering`.
 
 Casting:
-`explicit Cast button -> HTMLMediaElement.remote.prompt() when available -> WebKit playback target picker fallback`.
+`Google Cast Web Sender SDK -> Default Media Receiver -> signed torrent media URL -> room state continues as playback authority`.
 
 ## Changes
 
@@ -76,6 +96,14 @@ Casting:
 - Added stream-health presentation while keeping progress, seeds/leechers, rate, and buffer target under Advanced Stream Details.
 - Preserved signed access, sync/heartbeat, host action API, progressive torrent playback, and existing room authority.
 - Pass Host and queue programming remain Discord-owned; the web mockup buttons route users back to the canonical Cinema panel rather than creating duplicate authority.
+- Production follow-up removes the fake header/profile/search/notification affordances and fake Home/Browse/My Stuff actions.
+- Navigation now exposes only real Theater, Queue, Details, and Discord actions.
+- Session tab renders real room/viewer/sync state; Chat opens the actual Discord channel.
+- Missing TMDB poster/overview data is hidden instead of replaced with fabricated placeholder content.
+- Host sheet keeps only working Discord Controls, Fullscreen, Pause for Everyone, and End Session actions.
+- Chromecast support now uses Google's Web Sender SDK and Default Media Receiver; availability-gated native Remote Playback/AirPlay remain truthful fallbacks where supported.
+- Signed torrent stream responses now expose narrowly scoped gstatic CORS for Cast receiver fetches; the HMAC URL remains required.
+- Watch metadata now reads the canonical nested TMDB catalog payload, so matched movies render their real TMDB title/year/overview/poster instead of appearing metadata-empty.
 
 ## Validation / results so far
 
@@ -88,7 +116,9 @@ Regression tests updated/added for:
 - CSP allowing only the trusted TMDB image host;
 - mode-correct private wording.
 
-First PR CI completed with 2,735 passing tests and one failure in `test_web_player_has_terminal_state_before_missing_room_fallback`; the test still required the retired literal `id="end" disabled>End Session</button>` markup. The redesigned control still preserves the same `id="end"`, `hostAction("end")`, terminal-state handling, and missing-room fallback. The regression test now checks the new host-sheet control instead. A new exact-head run is required.
+PR #431 exact-head CI ultimately passed all five workflow families and the PR merged. The production/mobile canary then failed usability because visible controls were not real actions. New regression coverage now asserts the fake navigation/actions/placeholders are absent, Google Cast sender integration is present, and Cast CORS only permits Google receiver origins. Exact-head CI for this remediation branch is pending.
+
+PR #432 head `d9533eb7...` then completed 2,742 tests with **2,741 passing / 1 failing**. The sole failure was the theater contract still requiring player context-menu suppression (`event=>event.preventDefault()`), which had been accidentally dropped while replacing the fake control block. The suppression has been restored on current head `52b6397193...`; fresh exact-head CI is required.
 
 ## Cleanup / conflicts
 
@@ -99,8 +129,9 @@ First PR CI completed with 2,735 passing tests and one failure in `test_web_play
 
 ## Blockers / risks
 
-- Remote Playback support is browser/device dependent; unsupported browsers cannot be forced to expose a cast target picker.
-- Custom controls need real Android Chrome/Discloud validation for fullscreen, audio gesture, sync, and cast behavior.
+- Google Cast Web Sender and native remote-playback support are browser/device dependent. Unsupported browsers get no Cast button rather than a fake one.
+- Chromecast receiver codec support can still reject a selected release even when local browser playback works.
+- Custom controls need real Android/Discloud validation for fullscreen, audio gesture, sync, Google Cast discovery/load, and fallback behavior.
 - A determined authorized viewer can still inspect network requests for the signed media URL; hiding the browser Download control is UI hardening, not DRM.
 
 ## Backlog
@@ -108,10 +139,13 @@ First PR CI completed with 2,735 passing tests and one failure in `test_web_play
 - full standalone Browse/Home/My Stuff website surfaces backed by persistent web identity/session data are outside this focused Watch-page redesign;
 - first-class web Pass Host and queue editing would require explicit authority/API design instead of dead duplicate controls;
 - **RSS Feed surfacing follow-up:** add a clean first-class RSS area in both Discord Cinema and the website using the existing Movie Sources/feed model. Feeds must be organized by source/category/status rather than dumped into one flat RSS list, with per-feed management and clear distinction from Search Providers and Reference Links.
+- **TMDB identity normalization follow-up:** every playable movie/TV item should have a canonical TMDB identity before it is presented as library content. Search/catalog selections already carry one; raw provider text, magnets, and .torrent attachments need a conservative identity step using parsed title/year plus explicit user confirmation when matching is ambiguous. Once identified, persist the TMDB ID and use it as the sole source for title, year/date, overview, poster/backdrop, genres, runtime, certification, cast/crew, and TV season/episode metadata. Never silently attach the wrong poster because a torrent filename looked vaguely similar.
+- **TV Shows / Continue Watching follow-up:** build a first-class TV experience backed by TMDB TV identity, seasons, episode metadata/artwork, and persistent per-user progress. Required product behavior: separate Movies / TV navigation; exact series matching; season grouping; ordered episode lists; episode title/number/runtime/air date/overview/still artwork; Resume / Continue Watching across sessions; per-episode watched/progress state; automatic next-episode suggestion and optional autoplay/countdown; skip-intro/recap support only when real timing metadata exists; season completion/progress; Recently Watched / Up Next; favorites/watchlist; provider/source matching at episode/season level; avoid merging similarly named shows; preserve server/private-room permissions and the canonical Cinema playback engine instead of creating a second TV player.
+- **Cinema viewer-value follow-up:** after TV foundations, evaluate subtitles/audio-track selection, playback-speed controls, quality/source preference, episode/movie history, watchlist/favorites, recently watched, resume cards, next-up queue, parental/adult-content filtering consistency, source-health preference, and optional notifications for queued/starting sessions. Add only features backed by real data/actions; no decorative dead controls.
 
 ## Next step
 
-Open the focused PR, run exact-head repository workflows, repair only evidence-backed failures, inspect the final diff for accidental changes, then run an Android/Discloud Watch-page canary covering host playback, viewer sync/audio, fullscreen, casting availability, private wording, queue display, and end-session behavior.
+Run exact-head repository workflows for PR #432, repair only evidence-backed failures, inspect the final diff, then repeat the Android/Discloud canary. The canary must verify that every visible control performs a real action, unsupported Cast is hidden, supported Google Cast actually opens device discovery and loads the signed stream, missing metadata does not render fake content, and core host/viewer sync remains intact.
 
 ---
 
