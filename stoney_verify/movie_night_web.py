@@ -1513,6 +1513,8 @@ function renderQueue(items) {{
   list.textContent="";
   const rows=Array.isArray(items)?items:[];
   document.getElementById("queueCount").textContent=rows.length+" queued";
+  const clear=document.getElementById("clearQueue");
+  clear.hidden=!(lastState?.is_host && rows.length);
   if(!rows.length) {{
     const empty=document.createElement("div");
     empty.className="queue-empty";
@@ -1564,8 +1566,6 @@ function renderQueue(items) {{
     }}
     list.appendChild(row);
   }}
-  const clear=document.getElementById("clearQueue");
-  clear.hidden=!(lastState?.is_host && rows.length);
 }}
 function viewerInitials(name) {{
   const parts=String(name||"").trim().split(/\s+/).filter(Boolean);
