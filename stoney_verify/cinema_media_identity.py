@@ -161,7 +161,7 @@ def episode_catalog_metadata(
         "still_url": str(episode.still_url or ""),
         "runtime": int(episode.runtime or 0),
         "rating": float(episode.rating or 0.0),
-        "adult": False,
+        "adult": bool(series.adult),
     }
 
 
