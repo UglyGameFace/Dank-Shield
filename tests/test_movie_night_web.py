@@ -86,7 +86,7 @@ def test_movie_night_player_contains_sync_heartbeat_and_host_controls() -> None:
     assert 's.sync_status==="joining"' in html
     assert "Synced Viewer" in html
     assert "<summary>Advanced Stream Details</summary>" in html
-    assert 'class="now"' in html
+    assert 'class="theater"' in html
     assert html.index("<video") < html.index("<summary>Advanced Stream Details</summary>")
 
 
@@ -440,7 +440,8 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
     assert "video.remote.prompt" in html
     assert "webkitShowPlaybackTargetPicker" in html
     assert 'controlslist="nodownload"' in html
-    assert '<video id="video" playsinline preload="metadata" controls' not in html
+    assert '<video id="video" controls' not in html
+    assert '<video id="video" playsinline preload="metadata" controls>' not in html
     assert 'event=>event.preventDefault()' in html
     assert "Stream Health:" in html
     assert "<summary>Advanced Stream Details</summary>" in html
