@@ -9,93 +9,20 @@ pretending progress/watchlist actions succeeded.
 
 import asyncio
 import time
-from datetime import datetime, timezone
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Mapping, Optional
 
-from .globals import get_supabase, reset_supabase
+from .cinema_storage import (
+    CinemaStorageUnavailable,
+    execute as _execute,
+    rows as _rows,
+    utc_now as _now,
+)
 
 USER_TABLE = "dank_cinema_users"
 MEDIA_TABLE = "dank_cinema_user_media"
 NOTIFICATION_TABLE = "dank_cinema_notifications"
 
 _CACHE_TTL = 20.0
-_DB_ATTEMPTS = 3
-_USER_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
-_MEDIA_CACHE: dict[int, tuple[float, list[dict[str, Any]]]] = {}
-_LOCKS: dict[int, asyncio.Lock] = {}
-
-DEFAULT_PREFERENCES: dict[str, Any] = {
-    "autoplay_next": True,
-    "visual_quality": "auto",
-    "playback_speed": 1.0,
-    "preferred_source": "",
-    "default_audio_language": "",
-    "default_subtitle_language": "",
-}
-
-
-class CinemaStorageUnavailable(RuntimeError):
-    pass
-
-
-class InvalidCinemaState(ValueError):
-    pass
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _rows(response: Any) -> list[dict[str, Any]]:
-    raw = getattr(response, "data", None) or []
-    return [dict(row) for row in raw if isinstance(row, Mapping)]
-
-
-def _is_retryable(exc: Exception) -> bool:
-    text = repr(exc).casefold()
-    return any(
-        marker in text
-        for marker in (
-            "timeout",
-            "timed out",
-            "connection reset",
-            "connection aborted",
-            "temporarily unavailable",
-            "remoteprotocolerror",
-            "broken pipe",
-            "eof",
-        )
-    )
-
-
-def _execute_sync(label: str, operation: Callable[[Any], Any]) -> Any:
-    last: Optional[Exception] = None
-    for attempt in range(1, _DB_ATTEMPTS + 1):
-        try:
-            client = get_supabase()
-            if client is None:
-                raise CinemaStorageUnavailable(
-                    "Dank Cinema storage is unavailable."
-                )
-            return operation(client)
-        except CinemaStorageUnavailable:
-            raise
-        except Exception as exc:
-            last = exc
-            if _is_retryable(exc) and attempt < _DB_ATTEMPTS:
-                reset_supabase()
-                time.sleep(0.12 * attempt)
-                continue
-            break
-    raise CinemaStorageUnavailable(
-        f"{label} failed safely: {type(last).__name__ if last else 'unknown error'}"
-    )
-
-
-async def _execute(label: str, operation: Callable[[Any], Any]) -> Any:
-    return await asyncio.to_thread(_execute_sync, label, operation)
-
-
 def _normalize_preferences(value: Any) -> dict[str, Any]:
     raw = dict(value) if isinstance(value, Mapping) else {}
     result = dict(DEFAULT_PREFERENCES)
