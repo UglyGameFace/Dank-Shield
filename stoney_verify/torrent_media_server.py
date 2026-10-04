@@ -10,7 +10,11 @@ from aiohttp import web
 
 from stoney_verify.api_new.torrent_stream_routes import register_torrent_public_routes
 from stoney_verify.movie_night_web import register_movie_night_public_routes
-from stoney_verify.cinema_site import register_cinema_site_routes
+from stoney_verify.cinema_site import (
+    cinema_oauth_ready,
+    cinema_oauth_redirect_uri,
+    register_cinema_site_routes,
+)
 from stoney_verify.torrent_streaming import get_torrent_manager
 
 _MEDIA_RUNNER: Optional[web.AppRunner] = None
@@ -76,8 +80,15 @@ async def _health(request: web.Request) -> web.Response:
             "service": "dank_torrent_media",
             "public_base_url_configured": bool(manager.public_base_url),
             "stream_signing_configured": bool(manager.stream_secret),
+            "cinema_standalone_login_configured": bool(cinema_oauth_ready()),
+            "cinema_oauth_redirect_uri": cinema_oauth_redirect_uri(),
         }
     )
+
+
+async def _root(request: web.Request) -> web.Response:
+    _ = request
+    raise web.HTTPFound("/cinema")
 
 
 async def start_torrent_media_server() -> bool:
@@ -103,8 +114,16 @@ async def start_torrent_media_server() -> bool:
             "⚠️ Torrent media server starting without DANK_MEDIA_PUBLIC_BASE_URL; "
             "Site health remains available but no playback URL can be issued yet."
         )
+    if not cinema_oauth_ready():
+        print(
+            "⚠️ Dank Cinema standalone login is not configured; "
+            "set DANK_CINEMA_DISCORD_CLIENT_SECRET and register "
+            f"{cinema_oauth_redirect_uri() or '<public-base>/cinema/auth/callback'} "
+            "as a Discord OAuth2 redirect URI."
+        )
 
     app = web.Application(client_max_size=1024 * 1024)
+    app.router.add_get("/", _root)
     app.router.add_get("/health", _health)
     register_torrent_public_routes(app)
     register_movie_night_public_routes(app)
