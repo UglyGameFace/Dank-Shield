@@ -438,8 +438,7 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
     assert "The 420 Lobby" in html
     assert 'id="cast"' in html
     assert "cast_sender.js?loadCastFramework=1" in html
-    assert 'window.history.replaceState(null,"",window.location.pathname)' in html
-    assert html.index("history.replaceState") < html.index("loadGoogleCastSdk();")
+    assert "history.replaceState" not in html
     assert "DEFAULT_MEDIA_RECEIVER_APP_ID" in html
     assert "requestSession()" in html
     assert "session.loadMedia(request)" in html
