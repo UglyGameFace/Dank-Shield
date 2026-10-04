@@ -886,6 +886,9 @@ def test_dank_cinema_host_controls_can_be_reopened_after_close() -> None:
     )
 
     assert 'id="hostLauncher"' in html
+    assert "let hostSheetDismissed=true" in html
+    assert "let previousHostState=null" in html
+    assert "previousHostState===false" in html
     assert "function openHostControls()" in html
     assert "function closeHostControls()" in html
     assert "launcher.hidden=!hostSheetDismissed" in html
@@ -1434,3 +1437,16 @@ def test_google_cast_sdk_is_deferred_until_after_initial_render() -> None:
     assert 'typeof window.requestIdleCallback==="function"' in html
     assert "requestIdleCallback(()=>loadGoogleCastSdk()" in html
     assert "setTimeout(()=>loadGoogleCastSdk(),900)" in html
+
+
+
+def test_desktop_host_controls_use_compact_floating_panel_instead_of_full_width_sheet() -> None:
+    html = movie_night_web._watch_html(
+        "room-desktop-host",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert "left:auto;right:24px;bottom:24px;transform:none" in html
+    assert "width:390px;max-height:min(76vh,620px)" in html
+    assert ".host-actions { grid-template-columns:repeat(2,minmax(0,1fr)); }" in html
