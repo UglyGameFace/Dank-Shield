@@ -51,6 +51,13 @@ from stoney_verify.movie_catalog import (
     search_tmdb_movies,
     tmdb_catalog_ready,
 )
+from stoney_verify.cinema_catalog import (
+    CinemaEpisode,
+    CinemaMedia,
+    get_details as get_cinema_details,
+    get_season as get_cinema_season,
+    search_catalog as search_cinema_catalog,
+)
 from stoney_verify.movie_night import (
     PRIVATE_VIEWER_LIMIT,
     MovieNightRoom,
@@ -1373,6 +1380,84 @@ def _normalized_movie_identity(value: Any) -> tuple[str, ...]:
     return tuple(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
 
 
+def _cinema_catalog_metadata(media: CinemaMedia) -> dict[str, Any]:
+    return {
+        "catalog_provider": "tmdb",
+        "catalog_id": str(int(media.tmdb_id)),
+        "tmdb_id": int(media.tmdb_id),
+        "media_type": str(media.media_type),
+        "title": str(media.title),
+        "original_title": str(media.original_title or ""),
+        "year": int(media.year or 0),
+        "overview": str(media.overview or ""),
+        "poster_url": str(media.poster_url or ""),
+        "backdrop_url": str(media.backdrop_url or ""),
+        "popularity": float(media.popularity or 0.0),
+        "rating": float(media.rating or 0.0),
+        "adult": bool(media.adult),
+    }
+
+
+def _cinema_episode_catalog_metadata(
+    *,
+    series: CinemaMedia,
+    episode: CinemaEpisode,
+) -> dict[str, Any]:
+    season = max(0, int(episode.season_number))
+    number = max(0, int(episode.episode_number))
+    display_title = (
+        f"{series.title} S{season:02d}E{number:02d}"
+        + (f" • {episode.title}" if episode.title else "")
+    )
+    return {
+        "catalog_provider": "tmdb",
+        "catalog_id": str(int(episode.tmdb_id)),
+        "tmdb_id": int(episode.tmdb_id),
+        "media_type": "episode",
+        "title": display_title[:180],
+        "episode_title": str(episode.title or "")[:180],
+        "series_id": int(series.tmdb_id),
+        "series_title": str(series.title)[:180],
+        "season_number": season,
+        "episode_number": number,
+        "year": int(series.year or 0),
+        "overview": str(episode.overview or "")[:900],
+        "poster_url": str(series.poster_url or ""),
+        "backdrop_url": str(episode.still_url or series.backdrop_url or ""),
+        "still_url": str(episode.still_url or ""),
+        "runtime": int(episode.runtime or 0),
+        "rating": float(episode.rating or 0.0),
+        "adult": False,
+    }
+
+
+def _episode_release_matches(
+    release_title: Any,
+    catalog_metadata: Mapping[str, Any],
+) -> bool:
+    series_title = _compact(catalog_metadata.get("series_title"))
+    season = _safe_int(catalog_metadata.get("season_number"), -1)
+    episode = _safe_int(catalog_metadata.get("episode_number"), -1)
+    if not series_title or season < 0 or episode < 0:
+        return False
+
+    release_text = str(release_title or "").casefold()
+    release_tokens = _normalized_movie_identity(release_text)
+    series_tokens = _normalized_movie_identity(series_title)
+    if not series_tokens or not all(token in release_tokens for token in series_tokens):
+        return False
+
+    compact = re.sub(r"[^a-z0-9]+", "", release_text)
+    patterns = (
+        f"s{season:02d}e{episode:02d}",
+        f"s{season}e{episode}",
+        f"{season}x{episode:02d}",
+        f"{season}x{episode}",
+        f"season{season}episode{episode}",
+    )
+    return any(pattern in compact for pattern in patterns)
+
+
 def _release_matches_catalog(
     release_title: Any,
     catalog_metadata: Optional[Mapping[str, Any]],
@@ -1380,6 +1465,9 @@ def _release_matches_catalog(
 ) -> bool:
     if not isinstance(catalog_metadata, Mapping):
         return False
+
+    if str(catalog_metadata.get("media_type") or "").strip().lower() == "episode":
+        return _episode_release_matches(release_title, catalog_metadata)
 
     catalog_id = _compact(catalog_metadata.get("catalog_id"), 40)
     if catalog_id and isinstance(release_metadata, Mapping):
@@ -1443,12 +1531,12 @@ def _filter_outcome_for_catalog(
     errors = list(outcome.errors)
     if outcome.variants and not matched:
         errors.append(
-            "Connected providers returned releases, but none matched the selected catalog movie."
+            "Connected providers returned releases, but none matched the selected catalog title."
         )
     elif len(matched) < len(outcome.variants):
         errors.append(
             f"Ignored {len(outcome.variants) - len(matched)} provider release(s) "
-            "that did not match the selected catalog movie."
+            "that did not match the selected catalog title."
         )
     return MediaSourceSearchOutcome(
         variants=matched,
