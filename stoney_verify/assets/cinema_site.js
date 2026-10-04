@@ -121,6 +121,40 @@
       : "";
   }
 
+  function tmdbImageVariant(url, size) {
+    const clean = safeImage(url);
+    if (!clean.startsWith("https://image.tmdb.org/")) return clean;
+    return clean.replace(/\/t\/p\/(?:w\d+|original)\//, `/t/p/${size}/`);
+  }
+
+  function configureArtwork(image, url, kind = "poster") {
+    const clean = safeImage(url);
+    if (!clean) return false;
+    if (!clean.startsWith("https://image.tmdb.org/")) {
+      image.src = clean;
+      return true;
+    }
+    const variants = kind === "backdrop"
+      ? [["w300", 300], ["w780", 780], ["w1280", 1280]]
+      : kind === "profile"
+        ? [["w185", 185], ["w300", 300]]
+        : kind === "still"
+          ? [["w300", 300], ["w780", 780]]
+          : [["w185", 185], ["w342", 342], ["w500", 500], ["w780", 780]];
+    image.src = tmdbImageVariant(clean, variants[Math.min(1, variants.length - 1)][0]);
+    image.srcset = variants
+      .map(([size, width]) => `${tmdbImageVariant(clean, size)} ${width}w`)
+      .join(", ");
+    image.sizes = kind === "backdrop"
+      ? "100vw"
+      : kind === "still"
+        ? "(max-width: 620px) calc(100vw - 46px), 200px"
+        : kind === "profile"
+          ? "88px"
+          : "(max-width: 620px) 44vw, (max-width: 1199px) 22vw, 190px";
+    return true;
+  }
+
   function initials(name) {
     const parts = String(name || "?").trim().split(/\s+/).filter(Boolean);
     return (parts[0]?.[0] || "?") + (parts.length > 1 ? parts.at(-1)?.[0] || "" : "");
@@ -362,15 +396,15 @@
     const card = node("article", "media-card");
     const art = node("div", "card-art");
     const artUrl = itemArt(item);
+    const kind = itemKind(item);
     if (artUrl) {
       const image = node("img");
-      image.src = artUrl;
+      configureArtwork(image, artUrl, kind === "episode" ? "still" : "poster");
       image.alt = `${itemTitle(item)} artwork`;
       image.loading = "lazy";
       image.decoding = "async";
       art.appendChild(image);
     }
-    const kind = itemKind(item);
     if (kind === "episode") {
       art.appendChild(node("span", "card-badge", `S${item.season_number || 0} E${item.episode_number || 0}`));
     } else if (item.playable) {
@@ -455,7 +489,7 @@
     const art = safeImage(hero.backdrop_url || hero.poster_url);
     if (art) {
       const image = node("img");
-      image.src = art;
+      configureArtwork(image, art, "backdrop");
       image.alt = "";
       image.fetchPriority = "high";
       image.decoding = "async";
@@ -660,7 +694,7 @@
       const wrap = node("div", "person");
       const image = node("img");
       const url = safeImage(person.profile_url);
-      if (url) image.src = url;
+      if (url) configureArtwork(image, url, "profile");
       image.alt = "";
       image.loading = "lazy";
       wrap.append(
@@ -738,7 +772,7 @@
       const art = safeImage(ep.still_url);
       if (art) {
         const image = node("img");
-        image.src = art;
+        configureArtwork(image, art, "still");
         image.alt = "";
         image.loading = "lazy";
         image.decoding = "async";
@@ -794,7 +828,7 @@
       const backdrop = safeImage(d.backdrop_url);
       if (backdrop) {
         const image = node("img");
-        image.src = backdrop;
+        configureArtwork(image, backdrop, "backdrop");
         image.alt = "";
         image.fetchPriority = "high";
         bg.appendChild(image);
@@ -804,7 +838,7 @@
       const posterUrl = safeImage(d.poster_url);
       if (posterUrl) {
         const image = node("img");
-        image.src = posterUrl;
+        configureArtwork(image, posterUrl, "poster");
         image.alt = `${d.title} poster`;
         image.loading = "eager";
         image.decoding = "async";
