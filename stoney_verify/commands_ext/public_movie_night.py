@@ -3166,8 +3166,9 @@ async def _execute_search_vote(
             room=room,
         )
 
+    catalog_media_type = str(catalog_metadata.get("media_type") or "movie").strip().lower()
     try:
-        if catalog_id:
+        if catalog_id and catalog_media_type == "movie":
             outcome, watch = await asyncio.gather(
                 search_movie_sources(int(room.guild_id), query),
                 get_tmdb_watch_availability(catalog_id),
@@ -3252,7 +3253,7 @@ async def _execute_search_vote(
             return await _replace(
                 interaction,
                 content=(
-                    f"🎬 Found **{title}** in the movie catalog, but no connected playback "
+                    f"🎬 Found **{title}** in the Cinema catalog, but no connected playback "
                     "provider returned a release. The host can still attach a magnet or .torrent."
                     + (
                         f"\nProvider status: {'; '.join(outcome.errors[:3])}"
