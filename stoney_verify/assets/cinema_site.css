@@ -224,6 +224,10 @@ img{max-width:100%}
   display:grid;grid-template-columns:200px minmax(0,1fr) auto;gap:14px;align-items:center;
   border:1px solid rgba(255,255,255,.07);border-radius:14px;background:#0a1713;padding:9px
 }
+.episode-card.episode-current{
+  border-color:rgba(177,255,60,.52);
+  box-shadow:0 0 0 1px rgba(177,255,60,.13),0 18px 42px rgba(0,0,0,.18)
+}
 .episode-still{width:200px;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:#101d19}
 .episode-still img{width:100%;height:100%;object-fit:cover}
 .episode-title{font-weight:900}
