@@ -677,6 +677,8 @@ def test_dank_cinema_approved_brand_asset_is_real_webp() -> None:
     assert len(payload) > 5_000
     assert payload[:4] == b"RIFF"
     assert payload[8:12] == b"WEBP"
+    assert b"ALPH" in payload
+    assert payload != movie_night_web._dank_cinema_brand_source_bytes()
 
     response = asyncio.run(
         movie_night_web.dank_cinema_brand_asset(SimpleNamespace())
@@ -900,16 +902,23 @@ def test_dank_cinema_mobile_layout_wraps_controls_instead_of_overflowing() -> No
     assert ".queue-item.manageable .queue-actions { grid-column:1 / -1;justify-content:flex-end; }" in html
 
 
-def test_dank_cinema_brand_blends_into_theater_header() -> None:
+def test_dank_cinema_brand_is_recreated_as_transparent_header_art() -> None:
     html = movie_night_web._watch_html(
         "room-brand-flush",
         456,
         "uid=456&exp=9999999999&sig=test",
     )
 
-    assert "mix-blend-mode:screen" in html
-    assert "linear-gradient(180deg,#020706 0%,#06110e 72%,transparent 100%)" in html
+    assert "mix-blend-mode:screen" not in html
+    assert "ImageDraw.floodfill" not in html
+    assert "drop-shadow(0 8px 22px rgba(0,0,0,.38))" in html
+    assert "rgba(2,7,6,.72)" in html
     assert 'src="/movie/assets/dank-cinema-brand.webp"' in html
+
+    source = Path(movie_night_web.__file__).read_text(encoding="utf-8")
+    assert "ImageDraw.floodfill" in source
+    assert "source.putalpha(alpha)" in source
+    assert "target_width = 1000" in source
 
 
 def test_dank_cinema_center_play_uses_canonical_host_action() -> None:
