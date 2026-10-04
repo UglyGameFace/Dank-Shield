@@ -274,6 +274,73 @@ def _discord_viewer_summaries(
     return summaries
 
 
+def _discord_room_context(
+    room: MovieNightRoom,
+    user_id: int,
+) -> dict[str, Any]:
+    """Return only cached Discord context already owned by the bot.
+
+    The signed Watch URL remains the authorization boundary. This helper makes
+    that Discord relationship visible on the website without adding OAuth or a
+    second identity system.
+    """
+
+    try:
+        from stoney_verify.globals import bot
+    except Exception:
+        bot = None
+
+    guild = None
+    channel = None
+    user = None
+    if bot is not None:
+        try:
+            guild = bot.get_guild(int(room.guild_id))
+        except Exception:
+            guild = None
+        if guild is not None:
+            try:
+                channel = guild.get_channel(int(room.channel_id))
+            except Exception:
+                channel = None
+            try:
+                user = guild.get_member(int(user_id))
+            except Exception:
+                user = None
+        if user is None:
+            try:
+                user = bot.get_user(int(user_id))
+            except Exception:
+                user = None
+
+    user_name = ""
+    avatar_url = ""
+    if user is not None:
+        user_name = str(
+            getattr(user, "display_name", "")
+            or getattr(user, "global_name", "")
+            or getattr(user, "name", "")
+            or ""
+        ).strip()[:80]
+        try:
+            avatar_url = _safe_discord_avatar_url(
+                getattr(getattr(user, "display_avatar", None), "url", "")
+            )
+        except Exception:
+            avatar_url = ""
+
+    guild_name = str(getattr(guild, "name", "") or "").strip()[:100]
+    channel_name = str(getattr(channel, "name", "") or "").strip()[:100]
+    return {
+        "connected": bool(guild is not None),
+        "guild_name": guild_name,
+        "channel_name": channel_name,
+        "user_id": int(user_id),
+        "user_name": user_name or str(int(user_id)),
+        "avatar_url": avatar_url,
+    }
+
+
 def _candidate_web_metadata(candidate: Any) -> dict[str, Any]:
     metadata = dict(getattr(candidate, "metadata", {}) or {}) if candidate is not None else {}
     catalog = (
@@ -393,6 +460,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     active_viewer_ids = movie_manager.active_viewers(room)
     buffer_quorum = movie_manager.buffer_quorum_viewers(room)
     viewer_summaries = _discord_viewer_summaries(room, active_viewer_ids)
+    discord_context = _discord_room_context(room, int(user_id))
     movie_metadata = _candidate_web_metadata(candidate)
     if not movie_metadata["title"]:
         movie_metadata["title"] = str(title or "Movie Night")
@@ -428,6 +496,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "host_active": movie_manager.host_active(room),
         "viewer_count": len(active_viewer_ids),
         "viewers": viewer_summaries,
+        "discord": discord_context,
         "buffer_quorum_count": len(buffer_quorum),
         "sync_status": sync_status,
         "sync_ready": sync_ready,
