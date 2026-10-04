@@ -497,6 +497,50 @@ async def get_season(series_id: int, season_number: int) -> tuple[CinemaEpisode,
     return tuple(episodes)
 
 
+async def get_next_episode(
+    series_id: int,
+    season_number: int,
+    episode_number: int,
+) -> Optional[CinemaEpisode]:
+    """Resolve the canonical episode immediately after the current TV episode."""
+
+    series = int(series_id)
+    season = max(0, int(season_number))
+    episode = max(0, int(episode_number))
+    if series <= 0:
+        raise ValueError("Invalid series id.")
+
+    current_season = await get_season(series, season)
+    later = sorted(
+        (
+            row
+            for row in current_season
+            if int(row.episode_number) > episode
+        ),
+        key=lambda row: int(row.episode_number),
+    )
+    if later:
+        return later[0]
+
+    details = await get_details("tv", series)
+    later_seasons = sorted(
+        (
+            int(row.get("season_number") or 0)
+            for row in details.seasons
+            if int(row.get("season_number") or 0) > season
+            and int(row.get("episode_count") or 0) > 0
+        )
+    )
+    for next_season in later_seasons:
+        episodes = sorted(
+            await get_season(series, next_season),
+            key=lambda row: int(row.episode_number),
+        )
+        if episodes:
+            return episodes[0]
+    return None
+
+
 async def recommendations_for_history(
     history: Sequence[Mapping[str, Any]],
     *,
@@ -553,6 +597,7 @@ __all__ = [
     "CinemaMedia",
     "catalog_home",
     "get_details",
+    "get_next_episode",
     "get_season",
     "recommendations_for_history",
     "search_catalog",
