@@ -13,6 +13,9 @@ Active branch:
 Issue:
 **#430 — Dank Cinema: match premium 420 Lobby theater website mockup**
 
+Current pull request:
+**#434 — Dank Cinema: ship exact brand and real Discord theater controls**
+
 Outcome:
 Make the signed Dank Cinema Watch experience use the owner-approved branding/template as the production contract while ensuring every visible player, host, queue, Cast, fullscreen, and Discord affordance performs a real action.
 
@@ -34,7 +37,7 @@ Make the signed Dank Cinema Watch experience use the owner-approved branding/tem
 
 ## Status
 
-**Implementation is active on the focused branch. PR #433 is already merged and is the production baseline. This follow-up branch is currently 17 commits ahead / 0 behind main and changes only the approved Cinema asset, MovieNight authority/web surfaces, and their focused tests. Exact-head CI and the real Android/desktop Discloud canary are still required before completion can be claimed.**
+**Implementation is active on PR #434. PR #433 is already merged and is the production baseline. The follow-up branch is mergeable and changes only the approved Cinema asset, MovieNight authority/web surfaces, ACTIVE_TASK.md, and focused tests. Exact-head CI is currently running; the real Android/desktop Discloud canary is still required before completion can be claimed.**
 
 ## Findings / root cause
 
@@ -154,7 +157,7 @@ Exact-head repository CI has not run on the current branch yet.
 
 ## Next step
 
-Open the focused PR from `fix/430-cinema-exact-brand-discord`, run exact-head repository workflows, repair only evidence-backed failures, inspect the final diff for accidental/stale logic, then run a real Discloud canary on Android and desktop. The canary must verify the exact header asset, TMDB backdrop, idle auto-hide/tap reveal, private double-tap skip, fullscreen/landscape, truthful Cast discovery/load, real Discord avatars/viewers, Pass Host, queue reorder/remove/clear, and preserved synchronized playback.
+Run exact-head repository workflows for PR #434, repair only evidence-backed failures, inspect the final diff for accidental/stale logic, then run a real Discloud canary on Android and desktop. The canary must verify the exact header asset, TMDB backdrop, idle auto-hide/tap reveal, private double-tap skip, fullscreen/landscape, truthful Cast discovery/load, real Discord avatars/viewers, Pass Host, queue reorder/remove/clear, and preserved synchronized playback.
 
 ---
 
