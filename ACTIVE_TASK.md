@@ -13,6 +13,9 @@ Active branch:
 Issue:
 **#430 — Dank Cinema: match premium 420 Lobby theater website mockup**
 
+Current pull request:
+**#435 — Dank Cinema: finish production theater polish and Discord parity**
+
 Outcome:
 Finish the real Dank Cinema Watch surface after the post-#434 Samsung/desktop canary exposed responsive overflow, mode semantics, Host Controls recovery, Cast discoverability, center-play authority, brand integration, and Discord-integration gaps.
 
@@ -31,7 +34,7 @@ Finish the real Dank Cinema Watch surface after the post-#434 Samsung/desktop ca
 
 ## Status
 
-**PR #434 merged with all workflow families green, but the real production canary failed the product Definition of Done. The screenshots showed mobile labels/controls overflowing, Host Controls becoming unrecoverable after close, Private Session wording and controls still carrying Watch Party assumptions, the exact banner reading as a pasted rectangular image, Cast disappearing entirely when no Google receiver was exposed, the center control not consistently exercising canonical host authority, and Discord integration being too subtle/inconsistent. Remediation is active on `fix/430-cinema-production-polish`; exact-head CI has not run yet.**
+**PR #434 merged with all workflow families green, but the real production canary failed the product Definition of Done. The screenshots showed mobile labels/controls overflowing, Host Controls becoming unrecoverable after close, Private Session wording and controls still carrying Watch Party assumptions, the exact banner reading as a pasted rectangular image, Cast disappearing entirely when no Google receiver was exposed, the center control not consistently exercising canonical host authority, and Discord integration being too subtle/inconsistent. Remediation is active in PR #435 on `fix/430-cinema-production-polish`; exact-head CI is running and the Samsung/desktop production canary remains required.**
 
 ## Findings / root cause
 
@@ -121,7 +124,7 @@ Regression coverage updated/added for:
 - Discord Private Session Pass Host eligibility;
 - existing queue/host handoff/signed access/player/sync contracts.
 
-Exact-head repository CI is still pending.
+PR #435 exact-head repository CI is running. A previous head had Design Regression, App Command Size, and Ticket Owner Override green while full CI/Profile Runtime were still running; later player-authority changes correctly triggered a fresh exact-head run, so only the newest head counts.
 
 ## Cleanup / conflicts
 
@@ -151,7 +154,7 @@ Exact-head repository CI is still pending.
 
 ## Next step
 
-Open the focused production-polish PR, run exact-head repository workflows, repair only evidence-backed failures, inspect the final diff for stale/conflicting Cinema behavior, then repeat the real Samsung Browser + desktop Discloud canary. The canary must verify zero horizontal overflow, Private-vs-Watch-Party wording/control changes, Host Controls recovery, banner integration, Cast status/action truthfulness, center playback authority, visible Discord identity/viewers/Pass Host, and preserved synchronized playback.
+Run exact-head repository workflows for PR #435, repair only evidence-backed failures, inspect the final diff for stale/conflicting Cinema behavior, then repeat the real Samsung Browser + desktop Discloud canary. The canary must verify zero horizontal overflow, Private-vs-Watch-Party wording/control changes, Host Controls recovery, banner integration, Cast status/action truthfulness, center playback authority, visible Discord identity/viewers/Pass Host, and preserved synchronized playback.
 
 ---
 
