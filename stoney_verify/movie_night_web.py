@@ -217,15 +217,26 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
 
     viewer = room.viewers.get(int(user_id))
     consumer_key = ""
+    cast_consumer_key = ""
     if session is not None:
         page_session = str(getattr(viewer, "client_session_id", "") or "").strip()[:64]
         consumer_key = f"movie:{int(user_id)}:{page_session or 'legacy'}"
+        cast_consumer_key = f"cast:{int(user_id)}:{page_session or 'legacy'}"
     media_missing = bool(room.stream_token and session is None)
     stream_url = (
         torrent_manager.stream_url(
             session,
             ttl_seconds=21600,
             consumer_key=consumer_key,
+        )
+        if session is not None
+        else ""
+    )
+    cast_stream_url = (
+        torrent_manager.stream_url(
+            session,
+            ttl_seconds=21600,
+            consumer_key=cast_consumer_key,
         )
         if session is not None
         else ""
@@ -305,6 +316,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "stream_token": room.stream_token,
         "stream_consumer": consumer_key,
         "stream_url": stream_url,
+        "cast_stream_url": cast_stream_url,
         "media_content_type": (
             media_content_type(session.file_name)
             if session is not None
@@ -1612,7 +1624,7 @@ function setCastVisible(visible) {{
 function refreshCastAvailability() {{
   const supported=!!(
     castContext &&
-    lastState?.stream_url &&
+    lastState?.cast_stream_url &&
     lastState?.cast_supported_media
   );
   setCastVisible(supported);
@@ -1645,13 +1657,13 @@ function initGoogleCast() {{
   }}
 }}
 function castLoadCurrentMedia() {{
-  if(!castContext || !lastState?.stream_url) return Promise.reject(new Error("No playable Cinema stream is ready."));
+  if(!castContext || !lastState?.cast_stream_url) return Promise.reject(new Error("No playable Cinema stream is ready."));
   if(!lastState?.cast_supported_media)
     return Promise.reject(new Error("This release uses a container Chromecast cannot play directly. Choose an MP4/WebM release to cast."));
   const session=castContext.getCurrentSession();
   if(!session) return Promise.reject(new Error("No Cast device is connected."));
   const mediaInfo=new chrome.cast.media.MediaInfo(
-    lastState.stream_url,
+    lastState.cast_stream_url,
     lastState.media_content_type||"video/mp4"
   );
   const metadata=new chrome.cast.media.GenericMediaMetadata();
