@@ -43,6 +43,39 @@ def _clean(value: Any, limit: int = 180) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
+def _catalog_identity(value: Optional[Mapping[str, Any]]) -> tuple[str, int, int, int]:
+    if not isinstance(value, Mapping):
+        return "", 0, 0, 0
+    kind = str(value.get("media_type") or "").strip().lower()
+    tmdb_id = int(value.get("tmdb_id") or value.get("catalog_id") or 0)
+    season = int(value.get("season_number") or 0)
+    episode = int(value.get("episode_number") or 0)
+    if kind not in {"movie", "tv", "episode"} or tmdb_id <= 0:
+        return "", 0, 0, 0
+    return kind, tmdb_id, season, episode
+
+
+def find_catalog_candidate(
+    room: MovieNightRoom,
+    metadata: Optional[Mapping[str, Any]],
+) -> Any:
+    """Find a room candidate by canonical Cinema identity, never title alone."""
+
+    identity = _catalog_identity(metadata)
+    if not identity[0]:
+        return None
+    for candidate in room.candidates.values():
+        candidate_meta = (
+            candidate.metadata.get("catalog")
+            if isinstance(getattr(candidate, "metadata", None), Mapping)
+            and isinstance(candidate.metadata.get("catalog"), Mapping)
+            else {}
+        )
+        if _catalog_identity(candidate_meta) == identity:
+            return candidate
+    return None
+
+
 def materialize_search_results(
     room: MovieNightRoom,
     outcome: MediaSourceSearchOutcome,
@@ -68,7 +101,11 @@ def materialize_search_results(
             else {}
         )
         candidate_title = _clean(catalog.get("title")) if catalog else result.title
-        candidate = manager.find_candidate_by_title(room.room_id, candidate_title)
+        candidate = (
+            find_catalog_candidate(room, catalog)
+            if catalog
+            else manager.find_candidate_by_title(room.room_id, candidate_title)
+        )
         candidate_metadata: dict[str, Any] = {"search_query": _clean(query)}
         if catalog:
             candidate_metadata["catalog"] = catalog
@@ -290,6 +327,7 @@ async def start_room_variant(
 __all__ = [
     "CinemaPlaybackError",
     "CinemaPlaybackResult",
+    "find_catalog_candidate",
     "materialize_search_results",
     "search_exact_episode_sources",
     "search_exact_movie_sources",
