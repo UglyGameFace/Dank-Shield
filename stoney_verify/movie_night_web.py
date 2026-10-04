@@ -1653,6 +1653,9 @@ function updatePlayerChrome() {{
   const icon=paused?'<path d="M8 5v14l11-7Z"/>':'<path d="M7 5h4v14H7ZM14 5h4v14h-4Z"/>';
   document.getElementById("centerPlayIcon").innerHTML=icon;
   document.getElementById("playerToggleIcon").innerHTML=icon;
+  const action=paused?"Play":"Pause";
+  document.getElementById("centerPlay").setAttribute("aria-label",action);
+  document.getElementById("playerToggle").setAttribute("aria-label",action);
 }}
 function renderQueue(items) {{
   const list=document.getElementById("queueList");
@@ -2272,15 +2275,39 @@ syncButton.onclick=async()=>{{
 }};
 document.getElementById("play").onclick=()=>hostAction("resume");
 document.getElementById("pause").onclick=()=>hostAction("pause");
-document.getElementById("centerPlay").onclick=async()=>{{
+async function togglePlayerPlayback() {{
   if(!lastState?.stream_url) return;
-  if(video.paused) {{
-    try {{ await video.play(); }} catch(err) {{ notice.textContent="Playback could not start: "+String(err?.message||err); }}
-  }} else {{
-    video.pause();
+  showPlayerControls(true);
+
+  if(lastState.is_host) {{
+    const shouldResume=video.paused || lastState.state!=="playing";
+    await hostAction(shouldResume?"resume":"pause");
+    return;
   }}
-}};
-document.getElementById("playerToggle").onclick=document.getElementById("centerPlay").onclick;
+
+  if(video.paused) {{
+    syncRequested=true;
+    syncGestureGranted=true;
+    try {{
+      await video.play();
+      await heartbeat(true);
+      notice.textContent=lastState.private
+        ?"Private playback resumed and resynced."
+        :"Playback resumed and resynced to the Watch Party.";
+    }} catch(err) {{
+      notice.textContent="Playback could not start: "+String(err?.message||err);
+    }}
+  }} else {{
+    syncRequested=false;
+    syncGestureGranted=false;
+    video.pause();
+    notice.textContent=lastState.private
+      ?"Paused locally. Tap Play to rejoin the private session."
+      :"Paused locally. Tap Play to rejoin synchronized playback.";
+  }}
+}}
+document.getElementById("centerPlay").onclick=togglePlayerPlayback;
+document.getElementById("playerToggle").onclick=togglePlayerPlayback;
 document.getElementById("rewind10").onclick=()=>{{
   if(lastState?.is_host) safeSeek(Math.max(0,(video.currentTime||0)-10));
 }};
