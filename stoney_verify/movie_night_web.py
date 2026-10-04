@@ -1066,12 +1066,14 @@ async def movie_night_action(request: web.Request) -> web.Response:
         payload = {}
 
     action = str(payload.get("action") or "").strip().lower()
-    if action not in {"pause", "resume", "seek", "end"}:
+    if action not in {"pause", "resume", "seek", "speed", "end"}:
         raise web.HTTPBadRequest(text="Unsupported Cinema playback action.")
 
     action_payload: dict[str, Any] = {}
     if action == "seek":
         action_payload["seconds"] = _float(payload.get("seconds"))
+    elif action == "speed":
+        action_payload["rate"] = _float(payload.get("rate"), 1.0)
 
     manager = get_movie_night_manager()
     manager.join_room(room.room_id, user_id=uid)
@@ -3515,7 +3517,7 @@ document.getElementById("captions").onclick=()=>{{
   let preferredIndex=0;
   if(preferredSubtitleLanguage) {{
     for(let i=0;i<tracks.length;i++) {{
-      const lang=String(tracks[i].language||tracks[i].label||"").casefold?.()||String(tracks[i].language||tracks[i].label||"").toLowerCase();
+      const lang=String(tracks[i].language||tracks[i].label||"").toLowerCase();
       if(lang.includes(preferredSubtitleLanguage.toLowerCase())) {{
         preferredIndex=i;
         break;
