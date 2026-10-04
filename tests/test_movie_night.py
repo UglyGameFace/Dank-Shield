@@ -1524,3 +1524,57 @@ def test_non_host_cannot_manage_cinema_queue() -> None:
         assert "host" in str(exc).lower()
     else:
         raise AssertionError("non-host unexpectedly managed the Cinema queue")
+
+
+
+def test_private_session_promotes_to_watch_party_without_restarting_room() -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="stream-token",
+        mode="private",
+        now=100.0,
+    )
+    manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
+    manager.join_room(room.room_id, user_id=20, now=101.0)
+    room.playback_state = "playing"
+    room.playback_position = 37.5
+    room.playback_anchor_monotonic = 101.0
+    room.queue[:] = ["queued-a"]
+
+    promoted = manager.promote_private_to_watch_party(
+        room.room_id,
+        host_id=10,
+    )
+
+    assert promoted is room
+    assert room.mode == "watch_party"
+    assert room.room_id == promoted.room_id
+    assert room.stream_token == "stream-token"
+    assert room.host_id == 10
+    assert 20 in room.viewers
+    assert room.queue == ["queued-a"]
+    assert room.private_allowed_viewers == set()
+    assert manager.user_can_access(room, 9999) is True
+
+
+def test_only_private_host_can_promote_session_to_watch_party() -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        mode="private",
+    )
+
+    try:
+        manager.promote_private_to_watch_party(room.room_id, host_id=20)
+    except PermissionError as exc:
+        assert "host" in str(exc).lower()
+    else:
+        raise AssertionError("non-host unexpectedly promoted a Private Session")
+
+    assert room.mode == "private"
