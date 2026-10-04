@@ -43,6 +43,7 @@ from stoney_verify.cinema_playback_service import (
     materialize_search_results,
     search_exact_episode_sources,
     search_exact_movie_sources,
+    select_preferred_variant,
     start_room_variant,
 )
 from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
@@ -1544,7 +1545,8 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
     if candidate is None:
         raise web.HTTPConflict(text="The next episode could not be attached to this Cinema room.")
     ranked = manager.ranked_variants(latest.room_id, candidate.candidate_id)
-    if not ranked:
+    selected = await select_preferred_variant(int(uid), ranked)
+    if selected is None:
         raise web.HTTPConflict(text="No playable next-episode release is available.")
 
     try:
@@ -1552,7 +1554,7 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
             latest.room_id,
             actor_id=int(uid),
             candidate_id=candidate.candidate_id,
-            variant_id=ranked[0].variant_id,
+            variant_id=selected.variant_id,
         )
     except Exception as exc:
         raise web.HTTPBadGateway(
