@@ -31,7 +31,7 @@ Rebuild the signed Dank Cinema Watch page to match the owner-approved premium da
 
 ## Status
 
-**Implementation is in progress on the focused branch. The first UI/control implementation and focused regression coverage are committed. Exact-head CI, final diff inspection, and a real mobile/Discloud canary are still required before completion can be claimed.**
+**Implementation is in progress on the focused branch. The first full PR run reached 2,736 tests with 2,735 passing and one stale markup assertion failing after the approved custom End Session control replaced the old plain button. That assertion is now updated on the current head. New exact-head CI, final diff inspection, and a real mobile/Discloud canary are still required before completion can be claimed.**
 
 ## Findings / root cause
 
@@ -88,7 +88,7 @@ Regression tests updated/added for:
 - CSP allowing only the trusted TMDB image host;
 - mode-correct private wording.
 
-Exact-head CI has not run yet.
+First PR CI completed with 2,735 passing tests and one failure in `test_web_player_has_terminal_state_before_missing_room_fallback`; the test still required the retired literal `id="end" disabled>End Session</button>` markup. The redesigned control still preserves the same `id="end"`, `hostAction("end")`, terminal-state handling, and missing-room fallback. The regression test now checks the new host-sheet control instead. A new exact-head run is required.
 
 ## Cleanup / conflicts
 
@@ -106,7 +106,8 @@ Exact-head CI has not run yet.
 ## Backlog
 
 - full standalone Browse/Home/My Stuff website surfaces backed by persistent web identity/session data are outside this focused Watch-page redesign;
-- first-class web Pass Host and queue editing would require explicit authority/API design instead of dead duplicate controls.
+- first-class web Pass Host and queue editing would require explicit authority/API design instead of dead duplicate controls;
+- **RSS Feed surfacing follow-up:** add a clean first-class RSS area in both Discord Cinema and the website using the existing Movie Sources/feed model. Feeds must be organized by source/category/status rather than dumped into one flat RSS list, with per-feed management and clear distinction from Search Providers and Reference Links.
 
 ## Next step
 
