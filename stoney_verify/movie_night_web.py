@@ -29,7 +29,10 @@ from stoney_verify.cinema_catalog import (
     get_season as get_cinema_season,
     search_catalog as search_cinema_catalog,
 )
-from stoney_verify.cinema_media_identity import parse_episode_query
+from stoney_verify.cinema_media_identity import (
+    looks_explicit_adult,
+    parse_episode_query,
+)
 from stoney_verify.cinema_library_service import (
     CinemaStorageUnavailable,
     get_cinema_user,
@@ -47,6 +50,7 @@ from stoney_verify.cinema_playback_service import (
     start_room_variant,
 )
 from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
+from stoney_verify.movie_night_preferences import load_movie_night_preferences
 from stoney_verify.movie_night_session import (
     ensure_movie_night_cleanup_task,
     terminate_movie_night_room,
@@ -1611,7 +1615,25 @@ async def movie_night_queue_search(request: web.Request) -> web.Response:
     if int(uid) != int(room.host_id):
         raise web.HTTPForbidden(text="Only the active Cinema host can search for queued titles.")
 
+    try:
+        _raw, cinema_preferences = await load_movie_night_preferences(
+            int(room.guild_id),
+            refresh=False,
+        )
+        adult_enabled = bool(cinema_preferences.adult_content_enabled)
+    except Exception:
+        adult_enabled = False
+
     query = " ".join(str(request.query.get("q", "") or "").split())[:180]
+    if not adult_enabled and looks_explicit_adult(query):
+        return web.json_response(
+            {
+                "query": query,
+                "results": [],
+                "adult_content_enabled": False,
+                "hint": "Adult-content Cinema search is disabled for this server.",
+            }
+        )
     if len(query) < 2:
         return web.json_response(
             {
@@ -1626,7 +1648,11 @@ async def movie_night_queue_search(request: web.Request) -> web.Response:
     try:
         if parsed is not None:
             series_query, season_number, episode_number = parsed
-            matches = await search_cinema_catalog(series_query, limit=8)
+            matches = await search_cinema_catalog(
+                series_query,
+                limit=8,
+                include_adult=adult_enabled,
+            )
             for series in matches:
                 if str(series.media_type or "") != "tv":
                     continue
@@ -1662,7 +1688,11 @@ async def movie_night_queue_search(request: web.Request) -> web.Response:
                 if len(results) >= 6:
                     break
         else:
-            matches = await search_cinema_catalog(query, limit=20)
+            matches = await search_cinema_catalog(
+                query,
+                limit=20,
+                include_adult=adult_enabled,
+            )
             for media in matches:
                 if str(media.media_type or "") != "movie":
                     continue
@@ -1720,6 +1750,18 @@ async def movie_night_queue_action(request: web.Request) -> web.Response:
                 if tmdb_id <= 0:
                     raise web.HTTPBadRequest(text="Invalid movie identity.")
                 details = await get_cinema_details("movie", tmdb_id)
+                try:
+                    _raw, cinema_preferences = await load_movie_night_preferences(
+                        int(room.guild_id),
+                        refresh=False,
+                    )
+                    adult_enabled = bool(cinema_preferences.adult_content_enabled)
+                except Exception:
+                    adult_enabled = False
+                if bool(details.media.adult) and not adult_enabled:
+                    raise web.HTTPForbidden(
+                        text="Adult-content Cinema playback is disabled for this server."
+                    )
                 metadata, query, outcome = await search_exact_movie_sources(
                     int(room.guild_id),
                     media=details.media,
@@ -1732,6 +1774,18 @@ async def movie_night_queue_action(request: web.Request) -> web.Response:
                 if series_id <= 0 or season_number < 0 or episode_number <= 0:
                     raise web.HTTPBadRequest(text="Invalid TV episode identity.")
                 details = await get_cinema_details("tv", series_id)
+                try:
+                    _raw, cinema_preferences = await load_movie_night_preferences(
+                        int(room.guild_id),
+                        refresh=False,
+                    )
+                    adult_enabled = bool(cinema_preferences.adult_content_enabled)
+                except Exception:
+                    adult_enabled = False
+                if bool(details.media.adult) and not adult_enabled:
+                    raise web.HTTPForbidden(
+                        text="Adult-content Cinema playback is disabled for this server."
+                    )
                 episodes = await get_cinema_season(series_id, season_number)
                 episode = next(
                     (
