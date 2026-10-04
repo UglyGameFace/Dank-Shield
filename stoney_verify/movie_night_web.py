@@ -376,6 +376,9 @@ def _candidate_web_metadata(candidate: Any) -> dict[str, Any]:
 async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     movie_manager = get_movie_night_manager()
     torrent_manager = get_torrent_manager()
+    room_mode = str(getattr(room, "mode", "watch_party") or "watch_party")
+    private_mode = room_mode == "private"
+    session_fallback_title = "Private Session" if private_mode else "Watch Party"
     session = await torrent_manager.get(room.stream_token) if room.stream_token else None
     if session is not None and not torrent_manager.session_usable(session):
         await torrent_manager.discard_unusable_session(room.stream_token)
@@ -463,7 +466,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     discord_context = _discord_room_context(room, int(user_id))
     movie_metadata = _candidate_web_metadata(candidate)
     if not movie_metadata["title"]:
-        movie_metadata["title"] = str(title or "Movie Night")
+        movie_metadata["title"] = str(title or session_fallback_title)
 
     queue_items: list[dict[str, Any]] = []
     for queued_id in list(room.queue)[:12]:
@@ -484,9 +487,9 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     return {
         "ok": True,
         "room_id": room.room_id,
-        "mode": str(getattr(room, "mode", "watch_party") or "watch_party"),
-        "private": str(getattr(room, "mode", "watch_party") or "watch_party") == "private",
-        "title": str(title or "Movie Night"),
+        "mode": room_mode,
+        "private": private_mode,
+        "title": str(title or session_fallback_title),
         "movie": movie_metadata,
         "queue": queue_items,
         "release_source": source,
@@ -1330,7 +1333,7 @@ video {{
       <div class="tap-skip-feedback left" id="tapSkipLeft" aria-live="polite">↶ 10s</div>
       <div class="tap-skip-feedback right" id="tapSkipRight" aria-live="polite">10s ↷</div>
       <div class="stage-top">
-        <div class="room-pill"><span class="live-dot"></span><span id="roomMode">Movie Night</span><span>│</span><span id="role">Connecting…</span></div>
+        <div class="room-pill"><span class="live-dot"></span><span id="roomMode">Cinema Session</span><span>│</span><span id="role">Connecting…</span></div>
         <button class="cast" id="cast" type="button" aria-label="Cast" title="Cast" hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 18a4 4 0 0 1 4 4"/><path d="M2 13a9 9 0 0 1 9 9"/><path d="M2 8a14 14 0 0 1 14 14"/><path d="M6 4h14a2 2 0 0 1 2 2v10"/></svg>
         </button>
@@ -1373,7 +1376,7 @@ video {{
     <div class="meta-main">
       <div class="title-row">
         <div>
-          <h2 class="movie-title" id="title">Movie Night</h2>
+          <h2 class="movie-title" id="title">Cinema</h2>
           <div class="movie-meta"><span id="state">—</span> &nbsp;•&nbsp; <span id="runtime">—</span><span id="yearWrap" hidden> &nbsp;•&nbsp; <span id="year"></span></span></div>
         </div>
         <div class="health"><span class="health-dot"></span><span id="healthText">Stream Health: Connecting</span></div>
@@ -1402,7 +1405,7 @@ video {{
   <div id="notice"></div>
 
   <section class="queue-panel" id="sessionPanel" hidden>
-    <div class="section-head"><h2>Session</h2><span id="sessionMode">Movie Night</span></div>
+    <div class="section-head"><h2>Session</h2><span id="sessionMode">Connecting…</span></div>
     <div class="grid">
       <div class="stat"><b>Viewers</b><span id="sessionViewers">0</span></div>
       <div class="stat"><b>Your role</b><span id="sessionRole">Connecting…</span></div>
@@ -2034,7 +2037,7 @@ function correctSyncedDrift(target) {{
 
 async function applyState(s) {{
   lastState=s;
-  document.getElementById("title").textContent=s.title||"Movie Night";
+  document.getElementById("title").textContent=s.title||(s.private?"Private Session":"Watch Party");
   document.getElementById("heading").textContent=
     s.private?"🔒 Dank Cinema Private Session":"🎬 Dank Cinema Watch Party";
   document.getElementById("state").textContent=s.state||"—";
