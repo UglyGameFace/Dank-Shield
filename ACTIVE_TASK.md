@@ -37,7 +37,7 @@ This remains one active implementation task covering:
 
 ## Status
 
-**Implementation is substantially complete on the feature branch. Pre-PR cleanup/static validation is active.**
+**Implementation is substantially complete in PR #437. Exact-head CI remediation/validation is active.**
 
 The branch is currently based exactly on production `main@c785c5e...` and is **0 commits behind**. The repository's canonical Python/unit CI and the new Cinema SQL workflow trigger on pull requests/main, not feature-branch pushes, so executable exact-head CI is still pending until the PR is opened. No completion/merge claim is valid before that CI and the production canary.
 
@@ -141,8 +141,8 @@ Completed pre-PR evidence:
 Pending executable evidence:
 
 - Python compile/unit suite cannot run locally in this tool environment because the repo cannot be cloned over network here;
-- canonical `ci.yml` does not support feature-branch dispatch and therefore has no branch run to inspect;
-- opening the PR is the next correct mechanism to obtain exact-head Python/unit/SQL workflow evidence;
+- canonical `ci.yml` does not support feature-branch dispatch; PR #437 now supplies the required exact-head CI trigger;
+- the first `Dank Cinema SQL` PR run proved migration replay/RLS/grants, then failed because the disposable test `service_role` lacked Supabase's RLS-bypass behavior; the harness was corrected to use `BYPASSRLS` without weakening production RLS;
 - live Discloud + Android/Samsung + desktop/tablet/ultrawide canary remains required after a CI-green deploy.
 
 ## Cleanup / conflicts
@@ -172,7 +172,7 @@ No required #430 master-contract item has been moved to backlog to make this bra
 
 ## Exact next step
 
-Finish the last static regression/diff check, open the focused #430 full-platform PR, use that PR's exact current head to run canonical Dank Shield CI plus Dank Cinema SQL validation, repair only evidence-backed failures, then perform the Discloud production canary before any completion or merge-ready claim.
+Use PR #437's exact current head for canonical Dank Shield CI plus Dank Cinema SQL validation, repair only evidence-backed failures, verify the final head remains mergeable/green, then perform the Discloud production canary before any completion or merge-ready claim.
 
 ---
 
