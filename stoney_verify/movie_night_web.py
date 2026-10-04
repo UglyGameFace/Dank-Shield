@@ -63,7 +63,7 @@ def _public_base() -> str:
 _BRAND_ASSET_PATH = (
     Path(__file__).with_name("assets") / "dank_cinema_brand_500.webp.b64"
 )
-_BRAND_ASSET_VERSION = "art-system-v4"
+_BRAND_ASSET_VERSION = "art-system-v5"
 
 _FEED_RUNTIME_STATE = cinema_feed_runtime_state()
 
@@ -1738,19 +1738,20 @@ button {{ cursor:pointer; }}
   filter:blur(17px);pointer-events:none;
 }}
 .brand-art {{
-  display:grid;
-  grid-template-columns:clamp(86px,14vw,136px) minmax(0,1fr);
+  display:flex;
   align-items:center;
-  gap:clamp(9px,1.15vw,18px);
   width:100%;
+  min-width:0;
 }}
-.brand-mark-art,.brand-wordmark-art {{
-  display:block;max-width:100%;height:auto;object-fit:contain;
+.brand-lockup-art {{
+  display:block;
+  width:min(100%,760px);
+  height:auto;
+  object-fit:contain;
+  object-position:left center;
   filter:drop-shadow(0 10px 28px rgba(0,0,0,.42));
   transform:translateZ(0);
 }}
-.brand-mark-art {{ width:100%;justify-self:start; }}
-.brand-wordmark-art {{ width:100%;justify-self:start; }}
 
 .nav {{
   display:flex; align-items:center; gap:5px;
@@ -2321,9 +2322,7 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
   .shell {{ padding-left:14px;padding-right:14px;padding-bottom:160px; }}
   .site-header {{ margin-left:-14px;margin-right:-14px;padding-left:10px;padding-right:10px; }}
   .brand {{ width:100%; }}
-  .brand-art {{ grid-template-columns:clamp(78px,24vw,112px) minmax(0,1fr);gap:0; }}
-  .brand-mark-art {{ transform:translateX(2px) translateZ(0); }}
-  .brand-wordmark-art {{ transform:translateX(-2px) translateZ(0); }}
+  .brand-lockup-art {{ width:min(100%,620px); }}
   .nav {{ margin-top:10px; }}
   .nav-item {{ padding:9px 11px;font-size:.75rem; }}
   .video-stage {{ min-height:0; }}
@@ -2371,23 +2370,13 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
 <header class="site-header">
   <div class="brand-row">
     <div class="brand">
-      <div class="brand-art" aria-label="Dank Cinema — A feature of The 420 Lobby">
+      <div class="brand-art">
         <img
-          class="brand-mark-art"
-          src="/movie/assets/dank-cinema-brand-mark.webp?v={_BRAND_ASSET_VERSION}"
-          alt=""
-          aria-hidden="true"
-          width="320"
-          height="245"
-          decoding="async"
-          fetchpriority="high"
-        >
-        <img
-          class="brand-wordmark-art"
-          src="/movie/assets/dank-cinema-brand-wordmark.webp?v={_BRAND_ASSET_VERSION}"
+          class="brand-lockup-art"
+          src="/movie/assets/dank-cinema-brand.webp?v={_BRAND_ASSET_VERSION}"
           alt="Dank Cinema — A feature of The 420 Lobby"
-          width="1040"
-          height="289"
+          width="1200"
+          height="278"
           decoding="async"
           fetchpriority="high"
         >
