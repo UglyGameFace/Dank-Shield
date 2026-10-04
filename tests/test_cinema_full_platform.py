@@ -504,3 +504,194 @@ def test_full_site_feed_center_does_not_fake_external_refresh_or_search() -> Non
     assert 'feedAction({ action: "refresh", source_id: source.source_id })' in script
     assert 'query: "movie"' not in script
     assert "Supports:" in script
+
+
+
+def test_same_title_movies_keep_distinct_canonical_room_identity(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=100,
+        channel_id=200,
+        host_id=42,
+        stream_token="",
+    )
+    monkeypatch.setattr(cinema_playback_service, "get_movie_night_manager", lambda: manager)
+
+    first = CinemaMedia(media_type="movie", tmdb_id=1001, title="Halloween", year=1978)
+    second = CinemaMedia(media_type="movie", tmdb_id=2002, title="Halloween", year=2007)
+
+    for media, token in ((first, "4"), (second, "5")):
+        metadata = cinema_playback_service.catalog_metadata(media)
+        outcome = MediaSourceSearchOutcome(
+            variants=(
+                ResolvedMediaVariant(
+                    title=f"Halloween.{media.year}.1080p",
+                    source_id=f"source-{media.tmdb_id}",
+                    source_label="Provider",
+                    source_ref="magnet:?xt=urn:btih:" + token * 40,
+                    file_size=1000,
+                    seeds=10,
+                    leechers=1,
+                    peers=11,
+                    metadata={},
+                ),
+            )
+        )
+        cinema_playback_service.materialize_search_results(
+            room,
+            outcome,
+            proposer_id=42,
+            query=f"Halloween {media.year}",
+            catalog_metadata=metadata,
+        )
+
+    first_candidate = cinema_playback_service.find_catalog_candidate(
+        room,
+        cinema_playback_service.catalog_metadata(first),
+    )
+    second_candidate = cinema_playback_service.find_catalog_candidate(
+        room,
+        cinema_playback_service.catalog_metadata(second),
+    )
+
+    assert first_candidate is not None
+    assert second_candidate is not None
+    assert first_candidate.candidate_id != second_candidate.candidate_id
+    assert len(room.candidates) == 2
+
+
+def test_theater_queue_search_returns_movies_without_fake_series_queue_items(monkeypatch) -> None:
+    room = SimpleNamespace(guild_id=100, host_id=42)
+
+    async def room_and_user(_request):
+        return room, 42
+
+    async def catalog(_query, *, limit=30, include_adult=False):
+        _ = (limit, include_adult)
+        return (
+            CinemaMedia(media_type="tv", tmdb_id=77, title="Example Show"),
+            CinemaMedia(media_type="movie", tmdb_id=123, title="Example Movie", year=2026),
+        )
+
+    monkeypatch.setattr(movie_night_web, "_room_and_user", room_and_user)
+    monkeypatch.setattr(movie_night_web, "search_cinema_catalog", catalog)
+
+    response = asyncio.run(
+        movie_night_web.movie_night_queue_search(
+            SimpleNamespace(query={"q": "Example"})
+        )
+    )
+    payload = __import__("json").loads(response.text)
+
+    assert [item["media_type"] for item in payload["results"]] == ["movie"]
+    assert payload["results"][0]["tmdb_id"] == 123
+    assert "exact episode" in payload["hint"].lower()
+
+
+def test_theater_queue_add_materializes_exact_playable_movie(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=100,
+        channel_id=200,
+        host_id=42,
+        stream_token="",
+    )
+    movie = CinemaMedia(media_type="movie", tmdb_id=123, title="Example Movie", year=2026)
+    details = CinemaDetails(media=movie)
+    metadata = cinema_playback_service.catalog_metadata(movie)
+    outcome = MediaSourceSearchOutcome(
+        variants=(
+            ResolvedMediaVariant(
+                title="Example.Movie.2026.1080p",
+                source_id="provider",
+                source_label="Provider",
+                source_ref="magnet:?xt=urn:btih:" + "6" * 40,
+                file_size=1000,
+                seeds=20,
+                leechers=2,
+                peers=22,
+                metadata={},
+            ),
+        )
+    )
+
+    async def room_and_user(_request):
+        return room, 42
+
+    async def get_details(_kind, _tmdb_id):
+        return details
+
+    async def exact_sources(_guild_id, *, media):
+        assert media.tmdb_id == 123
+        return metadata, "Example Movie", outcome
+
+    async def state_payload(current_room, uid):
+        return {"queue": list(current_room.queue), "uid": uid}
+
+    class Request:
+        async def json(self):
+            return {
+                "action": "add",
+                "media_type": "movie",
+                "tmdb_id": 123,
+            }
+
+    monkeypatch.setattr(movie_night_web, "_room_and_user", room_and_user)
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(movie_night_web, "get_cinema_details", get_details)
+    monkeypatch.setattr(movie_night_web, "search_exact_movie_sources", exact_sources)
+    monkeypatch.setattr(movie_night_web, "_state_payload", state_payload)
+    monkeypatch.setattr(cinema_playback_service, "get_movie_night_manager", lambda: manager)
+
+    response = asyncio.run(movie_night_web.movie_night_queue_action(Request()))
+    payload = __import__("json").loads(response.text)
+
+    assert len(payload["queue"]) == 1
+    candidate = cinema_playback_service.find_catalog_candidate(room, metadata)
+    assert candidate is not None
+    assert room.queue == [candidate.candidate_id]
+    assert manager.ranked_variants(room.room_id, candidate.candidate_id)
+
+
+def test_theater_queue_play_next_prioritizes_selected_item(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=100,
+        channel_id=200,
+        host_id=42,
+        stream_token="",
+    )
+    candidates = [
+        manager.nominate(
+            room.room_id,
+            user_id=42,
+            title=f"Movie {index}",
+            auto_vote=False,
+        )
+        for index in range(1, 4)
+    ]
+    for candidate in candidates:
+        manager.queue_winner(room.room_id, candidate_id=candidate.candidate_id)
+
+    async def room_and_user(_request):
+        return room, 42
+
+    async def state_payload(current_room, uid):
+        return {"queue": list(current_room.queue), "uid": uid}
+
+    class Request:
+        async def json(self):
+            return {
+                "action": "play_next",
+                "candidate_id": candidates[2].candidate_id,
+            }
+
+    monkeypatch.setattr(movie_night_web, "_room_and_user", room_and_user)
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(movie_night_web, "_state_payload", state_payload)
+
+    response = asyncio.run(movie_night_web.movie_night_queue_action(Request()))
+    payload = __import__("json").loads(response.text)
+
+    assert payload["queue"][0] == candidates[2].candidate_id
+    assert set(payload["queue"]) == {candidate.candidate_id for candidate in candidates}
