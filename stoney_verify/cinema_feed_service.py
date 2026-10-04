@@ -69,6 +69,9 @@ def _payload(source: Any, *, guild_id: int, include_endpoint: bool) -> dict[str,
         in {PROVIDER_TYPE_JSON, PROVIDER_TYPE_FEED},
         "playback_capable": provider_type
         in {PROVIDER_TYPE_JSON, PROVIDER_TYPE_FEED},
+        "supported_media_types": [
+            category if category in CATEGORIES else MEDIA_CATEGORY_CUSTOM
+        ],
         "last_refresh_at": int(runtime.get("refreshed_at") or 0),
         "last_refresh_ok": runtime.get("ok"),
         "last_refresh_error": str(runtime.get("error") or "")[:240],
