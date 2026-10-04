@@ -293,7 +293,7 @@ def test_movie_night_hub_changes_controls_by_room_mode_and_vote_context(monkeypa
         now=102.0,
     )
     private_labels = _labels(movie_ui.MovieNightHubView(10, private_room))
-    assert {"Find Movie", "Movie Picks", "Queue", "More"} <= private_labels
+    assert {"Find Movie / TV", "Movie Picks", "Queue", "More"} <= private_labels
     assert "Yes" not in private_labels
     assert "No" not in private_labels
 
