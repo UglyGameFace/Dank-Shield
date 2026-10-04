@@ -1626,3 +1626,20 @@ def test_queue_manager_exposes_real_add_play_next_reorder_and_remove_controls() 
     assert 'document.getElementById("clearQueue").onclick=()=>queueAction("clear")' in html
     assert '"Added by "+String(item.added_by)' in html
     assert "Movie title or exact episode, e.g. Show S3E7" in html
+
+
+
+def test_theater_uses_human_session_connection_states() -> None:
+    html = movie_night_web._watch_html(
+        "room-human-status",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'function humanSessionStatus(s)' in html
+    assert 'return "Host Away"' in html
+    assert 'return "Buffering"' in html
+    assert 'return "Connecting"' in html
+    assert 'return "Synced"' in html
+    assert 'sync.textContent="Reconnecting"' in html
+    assert 'role.textContent="Reconnecting"' in html
