@@ -1320,7 +1320,7 @@ def test_host_handoff_preserves_playback_and_moves_authority() -> None:
         raise AssertionError("previous host unexpectedly kept playback authority")
 
 
-def test_host_handoff_requires_active_viewer_and_is_disabled_for_private() -> None:
+def test_host_handoff_requires_active_viewer_and_private_handoff_stays_authorized() -> None:
     manager = MovieNightManager(viewer_ttl_seconds=30)
     room = manager.create_room(
         guild_id=1,
@@ -1352,17 +1352,25 @@ def test_host_handoff_requires_active_viewer_and_is_disabled_for_private() -> No
         mode="private",
         now=201.0,
     )
-    try:
-        manager.transfer_host(
-            private_room.room_id,
-            current_host_id=10,
-            new_host_id=20,
-            now=202.0,
-        )
-    except PermissionError as exc:
-        assert "private" in str(exc).lower()
-    else:
-        raise AssertionError("private viewing unexpectedly allowed host transfer")
+    manager.invite_private_viewer(
+        private_room.room_id,
+        host_id=10,
+        user_id=20,
+    )
+    manager.join_room(private_room.room_id, user_id=20, now=202.0)
+
+    transferred = manager.transfer_host(
+        private_room.room_id,
+        current_host_id=10,
+        new_host_id=20,
+        now=203.0,
+    )
+
+    assert transferred is private_room
+    assert private_room.host_id == 20
+    assert manager.user_can_access(private_room, 10)
+    assert manager.user_can_access(private_room, 20)
+    assert private_room.viewers[20].sync_ready is True
 
 
 def test_rejoin_restores_active_presence_without_losing_room_state() -> None:
