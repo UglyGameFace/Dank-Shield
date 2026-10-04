@@ -434,11 +434,12 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
     )
 
     assert "Dank Cinema • The 420 Lobby" in html
-    assert 'class="wordmark"' in html
-    assert 'class="brand-mark"' in html
-    assert "The 420 Lobby" in html
-    assert 'family=Lacquer' in html
-    assert 'viewBox="0 0 132 106"' in html
+    assert 'class="brand-banner"' in html
+    assert 'src="/movie/assets/dank-cinema-brand.webp"' in html
+    assert 'alt="Dank Cinema — A feature of The 420 Lobby"' in html
+    assert 'class="wordmark"' not in html
+    assert 'class="brand-mark"' not in html
+    assert "family=Lacquer" not in html
     assert 'id="videoStage"' in html
     assert 'screen.orientation.lock("landscape")' in html
     assert 'screen.orientation.unlock()' in html
@@ -649,3 +650,26 @@ def test_dank_cinema_polling_does_not_show_broken_sync_on_one_transient_fetch() 
     assert "stateFetchFailures>=3" in html
     assert "Sync connection lost. Reconnecting…" in html
     assert 'notice.textContent="Sync error: "+message' not in html
+
+
+
+def test_dank_cinema_approved_brand_asset_is_real_webp() -> None:
+    movie_night_web._dank_cinema_brand_bytes.cache_clear()
+    payload = movie_night_web._dank_cinema_brand_bytes()
+
+    assert len(payload) > 5_000
+    assert payload[:4] == b"RIFF"
+    assert payload[8:12] == b"WEBP"
+
+    response = asyncio.run(
+        movie_night_web.dank_cinema_brand_asset(SimpleNamespace())
+    )
+    assert response.content_type == "image/webp"
+    assert response.body == payload
+    assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+
+
+def test_dank_cinema_brand_asset_route_is_registered() -> None:
+    source = Path(movie_night_web.__file__).read_text(encoding="utf-8")
+    assert '"/movie/assets/dank-cinema-brand.webp"' in source
+    assert "dank_cinema_brand_asset" in source
