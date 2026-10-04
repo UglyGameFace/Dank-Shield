@@ -84,12 +84,17 @@ create table if not exists public.dank_cinema_notifications (
     title text not null,
     body text not null default '',
     action jsonb not null default '{}'::jsonb,
+    dedupe_key text,
     read_at timestamptz,
     created_at timestamptz not null default now()
 );
 
 create index if not exists idx_dank_cinema_notifications_user
     on public.dank_cinema_notifications (user_id, created_at desc);
+
+create unique index if not exists idx_dank_cinema_notifications_dedupe
+    on public.dank_cinema_notifications (user_id, dedupe_key)
+    where dedupe_key is not null;
 
 alter table public.dank_cinema_users enable row level security;
 alter table public.dank_cinema_user_media enable row level security;
