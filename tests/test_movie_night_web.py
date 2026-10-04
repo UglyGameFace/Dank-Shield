@@ -445,7 +445,7 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
 
     assert "Dank Cinema • The 420 Lobby" in html
     assert 'class="brand-banner"' in html
-    assert 'src="/movie/assets/dank-cinema-brand.webp"' in html
+    assert 'src="/movie/assets/dank-cinema-brand.webp?v=transparent-v2"' in html
     assert 'alt="Dank Cinema — A feature of The 420 Lobby"' in html
     assert 'class="wordmark"' not in html
     assert 'class="brand-mark"' not in html
@@ -913,7 +913,7 @@ def test_dank_cinema_brand_is_recreated_as_transparent_header_art() -> None:
     assert "ImageDraw.floodfill" not in html
     assert "drop-shadow(0 8px 22px rgba(0,0,0,.38))" in html
     assert "rgba(2,7,6,.72)" in html
-    assert 'src="/movie/assets/dank-cinema-brand.webp"' in html
+    assert 'src="/movie/assets/dank-cinema-brand.webp?v=transparent-v2"' in html
 
     source = Path(movie_night_web.__file__).read_text(encoding="utf-8")
     assert "ImageDraw.floodfill" in source
