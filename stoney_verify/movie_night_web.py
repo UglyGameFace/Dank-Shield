@@ -17,6 +17,25 @@ from urllib.parse import urlencode
 from aiohttp import web
 from PIL import Image, ImageDraw, ImageFilter
 
+from stoney_verify.media_source_registry import (
+    MEDIA_CATEGORY_ANIME,
+    MEDIA_CATEGORY_CUSTOM,
+    MEDIA_CATEGORY_DOCUMENTARIES,
+    MEDIA_CATEGORY_MOVIES,
+    MEDIA_CATEGORY_TV,
+    PROVIDER_TYPE_EXTERNAL,
+    PROVIDER_TYPE_FEED,
+    PROVIDER_TYPE_JSON,
+    add_custom_source,
+    load_media_source_registry,
+    prepare_example_search_url,
+    prepare_feed_url,
+    remove_custom_source,
+    save_media_source_registry,
+    set_custom_source_category,
+    set_custom_source_enabled,
+)
+from stoney_verify.media_source_resolver import preview_custom_media_source
 from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
 from stoney_verify.movie_night_session import (
     ensure_movie_night_cleanup_task,
@@ -41,6 +60,21 @@ _BRAND_ASSET_PATH = (
     Path(__file__).with_name("assets") / "dank_cinema_brand_500.webp.b64"
 )
 _BRAND_ASSET_VERSION = "art-system-v3"
+
+_FEED_RUNTIME_STATE: dict[tuple[int, str], dict[str, Any]] = {}
+_MEDIA_CATEGORIES = {
+    MEDIA_CATEGORY_MOVIES,
+    MEDIA_CATEGORY_TV,
+    MEDIA_CATEGORY_ANIME,
+    MEDIA_CATEGORY_DOCUMENTARIES,
+    MEDIA_CATEGORY_CUSTOM,
+}
+_MEDIA_PROVIDER_TYPES = {
+    PROVIDER_TYPE_JSON,
+    PROVIDER_TYPE_FEED,
+    PROVIDER_TYPE_EXTERNAL,
+}
+
 
 
 @lru_cache(maxsize=1)
