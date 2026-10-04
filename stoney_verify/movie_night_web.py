@@ -11,7 +11,7 @@ import os
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 from urllib.parse import urlencode
 
 from aiohttp import web
