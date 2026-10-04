@@ -98,7 +98,7 @@ def test_web_player_has_terminal_state_before_missing_room_fallback() -> None:
     assert 'hostAction("end")' in source
     assert 'if(s.ended) {' in source
     assert 'terminated=true;' in source
-    assert 'Movie Night room not found' in source
+    assert 'Dank Cinema session not found' in source
     assert 'if(terminated) return;' in source
 
 

@@ -127,11 +127,11 @@ async def _room_and_user(
 ) -> tuple[MovieNightRoom, int]:
     room_id, uid = _request_identity(request)
     if uid is None:
-        raise web.HTTPUnauthorized(text="Invalid or expired Movie Night link.")
+        raise web.HTTPUnauthorized(text="Invalid or expired Dank Cinema link.")
     manager = get_movie_night_manager()
     room = manager.get(room_id)
     if room is None:
-        raise web.HTTPNotFound(text="Movie Night room not found.")
+        raise web.HTTPNotFound(text="Dank Cinema session not found.")
     if not manager.user_can_access(room, uid):
         raise web.HTTPForbidden(text="This is a private Dank Cinema viewing session.")
     return room, uid
@@ -274,6 +274,73 @@ def _discord_viewer_summaries(
     return summaries
 
 
+def _discord_room_context(
+    room: MovieNightRoom,
+    user_id: int,
+) -> dict[str, Any]:
+    """Return only cached Discord context already owned by the bot.
+
+    The signed Watch URL remains the authorization boundary. This helper makes
+    that Discord relationship visible on the website without adding OAuth or a
+    second identity system.
+    """
+
+    try:
+        from stoney_verify.globals import bot
+    except Exception:
+        bot = None
+
+    guild = None
+    channel = None
+    user = None
+    if bot is not None:
+        try:
+            guild = bot.get_guild(int(room.guild_id))
+        except Exception:
+            guild = None
+        if guild is not None:
+            try:
+                channel = guild.get_channel(int(room.channel_id))
+            except Exception:
+                channel = None
+            try:
+                user = guild.get_member(int(user_id))
+            except Exception:
+                user = None
+        if user is None:
+            try:
+                user = bot.get_user(int(user_id))
+            except Exception:
+                user = None
+
+    user_name = ""
+    avatar_url = ""
+    if user is not None:
+        user_name = str(
+            getattr(user, "display_name", "")
+            or getattr(user, "global_name", "")
+            or getattr(user, "name", "")
+            or ""
+        ).strip()[:80]
+        try:
+            avatar_url = _safe_discord_avatar_url(
+                getattr(getattr(user, "display_avatar", None), "url", "")
+            )
+        except Exception:
+            avatar_url = ""
+
+    guild_name = str(getattr(guild, "name", "") or "").strip()[:100]
+    channel_name = str(getattr(channel, "name", "") or "").strip()[:100]
+    return {
+        "connected": bool(guild is not None),
+        "guild_name": guild_name,
+        "channel_name": channel_name,
+        "user_id": int(user_id),
+        "user_name": user_name or str(int(user_id)),
+        "avatar_url": avatar_url,
+    }
+
+
 def _candidate_web_metadata(candidate: Any) -> dict[str, Any]:
     metadata = dict(getattr(candidate, "metadata", {}) or {}) if candidate is not None else {}
     catalog = (
@@ -309,6 +376,9 @@ def _candidate_web_metadata(candidate: Any) -> dict[str, Any]:
 async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     movie_manager = get_movie_night_manager()
     torrent_manager = get_torrent_manager()
+    room_mode = str(getattr(room, "mode", "watch_party") or "watch_party")
+    private_mode = room_mode == "private"
+    session_fallback_title = "Private Session" if private_mode else "Watch Party"
     session = await torrent_manager.get(room.stream_token) if room.stream_token else None
     if session is not None and not torrent_manager.session_usable(session):
         await torrent_manager.discard_unusable_session(room.stream_token)
@@ -393,9 +463,10 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     active_viewer_ids = movie_manager.active_viewers(room)
     buffer_quorum = movie_manager.buffer_quorum_viewers(room)
     viewer_summaries = _discord_viewer_summaries(room, active_viewer_ids)
+    discord_context = _discord_room_context(room, int(user_id))
     movie_metadata = _candidate_web_metadata(candidate)
     if not movie_metadata["title"]:
-        movie_metadata["title"] = str(title or "Movie Night")
+        movie_metadata["title"] = str(title or session_fallback_title)
 
     queue_items: list[dict[str, Any]] = []
     for queued_id in list(room.queue)[:12]:
@@ -416,9 +487,9 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     return {
         "ok": True,
         "room_id": room.room_id,
-        "mode": str(getattr(room, "mode", "watch_party") or "watch_party"),
-        "private": str(getattr(room, "mode", "watch_party") or "watch_party") == "private",
-        "title": str(title or "Movie Night"),
+        "mode": room_mode,
+        "private": private_mode,
+        "title": str(title or session_fallback_title),
         "movie": movie_metadata,
         "queue": queue_items,
         "release_source": source,
@@ -428,6 +499,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "host_active": movie_manager.host_active(room),
         "viewer_count": len(active_viewer_ids),
         "viewers": viewer_summaries,
+        "discord": discord_context,
         "buffer_quorum_count": len(buffer_quorum),
         "sync_status": sync_status,
         "sync_ready": sync_ready,
@@ -658,7 +730,7 @@ async def movie_night_heartbeat(request: web.Request) -> web.Response:
 async def movie_night_action(request: web.Request) -> web.Response:
     room, uid = await _room_and_user(request)
     if int(uid) != int(room.host_id):
-        raise web.HTTPForbidden(text="Only the active Movie Night host controls playback.")
+        raise web.HTTPForbidden(text="Only the active Cinema host controls playback.")
 
     try:
         payload = await request.json()
@@ -669,7 +741,7 @@ async def movie_night_action(request: web.Request) -> web.Response:
 
     action = str(payload.get("action") or "").strip().lower()
     if action not in {"pause", "resume", "seek", "end"}:
-        raise web.HTTPBadRequest(text="Unsupported Movie Night playback action.")
+        raise web.HTTPBadRequest(text="Unsupported Cinema playback action.")
 
     action_payload: dict[str, Any] = {}
     if action == "seek":
@@ -691,7 +763,7 @@ async def movie_night_action(request: web.Request) -> web.Response:
 async def movie_night_transfer_host(request: web.Request) -> web.Response:
     room, uid = await _room_and_user(request)
     if int(uid) != int(room.host_id):
-        raise web.HTTPForbidden(text="Only the active Movie Night host can pass host.")
+        raise web.HTTPForbidden(text="Only the active Cinema host can pass host.")
 
     try:
         payload = await request.json()
@@ -810,6 +882,7 @@ html {{ background:var(--bg); scroll-behavior:smooth; }}
 body {{
   margin:0;
   min-height:100vh;
+  overflow-x:hidden;
   color:var(--text);
   background:
     radial-gradient(circle at 78% -10%,rgba(35,115,72,.28),transparent 35%),
@@ -818,18 +891,27 @@ body {{
 }}
 button,input {{ font:inherit; }}
 button {{ -webkit-tap-highlight-color:transparent; }}
-.shell {{ width:min(1120px,100%); margin:0 auto; padding:0 18px 140px; }}
-.site-header {{ position:relative; z-index:20; padding:18px 0 6px; }}
-.brand-row {{ display:flex; align-items:center; width:100%; }}
-.brand {{ width:100%; min-width:0; }}
+.shell {{ width:min(1120px,100%); margin:0 auto; padding:0 18px 150px; overflow-x:hidden; }}
+.site-header {{
+  position:relative; z-index:20;
+  margin:0 -18px;
+  padding:12px 18px 6px;
+  overflow:hidden;
+  background:
+    radial-gradient(circle at 17% 32%,rgba(69,143,54,.16),transparent 28%),
+    linear-gradient(180deg,#020706 0%,#06110e 72%,transparent 100%);
+}}
+.brand-row {{ display:flex; align-items:center; width:100%; min-width:0; }}
+.brand {{ width:100%; min-width:0; overflow:hidden; isolation:isolate; }}
 .brand-banner {{
   display:block;
-  width:min(500px,100%);
+  width:min(620px,100%);
   height:auto;
-  max-height:116px;
   object-fit:contain;
   object-position:left center;
-  filter:drop-shadow(0 0 18px rgba(126,255,65,.12));
+  mix-blend-mode:screen;
+  filter:contrast(1.05) saturate(1.04) drop-shadow(0 0 18px rgba(126,255,65,.10));
+  transform:translateZ(0);
 }}
 .nav {{
   display:flex; align-items:center; gap:5px;
@@ -913,7 +995,7 @@ video {{
 }}
 .room-pill {{
   display:flex; align-items:center; gap:8px;
-  max-width:calc(100% - 58px); padding:8px 11px;
+  min-width:0; max-width:calc(100% - 58px); padding:8px 11px;
   border:1px solid rgba(255,255,255,.12);
   border-radius:12px;
   background:rgba(3,10,8,.78);
@@ -921,15 +1003,21 @@ video {{
   font-size:.78rem; font-weight:800;
 }}
 .room-pill .live-dot {{ width:8px;height:8px;border-radius:50%;background:var(--lime);box-shadow:0 0 12px rgba(159,255,86,.75); }}
-#role {{ color:#d7dfdc; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+#role {{ color:#d7dfdc; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
 .cast {{
   pointer-events:auto;
+  position:relative;
   width:46px;height:46px; display:grid; place-items:center;
   border-radius:50%; border:1px solid rgba(255,255,255,.18);
   color:#fff; background:rgba(3,10,8,.72); backdrop-filter:blur(12px);
 }}
 .cast[hidden] {{ display:none !important; }}
 .cast:disabled {{ opacity:.35; }}
+.cast.unavailable {{ opacity:.5; border-style:dashed; }}
+.cast.unavailable::after {{
+  content:""; position:absolute; width:28px; height:2px;
+  background:currentColor; transform:rotate(-43deg); border-radius:999px;
+}}
 .cast.connected {{ color:var(--lime); border-color:var(--line-strong); }}
 .cast svg {{ width:23px;height:23px; }}
 .center-play {{
@@ -1017,9 +1105,10 @@ video {{
 .synopsis {{ color:#d4dbd8; margin:11px 0 0; line-height:1.46; font-size:.92rem; }}
 .health {{
   display:flex;align-items:center;gap:7px;
+  max-width:100%;
   border:1px solid rgba(152,255,82,.34);border-radius:999px;
   padding:8px 11px;color:var(--lime);font-size:.76rem;font-weight:850;
-  background:rgba(72,128,44,.08);white-space:nowrap;
+  background:rgba(72,128,44,.08);white-space:normal;overflow-wrap:anywhere;
 }}
 .health-dot {{ width:8px;height:8px;border-radius:50%;background:var(--lime);box-shadow:0 0 10px rgba(159,255,86,.6); }}
 .viewer-strip {{ display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;flex-wrap:wrap; }}
@@ -1053,8 +1142,10 @@ video {{
   border:1px solid rgba(255,255,255,.09);border-radius:16px;background:rgba(10,21,17,.72);
 }}
 .tab {{
-  border:0;border-radius:12px;padding:10px 7px;color:#d8dfdc;background:transparent;
-  font-size:.72rem;font-weight:850;white-space:nowrap;
+  min-width:0;
+  border:0;border-radius:12px;padding:10px 6px;color:#d8dfdc;background:transparent;
+  font-size:clamp(.6rem,2.2vw,.72rem);font-weight:850;
+  white-space:normal;overflow-wrap:anywhere;line-height:1.15;text-align:center;
 }}
 .tab.active {{ color:var(--lime); background:linear-gradient(180deg,rgba(86,176,50,.22),rgba(38,77,30,.22)); box-shadow:inset 0 0 0 1px rgba(148,255,80,.28); }}
 #notice {{ min-height:1.35em; margin:12px 3px 0;color:#bdc8c3;font-size:.82rem; }}
@@ -1097,9 +1188,11 @@ video {{
 .stat b {{ display:block;margin-bottom:5px;color:#84928c;font-size:.68rem;text-transform:uppercase;letter-spacing:.07em; }}
 .host-sheet {{
   position:fixed;left:50%;bottom:0;z-index:40;transform:translateX(-50%);
-  width:min(1120px,100%);padding:9px 18px calc(18px + env(safe-area-inset-bottom));
+  width:min(1120px,100%);max-height:min(72vh,560px);
+  padding:9px 18px calc(18px + env(safe-area-inset-bottom));
+  overflow-y:auto;overscroll-behavior:contain;
   border:1px solid rgba(197,255,175,.17);border-bottom:0;border-radius:22px 22px 0 0;
-  background:rgba(9,20,16,.96);backdrop-filter:blur(18px);box-shadow:0 -20px 55px rgba(0,0,0,.5);
+  background:rgba(9,20,16,.97);backdrop-filter:blur(18px);box-shadow:0 -20px 55px rgba(0,0,0,.5);
   display:none;
 }}
 .host-sheet.show {{ display:block; }}
@@ -1109,12 +1202,49 @@ video {{
 .close-sheet {{ border:0;background:transparent;color:#d8dfdc;font-size:1.25rem; }}
 .host-actions {{ display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px; }}
 .host-action {{
-  min-height:94px;border:1px solid rgba(255,255,255,.1);border-radius:14px;
+  min-width:0;min-height:94px;border:1px solid rgba(255,255,255,.1);border-radius:14px;
   background:#101b18;color:#f5f7f6;padding:10px 7px;font-weight:850;font-size:.72rem;
+  overflow-wrap:anywhere;line-height:1.15;
 }}
-.host-action small {{ display:block;color:#95a29c;font-size:.63rem;font-weight:650;margin-top:5px;line-height:1.25; }}
+.host-action small {{
+  display:block;color:#95a29c;font-size:.63rem;font-weight:650;margin-top:5px;
+  line-height:1.25;overflow-wrap:anywhere;
+}}
 .host-action.danger {{ color:#ff737c;border-color:rgba(255,82,96,.32);background:rgba(91,23,29,.28); }}
 #play {{ position:absolute;left:-9999px; }}
+.host-launcher {{
+  position:fixed;right:max(14px,env(safe-area-inset-right));
+  bottom:calc(14px + env(safe-area-inset-bottom));z-index:39;
+  display:flex;align-items:center;gap:7px;
+  border:1px solid rgba(160,255,92,.42);border-radius:999px;
+  padding:10px 13px;background:rgba(9,20,16,.94);color:var(--lime);
+  box-shadow:0 10px 30px rgba(0,0,0,.42);backdrop-filter:blur(14px);
+  font-size:.75rem;font-weight:900;
+}}
+.host-launcher[hidden] {{ display:none !important; }}
+.discord-context {{
+  display:flex;align-items:center;gap:10px;margin-top:12px;padding:10px;
+  border:1px solid rgba(115,137,255,.22);border-radius:12px;
+  background:rgba(32,40,74,.18);
+}}
+.discord-context-copy {{ min-width:0;flex:1; }}
+.discord-context-title {{ font-size:.78rem;font-weight:900;color:#dfe4ff; }}
+.discord-context-sub {{
+  margin-top:2px;color:#aeb8c8;font-size:.69rem;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}}
+.discord-live {{
+  display:flex;align-items:center;gap:7px;
+  max-width:100%;margin-top:10px;padding:7px 10px;
+  border:1px solid rgba(115,137,255,.24);border-radius:999px;
+  background:rgba(46,56,104,.16);color:#dfe4ff;
+  font-size:.7rem;font-weight:800;
+}}
+.discord-live[hidden] {{ display:none !important; }}
+.discord-live svg {{ width:17px;height:14px;flex:0 0 auto;color:#8ea0ff; }}
+.discord-live span {{
+  min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}}
 .sync-row {{ display:flex;align-items:center;gap:8px;margin-top:12px; }}
 #sync {{
   border:1px solid rgba(143,255,75,.32);border-radius:999px;background:rgba(86,170,52,.12);
@@ -1123,22 +1253,45 @@ video {{
 #sync:disabled {{ opacity:.72; }}
 .sr-only {{ position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }}
 @media (max-width:640px) {{
-  .shell {{ padding-left:14px;padding-right:14px; }}
-  .brand-banner {{ width:100%;max-height:none; }}
-  .nav-item {{ padding:9px 11px;font-size:.78rem; }}
+  .shell {{ padding-left:14px;padding-right:14px;padding-bottom:160px; }}
+  .site-header {{ margin-left:-14px;margin-right:-14px;padding-left:10px;padding-right:10px; }}
+  .brand-banner {{ width:100%;max-height:none;object-position:center; }}
+  .nav {{ margin-top:10px; }}
+  .nav-item {{ padding:9px 11px;font-size:.75rem; }}
   .video-stage {{ min-height:0; }}
-  .center-play {{ width:72px;height:72px; }}
-  .player-chrome {{ padding-left:10px;padding-right:10px; }}
+  .center-play {{
+    width:66px;height:66px;border-width:1.5px;
+    background:rgba(2,8,6,.56);box-shadow:0 8px 28px rgba(0,0,0,.34);
+  }}
+  .center-play svg {{ width:29px;height:29px; }}
+  .player-chrome {{ padding:38px 9px 10px; }}
+  .control-row {{ gap:8px; }}
+  .player-button {{ width:34px;height:34px; }}
   .volume {{ display:none; }}
   .info {{ grid-template-columns:78px minmax(0,1fr);gap:12px; }}
   .poster {{ width:78px; }}
   .title-row {{ display:block; }}
-  .health {{ margin-top:10px;width:max-content;max-width:100%; }}
-  .synopsis {{ font-size:.84rem; }}
-  .quick-tabs {{ grid-template-columns:repeat(4,minmax(72px,1fr));overflow-x:auto; }}
+  .movie-title {{ font-size:clamp(1.85rem,11vw,2.65rem);overflow-wrap:anywhere; }}
+  .health {{ margin-top:10px;width:fit-content;max-width:100%; }}
+  .synopsis {{ font-size:.84rem;overflow-wrap:anywhere; }}
+  .viewer-strip {{ align-items:flex-start; }}
+  .quick-tabs {{ grid-template-columns:repeat(4,minmax(0,1fr));overflow:visible;gap:3px;padding:5px; }}
+  .tab {{ padding:9px 3px;font-size:clamp(.56rem,2.6vw,.68rem); }}
+  .section-head {{ align-items:flex-start; }}
+  .queue-head-actions {{ flex-wrap:wrap;justify-content:flex-end; }}
+  .queue-item.manageable {{ grid-template-columns:50px minmax(0,1fr); }}
+  .queue-item.manageable .queue-actions {{ grid-column:1 / -1;justify-content:flex-end; }}
+  .queue-art {{ width:50px; }}
   .grid {{ grid-template-columns:1fr; }}
-  .host-actions {{ grid-template-columns:repeat(4,minmax(82px,1fr));overflow-x:auto; }}
-  .host-action {{ min-width:82px; }}
+  .host-sheet {{ padding-left:12px;padding-right:12px; }}
+  .host-actions {{ grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible; }}
+  .host-action {{ min-width:0;min-height:104px;font-size:.74rem; }}
+}}
+@media (max-width:380px) {{
+  .room-pill {{ gap:5px;padding:7px 8px;font-size:.68rem; }}
+  .cast {{ width:42px;height:42px; }}
+  .quick-tabs {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
+  .host-actions {{ grid-template-columns:1fr 1fr; }}
 }}
 </style>
 </head>
@@ -1181,7 +1334,7 @@ video {{
       <div class="tap-skip-feedback left" id="tapSkipLeft" aria-live="polite">↶ 10s</div>
       <div class="tap-skip-feedback right" id="tapSkipRight" aria-live="polite">10s ↷</div>
       <div class="stage-top">
-        <div class="room-pill"><span class="live-dot"></span><span id="roomMode">Movie Night</span><span>│</span><span id="role">Connecting…</span></div>
+        <div class="room-pill"><span class="live-dot"></span><span id="roomMode">Cinema Session</span><span>│</span><span id="role">Connecting…</span></div>
         <button class="cast" id="cast" type="button" aria-label="Cast" title="Cast" hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 18a4 4 0 0 1 4 4"/><path d="M2 13a9 9 0 0 1 9 9"/><path d="M2 8a14 14 0 0 1 14 14"/><path d="M6 4h14a2 2 0 0 1 2 2v10"/></svg>
         </button>
@@ -1224,7 +1377,7 @@ video {{
     <div class="meta-main">
       <div class="title-row">
         <div>
-          <h2 class="movie-title" id="title">Movie Night</h2>
+          <h2 class="movie-title" id="title">Cinema</h2>
           <div class="movie-meta"><span id="state">—</span> &nbsp;•&nbsp; <span id="runtime">—</span><span id="yearWrap" hidden> &nbsp;•&nbsp; <span id="year"></span></span></div>
         </div>
         <div class="health"><span class="health-dot"></span><span id="healthText">Stream Health: Connecting</span></div>
@@ -1235,25 +1388,36 @@ video {{
         <div class="watchers">👥 <strong id="viewers">0</strong> watching</div>
         <div class="watchers" id="hostPresence">Host status: checking…</div>
       </div>
+      <button class="discord-live" id="discordLive" type="button" hidden>
+        <svg viewBox="0 0 24 18" aria-hidden="true"><path fill="currentColor" d="M19.8 2.1A16 16 0 0 0 15.8.9l-.5 1a14 14 0 0 0-6.6 0l-.5-1a16 16 0 0 0-4 1.2C1.7 5.8.9 9.4 1.2 13c2.1 1.6 4.1 2.5 6 3.1l1.5-2c-.8-.3-1.6-.7-2.3-1.2l.6-.5c4.4 2 9.2 2 13.6 0l.7.5c-.8.5-1.5.9-2.4 1.2l1.5 2c1.9-.6 3.9-1.5 6-3.1.4-4.1-.7-7.7-3.1-10.9Z"/></svg>
+        <span id="discordLiveText">Discord linked</span>
+      </button>
       <div class="sync-row"><button id="sync" type="button">Tap to Sync</button><span id="syncHint"></span></div>
     </div>
   </section>
 
   <div class="quick-tabs" aria-label="Theater actions">
     <button class="tab active" type="button" data-panel="queue">▤ Queue</button>
-    <button class="tab" type="button" data-panel="viewers">👥 Session</button>
-    <button class="tab" type="button" data-panel="chat">💬 Open Discord</button>
-    <button class="tab" type="button" data-panel="settings">⚙ Stream Details</button>
+    <button class="tab" id="sessionTab" type="button" data-panel="viewers">👥 Session</button>
+    <button class="tab" type="button" data-panel="chat">💬 Discord</button>
+    <button class="tab" id="contextAction" type="button" data-panel="settings">⚙ Details</button>
   </div>
 
   <div id="notice"></div>
 
   <section class="queue-panel" id="sessionPanel" hidden>
-    <div class="section-head"><h2>Session</h2><span id="sessionMode">Movie Night</span></div>
+    <div class="section-head"><h2>Session</h2><span id="sessionMode">Connecting…</span></div>
     <div class="grid">
       <div class="stat"><b>Viewers</b><span id="sessionViewers">0</span></div>
       <div class="stat"><b>Your role</b><span id="sessionRole">Connecting…</span></div>
       <div class="stat"><b>Sync</b><span id="sessionSync">Checking…</span></div>
+    </div>
+    <div class="discord-context" id="discordContext" hidden>
+      <span class="viewer-avatar" id="discordIdentityAvatar" aria-hidden="true">?</span>
+      <div class="discord-context-copy">
+        <div class="discord-context-title" id="discordIdentityTitle">Discord linked</div>
+        <div class="discord-context-sub" id="discordIdentitySub"></div>
+      </div>
     </div>
     <div class="session-viewer-list" id="sessionViewerList"></div>
   </section>
@@ -1288,11 +1452,12 @@ video {{
   <div class="host-actions">
     <button class="host-action" id="passHost" type="button">👤→<br>Pass Host<small>Choose an active Discord viewer</small></button>
     <button class="host-action" id="manageQueue" type="button">☷<br>Manage Queue<small>Remove or reorder queued titles</small></button>
-    <button class="host-action" id="pause" type="button">Ⅱ<br>Pause for Everyone<small>Pause synchronized playback</small></button>
-    <button class="host-action danger" id="end" type="button">■<br><span id="endLabel">End Session</span><small>Close the room for everyone</small></button>
+    <button class="host-action" id="pause" type="button">Ⅱ<br><span id="pauseLabel">Pause Playback</span><small id="pauseHelp">Pause this Cinema session</small></button>
+    <button class="host-action danger" id="end" type="button">■<br><span id="endLabel">End Session</span><small id="endHelp">Close this Cinema session</small></button>
   </div>
   <button id="play" type="button">Resume</button>
 </section>
+<button class="host-launcher" id="hostLauncher" type="button" hidden>♛ Host Controls</button>
 <script>
 const BOOT={boot};
 window.__dankCastApiAvailable=false;
@@ -1327,6 +1492,7 @@ let streamRetryAttempt=0;
 let stateFetchFailures=0;
 let attachedStreamUrl="";
 let hostSheetDismissed=false;
+let previousHostState=false;
 let controlsHideTimer=null;
 let tapSkipFeedbackTimer=null;
 let lastStageTapAt=0;
@@ -1507,6 +1673,9 @@ function updatePlayerChrome() {{
   const icon=paused?'<path d="M8 5v14l11-7Z"/>':'<path d="M7 5h4v14H7ZM14 5h4v14h-4Z"/>';
   document.getElementById("centerPlayIcon").innerHTML=icon;
   document.getElementById("playerToggleIcon").innerHTML=icon;
+  const action=paused?"Play":"Pause";
+  document.getElementById("centerPlay").setAttribute("aria-label",action);
+  document.getElementById("playerToggle").setAttribute("aria-label",action);
 }}
 function renderQueue(items) {{
   const list=document.getElementById("queueList");
@@ -1617,7 +1786,9 @@ function renderDiscordViewers(s) {{
     name.textContent=String(viewer.display_name||viewer.user_id||"Discord viewer");
     const role=document.createElement("div");
     role.className="session-viewer-role";
-    role.textContent=viewer.is_host?"Host":"Viewer";
+    role.textContent=viewer.is_host
+      ?(s.private?"Private host":"Watch Party host")
+      :(s.private?"Invited viewer":"Viewer");
     copy.append(name,role);
     row.appendChild(copy);
 
@@ -1632,6 +1803,96 @@ function renderDiscordViewers(s) {{
     list.appendChild(row);
   }}
 }}
+function renderDiscordContext(s) {{
+  const ctx=s.discord||{{}};
+  const panel=document.getElementById("discordContext");
+  const title=document.getElementById("discordIdentityTitle");
+  const sub=document.getElementById("discordIdentitySub");
+  const avatar=document.getElementById("discordIdentityAvatar");
+  const live=document.getElementById("discordLive");
+  const liveText=document.getElementById("discordLiveText");
+
+  panel.hidden=!ctx.connected;
+  live.hidden=!ctx.connected;
+  avatar.textContent="";
+  if(!ctx.connected) {{
+    liveText.textContent="Discord unavailable";
+    return;
+  }}
+
+  const url=String(ctx.avatar_url||"");
+  if(url.startsWith("https://cdn.discordapp.com/")||url.startsWith("https://media.discordapp.net/")) {{
+    const img=document.createElement("img");
+    img.src=url;
+    img.alt="";
+    img.loading="lazy";
+    avatar.appendChild(img);
+  }} else {{
+    avatar.textContent=viewerInitials(ctx.user_name||ctx.user_id);
+  }}
+
+  title.textContent="Discord linked as "+String(ctx.user_name||ctx.user_id||"viewer");
+  const guild=String(ctx.guild_name||"Discord server");
+  const channel=String(ctx.channel_name||"");
+  sub.textContent=channel?guild+" • #"+channel:guild;
+
+  liveText.textContent=channel
+    ?"Discord • "+guild+" • #"+channel
+    :"Discord • "+guild;
+}}
+function applyModeSurface(s) {{
+  const privateMode=String(s.mode||"")==="private" || !!s.private;
+  document.body.dataset.cinemaMode=privateMode?"private":"watch-party";
+
+  document.getElementById("roomMode").textContent=privateMode?"Private Room":"Watch Party";
+  document.getElementById("endLabel").textContent=privateMode?"End Private Session":"End Movie Night";
+  document.getElementById("endHelp").textContent=privateMode
+    ?"Close this private session"
+    :"Close the Watch Party for everyone";
+  document.getElementById("sessionMode").textContent=privateMode?"Private Session":"Watch Party";
+  document.getElementById("sessionTab").textContent=privateMode?"👥 Private":"👥 Viewers";
+
+  const pauseLabel=document.getElementById("pauseLabel");
+  const pauseHelp=document.getElementById("pauseHelp");
+  if(privateMode) {{
+    pauseLabel.textContent=Number(s.viewer_count||0)>1?"Pause Private Room":"Pause";
+    pauseHelp.textContent=Number(s.viewer_count||0)>1
+      ?"Pause playback for invited viewers"
+      :"Pause your private playback";
+  }} else {{
+    pauseLabel.textContent="Pause for Everyone";
+    pauseHelp.textContent="Pause synchronized playback for all viewers";
+  }}
+
+  const hostSheet=document.getElementById("hostSheet");
+  const launcher=document.getElementById("hostLauncher");
+  const contextAction=document.getElementById("contextAction");
+
+  if(s.is_host && !previousHostState)
+    hostSheetDismissed=false;
+
+  if(s.is_host) {{
+    hostSheet.classList.toggle("show",!hostSheetDismissed);
+    launcher.hidden=!hostSheetDismissed;
+    contextAction.dataset.panel="host";
+    contextAction.textContent="♛ Host";
+    contextAction.title="Open Host Controls";
+  }} else {{
+    hostSheet.classList.remove("show");
+    launcher.hidden=true;
+    contextAction.dataset.panel="settings";
+    contextAction.textContent="⚙ Details";
+    contextAction.title="Advanced Stream Details";
+  }}
+
+  document.getElementById("syncHint").textContent=s.is_host
+    ?(privateMode
+      ?"You control this private session."
+      :"You control synchronized Watch Party playback.")
+    :"";
+
+  previousHostState=!!s.is_host;
+}}
 function streamHealthLabel(s) {{
   if(s.media_missing) return "Source unavailable";
   if(!s.stream_url) return "Waiting for source";
@@ -1645,12 +1906,9 @@ function streamHealthLabel(s) {{
 }}
 function renderSiteState(s) {{
   const movie=s.movie||{{}};
-  document.getElementById("roomMode").textContent=s.private?"Private Room":"Movie Night";
-  document.getElementById("endLabel").textContent=s.private?"End Private Session":"End Movie Night";
-  document.getElementById("hostSheet").classList.toggle("show",!!s.is_host && !hostSheetDismissed);
+  applyModeSurface(s);
   document.getElementById("healthText").textContent="Stream Health: "+streamHealthLabel(s);
   document.getElementById("hostPresence").textContent=s.host_active?"Host online":"Host away";
-  document.getElementById("sessionMode").textContent=s.private?"Private Session":"Movie Night";
   document.getElementById("sessionViewers").textContent=String(s.viewer_count||0);
   document.getElementById("sessionRole").textContent=s.is_host?"Host":"Viewer";
   document.getElementById("sessionSync").textContent=
@@ -1685,12 +1943,12 @@ function renderSiteState(s) {{
     document.getElementById("movieInfo").classList.add("no-poster");
   }}
   renderQueue(s.queue||[]);
+  renderDiscordContext(s);
   renderDiscordViewers(s);
   const hostOnly=!s.is_host;
   document.getElementById("rewind10").disabled=hostOnly;
   document.getElementById("forward10").disabled=hostOnly;
   document.getElementById("timeline").disabled=hostOnly;
-  document.getElementById("syncHint").textContent=s.is_host?"You control synchronized playback.":"";
   updatePlayerChrome();
   refreshCastAvailability();
   syncCastToRoom(s);
@@ -1780,9 +2038,9 @@ function correctSyncedDrift(target) {{
 
 async function applyState(s) {{
   lastState=s;
-  document.getElementById("title").textContent=s.title||"Movie Night";
+  document.getElementById("title").textContent=s.title||(s.private?"Private Session":"Watch Party");
   document.getElementById("heading").textContent=
-    s.private?"🔒 Dank Cinema Private Session":"🎬 Dank Cinema Movie Night";
+    s.private?"🔒 Dank Cinema Private Session":"🎬 Dank Cinema Watch Party";
   document.getElementById("state").textContent=s.state||"—";
   document.getElementById("viewers").textContent=String(s.viewer_count||0);
   document.getElementById("role").textContent=
@@ -1820,7 +2078,7 @@ async function applyState(s) {{
     document.getElementById("pause").disabled=true;
     document.getElementById("end").disabled=true;
     syncButton.disabled=true;
-    notice.textContent=s.private?"Private Session has ended.":"Movie Night has ended.";
+    notice.textContent=s.private?"Private Session has ended.":"Watch Party has ended.";
     document.getElementById("hostSheet").classList.remove("show");
     return;
   }}
@@ -1851,7 +2109,7 @@ async function applyState(s) {{
     if(s.media_missing) {{
       notice.textContent=s.private
         ?"The attached media session expired or was reclaimed. Your Private Session is still active; return to Discord and choose the release again."
-        :"The attached media session expired or was reclaimed. The Movie Night room is still active; return to Discord and choose the release again.";
+        :"The attached media session expired or was reclaimed. The Watch Party is still active; return to Discord and choose the release again.";
     }} else {{
       notice.textContent="Waiting for the host to choose media.";
     }}
@@ -1902,11 +2160,13 @@ async function applyState(s) {{
           }}
         }}
 
-        if(!notice.textContent || notice.textContent.startsWith("Joining Movie Night"))
+        if(!notice.textContent || notice.textContent.startsWith("Joining ")) {{
+          const joiningLabel=s.private?"Private Session":"Watch Party";
           notice.textContent=
-            "Joining Movie Night… buffering around "+Math.floor((joinTarget||0)/60)+":"+
+            "Joining "+joiningLabel+"… buffering around "+Math.floor((joinTarget||0)/60)+":"+
             String(Math.floor((joinTarget||0)%60)).padStart(2,"0")+
             ". Playback will stay put while the buffer catches up.";
+        }}
       }}
     }} else {{
       joinTarget=null;
@@ -1949,10 +2209,10 @@ async function poll() {{
   }}
   catch(err) {{
     const message=String(err.message||err);
-    if(message.includes("Movie Night room not found")) {{
+    if(message.includes("Dank Cinema session not found")) {{
       terminated=true;
       video.pause();
-      notice.textContent="Movie Night has ended.";
+      notice.textContent=lastState?.private?"Private Session has ended.":"Cinema session has ended.";
       return;
     }}
     stateFetchFailures+=1;
@@ -1992,7 +2252,10 @@ async function queueAction(action, candidateId="") {{
   }}
 }}
 async function hostAction(action, extra={{}}) {{
-  if(!lastState || !lastState.is_host || remoteApply) return;
+  // Explicit user controls must never be dropped just because a state poll is
+  // currently applying remote media state. Media event listeners themselves
+  // already use remoteApply to suppress feedback loops.
+  if(!lastState || !lastState.is_host) return;
   try {{
     await applyState(await jsonFetch("/movie/"+BOOT.roomId+"/action", {{
       method:"POST",
@@ -2047,15 +2310,39 @@ syncButton.onclick=async()=>{{
 }};
 document.getElementById("play").onclick=()=>hostAction("resume");
 document.getElementById("pause").onclick=()=>hostAction("pause");
-document.getElementById("centerPlay").onclick=async()=>{{
+async function togglePlayerPlayback() {{
   if(!lastState?.stream_url) return;
-  if(video.paused) {{
-    try {{ await video.play(); }} catch(err) {{ notice.textContent="Playback could not start: "+String(err?.message||err); }}
-  }} else {{
-    video.pause();
+  showPlayerControls(true);
+
+  if(lastState.is_host) {{
+    const shouldResume=video.paused || lastState.state!=="playing";
+    await hostAction(shouldResume?"resume":"pause");
+    return;
   }}
-}};
-document.getElementById("playerToggle").onclick=document.getElementById("centerPlay").onclick;
+
+  if(video.paused) {{
+    syncRequested=true;
+    syncGestureGranted=true;
+    try {{
+      await video.play();
+      await heartbeat(true);
+      notice.textContent=lastState.private
+        ?"Private playback resumed and resynced."
+        :"Playback resumed and resynced to the Watch Party.";
+    }} catch(err) {{
+      notice.textContent="Playback could not start: "+String(err?.message||err);
+    }}
+  }} else {{
+    syncRequested=false;
+    syncGestureGranted=false;
+    video.pause();
+    notice.textContent=lastState.private
+      ?"Paused locally. Tap Play to rejoin the private session."
+      :"Paused locally. Tap Play to rejoin synchronized playback.";
+  }}
+}}
+document.getElementById("centerPlay").onclick=togglePlayerPlayback;
+document.getElementById("playerToggle").onclick=togglePlayerPlayback;
 document.getElementById("rewind10").onclick=()=>{{
   if(lastState?.is_host) safeSeek(Math.max(0,(video.currentTime||0)-10));
 }};
@@ -2104,10 +2391,19 @@ document.addEventListener("fullscreenchange",()=>{{
     try {{ screen.orientation.unlock(); }} catch(_) {{}}
   }}
 }});
-document.getElementById("closeHostSheet").onclick=()=>{{
+function openHostControls() {{
+  if(!lastState?.is_host) return;
+  hostSheetDismissed=false;
+  document.getElementById("hostSheet").classList.add("show");
+  document.getElementById("hostLauncher").hidden=true;
+}}
+function closeHostControls() {{
   hostSheetDismissed=true;
   document.getElementById("hostSheet").classList.remove("show");
-}};
+  document.getElementById("hostLauncher").hidden=!lastState?.is_host;
+}}
+document.getElementById("closeHostSheet").onclick=closeHostControls;
+document.getElementById("hostLauncher").onclick=openHostControls;
 async function transferHost(newHostId, displayName="viewer") {{
   if(!lastState?.is_host || !Number(newHostId)) return;
   const target=String(displayName||"viewer");
@@ -2137,6 +2433,7 @@ document.getElementById("passHost").onclick=()=>{{
   panel.scrollIntoView({{behavior:"smooth",block:"nearest"}});
   notice.textContent="Choose an active viewer below to pass host control.";
 }};
+document.getElementById("discordLive").onclick=openDiscordRoom;
 document.getElementById("manageQueue").onclick=()=>{{
   document.getElementById("queuePanel").scrollIntoView({{behavior:"smooth",block:"nearest"}});
   notice.textContent="Queue manager is active. Use ↑ ↓ or × on queued titles.";
@@ -2167,6 +2464,8 @@ for(const tab of document.querySelectorAll("[data-panel]")) {{
       const details=document.querySelector(".diagnostics");
       details.open=true;
       details.scrollIntoView({{behavior:"smooth",block:"nearest"}});
+    }} else if(tab.dataset.panel==="host") {{
+      openHostControls();
     }} else if(tab.dataset.panel==="chat") openDiscordRoom();
   }});
 }}
@@ -2177,31 +2476,59 @@ let castState="NO_DEVICES_AVAILABLE";
 let castActive=false;
 let castWasMuted=false;
 let castLastSyncAt=0;
+let remotePlaybackAvailable=false;
 
-function setCastVisible(visible) {{
-  castButton.hidden=!visible;
-  castButton.disabled=!visible;
-}}
-function refreshCastAvailability() {{
+function googleCastDeviceAvailable() {{
   const noDevices=window.cast?.framework
     ?cast.framework.CastState.NO_DEVICES_AVAILABLE
     :"NO_DEVICES_AVAILABLE";
-  const realDeviceAvailable=!!(
+  return !!(
     castContext &&
     typeof castContext.requestSession==="function" &&
     castState &&
     castState!==noDevices
   );
-  setCastVisible(!!(
-    realDeviceAvailable &&
-    lastState?.cast_stream_url &&
-    lastState?.cast_supported_media
-  ));
+}}
+function castAvailability() {{
+  if(!lastState?.stream_url)
+    return {{show:false,available:false,transport:"",reason:"No media is loaded yet."}};
+
+  if(googleCastDeviceAvailable() && lastState?.cast_supported_media)
+    return {{show:true,available:true,transport:"google",reason:"Chromecast available"}};
+
+  if(remotePlaybackAvailable && video.remote && typeof video.remote.prompt==="function")
+    return {{show:true,available:true,transport:"remote",reason:"Remote playback device available"}};
+
+  if(googleCastDeviceAvailable() && !lastState?.cast_supported_media)
+    return {{
+      show:true,
+      available:false,
+      transport:"",
+      reason:"A Cast device is available, but this release cannot be sent directly. Try an MP4/WebM release."
+    }};
+
+  return {{
+    show:true,
+    available:false,
+    transport:"",
+    reason:"No compatible casting device is currently available in this browser."
+  }};
+}}
+function refreshCastAvailability() {{
+  const status=castAvailability();
+  castButton.hidden=!status.show;
+  castButton.disabled=false;
+  castButton.classList.toggle("unavailable",status.show&&!status.available);
+  castButton.setAttribute("aria-label",status.available?"Cast":"Cast unavailable");
+  castButton.title=status.reason;
+  castButton.dataset.transport=status.transport||"";
 }}
 function initGoogleCast() {{
   try {{
     if(!window.__dankCastApiAvailable || !window.cast?.framework || !window.chrome?.cast?.media) {{
-      setCastVisible(false);
+      castContext=null;
+      castState="NO_DEVICES_AVAILABLE";
+      refreshCastAvailability();
       return false;
     }}
     castContext=cast.framework.CastContext.getInstance();
@@ -2238,7 +2565,7 @@ function initGoogleCast() {{
   }} catch(_) {{
     castContext=null;
     castState="NO_DEVICES_AVAILABLE";
-    setCastVisible(false);
+    refreshCastAvailability();
     return false;
   }}
 }}
@@ -2266,8 +2593,10 @@ function castLoadCurrentMedia() {{
   return session.loadMedia(request);
 }}
 async function startGoogleCast() {{
-  if(!initGoogleCast() || castButton.hidden)
+  if(!initGoogleCast() || !googleCastDeviceAvailable())
     throw new Error("No Chromecast device is currently available in this browser.");
+  if(!lastState?.cast_supported_media)
+    throw new Error("This release cannot be sent directly to Chromecast. Choose an MP4/WebM release.");
   await castContext.requestSession();
   await castLoadCurrentMedia();
   castWasMuted=video.muted;
@@ -2299,13 +2628,46 @@ function syncCastToRoom(s) {{
       media.play(null,()=>{{}},()=>{{}});
   }} catch(_) {{}}
 }}
-setCastVisible(false);
+if(video.remote && typeof video.remote.watchAvailability==="function") {{
+  try {{
+    video.remote.watchAvailability(available=>{{
+      remotePlaybackAvailable=!!available;
+      refreshCastAvailability();
+    }}).catch(()=>{{
+      remotePlaybackAvailable=false;
+      refreshCastAvailability();
+    }});
+    video.remote.addEventListener("connect",()=>{{
+      castButton.classList.add("connected");
+      notice.textContent="Remote playback connected.";
+    }});
+    video.remote.addEventListener("disconnect",()=>{{
+      castButton.classList.remove("connected");
+      refreshCastAvailability();
+    }});
+  }} catch(_) {{
+    remotePlaybackAvailable=false;
+  }}
+}}
+castButton.hidden=true;
 window.addEventListener("dank-cast-api",()=>initGoogleCast());
 setTimeout(()=>initGoogleCast(),1200);
 castButton.onclick=async()=>{{
-  try {{ await startGoogleCast(); }}
-  catch(err) {{
-    setCastVisible(false);
+  const status=castAvailability();
+  if(!status.available) {{
+    notice.textContent=status.reason;
+    return;
+  }}
+  try {{
+    if(status.transport==="google") {{
+      await startGoogleCast();
+      return;
+    }}
+    if(status.transport==="remote" && video.remote && typeof video.remote.prompt==="function") {{
+      await video.remote.prompt();
+      return;
+    }}
+  }} catch(err) {{
     notice.textContent=String(err?.message||"Casting could not start.");
   }}
 }};

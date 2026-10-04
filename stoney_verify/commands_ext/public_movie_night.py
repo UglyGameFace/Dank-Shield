@@ -3673,13 +3673,19 @@ def _host_handoff_choices(
     room: MovieNightRoom,
 ) -> list[DankChoice]:
     manager = get_movie_night_manager()
-    if _private_viewing(room):
-        return []
-
+    private_mode = _private_viewing(room)
     active = manager.active_viewers(room)
     choices: list[DankChoice] = []
     for uid in sorted(
-        (int(value) for value in active if int(value) != int(room.host_id)),
+        (
+            int(value)
+            for value in active
+            if int(value) != int(room.host_id)
+            and (
+                not private_mode
+                or manager.user_can_access(room, int(value))
+            )
+        ),
         key=lambda value: float(
             getattr(room.viewers.get(value), "joined_at", 0.0) or 0.0
         ),
@@ -3698,9 +3704,17 @@ def _host_handoff_choices(
                 label=label,
                 value=str(uid),
                 description=(
-                    "Synced viewer • receives Play, Pause, Seek, and End controls"
+                    (
+                        "Authorized private viewer • receives current playback control"
+                        if private_mode
+                        else "Synced viewer • receives Play, Pause, Seek, and End controls"
+                    )
                     if synced
-                    else "Active viewer • becomes host at the current movie position"
+                    else (
+                        "Authorized private viewer • becomes host at the current position"
+                        if private_mode
+                        else "Active viewer • becomes host at the current movie position"
+                    )
                 )[:100],
                 emoji="👑",
                 default=False,
@@ -3717,21 +3731,20 @@ async def _open_host_handoff_picker(
     if int(interaction.user.id) != int(room.host_id):
         return await _movie_hub_notice(
             interaction,
-            "❌ Only the current Movie Night host can pass host control.",
-            room=room,
-        )
-    if _private_viewing(room):
-        return await _movie_hub_notice(
-            interaction,
-            "🔒 Private Sessions keep one host/controller and cannot pass host control.",
+            "❌ Only the current Cinema host can pass host control.",
             room=room,
         )
 
+    private_mode = _private_viewing(room)
     choices = _host_handoff_choices(interaction, room)
     if not choices:
         return await _replace(
             interaction,
-            content="ℹ️ No other active Movie Night viewers are available to receive host control.",
+            content=(
+                "ℹ️ No other active authorized Private Session viewers are available to receive host control."
+                if private_mode
+                else "ℹ️ No other active Watch Party viewers are available to receive host control."
+            ),
             embed=_session_status_embed(interaction, room),
             view=MovieNightMoreView(
                 int(interaction.user.id),
@@ -3797,8 +3810,13 @@ async def _open_host_handoff_picker(
         interaction,
         content=(
             "👑 **Pass Host**\n"
-            "Choose an active viewer. They immediately receive playback controls on the existing "
-            "Watch page; the movie does not restart."
+            + (
+                "Choose an active authorized Private Session viewer. They receive playback control "
+                "without changing who can access the private room."
+                if private_mode
+                else "Choose an active Watch Party viewer. They immediately receive playback controls "
+                "on the existing Watch page; the movie does not restart."
+            )
         ),
         embed=_session_status_embed(interaction, room),
         view=DankPickerView(
@@ -3806,7 +3824,7 @@ async def _open_host_handoff_picker(
             choices=choices,
             on_pick=picked,
             placeholder="Choose the next host…",
-            title="Pass Movie Night Host",
+            title=("Pass Private Session Host" if private_mode else "Pass Watch Party Host"),
             custom_id=f"dank:movie:host-pass:{room.room_id[:32]}",
             on_home=home,
         ),
@@ -3836,8 +3854,9 @@ def _private_viewers_embed(
         title="🔒 Dank Cinema • Private Viewers",
         description=(
             f"Authorized: **{len(allowed)} / {PRIVATE_VIEWER_LIMIT}** total viewers\n"
-            "Only people on this list can open the private room. The host keeps movie, queue, "
-            "playback, and end-session control; invited viewers receive their own signed Watch link."
+            "Only people on this list can open the private room. The current host controls movie, "
+            "queue, playback, and ending the session; host control can be passed only to an already "
+            "authorized active viewer. Invited viewers receive their own signed Watch link."
         ),
         color=discord.Color.blurple(),
     )
@@ -3978,22 +3997,29 @@ class MovieNightMoreView(_OwnedView):
         else:
             private_mode = _private_viewing(room)
             is_host = int(owner_id) == int(room.host_id)
+            manager = get_movie_night_manager()
+            active = manager.active_viewers(room)
+            can_pass_host = bool(
+                is_host
+                and any(
+                    int(uid) != int(room.host_id)
+                    and (
+                        not private_mode
+                        or manager.user_can_access(room, int(uid))
+                    )
+                    for uid in active
+                )
+            )
             if private_mode:
                 self.session_status.label = "Private Session Status"
                 self.end_session.label = "End Private Session"
-                self.remove_item(self.pass_host)
                 if not is_host:
                     self.remove_item(self.private_viewers)
                     self.remove_item(self.end_session)
+                if not can_pass_host:
+                    self.remove_item(self.pass_host)
             else:
                 self.remove_item(self.private_viewers)
-                can_pass_host = bool(
-                    is_host
-                    and any(
-                        int(uid) != int(room.host_id)
-                        for uid in get_movie_night_manager().active_viewers(room)
-                    )
-                )
                 if not can_pass_host:
                     self.remove_item(self.pass_host)
         if not self.staff:

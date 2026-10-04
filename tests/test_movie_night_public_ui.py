@@ -172,7 +172,7 @@ def test_private_host_gets_viewer_manager_and_invited_viewer_gets_watch_only(mon
     host_more = _labels(movie_ui.MovieNightMoreView(10, room, staff=False))
     assert "Private Viewers" in host_more
     assert "End Private Session" in host_more
-    assert "Pass Host" not in host_more
+    assert "Pass Host" in host_more
 
     viewer_more = _labels(movie_ui.MovieNightMoreView(20, room, staff=False))
     assert "Private Viewers" not in viewer_more
@@ -1713,3 +1713,62 @@ def test_search_vote_never_falls_back_to_external_browser_providers() -> None:
     assert "ExternalSearchResultsView" not in source
     assert "external_provider_count" not in source
     assert "External Search Available" not in source
+
+
+def test_private_host_handoff_choices_include_only_authorized_active_viewers(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        mode="private",
+        now=100.0,
+    )
+    manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
+    manager.invite_private_viewer(room.room_id, host_id=10, user_id=30)
+    manager.join_room(room.room_id, user_id=20, now=101.0)
+    manager.join_room(room.room_id, user_id=30, now=101.0)
+    room.viewers[30].last_seen = -1_000_000.0
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+
+    guild = SimpleNamespace(
+        get_member=lambda uid: SimpleNamespace(
+            display_name={20: "Private Viewer", 30: "Stale Private"}.get(uid, str(uid)),
+            name={20: "Private Viewer", 30: "Stale Private"}.get(uid, str(uid)),
+        )
+    )
+    interaction = SimpleNamespace(guild=guild)
+
+    choices = movie_ui._host_handoff_choices(interaction, room)
+
+    assert [choice.value for choice in choices] == ["20"]
+    assert choices[0].label == "Private Viewer"
+    assert "Authorized private viewer" in choices[0].description
+
+
+def test_private_more_shows_pass_host_only_with_eligible_viewer(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        mode="private",
+        now=100.0,
+    )
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+
+    assert "Pass Host" not in _labels(
+        movie_ui.MovieNightMoreView(10, room, staff=False)
+    )
+
+    manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
+    manager.join_room(room.room_id, user_id=20, now=101.0)
+
+    assert "Pass Host" in _labels(
+        movie_ui.MovieNightMoreView(10, room, staff=False)
+    )
+    assert "Pass Host" not in _labels(
+        movie_ui.MovieNightMoreView(20, room, staff=False)
+    )
