@@ -773,6 +773,7 @@ def _candidate_web_metadata(candidate: Any) -> dict[str, Any]:
         "season_number": season_number,
         "episode_number": episode_number,
         "episode_title": str(source.get("episode_title") or "").strip()[:180],
+        "adult": bool(source.get("adult", False)),
         "runtime_minutes": max(0, int(source.get("runtime") or 0)) if str(source.get("runtime") or "").isdigit() else 0,
     }
 
@@ -1394,6 +1395,7 @@ async def movie_night_progress(request: web.Request) -> web.Response:
         "backdrop_url": str(media.get("backdrop_url") or ""),
         "year": int(media.get("year") or 0),
         "media_type": media_type,
+        "adult": bool(media.get("adult", False)),
     }
     if media_type == "episode":
         metadata.update(
