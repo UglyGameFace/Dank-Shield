@@ -1177,6 +1177,172 @@ async def movie_night_promote_watch_party(request: web.Request) -> web.Response:
     return web.json_response(state)
 
 
+def _media_source_web_payload(
+    source: Any,
+    *,
+    guild_id: int,
+    include_endpoint: bool,
+) -> dict[str, Any]:
+    runtime = _FEED_RUNTIME_STATE.get((int(guild_id), str(source.source_id)), {})
+    provider_type = str(source.provider_type or PROVIDER_TYPE_JSON)
+    category = str(getattr(source, "category", MEDIA_CATEGORY_CUSTOM) or MEDIA_CATEGORY_CUSTOM)
+    payload: dict[str, Any] = {
+        "source_id": str(source.source_id),
+        "label": str(source.label),
+        "provider_type": provider_type,
+        "category": category if category in _MEDIA_CATEGORIES else MEDIA_CATEGORY_CUSTOM,
+        "enabled": bool(source.enabled),
+        "search_capable": provider_type in {PROVIDER_TYPE_JSON, PROVIDER_TYPE_EXTERNAL},
+        "discovery_capable": provider_type in {PROVIDER_TYPE_JSON, PROVIDER_TYPE_FEED},
+        "playback_capable": provider_type in {PROVIDER_TYPE_JSON, PROVIDER_TYPE_FEED},
+        "last_refresh_at": int(runtime.get("refreshed_at") or 0),
+        "last_refresh_ok": runtime.get("ok"),
+        "last_refresh_error": str(runtime.get("error") or "")[:240],
+        "newly_discovered": list(runtime.get("titles") or [])[:8],
+    }
+    if include_endpoint:
+        payload["endpoint_url"] = str(source.endpoint_url)
+    return payload
+
+
+async def _media_source_state(room: MovieNightRoom, uid: int) -> dict[str, Any]:
+    _raw, registry = await load_media_source_registry(int(room.guild_id), refresh=False)
+    is_host = int(uid) == int(room.host_id)
+    sources = [
+        _media_source_web_payload(
+            source,
+            guild_id=int(room.guild_id),
+            include_endpoint=is_host,
+        )
+        for source in registry.sources
+        if is_host or source.enabled
+    ]
+    return {
+        "revision": int(registry.revision),
+        "is_host": is_host,
+        "sources": sources,
+        "categories": [
+            MEDIA_CATEGORY_MOVIES,
+            MEDIA_CATEGORY_TV,
+            MEDIA_CATEGORY_ANIME,
+            MEDIA_CATEGORY_DOCUMENTARIES,
+            MEDIA_CATEGORY_CUSTOM,
+        ],
+    }
+
+
+async def movie_night_sources(request: web.Request) -> web.Response:
+    room, uid = await _room_and_user(request)
+    return web.json_response(await _media_source_state(room, uid))
+
+
+async def movie_night_source_action(request: web.Request) -> web.Response:
+    room, uid = await _room_and_user(request)
+    if int(uid) != int(room.host_id):
+        raise web.HTTPForbidden(text="Only the Cinema host can manage media sources.")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    action = str(payload.get("action") or "").strip().lower()
+    source_id = str(payload.get("source_id") or "").strip()
+
+    raw_config, registry = await load_media_source_registry(
+        int(room.guild_id),
+        refresh=True,
+    )
+
+    if action == "refresh":
+        source = next(
+            (item for item in registry.sources if item.source_id == source_id),
+            None,
+        )
+        if source is None:
+            raise web.HTTPNotFound(text="Media source not found.")
+        if not source.enabled:
+            raise web.HTTPBadRequest(text="Enable this source before refreshing it.")
+
+        outcome = await preview_custom_media_source(
+            source,
+            query=str(payload.get("query") or "movie")[:180],
+            limit=8,
+        )
+        error = str(outcome.errors[0]) if outcome.errors else ""
+        _FEED_RUNTIME_STATE[(int(room.guild_id), source.source_id)] = {
+            "refreshed_at": int(time.time()),
+            "ok": not bool(error),
+            "error": error,
+            "titles": [str(item.title)[:180] for item in outcome.variants[:8]],
+        }
+        return web.json_response(await _media_source_state(room, uid))
+
+    try:
+        if action == "save":
+            label = " ".join(str(payload.get("label") or "").split())[:80]
+            provider_type = str(payload.get("provider_type") or PROVIDER_TYPE_FEED).strip().lower()
+            if provider_type not in _MEDIA_PROVIDER_TYPES:
+                raise ValueError("Unsupported media source type.")
+            category = str(payload.get("category") or MEDIA_CATEGORY_CUSTOM).strip().lower()
+            if category not in _MEDIA_CATEGORIES:
+                category = MEDIA_CATEGORY_CUSTOM
+            raw_url = str(payload.get("endpoint_url") or "").strip()
+            endpoint_url = (
+                prepare_feed_url(raw_url)
+                if provider_type == PROVIDER_TYPE_FEED
+                else prepare_example_search_url(raw_url)
+            )
+            updated = add_custom_source(
+                registry,
+                source_id=source_id,
+                label=label,
+                endpoint_url=endpoint_url,
+                added_by=uid,
+                provider_type=provider_type,
+                category=category,
+            )
+            actual_id = source_id
+            if not actual_id:
+                before = {item.source_id for item in registry.sources}
+                created = [item for item in updated.sources if item.source_id not in before]
+                actual_id = created[0].source_id if created else ""
+            if actual_id:
+                updated = set_custom_source_category(updated, actual_id, category)
+        elif action == "toggle":
+            source = next((item for item in registry.sources if item.source_id == source_id), None)
+            if source is None:
+                raise LookupError("Media source not found.")
+            updated = set_custom_source_enabled(registry, source_id, not bool(source.enabled))
+        elif action == "remove":
+            updated = remove_custom_source(registry, source_id)
+            _FEED_RUNTIME_STATE.pop((int(room.guild_id), source_id), None)
+        elif action == "category":
+            category = str(payload.get("category") or MEDIA_CATEGORY_CUSTOM).strip().lower()
+            if category not in _MEDIA_CATEGORIES:
+                raise ValueError("Unsupported media category.")
+            updated = set_custom_source_category(registry, source_id, category)
+        else:
+            raise web.HTTPBadRequest(text="Unsupported media source action.")
+    except LookupError as exc:
+        raise web.HTTPNotFound(text=str(exc))
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+
+    applied, _saved = await save_media_source_registry(
+        int(room.guild_id),
+        expected_config=raw_config,
+        updated=updated,
+    )
+    if not applied:
+        raise web.HTTPConflict(
+            text="Cinema sources changed elsewhere. Refresh the Feed Center and try again."
+        )
+    return web.json_response(await _media_source_state(room, uid))
+
+
 async def movie_night_queue_action(request: web.Request) -> web.Response:
     room, uid = await _room_and_user(request)
     if int(uid) != int(room.host_id):
@@ -3663,6 +3829,8 @@ def register_movie_night_public_routes(app: web.Application) -> None:
     app.router.add_get("/movie/{room_id}/invite-options", movie_night_invite_options)
     app.router.add_post("/movie/{room_id}/promote", movie_night_promote_watch_party)
     app.router.add_post("/movie/{room_id}/queue", movie_night_queue_action)
+    app.router.add_get("/movie/{room_id}/sources", movie_night_sources)
+    app.router.add_post("/movie/{room_id}/sources", movie_night_source_action)
 
 
 __all__ = [
@@ -3670,6 +3838,8 @@ __all__ = [
     "movie_night_invite_options",
     "movie_night_promote_watch_party",
     "movie_night_queue_action",
+    "movie_night_source_action",
+    "movie_night_sources",
     "movie_night_transfer_host",
     "movie_night_watch_url",
     "register_movie_night_public_routes",
