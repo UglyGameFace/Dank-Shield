@@ -388,6 +388,7 @@
             backdrop_url: itemBackdrop(item),
             year: Number(item.year || 0),
             media_type: mediaType,
+            adult: Boolean(item.adult || item?.metadata?.adult),
           },
         }),
       });
@@ -612,7 +613,11 @@
         results.textContent = "";
         const rows = Array.isArray(data.results) ? data.results : [];
         if (!rows.length) {
-          results.appendChild(node("div", "result-empty", `No real Cinema results matched “${query}”.`));
+          results.appendChild(node(
+            "div",
+            "result-empty",
+            data.notice || `No real Cinema results matched “${query}”.`,
+          ));
           return;
         }
         rows.forEach((item) => results.appendChild(searchResultCard(item)));
@@ -690,6 +695,7 @@
       poster_url: details.poster_url,
       backdrop_url: details.backdrop_url,
       year: details.year,
+      adult: Boolean(details.adult),
       watchlisted: !enabled,
     }, enabled);
   }
