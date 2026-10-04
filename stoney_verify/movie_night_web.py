@@ -311,6 +311,12 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
             if session is not None
             else ""
         ),
+        "cast_supported_media": (
+            media_content_type(session.file_name)
+            in {"video/mp4", "video/webm", "video/mp2t", "video/mpeg"}
+            if session is not None
+            else False
+        ),
         "discord_url": (
             f"https://discord.com/channels/{int(room.guild_id)}/{int(room.channel_id)}"
             if int(room.guild_id) > 0 and int(room.channel_id) > 0
@@ -1213,6 +1219,7 @@ function renderSiteState(s) {{
   document.getElementById("timeline").disabled=hostOnly;
   document.getElementById("syncHint").textContent=s.is_host?"You control synchronized playback.":"";
   updatePlayerChrome();
+  refreshCastAvailability();
   syncCastToRoom(s);
 }}
 function resetPlaybackRate() {{
@@ -1626,6 +1633,14 @@ function setCastVisible(visible) {{
   castButton.hidden=!visible;
   castButton.disabled=!visible;
 }}
+function refreshCastAvailability() {{
+  const supported=!!(
+    castContext &&
+    lastState?.stream_url &&
+    lastState?.cast_supported_media
+  );
+  setCastVisible(supported);
+}}
 function initGoogleCast() {{
   try {{
     if(!window.__dankCastApiAvailable || !window.cast?.framework || !window.chrome?.cast?.media) return false;
@@ -1647,7 +1662,7 @@ function initGoogleCast() {{
         }}
       }}
     );
-    setCastVisible(true);
+    refreshCastAvailability();
     return true;
   }} catch(_) {{
     return false;
@@ -1655,6 +1670,8 @@ function initGoogleCast() {{
 }}
 function castLoadCurrentMedia() {{
   if(!castContext || !lastState?.stream_url) return Promise.reject(new Error("No playable Cinema stream is ready."));
+  if(!lastState?.cast_supported_media)
+    return Promise.reject(new Error("This release uses a container Chromecast cannot play directly. Choose an MP4/WebM release to cast."));
   const session=castContext.getCurrentSession();
   if(!session) return Promise.reject(new Error("No Cast device is connected."));
   const mediaInfo=new chrome.cast.media.MediaInfo(
