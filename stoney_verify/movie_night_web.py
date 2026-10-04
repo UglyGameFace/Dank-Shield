@@ -127,11 +127,11 @@ async def _room_and_user(
 ) -> tuple[MovieNightRoom, int]:
     room_id, uid = _request_identity(request)
     if uid is None:
-        raise web.HTTPUnauthorized(text="Invalid or expired Movie Night link.")
+        raise web.HTTPUnauthorized(text="Invalid or expired Dank Cinema link.")
     manager = get_movie_night_manager()
     room = manager.get(room_id)
     if room is None:
-        raise web.HTTPNotFound(text="Movie Night room not found.")
+        raise web.HTTPNotFound(text="Dank Cinema session not found.")
     if not manager.user_can_access(room, uid):
         raise web.HTTPForbidden(text="This is a private Dank Cinema viewing session.")
     return room, uid
@@ -730,7 +730,7 @@ async def movie_night_heartbeat(request: web.Request) -> web.Response:
 async def movie_night_action(request: web.Request) -> web.Response:
     room, uid = await _room_and_user(request)
     if int(uid) != int(room.host_id):
-        raise web.HTTPForbidden(text="Only the active Movie Night host controls playback.")
+        raise web.HTTPForbidden(text="Only the active Cinema host controls playback.")
 
     try:
         payload = await request.json()
@@ -741,7 +741,7 @@ async def movie_night_action(request: web.Request) -> web.Response:
 
     action = str(payload.get("action") or "").strip().lower()
     if action not in {"pause", "resume", "seek", "end"}:
-        raise web.HTTPBadRequest(text="Unsupported Movie Night playback action.")
+        raise web.HTTPBadRequest(text="Unsupported Cinema playback action.")
 
     action_payload: dict[str, Any] = {}
     if action == "seek":
@@ -763,7 +763,7 @@ async def movie_night_action(request: web.Request) -> web.Response:
 async def movie_night_transfer_host(request: web.Request) -> web.Response:
     room, uid = await _room_and_user(request)
     if int(uid) != int(room.host_id):
-        raise web.HTTPForbidden(text="Only the active Movie Night host can pass host.")
+        raise web.HTTPForbidden(text="Only the active Cinema host can pass host.")
 
     try:
         payload = await request.json()
@@ -2208,7 +2208,7 @@ async function poll() {{
   }}
   catch(err) {{
     const message=String(err.message||err);
-    if(message.includes("Movie Night room not found")) {{
+    if(message.includes("Dank Cinema session not found")) {{
       terminated=true;
       video.pause();
       notice.textContent=lastState?.private?"Private Session has ended.":"Cinema session has ended.";
