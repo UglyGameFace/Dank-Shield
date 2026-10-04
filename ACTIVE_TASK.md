@@ -13,6 +13,9 @@ Active branch:
 Issue:
 **#430 — Dank Cinema: match premium 420 Lobby theater website mockup**
 
+Pull request:
+**#432 — Dank Cinema: replace mockup controls with real web actions**
+
 Outcome:
 Rebuild the signed Dank Cinema Watch page to match the owner-approved premium dark-green 420 Lobby theater mockup while preserving the canonical synchronized playback, signed access, torrent runtime, and Discord-owned movie programming paths.
 
@@ -129,7 +132,7 @@ PR #431 exact-head CI ultimately passed all five workflow families and the PR me
 
 ## Next step
 
-Open the focused remediation PR, run exact-head repository workflows, repair only evidence-backed failures, inspect the final diff, then repeat the Android/Discloud canary. The canary must verify that every visible control performs a real action, unsupported Cast is hidden, supported Google Cast actually opens device discovery and loads the signed stream, missing metadata does not render fake content, and core host/viewer sync remains intact.
+Run exact-head repository workflows for PR #432, repair only evidence-backed failures, inspect the final diff, then repeat the Android/Discloud canary. The canary must verify that every visible control performs a real action, unsupported Cast is hidden, supported Google Cast actually opens device discovery and loads the signed stream, missing metadata does not render fake content, and core host/viewer sync remains intact.
 
 ---
 
