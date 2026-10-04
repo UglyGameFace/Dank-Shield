@@ -444,6 +444,8 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
     assert "requestSession()" in html
     assert "session.loadMedia(request)" in html
     assert "lastState.cast_stream_url" in html
+    assert "video.remote.watchAvailability" in html
+    assert "remotePlaybackAvailable" in html
     assert 'controlslist="nodownload"' in html
     assert '<video id="video" controls' not in html
     assert '<video id="video" playsinline preload="metadata" controls>' not in html
