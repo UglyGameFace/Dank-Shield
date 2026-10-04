@@ -274,6 +274,106 @@ def _discord_viewer_summaries(
     return summaries
 
 
+def _discord_invite_options(
+    room: MovieNightRoom,
+    query: str = "",
+    *,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    try:
+        from stoney_verify.globals import bot
+    except Exception:
+        bot = None
+    if bot is None:
+        return []
+
+    try:
+        guild = bot.get_guild(int(room.guild_id))
+    except Exception:
+        guild = None
+    if guild is None:
+        return []
+
+    needle = " ".join(str(query or "").casefold().split())[:80]
+    rows: list[dict[str, Any]] = []
+    for member in tuple(getattr(guild, "members", ()) or ()):
+        uid = int(getattr(member, "id", 0) or 0)
+        if uid <= 0 or uid == int(room.host_id) or bool(getattr(member, "bot", False)):
+            continue
+        display_name = str(
+            getattr(member, "display_name", "")
+            or getattr(member, "global_name", "")
+            or getattr(member, "name", "")
+            or uid
+        ).strip()[:80]
+        username = str(getattr(member, "name", "") or "").strip()[:80]
+        searchable = f"{display_name} {username} {uid}".casefold()
+        if needle and needle not in searchable:
+            continue
+        avatar_url = ""
+        try:
+            avatar_url = _safe_discord_avatar_url(
+                getattr(getattr(member, "display_avatar", None), "url", "")
+            )
+        except Exception:
+            avatar_url = ""
+        rows.append(
+            {
+                "user_id": uid,
+                "display_name": display_name or str(uid),
+                "username": username,
+                "avatar_url": avatar_url,
+            }
+        )
+        if len(rows) >= max(1, min(int(limit), 20)):
+            break
+    return rows
+
+
+async def _dm_watch_party_invite(
+    room: MovieNightRoom,
+    *,
+    user_id: int,
+    watch_url: str,
+) -> bool:
+    if not watch_url:
+        return False
+    try:
+        from stoney_verify.globals import bot
+    except Exception:
+        bot = None
+    if bot is None:
+        return False
+
+    target = None
+    try:
+        guild = bot.get_guild(int(room.guild_id))
+    except Exception:
+        guild = None
+    if guild is not None:
+        try:
+            target = guild.get_member(int(user_id))
+        except Exception:
+            target = None
+    if target is None:
+        try:
+            target = bot.get_user(int(user_id))
+        except Exception:
+            target = None
+    if target is None or bool(getattr(target, "bot", False)):
+        return False
+
+    try:
+        await target.send(
+            "🍿 **Dank Cinema Watch Party invite**\n"
+            "You were invited to join a live Dank Cinema session.\n"
+            f"{watch_url}"
+        )
+        return True
+    except Exception:
+        return False
+
+
 def _discord_room_context(
     room: MovieNightRoom,
     user_id: int,
@@ -792,6 +892,75 @@ async def movie_night_transfer_host(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(text=str(exc))
 
     return web.json_response(await _state_payload(room, uid))
+
+
+async def movie_night_invite_options(request: web.Request) -> web.Response:
+    room, uid = await _room_and_user(request)
+    if int(uid) != int(room.host_id):
+        raise web.HTTPForbidden(text="Only the Cinema host can invite a Discord user.")
+    if str(getattr(room, "mode", "watch_party") or "watch_party") != "private":
+        raise web.HTTPBadRequest(text="This Cinema session is already a Watch Party.")
+
+    query = str(request.query.get("q", "") or "").strip()
+    return web.json_response(
+        {
+            "members": _discord_invite_options(room, query),
+            "discord_url": (
+                f"https://discord.com/channels/{int(room.guild_id)}/{int(room.channel_id)}"
+                if int(room.guild_id) > 0 and int(room.channel_id) > 0
+                else ""
+            ),
+        }
+    )
+
+
+async def movie_night_promote_watch_party(request: web.Request) -> web.Response:
+    room, uid = await _room_and_user(request)
+    if int(uid) != int(room.host_id):
+        raise web.HTTPForbidden(text="Only the Private Session host can start a Watch Party.")
+    if str(getattr(room, "mode", "watch_party") or "watch_party") != "private":
+        raise web.HTTPBadRequest(text="This Cinema session is already a Watch Party.")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    try:
+        invitee_id = int(payload.get("user_id") or 0)
+    except Exception:
+        invitee_id = 0
+    if invitee_id <= 0 or invitee_id == int(room.host_id):
+        raise web.HTTPBadRequest(text="Choose another Discord member to invite.")
+
+    options = _discord_invite_options(room, str(invitee_id), limit=20)
+    if not any(int(row.get("user_id", 0) or 0) == invitee_id for row in options):
+        raise web.HTTPBadRequest(
+            text="That Discord member is not available in the bot's current server cache. "
+            "Use the Discord Cinema picker instead."
+        )
+
+    manager = get_movie_night_manager()
+    manager.promote_private_to_watch_party(
+        room.room_id,
+        host_id=uid,
+    )
+    watch_url = movie_night_watch_url(room.room_id, invitee_id)
+    dm_sent = await _dm_watch_party_invite(
+        room,
+        user_id=invitee_id,
+        watch_url=watch_url,
+    )
+
+    state = await _state_payload(room, uid)
+    state["invite"] = {
+        "user_id": invitee_id,
+        "watch_url": watch_url,
+        "dm_sent": dm_sent,
+    }
+    return web.json_response(state)
 
 
 async def movie_night_queue_action(request: web.Request) -> web.Response:
@@ -2774,11 +2943,15 @@ def register_movie_night_public_routes(app: web.Application) -> None:
     app.router.add_post("/movie/{room_id}/heartbeat", movie_night_heartbeat)
     app.router.add_post("/movie/{room_id}/action", movie_night_action)
     app.router.add_post("/movie/{room_id}/host", movie_night_transfer_host)
+    app.router.add_get("/movie/{room_id}/invite-options", movie_night_invite_options)
+    app.router.add_post("/movie/{room_id}/promote", movie_night_promote_watch_party)
     app.router.add_post("/movie/{room_id}/queue", movie_night_queue_action)
 
 
 __all__ = [
     "dank_cinema_brand_asset",
+    "movie_night_invite_options",
+    "movie_night_promote_watch_party",
     "movie_night_queue_action",
     "movie_night_transfer_host",
     "movie_night_watch_url",
