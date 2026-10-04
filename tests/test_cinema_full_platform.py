@@ -1,0 +1,243 @@
+from __future__ import annotations
+
+import asyncio
+from types import SimpleNamespace
+
+from stoney_verify import cinema_catalog, movie_night_web
+from stoney_verify.cinema_catalog import CinemaDetails, CinemaEpisode, CinemaMedia
+from stoney_verify.cinema_media_identity import (
+    episode_catalog_metadata,
+    filter_outcome_for_catalog,
+    release_matches_catalog,
+)
+from stoney_verify import cinema_playback_service
+from stoney_verify.media_source_resolver import (
+    MediaSourceSearchOutcome,
+    ResolvedMediaVariant,
+)
+from stoney_verify.movie_night import MovieNightManager
+
+
+def _episode(
+    *,
+    series_id: int = 77,
+    season: int = 3,
+    number: int = 7,
+    tmdb_id: int = 9001,
+    title: str = "Episode",
+) -> CinemaEpisode:
+    return CinemaEpisode(
+        series_id=series_id,
+        season_number=season,
+        episode_number=number,
+        tmdb_id=tmdb_id,
+        title=title,
+    )
+
+
+def _series() -> CinemaMedia:
+    return CinemaMedia(
+        media_type="tv",
+        tmdb_id=77,
+        title="Example Show",
+        year=2026,
+        poster_url="https://image.tmdb.org/t/p/w500/poster.jpg",
+        backdrop_url="https://image.tmdb.org/t/p/w1280/backdrop.jpg",
+    )
+
+
+def test_episode_identity_requires_exact_series_and_episode_marker() -> None:
+    metadata = episode_catalog_metadata(series=_series(), episode=_episode())
+
+    assert release_matches_catalog(
+        "Example.Show.S03E07.1080p.WEB-DL",
+        metadata,
+        {},
+    )
+    assert release_matches_catalog(
+        "Example Show 3x07 720p",
+        metadata,
+        {},
+    )
+    assert not release_matches_catalog(
+        "Example.Show.S03E08.1080p.WEB-DL",
+        metadata,
+        {},
+    )
+    assert not release_matches_catalog(
+        "Different.Show.S03E07.1080p.WEB-DL",
+        metadata,
+        {},
+    )
+
+
+def test_episode_provider_filter_keeps_only_canonical_episode() -> None:
+    metadata = episode_catalog_metadata(series=_series(), episode=_episode())
+    good = ResolvedMediaVariant(
+        title="Example.Show.S03E07.1080p",
+        source_id="good",
+        source_label="Good",
+        source_ref="magnet:?xt=urn:btih:" + "1" * 40,
+        file_size=100,
+        seeds=10,
+        leechers=1,
+        peers=11,
+        metadata={},
+    )
+    wrong = ResolvedMediaVariant(
+        title="Example.Show.S03E08.1080p",
+        source_id="wrong",
+        source_label="Wrong",
+        source_ref="magnet:?xt=urn:btih:" + "2" * 40,
+        file_size=100,
+        seeds=20,
+        leechers=1,
+        peers=21,
+        metadata={},
+    )
+
+    filtered = filter_outcome_for_catalog(
+        MediaSourceSearchOutcome(variants=(wrong, good)),
+        metadata,
+    )
+
+    assert filtered.variants == (good,)
+    assert filtered.errors
+
+
+def test_next_episode_crosses_real_season_boundary(monkeypatch) -> None:
+    async def fake_season(_series_id: int, season_number: int):
+        if season_number == 3:
+            return (_episode(season=3, number=7, tmdb_id=9001),)
+        if season_number == 4:
+            return (
+                _episode(season=4, number=1, tmdb_id=9101, title="Season Four Premiere"),
+                _episode(season=4, number=2, tmdb_id=9102),
+            )
+        return ()
+
+    async def fake_details(_kind: str, _series_id: int):
+        return CinemaDetails(
+            media=_series(),
+            seasons=(
+                {"season_number": 3, "episode_count": 7},
+                {"season_number": 4, "episode_count": 8},
+            ),
+        )
+
+    monkeypatch.setattr(cinema_catalog, "get_season", fake_season)
+    monkeypatch.setattr(cinema_catalog, "get_details", fake_details)
+
+    found = asyncio.run(cinema_catalog.get_next_episode(77, 3, 7))
+
+    assert found is not None
+    assert found.season_number == 4
+    assert found.episode_number == 1
+    assert found.tmdb_id == 9101
+
+
+def test_materialized_provider_result_keeps_catalog_identity(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=100,
+        channel_id=200,
+        host_id=42,
+        stream_token="",
+    )
+    monkeypatch.setattr(cinema_playback_service, "get_movie_night_manager", lambda: manager)
+
+    metadata = episode_catalog_metadata(series=_series(), episode=_episode())
+    result = ResolvedMediaVariant(
+        title="Example.Show.S03E07.1080p.WEB-DL",
+        source_id="provider",
+        source_label="Provider",
+        source_ref="magnet:?xt=urn:btih:" + "3" * 40,
+        file_size=1234,
+        seeds=8,
+        leechers=2,
+        peers=10,
+        metadata={"quality": "1080p"},
+    )
+
+    titles, releases = cinema_playback_service.materialize_search_results(
+        room,
+        MediaSourceSearchOutcome(variants=(result,)),
+        proposer_id=42,
+        query="Example Show S03E07",
+        catalog_metadata=metadata,
+    )
+
+    assert titles == 1
+    assert releases == 1
+    candidate = manager.find_candidate_by_title(room.room_id, metadata["title"])
+    assert candidate is not None
+    assert candidate.metadata["catalog"]["tmdb_id"] == 9001
+    assert candidate.metadata["catalog"]["series_id"] == 77
+    assert len(candidate.variants) == 1
+
+
+def test_watch_player_only_exposes_real_resolved_next_episode_control() -> None:
+    html = movie_night_web._watch_html(
+        "room-tv",
+        42,
+        "uid=42&exp=9999999999&sig=test",
+    )
+
+    assert 'id="nextEpisode"' in html
+    assert 'hidden disabled' in html
+    assert "async function loadNextEpisodeAvailability" in html
+    assert 'jsonFetch("/movie/"+BOOT.roomId+"/next-episode")' in html
+    assert "nextEpisodeState?.available" in html
+    assert "lastState?.is_host" in html
+    assert 'document.getElementById("nextEpisode").onclick=()=>playNextEpisode(true)' in html
+    assert "cinemaPreferences.autoplay_next!==false" in html
+
+
+def test_next_episode_get_hides_control_without_playable_source(monkeypatch) -> None:
+    current = SimpleNamespace(
+        title="Example Show S03E07",
+        metadata={
+            "catalog": {
+                "media_type": "episode",
+                "tmdb_id": 9001,
+                "series_id": 77,
+                "series_title": "Example Show",
+                "season_number": 3,
+                "episode_number": 7,
+            }
+        },
+    )
+    room = SimpleNamespace(
+        room_id="room-tv",
+        guild_id=100,
+        host_id=42,
+        current_candidate_id="current",
+        candidates={"current": current},
+    )
+
+    async def room_and_user(_request):
+        return room, 42
+
+    next_episode = _episode(season=3, number=8, tmdb_id=9002, title="Next")
+    metadata = episode_catalog_metadata(series=_series(), episode=next_episode)
+
+    async def context(_room):
+        return (
+            current.metadata["catalog"],
+            next_episode,
+            metadata,
+            "Example Show S03E08",
+            MediaSourceSearchOutcome(variants=()),
+        )
+
+    monkeypatch.setattr(movie_night_web, "_room_and_user", room_and_user)
+    monkeypatch.setattr(movie_night_web, "_next_episode_context", context)
+
+    response = asyncio.run(
+        movie_night_web.movie_night_next_episode(SimpleNamespace(method="GET"))
+    )
+    payload = __import__("json").loads(response.text)
+
+    assert payload["available"] is False
+    assert payload["reason"] == "source_unavailable"
+    assert payload["next_episode"]["episode_number"] == 8
