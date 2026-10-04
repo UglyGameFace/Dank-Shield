@@ -2856,6 +2856,7 @@ function applyModeSurface(s) {{
   const contextAction=document.getElementById("contextAction");
   const inviteWatchParty=document.getElementById("inviteWatchParty");
   inviteWatchParty.hidden=!(s.is_host && privateMode);
+  if(!privateMode) document.getElementById("inviteModal").hidden=true;
 
   if(s.is_host && !previousHostState)
     hostSheetDismissed=false;
@@ -3448,11 +3449,16 @@ const inviteModal=document.getElementById("inviteModal");
 const inviteResults=document.getElementById("inviteResults");
 const inviteStatus=document.getElementById("inviteStatus");
 const inviteSearch=document.getElementById("inviteSearch");
+let inviteTrigger=null;
 
 function closeInviteModal() {{
   inviteModal.hidden=true;
   inviteResults.textContent="";
   inviteStatus.textContent="Search the Discord server member cache or open the native Discord picker.";
+  if(inviteTrigger && typeof inviteTrigger.focus==="function") {{
+    try {{ inviteTrigger.focus(); }} catch(_) {{}}
+  }}
+  inviteTrigger=null;
 }}
 function inviteAvatar(row) {{
   const avatar=document.createElement("span");
@@ -3532,8 +3538,9 @@ async function promoteAndInvite(userId,displayName) {{
     inviteStatus.textContent="Invite failed: "+String(err?.message||err);
   }}
 }}
-document.getElementById("inviteWatchParty").onclick=()=>{{
+document.getElementById("inviteWatchParty").onclick=event=>{{
   if(!lastState?.is_host || !lastState?.private) return;
+  inviteTrigger=event.currentTarget;
   closeHostControls();
   inviteModal.hidden=false;
   inviteSearch.value="";
@@ -3553,6 +3560,12 @@ document.getElementById("inviteDiscordFallback").onclick=()=>{{
 }};
 inviteModal.addEventListener("click",event=>{{
   if(event.target===inviteModal) closeInviteModal();
+}});
+inviteModal.addEventListener("keydown",event=>{{
+  if(event.key==="Escape") {{
+    event.preventDefault();
+    closeInviteModal();
+  }}
 }});
 
 async function transferHost(newHostId, displayName="viewer") {{
