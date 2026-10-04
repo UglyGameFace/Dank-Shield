@@ -176,16 +176,32 @@ def _safe_movie_art_url(value: Any) -> str:
 
 def _candidate_web_metadata(candidate: Any) -> dict[str, Any]:
     metadata = dict(getattr(candidate, "metadata", {}) or {}) if candidate is not None else {}
+    catalog = (
+        dict(metadata.get("catalog") or {})
+        if isinstance(metadata.get("catalog"), dict)
+        else {}
+    )
+
+    # Canonical Movie Night candidates intentionally wrap TMDB identity under
+    # metadata["catalog"] so provider/search metadata can coexist without
+    # collisions. The Watch page must read that canonical catalog envelope
+    # instead of assuming TMDB fields were flattened onto the candidate.
+    source = catalog or metadata
+
     year = 0
     try:
-        year = max(0, int(metadata.get("year") or 0))
+        year = max(0, int(source.get("year") or 0))
     except Exception:
         year = 0
     return {
-        "title": str(getattr(candidate, "title", "") or ""),
+        "title": str(
+            source.get("title")
+            or getattr(candidate, "title", "")
+            or ""
+        ),
         "year": year,
-        "overview": str(metadata.get("overview") or "").strip()[:1200],
-        "poster_url": _safe_movie_art_url(metadata.get("poster_url")),
+        "overview": str(source.get("overview") or "").strip()[:1200],
+        "poster_url": _safe_movie_art_url(source.get("poster_url")),
     }
 
 
