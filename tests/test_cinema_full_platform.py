@@ -334,3 +334,64 @@ def test_tv_details_do_not_claim_series_title_is_a_playable_source() -> None:
     assert "variant.swarm_health" not in source
     assert '"watch_party_picks",' in source
     assert 'catalog.get("top_movies"' not in source
+
+
+def test_full_site_uses_single_composed_brand_and_responsive_tmdb_art() -> None:
+    from pathlib import Path
+
+    root = Path(cinema_site.__file__).resolve().parent
+    script = (root / "assets" / "cinema_site.js").read_text(encoding="utf-8")
+    styles = (root / "assets" / "cinema_site.css").read_text(encoding="utf-8")
+
+    assert 'dank-cinema-brand.webp?v=art-system-v5' in script
+    assert "dank-cinema-brand-mark.webp" not in script
+    assert "dank-cinema-brand-wordmark.webp" not in script
+    assert 'class="brand-lockup-img"' not in script  # created through node(), not HTML text
+    assert 'node("img", "brand-lockup-img")' in script
+    assert ".brand-mark" not in styles
+    assert ".brand-word" not in styles
+    assert ".brand-lockup-img" in styles
+    assert "function configureArtwork(" in script
+    assert "image.srcset = variants" in script
+    assert 'kind === "backdrop"' in script
+    assert 'kind === "still"' in script
+    assert 'kind === "profile"' in script
+
+
+def test_full_site_auto_quality_and_source_search_controls_are_real() -> None:
+    from pathlib import Path
+
+    script = (Path(cinema_site.__file__).resolve().parent / "assets" / "cinema_site.js").read_text(encoding="utf-8")
+    site_source = Path(cinema_site.__file__).read_text(encoding="utf-8")
+
+    assert "function autoQualityMode()" in script
+    assert "saveData" in script
+    assert "effectiveType" in script
+    assert "deviceMemory" in script
+    assert "hardwareConcurrency" in script
+    assert 'applyVisualQuality("auto")' in script
+    assert 'input.dispatchEvent(new Event("input", { bubbles: true }))' in script
+    assert "search_custom_media_sources(guild_id, query)" not in site_source
+    assert "search_movie_sources(guild_id, query)" in site_source
+
+
+def test_shared_playback_service_applies_saved_host_speed_without_blocking_playback() -> None:
+    from pathlib import Path
+
+    source = Path(cinema_playback_service.__file__).read_text(encoding="utf-8")
+
+    assert "profile = await get_cinema_user(initial_host_id)" in source
+    assert 'preferences.get("playback_speed")' in source
+    assert 'action="speed"' in source
+    assert "except (CinemaStorageUnavailable, TypeError, ValueError):" in source
+    assert "Personalization must never prevent otherwise valid Cinema playback." in source
+
+
+def test_notifications_keep_truthful_unread_badge_after_mark_read() -> None:
+    from pathlib import Path
+
+    script = (Path(cinema_site.__file__).resolve().parent / "assets" / "cinema_site.js").read_text(encoding="utf-8")
+
+    assert "const unreadCount = notifications.filter((item) => !item.read_at).length;" in script
+    assert "notifications_unread: unreadCount" in script
+    assert "state.home = null;\n                renderNotifications();" not in script
