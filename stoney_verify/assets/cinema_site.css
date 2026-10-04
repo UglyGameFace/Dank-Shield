@@ -227,7 +227,12 @@ img{max-width:100%}
 .episode-title{font-weight:900}
 .episode-copy{margin-top:4px;color:#9da9a4;font-size:.76rem;line-height:1.42}
 .episode-meta{margin-top:6px;color:#7f8e87;font-size:.68rem}
-.episode-state{font-size:.7rem;color:var(--lime);font-weight:850}
+.episode-state{
+  display:grid;gap:7px;justify-items:end;min-width:148px;
+  font-size:.7rem;color:var(--lime);font-weight:850
+}
+.episode-progress-label{line-height:1.3;text-align:right}
+.episode-play{min-height:38px;padding:8px 11px;white-space:nowrap;font-size:.7rem}
 
 .library-tabs{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0 18px}
 .tab-btn{border:1px solid rgba(255,255,255,.09);border-radius:999px;background:#0d1a16;color:#bdc8c3;padding:8px 12px;font-weight:800}
@@ -328,7 +333,8 @@ html[data-quality="standard"] .hero-grain{opacity:.035}
   .profile-card{position:static}
   .episode-card{grid-template-columns:150px minmax(0,1fr)}
   .episode-still{width:150px}
-  .episode-state{grid-column:2}
+  .episode-state{grid-column:2;justify-items:start;min-width:0}
+  .episode-progress-label{text-align:left}
   .bottom-nav{
     position:fixed;z-index:40;left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));display:grid;grid-template-columns:repeat(5,1fr);
     border:1px solid rgba(183,255,132,.13);border-radius:18px;background:rgba(5,13,10,.94);backdrop-filter:blur(16px);box-shadow:0 18px 50px rgba(0,0,0,.4);
@@ -372,7 +378,9 @@ html[data-quality="standard"] .hero-grain{opacity:.035}
   .panel{padding:13px}
   .episode-card{grid-template-columns:1fr;gap:9px}
   .episode-still{width:100%}
-  .episode-state{grid-column:1}
+  .episode-state{grid-column:1;justify-items:stretch}
+  .episode-progress-label{text-align:left}
+  .episode-play{width:100%}
   .form-grid{grid-template-columns:1fr}
   .feed-grid,.source-grid{grid-template-columns:1fr}
   .notification{grid-template-columns:1fr}
