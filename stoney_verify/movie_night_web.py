@@ -4314,8 +4314,19 @@ function renderFeedCenter(state) {{
       name.className="feed-card-name";
       name.textContent=String(source.label||source.source_id||"Media source");
       const stateBadge=document.createElement("span");
-      stateBadge.className="feed-badge "+(source.enabled?"good":"off");
-      stateBadge.textContent=source.enabled?"Enabled":"Disabled";
+      const healthState=String(source.health_state||"");
+      const healthLabel={{
+        online:"Online",
+        offline:"Offline",
+        unchecked:"Not checked",
+        reference:"Reference link",
+        disabled:"Disabled"
+      }}[healthState]||(source.enabled?"Not checked":"Disabled");
+      stateBadge.className="feed-badge "+(
+        healthState==="online"?"good":
+        healthState==="offline"||healthState==="disabled"?"off":""
+      );
+      stateBadge.textContent=healthLabel;
       top.append(name,stateBadge);
       card.appendChild(top);
 
@@ -4333,6 +4344,16 @@ function renderFeedCenter(state) {{
         badges.appendChild(badge);
       }}
       card.appendChild(badges);
+
+      const supported=Array.isArray(source.supported_media_types)
+        ?source.supported_media_types.map(item=>FEED_CATEGORY_LABELS[String(item||"")]||"Custom")
+        :[];
+      if(supported.length) {{
+        const support=document.createElement("div");
+        support.className="feed-meta";
+        support.textContent="Supports: "+supported.join(", ");
+        card.appendChild(support);
+      }}
 
       const meta=document.createElement("div");
       meta.className="feed-meta";
