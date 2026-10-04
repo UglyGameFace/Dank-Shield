@@ -1805,10 +1805,16 @@ function renderDiscordContext(s) {{
   const title=document.getElementById("discordIdentityTitle");
   const sub=document.getElementById("discordIdentitySub");
   const avatar=document.getElementById("discordIdentityAvatar");
+  const live=document.getElementById("discordLive");
+  const liveText=document.getElementById("discordLiveText");
 
   panel.hidden=!ctx.connected;
+  live.hidden=!ctx.connected;
   avatar.textContent="";
-  if(!ctx.connected) return;
+  if(!ctx.connected) {{
+    liveText.textContent="Discord unavailable";
+    return;
+  }}
 
   const url=String(ctx.avatar_url||"");
   if(url.startsWith("https://cdn.discordapp.com/")||url.startsWith("https://media.discordapp.net/")) {{
@@ -1826,9 +1832,6 @@ function renderDiscordContext(s) {{
   const channel=String(ctx.channel_name||"");
   sub.textContent=channel?guild+" • #"+channel:guild;
 
-  const live=document.getElementById("discordLive");
-  const liveText=document.getElementById("discordLiveText");
-  live.hidden=!ctx.connected;
   liveText.textContent=channel
     ?"Discord • "+guild+" • #"+channel
     :"Discord • "+guild;
