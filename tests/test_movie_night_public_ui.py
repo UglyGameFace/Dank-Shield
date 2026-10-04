@@ -267,7 +267,7 @@ def test_movie_night_hub_changes_controls_by_room_mode_and_vote_context(monkeypa
     monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
 
     public_labels = _labels(movie_ui.MovieNightHubView(10, public_room))
-    assert {"Find Movie", "Movie Picks", "Queue", "More"} <= public_labels
+    assert {"Find Movie / TV", "Movie Picks", "Queue", "More"} <= public_labels
     assert "Start Watch Party" not in public_labels
     assert "Start Private Session" not in public_labels
     assert "Yes" not in public_labels
@@ -875,7 +875,7 @@ def test_dank_cinema_branding_is_consistent_across_core_surfaces(monkeypatch) ->
     assert str(empty_room.title) == "🍿 Dank Cinema"
 
     search_modal = movie_ui.MovieSearchModal(owner_id=1, room_id="room")
-    assert str(search_modal.title) == "1/3 • Find Movie"
+    assert str(search_modal.title) == "1/3 • Find Movie or TV"
 
 
 def test_cinema_home_embed_is_simple_and_status_details_are_separate(monkeypatch) -> None:
@@ -1319,7 +1319,7 @@ def test_catalog_filter_reports_when_provider_results_do_not_match() -> None:
         catalog,
     )
     assert filtered.variants == ()
-    assert "none matched the selected catalog movie" in filtered.errors[-1]
+    assert "none matched the selected catalog title" in filtered.errors[-1]
 
 
 def test_movie_night_is_reachable_from_home_registry_and_normal_search_words() -> None:
