@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""Signed Discord-linked identity for the general Dank Cinema website.
+"""Signed Discord-linked identity for the Dank Cinema website.
 
-This intentionally mirrors the existing signed Watch-link trust model. It does
-not claim to be Discord OAuth. Links are short-lived bearer credentials issued
-from Discord interactions and are scoped to one guild + Discord user.
+Discord interactions can issue a short-lived signed deep link. A validated deep
+link or Discord OAuth login is then exchanged for an HttpOnly browser session so
+the full Cinema site does not need to keep bearer credentials in every API URL.
 """
 
 import hashlib
@@ -13,6 +13,9 @@ import os
 import time
 from typing import Optional
 from urllib.parse import urlencode
+
+CINEMA_SESSION_COOKIE = "dank_cinema_session"
+CINEMA_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 
 
 def _secret() -> str:
@@ -23,10 +26,19 @@ def _public_base() -> str:
     return str(os.getenv("DANK_MEDIA_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
 
 
+def cinema_public_base() -> str:
+    return _public_base()
+
+
 def _signature(guild_id: int, user_id: int, expires: int) -> str:
     payload = f"dank-cinema-site:{int(guild_id)}:{int(user_id)}:{int(expires)}".encode(
         "utf-8"
     )
+    return hmac.new(_secret().encode("utf-8"), payload, hashlib.sha256).hexdigest()
+
+
+def _session_signature(user_id: int, expires: int) -> str:
+    payload = f"dank-cinema-session:{int(user_id)}:{int(expires)}".encode("utf-8")
     return hmac.new(_secret().encode("utf-8"), payload, hashlib.sha256).hexdigest()
 
 
@@ -76,4 +88,51 @@ def validate_cinema_site_access(
     return uid
 
 
-__all__ = ["cinema_site_url", "validate_cinema_site_access"]
+def cinema_session_value(
+    user_id: int,
+    *,
+    ttl_seconds: int = CINEMA_SESSION_TTL_SECONDS,
+) -> str:
+    secret = _secret()
+    uid = int(user_id)
+    if not secret or uid <= 0:
+        return ""
+    ttl = max(3600, min(int(ttl_seconds), 30 * 24 * 60 * 60))
+    expires = int(time.time()) + ttl
+    signature = _session_signature(uid, expires)
+    return f"{uid}.{expires}.{signature}"
+
+
+def validate_cinema_session(value: str) -> Optional[int]:
+    if not _secret():
+        return None
+    parts = str(value or "").strip().split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        uid = int(parts[0])
+        expires = int(parts[1])
+    except Exception:
+        return None
+    now = int(time.time())
+    if (
+        uid <= 0
+        or expires < now
+        or expires > now + 30 * 24 * 60 * 60 + 60
+    ):
+        return None
+    expected = _session_signature(uid, expires)
+    if not hmac.compare_digest(expected, parts[2]):
+        return None
+    return uid
+
+
+__all__ = [
+    "CINEMA_SESSION_COOKIE",
+    "CINEMA_SESSION_TTL_SECONDS",
+    "cinema_public_base",
+    "cinema_session_value",
+    "cinema_site_url",
+    "validate_cinema_session",
+    "validate_cinema_site_access",
+]
