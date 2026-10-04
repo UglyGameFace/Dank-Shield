@@ -521,7 +521,12 @@ async def cinema_home_api(request: web.Request) -> web.Response:
             list_recent_discoveries(guild_id, limit=30)
         )
         notifications_task = asyncio.create_task(
-            list_notifications(user_id, unread_only=True, limit=20)
+            list_notifications(
+                user_id,
+                guild_id=guild_id,
+                unread_only=True,
+                limit=20,
+            )
         )
         library, profile, catalog, feeds, recent_added, notifications = await asyncio.gather(
             library_task,
@@ -1329,8 +1334,39 @@ async def cinema_feeds_api(request: web.Request) -> web.Response:
 async def cinema_notifications_api(request: web.Request) -> web.Response:
     _guild_id, user_id = _site_identity(request)
     if request.method == "GET":
-        rows = await list_notifications(user_id, limit=50)
-        return web.json_response({"notifications": rows})
+        rows = await list_notifications(
+            user_id,
+            guild_id=_guild_id,
+            limit=50,
+        )
+        manager = get_movie_night_manager()
+        output: list[dict[str, Any]] = []
+        for raw in rows:
+            row = dict(raw)
+            action = (
+                dict(row.get("action") or {})
+                if isinstance(row.get("action"), Mapping)
+                else {}
+            )
+            if str(action.get("kind") or "") == "room":
+                room_id = str(action.get("room_id") or "").strip()
+                room = manager.get(room_id) if room_id else None
+                if (
+                    room is not None
+                    and not room.ended
+                    and int(room.guild_id) == int(_guild_id)
+                    and manager.user_can_access(room, int(user_id))
+                ):
+                    action["watch_url"] = movie_night_watch_url(
+                        room.room_id,
+                        int(user_id),
+                    )
+                    action["available"] = True
+                else:
+                    action["available"] = False
+            row["action"] = action
+            output.append(row)
+        return web.json_response({"notifications": output})
     try:
         payload = await request.json()
     except Exception:
