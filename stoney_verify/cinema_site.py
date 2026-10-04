@@ -8,11 +8,16 @@ movie_night_web remain the playback/session authority.
 """
 
 import asyncio
+import html
 import json
+import os
+import secrets
 from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Optional
+from urllib.parse import urlencode
 
+import aiohttp
 from aiohttp import web
 
 from .cinema_catalog import (
@@ -36,10 +41,20 @@ from .cinema_library_service import (
     update_cinema_preferences,
 )
 from .cinema_site_auth import (
+    CINEMA_GUILDS_COOKIE,
+    CINEMA_GUILDS_TTL_SECONDS,
+    CINEMA_IDENTITY_COOKIE,
+    CINEMA_IDENTITY_TTL_SECONDS,
+    CINEMA_OAUTH_STATE_COOKIE,
     CINEMA_SESSION_COOKIE,
     CINEMA_SESSION_TTL_SECONDS,
+    cinema_guilds_value,
+    cinema_identity_value,
+    cinema_public_base,
     cinema_session_value,
     cinema_site_url,
+    validate_cinema_guilds,
+    validate_cinema_identity,
     validate_cinema_session,
     validate_cinema_site_access,
 )
@@ -79,6 +94,468 @@ from .movie_night_web import movie_night_watch_url
 _ASSET_DIR = Path(__file__).with_name("assets")
 _CSS_PATH = _ASSET_DIR / "cinema_site.css"
 _JS_PATH = _ASSET_DIR / "cinema_site.js"
+
+
+_DISCORD_API_BASE = "https://discord.com/api/v10"
+_CINEMA_OAUTH_TARGET_COOKIE = "dank_cinema_oauth_target"
+
+
+def _discord_oauth_client_id() -> int:
+    configured = str(os.getenv("DANK_CINEMA_DISCORD_CLIENT_ID", "") or "").strip()
+    try:
+        if configured:
+            return int(configured)
+    except Exception:
+        pass
+    try:
+        from .globals import bot
+    except Exception:
+        bot = None
+    try:
+        return int(
+            getattr(bot, "application_id", 0)
+            or getattr(getattr(bot, "user", None), "id", 0)
+            or 0
+        )
+    except Exception:
+        return 0
+
+
+def _discord_oauth_client_secret() -> str:
+    return str(os.getenv("DANK_CINEMA_DISCORD_CLIENT_SECRET", "") or "").strip()
+
+
+def _discord_oauth_redirect_uri() -> str:
+    base = cinema_public_base()
+    return f"{base}/cinema/auth/callback" if base else ""
+
+
+def _discord_oauth_ready() -> bool:
+    return bool(
+        _discord_oauth_client_id() > 0
+        and _discord_oauth_client_secret()
+        and _discord_oauth_redirect_uri()
+    )
+
+
+def _bot_guild(guild_id: int) -> Any:
+    try:
+        from .globals import bot
+    except Exception:
+        bot = None
+    if bot is None:
+        return None
+    try:
+        return bot.get_guild(int(guild_id))
+    except Exception:
+        return None
+
+
+async def _fetch_site_member(guild_id: int, user_id: int) -> Any:
+    guild = _bot_guild(guild_id)
+    if guild is None:
+        return None
+    try:
+        cached = guild.get_member(int(user_id))
+    except Exception:
+        cached = None
+    if cached is not None:
+        return cached
+    fetch_member = getattr(guild, "fetch_member", None)
+    if not callable(fetch_member):
+        return None
+    try:
+        return await fetch_member(int(user_id))
+    except Exception:
+        return None
+
+
+def _cached_member_guilds(user_id: int) -> list[Any]:
+    try:
+        from .globals import bot
+    except Exception:
+        bot = None
+    guilds = list(getattr(bot, "guilds", ()) or ()) if bot is not None else []
+    output: list[Any] = []
+    for guild in guilds:
+        try:
+            if guild.get_member(int(user_id)) is not None:
+                output.append(guild)
+        except Exception:
+            continue
+    return output
+
+
+def _cinema_entry_html(
+    *,
+    user_id: int = 0,
+    guilds: list[Any] | tuple[Any, ...] = (),
+    error: str = "",
+) -> str:
+    rows: list[str] = []
+    for guild in guilds:
+        try:
+            guild_id = int(getattr(guild, "id", 0) or 0)
+        except Exception:
+            guild_id = 0
+        if guild_id <= 0:
+            continue
+        name = html.escape(str(getattr(guild, "name", "") or f"Server {guild_id}")[:100])
+        rows.append(
+            f'<a class="btn primary" href="/cinema/open/{guild_id}">'
+            f'Open {name}</a>'
+        )
+    safe_error = html.escape(str(error or "")[:500])
+    if user_id > 0:
+        body = (
+            '<h1>Choose your Dank Cinema</h1>'
+            '<p class="section-sub">Only Discord servers you currently share with '
+            'Dank Shield can open their Cinema site.</p>'
+            + (f'<div class="state-card">{safe_error}</div>' if safe_error else "")
+            + (
+                '<div class="hero-actions">' + "".join(rows) + "</div>"
+                if rows
+                else (
+                    '<div class="state-card">No eligible Cinema server is currently '
+                    'available for this Discord account.</div>'
+                    '<div class="hero-actions"><a class="btn primary" href="/cinema/login">'
+                    'Refresh Discord access</a></div>'
+                )
+            )
+        )
+    else:
+        body = (
+            '<h1>Dank Cinema</h1>'
+            '<p class="section-sub">Sign in with Discord. Access is granted only when '
+            'you are currently a member of the exact server whose Cinema you open.</p>'
+            + (f'<div class="state-card">{safe_error}</div>' if safe_error else "")
+            + (
+                '<div class="hero-actions"><a class="btn primary" href="/cinema/login">'
+                'Continue with Discord</a></div>'
+                if _discord_oauth_ready()
+                else (
+                    '<div class="state-card">Standalone Discord login is not configured '
+                    'yet. Open Dank Cinema from the bot until OAuth is configured.</div>'
+                )
+            )
+        )
+    return f"""<!doctype html>
+<html lang="en" data-quality="standard">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#030806">
+  <title>Dank Cinema</title>
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=2">
+</head>
+<body>
+  <div class="app-shell">
+    <main class="page">
+      <a class="brand-lockup" href="/cinema" aria-label="Dank Cinema home">
+        <img class="brand-lockup-img" src="/movie/assets/dank-cinema-brand.webp?v=art-system-v5"
+             alt="Dank Cinema — A feature of The 420 Lobby" width="1200" height="278">
+      </a>
+      <section class="section">{body}</section>
+    </main>
+  </div>
+</body>
+</html>"""
+
+
+def _cinema_entry_response(
+    *,
+    user_id: int = 0,
+    guilds: list[Any] | tuple[Any, ...] = (),
+    error: str = "",
+    status: int = 200,
+) -> web.Response:
+    return web.Response(
+        text=_cinema_entry_html(user_id=user_id, guilds=guilds, error=error),
+        status=int(status),
+        content_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": (
+                "default-src 'self'; "
+                "style-src 'self'; "
+                "img-src 'self' https://image.tmdb.org; "
+                "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+            ),
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+async def cinema_entry_page(request: web.Request) -> web.Response:
+    user_id = validate_cinema_identity(
+        str(request.cookies.get(CINEMA_IDENTITY_COOKIE, "") or "")
+    )
+    if user_id is None:
+        return _cinema_entry_response()
+
+    allowed_ids = validate_cinema_guilds(
+        int(user_id),
+        str(request.cookies.get(CINEMA_GUILDS_COOKIE, "") or ""),
+    )
+    guilds = [
+        guild
+        for guild_id in allowed_ids
+        if (guild := _bot_guild(int(guild_id))) is not None
+    ]
+    if not guilds:
+        guilds = _cached_member_guilds(int(user_id))
+    return _cinema_entry_response(user_id=int(user_id), guilds=guilds)
+
+
+async def cinema_oauth_login(request: web.Request) -> web.Response:
+    if not _discord_oauth_ready():
+        return _cinema_entry_response(
+            error="Standalone Discord login is not configured yet.",
+            status=503,
+        )
+    state = secrets.token_urlsafe(32)
+    try:
+        target_guild = int(str(request.query.get("guild_id", "") or "") or 0)
+    except Exception:
+        target_guild = 0
+    params = {
+        "response_type": "code",
+        "client_id": str(_discord_oauth_client_id()),
+        "scope": "identify guilds",
+        "state": state,
+        "redirect_uri": _discord_oauth_redirect_uri(),
+    }
+    response = web.HTTPFound(
+        "https://discord.com/oauth2/authorize?" + urlencode(params)
+    )
+    response.set_cookie(
+        CINEMA_OAUTH_STATE_COOKIE,
+        state,
+        max_age=600,
+        httponly=True,
+        secure=True,
+        samesite="Lax",
+        path="/cinema",
+    )
+    if target_guild > 0:
+        response.set_cookie(
+            _CINEMA_OAUTH_TARGET_COOKIE,
+            str(target_guild),
+            max_age=600,
+            httponly=True,
+            secure=True,
+            samesite="Lax",
+            path="/cinema",
+        )
+    else:
+        response.del_cookie(_CINEMA_OAUTH_TARGET_COOKIE, path="/cinema")
+    return response
+
+
+async def cinema_oauth_callback(request: web.Request) -> web.Response:
+    expected_state = str(
+        request.cookies.get(CINEMA_OAUTH_STATE_COOKIE, "") or ""
+    )
+    returned_state = str(request.query.get("state", "") or "")
+    code = str(request.query.get("code", "") or "").strip()
+    if (
+        not expected_state
+        or not returned_state
+        or not secrets.compare_digest(expected_state, returned_state)
+        or not code
+        or not _discord_oauth_ready()
+    ):
+        return _cinema_entry_response(
+            error="Discord sign-in expired or could not be verified. Try again.",
+            status=401,
+        )
+
+    timeout = aiohttp.ClientTimeout(total=12.0, connect=4.0, sock_read=8.0)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                f"{_DISCORD_API_BASE}/oauth2/token",
+                data={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": _discord_oauth_redirect_uri(),
+                    "client_id": str(_discord_oauth_client_id()),
+                    "client_secret": _discord_oauth_client_secret(),
+                },
+                headers={"Accept": "application/json"},
+            ) as token_response:
+                if token_response.status != 200:
+                    raise RuntimeError(
+                        f"Discord token exchange returned HTTP {token_response.status}."
+                    )
+                token_payload = await token_response.json(content_type=None)
+            access_token = str(token_payload.get("access_token") or "").strip()
+            if not access_token:
+                raise RuntimeError("Discord did not return an access token.")
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+            }
+            async with session.get(
+                f"{_DISCORD_API_BASE}/users/@me",
+                headers=headers,
+            ) as user_response:
+                if user_response.status != 200:
+                    raise RuntimeError(
+                        f"Discord identity returned HTTP {user_response.status}."
+                    )
+                user_payload = await user_response.json(content_type=None)
+            async with session.get(
+                f"{_DISCORD_API_BASE}/users/@me/guilds",
+                headers=headers,
+            ) as guild_response:
+                if guild_response.status != 200:
+                    raise RuntimeError(
+                        f"Discord guild lookup returned HTTP {guild_response.status}."
+                    )
+                user_guilds = await guild_response.json(content_type=None)
+    except Exception:
+        return _cinema_entry_response(
+            error="Discord sign-in could not be completed. Try again.",
+            status=502,
+        )
+
+    try:
+        user_id = int(user_payload.get("id") or 0)
+    except Exception:
+        user_id = 0
+    if user_id <= 0:
+        return _cinema_entry_response(
+            error="Discord did not return a valid account identity.",
+            status=401,
+        )
+
+    shared_ids: list[int] = []
+    for row in user_guilds if isinstance(user_guilds, list) else []:
+        if not isinstance(row, Mapping):
+            continue
+        try:
+            guild_id = int(row.get("id") or 0)
+        except Exception:
+            guild_id = 0
+        if guild_id > 0 and _bot_guild(guild_id) is not None:
+            shared_ids.append(guild_id)
+    shared_ids = sorted(set(shared_ids))[:50]
+
+    try:
+        target_guild = int(
+            str(request.cookies.get(_CINEMA_OAUTH_TARGET_COOKIE, "") or "") or 0
+        )
+    except Exception:
+        target_guild = 0
+
+    if target_guild > 0:
+        if target_guild not in shared_ids:
+            return _cinema_entry_response(
+                user_id=user_id,
+                error=(
+                    "This Discord account is not currently a member of that "
+                    "Cinema server."
+                ),
+                status=403,
+            )
+        member = await _fetch_site_member(target_guild, user_id)
+        if member is None:
+            return _cinema_entry_response(
+                user_id=user_id,
+                error=(
+                    "Dank Shield could not verify current membership in that "
+                    "Cinema server."
+                ),
+                status=403,
+            )
+        response: web.StreamResponse = web.HTTPFound(
+            f"/cinema/{target_guild}"
+        )
+        session_value = cinema_session_value(target_guild, user_id)
+        if session_value:
+            response.set_cookie(
+                CINEMA_SESSION_COOKIE,
+                session_value,
+                max_age=CINEMA_SESSION_TTL_SECONDS,
+                httponly=True,
+                secure=True,
+                samesite="Lax",
+                path=f"/cinema/{target_guild}",
+            )
+    else:
+        response = web.HTTPFound("/cinema")
+
+    identity_value = cinema_identity_value(user_id)
+    if identity_value:
+        response.set_cookie(
+            CINEMA_IDENTITY_COOKIE,
+            identity_value,
+            max_age=CINEMA_IDENTITY_TTL_SECONDS,
+            httponly=True,
+            secure=True,
+            samesite="Lax",
+            path="/cinema",
+        )
+    guilds_value = cinema_guilds_value(user_id, shared_ids)
+    if guilds_value:
+        response.set_cookie(
+            CINEMA_GUILDS_COOKIE,
+            guilds_value,
+            max_age=CINEMA_GUILDS_TTL_SECONDS,
+            httponly=True,
+            secure=True,
+            samesite="Lax",
+            path="/cinema",
+        )
+    response.del_cookie(CINEMA_OAUTH_STATE_COOKIE, path="/cinema")
+    response.del_cookie(_CINEMA_OAUTH_TARGET_COOKIE, path="/cinema")
+    return response
+
+
+async def cinema_open_guild(request: web.Request) -> web.Response:
+    user_id = validate_cinema_identity(
+        str(request.cookies.get(CINEMA_IDENTITY_COOKIE, "") or "")
+    )
+    if user_id is None:
+        try:
+            guild_id = int(request.match_info.get("guild_id") or 0)
+        except Exception:
+            guild_id = 0
+        raise web.HTTPFound(f"/cinema/login?guild_id={guild_id}")
+
+    try:
+        guild_id = int(request.match_info.get("guild_id") or 0)
+    except Exception:
+        guild_id = 0
+    if guild_id <= 0 or _bot_guild(guild_id) is None:
+        return _cinema_entry_response(
+            user_id=int(user_id),
+            error="That Dank Cinema server is unavailable.",
+            status=404,
+        )
+    member = await _fetch_site_member(guild_id, int(user_id))
+    if member is None:
+        return _cinema_entry_response(
+            user_id=int(user_id),
+            error="You must currently be a member of that Discord server.",
+            status=403,
+        )
+
+    response = web.HTTPFound(f"/cinema/{guild_id}")
+    session_value = cinema_session_value(guild_id, int(user_id))
+    if session_value:
+        response.set_cookie(
+            CINEMA_SESSION_COOKIE,
+            session_value,
+            max_age=CINEMA_SESSION_TTL_SECONDS,
+            httponly=True,
+            secure=True,
+            samesite="Lax",
+            path=f"/cinema/{guild_id}",
+        )
+    return response
 
 
 def _site_member(guild_id: int, user_id: int) -> Any:
@@ -1426,7 +1903,16 @@ def _site_html(guild_id: int, user_id: int) -> str:
 
 
 async def cinema_site_page(request: web.Request) -> web.Response:
-    guild_id, user_id = _site_identity(request)
+    try:
+        guild_id, user_id = _site_identity(request)
+    except web.HTTPUnauthorized:
+        try:
+            guild_id = int(request.match_info.get("guild_id") or 0)
+        except Exception:
+            guild_id = 0
+        if guild_id > 0 and _discord_oauth_ready():
+            raise web.HTTPFound(f"/cinema/login?guild_id={guild_id}")
+        raise
     response = web.Response(
         text=_site_html(guild_id, user_id),
         content_type="text/html",
@@ -1486,6 +1972,10 @@ async def cinema_site_asset(request: web.Request) -> web.Response:
 
 
 def register_cinema_site_routes(app: web.Application) -> None:
+    app.router.add_get("/cinema", cinema_entry_page)
+    app.router.add_get("/cinema/login", cinema_oauth_login)
+    app.router.add_get("/cinema/auth/callback", cinema_oauth_callback)
+    app.router.add_get("/cinema/open/{guild_id}", cinema_open_guild)
     app.router.add_get("/cinema/assets/{name}", cinema_site_asset)
     app.router.add_get("/cinema/{guild_id}", cinema_site_page)
     app.router.add_get("/cinema/{guild_id}/api/home", cinema_home_api)
