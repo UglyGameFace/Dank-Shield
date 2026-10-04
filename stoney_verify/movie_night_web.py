@@ -26,6 +26,7 @@ from stoney_verify.cinema_feed_service import (
 from stoney_verify.cinema_library_service import (
     CinemaStorageUnavailable,
     get_cinema_user,
+    get_media_state,
     notify_watch_party_invite,
     record_progress,
     update_cinema_preferences,
@@ -1324,7 +1325,24 @@ async def movie_night_progress(request: web.Request) -> web.Response:
     media_type = str(media.get("media_type") or "").strip().lower()
     tmdb_id = int(media.get("tmdb_id") or 0)
     if media_type not in {"movie", "episode"} or tmdb_id <= 0:
-        return web.json_response({"ok": True, "tracked": False})
+        return web.json_response({"ok": True, "tracked": False, "item": None})
+
+    season_number = int(media.get("season_number") or 0)
+    episode_number = int(media.get("episode_number") or 0)
+    if request.method == "GET":
+        try:
+            row = await get_media_state(
+                int(uid),
+                media_type=media_type,
+                tmdb_id=tmdb_id,
+                season_number=season_number,
+                episode_number=episode_number,
+            )
+        except CinemaStorageUnavailable as exc:
+            raise web.HTTPServiceUnavailable(
+                text="Cinema progress storage is temporarily unavailable."
+            ) from exc
+        return web.json_response({"ok": True, "tracked": True, "item": row})
 
     try:
         payload = await request.json()
@@ -1356,8 +1374,8 @@ async def movie_night_progress(request: web.Request) -> web.Response:
             title=str(media.get("title") or room.current_candidate.title if candidate else ""),
             progress_seconds=_float(payload.get("progress_seconds"), 0.0),
             duration_seconds=_float(payload.get("duration_seconds"), 0.0),
-            season_number=int(media.get("season_number") or 0),
-            episode_number=int(media.get("episode_number") or 0),
+            season_number=season_number,
+            episode_number=episode_number,
             metadata=metadata,
             completed=(
                 bool(payload.get("completed"))
@@ -2549,6 +2567,10 @@ let preferredAudioLanguage="";
 let preferredSubtitleLanguage="";
 let lastProgressPersistAt=0;
 let lastProgressMediaKey="";
+let lastProgressRestoreKey="";
+let pendingProgressResume=null;
+let progressResumeApplying=false;
+let hostSeekCommitTimer=null;
 let progressStorageWarned=false;
 let terminated=false;
 let syncRequested=false;
@@ -3225,6 +3247,78 @@ function safeSeek(target) {{
   }}
 }}
 
+function progressIdentity(movie=lastState?.movie) {{
+  const media=movie||{{}};
+  const kind=String(media.media_type||"").toLowerCase();
+  const tmdb=Number(media.tmdb_id||0);
+  if(!["movie","episode"].includes(kind) || tmdb<=0) return "";
+  return kind+":"+String(tmdb)+":"+String(Number(media.season_number||0))+":"+String(Number(media.episode_number||0));
+}}
+
+async function applyPendingProgressResume() {{
+  const pending=pendingProgressResume;
+  if(!pending || progressResumeApplying || !lastState?.is_host || !lastState?.stream_url) return;
+  if(progressIdentity()!==pending.key) {{
+    pendingProgressResume=null;
+    return;
+  }}
+  const canonical=Number(lastState.position_seconds||0);
+  if(canonical>2.5) {{
+    pendingProgressResume=null;
+    return;
+  }}
+  if(video.readyState<1 || !Number.isFinite(video.duration) || video.duration<=0) return;
+  const completionPoint=Math.max(30,Number(video.duration)*.92);
+  const target=Math.max(0,Math.min(Number(pending.seconds||0),Math.max(0,video.duration-1)));
+  pendingProgressResume=null;
+  if(target<5 || target>=completionPoint) return;
+
+  progressResumeApplying=true;
+  try {{
+    if(!safeSeek(target)) return;
+    await hostAction("seek",{{seconds:target}});
+    notice.textContent="Resumed from "+fmtClock(target)+".";
+  }} finally {{
+    setTimeout(()=>{{progressResumeApplying=false;}},300);
+  }}
+}}
+
+async function maybeRestoreWatchProgress(s) {{
+  if(!s?.is_host || !s?.stream_url) return;
+  const key=progressIdentity(s.movie);
+  if(!key || key===lastProgressRestoreKey) return;
+  lastProgressRestoreKey=key;
+  if(Number(s.position_seconds||0)>2.5) return;
+  try {{
+    const saved=await jsonFetch("/movie/"+BOOT.roomId+"/progress");
+    if(
+      progressIdentity()!==key ||
+      !lastState?.is_host ||
+      Number(lastState.position_seconds||0)>2.5
+    ) return;
+    const item=saved?.item;
+    if(!item || item.completed) return;
+    const seconds=Math.max(0,Number(item.progress_seconds||0));
+    if(seconds<5) return;
+    pendingProgressResume={{key,seconds}};
+    await applyPendingProgressResume();
+  }} catch(_) {{
+    // Playback remains available when durable Cinema storage is temporarily down.
+  }}
+}}
+
+function scheduleHostSeekCommit() {{
+  if(remoteApply || progressResumeApplying || !lastState?.is_host) return;
+  if(hostSeekCommitTimer!==null) clearTimeout(hostSeekCommitTimer);
+  hostSeekCommitTimer=setTimeout(async()=>{{
+    hostSeekCommitTimer=null;
+    if(remoteApply || progressResumeApplying || !lastState?.is_host) return;
+    const seconds=Math.max(0,Number(video.currentTime||0));
+    await hostAction("seek",{{seconds}});
+    persistWatchProgress(true);
+  }},250);
+}}
+
 function correctSyncedDrift(target) {{
   if(!Number.isFinite(target)) return;
   const signed=(video.currentTime||0)-target;
@@ -3314,6 +3408,7 @@ async function applyState(s) {{
     streamRetryAttempt=0;
     cancelStreamRetry();
     attachStream(s.stream_url);
+    void maybeRestoreWatchProgress(s);
   }}
   if(!s.stream_url) {{
     if(s.media_missing) {{
@@ -4373,7 +4468,7 @@ video.addEventListener("pause",()=>{{
   showPlayerControls(true);
   if(!remoteApply && lastState?.is_host) hostAction("pause");
 }});
-video.addEventListener("seeked",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("seek",{{seconds:video.currentTime||0}}); }});
+video.addEventListener("seeked",scheduleHostSeekCommit);
 video.addEventListener("loadedmetadata",()=>{{
   streamRetryAttempt=0;
   cancelStreamRetry();
@@ -4389,6 +4484,7 @@ video.addEventListener("loadedmetadata",()=>{{
       }}
     }}
   }}
+  void applyPendingProgressResume();
 }});
 video.addEventListener("durationchange",updatePlayerChrome);
 video.addEventListener("timeupdate",updatePlayerChrome);
@@ -4417,11 +4513,13 @@ async function persistWatchProgress(force=false) {{
   const tmdbId=Number(movie.tmdb_id||0);
   if(!["movie","episode"].includes(mediaType) || tmdbId<=0) return;
   const now=Date.now();
+  const key=progressIdentity(movie);
+  if(!key) return;
+  if(key!==lastProgressMediaKey) lastProgressPersistAt=0;
   if(!force && now-lastProgressPersistAt<30000) return;
   const duration=Number.isFinite(video.duration)?Number(video.duration):0;
   const position=Math.max(0,Number(video.currentTime||0));
   if(duration<=0 && position<=0) return;
-  const key=mediaType+":"+String(tmdbId)+":"+String(movie.season_number||0)+":"+String(movie.episode_number||0);
   lastProgressMediaKey=key;
   lastProgressPersistAt=now;
   try {{
@@ -4509,6 +4607,7 @@ def register_movie_night_public_routes(app: web.Application) -> None:
     app.router.add_get("/movie/{room_id}/invite-options", movie_night_invite_options)
     app.router.add_post("/movie/{room_id}/promote", movie_night_promote_watch_party)
     app.router.add_post("/movie/{room_id}/queue", movie_night_queue_action)
+    app.router.add_get("/movie/{room_id}/progress", movie_night_progress)
     app.router.add_post("/movie/{room_id}/progress", movie_night_progress)
     app.router.add_get("/movie/{room_id}/preferences", movie_night_preferences)
     app.router.add_post("/movie/{room_id}/preferences", movie_night_preferences)
