@@ -1387,3 +1387,19 @@ def test_feed_center_ui_exposes_real_source_management_without_fake_catalog_card
     assert 'edit.textContent="Edit"' in html
     assert 'toggle.textContent=source.enabled?"Disable":"Enable"' in html
     assert 'remove.textContent="Delete"' in html
+
+
+
+def test_brand_art_reserves_real_variant_aspect_ratios_to_avoid_header_cls() -> None:
+    html = movie_night_web._watch_html(
+        "room-brand-ratio",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'class="brand-mark-art"' in html
+    assert 'width="320"' in html
+    assert 'height="245"' in html
+    assert 'class="brand-wordmark-art"' in html
+    assert 'width="1040"' in html
+    assert 'height="289"' in html
