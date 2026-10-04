@@ -1378,9 +1378,9 @@ video {{
 
   <div class="quick-tabs" aria-label="Theater actions">
     <button class="tab active" type="button" data-panel="queue">▤ Queue</button>
-    <button class="tab" type="button" data-panel="viewers">👥 Session</button>
-    <button class="tab" type="button" data-panel="chat">💬 Open Discord</button>
-    <button class="tab" type="button" data-panel="settings">⚙ Stream Details</button>
+    <button class="tab" id="sessionTab" type="button" data-panel="viewers">👥 Session</button>
+    <button class="tab" type="button" data-panel="chat">💬 Discord</button>
+    <button class="tab" id="contextAction" type="button" data-panel="settings">⚙ Details</button>
   </div>
 
   <div id="notice"></div>
@@ -1391,6 +1391,13 @@ video {{
       <div class="stat"><b>Viewers</b><span id="sessionViewers">0</span></div>
       <div class="stat"><b>Your role</b><span id="sessionRole">Connecting…</span></div>
       <div class="stat"><b>Sync</b><span id="sessionSync">Checking…</span></div>
+    </div>
+    <div class="discord-context" id="discordContext" hidden>
+      <span class="viewer-avatar" id="discordIdentityAvatar" aria-hidden="true">?</span>
+      <div class="discord-context-copy">
+        <div class="discord-context-title" id="discordIdentityTitle">Discord linked</div>
+        <div class="discord-context-sub" id="discordIdentitySub"></div>
+      </div>
     </div>
     <div class="session-viewer-list" id="sessionViewerList"></div>
   </section>
@@ -1425,11 +1432,12 @@ video {{
   <div class="host-actions">
     <button class="host-action" id="passHost" type="button">👤→<br>Pass Host<small>Choose an active Discord viewer</small></button>
     <button class="host-action" id="manageQueue" type="button">☷<br>Manage Queue<small>Remove or reorder queued titles</small></button>
-    <button class="host-action" id="pause" type="button">Ⅱ<br>Pause for Everyone<small>Pause synchronized playback</small></button>
-    <button class="host-action danger" id="end" type="button">■<br><span id="endLabel">End Session</span><small>Close the room for everyone</small></button>
+    <button class="host-action" id="pause" type="button">Ⅱ<br><span id="pauseLabel">Pause Playback</span><small id="pauseHelp">Pause this Cinema session</small></button>
+    <button class="host-action danger" id="end" type="button">■<br><span id="endLabel">End Session</span><small id="endHelp">Close this Cinema session</small></button>
   </div>
   <button id="play" type="button">Resume</button>
 </section>
+<button class="host-launcher" id="hostLauncher" type="button" hidden>♛ Host Controls</button>
 <script>
 const BOOT={boot};
 window.__dankCastApiAvailable=false;
