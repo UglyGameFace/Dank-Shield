@@ -1436,32 +1436,43 @@ def test_quality_mode_boot_does_not_touch_room_state_before_it_is_declared() -> 
 
 
 def test_feed_center_state_groups_real_sources_and_hides_urls_from_viewers(monkeypatch) -> None:
-    source_enabled = SimpleNamespace(
-        source_id="anime-feed",
-        label="Anime Feed",
-        endpoint_url="https://feeds.example.org/anime.xml",
-        provider_type="feed",
-        category="anime",
-        enabled=True,
-    )
-    source_disabled = SimpleNamespace(
-        source_id="private-json",
-        label="Private JSON",
-        endpoint_url="https://feeds.example.org/private.json",
-        provider_type="json",
-        category="movies",
-        enabled=False,
-    )
-    registry = SimpleNamespace(
-        revision=7,
-        sources=(source_enabled, source_disabled),
-    )
-
-    async def load_registry(_guild_id, *, refresh=False):
+    async def shared_state(_guild_id, *, can_manage, refresh=False):
         _ = refresh
-        return {}, registry
+        enabled = {
+            "source_id": "anime-feed",
+            "label": "Anime Feed",
+            "provider_type": "feed",
+            "category": "anime",
+            "enabled": True,
+            "search_capable": False,
+            "discovery_capable": True,
+            "playback_capable": True,
+            "supported_media_types": ["anime"],
+            "health_state": "unchecked",
+        }
+        disabled = {
+            "source_id": "private-json",
+            "label": "Private JSON",
+            "provider_type": "json",
+            "category": "movies",
+            "enabled": False,
+            "search_capable": True,
+            "discovery_capable": True,
+            "playback_capable": True,
+            "supported_media_types": ["movies"],
+            "health_state": "disabled",
+        }
+        if can_manage:
+            enabled["endpoint_url"] = "https://feeds.example.org/anime.xml"
+            disabled["endpoint_url"] = "https://feeds.example.org/private.json"
+        return {
+            "revision": 7,
+            "can_manage": can_manage,
+            "sources": [enabled, disabled] if can_manage else [enabled],
+            "categories": ["movies", "tv", "anime", "documentaries", "custom"],
+        }
 
-    monkeypatch.setattr(movie_night_web, "load_media_source_registry", load_registry)
+    monkeypatch.setattr(movie_night_web, "cinema_feed_state", shared_state)
     room = SimpleNamespace(guild_id=123, host_id=10)
 
     viewer_state = asyncio.run(movie_night_web._media_source_state(room, 20))
@@ -1470,6 +1481,10 @@ def test_feed_center_state_groups_real_sources_and_hides_urls_from_viewers(monke
     assert "endpoint_url" not in viewer_state["sources"][0]
     assert viewer_state["sources"][0]["category"] == "anime"
     assert viewer_state["sources"][0]["discovery_capable"] is True
+    assert viewer_state["sources"][0]["search_capable"] is False
+    assert viewer_state["sources"][0]["playback_capable"] is True
+    assert viewer_state["sources"][0]["health_state"] == "unchecked"
+    assert viewer_state["sources"][0]["supported_media_types"] == ["anime"]
 
     host_state = asyncio.run(movie_night_web._media_source_state(room, 10))
     assert host_state["is_host"] is True
