@@ -2197,7 +2197,7 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
   </section>
 
   <section class="info no-poster" id="movieInfo">
-    <div class="poster" id="posterWrap" hidden><img id="poster" alt=""></div>
+    <div class="poster" id="posterWrap" hidden><img id="poster" alt="" loading="lazy" decoding="async"></div>
     <div class="meta-main">
       <div class="title-row">
         <div>
@@ -2384,10 +2384,20 @@ function applyQualityMode(preference) {{
   if(note) note.textContent=requested==="auto"
     ?"Auto selected "+effective+". Playback features stay identical in every mode."
     :requested[0].toUpperCase()+requested.slice(1)+" visual mode. Playback features stay identical.";
+  if(typeof lastState!=="undefined" && lastState?.movie)
+    applyMovieArtwork(lastState.movie,lastState);
 }}
 let storedQuality="auto";
 try {{ storedQuality=localStorage.getItem(QUALITY_STORAGE_KEY)||"auto"; }} catch(_) {{}}
 applyQualityMode(storedQuality);
+let artworkResizeTimer=null;
+window.addEventListener("resize",()=>{{
+  if(artworkResizeTimer!==null) clearTimeout(artworkResizeTimer);
+  artworkResizeTimer=setTimeout(()=>{{
+    artworkResizeTimer=null;
+    if(lastState?.movie) applyMovieArtwork(lastState.movie,lastState);
+  }},180);
+}},{{passive:true}});
 
 window.__dankCastApiAvailable=false;
 window.__onGCastApiAvailable=function(isAvailable){{
@@ -2885,6 +2895,52 @@ function streamHealthLabel(s) {{
   if(seeds>0 || rate>0) return "Good";
   return "Connected";
 }}
+function tmdbVariant(url,size) {{
+  const clean=String(url||"");
+  if(!clean.startsWith("https://image.tmdb.org/")) return "";
+  return clean.replace(/\/t\/p\/(?:original|w\d+)\//,"/t/p/"+size+"/");
+}}
+function preferredBackdrop(url) {{
+  const width=Math.max(window.innerWidth||0,videoStage?.clientWidth||0);
+  const quality=document.documentElement.dataset.quality||"standard";
+  if(quality==="lite" || width<720) return tmdbVariant(url,"w780")||url;
+  if(quality==="standard" || width<1200) return tmdbVariant(url,"w1280")||url;
+  return tmdbVariant(url,"original")||url;
+}}
+function applyMovieArtwork(movie,s) {{
+  const poster=document.getElementById("poster");
+  const posterWrap=document.getElementById("posterWrap");
+  const stage=document.getElementById("videoStage");
+  const sourceBackdrop=String(movie.backdrop_url||movie.poster_url||"");
+  const backdrop=preferredBackdrop(sourceBackdrop);
+  if(backdrop.startsWith("https://image.tmdb.org/")) {{
+    stage.style.setProperty("--backdrop-image",'url("'+backdrop.replace(/"/g,"%22")+'")');
+    if(video.poster!==backdrop) video.poster=backdrop;
+  }} else {{
+    stage.style.removeProperty("--backdrop-image");
+    video.removeAttribute("poster");
+  }}
+
+  const posterUrl=String(movie.poster_url||"");
+  if(posterUrl.startsWith("https://image.tmdb.org/")) {{
+    const w185=tmdbVariant(posterUrl,"w185")||posterUrl;
+    const w342=tmdbVariant(posterUrl,"w342")||posterUrl;
+    const w500=tmdbVariant(posterUrl,"w500")||posterUrl;
+    poster.src=w342;
+    poster.srcset=w185+" 185w, "+w342+" 342w, "+w500+" 500w";
+    poster.sizes="(max-width:640px) 78px, (max-width:1079px) 108px, 120px";
+    poster.alt=(movie.title||s.title||"Movie")+" poster";
+    posterWrap.hidden=false;
+    document.getElementById("movieInfo").classList.remove("no-poster");
+  }} else {{
+    poster.removeAttribute("src");
+    poster.removeAttribute("srcset");
+    poster.removeAttribute("sizes");
+    poster.alt="";
+    posterWrap.hidden=true;
+    document.getElementById("movieInfo").classList.add("no-poster");
+  }}
+}}
 function renderSiteState(s) {{
   const movie=s.movie||{{}};
   applyModeSurface(s);
@@ -2901,28 +2957,7 @@ function renderSiteState(s) {{
   const overview=document.getElementById("overview");
   overview.textContent=movie.overview||"";
   overview.hidden=!movie.overview;
-  const poster=document.getElementById("poster");
-  const posterWrap=document.getElementById("posterWrap");
-  const stage=document.getElementById("videoStage");
-  const backdrop=String(movie.backdrop_url||movie.poster_url||"");
-  if(backdrop.startsWith("https://image.tmdb.org/")) {{
-    stage.style.setProperty("--backdrop-image",'url("'+backdrop.replace(/"/g,"%22")+'")');
-    if(video.poster!==backdrop) video.poster=backdrop;
-  }} else {{
-    stage.style.removeProperty("--backdrop-image");
-    video.removeAttribute("poster");
-  }}
-  if(String(movie.poster_url||"").startsWith("https://image.tmdb.org/")) {{
-    if(poster.src!==movie.poster_url) poster.src=movie.poster_url;
-    poster.alt=(movie.title||s.title||"Movie")+" poster";
-    posterWrap.hidden=false;
-    document.getElementById("movieInfo").classList.remove("no-poster");
-  }} else {{
-    poster.removeAttribute("src");
-    poster.alt="";
-    posterWrap.hidden=true;
-    document.getElementById("movieInfo").classList.add("no-poster");
-  }}
+  applyMovieArtwork(movie,s);
   renderQueue(s.queue||[]);
   renderDiscordContext(s);
   renderDiscordViewers(s);
