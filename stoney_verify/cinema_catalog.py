@@ -248,7 +248,13 @@ async def _request(path: str, *, params: Optional[Mapping[str, Any]] = None, cac
     return payload
 
 
-def _media_rows(value: Any, *, forced_type: str = "", limit: int = 24) -> tuple[CinemaMedia, ...]:
+def _media_rows(
+    value: Any,
+    *,
+    forced_type: str = "",
+    limit: int = 24,
+    include_adult: bool = False,
+) -> tuple[CinemaMedia, ...]:
     rows = value if isinstance(value, list) else []
     output: list[CinemaMedia] = []
     seen: set[str] = set()
@@ -256,7 +262,7 @@ def _media_rows(value: Any, *, forced_type: str = "", limit: int = 24) -> tuple[
         if not isinstance(raw, Mapping):
             continue
         item = _media_from_item(raw, forced_type)
-        if item is None or item.key in seen or item.adult:
+        if item is None or item.key in seen or (item.adult and not include_adult):
             continue
         seen.add(item.key)
         output.append(item)
@@ -265,7 +271,12 @@ def _media_rows(value: Any, *, forced_type: str = "", limit: int = 24) -> tuple[
     return tuple(output)
 
 
-async def search_catalog(query: str, *, limit: int = 30) -> tuple[CinemaMedia, ...]:
+async def search_catalog(
+    query: str,
+    *,
+    limit: int = 30,
+    include_adult: bool = False,
+) -> tuple[CinemaMedia, ...]:
     clean = _clean_text(query, 180)
     if not clean:
         return ()
@@ -273,7 +284,7 @@ async def search_catalog(query: str, *, limit: int = 30) -> tuple[CinemaMedia, .
         "/search/multi",
         params={
             "query": clean,
-            "include_adult": "false",
+            "include_adult": "true" if include_adult else "false",
             "language": "en-US",
             "page": 1,
         },
@@ -282,6 +293,7 @@ async def search_catalog(query: str, *, limit: int = 30) -> tuple[CinemaMedia, .
     return _media_rows(
         payload.get("results") if isinstance(payload, Mapping) else [],
         limit=limit,
+        include_adult=include_adult,
     )
 
 
