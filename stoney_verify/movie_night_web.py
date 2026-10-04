@@ -1140,6 +1140,7 @@ let lastJoinRetargetAt=0;
 let lastHardSyncSeekAt=0;
 let streamRetryTimer=null;
 let streamRetryAttempt=0;
+let stateFetchFailures=0;
 let attachedStreamUrl="";
 let hostSheetDismissed=false;
 const SOFT_DRIFT_START=0.35;
@@ -1564,7 +1565,13 @@ async function applyState(s) {{
 }}
 async function poll() {{
   if(terminated) return;
-  try {{ await applyState(await jsonFetch("/movie/"+BOOT.roomId+"/state")); }}
+  try {{
+    const state=await jsonFetch("/movie/"+BOOT.roomId+"/state");
+    stateFetchFailures=0;
+    if(notice.textContent.startsWith("Sync connection lost"))
+      notice.textContent="";
+    await applyState(state);
+  }}
   catch(err) {{
     const message=String(err.message||err);
     if(message.includes("Movie Night room not found")) {{
@@ -1573,7 +1580,9 @@ async function poll() {{
       notice.textContent="Movie Night has ended.";
       return;
     }}
-    notice.textContent="Sync error: "+message;
+    stateFetchFailures+=1;
+    if(stateFetchFailures>=3)
+      notice.textContent="Sync connection lost. Reconnecting…";
   }}
 }}
 async function heartbeat(forceSync=false) {{
