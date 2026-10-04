@@ -50,6 +50,7 @@ from .media_source_registry import enabled_structured_sources, load_media_source
 from .media_source_resolver import (
     preview_custom_media_source,
     search_custom_media_sources,
+    search_movie_sources,
 )
 from .movie_night import get_movie_night_manager
 from .movie_night_web import movie_night_watch_url
@@ -614,6 +615,29 @@ async def cinema_details_api(request: web.Request) -> web.Response:
     library_task = asyncio.create_task(list_user_media(user_id))
     details, rows = await asyncio.gather(details_task, library_task)
 
+    source_rows: list[dict[str, Any]] = []
+    try:
+        source_outcome = await search_movie_sources(
+            int(_guild_id),
+            str(details.media.title),
+        )
+        for variant in source_outcome.variants[:8]:
+            health = variant.swarm_health
+            source_rows.append(
+                {
+                    "source_id": str(variant.source_id or ""),
+                    "source_label": str(variant.source_label or "Cinema source"),
+                    "title": str(variant.title or "")[:180],
+                    "file_size": int(variant.file_size or 0),
+                    "seeds": int(health.get("seeds") or 0),
+                    "leechers": int(health.get("leechers") or 0),
+                    "health": str(health.get("label") or ""),
+                    "playable": True,
+                }
+            )
+    except Exception:
+        source_rows = []
+
     matching = [
         _media_payload(row)
         for row in rows
@@ -652,6 +676,7 @@ async def cinema_details_api(request: web.Request) -> web.Response:
             "details": details.to_payload(),
             "library": matching[0] if matching else None,
             "episode_progress": episode_progress,
+            "sources": source_rows,
             "active_session": active_session,
             "discord": _safe_discord_context(_guild_id, user_id),
         }
