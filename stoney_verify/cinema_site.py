@@ -661,8 +661,23 @@ async def cinema_search_api(request: web.Request) -> web.Response:
     if not query:
         return web.json_response({"query": "", "results": []})
 
-    catalog_task = asyncio.create_task(search_catalog(query, limit=30))
-    episode_task = asyncio.create_task(_search_episode_query(query))
+    adult_enabled = await _guild_adult_content_enabled(guild_id)
+    if not adult_enabled and looks_explicit_adult(query):
+        return web.json_response(
+            {
+                "query": query,
+                "results": [],
+                "adult_content_enabled": False,
+                "notice": "Adult-content Cinema search is disabled for this server.",
+            }
+        )
+
+    catalog_task = asyncio.create_task(
+        search_catalog(query, limit=30, include_adult=adult_enabled)
+    )
+    episode_task = asyncio.create_task(
+        _search_episode_query(query, include_adult=adult_enabled)
+    )
     media_task = asyncio.create_task(list_user_media(user_id))
     source_task = asyncio.create_task(search_movie_sources(guild_id, query))
     discovery_task = asyncio.create_task(
@@ -714,6 +729,10 @@ async def cinema_search_api(request: web.Request) -> web.Response:
             seen.add(key)
 
     if not isinstance(source_result, Exception):
+        source_result = filter_adult_provider_results(
+            source_result,
+            enabled=adult_enabled,
+        )
         for variant in source_result.variants[:20]:
             key = f"source:{variant.source_id}:{variant.title.casefold()}"
             if key in seen:
@@ -743,7 +762,13 @@ async def cinema_search_api(request: web.Request) -> web.Response:
             seen.add(key)
             results.append(payload)
 
-    return web.json_response({"query": query, "results": results[:60]})
+    return web.json_response(
+        {
+            "query": query,
+            "results": results[:60],
+            "adult_content_enabled": adult_enabled,
+        }
+    )
 
 
 async def cinema_details_api(request: web.Request) -> web.Response:
