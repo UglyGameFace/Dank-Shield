@@ -217,19 +217,13 @@
     const brand = node("a", "brand-lockup");
     brand.href = "#home";
     brand.setAttribute("aria-label", "Dank Cinema home");
-    const mark = node("img", "brand-mark");
-    mark.src = "/movie/assets/dank-cinema-brand-mark.webp?v=art-system-v4";
-    mark.alt = "";
-    mark.width = 54;
-    mark.height = 42;
-    mark.decoding = "async";
-    const word = node("img", "brand-word");
-    word.src = "/movie/assets/dank-cinema-brand-wordmark.webp?v=art-system-v4";
-    word.alt = "Dank Cinema";
-    word.width = 330;
-    word.height = 92;
-    word.decoding = "async";
-    brand.append(mark, word);
+    const lockup = node("img", "brand-lockup-img");
+    lockup.src = "/movie/assets/dank-cinema-brand.webp?v=art-system-v5";
+    lockup.alt = "Dank Cinema — A feature of The 420 Lobby";
+    lockup.width = 1200;
+    lockup.height = 278;
+    lockup.decoding = "async";
+    brand.appendChild(lockup);
 
     const nav = node("nav", "desktop-nav");
     nav.setAttribute("aria-label", "Cinema navigation");
