@@ -14,7 +14,7 @@ Issue:
 **#430 — Dank Cinema: match premium 420 Lobby theater website mockup**
 
 Current pull request:
-**pending**
+**#436 — Dank Cinema: promote Private Sessions and harden responsive theater**
 
 Outcome:
 Finish the evidence-backed production gaps from the latest Samsung canary: let a Private Session host invite a real Discord member and promote the live room into a Watch Party without restarting playback, recover cleanly when mobile browsers switch desktop mode/viewport geometry, and make the approved Cinema branding read as integrated artwork instead of a pasted black rectangle.
@@ -33,7 +33,7 @@ Finish the evidence-backed production gaps from the latest Samsung canary: let a
 
 ## Status
 
-**Implementation is active on the focused branch. PR #435 is already merged and green in production. The new branch is ahead of main only in the Cinema room/web/Discord surfaces and focused tests. Exact-head CI has not run on this branch yet, and the real Samsung Browser + desktop-mode Discloud canary is still required before completion can be claimed.**
+**Implementation is active in PR #436. PR #435 is already merged and green in production. This follow-up changes only the Cinema room/web/Discord surfaces, ACTIVE_TASK.md, and focused tests. Exact-head CI is starting from the PR head; the real Samsung Browser + desktop-mode Discloud canary is still required before completion can be claimed.**
 
 ## Findings / root cause
 
@@ -136,7 +136,7 @@ Exact-head CI is pending.
 
 ## Next step
 
-Open the focused PR, run exact-head repository workflows, repair only evidence-backed failures, inspect the final diff for stale/conflicting Cinema behavior, then run the Samsung Browser canary including **mobile → desktop mode → mobile**, normal/fullscreen transitions, Private → Watch Party promotion, signed Discord invite delivery/fallback, live UI mode changes, and banner appearance on both mobile and desktop.
+Run exact-head repository workflows for PR #436, repair only evidence-backed failures, inspect the final diff for stale/conflicting Cinema behavior, then run the Samsung Browser canary including **mobile → desktop mode → mobile**, normal/fullscreen transitions, Private → Watch Party promotion, signed Discord invite delivery/fallback, live UI mode changes, and banner appearance on both mobile and desktop.
 
 ---
 
