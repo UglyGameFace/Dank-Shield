@@ -63,8 +63,9 @@ Rebuild the signed Dank Cinema Watch page to match the owner-approved premium da
 
 6. **The first Cast implementation was not Chromecast integration.**
    - `HTMLMediaElement.remote.prompt()` / AirPlay feature detection does not create a Google Cast sender session;
-   - the remediation uses Google's Web Sender SDK with the Default Media Receiver and signed media URL;
-   - Cast is hidden unless the SDK actually initializes, so unsupported browsers no longer get a decorative dead Cast button.
+   - the remediation uses Google's Web Sender SDK with the Default Media Receiver and a separately signed Cast media URL;
+   - native Remote Playback/AirPlay are only used as fallbacks after the browser reports a real available target;
+   - Cast is hidden unless at least one real casting transport is available and the selected media container is directly castable.
 
 ## Execution path
 
@@ -94,7 +95,7 @@ Casting:
 - Session tab renders real room/viewer/sync state; Chat opens the actual Discord channel.
 - Missing TMDB poster/overview data is hidden instead of replaced with fabricated placeholder content.
 - Host sheet keeps only working Discord Controls, Fullscreen, Pause for Everyone, and End Session actions.
-- Chromecast support now uses Google's Web Sender SDK and Default Media Receiver, with the Cast button hidden until the SDK genuinely initializes.
+- Chromecast support now uses Google's Web Sender SDK and Default Media Receiver; availability-gated native Remote Playback/AirPlay remain truthful fallbacks where supported.
 - Signed torrent stream responses now expose narrowly scoped gstatic CORS for Cast receiver fetches; the HMAC URL remains required.
 
 ## Validation / results so far
@@ -119,7 +120,7 @@ PR #431 exact-head CI ultimately passed all five workflow families and the PR me
 
 ## Blockers / risks
 
-- Google Cast Web Sender support is browser/device dependent. Unsupported browsers get no Cast button rather than a fake one.
+- Google Cast Web Sender and native remote-playback support are browser/device dependent. Unsupported browsers get no Cast button rather than a fake one.
 - Chromecast receiver codec support can still reject a selected release even when local browser playback works.
 - Custom controls need real Android/Discloud validation for fullscreen, audio gesture, sync, Google Cast discovery/load, and fallback behavior.
 - A determined authorized viewer can still inspect network requests for the signed media URL; hiding the browser Download control is UI hardening, not DRM.
