@@ -1112,6 +1112,8 @@ button {{ -webkit-tap-highlight-color:transparent; }}
   aspect-ratio:16/9;
   min-height:228px;
   overflow:hidden;
+  contain:layout paint;
+  isolation:isolate;
   background-color:#000;
   background-image:
     linear-gradient(180deg,rgba(0,0,0,.06),rgba(0,0,0,.14)),
@@ -1127,9 +1129,12 @@ button {{ -webkit-tap-highlight-color:transparent; }}
   z-index:1;
 }}
 video {{
-  position:relative; z-index:0;
+  position:absolute; inset:0; z-index:0;
   display:block; width:100%; height:100%;
-  object-fit:contain; background:transparent;
+  max-width:none; max-height:none;
+  object-fit:cover; background:#000;
+  transform:translateZ(0);
+  backface-visibility:hidden;
 }}
 .video-stage:fullscreen,
 .video-stage:-webkit-full-screen {{
@@ -1143,6 +1148,7 @@ video {{
 }}
 .video-stage:fullscreen video,
 .video-stage:-webkit-full-screen video {{
+  inset:0;
   width:100vw;
   height:100vh;
   object-fit:contain;
@@ -1414,6 +1420,52 @@ video {{
 .discord-live span {{
   min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }}
+.invite-modal {{
+  position:fixed;inset:0;z-index:60;
+  display:grid;place-items:center;padding:18px;
+  background:rgba(0,0,0,.72);backdrop-filter:blur(10px);
+}}
+.invite-modal[hidden] {{ display:none !important; }}
+.invite-card {{
+  width:min(520px,100%);max-height:min(78vh,640px);overflow:auto;
+  border:1px solid rgba(183,255,132,.22);border-radius:20px;
+  background:#0a1713;box-shadow:0 24px 70px rgba(0,0,0,.58);
+  padding:16px;
+}}
+.invite-head {{ display:flex;align-items:flex-start;justify-content:space-between;gap:12px; }}
+.invite-head h3 {{ margin:0;font-size:1.05rem; }}
+.invite-head p {{ margin:5px 0 0;color:#9eaaa5;font-size:.76rem;line-height:1.35; }}
+.invite-close {{ border:0;background:transparent;color:#dce3e0;font-size:1.35rem; }}
+.invite-search-row {{ display:flex;gap:8px;margin-top:14px; }}
+.invite-search {{
+  min-width:0;flex:1;border:1px solid rgba(255,255,255,.12);border-radius:12px;
+  background:#0e1d18;color:#fff;padding:10px 11px;outline:none;
+}}
+.invite-search:focus {{ border-color:rgba(163,255,94,.5);box-shadow:0 0 0 3px rgba(126,255,65,.08); }}
+.invite-search-button,.invite-fallback {{
+  border:1px solid rgba(163,255,94,.3);border-radius:12px;
+  background:rgba(76,146,45,.16);color:var(--lime);
+  padding:10px 12px;font-weight:850;
+}}
+.invite-results {{ display:grid;gap:8px;margin-top:12px; }}
+.invite-result {{
+  display:flex;align-items:center;gap:10px;width:100%;
+  border:1px solid rgba(255,255,255,.08);border-radius:13px;
+  background:#0d1b17;color:#f4f7f5;padding:9px;text-align:left;
+}}
+.invite-result:hover,.invite-result:focus {{ border-color:rgba(163,255,94,.38); }}
+.invite-result-copy {{ min-width:0;flex:1; }}
+.invite-result-name {{ font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }}
+.invite-result-user {{ margin-top:2px;color:#94a09b;font-size:.7rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }}
+.invite-status {{
+  margin-top:12px;padding:10px;border-radius:11px;background:#0d1916;color:#c8d1cd;
+  font-size:.76rem;line-height:1.4;overflow-wrap:anywhere;
+}}
+.invite-link-row {{ display:flex;gap:7px;margin-top:8px; }}
+.invite-link {{
+  min-width:0;flex:1;border:1px solid rgba(255,255,255,.08);border-radius:9px;
+  background:#07110e;color:#cfd8d4;padding:8px;font-size:.68rem;
+}}
 .sync-row {{ display:flex;align-items:center;gap:8px;margin-top:12px; }}
 #sync {{
   border:1px solid rgba(143,255,75,.32);border-radius:999px;background:rgba(86,170,52,.12);
@@ -1619,6 +1671,7 @@ video {{
   <div class="sheet-handle"></div>
   <div class="sheet-title"><strong>♛ Host Controls</strong><button class="close-sheet" id="closeHostSheet" type="button" aria-label="Close host controls">×</button></div>
   <div class="host-actions">
+    <button class="host-action" id="inviteWatchParty" type="button" hidden>➕<br>Invite to Watch Party<small>Pick a Discord member and convert this Private Session without restarting</small></button>
     <button class="host-action" id="passHost" type="button">👤→<br>Pass Host<small>Choose an active Discord viewer</small></button>
     <button class="host-action" id="manageQueue" type="button">☷<br>Manage Queue<small>Remove or reorder queued titles</small></button>
     <button class="host-action" id="pause" type="button">Ⅱ<br><span id="pauseLabel">Pause Playback</span><small id="pauseHelp">Pause this Cinema session</small></button>
@@ -1627,6 +1680,24 @@ video {{
   <button id="play" type="button">Resume</button>
 </section>
 <button class="host-launcher" id="hostLauncher" type="button" hidden>♛ Host Controls</button>
+<div class="invite-modal" id="inviteModal" hidden role="dialog" aria-modal="true" aria-labelledby="inviteTitle">
+  <div class="invite-card">
+    <div class="invite-head">
+      <div>
+        <h3 id="inviteTitle">Invite to Watch Party</h3>
+        <p>Pick a real Discord member. The current movie, queue, position, host, and stream stay intact while this room becomes a Watch Party.</p>
+      </div>
+      <button class="invite-close" id="inviteClose" type="button" aria-label="Close invite picker">×</button>
+    </div>
+    <div class="invite-search-row">
+      <input class="invite-search" id="inviteSearch" type="search" autocomplete="off" placeholder="Search Discord members…">
+      <button class="invite-search-button" id="inviteSearchButton" type="button">Search</button>
+    </div>
+    <div class="invite-results" id="inviteResults"></div>
+    <div class="invite-status" id="inviteStatus">Search the Discord server member cache or open the native Discord picker.</div>
+    <button class="invite-fallback" id="inviteDiscordFallback" type="button">Open Discord Picker</button>
+  </div>
+</div>
 <script>
 const BOOT={boot};
 window.__dankCastApiAvailable=false;
@@ -1694,6 +1765,39 @@ function loadClientSessionId() {{
 }}
 const CLIENT_SESSION_ID=loadClientSessionId();
 const videoStage=document.getElementById("videoStage");
+let playerLayoutRaf=0;
+
+function stabilizePlayerLayout() {{
+  if(playerLayoutRaf) cancelAnimationFrame(playerLayoutRaf);
+  playerLayoutRaf=requestAnimationFrame(()=>{{
+    playerLayoutRaf=0;
+    const width=Math.max(1,Math.round(videoStage.getBoundingClientRect().width||0));
+    if(!document.fullscreenElement && width>0) {{
+      videoStage.style.height=(width*9/16)+"px";
+      videoStage.style.minHeight="0";
+    }} else if(document.fullscreenElement) {{
+      videoStage.style.removeProperty("height");
+    }}
+    // Force Samsung/Chromium to rebuild the composited video layer after
+    // desktop-mode, viewport, or orientation changes without reloading media.
+    video.style.position="absolute";
+    video.style.inset="0";
+    video.style.width="100%";
+    video.style.height="100%";
+  }});
+}}
+if(typeof ResizeObserver==="function") {{
+  const cinemaResizeObserver=new ResizeObserver(()=>stabilizePlayerLayout());
+  cinemaResizeObserver.observe(videoStage);
+}}
+window.addEventListener("resize",stabilizePlayerLayout,{{passive:true}});
+window.addEventListener("orientationchange",()=>setTimeout(stabilizePlayerLayout,120),{{passive:true}});
+window.visualViewport?.addEventListener("resize",stabilizePlayerLayout,{{passive:true}});
+window.addEventListener("pageshow",()=>stabilizePlayerLayout());
+document.addEventListener("visibilitychange",()=>{{
+  if(!document.hidden) setTimeout(stabilizePlayerLayout,60);
+}});
+stabilizePlayerLayout();
 
 function clearControlsHideTimer() {{
   if(controlsHideTimer!==null) {{
@@ -2036,6 +2140,8 @@ function applyModeSurface(s) {{
   const hostSheet=document.getElementById("hostSheet");
   const launcher=document.getElementById("hostLauncher");
   const contextAction=document.getElementById("contextAction");
+  const inviteWatchParty=document.getElementById("inviteWatchParty");
+  inviteWatchParty.hidden=!(s.is_host && privateMode);
 
   if(s.is_host && !previousHostState)
     hostSheetDismissed=false;
@@ -2528,6 +2634,9 @@ document.getElementById("volume").addEventListener("input",event=>{{
 }});
 document.getElementById("mute").onclick=()=>{{ video.muted=!video.muted; }};
 video.addEventListener("contextmenu",event=>event.preventDefault());
+for(const eventName of ["loadedmetadata","loadeddata","canplay","playing","emptied"]) {{
+  video.addEventListener(eventName,()=>stabilizePlayerLayout());
+}}
 async function enterTheaterFullscreen() {{
   const target=document.getElementById("videoStage");
   try {{
@@ -2556,6 +2665,7 @@ async function enterTheaterFullscreen() {{
 }}
 document.getElementById("fullscreen").onclick=enterTheaterFullscreen;
 document.addEventListener("fullscreenchange",()=>{{
+  setTimeout(stabilizePlayerLayout,40);
   if(!document.fullscreenElement && screen.orientation && typeof screen.orientation.unlock==="function") {{
     try {{ screen.orientation.unlock(); }} catch(_) {{}}
   }}
@@ -2573,6 +2683,118 @@ function closeHostControls() {{
 }}
 document.getElementById("closeHostSheet").onclick=closeHostControls;
 document.getElementById("hostLauncher").onclick=openHostControls;
+
+const inviteModal=document.getElementById("inviteModal");
+const inviteResults=document.getElementById("inviteResults");
+const inviteStatus=document.getElementById("inviteStatus");
+const inviteSearch=document.getElementById("inviteSearch");
+
+function closeInviteModal() {{
+  inviteModal.hidden=true;
+  inviteResults.textContent="";
+  inviteStatus.textContent="Search the Discord server member cache or open the native Discord picker.";
+}}
+function inviteAvatar(row) {{
+  const avatar=document.createElement("span");
+  avatar.className="viewer-avatar";
+  const url=String(row?.avatar_url||"");
+  if(url.startsWith("https://cdn.discordapp.com/")||url.startsWith("https://media.discordapp.net/")) {{
+    const img=document.createElement("img");
+    img.src=url;
+    img.alt="";
+    img.loading="lazy";
+    avatar.appendChild(img);
+  }} else {{
+    avatar.textContent=viewerInitials(row?.display_name||row?.user_id);
+  }}
+  return avatar;
+}}
+async function searchInviteMembers() {{
+  if(!lastState?.is_host || !lastState?.private) return;
+  inviteResults.textContent="";
+  inviteStatus.textContent="Searching Discord members…";
+  try {{
+    const query=encodeURIComponent(String(inviteSearch.value||"").trim());
+    const data=await jsonFetch("/movie/"+BOOT.roomId+"/invite-options?q="+query);
+    const rows=Array.isArray(data.members)?data.members:[];
+    inviteStatus.textContent=rows.length
+      ?"Choose who to invite. This immediately turns the live Private Session into a Watch Party."
+      :"No cached Discord member matched. Use the native Discord picker below.";
+    for(const row of rows) {{
+      const button=document.createElement("button");
+      button.type="button";
+      button.className="invite-result";
+      button.appendChild(inviteAvatar(row));
+      const copy=document.createElement("div");
+      copy.className="invite-result-copy";
+      const name=document.createElement("div");
+      name.className="invite-result-name";
+      name.textContent=String(row.display_name||row.user_id||"Discord member");
+      const user=document.createElement("div");
+      user.className="invite-result-user";
+      user.textContent=row.username?("@"+String(row.username)):"Discord member";
+      copy.append(name,user);
+      button.appendChild(copy);
+      button.onclick=()=>promoteAndInvite(Number(row.user_id||0),String(row.display_name||"viewer"));
+      inviteResults.appendChild(button);
+    }}
+  }} catch(err) {{
+    inviteStatus.textContent="Discord member search failed: "+String(err?.message||err);
+  }}
+}}
+async function promoteAndInvite(userId,displayName) {{
+  if(!lastState?.is_host || !lastState?.private || !Number(userId)) return;
+  if(!confirm("Invite "+displayName+" and turn this Private Session into a Watch Party?")) return;
+  inviteStatus.textContent="Starting Watch Party without restarting the movie…";
+  try {{
+    const state=await jsonFetch("/movie/"+BOOT.roomId+"/promote", {{
+      method:"POST",
+      body:JSON.stringify({{user_id:Number(userId)}})
+    }});
+    const invite=state.invite||{{}};
+    await applyState(state);
+    inviteModal.hidden=true;
+    if(invite.dm_sent) {{
+      notice.textContent="Watch Party started. Discord invite sent to "+displayName+".";
+    }} else if(invite.watch_url) {{
+      let copied=false;
+      try {{
+        await navigator.clipboard.writeText(String(invite.watch_url));
+        copied=true;
+      }} catch(_) {{}}
+      notice.textContent=copied
+        ?"Watch Party started. Their signed invite link was copied because Discord DM was unavailable."
+        :"Watch Party started. Discord DM was unavailable; use Discord to send the invite.";
+    }} else {{
+      notice.textContent="Watch Party started. Open Discord to invite "+displayName+".";
+    }}
+  }} catch(err) {{
+    inviteStatus.textContent="Invite failed: "+String(err?.message||err);
+  }}
+}}
+document.getElementById("inviteWatchParty").onclick=()=>{{
+  if(!lastState?.is_host || !lastState?.private) return;
+  closeHostControls();
+  inviteModal.hidden=false;
+  inviteSearch.value="";
+  searchInviteMembers();
+  setTimeout(()=>inviteSearch.focus(),30);
+}};
+document.getElementById("inviteClose").onclick=closeInviteModal;
+document.getElementById("inviteSearchButton").onclick=searchInviteMembers;
+inviteSearch.addEventListener("keydown",event=>{{
+  if(event.key==="Enter") {{
+    event.preventDefault();
+    searchInviteMembers();
+  }}
+}});
+document.getElementById("inviteDiscordFallback").onclick=()=>{{
+  openDiscordRoom();
+}};
+inviteModal.addEventListener("click",event=>{{
+  if(event.target===inviteModal) closeInviteModal();
+}});
+
 async function transferHost(newHostId, displayName="viewer") {{
   if(!lastState?.is_host || !Number(newHostId)) return;
   const target=String(displayName||"viewer");
