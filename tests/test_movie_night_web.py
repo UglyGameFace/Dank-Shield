@@ -1178,7 +1178,7 @@ def test_player_layout_recovers_from_mobile_desktop_mode_resizes() -> None:
     )
 
     assert "position:absolute; inset:0; z-index:0" in html
-    assert "object-fit:cover" in html
+    assert "object-fit:contain" in html
     assert "contain:layout paint" in html
     assert "new ResizeObserver(()=>stabilizePlayerLayout())" in html
     assert 'window.addEventListener("resize",stabilizePlayerLayout' in html
