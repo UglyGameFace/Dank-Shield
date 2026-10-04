@@ -585,14 +585,6 @@ def _watch_html(room_id: str, uid: int, query: str) -> str:
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <title>Dank Cinema • The 420 Lobby</title>
-<script>
-window.__dankCastApiAvailable=false;
-window.__onGCastApiAvailable=function(isAvailable){{
-  window.__dankCastApiAvailable=!!isAvailable;
-  window.dispatchEvent(new Event("dank-cast-api"));
-}};
-</script>
-<script async src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
 <style>
 @import url("https://fonts.googleapis.com/css2?family=Permanent+Marker&display=swap");
 :root {{
@@ -1020,6 +1012,25 @@ video {{
 </section>
 <script>
 const BOOT={boot};
+// Keep signed room credentials in memory for same-origin API calls, but remove
+// them from the browser URL before loading the third-party Google Cast SDK.
+try {{
+  window.history.replaceState(null,"",window.location.pathname);
+}} catch(_) {{}}
+window.__dankCastApiAvailable=false;
+window.__onGCastApiAvailable=function(isAvailable){{
+  window.__dankCastApiAvailable=!!isAvailable;
+  window.dispatchEvent(new Event("dank-cast-api"));
+}};
+function loadGoogleCastSdk() {{
+  const script=document.createElement("script");
+  script.async=true;
+  script.src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1";
+  script.onerror=()=>window.dispatchEvent(new Event("dank-cast-api"));
+  document.head.appendChild(script);
+}}
+loadGoogleCastSdk();
+
 const video=document.getElementById("video");
 const notice=document.getElementById("notice");
 const syncButton=document.getElementById("sync");
