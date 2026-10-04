@@ -483,6 +483,46 @@ def test_candidate_web_metadata_allows_only_tmdb_artwork() -> None:
     assert movie_night_web._candidate_web_metadata(candidate)["poster_url"] == ""
 
 
+def test_candidate_web_metadata_reads_canonical_catalog_envelope() -> None:
+    candidate = SimpleNamespace(
+        title="Release-ish fallback title",
+        metadata={
+            "search_query": "Terrifier 3",
+            "catalog": {
+                "catalog_provider": "tmdb",
+                "catalog_id": "1034541",
+                "title": "Terrifier 3",
+                "year": 2024,
+                "overview": "Art the Clown returns.",
+                "poster_url": "https://image.tmdb.org/t/p/w342/terrifier3.jpg",
+            },
+        },
+    )
+
+    assert movie_night_web._candidate_web_metadata(candidate) == {
+        "title": "Terrifier 3",
+        "year": 2024,
+        "overview": "Art the Clown returns.",
+        "poster_url": "https://image.tmdb.org/t/p/w342/terrifier3.jpg",
+    }
+
+
+def test_candidate_web_metadata_catalog_artwork_stays_tmdb_only() -> None:
+    candidate = SimpleNamespace(
+        title="Example",
+        metadata={
+            "catalog": {
+                "title": "Example",
+                "year": 2026,
+                "overview": "Catalog metadata.",
+                "poster_url": "https://example.invalid/not-tmdb.jpg",
+            },
+        },
+    )
+
+    assert movie_night_web._candidate_web_metadata(candidate)["poster_url"] == ""
+
+
 def test_movie_night_watch_csp_allows_only_tmdb_remote_images(monkeypatch) -> None:
     manager = MovieNightManager()
     room = manager.create_room(
