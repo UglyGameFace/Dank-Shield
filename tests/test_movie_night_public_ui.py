@@ -13,6 +13,7 @@ from stoney_verify.command_surface_contract import (
 )
 from stoney_verify.commands_ext import public_movie_night as movie_ui
 from stoney_verify.commands_ext.public_command_surface_v2 import _standalone
+from stoney_verify.cinema_catalog import CinemaMedia
 from stoney_verify.media_source_registry import CustomMediaSource, MediaSourceRegistry
 from stoney_verify.media_source_resolver import (
     MediaSourceSearchOutcome,
@@ -254,6 +255,63 @@ def test_host_handoff_choices_only_include_active_non_host_viewers(monkeypatch) 
     assert [choice.value for choice in choices] == ["20"]
     assert choices[0].label == "Alex"
     assert choices[0].default is False
+
+
+def test_catalog_search_uses_visual_tmdb_result_browser() -> None:
+    us = CinemaMedia(
+        media_type="tv",
+        tmdb_id=2316,
+        title="The Office",
+        year=2005,
+        overview="Scranton paper company.",
+        poster_url="https://image.tmdb.org/t/p/w500/us-office.jpg",
+        backdrop_url="https://image.tmdb.org/t/p/w1280/us-office.jpg",
+        rating=8.6,
+    )
+    uk = CinemaMedia(
+        media_type="tv",
+        tmdb_id=2996,
+        title="The Office",
+        year=2001,
+        overview="Wernham Hogg.",
+        poster_url="https://image.tmdb.org/t/p/w500/uk-office.jpg",
+        backdrop_url="https://image.tmdb.org/t/p/w1280/uk-office.jpg",
+        rating=8.5,
+    )
+
+    view = movie_ui._CinemaCatalogResultView(
+        owner_id=1,
+        room_id="room",
+        raw_query="The Office",
+        catalog=(us, uk),
+        index=0,
+    )
+    embed = view._embed()
+
+    assert "The Office (2005)" in str(embed.title)
+    assert "TV Series" in str(embed.description)
+    assert str(embed.thumbnail.url).endswith("/us-office.jpg")
+    assert str(embed.image.url).endswith("/us-office.jpg")
+    assert "Result 1 of 2" in str(embed.footer.text)
+    assert {
+        "Previous",
+        "Select This Title",
+        "Next",
+        "Use Exact Search Text",
+        "New Search",
+    } <= _labels(view)
+
+    previous = next(item for item in view.children if getattr(item, "label", "") == "Previous")
+    next_button = next(item for item in view.children if getattr(item, "label", "") == "Next")
+    assert previous.disabled is True
+    assert next_button.disabled is False
+
+    second = view._replacement(1)
+    assert "The Office (2001)" in str(second._embed().title)
+    previous = next(item for item in second.children if getattr(item, "label", "") == "Previous")
+    next_button = next(item for item in second.children if getattr(item, "label", "") == "Next")
+    assert previous.disabled is False
+    assert next_button.disabled is True
 
 
 def test_movie_night_hub_changes_controls_by_room_mode_and_vote_context(monkeypatch) -> None:
