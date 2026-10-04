@@ -595,7 +595,8 @@ async def cinema_home_api(request: web.Request) -> web.Response:
 def _parse_episode_query(query: str) -> Optional[tuple[str, int, int]]:
     clean = " ".join(str(query or "").split())
     patterns = (
-        re.compile(r"^(.+?)\s+s(\d{1,2})e(\d{1,3})(?:\b|$)", re.IGNORECASE),
+        re.compile(r"^(.+?)\s+s(\d{1,2})\s*e(\d{1,3})(?:\b|$)", re.IGNORECASE),
+        re.compile(r"^(.+?)\s+(\d{1,2})x(\d{1,3})(?:\b|$)", re.IGNORECASE),
         re.compile(
             r"^(.+?)\s+season\s+(\d{1,2})\s+episode\s+(\d{1,3})(?:\b|$)",
             re.IGNORECASE,
