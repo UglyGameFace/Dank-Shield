@@ -124,7 +124,7 @@ Regression coverage updated/added for:
 - Discord Private Session Pass Host eligibility;
 - existing queue/host handoff/signed access/player/sync contracts.
 
-PR #435 exact-head repository CI is running. A previous head had Design Regression, App Command Size, and Ticket Owner Override green while full CI/Profile Runtime were still running; later player-authority changes correctly triggered a fresh exact-head run, so only the newest head counts.
+PR #435 head `c20b7b2b0eff2364caf2aca4b8ddec5fbb2073ba` completed 2,765 unit tests with **2,760 passing / 5 failing**. Compile and whitespace checks passed, as did Design Regression, App Command Size, Ticket Owner Override, and Profile Runtime. The five failures were stale string/markup assertions that still required the superseded generic Movie Night wording, old “Open Discord” label, and an implementation-variable spelling for the Host Controls launcher even though the new behavior was present. Those regression assertions were updated to the intended mode-aware Cinema contract on current head `1edb3acf5be6aba789b878a9d806c97df50353d5`; fresh exact-head CI is running now.
 
 ## Cleanup / conflicts
 
