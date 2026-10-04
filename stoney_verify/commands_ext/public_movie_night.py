@@ -64,6 +64,7 @@ from stoney_verify.movie_night_preferences import (
 )
 from stoney_verify.movie_night_session import terminate_movie_night_room
 from stoney_verify.movie_night_web import movie_night_watch_url
+from stoney_verify.cinema_site_auth import cinema_site_url
 from stoney_verify.panel_lifecycle import (
     PRIVATE_MENU_TTL_SECONDS,
     private_menu_lifecycle_text,
@@ -740,9 +741,11 @@ def _movie_hub_view(
     interaction: discord.Interaction,
     room: Optional[MovieNightRoom],
 ) -> "MovieNightHubView":
+    guild_id = int(getattr(getattr(interaction, "guild", None), "id", 0) or 0)
     return MovieNightHubView(
         int(interaction.user.id),
         room,
+        guild_id=guild_id,
     )
 
 
@@ -4454,8 +4457,15 @@ class MovieNightHubView(_OwnedView):
         self,
         owner_id: int,
         room: Optional[MovieNightRoom] = None,
+        *,
+        guild_id: int = 0,
     ) -> None:
         super().__init__(owner_id)
+        resolved_guild_id = int(
+            guild_id
+            or (getattr(room, "guild_id", 0) if room is not None else 0)
+            or 0
+        )
         private_mode = _private_viewing(room)
         private_host = bool(
             private_mode
@@ -4514,6 +4524,18 @@ class MovieNightHubView(_OwnedView):
                         row=2,
                     )
                 )
+
+        site_url = cinema_site_url(resolved_guild_id, int(owner_id))
+        if site_url:
+            self.add_item(
+                discord.ui.Button(
+                    label="Open Dank Cinema",
+                    emoji="🍿",
+                    style=discord.ButtonStyle.link,
+                    url=site_url,
+                    row=2,
+                )
+            )
 
     @discord.ui.button(label="Start Watch Party", emoji="🎬", style=discord.ButtonStyle.success, row=0, custom_id="dank:movie:hub:start")
     async def start_join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
