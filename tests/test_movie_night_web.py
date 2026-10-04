@@ -441,6 +441,7 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
     assert "DEFAULT_MEDIA_RECEIVER_APP_ID" in html
     assert "requestSession()" in html
     assert "session.loadMedia(request)" in html
+    assert "lastState.cast_stream_url" in html
     assert 'controlslist="nodownload"' in html
     assert '<video id="video" controls' not in html
     assert '<video id="video" playsinline preload="metadata" controls>' not in html
@@ -536,3 +537,11 @@ def test_dank_cinema_hides_placeholder_art_and_fake_avatars() -> None:
     assert "fake-avatars" not in html
     assert "renderAvatars" not in html
     assert "A synchronized Dank Cinema session in The 420 Lobby." not in html
+
+
+
+def test_cast_stream_uses_separate_consumer_identity() -> None:
+    source = Path(movie_night_web.__file__).read_text(encoding="utf-8")
+    assert 'cast_consumer_key = f"cast:' in source
+    assert '"cast_stream_url": cast_stream_url' in source
+    assert "consumer_key=cast_consumer_key" in source
