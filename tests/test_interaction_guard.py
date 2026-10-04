@@ -293,6 +293,34 @@ def test_unowned_ephemeral_movie_component_recovers_immediately_to_dank_cinema(m
     asyncio.run(run())
 
 
+def test_unowned_ephemeral_cinema_visual_component_recovers_immediately(monkeypatch):
+    async def run() -> None:
+        from stoney_verify.commands_ext import public_movie_night
+        from stoney_verify.commands_ext.public_movie_night import MovieNightHubView
+
+        interaction = FakeInteraction(ephemeral=True)
+        interaction.data["custom_id"] = "dank:cinema:catalog-visual:next"
+        store = Obj(_views={}, _dynamic_items={})
+        bot = Obj(_connection=Obj(_view_store=store))
+
+        async def unexpected_sleep(_seconds: float) -> None:
+            raise AssertionError("known stale Cinema visual controls must recover without generic grace")
+
+        monkeypatch.setattr(guard.asyncio, "sleep", unexpected_sleep)
+        monkeypatch.setattr(public_movie_night, "_room_for_interaction", lambda _interaction: None)
+
+        recovered = await guard._recover_unowned_private_component(bot, interaction)
+
+        assert recovered is True
+        assert interaction.response.done is True
+        assert len(interaction.response.edits) == 1
+        payload = interaction.response.edits[0]
+        assert "Dank Cinema menu expired" in payload["content"]
+        assert isinstance(payload["view"], MovieNightHubView)
+
+    asyncio.run(run())
+
+
 def test_legacy_opaque_movie_component_uses_cinema_embed_for_recovery(monkeypatch):
     async def run() -> None:
         from stoney_verify.commands_ext import public_movie_night

@@ -3072,6 +3072,16 @@ let controlsHideTimer=null;
 let tapSkipFeedbackTimer=null;
 let lastStageTapAt=0;
 let lastStageTapSide="";
+const AUDIO_STORAGE_KEY="dank-cinema-audio:"+BOOT.uid;
+let userMuted=false;
+let preferredVolume=1;
+try {{
+  const saved=JSON.parse(localStorage.getItem(AUDIO_STORAGE_KEY)||"{{}}");
+  userMuted=!!saved.muted;
+  const savedVolume=Number(saved.volume);
+  if(Number.isFinite(savedVolume) && savedVolume>0 && savedVolume<=1)
+    preferredVolume=savedVolume;
+}} catch(_) {{}}
 const SOFT_DRIFT_START=0.35;
 const SOFT_DRIFT_STOP=0.12;
 const HARD_DRIFT_SECONDS=5.0;
@@ -3153,6 +3163,7 @@ function recoverPlayerFromViewportChange() {{
   for(const delay of [0,60,180,420]) {{
     playerRecoveryTimers.push(setTimeout(()=>{{
       stabilizePlayerLayout();
+      applyUserAudioState(false);
       showPlayerControls(false);
     }},delay));
   }}
@@ -3739,6 +3750,7 @@ function attachStream(url, force=false) {{
   resetPlaybackRate();
   video.src=clean;
   video.load();
+  applyUserAudioState(false);
 }}
 
 function scheduleStreamRetry() {{
@@ -4285,6 +4297,7 @@ async function hostAction(action, extra={{}}) {{
 syncButton.onclick=async()=>{{
   if(!lastState || lastState.is_host || !lastState.stream_url) return;
 
+  applyUserAudioState(true);
   syncRequested=true;
   syncGestureGranted=true;
   resetPlaybackRate();
@@ -4335,11 +4348,13 @@ async function togglePlayerPlayback() {{
 
   if(lastState.is_host) {{
     const shouldResume=video.paused || lastState.state!=="playing";
+    if(shouldResume) await primeAudiblePlaybackGesture();
     await hostAction(shouldResume?"resume":"pause");
     return;
   }}
 
   if(video.paused) {{
+    applyUserAudioState(true);
     syncRequested=true;
     syncGestureGranted=true;
     try {{
@@ -4375,6 +4390,14 @@ document.getElementById("timeline").addEventListener("input",event=>{{
 }});
 const volumeControl=document.getElementById("volume");
 const muteControl=document.getElementById("mute");
+function saveUserAudioState() {{
+  try {{
+    localStorage.setItem(
+      AUDIO_STORAGE_KEY,
+      JSON.stringify({{muted:!!userMuted,volume:preferredVolume}})
+    );
+  }} catch(_) {{}}
+}}
 function syncVolumeControls() {{
   const effectiveMuted=video.muted || Number(video.volume||0)<=0;
   muteControl.classList.toggle("active",effectiveMuted);
@@ -4383,20 +4406,50 @@ function syncVolumeControls() {{
   if(document.activeElement!==volumeControl)
     volumeControl.value=String(Math.max(0,Math.min(1,Number(video.volume||0))));
 }}
+function applyUserAudioState(forceAudible=false) {{
+  try {{
+    const target=Math.max(0.05,Math.min(1,Number(preferredVolume||1)));
+    if(Number(video.volume||0)<=0 || Math.abs(Number(video.volume||0)-target)>0.001)
+      video.volume=target;
+  }} catch(_) {{}}
+  try {{
+    video.muted=forceAudible && !userMuted ? false : !!userMuted;
+  }} catch(_) {{}}
+  syncVolumeControls();
+}}
+async function primeAudiblePlaybackGesture() {{
+  if(userMuted) {{
+    applyUserAudioState(false);
+    return;
+  }}
+  applyUserAudioState(true);
+  if(!video.paused || !video.getAttribute("src")) return;
+  try {{
+    await video.play();
+    video.pause();
+  }} catch(_) {{
+    // The explicit Play action below still gets a chance to start the source.
+  }}
+}}
 volumeControl.addEventListener("input",event=>{{
-  video.volume=Math.max(0,Math.min(1,Number(event.target.value||0)));
-  video.muted=video.volume===0;
+  const next=Math.max(0,Math.min(1,Number(event.target.value||0)));
+  if(next>0) preferredVolume=next;
+  userMuted=next<=0;
+  try {{ video.volume=next>0?next:preferredVolume; }} catch(_) {{}}
+  try {{ video.muted=userMuted; }} catch(_) {{}}
+  saveUserAudioState();
   syncVolumeControls();
 }});
 muteControl.onclick=()=>{{
-  const shouldUnmute=video.muted || Number(video.volume||0)<=0;
-  if(shouldUnmute && Number(video.volume||0)<=0) video.volume=1;
-  video.muted=!shouldUnmute;
-  syncVolumeControls();
+  const effectiveMuted=video.muted || Number(video.volume||0)<=0 || userMuted;
+  userMuted=!effectiveMuted;
+  if(!userMuted && Number(video.volume||0)<=0) preferredVolume=Math.max(.5,preferredVolume);
+  saveUserAudioState();
+  applyUserAudioState(!userMuted);
   showPlayerControls(true);
 }};
 video.addEventListener("volumechange",syncVolumeControls);
-syncVolumeControls();
+applyUserAudioState(false);
 document.getElementById("pip").onclick=async()=>{{
   try {{
     if(document.pictureInPictureElement===video) await document.exitPictureInPicture();

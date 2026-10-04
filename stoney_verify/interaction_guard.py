@@ -584,6 +584,7 @@ async def _recover_unowned_private_component(
         )
         is_private_movie_night = (
             custom_id.startswith("dank:movie:")
+            or custom_id.startswith("dank:cinema:")
             or _message_looks_like_dank_cinema(interaction)
         )
         is_known_private_surface = is_private_community_hub or is_private_movie_night

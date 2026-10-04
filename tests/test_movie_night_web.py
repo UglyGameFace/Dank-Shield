@@ -1401,6 +1401,13 @@ def test_dank_cinema_player_capability_controls_are_not_placebos() -> None:
     assert 'key==="m"' in html
     assert 'video.addEventListener("volumechange",syncVolumeControls)' in html
     assert 'muteControl.setAttribute("aria-pressed"' in html
+    assert 'const AUDIO_STORAGE_KEY="dank-cinema-audio:"+BOOT.uid' in html
+    assert "function applyUserAudioState(forceAudible=false)" in html
+    assert "async function primeAudiblePlaybackGesture()" in html
+    assert "if(shouldResume) await primeAudiblePlaybackGesture();" in html
+    assert "applyUserAudioState(true);\n  syncRequested=true;" in html
+    assert "applyUserAudioState(false);\n      showPlayerControls(false);" in html
+    assert "video.load();\n  applyUserAudioState(false);" in html
     assert "pointer-events:none;" in html
     assert "touch-action:manipulation;" in html
 

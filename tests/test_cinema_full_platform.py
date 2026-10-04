@@ -112,6 +112,55 @@ def test_episode_provider_filter_keeps_only_canonical_episode() -> None:
     assert filtered.errors
 
 
+def test_catalog_search_ranks_exact_tv_title_before_fuzzy_variants(monkeypatch) -> None:
+    async def request(_path, *, params=None, cache_ttl=0.0):
+        _ = params, cache_ttl
+        return {
+            "results": [
+                {
+                    "media_type": "tv",
+                    "id": 300,
+                    "name": "The Office PL",
+                    "first_air_date": "2021-01-01",
+                    "popularity": 500.0,
+                    "vote_average": 7.8,
+                },
+                {
+                    "media_type": "tv",
+                    "id": 2316,
+                    "name": "The Office",
+                    "first_air_date": "2005-03-24",
+                    "popularity": 180.0,
+                    "vote_average": 8.6,
+                },
+                {
+                    "media_type": "tv",
+                    "id": 2996,
+                    "name": "The Office",
+                    "first_air_date": "2001-07-09",
+                    "popularity": 90.0,
+                    "vote_average": 8.5,
+                },
+                {
+                    "media_type": "movie",
+                    "id": 999,
+                    "title": "Office Party",
+                    "release_date": "2026-01-01",
+                    "popularity": 900.0,
+                    "vote_average": 9.0,
+                },
+            ]
+        }
+
+    monkeypatch.setattr(cinema_catalog, "_request", request)
+
+    results = asyncio.run(cinema_catalog.search_catalog("The Office", limit=4))
+    assert [item.tmdb_id for item in results[:3]] == [2316, 2996, 300]
+
+    year_results = asyncio.run(cinema_catalog.search_catalog("The Office (2001)", limit=4))
+    assert year_results[0].tmdb_id == 2996
+
+
 def test_next_episode_crosses_real_season_boundary(monkeypatch) -> None:
     async def fake_season(_series_id: int, season_number: int):
         if season_number == 3:

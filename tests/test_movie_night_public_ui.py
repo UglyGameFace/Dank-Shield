@@ -292,6 +292,7 @@ def test_catalog_search_uses_visual_tmdb_result_browser() -> None:
     assert str(embed.thumbnail.url).endswith("/us-office.jpg")
     assert str(embed.image.url).endswith("/us-office.jpg")
     assert "Result 1 of 2" in str(embed.footer.text)
+    assert "Dank Cinema" in str(embed.footer.text)
     assert {
         "Previous",
         "Select This Title",
@@ -305,12 +306,61 @@ def test_catalog_search_uses_visual_tmdb_result_browser() -> None:
     assert previous.disabled is True
     assert next_button.disabled is False
 
-    second = view._replacement(1)
-    assert "The Office (2001)" in str(second._embed().title)
-    previous = next(item for item in second.children if getattr(item, "label", "") == "Previous")
-    next_button = next(item for item in second.children if getattr(item, "label", "") == "Next")
+    view._set_index(1)
+    assert "The Office (2001)" in str(view._embed().title)
+    previous = next(item for item in view.children if getattr(item, "label", "") == "Previous")
+    next_button = next(item for item in view.children if getattr(item, "label", "") == "Next")
     assert previous.disabled is False
     assert next_button.disabled is True
+
+
+def test_catalog_visual_pagination_acknowledges_before_reusing_same_view(monkeypatch) -> None:
+    first = CinemaMedia(
+        media_type="movie",
+        tmdb_id=1,
+        title="First",
+        year=2025,
+    )
+    second = CinemaMedia(
+        media_type="movie",
+        tmdb_id=2,
+        title="Second",
+        year=2026,
+    )
+    view = movie_ui._CinemaCatalogResultView(
+        owner_id=1,
+        room_id="room",
+        raw_query="test",
+        catalog=(first, second),
+        index=0,
+    )
+
+    calls: list[tuple[str, object]] = []
+
+    class Response:
+        def __init__(self) -> None:
+            self.done = False
+
+        def is_done(self) -> bool:
+            return self.done
+
+        async def defer(self) -> None:
+            calls.append(("defer", None))
+            self.done = True
+
+    async def replace(interaction, *, content="", embed=None, view=None):
+        _ = interaction, content, embed
+        calls.append(("replace", view))
+
+    monkeypatch.setattr(movie_ui, "_replace", replace)
+    interaction = SimpleNamespace(response=Response())
+
+    asyncio.run(view._show_index(interaction, 1))
+
+    assert calls[0][0] == "defer"
+    assert calls[1] == ("replace", view)
+    assert view.index == 1
+    assert "Second (2026)" in str(view._embed().title)
 
 
 def test_movie_night_hub_changes_controls_by_room_mode_and_vote_context(monkeypatch) -> None:

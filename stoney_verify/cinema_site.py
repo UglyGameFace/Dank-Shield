@@ -143,6 +143,14 @@ def _discord_oauth_ready() -> bool:
     )
 
 
+def cinema_oauth_ready() -> bool:
+    return _discord_oauth_ready()
+
+
+def cinema_oauth_redirect_uri() -> str:
+    return _discord_oauth_redirect_uri()
+
+
 def _bot_guild(guild_id: int) -> Any:
     try:
         from .globals import bot
