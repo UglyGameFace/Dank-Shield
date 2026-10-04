@@ -44,6 +44,43 @@
     return `${path}${AUTH_QUERY ? join + AUTH_QUERY.slice(1) : ""}`;
   }
 
+  function autoQualityMode() {
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection || {};
+    const saveData = connection.saveData === true;
+    const effective = String(connection.effectiveType || "").toLowerCase();
+    const memory = Number(navigator.deviceMemory || 0);
+    const cores = Number(navigator.hardwareConcurrency || 0);
+    const width = Math.max(window.innerWidth || 0, document.documentElement.clientWidth || 0);
+
+    if (
+      reduced
+      || saveData
+      || ["slow-2g", "2g"].includes(effective)
+      || (memory > 0 && memory <= 2)
+      || (cores > 0 && cores <= 2)
+    ) return "lite";
+
+    if (
+      effective === "3g"
+      || (memory > 0 && memory <= 4)
+      || (cores > 0 && cores <= 4)
+      || width < 720
+    ) return "standard";
+
+    return "high";
+  }
+
+  function applyVisualQuality(preference = "auto") {
+    const requested = String(preference || "auto").toLowerCase();
+    const resolved = ["high", "standard", "lite"].includes(requested)
+      ? requested
+      : autoQualityMode();
+    document.documentElement.dataset.qualityPreference = requested;
+    document.documentElement.dataset.quality = resolved;
+    return resolved;
+  }
+
   async function api(path, options = {}) {
     const response = await fetch(authUrl(API_BASE + path), {
       credentials: "same-origin",
@@ -412,10 +449,8 @@
   async function ensureHome(force = false) {
     if (state.home && !force) return state.home;
     state.home = await api("/home");
-    const quality = state.home?.profile?.preferences?.visual_quality;
-    if (["high", "standard", "lite"].includes(quality)) {
-      document.documentElement.dataset.quality = quality;
-    }
+    const quality = state.home?.profile?.preferences?.visual_quality || "auto";
+    applyVisualQuality(quality);
     return state.home;
   }
 
@@ -983,9 +1018,7 @@
         try {
           const response = await api("/profile", { method: "POST", body: JSON.stringify(payload) });
           state.profile = { ...data, preferences: response.preferences };
-          if (["high","standard","lite"].includes(response.preferences?.visual_quality)) {
-            document.documentElement.dataset.quality = response.preferences.visual_quality;
-          }
+          applyVisualQuality(response.preferences?.visual_quality || "auto");
           toast("Cinema preferences saved.");
         } catch (error) {
           toast(error.message || "Preferences could not be saved.", "error");
@@ -1179,10 +1212,16 @@
     try {
       const data = await api("/notifications");
       state.notifications = data;
+      const notifications = Array.isArray(data.notifications) ? data.notifications : [];
+      const unreadCount = notifications.filter((item) => !item.read_at).length;
+      state.home = {
+        ...(state.home || {}),
+        notifications_unread: unreadCount,
+      };
       page.textContent = "";
       page.appendChild(node("h1", "", "Notifications"));
       const list = node("div", "notification-list section");
-      const rows = Array.isArray(data.notifications) ? data.notifications : [];
+      const rows = notifications;
       if (!rows.length) {
         list.appendChild(node("div", "state-card", "No Cinema notifications right now."));
       } else {
@@ -1199,7 +1238,6 @@
             item.appendChild(button("Mark Read", "btn ghost", async () => {
               try {
                 await api("/notifications", { method: "POST", body: JSON.stringify({ notification_id: notification.id }) });
-                state.home = null;
                 renderNotifications();
               } catch (error) {
                 toast(error.message || "Notification update failed.", "error");
@@ -1234,8 +1272,20 @@
 
   window.addEventListener("hashchange", renderRoute);
   window.addEventListener("pageshow", () => {
-    if (document.visibilityState !== "hidden") renderRoute();
+    if (document.visibilityState !== "hidden") {
+      if (document.documentElement.dataset.qualityPreference === "auto") applyVisualQuality("auto");
+      renderRoute();
+    }
   });
+  window.addEventListener("resize", () => {
+    if (document.documentElement.dataset.qualityPreference === "auto") applyVisualQuality("auto");
+  }, { passive: true });
+  if (navigator.connection && typeof navigator.connection.addEventListener === "function") {
+    navigator.connection.addEventListener("change", () => {
+      if (document.documentElement.dataset.qualityPreference === "auto") applyVisualQuality("auto");
+    });
+  }
 
+  applyVisualQuality("auto");
   renderRoute();
 })();
