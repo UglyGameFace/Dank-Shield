@@ -104,11 +104,18 @@ def materialize_search_results(
             else {}
         )
         candidate_title = _clean(catalog.get("title")) if catalog else result.title
-        candidate = (
-            find_catalog_candidate(room, catalog)
-            if catalog
-            else manager.find_candidate_by_title(room.room_id, candidate_title)
-        )
+        if catalog:
+            candidate = find_catalog_candidate(room, catalog)
+            if candidate is None and not _catalog_identity(catalog)[0]:
+                candidate = manager.find_candidate_by_title(
+                    room.room_id,
+                    candidate_title,
+                )
+        else:
+            candidate = manager.find_candidate_by_title(
+                room.room_id,
+                candidate_title,
+            )
         candidate_metadata: dict[str, Any] = {"search_query": _clean(query)}
         if catalog:
             candidate_metadata["catalog"] = catalog
