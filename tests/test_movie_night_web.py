@@ -80,6 +80,7 @@ def test_movie_night_player_contains_sync_heartbeat_and_host_controls() -> None:
     assert "ranges.end(i)" in html
     assert "return video.buffered.end(video.buffered.length-1)" not in html
     assert "Tap to Sync" in html
+    assert "syncButton.hidden=!!s.is_host" in html
     assert "Buffering the group for smoother playback" in html
     assert "Joining Movie Night" in html
     assert "Playback will stay put while the buffer catches up." in html
