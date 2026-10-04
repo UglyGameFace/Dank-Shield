@@ -523,7 +523,10 @@
       const source = node("div", "feed-meta", item.source_label || "Cinema source");
       const action = button("View matching titles", "btn secondary", () => {
         const input = document.querySelector(".search-input");
-        if (input) input.value = itemTitle(item);
+        if (!input) return;
+        input.value = itemTitle(item);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.focus();
       });
       card.append(kicker, title, source, action);
       return card;
@@ -857,10 +860,14 @@
         const left = node("div");
         left.appendChild(node("h2", "", "Episodes"));
         const latest = latestEpisodeProgress(data.episode_progress);
-        if (latest) {
-          const label = latest.completed
-            ? `Continue after S${latest.season_number} E${latest.episode_number}`
-            : `Continue S${latest.season_number} E${latest.episode_number}`;
+        const continuation = data.continue_episode || null;
+        if (continuation) {
+          const season = Number(continuation.season_number || 0);
+          const episode = Number(continuation.episode_number || 0);
+          const resume = Number(continuation.progress_seconds || 0) > 0 && !continuation.completed;
+          const label = resume
+            ? `Continue S${season} E${episode}`
+            : `Next S${season} E${episode}`;
           left.appendChild(node("div", "section-sub", label));
         }
         const select = node("select", "season-select");
@@ -874,7 +881,7 @@
         const episodeHost = node("div");
         tvPanel.append(toolbar, episodeHost);
         page.appendChild(tvPanel);
-        const initialSeason = Number(requestedSeason || latest?.season_number || select.value || 1);
+        const initialSeason = Number(requestedSeason || continuation?.season_number || latest?.season_number || select.value || 1);
         select.value = String(initialSeason);
         select.addEventListener("change", () => loadSeason(d.tmdb_id, Number(select.value), episodeHost, data.host_session).catch((error) => {
           episodeHost.textContent = "";
