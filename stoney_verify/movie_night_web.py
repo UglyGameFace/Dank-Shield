@@ -2010,7 +2010,7 @@ async function applyState(s) {{
   lastState=s;
   document.getElementById("title").textContent=s.title||"Movie Night";
   document.getElementById("heading").textContent=
-    s.private?"🔒 Dank Cinema Private Session":"🎬 Dank Cinema Movie Night";
+    s.private?"🔒 Dank Cinema Private Session":"🎬 Dank Cinema Watch Party";
   document.getElementById("state").textContent=s.state||"—";
   document.getElementById("viewers").textContent=String(s.viewer_count||0);
   document.getElementById("role").textContent=
@@ -2048,7 +2048,7 @@ async function applyState(s) {{
     document.getElementById("pause").disabled=true;
     document.getElementById("end").disabled=true;
     syncButton.disabled=true;
-    notice.textContent=s.private?"Private Session has ended.":"Movie Night has ended.";
+    notice.textContent=s.private?"Private Session has ended.":"Watch Party has ended.";
     document.getElementById("hostSheet").classList.remove("show");
     return;
   }}
@@ -2079,7 +2079,7 @@ async function applyState(s) {{
     if(s.media_missing) {{
       notice.textContent=s.private
         ?"The attached media session expired or was reclaimed. Your Private Session is still active; return to Discord and choose the release again."
-        :"The attached media session expired or was reclaimed. The Movie Night room is still active; return to Discord and choose the release again.";
+        :"The attached media session expired or was reclaimed. The Watch Party is still active; return to Discord and choose the release again.";
     }} else {{
       notice.textContent="Waiting for the host to choose media.";
     }}
@@ -2130,11 +2130,13 @@ async function applyState(s) {{
           }}
         }}
 
-        if(!notice.textContent || notice.textContent.startsWith("Joining Movie Night"))
+        if(!notice.textContent || notice.textContent.startsWith("Joining ")) {{
+          const joiningLabel=s.private?"Private Session":"Watch Party";
           notice.textContent=
-            "Joining Movie Night… buffering around "+Math.floor((joinTarget||0)/60)+":"+
+            "Joining "+joiningLabel+"… buffering around "+Math.floor((joinTarget||0)/60)+":"+
             String(Math.floor((joinTarget||0)%60)).padStart(2,"0")+
             ". Playback will stay put while the buffer catches up.";
+        }}
       }}
     }} else {{
       joinTarget=null;
@@ -2180,7 +2182,7 @@ async function poll() {{
     if(message.includes("Movie Night room not found")) {{
       terminated=true;
       video.pause();
-      notice.textContent="Movie Night has ended.";
+      notice.textContent=lastState?.private?"Private Session has ended.":"Cinema session has ended.";
       return;
     }}
     stateFetchFailures+=1;
