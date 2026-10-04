@@ -53,7 +53,9 @@ from .media_source_resolver import (
 )
 from .cinema_media_identity import (
     catalog_metadata,
+    filter_adult_provider_results,
     filter_outcome_for_catalog,
+    looks_explicit_adult,
     parse_episode_query,
 )
 from .cinema_playback_service import (
@@ -65,6 +67,7 @@ from .cinema_playback_service import (
     start_room_variant,
 )
 from .movie_night import get_movie_night_manager
+from .movie_night_preferences import load_movie_night_preferences
 from .movie_night_web import movie_night_watch_url
 
 _ASSET_DIR = Path(__file__).with_name("assets")
@@ -594,13 +597,29 @@ async def cinema_home_api(request: web.Request) -> web.Response:
     )
 
 
-async def _search_episode_query(query: str) -> list[dict[str, Any]]:
+async def _guild_adult_content_enabled(guild_id: int) -> bool:
+    try:
+        _raw, preferences = await load_movie_night_preferences(int(guild_id), refresh=False)
+        return bool(preferences.adult_content_enabled)
+    except Exception:
+        return False
+
+
+async def _search_episode_query(
+    query: str,
+    *,
+    include_adult: bool = False,
+) -> list[dict[str, Any]]:
     parsed = parse_episode_query(query)
     if parsed is None:
         return []
     series_query, season_number, episode_number = parsed
     try:
-        matches = await search_catalog(series_query, limit=8)
+        matches = await search_catalog(
+            series_query,
+            limit=8,
+            include_adult=bool(include_adult),
+        )
     except Exception:
         return []
     series = next((item for item in matches if item.media_type == "tv"), None)
