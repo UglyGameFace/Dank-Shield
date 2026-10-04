@@ -408,3 +408,20 @@ def test_episode_search_parser_accepts_shared_cinema_notation() -> None:
         7,
     )
     assert cinema_site._parse_episode_query("Example Show") is None
+
+
+
+def test_episode_cards_preserve_exact_details_identity() -> None:
+    from pathlib import Path
+
+    script = (Path(cinema_site.__file__).resolve().parent / "assets" / "cinema_site.js").read_text(encoding="utf-8")
+    styles = (Path(cinema_site.__file__).resolve().parent / "assets" / "cinema_site.css").read_text(encoding="utf-8")
+
+    assert 'params.set("season", String(season))' in script
+    assert 'params.set("episode", String(episode))' in script
+    assert "requestedEpisode = null" in script
+    assert 'card.classList.add("episode-current")' in script
+    assert 'card.setAttribute("aria-current", "true")' in script
+    assert 'params.get("episode")' in script
+    assert 'current.scrollIntoView({ block: "center"' in script
+    assert ".episode-card.episode-current" in styles
