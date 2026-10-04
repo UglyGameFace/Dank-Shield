@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from stoney_verify import cinema_catalog, cinema_site, movie_night_web
+from stoney_verify import cinema_catalog, cinema_feed_service, cinema_site, movie_night_web
 from stoney_verify.cinema_catalog import CinemaDetails, CinemaEpisode, CinemaMedia
 from stoney_verify.cinema_media_identity import (
     episode_catalog_metadata,
@@ -425,3 +425,81 @@ def test_episode_cards_preserve_exact_details_identity() -> None:
     assert 'params.get("episode")' in script
     assert 'current.scrollIntoView({ block: "center"' in script
     assert ".episode-card.episode-current" in styles
+
+
+
+def test_feed_center_capabilities_health_and_refresh_queries_are_truthful() -> None:
+    source = SimpleNamespace(
+        source_id="external-ref",
+        label="Reference Search",
+        endpoint_url="https://example.org/search?q={query}",
+        provider_type="external",
+        category="tv",
+        enabled=True,
+    )
+    payload = cinema_feed_service._payload(
+        source,
+        guild_id=123,
+        include_endpoint=False,
+    )
+
+    assert payload["search_capable"] is False
+    assert payload["discovery_capable"] is False
+    assert payload["playback_capable"] is False
+    assert payload["health_state"] == "reference"
+    assert payload["supported_media_types"] == ["tv"]
+    assert "endpoint_url" not in payload
+
+    assert cinema_feed_service._default_refresh_query("movies") == "movie"
+    assert cinema_feed_service._default_refresh_query("tv") == "tv"
+    assert cinema_feed_service._default_refresh_query("anime") == "anime"
+    assert cinema_feed_service._default_refresh_query("documentaries") == "documentary"
+    assert cinema_feed_service._default_refresh_query("custom") == "movie"
+
+
+def test_feed_center_structured_health_reflects_real_refresh_state(monkeypatch) -> None:
+    source = SimpleNamespace(
+        source_id="movie-json",
+        label="Movie JSON",
+        endpoint_url="https://example.org/api",
+        provider_type="json",
+        category="movies",
+        enabled=True,
+    )
+    key = (456, "movie-json")
+    cinema_feed_service._RUNTIME_STATE[key] = {
+        "refreshed_at": 123456,
+        "ok": True,
+        "error": "",
+        "titles": ["Example Movie"],
+    }
+    try:
+        payload = cinema_feed_service._payload(
+            source,
+            guild_id=456,
+            include_endpoint=True,
+        )
+    finally:
+        cinema_feed_service._RUNTIME_STATE.pop(key, None)
+
+    assert payload["search_capable"] is True
+    assert payload["discovery_capable"] is True
+    assert payload["playback_capable"] is True
+    assert payload["health_state"] == "online"
+    assert payload["last_refresh_ok"] is True
+    assert payload["newly_discovered"] == ["Example Movie"]
+    assert payload["endpoint_url"] == "https://example.org/api"
+
+
+def test_full_site_feed_center_does_not_fake_external_refresh_or_search() -> None:
+    from pathlib import Path
+
+    script = (Path(cinema_site.__file__).resolve().parent / "assets" / "cinema_site.js").read_text(encoding="utf-8")
+
+    assert "function sourceHealthLabel(source)" in script
+    assert 'reference: "Reference link"' in script
+    assert 'source.search_capable ? "Search" : ""' in script
+    assert 'source.provider_type !== "external"' in script
+    assert 'feedAction({ action: "refresh", source_id: source.source_id })' in script
+    assert 'query: "movie"' not in script
+    assert "Supports:" in script
