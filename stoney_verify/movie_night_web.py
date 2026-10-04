@@ -26,7 +26,10 @@ from stoney_verify.cinema_feed_service import (
 from stoney_verify.cinema_catalog import (
     get_details as get_cinema_details,
     get_next_episode,
+    get_season as get_cinema_season,
+    search_catalog as search_cinema_catalog,
 )
+from stoney_verify.cinema_media_identity import parse_episode_query
 from stoney_verify.cinema_library_service import (
     CinemaStorageUnavailable,
     get_cinema_user,
@@ -39,6 +42,7 @@ from stoney_verify.cinema_playback_service import (
     find_catalog_candidate,
     materialize_search_results,
     search_exact_episode_sources,
+    search_exact_movie_sources,
     start_room_variant,
 )
 from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
@@ -863,18 +867,37 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     if not movie_metadata["title"]:
         movie_metadata["title"] = str(title or session_fallback_title)
 
+    queued_candidates = [
+        room.candidates.get(str(queued_id))
+        for queued_id in list(room.queue)[:12]
+    ]
+    queued_candidates = [item for item in queued_candidates if item is not None]
+    proposer_ids = {
+        int(getattr(item, "proposer_id", 0) or 0)
+        for item in queued_candidates
+        if int(getattr(item, "proposer_id", 0) or 0) > 0
+    }
+    proposer_names = {
+        int(row.get("user_id") or 0): str(row.get("display_name") or "")
+        for row in _discord_viewer_summaries(room, proposer_ids)
+    }
+
     queue_items: list[dict[str, Any]] = []
-    for queued_id in list(room.queue)[:12]:
-        queued = room.candidates.get(str(queued_id))
-        if queued is None:
-            continue
+    for queued in queued_candidates:
         queued_meta = _candidate_web_metadata(queued)
+        proposer_id = int(getattr(queued, "proposer_id", 0) or 0)
         queue_items.append(
             {
                 "candidate_id": str(queued.candidate_id),
                 "title": queued_meta["title"] or "Untitled",
                 "year": queued_meta["year"],
                 "poster_url": queued_meta["poster_url"],
+                "media_type": queued_meta["media_type"],
+                "tmdb_id": queued_meta["tmdb_id"],
+                "season_number": queued_meta["season_number"],
+                "episode_number": queued_meta["episode_number"],
+                "proposer_id": proposer_id,
+                "added_by": proposer_names.get(proposer_id, "") if proposer_id else "",
                 "is_current": str(queued.candidate_id) == str(room.current_candidate_id or ""),
             }
         )
@@ -1581,6 +1604,92 @@ async def movie_night_preferences(request: web.Request) -> web.Response:
     )
 
 
+async def movie_night_queue_search(request: web.Request) -> web.Response:
+    room, uid = await _room_and_user(request)
+    if int(uid) != int(room.host_id):
+        raise web.HTTPForbidden(text="Only the active Cinema host can search for queued titles.")
+
+    query = " ".join(str(request.query.get("q", "") or "").split())[:180]
+    if len(query) < 2:
+        return web.json_response(
+            {
+                "query": query,
+                "results": [],
+                "hint": "Search a movie title or an exact TV episode such as Show S3E7.",
+            }
+        )
+
+    parsed = parse_episode_query(query)
+    results: list[dict[str, Any]] = []
+    try:
+        if parsed is not None:
+            series_query, season_number, episode_number = parsed
+            matches = await search_cinema_catalog(series_query, limit=8)
+            for series in matches:
+                if str(series.media_type or "") != "tv":
+                    continue
+                try:
+                    episodes = await get_cinema_season(
+                        int(series.tmdb_id),
+                        int(season_number),
+                    )
+                except Exception:
+                    continue
+                episode = next(
+                    (
+                        item
+                        for item in episodes
+                        if int(item.episode_number) == int(episode_number)
+                    ),
+                    None,
+                )
+                if episode is None:
+                    continue
+                results.append(
+                    {
+                        **episode.to_payload(),
+                        "result_kind": "episode",
+                        "media_type": "episode",
+                        "series_id": int(series.tmdb_id),
+                        "series_title": str(series.title),
+                        "series_poster_url": str(series.poster_url or ""),
+                        "poster_url": str(series.poster_url or ""),
+                        "backdrop_url": str(episode.still_url or series.backdrop_url or ""),
+                    }
+                )
+                if len(results) >= 6:
+                    break
+        else:
+            matches = await search_cinema_catalog(query, limit=20)
+            for media in matches:
+                if str(media.media_type or "") != "movie":
+                    continue
+                results.append(
+                    {
+                        **media.to_payload(),
+                        "result_kind": "movie",
+                    }
+                )
+                if len(results) >= 12:
+                    break
+    except Exception as exc:
+        raise web.HTTPServiceUnavailable(
+            text="Cinema catalog search is temporarily unavailable."
+        ) from exc
+
+    return web.json_response(
+        {
+            "query": query,
+            "results": results,
+            "hint": (
+                "For TV, search an exact episode such as Show S3E7."
+                if parsed is None
+                else ""
+            ),
+        }
+    )
+
+
 async def movie_night_queue_action(request: web.Request) -> web.Response:
     room, uid = await _room_and_user(request)
     if int(uid) != int(room.host_id):
@@ -1598,12 +1707,103 @@ async def movie_night_queue_action(request: web.Request) -> web.Response:
     manager = get_movie_night_manager()
 
     try:
-        if action == "remove":
+        if action == "add":
+            media_type = str(payload.get("media_type") or "").strip().lower()
+            metadata: dict[str, Any]
+            query: str
+            outcome: Any
+
+            if media_type == "movie":
+                tmdb_id = int(payload.get("tmdb_id") or 0)
+                if tmdb_id <= 0:
+                    raise web.HTTPBadRequest(text="Invalid movie identity.")
+                details = await get_cinema_details("movie", tmdb_id)
+                metadata, query, outcome = await search_exact_movie_sources(
+                    int(room.guild_id),
+                    media=details.media,
+                )
+            elif media_type == "episode":
+                series_id = int(payload.get("series_id") or 0)
+                season_number = int(payload.get("season_number") or 0)
+                episode_number = int(payload.get("episode_number") or 0)
+                requested_tmdb_id = int(payload.get("tmdb_id") or 0)
+                if series_id <= 0 or season_number < 0 or episode_number <= 0:
+                    raise web.HTTPBadRequest(text="Invalid TV episode identity.")
+                details = await get_cinema_details("tv", series_id)
+                episodes = await get_cinema_season(series_id, season_number)
+                episode = next(
+                    (
+                        item
+                        for item in episodes
+                        if int(item.episode_number) == episode_number
+                    ),
+                    None,
+                )
+                if episode is None:
+                    raise web.HTTPNotFound(text="That TV episode is not available in the catalog.")
+                if requested_tmdb_id > 0 and int(episode.tmdb_id) != requested_tmdb_id:
+                    raise web.HTTPConflict(
+                        text="The episode identity changed. Search Cinema again."
+                    )
+                metadata, query, outcome = await search_exact_episode_sources(
+                    int(room.guild_id),
+                    series=details.media,
+                    episode=episode,
+                )
+            else:
+                raise web.HTTPBadRequest(
+                    text="Queue Add supports movies or a specific TV episode."
+                )
+
+            if not tuple(outcome.variants or ()):
+                raise web.HTTPConflict(
+                    text="No playable source currently matches this exact Cinema title."
+                )
+
+            latest = manager.get(room.room_id)
+            if (
+                latest is None
+                or latest.ended
+                or int(latest.host_id) != int(uid)
+            ):
+                raise web.HTTPConflict(
+                    text="Cinema changed while that title was being prepared. Try again."
+                )
+
+            manager.join_room(latest.room_id, user_id=int(uid))
+            materialize_search_results(
+                latest,
+                outcome,
+                proposer_id=int(uid),
+                query=query,
+                catalog_metadata=metadata,
+            )
+            candidate = find_catalog_candidate(latest, metadata)
+            if candidate is None:
+                raise web.HTTPConflict(text="Cinema could not attach that title to the queue.")
+            if str(candidate.candidate_id) == str(latest.current_candidate_id or ""):
+                raise web.HTTPConflict(text="That title is already playing.")
+            manager.queue_winner(
+                latest.room_id,
+                candidate_id=candidate.candidate_id,
+            )
+            room = latest
+        elif action == "remove":
             manager.remove_queued(
                 room.room_id,
                 host_id=uid,
                 candidate_id=candidate_id,
             )
+        elif action == "play_next":
+            if candidate_id not in room.queue:
+                raise LookupError("Queued movie not found.")
+            while room.queue and str(room.queue[0]) != candidate_id:
+                manager.move_queued(
+                    room.room_id,
+                    host_id=uid,
+                    candidate_id=candidate_id,
+                    offset=-1,
+                )
         elif action == "move_up":
             manager.move_queued(
                 room.room_id,
@@ -1622,10 +1822,18 @@ async def movie_night_queue_action(request: web.Request) -> web.Response:
             manager.clear_queue(room.room_id, host_id=uid)
         else:
             raise web.HTTPBadRequest(text="Unsupported Cinema queue action.")
+    except web.HTTPException:
+        raise
     except PermissionError as exc:
         raise web.HTTPForbidden(text=str(exc))
     except LookupError as exc:
         raise web.HTTPNotFound(text=str(exc))
+    except Exception as exc:
+        if action == "add":
+            raise web.HTTPServiceUnavailable(
+                text="Cinema could not prepare that queue item right now."
+            ) from exc
+        raise
 
     return web.json_response(await _state_payload(room, uid))
 
@@ -4876,6 +5084,7 @@ def register_movie_night_public_routes(app: web.Application) -> None:
     app.router.add_post("/movie/{room_id}/host", movie_night_transfer_host)
     app.router.add_get("/movie/{room_id}/invite-options", movie_night_invite_options)
     app.router.add_post("/movie/{room_id}/promote", movie_night_promote_watch_party)
+    app.router.add_get("/movie/{room_id}/queue-search", movie_night_queue_search)
     app.router.add_post("/movie/{room_id}/queue", movie_night_queue_action)
     app.router.add_get("/movie/{room_id}/progress", movie_night_progress)
     app.router.add_post("/movie/{room_id}/progress", movie_night_progress)
@@ -4895,6 +5104,7 @@ __all__ = [
     "movie_night_progress",
     "movie_night_promote_watch_party",
     "movie_night_queue_action",
+    "movie_night_queue_search",
     "movie_night_source_action",
     "movie_night_sources",
     "movie_night_transfer_host",
