@@ -378,6 +378,8 @@ def test_movie_night_state_exposes_private_room_mode(monkeypatch) -> None:
 
     assert payload["mode"] == "private"
     assert payload["private"] is True
+    assert payload["title"] == "Private Session"
+    assert payload["movie"]["title"] == "Private Session"
     assert payload["viewer_count"] == 1
     html = movie_night_web._watch_html(
         room.room_id,
@@ -972,3 +974,43 @@ def test_dank_cinema_discord_integration_is_visible_on_theater_page() -> None:
     assert 'id="discordLiveText"' in html
     assert 'document.getElementById("discordLive").onclick=openDiscordRoom' in html
     assert '"Discord • "+guild+" • #"+channel' in html
+
+
+
+def test_watch_page_initial_placeholders_do_not_assume_watch_party_mode() -> None:
+    html = movie_night_web._watch_html(
+        "room-neutral-first-paint",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert 'id="roomMode">Cinema Session</span>' in html
+    assert 'id="title">Cinema</h2>' in html
+    assert 'id="sessionMode">Connecting…</span>' in html
+    assert 'id="roomMode">Movie Night</span>' not in html
+
+
+def test_public_room_fallback_title_is_watch_party(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        mode="watch_party",
+    )
+
+    class _TorrentManager:
+        async def get(self, token: str):
+            _ = token
+            return None
+
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(movie_night_web, "get_torrent_manager", lambda: _TorrentManager())
+
+    payload = asyncio.run(movie_night_web._state_payload(room, 10))
+
+    assert payload["private"] is False
+    assert payload["mode"] == "watch_party"
+    assert payload["title"] == "Watch Party"
+    assert payload["movie"]["title"] == "Watch Party"
