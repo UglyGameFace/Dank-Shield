@@ -21,6 +21,7 @@ from .cinema_catalog import (
     CinemaMedia,
     catalog_home,
     get_details,
+    get_next_episode,
     get_season,
     recommendations_for_history,
     search_catalog,
@@ -52,6 +53,15 @@ from .media_source_resolver import (
     preview_custom_media_source,
     search_custom_media_sources,
     search_movie_sources,
+)
+from .cinema_media_identity import (
+    catalog_metadata,
+    filter_outcome_for_catalog,
+)
+from .cinema_playback_service import (
+    materialize_search_results,
+    search_exact_episode_sources,
+    start_room_variant,
 )
 from .movie_night import get_movie_night_manager
 from .movie_night_web import movie_night_watch_url
@@ -248,6 +258,10 @@ def _active_rooms_payload(guild_id: int, user_id: int) -> list[dict[str, Any]]:
                     or metadata.get("catalog_id")
                     or 0
                 ),
+                "series_id": int(metadata.get("series_id") or 0),
+                "series_title": str(metadata.get("series_title") or "")[:180],
+                "season_number": int(metadata.get("season_number") or 0),
+                "episode_number": int(metadata.get("episode_number") or 0),
                 "poster_url": str(metadata.get("poster_url") or ""),
                 "backdrop_url": str(metadata.get("backdrop_url") or ""),
                 "watch_url": movie_night_watch_url(room.room_id, int(user_id)),
@@ -689,27 +703,32 @@ async def cinema_details_api(request: web.Request) -> web.Response:
     details, rows = await asyncio.gather(details_task, library_task)
 
     source_rows: list[dict[str, Any]] = []
-    try:
-        source_outcome = await search_movie_sources(
-            int(_guild_id),
-            str(details.media.title),
-        )
-        for variant in source_outcome.variants[:8]:
-            health = variant.swarm_health
-            source_rows.append(
-                {
-                    "source_id": str(variant.source_id or ""),
-                    "source_label": str(variant.source_label or "Cinema source"),
-                    "title": str(variant.title or "")[:180],
-                    "file_size": int(variant.file_size or 0),
-                    "seeds": int(health.get("seeds") or 0),
-                    "leechers": int(health.get("leechers") or 0),
-                    "health": str(health.get("label") or ""),
-                    "playable": True,
-                }
+    if media_type == "movie":
+        try:
+            source_outcome = await search_movie_sources(
+                int(_guild_id),
+                str(details.media.title),
             )
-    except Exception:
-        source_rows = []
+            source_outcome = filter_outcome_for_catalog(
+                source_outcome,
+                catalog_metadata(details.media),
+            )
+            for variant in source_outcome.variants[:8]:
+                health = variant.swarm_health
+                source_rows.append(
+                    {
+                        "source_id": str(variant.source_id or ""),
+                        "source_label": str(variant.source_label or "Cinema source"),
+                        "title": str(variant.title or "")[:180],
+                        "file_size": int(variant.file_size or 0),
+                        "seeds": int(health.get("seeds") or 0),
+                        "leechers": int(health.get("leechers") or 0),
+                        "health": str(health.get("label") or ""),
+                        "playable": True,
+                    }
+                )
+        except Exception:
+            source_rows = []
 
     matching = [
         _media_payload(row)
@@ -735,22 +754,81 @@ async def cinema_details_api(request: web.Request) -> web.Response:
         == tmdb_id
     ]
     active_sessions = _active_rooms_payload(_guild_id, user_id)
-    active_session = next(
-        (
-            room
-            for room in active_sessions
-            if str(room.get("media_type") or "") == media_type
-            and int(room.get("tmdb_id") or 0) == tmdb_id
-        ),
+    if media_type == "movie":
+        active_session = next(
+            (
+                room
+                for room in active_sessions
+                if str(room.get("media_type") or "") == "movie"
+                and int(room.get("tmdb_id") or 0) == tmdb_id
+            ),
+            None,
+        )
+    else:
+        active_session = next(
+            (
+                room
+                for room in active_sessions
+                if str(room.get("media_type") or "") == "episode"
+                and int(room.get("series_id") or 0) == tmdb_id
+            ),
+            None,
+        )
+    host_session = next(
+        (room for room in active_sessions if bool(room.get("is_host"))),
         None,
     )
+
+    continue_episode: Optional[dict[str, Any]] = None
+    if media_type == "tv" and episode_progress:
+        latest = dict(episode_progress[0])
+        if not bool(latest.get("completed")):
+            latest_meta = (
+                latest.get("metadata")
+                if isinstance(latest.get("metadata"), Mapping)
+                else {}
+            )
+            continue_episode = {
+                "media_type": "episode",
+                "series_id": tmdb_id,
+                "series_title": details.media.title,
+                "season_number": int(latest.get("season_number") or 0),
+                "episode_number": int(latest.get("episode_number") or 0),
+                "tmdb_id": int(latest.get("tmdb_id") or 0),
+                "title": str(
+                    latest_meta.get("episode_title")
+                    or latest.get("title")
+                    or "Episode"
+                )[:180],
+                "progress_seconds": float(latest.get("progress_seconds") or 0.0),
+                "completed": False,
+            }
+        else:
+            try:
+                next_episode = await get_next_episode(
+                    tmdb_id,
+                    int(latest.get("season_number") or 0),
+                    int(latest.get("episode_number") or 0),
+                )
+            except Exception:
+                next_episode = None
+            if next_episode is not None:
+                continue_episode = {
+                    **next_episode.to_payload(),
+                    "series_title": details.media.title,
+                    "completed": False,
+                    "progress_seconds": 0.0,
+                }
+
     return web.json_response(
         {
             "details": details.to_payload(),
             "library": matching[0] if matching else None,
             "episode_progress": episode_progress,
+            "continue_episode": continue_episode,
             "sources": source_rows,
             "active_session": active_session,
+            "host_session": host_session,
             "discord": _safe_discord_context(_guild_id, user_id),
         }
     )
@@ -792,6 +870,189 @@ async def cinema_season_api(request: web.Request) -> web.Response:
         )
         output.append(payload)
     return web.json_response({"episodes": output})
+
+
+async def cinema_play_api(request: web.Request) -> web.Response:
+    guild_id, user_id = _site_identity(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, Mapping):
+        payload = {}
+
+    room_id = str(payload.get("room_id") or "").strip()
+    media_type = str(payload.get("media_type") or "").strip().lower()
+    manager = get_movie_night_manager()
+    room = manager.get(room_id)
+    if (
+        not room_id
+        or room is None
+        or room.ended
+        or int(room.guild_id) != int(guild_id)
+        or int(room.host_id) != int(user_id)
+        or not manager.user_can_access(room, int(user_id))
+    ):
+        raise web.HTTPForbidden(
+            text="A current Cinema room that you host is required to start playback from the website."
+        )
+
+    baseline = (
+        str(room.stream_token or ""),
+        str(room.current_candidate_id or ""),
+        str(room.current_variant_id or ""),
+    )
+
+    if media_type == "movie":
+        try:
+            tmdb_id = int(payload.get("tmdb_id") or 0)
+        except Exception:
+            tmdb_id = 0
+        if tmdb_id <= 0:
+            raise web.HTTPBadRequest(text="Invalid movie identity.")
+        try:
+            details = await get_details("movie", tmdb_id)
+            metadata = catalog_metadata(details.media)
+            query = details.media.title
+            outcome = await search_movie_sources(int(guild_id), query)
+            outcome = filter_outcome_for_catalog(outcome, metadata)
+        except Exception as exc:
+            raise web.HTTPServiceUnavailable(
+                text="Cinema source search is temporarily unavailable."
+            ) from exc
+    elif media_type == "episode":
+        try:
+            series_id = int(payload.get("series_id") or 0)
+            season_number = int(payload.get("season_number") or 0)
+            episode_number = int(payload.get("episode_number") or 0)
+        except Exception:
+            series_id = season_number = episode_number = 0
+        if series_id <= 0 or season_number < 0 or episode_number <= 0:
+            raise web.HTTPBadRequest(text="Invalid TV episode identity.")
+        try:
+            details = await get_details("tv", series_id)
+            episodes = await get_season(series_id, season_number)
+            episode = next(
+                (
+                    item
+                    for item in episodes
+                    if int(item.episode_number) == episode_number
+                ),
+                None,
+            )
+            if episode is None:
+                raise web.HTTPNotFound(text="That TV episode is not available in the catalog.")
+            requested_tmdb_id = int(payload.get("tmdb_id") or 0)
+            if requested_tmdb_id > 0 and int(episode.tmdb_id) != requested_tmdb_id:
+                raise web.HTTPConflict(text="The episode identity changed. Refresh Cinema and try again.")
+            metadata, query, outcome = await search_exact_episode_sources(
+                int(guild_id),
+                series=details.media,
+                episode=episode,
+            )
+        except web.HTTPException:
+            raise
+        except Exception as exc:
+            raise web.HTTPServiceUnavailable(
+                text="Cinema episode source search is temporarily unavailable."
+            ) from exc
+    else:
+        raise web.HTTPBadRequest(text="Cinema can start a movie or a specific TV episode.")
+
+    variants = tuple(outcome.variants or ())
+    if not variants:
+        raise web.HTTPConflict(
+            text="No playable source currently matches this exact Cinema title."
+        )
+
+    latest = manager.get(room_id)
+    if (
+        latest is None
+        or latest.ended
+        or int(latest.host_id) != int(user_id)
+        or (
+            str(latest.stream_token or ""),
+            str(latest.current_candidate_id or ""),
+            str(latest.current_variant_id or ""),
+        )
+        != baseline
+    ):
+        raise web.HTTPConflict(
+            text="Cinema changed while sources were loading. Retry from the current session."
+        )
+
+    manager.join_room(room_id, user_id=int(user_id))
+    materialize_search_results(
+        latest,
+        outcome,
+        proposer_id=int(user_id),
+        query=query,
+        catalog_metadata=metadata,
+    )
+    candidate = manager.find_candidate_by_title(
+        room_id,
+        str(metadata.get("title") or ""),
+    )
+    if candidate is None:
+        raise web.HTTPConflict(text="Cinema could not attach that title to the current room.")
+
+    allowed_refs = {str(item.source_ref or "") for item in variants}
+    ranked = [
+        item
+        for item in manager.ranked_variants(room_id, candidate.candidate_id)
+        if str(item.source_ref or "") in allowed_refs
+    ]
+    if not ranked:
+        raise web.HTTPConflict(text="No playable release remains for this title.")
+
+    try:
+        profile = await get_cinema_user(user_id)
+    except CinemaStorageUnavailable:
+        profile = {"preferences": {}}
+    preferences = (
+        profile.get("preferences")
+        if isinstance(profile.get("preferences"), Mapping)
+        else {}
+    )
+    preferred = str(preferences.get("preferred_source") or "").strip().casefold()
+    selected = ranked[0]
+    if preferred:
+        preferred_variant = next(
+            (
+                item
+                for item in ranked
+                if preferred == str(item.source_id or "").casefold()
+                or preferred in str(item.source_label or "").casefold()
+            ),
+            None,
+        )
+        if preferred_variant is not None:
+            selected = preferred_variant
+
+    try:
+        playback = await start_room_variant(
+            room_id,
+            actor_id=int(user_id),
+            candidate_id=candidate.candidate_id,
+            variant_id=selected.variant_id,
+        )
+    except Exception as exc:
+        raise web.HTTPBadGateway(
+            text="The selected Cinema source could not be started."
+        ) from exc
+
+    return web.json_response(
+        {
+            "ok": True,
+            "room_id": playback.room.room_id,
+            "watch_url": movie_night_watch_url(playback.room.room_id, int(user_id)),
+            "media": metadata,
+            "source": {
+                "source_id": str(selected.source_id or ""),
+                "source_label": str(selected.source_label or "Cinema source"),
+            },
+        }
+    )
 
 
 async def cinema_library_api(request: web.Request) -> web.Response:
@@ -1023,6 +1284,7 @@ def register_cinema_site_routes(app: web.Application) -> None:
         "/cinema/{guild_id}/api/season/{series_id}/{season_number}",
         cinema_season_api,
     )
+    app.router.add_post("/cinema/{guild_id}/api/play", cinema_play_api)
     app.router.add_get("/cinema/{guild_id}/api/library", cinema_library_api)
     app.router.add_post("/cinema/{guild_id}/api/library", cinema_library_api)
     app.router.add_get("/cinema/{guild_id}/api/profile", cinema_profile_api)
@@ -1044,6 +1306,7 @@ __all__ = [
     "cinema_home_api",
     "cinema_library_api",
     "cinema_notifications_api",
+    "cinema_play_api",
     "cinema_profile_api",
     "cinema_search_api",
     "cinema_season_api",
