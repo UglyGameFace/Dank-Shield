@@ -67,6 +67,12 @@ Rebuild the signed Dank Cinema Watch page to match the owner-approved premium da
    - native Remote Playback/AirPlay are only used as fallbacks after the browser reports a real available target;
    - Cast is hidden unless at least one real casting transport is available and the selected media container is directly castable.
 
+7. **TMDB metadata existed but the Watch page was reading the wrong shape.**
+   - canonical Movie Night candidates store TMDB identity under `candidate.metadata["catalog"]`;
+   - the Watch serializer was incorrectly reading `year`, `overview`, and `poster_url` only from the candidate metadata root;
+   - this is why a correctly TMDB-matched title could still show a blank poster/description on the website;
+   - the serializer now reads the canonical catalog envelope first and keeps the strict TMDB image-host allowlist.
+
 ## Execution path
 
 `signed Watch URL -> _room_and_user -> _state_payload -> custom Dank Cinema theater UI -> heartbeat/state/action -> canonical MovieNightManager + TorrentMediaManager`.
@@ -97,6 +103,7 @@ Casting:
 - Host sheet keeps only working Discord Controls, Fullscreen, Pause for Everyone, and End Session actions.
 - Chromecast support now uses Google's Web Sender SDK and Default Media Receiver; availability-gated native Remote Playback/AirPlay remain truthful fallbacks where supported.
 - Signed torrent stream responses now expose narrowly scoped gstatic CORS for Cast receiver fetches; the HMAC URL remains required.
+- Watch metadata now reads the canonical nested TMDB catalog payload, so matched movies render their real TMDB title/year/overview/poster instead of appearing metadata-empty.
 
 ## Validation / results so far
 
@@ -130,6 +137,8 @@ PR #431 exact-head CI ultimately passed all five workflow families and the PR me
 - full standalone Browse/Home/My Stuff website surfaces backed by persistent web identity/session data are outside this focused Watch-page redesign;
 - first-class web Pass Host and queue editing would require explicit authority/API design instead of dead duplicate controls;
 - **RSS Feed surfacing follow-up:** add a clean first-class RSS area in both Discord Cinema and the website using the existing Movie Sources/feed model. Feeds must be organized by source/category/status rather than dumped into one flat RSS list, with per-feed management and clear distinction from Search Providers and Reference Links.
+- **TV Shows / Continue Watching follow-up:** build a first-class TV experience backed by TMDB TV identity, seasons, episode metadata/artwork, and persistent per-user progress. Required product behavior: separate Movies / TV navigation; exact series matching; season grouping; ordered episode lists; episode title/number/runtime/air date/overview/still artwork; Resume / Continue Watching across sessions; per-episode watched/progress state; automatic next-episode suggestion and optional autoplay/countdown; skip-intro/recap support only when real timing metadata exists; season completion/progress; Recently Watched / Up Next; favorites/watchlist; provider/source matching at episode/season level; avoid merging similarly named shows; preserve server/private-room permissions and the canonical Cinema playback engine instead of creating a second TV player.
+- **Cinema viewer-value follow-up:** after TV foundations, evaluate subtitles/audio-track selection, playback-speed controls, quality/source preference, episode/movie history, watchlist/favorites, recently watched, resume cards, next-up queue, parental/adult-content filtering consistency, source-health preference, and optional notifications for queued/starting sessions. Add only features backed by real data/actions; no decorative dead controls.
 
 ## Next step
 
