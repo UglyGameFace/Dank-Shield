@@ -37,6 +37,10 @@ from .cinema_library_service import (
     update_cinema_preferences,
 )
 from .cinema_site_auth import cinema_site_url, validate_cinema_site_access
+from .cinema_discovery_service import (
+    list_recent_discoveries,
+    search_discoveries,
+)
 from .cinema_feed_service import (
     CinemaFeedConflict,
     feed_state as cinema_feed_state,
@@ -177,6 +181,36 @@ def _media_payload(row: Mapping[str, Any]) -> dict[str, Any]:
     else:
         payload["progress_ratio"] = 0.0
     return payload
+
+
+def _discovery_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = (
+        dict(row.get("metadata") or {})
+        if isinstance(row.get("metadata"), Mapping)
+        else {}
+    )
+    media_type = str(row.get("media_type") or "").strip().lower()
+    try:
+        tmdb_id = int(row.get("tmdb_id") or 0)
+    except Exception:
+        tmdb_id = 0
+    return {
+        "result_kind": "feed_discovery",
+        "title": str(row.get("title") or "")[:180],
+        "media_type": media_type,
+        "tmdb_id": tmdb_id,
+        "poster_url": str(metadata.get("poster_url") or ""),
+        "backdrop_url": str(metadata.get("backdrop_url") or ""),
+        "overview": str(metadata.get("overview") or "")[:900],
+        "year": int(metadata.get("year") or 0),
+        "rating": float(metadata.get("rating") or 0.0),
+        "source_id": str(row.get("source_id") or ""),
+        "source_label": str(metadata.get("source_label") or ""),
+        "category": str(metadata.get("category") or "custom"),
+        "playable": bool(row.get("playable", True)),
+        "first_seen_at": str(row.get("first_seen_at") or ""),
+        "metadata": metadata,
+    }
 
 
 def _active_rooms_payload(guild_id: int, user_id: int) -> list[dict[str, Any]]:
@@ -374,14 +408,18 @@ async def cinema_home_api(request: web.Request) -> web.Response:
         profile_task = asyncio.create_task(get_cinema_user(user_id))
         catalog_task = asyncio.create_task(catalog_home())
         feeds_task = asyncio.create_task(_feed_discovery(guild_id))
+        recent_added_task = asyncio.create_task(
+            list_recent_discoveries(guild_id, limit=30)
+        )
         notifications_task = asyncio.create_task(
             list_notifications(user_id, unread_only=True, limit=20)
         )
-        library, profile, catalog, feeds, notifications = await asyncio.gather(
+        library, profile, catalog, feeds, recent_added, notifications = await asyncio.gather(
             library_task,
             profile_task,
             catalog_task,
             feeds_task,
+            recent_added_task,
             notifications_task,
         )
     except CinemaStorageUnavailable as exc:
@@ -426,6 +464,11 @@ async def cinema_home_api(request: web.Request) -> web.Response:
         "popular_tv",
         "Popular TV",
         [item.to_payload() for item in catalog.get("popular_tv", ())],
+    )
+    add(
+        "recently_added",
+        "Recently Added",
+        [_discovery_payload(row) for row in recent_added],
     )
     add(
         "watchlist",
@@ -484,10 +527,14 @@ async def cinema_search_api(request: web.Request) -> web.Response:
     catalog_task = asyncio.create_task(search_catalog(query, limit=30))
     media_task = asyncio.create_task(list_user_media(user_id))
     source_task = asyncio.create_task(search_custom_media_sources(guild_id, query))
-    catalog_rows, user_rows, source_result = await asyncio.gather(
+    discovery_task = asyncio.create_task(
+        search_discoveries(guild_id, query, limit=20)
+    )
+    catalog_rows, user_rows, source_result, discovery_rows = await asyncio.gather(
         catalog_task,
         media_task,
         source_task,
+        discovery_task,
         return_exceptions=True,
     )
 
@@ -536,6 +583,19 @@ async def cinema_search_api(request: web.Request) -> web.Response:
                     "metadata": dict(variant.metadata or {}),
                 }
             )
+
+    if not isinstance(discovery_rows, Exception):
+        for row in discovery_rows:
+            payload = _discovery_payload(row)
+            key = (
+                f"{payload.get('media_type')}:{payload.get('tmdb_id')}"
+                if payload.get("tmdb_id")
+                else f"feed:{payload.get('source_id')}:{str(payload.get('title') or '').casefold()}"
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(payload)
 
     return web.json_response({"query": query, "results": results[:60]})
 
