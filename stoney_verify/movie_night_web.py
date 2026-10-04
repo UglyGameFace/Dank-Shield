@@ -2026,6 +2026,14 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
   .movie-title {{ font-size:clamp(2.3rem,4vw,4.1rem); }}
   .synopsis {{ max-width:78ch; }}
   .quick-tabs {{ max-width:760px; }}
+  .host-sheet {{
+    left:auto;right:24px;bottom:24px;transform:none;
+    width:390px;max-height:min(76vh,620px);
+    border:1px solid rgba(197,255,175,.17);border-radius:22px;
+    padding:11px 14px 14px;
+  }}
+  .host-actions {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
+  .host-action {{ min-height:108px; }}
 }}
 @media (min-width:1500px) {{
   .theater-grid {{ grid-template-columns:minmax(0,1fr) 390px; }}
@@ -2447,8 +2455,8 @@ let streamRetryTimer=null;
 let streamRetryAttempt=0;
 let stateFetchFailures=0;
 let attachedStreamUrl="";
-let hostSheetDismissed=false;
-let previousHostState=false;
+let hostSheetDismissed=true;
+let previousHostState=null;
 let controlsHideTimer=null;
 let tapSkipFeedbackTimer=null;
 let lastStageTapAt=0;
@@ -2877,7 +2885,7 @@ function applyModeSurface(s) {{
   inviteWatchParty.hidden=!(s.is_host && privateMode);
   if(!privateMode) document.getElementById("inviteModal").hidden=true;
 
-  if(s.is_host && !previousHostState)
+  if(s.is_host && previousHostState===false)
     hostSheetDismissed=false;
 
   if(s.is_host) {{
