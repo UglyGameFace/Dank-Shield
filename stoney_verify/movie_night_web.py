@@ -1343,7 +1343,7 @@ async function applyState(s) {{
     if(s.media_missing) {{
       notice.textContent=s.private
         ?"The attached media session expired or was reclaimed. Your Private Session is still active; return to Discord and choose the release again."
-        :"The attached media session expired or was reclaimed. The Movie Night is still active; return to Discord and choose the release again.";
+        :"The attached media session expired or was reclaimed. The Movie Night room is still active; return to Discord and choose the release again.";
     }} else {{
       notice.textContent="Waiting for the host to choose media.";
     }}
