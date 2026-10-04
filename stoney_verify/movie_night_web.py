@@ -40,6 +40,7 @@ def _public_base() -> str:
 _BRAND_ASSET_PATH = (
     Path(__file__).with_name("assets") / "dank_cinema_brand_500.webp.b64"
 )
+_BRAND_ASSET_VERSION = "transparent-v2"
 
 
 @lru_cache(maxsize=1)
@@ -1678,7 +1679,7 @@ video {{
     <div class="brand">
       <img
         class="brand-banner"
-        src="/movie/assets/dank-cinema-brand.webp"
+        src="/movie/assets/dank-cinema-brand.webp?v={_BRAND_ASSET_VERSION}"
         alt="Dank Cinema — A feature of The 420 Lobby"
         width="500"
         height="116"
