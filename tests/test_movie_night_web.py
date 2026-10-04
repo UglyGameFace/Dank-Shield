@@ -387,9 +387,12 @@ def test_movie_night_state_exposes_private_room_mode(monkeypatch) -> None:
     assert "Dank Cinema Private Session" in html
     assert "Hosted by You" in html
     assert "End this Private Session and release its media?" in html
-    assert 's.private?"Private Room":"Movie Night"' in html
+    assert 'privateMode?"Private Room":"Watch Party"' in html
     assert 's.is_host?"Hosted by You"' in html
-    assert 's.private?"End Private Session":"End Movie Night"' in html
+    assert 'privateMode?"End Private Session":"End Movie Night"' in html
+    assert 'privateMode?"Private Session":"Watch Party"' in html
+    assert 'pauseLabel.textContent=Number(s.viewer_count||0)>1?"Pause Private Room":"Pause"' in html
+    assert 'pauseLabel.textContent="Pause for Everyone"' in html
 
 
 def test_watch_state_flips_host_authority_without_new_room(monkeypatch) -> None:
@@ -453,8 +456,10 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
     assert "lastState.cast_stream_url" in html
     assert "CAST_STATE_CHANGED" in html
     assert "NO_DEVICES_AVAILABLE" in html
-    assert "video.remote.watchAvailability" not in html
-    assert "remotePlaybackAvailable" not in html
+    assert "video.remote.watchAvailability" in html
+    assert "remotePlaybackAvailable" in html
+    assert 'castButton.classList.toggle("unavailable"' in html
+    assert "No compatible casting device is currently available in this browser." in html
     assert 'controlslist="nodownload"' in html
     assert '<video id="video" controls' not in html
     assert '<video id="video" playsinline preload="metadata" controls>' not in html
@@ -622,7 +627,7 @@ def test_dank_cinema_player_uses_real_tmdb_backdrop_and_landscape_fullscreen() -
     assert "document.fullscreenElement" in html
 
 
-def test_dank_cinema_cast_button_requires_real_google_cast_device_state() -> None:
+def test_dank_cinema_cast_button_is_truthful_and_device_backed() -> None:
     html = movie_night_web._watch_html(
         "room-real-cast",
         456,
@@ -633,8 +638,12 @@ def test_dank_cinema_cast_button_requires_real_google_cast_device_state() -> Non
     assert "CastContextEventType.CAST_STATE_CHANGED" in html
     assert "CastState.NO_DEVICES_AVAILABLE" in html
     assert "typeof castContext.requestSession" in html
-    assert "setCastVisible(false)" in html
-    assert "video.remote.prompt" not in html
+    assert "video.remote.watchAvailability" in html
+    assert "video.remote.prompt" in html
+    assert "remotePlaybackAvailable" in html
+    assert 'castButton.classList.toggle("unavailable"' in html
+    assert 'castButton.setAttribute("aria-label",status.available?"Cast":"Cast unavailable")' in html
+    assert "No compatible casting device is currently available in this browser." in html
     assert "webkitShowPlaybackTargetPicker" not in html
 
 
@@ -849,3 +858,111 @@ def test_dank_cinema_queue_ui_has_real_host_management_actions() -> None:
     assert '"move_down"' in html
     assert '"remove"' in html
     assert 'queueAction("clear")' in html
+
+
+
+def test_dank_cinema_host_controls_can_be_reopened_after_close() -> None:
+    html = movie_night_web._watch_html(
+        "room-host-reopen",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert 'id="hostLauncher"' in html
+    assert "function openHostControls()" in html
+    assert "function closeHostControls()" in html
+    assert "hostLauncher.hidden=!hostSheetDismissed" in html
+    assert 'contextAction.dataset.panel="host"' in html
+    assert 'else if(tab.dataset.panel==="host")' in html
+
+
+def test_dank_cinema_mobile_layout_wraps_controls_instead_of_overflowing() -> None:
+    html = movie_night_web._watch_html(
+        "room-responsive",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert ".shell { width:min(1120px,100%); margin:0 auto; padding:0 18px 150px; overflow-x:hidden; }" in html
+    assert ".tab {" in html
+    assert "white-space:normal;overflow-wrap:anywhere" in html
+    assert ".host-actions { grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible; }" in html
+    assert ".quick-tabs { grid-template-columns:repeat(2,minmax(0,1fr)); }" in html
+    assert ".queue-item.manageable .queue-actions { grid-column:1 / -1;justify-content:flex-end; }" in html
+
+
+def test_dank_cinema_brand_blends_into_theater_header() -> None:
+    html = movie_night_web._watch_html(
+        "room-brand-flush",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert "mix-blend-mode:screen" in html
+    assert "linear-gradient(180deg,#020706 0%,#06110e 72%,transparent 100%)" in html
+    assert 'src="/movie/assets/dank-cinema-brand.webp"' in html
+
+
+def test_dank_cinema_center_play_uses_canonical_host_action() -> None:
+    html = movie_night_web._watch_html(
+        "room-center-play",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert "async function togglePlayerPlayback()" in html
+    assert 'await hostAction(shouldResume?"resume":"pause")' in html
+    assert 'document.getElementById("centerPlay").onclick=togglePlayerPlayback' in html
+    assert 'document.getElementById("playerToggle").onclick=togglePlayerPlayback' in html
+
+
+def test_discord_room_context_exposes_cached_guild_channel_and_identity(monkeypatch) -> None:
+    from stoney_verify import globals as globals_module
+
+    class Avatar:
+        url = "https://cdn.discordapp.com/avatars/10/example.webp"
+
+    member = SimpleNamespace(
+        id=10,
+        display_name="Cinema Host",
+        display_avatar=Avatar(),
+    )
+    channel = SimpleNamespace(id=456, name="movie-night")
+    guild = SimpleNamespace(
+        id=123,
+        name="The 420 Lobby",
+        get_member=lambda uid: member if int(uid) == 10 else None,
+        get_channel=lambda cid: channel if int(cid) == 456 else None,
+    )
+    fake_bot = SimpleNamespace(
+        get_guild=lambda gid: guild if int(gid) == 123 else None,
+        get_user=lambda uid: None,
+    )
+    monkeypatch.setattr(globals_module, "bot", fake_bot)
+
+    room = SimpleNamespace(guild_id=123, channel_id=456)
+    context = movie_night_web._discord_room_context(room, 10)
+
+    assert context == {
+        "connected": True,
+        "guild_name": "The 420 Lobby",
+        "channel_name": "movie-night",
+        "user_id": 10,
+        "user_name": "Cinema Host",
+        "avatar_url": "https://cdn.discordapp.com/avatars/10/example.webp",
+    }
+
+
+def test_dank_cinema_discord_integration_is_visible_on_theater_page() -> None:
+    html = movie_night_web._watch_html(
+        "room-discord-context",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert 'id="discordContext"' in html
+    assert 'id="discordIdentityTitle"' in html
+    assert 'id="discordIdentitySub"' in html
+    assert "Discord linked as " in html
+    assert 'guild+" • #"+channel' in html
+    assert "renderDiscordContext(s)" in html
