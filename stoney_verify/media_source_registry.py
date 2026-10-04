@@ -15,13 +15,25 @@ from typing import Any, Mapping, Optional
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit, urlunsplit
 
 MEDIA_SOURCE_REGISTRY_KEY = "movie_night_media_sources_v1"
-MEDIA_SOURCE_REGISTRY_VERSION = 2
+MEDIA_SOURCE_REGISTRY_VERSION = 3
 MAX_CUSTOM_MEDIA_SOURCES = 20
 
 PROVIDER_TYPE_JSON = "json"
 PROVIDER_TYPE_FEED = "feed"
 PROVIDER_TYPE_EXTERNAL = "external"
 _PROVIDER_TYPES = {PROVIDER_TYPE_JSON, PROVIDER_TYPE_FEED, PROVIDER_TYPE_EXTERNAL}
+MEDIA_CATEGORY_MOVIES = "movies"
+MEDIA_CATEGORY_TV = "tv"
+MEDIA_CATEGORY_ANIME = "anime"
+MEDIA_CATEGORY_DOCUMENTARIES = "documentaries"
+MEDIA_CATEGORY_CUSTOM = "custom"
+_MEDIA_CATEGORIES = {
+    MEDIA_CATEGORY_MOVIES,
+    MEDIA_CATEGORY_TV,
+    MEDIA_CATEGORY_ANIME,
+    MEDIA_CATEGORY_DOCUMENTARIES,
+    MEDIA_CATEGORY_CUSTOM,
+}
 _DISCORD_LINK_BUTTON_URL_LIMIT = 512
 _SOURCE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 
@@ -33,6 +45,7 @@ class CustomMediaSource:
     endpoint_url: str
     provider_type: str = PROVIDER_TYPE_JSON
     enabled: bool = True
+    category: str = MEDIA_CATEGORY_CUSTOM
     added_by: int = 0
     created_at: str = ""
 
@@ -43,6 +56,7 @@ class CustomMediaSource:
             "endpoint_url": self.endpoint_url,
             "provider_type": self.provider_type,
             "enabled": bool(self.enabled),
+            "category": self.category,
             "added_by": int(self.added_by),
             "created_at": self.created_at,
         }
@@ -78,6 +92,11 @@ def _safe_label(value: Any) -> str:
 def _safe_provider_type(value: Any) -> str:
     clean = str(value or PROVIDER_TYPE_JSON).strip().casefold()
     return clean if clean in _PROVIDER_TYPES else PROVIDER_TYPE_JSON
+
+
+def _safe_category(value: Any) -> str:
+    clean = str(value or MEDIA_CATEGORY_CUSTOM).strip().casefold()
+    return clean if clean in _MEDIA_CATEGORIES else MEDIA_CATEGORY_CUSTOM
 
 
 def _safe_int(value: Any) -> int:
@@ -282,6 +301,7 @@ def _source_from_raw(raw: Any) -> Optional[CustomMediaSource]:
         endpoint_url=endpoint,
         provider_type=_safe_provider_type(raw.get("provider_type")),
         enabled=bool(raw.get("enabled", True)),
+        category=_safe_category(raw.get("category")),
         added_by=_safe_int(raw.get("added_by")),
         created_at=str(raw.get("created_at") or "")[:64],
     )
@@ -343,10 +363,12 @@ def add_custom_source(
     endpoint_url: str,
     added_by: int,
     provider_type: str = PROVIDER_TYPE_JSON,
+    category: str = MEDIA_CATEGORY_CUSTOM,
 ) -> MediaSourceRegistry:
     clean_label = _safe_label(label)
     clean_url = _normalize_endpoint_url(endpoint_url)
     clean_type = _safe_provider_type(provider_type)
+    clean_category = _safe_category(category)
     clean_id = _safe_id(source_id)
     if not clean_label:
         raise ValueError("Custom media source name is required.")
@@ -377,12 +399,36 @@ def add_custom_source(
         endpoint_url=clean_url,
         provider_type=clean_type,
         enabled=True if previous is None else bool(previous.enabled),
+        category=clean_category if previous is None else _safe_category(previous.category or clean_category),
         added_by=_safe_int(added_by),
         created_at=created_at,
     )
     return MediaSourceRegistry(
         revision=int(registry.revision) + 1,
         sources=tuple(existing.values()),
+    )
+
+
+def set_custom_source_category(
+    registry: MediaSourceRegistry,
+    source_id: str,
+    category: str,
+) -> MediaSourceRegistry:
+    clean_id = _safe_id(source_id)
+    clean_category = _safe_category(category)
+    found = False
+    updated: list[CustomMediaSource] = []
+    for source in registry.sources:
+        if source.source_id == clean_id:
+            updated.append(replace(source, category=clean_category))
+            found = True
+        else:
+            updated.append(source)
+    if not found:
+        raise LookupError("Custom media source not found.")
+    return MediaSourceRegistry(
+        revision=int(registry.revision) + 1,
+        sources=tuple(updated),
     )
 
 
@@ -483,6 +529,11 @@ __all__ = [
     "PROVIDER_TYPE_JSON",
     "CustomMediaSource",
     "MEDIA_SOURCE_REGISTRY_KEY",
+    "MEDIA_CATEGORY_MOVIES",
+    "MEDIA_CATEGORY_TV",
+    "MEDIA_CATEGORY_ANIME",
+    "MEDIA_CATEGORY_DOCUMENTARIES",
+    "MEDIA_CATEGORY_CUSTOM",
     "MAX_CUSTOM_MEDIA_SOURCES",
     "MediaSourceRegistry",
     "add_custom_source",
@@ -493,5 +544,6 @@ __all__ = [
     "prepare_feed_url",
     "remove_custom_source",
     "save_media_source_registry",
+    "set_custom_source_category",
     "set_custom_source_enabled",
 ]
