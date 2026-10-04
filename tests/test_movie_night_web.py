@@ -635,3 +635,17 @@ def test_dank_cinema_cast_button_requires_real_google_cast_device_state() -> Non
     assert "setCastVisible(false)" in html
     assert "video.remote.prompt" not in html
     assert "webkitShowPlaybackTargetPicker" not in html
+
+
+
+def test_dank_cinema_polling_does_not_show_broken_sync_on_one_transient_fetch() -> None:
+    html = movie_night_web._watch_html(
+        "room-transient-fetch",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert "stateFetchFailures+=1" in html
+    assert "stateFetchFailures>=3" in html
+    assert "Sync connection lost. Reconnecting…" in html
+    assert 'notice.textContent="Sync error: "+message' not in html
