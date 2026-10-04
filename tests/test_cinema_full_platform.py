@@ -695,3 +695,33 @@ def test_theater_queue_play_next_prioritizes_selected_item(monkeypatch) -> None:
 
     assert payload["queue"][0] == candidates[2].candidate_id
     assert set(payload["queue"]) == {candidate.candidate_id for candidate in candidates}
+
+
+
+def test_preferred_source_selection_is_shared_and_falls_back_safely(monkeypatch) -> None:
+    first = SimpleNamespace(source_id="alpha", source_label="Alpha Source")
+    preferred = SimpleNamespace(source_id="beta", source_label="Beta Premium")
+
+    async def profile(_user_id: int):
+        return {"preferences": {"preferred_source": "beta"}}
+
+    monkeypatch.setattr(cinema_playback_service, "get_cinema_user", profile)
+    chosen = asyncio.run(
+        cinema_playback_service.select_preferred_variant(
+            42,
+            [first, preferred],
+        )
+    )
+    assert chosen is preferred
+
+    async def no_match(_user_id: int):
+        return {"preferences": {"preferred_source": "missing"}}
+
+    monkeypatch.setattr(cinema_playback_service, "get_cinema_user", no_match)
+    fallback = asyncio.run(
+        cinema_playback_service.select_preferred_variant(
+            42,
+            [first, preferred],
+        )
+    )
+    assert fallback is first
