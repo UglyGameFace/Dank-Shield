@@ -9,7 +9,10 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 import stoney_verify.torrent_streaming as torrent_streaming
-from stoney_verify.api_new.torrent_stream_routes import _bounded_partial_response_end
+from stoney_verify.api_new.torrent_stream_routes import (
+    _bounded_partial_response_end,
+    _cast_cors_headers,
+)
 from stoney_verify.torrent_media_server import _validate_public_base_url
 from stoney_verify.torrent_streaming import (
     TorrentMediaManager,
@@ -1192,3 +1195,16 @@ def test_viewer_consumer_id_is_signed_into_stream_url(monkeypatch, tmp_path: Pat
             "movie:99:other-page",
         )
     )
+
+
+def test_cast_cors_headers_allow_only_google_receiver_origins() -> None:
+    allowed = SimpleNamespace(headers={"Origin": "https://www.gstatic.com"})
+    nested = SimpleNamespace(headers={"Origin": "https://cast.gstatic.com"})
+    denied = SimpleNamespace(headers={"Origin": "https://evil.example.com"})
+    missing = SimpleNamespace(headers={})
+
+    assert _cast_cors_headers(allowed)["Access-Control-Allow-Origin"] == "https://www.gstatic.com"
+    assert _cast_cors_headers(nested)["Access-Control-Allow-Origin"] == "https://cast.gstatic.com"
+    assert _cast_cors_headers(denied) == {}
+    assert _cast_cors_headers(missing) == {}
+    assert "Range" in _cast_cors_headers(allowed)["Access-Control-Allow-Headers"]
