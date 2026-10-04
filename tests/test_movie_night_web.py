@@ -968,3 +968,7 @@ def test_dank_cinema_discord_integration_is_visible_on_theater_page() -> None:
     assert "Discord linked as " in html
     assert 'guild+" • #"+channel' in html
     assert "renderDiscordContext(s)" in html
+    assert 'id="discordLive"' in html
+    assert 'id="discordLiveText"' in html
+    assert 'document.getElementById("discordLive").onclick=openDiscordRoom' in html
+    assert '"Discord • "+guild+" • #"+channel' in html
