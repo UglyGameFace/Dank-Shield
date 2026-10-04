@@ -1111,6 +1111,16 @@
     }[String(value)] || "Custom";
   }
 
+  function sourceHealthLabel(source) {
+    return {
+      online: "Online",
+      offline: "Offline",
+      unchecked: "Not checked",
+      reference: "Reference link",
+      disabled: "Disabled",
+    }[String(source?.health_state || "")] || (source?.enabled ? "Not checked" : "Disabled");
+  }
+
   async function feedAction(payload) {
     const result = await api("/feeds", { method: "POST", body: JSON.stringify(payload) });
     state.feeds = result;
@@ -1230,8 +1240,20 @@
               source.playback_capable ? "Playback" : "",
             ].filter(Boolean).join(" • ");
             card.appendChild(node("div", "feed-meta", capability || "Reference"));
-            const status = node("div", `status-pill ${source.last_refresh_ok === true ? "online" : source.last_refresh_ok === false ? "offline" : ""}`);
-            status.append(node("span", "status-dot"), node("span", "", source.enabled ? "Enabled" : "Disabled"));
+            const supported = Array.isArray(source.supported_media_types)
+              ? source.supported_media_types.map(categoryLabel).filter(Boolean)
+              : [];
+            if (supported.length) {
+              card.appendChild(node("div", "feed-meta", `Supports: ${supported.join(", ")}`));
+            }
+            const healthState = String(source.health_state || "");
+            const statusClass = healthState === "online"
+              ? "online"
+              : healthState === "offline" || healthState === "disabled"
+                ? "offline"
+                : "";
+            const status = node("div", `status-pill ${statusClass}`.trim());
+            status.append(node("span", "status-dot"), node("span", "", sourceHealthLabel(source)));
             card.appendChild(status);
             if (source.last_refresh_at) {
               card.appendChild(node("div", "feed-meta", `Last refresh: ${new Date(source.last_refresh_at * 1000).toLocaleString()}`));
@@ -1243,11 +1265,18 @@
             }
             if (data.can_manage) {
               const actions = node("div", "hero-actions");
+              if (source.provider_type !== "external") {
+                actions.appendChild(button("Refresh", "btn secondary", async () => {
+                  try {
+                    await feedAction({ action: "refresh", source_id: source.source_id });
+                    toast("Source refreshed.");
+                    renderFeeds();
+                  } catch (error) {
+                    toast(error.message || "Refresh failed.", "error");
+                  }
+                }));
+              }
               actions.append(
-                button("Refresh", "btn secondary", async () => {
-                  try { await feedAction({ action: "refresh", source_id: source.source_id, query: "movie" }); toast("Source refreshed."); renderFeeds(); }
-                  catch (error) { toast(error.message || "Refresh failed.", "error"); }
-                }),
                 button("Edit", "btn secondary", () => openFeedEditor(source)),
                 button(source.enabled ? "Disable" : "Enable", "btn secondary", async () => {
                   try { await feedAction({ action: "toggle", source_id: source.source_id }); renderFeeds(); }
