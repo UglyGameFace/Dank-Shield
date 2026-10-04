@@ -688,6 +688,40 @@ async def movie_night_action(request: web.Request) -> web.Response:
     return web.json_response(await _state_payload(room, uid))
 
 
+async def movie_night_transfer_host(request: web.Request) -> web.Response:
+    room, uid = await _room_and_user(request)
+    if int(uid) != int(room.host_id):
+        raise web.HTTPForbidden(text="Only the active Movie Night host can pass host.")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    try:
+        new_host_id = int(payload.get("new_host_id") or 0)
+    except Exception:
+        new_host_id = 0
+    if new_host_id <= 0:
+        raise web.HTTPBadRequest(text="Choose an active viewer to receive host control.")
+
+    manager = get_movie_night_manager()
+    try:
+        manager.transfer_host(
+            room.room_id,
+            current_host_id=uid,
+            new_host_id=new_host_id,
+        )
+    except PermissionError as exc:
+        raise web.HTTPForbidden(text=str(exc))
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+
+    return web.json_response(await _state_payload(room, uid))
+
+
 def _watch_html(room_id: str, uid: int, query: str) -> str:
     boot = json.dumps(
         {
@@ -2017,10 +2051,12 @@ def register_movie_night_public_routes(app: web.Application) -> None:
     app.router.add_get("/movie/{room_id}/state", movie_night_state)
     app.router.add_post("/movie/{room_id}/heartbeat", movie_night_heartbeat)
     app.router.add_post("/movie/{room_id}/action", movie_night_action)
+    app.router.add_post("/movie/{room_id}/host", movie_night_transfer_host)
 
 
 __all__ = [
     "dank_cinema_brand_asset",
+    "movie_night_transfer_host",
     "movie_night_watch_url",
     "register_movie_night_public_routes",
 ]
