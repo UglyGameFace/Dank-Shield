@@ -28,6 +28,64 @@ def normalized_title_tokens(value: Any) -> tuple[str, ...]:
     return tuple(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
 
 
+_EXPLICIT_ADULT_RE = re.compile(
+    r"(?:^|[^a-z0-9])(?:xxx|porn|pornographic|adult[ _-]?video)(?:$|[^a-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def variant_is_explicit_adult(variant: Any) -> bool:
+    if _EXPLICIT_ADULT_RE.search(str(getattr(variant, "title", "") or "")):
+        return True
+    metadata = getattr(variant, "metadata", None)
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    values: list[Any] = [metadata.get("category"), metadata.get("type")]
+    source_reported = (
+        metadata.get("source_reported")
+        if isinstance(metadata.get("source_reported"), Mapping)
+        else {}
+    )
+    values.extend(
+        source_reported.get(key)
+        for key in ("category", "type", "tags", "classification")
+    )
+    explicit_labels = {"adult", "xxx", "porn", "pornographic", "adult video"}
+    for value in values:
+        if not value:
+            continue
+        clean = " ".join(
+            str(value).casefold().replace("_", " ").replace("-", " ").split()
+        )
+        if clean in explicit_labels or _EXPLICIT_ADULT_RE.search(clean):
+            return True
+    return False
+
+
+def filter_adult_provider_results(
+    outcome: MediaSourceSearchOutcome,
+    *,
+    enabled: bool,
+) -> MediaSourceSearchOutcome:
+    if enabled:
+        return outcome
+    kept = tuple(
+        variant
+        for variant in outcome.variants
+        if not variant_is_explicit_adult(variant)
+    )
+    removed = len(outcome.variants) - len(kept)
+    if removed <= 0:
+        return outcome
+    errors = list(outcome.errors)
+    errors.append(
+        f"Filtered {removed} explicit adult provider release(s) by server Cinema setting."
+    )
+    return MediaSourceSearchOutcome(
+        variants=kept,
+        errors=tuple(errors[:20]),
+    )
+
+
 def parse_episode_query(value: Any) -> Optional[tuple[str, int, int]]:
     """Parse the episode notation shared by website, Theater, and providers."""
 
@@ -228,8 +286,10 @@ __all__ = [
     "episode_catalog_metadata",
     "episode_release_matches",
     "episode_search_query",
+    "filter_adult_provider_results",
     "filter_outcome_for_catalog",
     "normalized_title_tokens",
     "parse_episode_query",
     "release_matches_catalog",
+    "variant_is_explicit_adult",
 ]
