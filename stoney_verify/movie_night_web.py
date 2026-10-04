@@ -2087,6 +2087,7 @@ video {{
   object-fit:contain; background:#000;
   transform:translateZ(0);
   backface-visibility:hidden;
+  pointer-events:none;
 }}
 .video-stage:fullscreen,
 .video-stage:-webkit-full-screen {{
@@ -2161,7 +2162,9 @@ video {{
   position:absolute; inset:auto 0 0;
   padding:44px 14px 13px;
   background:linear-gradient(180deg,transparent 0%,rgba(0,0,0,.58) 32%,rgba(0,0,0,.94) 100%);
-  z-index:4;
+  z-index:6;
+  pointer-events:auto;
+  touch-action:manipulation;
   transition:opacity .18s ease,transform .18s ease;
 }}
 .video-stage.controls-hidden {{ cursor:none; }}
@@ -2202,6 +2205,8 @@ video {{
 .player-button {{
   width:36px;height:36px; display:grid;place-items:center;
   border:0;border-radius:50%; color:#fff;background:transparent;
+  touch-action:manipulation;
+  -webkit-tap-highlight-color:transparent;
 }}
 .player-button svg {{ width:22px;height:22px; }}
 .player-button.primary {{ width:44px;height:44px; }}
@@ -3096,36 +3101,72 @@ function loadClientSessionId() {{
 const CLIENT_SESSION_ID=loadClientSessionId();
 const videoStage=document.getElementById("videoStage");
 let playerLayoutRaf=0;
+let nativeVideoFullscreen=false;
+let playerRecoveryTimers=[];
 
+function theaterFullscreenActive() {{
+  return !!(
+    document.fullscreenElement ||
+    document.webkitFullscreenElement ||
+    nativeVideoFullscreen ||
+    video.webkitDisplayingFullscreen
+  );
+}}
+function clearPlayerRecoveryTimers() {{
+  for(const timer of playerRecoveryTimers) clearTimeout(timer);
+  playerRecoveryTimers=[];
+}}
 function stabilizePlayerLayout() {{
   if(playerLayoutRaf) cancelAnimationFrame(playerLayoutRaf);
   playerLayoutRaf=requestAnimationFrame(()=>{{
     playerLayoutRaf=0;
-    const width=Math.max(1,Math.round(videoStage.getBoundingClientRect().width||0));
-    if(!document.fullscreenElement && width>0) {{
-      videoStage.style.height=(width*9/16)+"px";
+    const fullscreen=theaterFullscreenActive();
+    const rect=videoStage.getBoundingClientRect();
+    const width=Math.max(1,Math.round(rect.width||videoStage.clientWidth||0));
+    if(!fullscreen && width>0) {{
+      const height=Math.max(1,Math.round(width*9/16));
+      videoStage.style.height=height+"px";
       videoStage.style.minHeight="0";
-    }} else if(document.fullscreenElement) {{
+      videoStage.style.maxHeight=height+"px";
+      videoStage.style.aspectRatio="16 / 9";
+    }} else if(fullscreen) {{
       videoStage.style.removeProperty("height");
+      videoStage.style.removeProperty("min-height");
+      videoStage.style.removeProperty("max-height");
+      videoStage.style.removeProperty("aspect-ratio");
     }}
-    // Force Samsung/Chromium to rebuild the composited video layer after
-    // desktop-mode, viewport, or orientation changes without reloading media.
+    // Samsung Internet/Chromium can keep a stale native video compositor after
+    // exiting fullscreen. Reassert the non-interactive media layer so the custom
+    // portrait controls remain above it and continue receiving touch events.
     video.style.position="absolute";
     video.style.inset="0";
     video.style.width="100%";
     video.style.height="100%";
+    video.style.maxWidth="none";
+    video.style.maxHeight="none";
+    video.style.pointerEvents="none";
   }});
+}}
+function recoverPlayerFromViewportChange() {{
+  clearPlayerRecoveryTimers();
+  videoStage.classList.remove("controls-hidden");
+  for(const delay of [0,60,180,420]) {{
+    playerRecoveryTimers.push(setTimeout(()=>{{
+      stabilizePlayerLayout();
+      showPlayerControls(false);
+    }},delay));
+  }}
 }}
 if(typeof ResizeObserver==="function") {{
   const cinemaResizeObserver=new ResizeObserver(()=>stabilizePlayerLayout());
   cinemaResizeObserver.observe(videoStage);
 }}
 window.addEventListener("resize",stabilizePlayerLayout,{{passive:true}});
-window.addEventListener("orientationchange",()=>setTimeout(stabilizePlayerLayout,120),{{passive:true}});
+window.addEventListener("orientationchange",recoverPlayerFromViewportChange,{{passive:true}});
 window.visualViewport?.addEventListener("resize",stabilizePlayerLayout,{{passive:true}});
-window.addEventListener("pageshow",()=>stabilizePlayerLayout());
+window.addEventListener("pageshow",()=>recoverPlayerFromViewportChange());
 document.addEventListener("visibilitychange",()=>{{
-  if(!document.hidden) setTimeout(stabilizePlayerLayout,60);
+  if(!document.hidden) recoverPlayerFromViewportChange();
 }});
 stabilizePlayerLayout();
 
@@ -4332,11 +4373,30 @@ document.getElementById("timeline").addEventListener("input",event=>{{
   if(!lastState?.is_host || !Number.isFinite(video.duration) || video.duration<=0) return;
   safeSeek((Number(event.target.value||0)/1000)*video.duration);
 }});
-document.getElementById("volume").addEventListener("input",event=>{{
-  video.volume=Math.max(0,Math.min(1,Number(event.target.value||1)));
+const volumeControl=document.getElementById("volume");
+const muteControl=document.getElementById("mute");
+function syncVolumeControls() {{
+  const effectiveMuted=video.muted || Number(video.volume||0)<=0;
+  muteControl.classList.toggle("active",effectiveMuted);
+  muteControl.setAttribute("aria-pressed",effectiveMuted?"true":"false");
+  muteControl.setAttribute("aria-label",effectiveMuted?"Unmute":"Mute");
+  if(document.activeElement!==volumeControl)
+    volumeControl.value=String(Math.max(0,Math.min(1,Number(video.volume||0))));
+}}
+volumeControl.addEventListener("input",event=>{{
+  video.volume=Math.max(0,Math.min(1,Number(event.target.value||0)));
   video.muted=video.volume===0;
+  syncVolumeControls();
 }});
-document.getElementById("mute").onclick=()=>{{ video.muted=!video.muted; }};
+muteControl.onclick=()=>{{
+  const shouldUnmute=video.muted || Number(video.volume||0)<=0;
+  if(shouldUnmute && Number(video.volume||0)<=0) video.volume=1;
+  video.muted=!shouldUnmute;
+  syncVolumeControls();
+  showPlayerControls(true);
+}};
+video.addEventListener("volumechange",syncVolumeControls);
+syncVolumeControls();
 document.getElementById("pip").onclick=async()=>{{
   try {{
     if(document.pictureInPictureElement===video) await document.exitPictureInPicture();
@@ -4376,8 +4436,9 @@ for(const eventName of ["loadedmetadata","loadeddata","canplay","playing","empti
 async function enterTheaterFullscreen() {{
   const target=document.getElementById("videoStage");
   try {{
-    if(document.fullscreenElement) {{
-      await document.exitFullscreen();
+    if(document.fullscreenElement || document.webkitFullscreenElement) {{
+      if(typeof document.exitFullscreen==="function") await document.exitFullscreen();
+      else if(typeof document.webkitExitFullscreen==="function") document.webkitExitFullscreen();
       return;
     }}
     if(target?.requestFullscreen) {{
@@ -4391,20 +4452,44 @@ async function enterTheaterFullscreen() {{
       return;
     }}
     if(typeof video.webkitEnterFullscreen==="function") {{
+      nativeVideoFullscreen=true;
       video.webkitEnterFullscreen();
       return;
     }}
     notice.textContent="Fullscreen is not supported by this browser.";
   }} catch(err) {{
+    nativeVideoFullscreen=false;
+    recoverPlayerFromViewportChange();
     notice.textContent="Fullscreen could not start: "+String(err?.message||err);
   }}
 }}
-document.getElementById("fullscreen").onclick=enterTheaterFullscreen;
-document.addEventListener("fullscreenchange",()=>{{
-  setTimeout(stabilizePlayerLayout,40);
-  if(!document.fullscreenElement && screen.orientation && typeof screen.orientation.unlock==="function") {{
+function unlockCinemaOrientation() {{
+  if(screen.orientation && typeof screen.orientation.unlock==="function") {{
     try {{ screen.orientation.unlock(); }} catch(_) {{}}
   }}
+}}
+function handleFullscreenChange() {{
+  const active=!!(document.fullscreenElement||document.webkitFullscreenElement);
+  if(active) {{
+    stabilizePlayerLayout();
+    showPlayerControls(true);
+  }} else {{
+    unlockCinemaOrientation();
+    recoverPlayerFromViewportChange();
+  }}
+}}
+document.getElementById("fullscreen").onclick=enterTheaterFullscreen;
+document.addEventListener("fullscreenchange",handleFullscreenChange);
+document.addEventListener("webkitfullscreenchange",handleFullscreenChange);
+video.addEventListener("webkitbeginfullscreen",()=>{{
+  nativeVideoFullscreen=true;
+  stabilizePlayerLayout();
+  showPlayerControls(true);
+}});
+video.addEventListener("webkitendfullscreen",()=>{{
+  nativeVideoFullscreen=false;
+  unlockCinemaOrientation();
+  recoverPlayerFromViewportChange();
 }});
 function openHostControls() {{
   if(!lastState?.is_host) return;

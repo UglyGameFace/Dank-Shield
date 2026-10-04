@@ -1346,9 +1346,13 @@ def test_player_layout_recovers_from_mobile_desktop_mode_resizes() -> None:
     assert "new ResizeObserver(()=>stabilizePlayerLayout())" in html
     assert 'window.addEventListener("resize",stabilizePlayerLayout' in html
     assert 'window.visualViewport?.addEventListener("resize",stabilizePlayerLayout' in html
-    assert 'window.addEventListener("orientationchange"' in html
+    assert 'window.addEventListener("orientationchange",recoverPlayerFromViewportChange' in html
     assert 'video.addEventListener(eventName,()=>stabilizePlayerLayout())' in html
-    assert 'setTimeout(stabilizePlayerLayout,40)' in html
+    assert "function recoverPlayerFromViewportChange()" in html
+    assert 'video.addEventListener("webkitendfullscreen"' in html
+    assert 'document.addEventListener("webkitfullscreenchange",handleFullscreenChange)' in html
+    assert 'video.style.pointerEvents="none"' in html
+    assert "videoStage.style.maxHeight=height+\"px\"" in html
 
 
 
@@ -1395,6 +1399,10 @@ def test_dank_cinema_player_capability_controls_are_not_placebos() -> None:
     assert 'key==="arrowright"' in html
     assert 'key==="f"' in html
     assert 'key==="m"' in html
+    assert 'video.addEventListener("volumechange",syncVolumeControls)' in html
+    assert 'muteControl.setAttribute("aria-pressed"' in html
+    assert "pointer-events:none;" in html
+    assert "touch-action:manipulation;" in html
 
 
 def test_dank_cinema_tmdb_art_is_responsive_instead_of_one_size_for_every_device() -> None:

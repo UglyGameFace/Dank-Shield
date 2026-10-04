@@ -13,6 +13,7 @@ from stoney_verify.command_surface_contract import (
 )
 from stoney_verify.commands_ext import public_movie_night as movie_ui
 from stoney_verify.commands_ext.public_command_surface_v2 import _standalone
+from stoney_verify.cinema_catalog import CinemaMedia
 from stoney_verify.media_source_registry import CustomMediaSource, MediaSourceRegistry
 from stoney_verify.media_source_resolver import (
     MediaSourceSearchOutcome,
@@ -157,10 +158,9 @@ def test_private_host_gets_viewer_manager_and_invited_viewer_gets_watch_only(mon
         host_id=10,
         stream_token="private-stream",
         mode="private",
-        now=100.0,
     )
     manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
-    manager.join_room(room.room_id, user_id=20, now=101.0)
+    manager.join_room(room.room_id, user_id=20)
 
     monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
     monkeypatch.setattr(
@@ -254,6 +254,63 @@ def test_host_handoff_choices_only_include_active_non_host_viewers(monkeypatch) 
     assert [choice.value for choice in choices] == ["20"]
     assert choices[0].label == "Alex"
     assert choices[0].default is False
+
+
+def test_catalog_search_uses_visual_tmdb_result_browser() -> None:
+    us = CinemaMedia(
+        media_type="tv",
+        tmdb_id=2316,
+        title="The Office",
+        year=2005,
+        overview="Scranton paper company.",
+        poster_url="https://image.tmdb.org/t/p/w500/us-office.jpg",
+        backdrop_url="https://image.tmdb.org/t/p/w1280/us-office.jpg",
+        rating=8.6,
+    )
+    uk = CinemaMedia(
+        media_type="tv",
+        tmdb_id=2996,
+        title="The Office",
+        year=2001,
+        overview="Wernham Hogg.",
+        poster_url="https://image.tmdb.org/t/p/w500/uk-office.jpg",
+        backdrop_url="https://image.tmdb.org/t/p/w1280/uk-office.jpg",
+        rating=8.5,
+    )
+
+    view = movie_ui._CinemaCatalogResultView(
+        owner_id=1,
+        room_id="room",
+        raw_query="The Office",
+        catalog=(us, uk),
+        index=0,
+    )
+    embed = view._embed()
+
+    assert "The Office (2005)" in str(embed.title)
+    assert "TV Series" in str(embed.description)
+    assert str(embed.thumbnail.url).endswith("/us-office.jpg")
+    assert str(embed.image.url).endswith("/us-office.jpg")
+    assert "Result 1 of 2" in str(embed.footer.text)
+    assert {
+        "Previous",
+        "Select This Title",
+        "Next",
+        "Use Exact Search Text",
+        "New Search",
+    } <= _labels(view)
+
+    previous = next(item for item in view.children if getattr(item, "label", "") == "Previous")
+    next_button = next(item for item in view.children if getattr(item, "label", "") == "Next")
+    assert previous.disabled is True
+    assert next_button.disabled is False
+
+    second = view._replacement(1)
+    assert "The Office (2001)" in str(second._embed().title)
+    previous = next(item for item in second.children if getattr(item, "label", "") == "Previous")
+    next_button = next(item for item in second.children if getattr(item, "label", "") == "Next")
+    assert previous.disabled is False
+    assert next_button.disabled is True
 
 
 def test_movie_night_hub_changes_controls_by_room_mode_and_vote_context(monkeypatch) -> None:
@@ -1726,12 +1783,11 @@ def test_private_host_handoff_choices_include_only_authorized_active_viewers(mon
         host_id=10,
         stream_token="",
         mode="private",
-        now=100.0,
     )
     manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
     manager.invite_private_viewer(room.room_id, host_id=10, user_id=30)
-    manager.join_room(room.room_id, user_id=20, now=101.0)
-    manager.join_room(room.room_id, user_id=30, now=101.0)
+    manager.join_room(room.room_id, user_id=20)
+    manager.join_room(room.room_id, user_id=30)
     room.viewers[30].last_seen = -1_000_000.0
     monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
 
@@ -1758,7 +1814,6 @@ def test_private_more_shows_pass_host_only_with_eligible_viewer(monkeypatch) -> 
         host_id=10,
         stream_token="",
         mode="private",
-        now=100.0,
     )
     monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
 
@@ -1767,7 +1822,7 @@ def test_private_more_shows_pass_host_only_with_eligible_viewer(monkeypatch) -> 
     )
 
     manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
-    manager.join_room(room.room_id, user_id=20, now=101.0)
+    manager.join_room(room.room_id, user_id=20)
 
     assert "Pass Host" in _labels(
         movie_ui.MovieNightMoreView(10, room, staff=False)
