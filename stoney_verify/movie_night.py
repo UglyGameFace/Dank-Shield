@@ -371,6 +371,35 @@ class MovieNightManager:
         room.viewers.pop(uid, None)
         return room
 
+    def promote_private_to_watch_party(
+        self,
+        room_id: str,
+        *,
+        host_id: int,
+    ) -> MovieNightRoom:
+        """Convert the live Private Session into a Watch Party in place.
+
+        The room id, media lease, queue, playback clock, viewers, and host stay
+        untouched. Only the access/collaboration mode changes, so every signed
+        Watch page observes the transition on its next state poll.
+        """
+
+        room = self._require_room(room_id)
+        if int(host_id) != int(room.host_id):
+            raise PermissionError("Only the Private Session host can start the Watch Party.")
+        mode = str(getattr(room, "mode", "watch_party") or "watch_party")
+        if mode == "watch_party":
+            return room
+        if mode != "private":
+            raise RuntimeError("This Cinema session cannot be promoted to a Watch Party.")
+
+        room.mode = "watch_party"
+        # Private allowlisting no longer controls access after promotion.
+        # Drop stale ids so no later code accidentally interprets them as
+        # authoritative after the room becomes collaborative.
+        room.private_allowed_viewers.clear()
+        return room
+
     def active_room_for_user(
         self,
         guild_id: int,
