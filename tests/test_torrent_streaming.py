@@ -13,6 +13,7 @@ from stoney_verify.api_new.torrent_stream_routes import (
     _bounded_partial_response_end,
     _cast_cors_headers,
 )
+from stoney_verify import torrent_media_server
 from stoney_verify.torrent_media_server import _validate_public_base_url
 from stoney_verify.torrent_streaming import (
     TorrentMediaManager,
@@ -122,6 +123,38 @@ def _manager(monkeypatch, tmp_path: Path) -> TorrentMediaManager:
     monkeypatch.setenv("DANK_TORRENT_DISK_RESERVE_BYTES", str(2 * 1024 * 1024 * 1024))
     monkeypatch.setenv("DANK_TORRENT_MAX_TOTAL_BYTES", str(8 * 1024 * 1024 * 1024))
     return TorrentMediaManager(lt_module=_FakeLT())
+
+
+def test_public_site_root_redirects_to_dank_cinema() -> None:
+    import aiohttp.web
+
+    try:
+        asyncio.run(torrent_media_server._root(SimpleNamespace()))
+    except Exception as exc:
+        assert isinstance(exc, aiohttp.web.HTTPFound)
+        assert exc.location == "/cinema"
+    else:
+        raise AssertionError("The bare media-site domain must redirect to Dank Cinema.")
+
+
+def test_media_health_reports_standalone_cinema_oauth_readiness(monkeypatch) -> None:
+    monkeypatch.setattr(torrent_media_server, "cinema_oauth_ready", lambda: True)
+    monkeypatch.setattr(
+        torrent_media_server,
+        "cinema_oauth_redirect_uri",
+        lambda: "https://cinema.example/cinema/auth/callback",
+    )
+
+    class Manager:
+        public_base_url = "https://cinema.example"
+        stream_secret = "secret"
+
+    monkeypatch.setattr(torrent_media_server, "get_torrent_manager", lambda: Manager())
+    response = asyncio.run(torrent_media_server._health(SimpleNamespace()))
+    payload = __import__("json").loads(response.text)
+
+    assert payload["cinema_standalone_login_configured"] is True
+    assert payload["cinema_oauth_redirect_uri"].endswith("/cinema/auth/callback")
 
 
 def test_live_torrent_status_exposes_seed_and_leech_counts(monkeypatch, tmp_path: Path) -> None:
