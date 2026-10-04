@@ -2306,11 +2306,41 @@ video {{
 .queue-action.danger {{ color:#ff727d;border-color:rgba(255,93,107,.24); }}
 .queue-action:disabled {{ opacity:.28; }}
 .queue-head-actions {{ display:flex;align-items:center;gap:8px; }}
-.queue-clear {{
+.queue-clear,.queue-add-toggle {{
   border:0;background:transparent;color:#b7c2bd;
   padding:4px 0;font-size:.72rem;font-weight:750;
 }}
-.queue-clear[hidden] {{ display:none !important; }}
+.queue-add-toggle {{ color:var(--lime); }}
+.queue-clear[hidden],.queue-add-toggle[hidden] {{ display:none !important; }}
+.queue-add-form {{
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;
+  margin:10px 0 12px;padding:10px;border:1px solid rgba(168,255,103,.12);
+  border-radius:12px;background:#081510;
+}}
+.queue-add-form[hidden] {{ display:none !important; }}
+.queue-search-input {{
+  min-width:0;border:1px solid rgba(255,255,255,.11);border-radius:10px;
+  background:#10201a;color:#f5f8f6;padding:10px 11px;font:inherit;
+}}
+.queue-search-submit {{
+  border:1px solid rgba(167,255,100,.28);border-radius:10px;
+  background:rgba(77,156,45,.18);color:var(--lime);padding:9px 12px;font-weight:850;
+}}
+.queue-search-results {{ grid-column:1 / -1;display:grid;gap:7px;max-height:280px;overflow:auto; }}
+.queue-search-empty {{ color:#8e9b95;font-size:.72rem;line-height:1.4;padding:5px 2px; }}
+.queue-search-result {{
+  display:grid;grid-template-columns:46px minmax(0,1fr) auto;gap:9px;align-items:center;
+  padding:7px;border:1px solid rgba(255,255,255,.07);border-radius:10px;background:#0b1914;
+}}
+.queue-search-art {{ width:46px;aspect-ratio:2/3;border-radius:7px;overflow:hidden;background:#14241e; }}
+.queue-search-art img {{ width:100%;height:100%;object-fit:cover; }}
+.queue-search-title {{ font-size:.78rem;font-weight:850; }}
+.queue-search-meta {{ margin-top:2px;color:#8d9a94;font-size:.66rem; }}
+.queue-search-add {{
+  border:1px solid rgba(167,255,100,.24);border-radius:9px;background:rgba(71,142,43,.14);
+  color:var(--lime);padding:8px 9px;font-size:.68rem;font-weight:850;
+}}
+.queue-action.next {{ width:auto;padding:0 8px;white-space:nowrap;color:var(--lime); }}
 .queue-art {{ width:58px;aspect-ratio:16/10;border-radius:9px;overflow:hidden;background:#13231d; }}
 .queue-art img {{ width:100%;height:100%;object-fit:cover; }}
 .queue-title {{ font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }}
@@ -2552,6 +2582,11 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
   .tab {{ padding:9px 3px;font-size:clamp(.56rem,2.6vw,.68rem); }}
   .section-head {{ align-items:flex-start; }}
   .queue-head-actions {{ flex-wrap:wrap;justify-content:flex-end; }}
+  .queue-add-form {{ grid-template-columns:1fr; }}
+  .queue-search-submit,.queue-search-results {{ grid-column:1; }}
+  .queue-search-result {{ grid-template-columns:42px minmax(0,1fr); }}
+  .queue-search-art {{ width:42px; }}
+  .queue-search-add {{ grid-column:1 / -1;width:100%; }}
   .queue-item.manageable {{ grid-template-columns:50px minmax(0,1fr); }}
   .queue-item.manageable .queue-actions {{ grid-column:1 / -1;justify-content:flex-end; }}
   .queue-art {{ width:50px; }}
@@ -2763,9 +2798,17 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
       <h2>Up Next</h2>
       <div class="queue-head-actions">
         <span id="queueCount">0 queued</span>
+        <button class="queue-add-toggle" id="queueAddToggle" type="button" hidden>Add Title</button>
         <button class="queue-clear" id="clearQueue" type="button" hidden>Clear Queue</button>
       </div>
     </div>
+    <form class="queue-add-form" id="queueAddForm" hidden>
+      <input class="queue-search-input" id="queueSearchInput" type="search" maxlength="180"
+        placeholder="Movie title or exact episode, e.g. Show S3E7"
+        aria-label="Search a movie or exact TV episode to add to the queue">
+      <button class="queue-search-submit" id="queueSearchSubmit" type="submit">Search</button>
+      <div class="queue-search-results" id="queueSearchResults" aria-live="polite"></div>
+    </form>
     <div id="queueList">
       <div class="queue-empty">
         <div class="queue-empty-mark" aria-hidden="true">▤</div>
@@ -3216,8 +3259,12 @@ function renderQueue(items) {{
   list.textContent="";
   const rows=Array.isArray(items)?items:[];
   document.getElementById("queueCount").textContent=rows.length+" queued";
+  const isHost=!!lastState?.is_host;
   const clear=document.getElementById("clearQueue");
-  clear.hidden=!(lastState?.is_host && rows.length);
+  const addToggle=document.getElementById("queueAddToggle");
+  clear.hidden=!(isHost && rows.length);
+  addToggle.hidden=!isHost;
+  if(!isHost) document.getElementById("queueAddForm").hidden=true;
   if(!rows.length) {{
     const empty=document.createElement("div");
     empty.className="queue-empty";
@@ -3234,18 +3281,11 @@ function renderQueue(items) {{
     title.textContent="Your Queue Is Empty";
     const sub=document.createElement("div");
     sub.className="queue-empty-sub";
-    sub.textContent="Add a title from Discord Cinema and it will appear here for everyone in the session.";
+    sub.textContent=isHost
+      ?"Use Add Title above to search movies or an exact TV episode without leaving the Theater."
+      :"The current host can add and arrange titles without leaving playback.";
     copy.append(title,sub);
     empty.append(mark,copy);
-
-    if(lastState?.discord_url) {{
-      const action=document.createElement("button");
-      action.type="button";
-      action.className="queue-empty-action";
-      action.textContent="Open Discord";
-      action.onclick=openDiscordRoom;
-      empty.appendChild(action);
-    }}
     list.appendChild(empty);
     return;
   }}
@@ -3266,7 +3306,13 @@ function renderQueue(items) {{
     title.textContent=String(item.title||"Untitled");
     const sub=document.createElement("div");
     sub.className="queue-sub";
-    sub.textContent=(item.year?String(item.year)+" • ":"")+(item.is_current?"Now playing":"Up next");
+    const queueMeta=[];
+    if(item.year) queueMeta.push(String(item.year));
+    if(item.media_type==="episode")
+      queueMeta.push("S"+String(item.season_number||0)+" E"+String(item.episode_number||0));
+    queueMeta.push(item.is_current?"Now playing":"Up next");
+    if(item.added_by) queueMeta.push("Added by "+String(item.added_by));
+    sub.textContent=queueMeta.join(" • ");
     copy.append(title,sub);
     row.append(art,copy);
 
@@ -3275,14 +3321,15 @@ function renderQueue(items) {{
       const actions=document.createElement("div");
       actions.className="queue-actions";
       const index=rows.indexOf(item);
-      for(const [label,actionName,disabled,danger] of [
-        ["↑","move_up",index===0,false],
-        ["↓","move_down",index===rows.length-1,false],
-        ["×","remove",false,true]
+      for(const [label,actionName,disabled,danger,next] of [
+        ["Play Next","play_next",index===0,false,true],
+        ["↑","move_up",index===0,false,false],
+        ["↓","move_down",index===rows.length-1,false,false],
+        ["×","remove",false,true,false]
       ]) {{
         const button=document.createElement("button");
         button.type="button";
-        button.className="queue-action"+(danger?" danger":"");
+        button.className="queue-action"+(danger?" danger":"")+(next?" next":"");
         button.textContent=label;
         button.disabled=disabled;
         button.setAttribute("aria-label",actionName.replace("_"," ")+" "+String(item.title||"title"));
@@ -4005,6 +4052,104 @@ async function queueAction(action, candidateId="") {{
     notice.textContent="Queue update failed: "+String(err?.message||err);
   }}
 }}
+function renderQueueSearchResults(data) {{
+  const root=document.getElementById("queueSearchResults");
+  root.textContent="";
+  const rows=Array.isArray(data?.results)?data.results:[];
+  if(!rows.length) {{
+    const empty=document.createElement("div");
+    empty.className="queue-search-empty";
+    empty.textContent=String(data?.hint||"No Cinema titles matched that search.");
+    root.appendChild(empty);
+    return;
+  }}
+  for(const item of rows) {{
+    const row=document.createElement("div");
+    row.className="queue-search-result";
+    const art=document.createElement("div");
+    art.className="queue-search-art";
+    const artUrl=String(item.poster_url||item.series_poster_url||"");
+    if(artUrl.startsWith("https://image.tmdb.org/")) {{
+      const img=document.createElement("img");
+      img.src=artUrl;img.alt="";img.loading="lazy";img.decoding="async";
+      art.appendChild(img);
+    }}
+    const copy=document.createElement("div");
+    const title=document.createElement("div");
+    title.className="queue-search-title";
+    title.textContent=String(item.media_type==="episode"
+      ?(item.series_title||"TV")+" • "+(item.title||"Episode")
+      :(item.title||"Untitled"));
+    const meta=document.createElement("div");
+    meta.className="queue-search-meta";
+    const bits=[];
+    if(item.year) bits.push(String(item.year));
+    if(item.media_type==="episode")
+      bits.push("S"+String(item.season_number||0)+" E"+String(item.episode_number||0));
+    else bits.push("Movie");
+    if(Number(item.rating||0)>0) bits.push("★ "+Number(item.rating).toFixed(1));
+    meta.textContent=bits.join(" • ");
+    copy.append(title,meta);
+
+    const add=document.createElement("button");
+    add.type="button";add.className="queue-search-add";add.textContent="Add";
+    add.onclick=async()=>{{
+      if(!lastState?.is_host || add.disabled) return;
+      add.disabled=true;add.textContent="Checking…";
+      try {{
+        const payload={{
+          action:"add",
+          media_type:String(item.media_type||""),
+          tmdb_id:Number(item.tmdb_id||0),
+          series_id:Number(item.series_id||0),
+          season_number:Number(item.season_number||0),
+          episode_number:Number(item.episode_number||0)
+        }};
+        const state=await jsonFetch("/movie/"+BOOT.roomId+"/queue",{{
+          method:"POST",body:JSON.stringify(payload)
+        }});
+        await applyState(state);
+        document.getElementById("queueAddForm").hidden=true;
+        document.getElementById("queueSearchInput").value="";
+        root.textContent="";
+        notice.textContent="Added "+String(item.title||item.series_title||"title")+" to Up Next.";
+      }} catch(err) {{
+        notice.textContent="Could not add title: "+String(err?.message||err);
+        add.disabled=false;add.textContent="Add";
+      }}
+    }};
+    row.append(art,copy,add);
+    root.appendChild(row);
+  }}
+}}
+async function searchQueueCatalog() {{
+  if(!lastState?.is_host) return;
+  const input=document.getElementById("queueSearchInput");
+  const root=document.getElementById("queueSearchResults");
+  const query=String(input.value||"").trim();
+  if(query.length<2) {{
+    root.textContent="";
+    const hint=document.createElement("div");
+    hint.className="queue-search-empty";
+    hint.textContent="Enter a movie title or exact TV episode such as Show S3E7.";
+    root.appendChild(hint);
+    return;
+  }}
+  root.textContent="";
+  const loading=document.createElement("div");
+  loading.className="queue-search-empty";loading.textContent="Searching Cinema…";
+  root.appendChild(loading);
+  try {{
+    const data=await jsonFetch("/movie/"+BOOT.roomId+"/queue-search?q="+encodeURIComponent(query));
+    renderQueueSearchResults(data);
+  }} catch(err) {{
+    root.textContent="";
+    const error=document.createElement("div");
+    error.className="queue-search-empty";
+    error.textContent="Queue search failed: "+String(err?.message||err);
+    root.appendChild(error);
+  }}
+}}
 async function hostAction(action, extra={{}}) {{
   // Explicit user controls must never be dropped just because a state poll is
   // currently applying remote media state. Media event listeners themselves
@@ -4351,8 +4496,18 @@ document.getElementById("passHost").onclick=()=>{{
 document.getElementById("discordLive").onclick=openDiscordRoom;
 document.getElementById("manageQueue").onclick=()=>{{
   document.getElementById("queuePanel").scrollIntoView({{behavior:"smooth",block:"nearest"}});
-  notice.textContent="Queue manager is active. Use ↑ ↓ or × on queued titles.";
+  notice.textContent="Queue manager is active. Add a title, choose Play Next, reorder with ↑ ↓, or remove with ×.";
 }};
+document.getElementById("queueAddToggle").onclick=()=>{{
+  if(!lastState?.is_host) return;
+  const form=document.getElementById("queueAddForm");
+  form.hidden=!form.hidden;
+  if(!form.hidden) document.getElementById("queueSearchInput").focus();
+}};
+document.getElementById("queueAddForm").addEventListener("submit",event=>{{
+  event.preventDefault();
+  searchQueueCatalog();
+}});
 document.getElementById("clearQueue").onclick=()=>queueAction("clear");
 
 const qualitySelect=document.getElementById("qualityMode");
