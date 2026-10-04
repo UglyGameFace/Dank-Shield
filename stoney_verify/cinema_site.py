@@ -59,6 +59,7 @@ from .cinema_media_identity import (
 from .cinema_playback_service import (
     materialize_search_results,
     search_exact_episode_sources,
+    search_exact_movie_sources,
     start_room_variant,
 )
 from .movie_night import get_movie_night_manager
@@ -957,10 +958,10 @@ async def cinema_play_api(request: web.Request) -> web.Response:
             raise web.HTTPBadRequest(text="Invalid movie identity.")
         try:
             details = await get_details("movie", tmdb_id)
-            metadata = catalog_metadata(details.media)
-            query = details.media.title
-            outcome = await search_movie_sources(int(guild_id), query)
-            outcome = filter_outcome_for_catalog(outcome, metadata)
+            metadata, query, outcome = await search_exact_movie_sources(
+                int(guild_id),
+                media=details.media,
+            )
         except Exception as exc:
             raise web.HTTPServiceUnavailable(
                 text="Cinema source search is temporarily unavailable."
