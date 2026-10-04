@@ -1229,6 +1229,18 @@ video {{
   margin-top:2px;color:#aeb8c8;font-size:.69rem;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }}
+.discord-live {{
+  display:flex;align-items:center;gap:7px;
+  max-width:100%;margin-top:10px;padding:7px 10px;
+  border:1px solid rgba(115,137,255,.24);border-radius:999px;
+  background:rgba(46,56,104,.16);color:#dfe4ff;
+  font-size:.7rem;font-weight:800;
+}}
+.discord-live[hidden] {{ display:none !important; }}
+.discord-live svg {{ width:17px;height:14px;flex:0 0 auto;color:#8ea0ff; }}
+.discord-live span {{
+  min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}}
 .sync-row {{ display:flex;align-items:center;gap:8px;margin-top:12px; }}
 #sync {{
   border:1px solid rgba(143,255,75,.32);border-radius:999px;background:rgba(86,170,52,.12);
@@ -1372,6 +1384,10 @@ video {{
         <div class="watchers">👥 <strong id="viewers">0</strong> watching</div>
         <div class="watchers" id="hostPresence">Host status: checking…</div>
       </div>
+      <button class="discord-live" id="discordLive" type="button" hidden>
+        <svg viewBox="0 0 24 18" aria-hidden="true"><path fill="currentColor" d="M19.8 2.1A16 16 0 0 0 15.8.9l-.5 1a14 14 0 0 0-6.6 0l-.5-1a16 16 0 0 0-4 1.2C1.7 5.8.9 9.4 1.2 13c2.1 1.6 4.1 2.5 6 3.1l1.5-2c-.8-.3-1.6-.7-2.3-1.2l.6-.5c4.4 2 9.2 2 13.6 0l.7.5c-.8.5-1.5.9-2.4 1.2l1.5 2c1.9-.6 3.9-1.5 6-3.1.4-4.1-.7-7.7-3.1-10.9Z"/></svg>
+        <span id="discordLiveText">Discord linked</span>
+      </button>
       <div class="sync-row"><button id="sync" type="button">Tap to Sync</button><span id="syncHint"></span></div>
     </div>
   </section>
@@ -1809,6 +1825,13 @@ function renderDiscordContext(s) {{
   const guild=String(ctx.guild_name||"Discord server");
   const channel=String(ctx.channel_name||"");
   sub.textContent=channel?guild+" • #"+channel:guild;
+
+  const live=document.getElementById("discordLive");
+  const liveText=document.getElementById("discordLiveText");
+  live.hidden=!ctx.connected;
+  liveText.textContent=channel
+    ?"Discord • "+guild+" • #"+channel
+    :"Discord • "+guild;
 }}
 function applyModeSurface(s) {{
   const privateMode=String(s.mode||"")==="private" || !!s.private;
@@ -2403,6 +2426,7 @@ document.getElementById("passHost").onclick=()=>{{
   panel.scrollIntoView({{behavior:"smooth",block:"nearest"}});
   notice.textContent="Choose an active viewer below to pass host control.";
 }};
+document.getElementById("discordLive").onclick=openDiscordRoom;
 document.getElementById("manageQueue").onclick=()=>{{
   document.getElementById("queuePanel").scrollIntoView({{behavior:"smooth",block:"nearest"}});
   notice.textContent="Queue manager is active. Use ↑ ↓ or × on queued titles.";
