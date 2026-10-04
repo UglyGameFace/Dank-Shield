@@ -1287,7 +1287,7 @@ video {{
   position:absolute; inset:0; z-index:0;
   display:block; width:100%; height:100%;
   max-width:none; max-height:none;
-  object-fit:cover; background:#000;
+  object-fit:contain; background:#000;
   transform:translateZ(0);
   backface-visibility:hidden;
 }}
