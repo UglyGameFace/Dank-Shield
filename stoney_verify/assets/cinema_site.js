@@ -802,6 +802,30 @@
       if ((d.directors || []).length) side.appendChild(node("p", "section-sub", `Director: ${d.directors.join(", ")}`));
       if ((d.creators || []).length) side.appendChild(node("p", "section-sub", `Created by: ${d.creators.join(", ")}`));
       side.appendChild(node("p", "section-sub", data.library?.completed ? "Watched" : Number(data.library?.progress_seconds || 0) > 0 ? `Progress: ${formatSeconds(data.library.progress_seconds)}` : "No saved playback progress yet."));
+
+      const sources = Array.isArray(data.sources) ? data.sources : [];
+      const sourceTitle = node("h3", "", "Available Cinema Sources");
+      sourceTitle.style.marginTop = "18px";
+      side.appendChild(sourceTitle);
+      if (!sources.length) {
+        side.appendChild(node("p", "section-sub", d.media_type === "tv"
+          ? "Choose an episode to search connected playback sources for that exact SxxExx release."
+          : "No connected playback source currently matches this title. Discord can still accept a host-supplied magnet or .torrent."));
+      } else {
+        sources.slice(0, 6).forEach((source) => {
+          const row = node("div", "source-card");
+          row.style.marginTop = "8px";
+          row.append(
+            node("div", "feed-title", source.source_label || "Cinema source"),
+            node("div", "feed-meta", [
+              source.health ? `Health: ${source.health}` : "",
+              Number(source.seeds || 0) ? `${source.seeds} seeds` : "",
+              source.title || "",
+            ].filter(Boolean).join(" • ")),
+          );
+          side.appendChild(row);
+        });
+      }
       detailsGrid.append(main, side);
       page.appendChild(detailsGrid);
 
