@@ -725,3 +725,100 @@ def test_preferred_source_selection_is_shared_and_falls_back_safely(monkeypatch)
         )
     )
     assert fallback is first
+
+
+
+def test_adult_policy_filters_saved_library_and_provider_results() -> None:
+    snapshot = {
+        "watchlist": [
+            {"title": "Safe", "metadata": {"adult": False}},
+            {"title": "Adult", "metadata": {"adult": True}},
+        ],
+        "continue_watching": [
+            {"title": "Adult Episode", "metadata": {"adult": True}},
+        ],
+        "recently_watched": [
+            {"title": "Safe History", "metadata": {}},
+        ],
+        "watch_again": [],
+        "series_progress": [],
+    }
+    filtered = cinema_site._filter_library_snapshot_for_policy(
+        snapshot,
+        adult_enabled=False,
+    )
+    assert [row["title"] for row in filtered["watchlist"]] == ["Safe"]
+    assert filtered["continue_watching"] == []
+    assert [row["title"] for row in filtered["recently_watched"]] == ["Safe History"]
+
+    adult_variant = ResolvedMediaVariant(
+        title="Example.Movie.XXX.1080p",
+        source_id="adult",
+        source_label="Adult",
+        source_ref="magnet:?xt=urn:btih:" + "7" * 40,
+        file_size=100,
+        seeds=1,
+        leechers=1,
+        peers=2,
+        metadata={"category": "adult"},
+    )
+    safe_variant = ResolvedMediaVariant(
+        title="Example.Movie.2026.1080p",
+        source_id="safe",
+        source_label="Safe",
+        source_ref="magnet:?xt=urn:btih:" + "8" * 40,
+        file_size=100,
+        seeds=1,
+        leechers=1,
+        peers=2,
+        metadata={},
+    )
+    from stoney_verify.cinema_media_identity import filter_adult_provider_results
+
+    outcome = filter_adult_provider_results(
+        MediaSourceSearchOutcome(variants=(adult_variant, safe_variant)),
+        enabled=False,
+    )
+    assert outcome.variants == (safe_variant,)
+
+
+def test_episode_identity_preserves_series_adult_flag() -> None:
+    adult_series = CinemaMedia(
+        media_type="tv",
+        tmdb_id=77,
+        title="Adult Series",
+        adult=True,
+    )
+    metadata = episode_catalog_metadata(
+        series=adult_series,
+        episode=_episode(),
+    )
+    assert metadata["adult"] is True
+
+
+def test_full_site_notification_ui_uses_live_room_action() -> None:
+    from pathlib import Path
+
+    script = (Path(cinema_site.__file__).resolve().parent / "assets" / "cinema_site.js").read_text(encoding="utf-8")
+    source = Path(cinema_site.__file__).read_text(encoding="utf-8")
+
+    assert 'action.kind === "room" && action.watch_url' in script
+    assert 'button("Join Theater"' in script
+    assert "location.href = action.watch_url" in script
+    assert "guild_id=_guild_id" in source
+    assert 'action["watch_url"] = movie_night_watch_url' in source
+    assert 'action["available"] = False' in source
+
+
+def test_cinema_search_and_queue_honor_shared_adult_policy() -> None:
+    from pathlib import Path
+
+    site_source = Path(cinema_site.__file__).read_text(encoding="utf-8")
+    watch_source = Path(movie_night_web.__file__).read_text(encoding="utf-8")
+
+    assert "looks_explicit_adult(query)" in site_source
+    assert "include_adult=adult_enabled" in site_source
+    assert "filter_adult_provider_results(" in site_source
+    assert "looks_explicit_adult(query)" in watch_source
+    assert "include_adult=adult_enabled" in watch_source
+    assert "Adult-content Cinema search is disabled for this server." in watch_source
