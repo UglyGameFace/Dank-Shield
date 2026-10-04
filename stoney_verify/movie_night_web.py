@@ -2417,13 +2417,18 @@ window.__onGCastApiAvailable=function(isAvailable){{
   window.dispatchEvent(new Event("dank-cast-api"));
 }};
 function loadGoogleCastSdk() {{
+  if(document.querySelector('script[data-dank-cast-sdk="1"]')) return;
   const script=document.createElement("script");
   script.async=true;
+  script.dataset.dankCastSdk="1";
   script.src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1";
   script.onerror=()=>window.dispatchEvent(new Event("dank-cast-api"));
   document.head.appendChild(script);
 }}
-loadGoogleCastSdk();
+if(typeof window.requestIdleCallback==="function")
+  window.requestIdleCallback(()=>loadGoogleCastSdk(),{{timeout:2200}});
+else
+  setTimeout(()=>loadGoogleCastSdk(),900);
 
 const video=document.getElementById("video");
 const notice=document.getElementById("notice");
