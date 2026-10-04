@@ -1450,3 +1450,19 @@ def test_desktop_host_controls_use_compact_floating_panel_instead_of_full_width_
     assert "left:auto;right:24px;bottom:24px;transform:none" in html
     assert "width:390px;max-height:min(76vh,620px)" in html
     assert ".host-actions { grid-template-columns:repeat(2,minmax(0,1fr)); }" in html
+
+
+
+def test_queue_empty_state_is_branded_and_only_offers_real_discord_action() -> None:
+    html = movie_night_web._watch_html(
+        "room-empty-queue",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert "Your Queue Is Empty" in html
+    assert "Add a title from Discord Cinema" in html
+    assert 'if(lastState?.discord_url)' in html
+    assert 'action.textContent="Open Discord"' in html
+    assert "action.onclick=openDiscordRoom" in html
+    assert "Nothing queued yet." not in html
