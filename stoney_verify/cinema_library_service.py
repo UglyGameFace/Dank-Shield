@@ -473,6 +473,7 @@ async def notify_watch_party_invite(
 async def list_notifications(
     user_id: int,
     *,
+    guild_id: Optional[int] = None,
     unread_only: bool = False,
     limit: int = 30,
 ) -> list[dict[str, Any]]:
@@ -486,6 +487,8 @@ async def list_notifications(
             .order("created_at", desc=True)
             .limit(max(1, min(int(limit), 100)))
         )
+        if guild_id:
+            query = query.eq("guild_id", int(guild_id))
         if unread_only:
             query = query.is_("read_at", "null")
         return query.execute()
