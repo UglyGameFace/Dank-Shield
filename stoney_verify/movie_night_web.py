@@ -2,11 +2,14 @@ from __future__ import annotations
 
 """Signed synchronized web player for Dank Shield Movie Night."""
 
+import base64
 import hashlib
 import hmac
 import json
 import os
 import time
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlencode
 
@@ -30,6 +33,32 @@ def _secret() -> str:
 
 def _public_base() -> str:
     return str(os.getenv("DANK_MEDIA_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+
+
+_BRAND_ASSET_PATH = (
+    Path(__file__).with_name("assets") / "dank_cinema_brand_500.webp.b64"
+)
+
+
+@lru_cache(maxsize=1)
+def _dank_cinema_brand_bytes() -> bytes:
+    encoded = _BRAND_ASSET_PATH.read_text(encoding="ascii").strip()
+    return base64.b64decode(encoded, validate=True)
+
+
+async def dank_cinema_brand_asset(_request: web.Request) -> web.Response:
+    try:
+        payload = _dank_cinema_brand_bytes()
+    except (OSError, ValueError):
+        raise web.HTTPNotFound(text="Dank Cinema brand asset unavailable.")
+    return web.Response(
+        body=payload,
+        content_type="image/webp",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 def _signature(room_id: str, user_id: int, expires: int) -> str:
@@ -174,6 +203,77 @@ def _safe_movie_art_url(value: Any) -> str:
     return ""
 
 
+def _safe_discord_avatar_url(value: Any) -> str:
+    cleaned = str(value or "").strip()
+    if (
+        cleaned.startswith("https://cdn.discordapp.com/")
+        or cleaned.startswith("https://media.discordapp.net/")
+    ):
+        return cleaned
+    return ""
+
+
+def _discord_viewer_summaries(
+    room: MovieNightRoom,
+    viewer_ids: set[int],
+) -> list[dict[str, Any]]:
+    try:
+        from stoney_verify.globals import bot
+    except Exception:
+        bot = None
+
+    guild = None
+    if bot is not None:
+        try:
+            guild = bot.get_guild(int(room.guild_id))
+        except Exception:
+            guild = None
+
+    ordered = sorted(
+        (int(uid) for uid in viewer_ids),
+        key=lambda uid: (uid != int(room.host_id), uid),
+    )
+    summaries: list[dict[str, Any]] = []
+    for uid in ordered:
+        entity = None
+        if guild is not None:
+            try:
+                entity = guild.get_member(uid)
+            except Exception:
+                entity = None
+        if entity is None and bot is not None:
+            try:
+                entity = bot.get_user(uid)
+            except Exception:
+                entity = None
+
+        display_name = ""
+        avatar_url = ""
+        if entity is not None:
+            display_name = str(
+                getattr(entity, "display_name", "")
+                or getattr(entity, "global_name", "")
+                or getattr(entity, "name", "")
+                or ""
+            ).strip()[:80]
+            try:
+                avatar_url = _safe_discord_avatar_url(
+                    getattr(getattr(entity, "display_avatar", None), "url", "")
+                )
+            except Exception:
+                avatar_url = ""
+
+        summaries.append(
+            {
+                "user_id": uid,
+                "display_name": display_name or str(uid),
+                "avatar_url": avatar_url,
+                "is_host": uid == int(room.host_id),
+            }
+        )
+    return summaries
+
+
 def _candidate_web_metadata(candidate: Any) -> dict[str, Any]:
     metadata = dict(getattr(candidate, "metadata", {}) or {}) if candidate is not None else {}
     catalog = (
@@ -290,7 +390,9 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         and viewer.sync_requested
     ):
         sync_target = float(viewer.sync_target_position)
+    active_viewer_ids = movie_manager.active_viewers(room)
     buffer_quorum = movie_manager.buffer_quorum_viewers(room)
+    viewer_summaries = _discord_viewer_summaries(room, active_viewer_ids)
     movie_metadata = _candidate_web_metadata(candidate)
     if not movie_metadata["title"]:
         movie_metadata["title"] = str(title or "Movie Night")
@@ -324,7 +426,8 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "position_seconds": round(room.current_position(), 3),
         "is_host": int(user_id) == int(room.host_id),
         "host_active": movie_manager.host_active(room),
-        "viewer_count": len(movie_manager.active_viewers(room)),
+        "viewer_count": len(active_viewer_ids),
+        "viewers": viewer_summaries,
         "buffer_quorum_count": len(buffer_quorum),
         "sync_status": sync_status,
         "sync_ready": sync_ready,
@@ -585,6 +688,89 @@ async def movie_night_action(request: web.Request) -> web.Response:
     return web.json_response(await _state_payload(room, uid))
 
 
+async def movie_night_transfer_host(request: web.Request) -> web.Response:
+    room, uid = await _room_and_user(request)
+    if int(uid) != int(room.host_id):
+        raise web.HTTPForbidden(text="Only the active Movie Night host can pass host.")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    try:
+        new_host_id = int(payload.get("new_host_id") or 0)
+    except Exception:
+        new_host_id = 0
+    if new_host_id <= 0:
+        raise web.HTTPBadRequest(text="Choose an active viewer to receive host control.")
+
+    manager = get_movie_night_manager()
+    try:
+        manager.transfer_host(
+            room.room_id,
+            current_host_id=uid,
+            new_host_id=new_host_id,
+        )
+    except PermissionError as exc:
+        raise web.HTTPForbidden(text=str(exc))
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+
+    return web.json_response(await _state_payload(room, uid))
+
+
+async def movie_night_queue_action(request: web.Request) -> web.Response:
+    room, uid = await _room_and_user(request)
+    if int(uid) != int(room.host_id):
+        raise web.HTTPForbidden(text="Only the active Cinema host can manage the queue.")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    action = str(payload.get("action") or "").strip().lower()
+    candidate_id = str(payload.get("candidate_id") or "").strip()
+    manager = get_movie_night_manager()
+
+    try:
+        if action == "remove":
+            manager.remove_queued(
+                room.room_id,
+                host_id=uid,
+                candidate_id=candidate_id,
+            )
+        elif action == "move_up":
+            manager.move_queued(
+                room.room_id,
+                host_id=uid,
+                candidate_id=candidate_id,
+                offset=-1,
+            )
+        elif action == "move_down":
+            manager.move_queued(
+                room.room_id,
+                host_id=uid,
+                candidate_id=candidate_id,
+                offset=1,
+            )
+        elif action == "clear":
+            manager.clear_queue(room.room_id, host_id=uid)
+        else:
+            raise web.HTTPBadRequest(text="Unsupported Cinema queue action.")
+    except PermissionError as exc:
+        raise web.HTTPForbidden(text=str(exc))
+    except LookupError as exc:
+        raise web.HTTPNotFound(text=str(exc))
+
+    return web.json_response(await _state_payload(room, uid))
+
+
 def _watch_html(room_id: str, uid: int, query: str) -> str:
     boot = json.dumps(
         {
@@ -603,7 +789,7 @@ def _watch_html(room_id: str, uid: int, query: str) -> str:
 <meta name="color-scheme" content="dark">
 <title>Dank Cinema • The 420 Lobby</title>
 <style>
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=Lacquer&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap");
 :root {{
   color-scheme:dark;
   font-family:"Inter",ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
@@ -634,64 +820,17 @@ button,input {{ font:inherit; }}
 button {{ -webkit-tap-highlight-color:transparent; }}
 .shell {{ width:min(1120px,100%); margin:0 auto; padding:0 18px 140px; }}
 .site-header {{ position:relative; z-index:20; padding:18px 0 6px; }}
-.brand-row {{ display:flex; align-items:center; justify-content:space-between; gap:16px; }}
-.brand {{ display:flex; align-items:center; gap:12px; min-width:0; }}
-.brand-mark {{
-  width:112px; height:92px; flex:0 0 auto;
-  overflow:visible;
-  filter:drop-shadow(0 0 18px rgba(126,255,65,.24));
+.brand-row {{ display:flex; align-items:center; width:100%; }}
+.brand {{ width:100%; min-width:0; }}
+.brand-banner {{
+  display:block;
+  width:min(500px,100%);
+  height:auto;
+  max-height:116px;
+  object-fit:contain;
+  object-position:left center;
+  filter:drop-shadow(0 0 18px rgba(126,255,65,.12));
 }}
-.brand-copy {{ min-width:0; }}
-.wordmark {{
-  margin:0;
-  display:flex;
-  align-items:flex-end;
-  gap:8px;
-  font-family:"Lacquer","Arial Black",Impact,sans-serif;
-  font-size:clamp(2.15rem,7.8vw,3.65rem);
-  font-weight:400;
-  letter-spacing:-.06em;
-  line-height:.82;
-  text-transform:uppercase;
-  transform:rotate(-1.2deg);
-  filter:drop-shadow(0 4px 0 rgba(0,0,0,.38));
-}}
-.wordmark span {{ position:relative; display:inline-block; }}
-.wordmark .dank {{
-  color:#fff;
-  text-shadow:-1px 1px 0 rgba(255,255,255,.22),2px 3px 0 rgba(0,0,0,.52);
-}}
-.wordmark .cinema {{
-  color:#9cff5c;
-  text-shadow:0 0 20px rgba(142,255,80,.14),2px 3px 0 rgba(0,0,0,.5);
-}}
-.wordmark .cinema::after {{
-  content:"";
-  position:absolute;
-  right:8%;
-  bottom:-12px;
-  width:5px;
-  height:19px;
-  border-radius:0 0 6px 6px;
-  background:#9cff5c;
-  box-shadow:-34px 6px 0 -1px #9cff5c, -78px 2px 0 -1px #9cff5c;
-  opacity:.86;
-}}
-.subbrand {{
-  margin-top:10px;
-  display:flex;
-  align-items:center;
-  gap:7px;
-  color:#d3d9d6;
-  font-size:.68rem;
-  font-weight:800;
-  letter-spacing:.18em;
-  text-transform:uppercase;
-}}
-.subbrand .discord-mark {{
-  width:19px;height:15px;display:inline-block;color:#7389ff;
-}}
-.subbrand strong {{ color:var(--lime); letter-spacing:.01em; text-transform:none; font-size:.79rem; }}
 .nav {{
   display:flex; align-items:center; gap:5px;
   overflow-x:auto; scrollbar-width:none; margin:15px -4px 9px; padding:0 4px 5px;
@@ -770,6 +909,7 @@ video {{
   display:flex; align-items:center; justify-content:space-between; gap:8px;
   pointer-events:none;
   z-index:4;
+  transition:opacity .18s ease,transform .18s ease;
 }}
 .room-pill {{
   display:flex; align-items:center; gap:8px;
@@ -799,6 +939,7 @@ video {{
   color:#fff; background:rgba(5,12,10,.5); backdrop-filter:blur(8px);
   box-shadow:0 10px 38px rgba(0,0,0,.32);
   z-index:4;
+  transition:opacity .18s ease,transform .18s ease;
 }}
 .center-play svg {{ width:34px;height:34px; }}
 .player-chrome {{
@@ -806,7 +947,34 @@ video {{
   padding:44px 14px 13px;
   background:linear-gradient(180deg,transparent 0%,rgba(0,0,0,.58) 32%,rgba(0,0,0,.94) 100%);
   z-index:4;
+  transition:opacity .18s ease,transform .18s ease;
 }}
+.video-stage.controls-hidden {{ cursor:none; }}
+.video-stage.controls-hidden .stage-top,
+.video-stage.controls-hidden .center-play,
+.video-stage.controls-hidden .player-chrome {{
+  opacity:0;
+  pointer-events:none;
+}}
+.video-stage.controls-hidden .stage-top {{ transform:translateY(-6px); }}
+.video-stage.controls-hidden .center-play {{ transform:translate(-50%,-50%) scale(.92); }}
+.video-stage.controls-hidden .player-chrome {{ transform:translateY(9px); }}
+.tap-skip-feedback {{
+  position:absolute;top:50%;z-index:5;
+  min-width:70px;padding:12px 14px;
+  border-radius:999px;
+  display:grid;place-items:center;
+  color:#fff;background:rgba(5,12,10,.72);
+  border:1px solid rgba(255,255,255,.18);
+  backdrop-filter:blur(8px);
+  font-size:.82rem;font-weight:900;
+  opacity:0;transform:translateY(-50%) scale(.88);
+  pointer-events:none;
+  transition:opacity .16s ease,transform .16s ease;
+}}
+.tap-skip-feedback.left {{ left:9%; }}
+.tap-skip-feedback.right {{ right:9%; }}
+.tap-skip-feedback.show {{ opacity:1;transform:translateY(-50%) scale(1); }}
 .timeline-row {{ display:block; }}
 .time-row {{ display:flex;align-items:center;justify-content:space-between;margin-top:6px;font-size:.72rem;font-weight:750; }}
 .timeline {{
@@ -854,8 +1022,31 @@ video {{
   background:rgba(72,128,44,.08);white-space:nowrap;
 }}
 .health-dot {{ width:8px;height:8px;border-radius:50%;background:var(--lime);box-shadow:0 0 10px rgba(159,255,86,.6); }}
-.viewer-strip {{ display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px; }}
+.viewer-strip {{ display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;flex-wrap:wrap; }}
+.viewer-cluster {{ display:flex;align-items:center;min-height:32px; }}
+.viewer-avatar {{
+  width:32px;height:32px;margin-left:-7px;border-radius:50%;
+  display:grid;place-items:center;overflow:hidden;
+  border:2px solid #08110e;background:#183229;color:#f1f7f4;
+  font-size:.66rem;font-weight:900;text-transform:uppercase;
+}}
+.viewer-avatar:first-child {{ margin-left:0; }}
+.viewer-avatar.host {{ box-shadow:0 0 0 1px var(--lime),0 0 14px rgba(167,255,100,.18); }}
+.viewer-avatar img {{ width:100%;height:100%;object-fit:cover;display:block; }}
 .watchers {{ display:flex;align-items:center;gap:6px;color:#dbe2df;font-size:.8rem; }}
+.session-viewer-list {{ display:grid;gap:8px;margin-top:12px; }}
+.session-viewer {{
+  display:flex;align-items:center;gap:10px;padding:9px;
+  border:1px solid rgba(255,255,255,.07);border-radius:12px;background:#0b1714;
+}}
+.session-viewer-copy {{ min-width:0;flex:1; }}
+.session-viewer-name {{ font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }}
+.session-viewer-role {{ margin-top:2px;color:#96a49e;font-size:.7rem; }}
+.session-viewer-action {{
+  border:1px solid rgba(151,255,84,.34);border-radius:999px;
+  background:rgba(75,135,45,.12);color:var(--lime);
+  padding:7px 10px;font-size:.7rem;font-weight:850;
+}}
 .quick-tabs {{
   display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;
   margin-top:16px;padding:7px;
@@ -881,6 +1072,21 @@ video {{
   display:grid;grid-template-columns:58px minmax(0,1fr);gap:10px;align-items:center;
   padding:8px;border:1px solid rgba(255,255,255,.07);border-radius:12px;background:#0a1512;
 }}
+.queue-item.manageable {{ grid-template-columns:58px minmax(0,1fr) auto; }}
+.queue-actions {{ display:flex;align-items:center;gap:4px; }}
+.queue-action {{
+  width:30px;height:30px;border-radius:9px;
+  border:1px solid rgba(255,255,255,.09);background:#10201a;color:#dce5e1;
+  font-size:.72rem;font-weight:900;
+}}
+.queue-action.danger {{ color:#ff727d;border-color:rgba(255,93,107,.24); }}
+.queue-action:disabled {{ opacity:.28; }}
+.queue-head-actions {{ display:flex;align-items:center;gap:8px; }}
+.queue-clear {{
+  border:0;background:transparent;color:#b7c2bd;
+  padding:4px 0;font-size:.72rem;font-weight:750;
+}}
+.queue-clear[hidden] {{ display:none !important; }}
 .queue-art {{ width:58px;aspect-ratio:16/10;border-radius:9px;overflow:hidden;background:#13231d; }}
 .queue-art img {{ width:100%;height:100%;object-fit:cover; }}
 .queue-title {{ font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }}
@@ -918,11 +1124,7 @@ video {{
 .sr-only {{ position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }}
 @media (max-width:640px) {{
   .shell {{ padding-left:14px;padding-right:14px; }}
-  .brand-mark {{ width:86px;height:72px; }}
-  .brand {{ gap:8px; }}
-  .wordmark {{ font-size:clamp(1.7rem,8.4vw,2.45rem);gap:5px; }}
-  .subbrand {{ margin-top:7px;font-size:.54rem;letter-spacing:.13em;gap:4px; }}
-  .subbrand strong {{ font-size:.66rem; }}
+  .brand-banner {{ width:100%;max-height:none; }}
   .nav-item {{ padding:9px 11px;font-size:.78rem; }}
   .video-stage {{ min-height:0; }}
   .center-play {{ width:72px;height:72px; }}
@@ -945,33 +1147,15 @@ video {{
 <header class="site-header">
   <div class="brand-row">
     <div class="brand">
-      <svg class="brand-mark" viewBox="0 0 132 106" aria-hidden="true">
-        <defs>
-          <filter id="brandGlow"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-        </defs>
-        <g fill="none" stroke="#61d52f" stroke-width="4.5" stroke-linecap="round" opacity=".68" filter="url(#brandGlow)">
-          <path d="M18 55c-13-12-6-25 10-21-10-14 1-25 15-16-1-17 16-21 24-7 8-13 25-9 24 8 15-10 27 2 17 16 17-3 23 15 9 25"/>
-          <path d="M18 70c-14 3-13 17 2 18M112 66c15 1 17 16 3 20"/>
-        </g>
-        <path d="M42 22 49 7l11 10 10-14 8 15 15-10 2 20" fill="none" stroke="#9cff5c" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="49" cy="7" r="3.2" fill="#9cff5c"/><circle cx="70" cy="3" r="3.2" fill="#9cff5c"/><circle cx="93" cy="8" r="3.2" fill="#9cff5c"/>
-        <path d="M25 75c7-34 70-43 84-7-10 26-68 31-84 7Z" fill="#0a0f0d" stroke="#f4f7f5" stroke-width="4"/>
-        <circle cx="67" cy="61" r="24" fill="#e7e9e8" stroke="#0b0e0d" stroke-width="4"/>
-        <circle cx="67" cy="61" r="5" fill="#101311"/>
-        <circle cx="67" cy="45" r="5.5" fill="#101311"/>
-        <circle cx="82" cy="56" r="5.5" fill="#101311"/>
-        <circle cx="76" cy="74" r="5.5" fill="#101311"/>
-        <circle cx="57" cy="74" r="5.5" fill="#101311"/>
-        <circle cx="51" cy="56" r="5.5" fill="#101311"/>
-        <path d="M20 82c24 14 75 14 97-2M31 93c22 10 54 10 76-1" fill="none" stroke="#9cff5c" stroke-width="4" stroke-linecap="round"/>
-      </svg>
-      <div class="brand-copy">
-        <h1 class="wordmark"><span class="dank">Dank</span><span class="cinema">Cinema</span></h1>
-        <div class="subbrand">A feature of
-          <svg class="discord-mark" viewBox="0 0 24 18" aria-hidden="true"><path fill="currentColor" d="M19.8 2.1A16 16 0 0 0 15.8.9l-.5 1a14 14 0 0 0-6.6 0l-.5-1a16 16 0 0 0-4 1.2C1.7 5.8.9 9.4 1.2 13c2.1 1.6 4.1 2.5 6 3.1l1.5-2c-.8-.3-1.6-.7-2.3-1.2l.6-.5c4.4 2 9.2 2 13.6 0l.7.5c-.8.5-1.5.9-2.4 1.2l1.5 2c1.9-.6 3.9-1.5 6-3.1.4-4.1-.7-7.7-3.1-10.9ZM8.5 11.1c-1.3 0-2.4-1.2-2.4-2.6S7.2 6 8.5 6s2.4 1.2 2.4 2.6-1.1 2.5-2.4 2.5Zm7 0c-1.3 0-2.4-1.2-2.4-2.6S14.2 6 15.5 6s2.4 1.2 2.4 2.6-1.1 2.5-2.4 2.5Z"/></svg>
-          <strong>The 420 Lobby</strong>
-        </div>
-      </div>
+      <img
+        class="brand-banner"
+        src="/movie/assets/dank-cinema-brand.webp"
+        alt="Dank Cinema — A feature of The 420 Lobby"
+        width="500"
+        height="116"
+        decoding="async"
+        fetchpriority="high"
+      >
     </div>
   </div>
   <nav class="nav" aria-label="Dank Cinema">
@@ -994,6 +1178,8 @@ video {{
   <section class="theater" aria-label="Dank Cinema player">
     <div class="video-stage" id="videoStage">
       <video id="video" playsinline preload="metadata" controlslist="nodownload" aria-label="Dank Cinema video"></video>
+      <div class="tap-skip-feedback left" id="tapSkipLeft" aria-live="polite">↶ 10s</div>
+      <div class="tap-skip-feedback right" id="tapSkipRight" aria-live="polite">10s ↷</div>
       <div class="stage-top">
         <div class="room-pill"><span class="live-dot"></span><span id="roomMode">Movie Night</span><span>│</span><span id="role">Connecting…</span></div>
         <button class="cast" id="cast" type="button" aria-label="Cast" title="Cast" hidden>
@@ -1045,6 +1231,7 @@ video {{
       </div>
       <p class="synopsis" id="overview" hidden></p>
       <div class="viewer-strip">
+        <div class="viewer-cluster" id="viewerAvatars" aria-label="Connected Discord viewers"></div>
         <div class="watchers">👥 <strong id="viewers">0</strong> watching</div>
         <div class="watchers" id="hostPresence">Host status: checking…</div>
       </div>
@@ -1068,10 +1255,17 @@ video {{
       <div class="stat"><b>Your role</b><span id="sessionRole">Connecting…</span></div>
       <div class="stat"><b>Sync</b><span id="sessionSync">Checking…</span></div>
     </div>
+    <div class="session-viewer-list" id="sessionViewerList"></div>
   </section>
 
   <section class="queue-panel" id="queuePanel">
-    <div class="section-head"><h2>Up Next</h2><span id="queueCount">0 queued</span></div>
+    <div class="section-head">
+      <h2>Up Next</h2>
+      <div class="queue-head-actions">
+        <span id="queueCount">0 queued</span>
+        <button class="queue-clear" id="clearQueue" type="button" hidden>Clear Queue</button>
+      </div>
+    </div>
     <div id="queueList"><div class="queue-empty">Nothing queued yet.</div></div>
   </section>
 
@@ -1092,8 +1286,8 @@ video {{
   <div class="sheet-handle"></div>
   <div class="sheet-title"><strong>♛ Host Controls</strong><button class="close-sheet" id="closeHostSheet" type="button" aria-label="Close host controls">×</button></div>
   <div class="host-actions">
-    <button class="host-action" id="openDiscordControls" type="button">↗<br>Discord Controls<small>Open the real Cinema control channel</small></button>
-    <button class="host-action" id="fullscreenHost" type="button">⛶<br>Fullscreen<small>Expand the theater player</small></button>
+    <button class="host-action" id="passHost" type="button">👤→<br>Pass Host<small>Choose an active Discord viewer</small></button>
+    <button class="host-action" id="manageQueue" type="button">☷<br>Manage Queue<small>Remove or reorder queued titles</small></button>
     <button class="host-action" id="pause" type="button">Ⅱ<br>Pause for Everyone<small>Pause synchronized playback</small></button>
     <button class="host-action danger" id="end" type="button">■<br><span id="endLabel">End Session</span><small>Close the room for everyone</small></button>
   </div>
@@ -1133,6 +1327,10 @@ let streamRetryAttempt=0;
 let stateFetchFailures=0;
 let attachedStreamUrl="";
 let hostSheetDismissed=false;
+let controlsHideTimer=null;
+let tapSkipFeedbackTimer=null;
+let lastStageTapAt=0;
+let lastStageTapSide="";
 const SOFT_DRIFT_START=0.35;
 const SOFT_DRIFT_STOP=0.12;
 const HARD_DRIFT_SECONDS=5.0;
@@ -1160,6 +1358,100 @@ function loadClientSessionId() {{
   }}
 }}
 const CLIENT_SESSION_ID=loadClientSessionId();
+const videoStage=document.getElementById("videoStage");
+
+function clearControlsHideTimer() {{
+  if(controlsHideTimer!==null) {{
+    clearTimeout(controlsHideTimer);
+    controlsHideTimer=null;
+  }}
+}}
+function hidePlayerControls() {{
+  clearControlsHideTimer();
+  if(!lastState?.stream_url) return;
+  videoStage.classList.add("controls-hidden");
+}}
+function schedulePlayerControlsHide(delayMs=null) {{
+  clearControlsHideTimer();
+  if(!lastState?.stream_url) return;
+  const delay=Number(delayMs??(video.paused?4500:2600));
+  controlsHideTimer=setTimeout(()=>hidePlayerControls(),Math.max(800,delay));
+}}
+function showPlayerControls(autoHide=true) {{
+  videoStage.classList.remove("controls-hidden");
+  clearControlsHideTimer();
+  if(autoHide) schedulePlayerControlsHide();
+}}
+function stageTargetIsControl(target) {{
+  return !!(
+    target &&
+    typeof target.closest==="function" &&
+    target.closest("button,input,.player-chrome,.stage-top")
+  );
+}}
+function showTapSkipFeedback(delta) {{
+  const target=document.getElementById(delta<0?"tapSkipLeft":"tapSkipRight");
+  if(!target) return;
+  document.getElementById("tapSkipLeft").classList.remove("show");
+  document.getElementById("tapSkipRight").classList.remove("show");
+  target.textContent=delta<0?"↶ 10s":"10s ↷";
+  target.classList.add("show");
+  if(tapSkipFeedbackTimer!==null) clearTimeout(tapSkipFeedbackTimer);
+  tapSkipFeedbackTimer=setTimeout(()=>target.classList.remove("show"),650);
+}}
+function privateTapSkip(delta) {{
+  if(!lastState?.private || !lastState?.is_host || !lastState?.stream_url)
+    return false;
+  const current=Number(video.currentTime||0);
+  const duration=Number.isFinite(video.duration)?Number(video.duration):Infinity;
+  const target=Math.max(0,Math.min(duration,current+Number(delta||0)));
+  if(!safeSeek(target)) return false;
+  showTapSkipFeedback(delta);
+  return true;
+}}
+videoStage.addEventListener("pointermove",event=>{{
+  if(event.pointerType==="mouse") showPlayerControls(true);
+}});
+videoStage.addEventListener("pointerup",event=>{{
+  if(stageTargetIsControl(event.target)) {{
+    showPlayerControls(true);
+    return;
+  }}
+
+  const rect=videoStage.getBoundingClientRect();
+  const ratio=rect.width>0?(Number(event.clientX||0)-rect.left)/rect.width:.5;
+  const side=ratio<.38?"left":ratio>.62?"right":"center";
+  const now=Date.now();
+  const doubleTap=(
+    (side==="left"||side==="right") &&
+    lastStageTapSide===side &&
+    now-lastStageTapAt<=340
+  );
+
+  if(doubleTap && lastState?.private && lastState?.is_host) {{
+    lastStageTapAt=0;
+    lastStageTapSide="";
+    showPlayerControls(false);
+    privateTapSkip(side==="left"?-10:10);
+    schedulePlayerControlsHide(1500);
+    return;
+  }}
+
+  lastStageTapAt=now;
+  lastStageTapSide=side;
+  if(videoStage.classList.contains("controls-hidden"))
+    showPlayerControls(true);
+  else
+    hidePlayerControls();
+}});
+videoStage.addEventListener("pointerdown",event=>{{
+  if(stageTargetIsControl(event.target)) {{
+    showPlayerControls(false);
+    clearControlsHideTimer();
+  }}
+}});
+videoStage.addEventListener("focusin",()=>showPlayerControls(false));
+videoStage.addEventListener("focusout",()=>schedulePlayerControlsHide());
 
 function api(path) {{ return path+"?"+BOOT.query; }}
 async function jsonFetch(path, options={{}}) {{
@@ -1221,6 +1513,8 @@ function renderQueue(items) {{
   list.textContent="";
   const rows=Array.isArray(items)?items:[];
   document.getElementById("queueCount").textContent=rows.length+" queued";
+  const clear=document.getElementById("clearQueue");
+  clear.hidden=!(lastState?.is_host && rows.length);
   if(!rows.length) {{
     const empty=document.createElement("div");
     empty.className="queue-empty";
@@ -1248,6 +1542,93 @@ function renderQueue(items) {{
     sub.textContent=(item.year?String(item.year)+" • ":"")+(item.is_current?"Now playing":"Up next");
     copy.append(title,sub);
     row.append(art,copy);
+
+    if(lastState?.is_host) {{
+      row.classList.add("manageable");
+      const actions=document.createElement("div");
+      actions.className="queue-actions";
+      const index=rows.indexOf(item);
+      for(const [label,actionName,disabled,danger] of [
+        ["↑","move_up",index===0,false],
+        ["↓","move_down",index===rows.length-1,false],
+        ["×","remove",false,true]
+      ]) {{
+        const button=document.createElement("button");
+        button.type="button";
+        button.className="queue-action"+(danger?" danger":"");
+        button.textContent=label;
+        button.disabled=disabled;
+        button.setAttribute("aria-label",actionName.replace("_"," ")+" "+String(item.title||"title"));
+        button.onclick=()=>queueAction(actionName,String(item.candidate_id||""));
+        actions.appendChild(button);
+      }}
+      row.appendChild(actions);
+    }}
+    list.appendChild(row);
+  }}
+}}
+function viewerInitials(name) {{
+  const parts=String(name||"").trim().split(/\s+/).filter(Boolean);
+  if(!parts.length) return "?";
+  return (parts[0][0]+(parts.length>1?parts[parts.length-1][0]:"")).slice(0,2).toUpperCase();
+}}
+function buildViewerAvatar(viewer, compact=false) {{
+  const avatar=document.createElement("span");
+  avatar.className="viewer-avatar"+(viewer?.is_host?" host":"");
+  avatar.title=String(viewer?.display_name||viewer?.user_id||"Discord viewer");
+  const url=String(viewer?.avatar_url||"");
+  if(url.startsWith("https://cdn.discordapp.com/")||url.startsWith("https://media.discordapp.net/")) {{
+    const img=document.createElement("img");
+    img.src=url;
+    img.alt="";
+    img.loading="lazy";
+    avatar.appendChild(img);
+  }} else {{
+    avatar.textContent=viewerInitials(viewer?.display_name||viewer?.user_id);
+  }}
+  if(compact) avatar.setAttribute("aria-hidden","true");
+  return avatar;
+}}
+function renderDiscordViewers(s) {{
+  const rows=Array.isArray(s.viewers)?s.viewers:[];
+  const cluster=document.getElementById("viewerAvatars");
+  const list=document.getElementById("sessionViewerList");
+  cluster.textContent="";
+  list.textContent="";
+
+  for(const viewer of rows.slice(0,5))
+    cluster.appendChild(buildViewerAvatar(viewer,true));
+  if(rows.length>5) {{
+    const more=document.createElement("span");
+    more.className="viewer-avatar";
+    more.textContent="+"+String(rows.length-5);
+    cluster.appendChild(more);
+  }}
+
+  for(const viewer of rows) {{
+    const row=document.createElement("div");
+    row.className="session-viewer";
+    row.appendChild(buildViewerAvatar(viewer));
+
+    const copy=document.createElement("div");
+    copy.className="session-viewer-copy";
+    const name=document.createElement("div");
+    name.className="session-viewer-name";
+    name.textContent=String(viewer.display_name||viewer.user_id||"Discord viewer");
+    const role=document.createElement("div");
+    role.className="session-viewer-role";
+    role.textContent=viewer.is_host?"Host":"Viewer";
+    copy.append(name,role);
+    row.appendChild(copy);
+
+    if(s.is_host && !viewer.is_host) {{
+      const action=document.createElement("button");
+      action.type="button";
+      action.className="session-viewer-action";
+      action.textContent="Pass Host";
+      action.onclick=()=>transferHost(Number(viewer.user_id||0),String(viewer.display_name||"viewer"));
+      row.appendChild(action);
+    }}
     list.appendChild(row);
   }}
 }}
@@ -1304,6 +1685,7 @@ function renderSiteState(s) {{
     document.getElementById("movieInfo").classList.add("no-poster");
   }}
   renderQueue(s.queue||[]);
+  renderDiscordViewers(s);
   const hostOnly=!s.is_host;
   document.getElementById("rewind10").disabled=hostOnly;
   document.getElementById("forward10").disabled=hostOnly;
@@ -1417,6 +1799,11 @@ async function applyState(s) {{
   document.getElementById("play").disabled=!s.is_host;
   document.getElementById("pause").disabled=!s.is_host;
   document.getElementById("end").disabled=!s.is_host;
+  document.getElementById("passHost").disabled=!(
+    s.is_host &&
+    Array.isArray(s.viewers) &&
+    s.viewers.some(viewer=>!viewer.is_host)
+  );
   syncButton.hidden=!!s.is_host;
   syncButton.disabled=!!s.is_host;
   if(!s.is_host && s.sync_status==="joining") syncButton.textContent=syncRequested?"Syncing…":"Tap to Sync";
@@ -1591,6 +1978,19 @@ async function heartbeat(forceSync=false) {{
     return null;
   }}
 }}
+async function queueAction(action, candidateId="") {{
+  if(!lastState?.is_host) return;
+  if(action==="clear" && !confirm("Clear every queued title?")) return;
+  try {{
+    const state=await jsonFetch("/movie/"+BOOT.roomId+"/queue", {{
+      method:"POST",
+      body:JSON.stringify({{action,candidate_id:candidateId}})
+    }});
+    await applyState(state);
+  }} catch(err) {{
+    notice.textContent="Queue update failed: "+String(err?.message||err);
+  }}
+}}
 async function hostAction(action, extra={{}}) {{
   if(!lastState || !lastState.is_host || remoteApply) return;
   try {{
@@ -1708,6 +2108,21 @@ document.getElementById("closeHostSheet").onclick=()=>{{
   hostSheetDismissed=true;
   document.getElementById("hostSheet").classList.remove("show");
 }};
+async function transferHost(newHostId, displayName="viewer") {{
+  if(!lastState?.is_host || !Number(newHostId)) return;
+  const target=String(displayName||"viewer");
+  if(!confirm("Pass host control to "+target+"?")) return;
+  try {{
+    const state=await jsonFetch("/movie/"+BOOT.roomId+"/host", {{
+      method:"POST",
+      body:JSON.stringify({{new_host_id:Number(newHostId)}})
+    }});
+    await applyState(state);
+    notice.textContent="Host control passed to "+target+".";
+  }} catch(err) {{
+    notice.textContent="Pass Host failed: "+String(err?.message||err);
+  }}
+}}
 function openDiscordRoom() {{
   const url=String(lastState?.discord_url||"");
   if(!url) {{
@@ -1716,8 +2131,17 @@ function openDiscordRoom() {{
   }}
   window.location.href=url;
 }}
-document.getElementById("openDiscordControls").onclick=openDiscordRoom;
-document.getElementById("fullscreenHost").onclick=()=>document.getElementById("fullscreen").click();
+document.getElementById("passHost").onclick=()=>{{
+  const panel=document.getElementById("sessionPanel");
+  panel.hidden=false;
+  panel.scrollIntoView({{behavior:"smooth",block:"nearest"}});
+  notice.textContent="Choose an active viewer below to pass host control.";
+}};
+document.getElementById("manageQueue").onclick=()=>{{
+  document.getElementById("queuePanel").scrollIntoView({{behavior:"smooth",block:"nearest"}});
+  notice.textContent="Queue manager is active. Use ↑ ↓ or × on queued titles.";
+}};
+document.getElementById("clearQueue").onclick=()=>queueAction("clear");
 
 for(const item of document.querySelectorAll("[data-nav]")) {{
   item.addEventListener("click",()=>{{
@@ -1890,6 +2314,7 @@ document.getElementById("end").onclick=()=>{{
     hostAction("end");
 }};
 video.addEventListener("play",()=>{{
+  schedulePlayerControlsHide(2200);
   if(remoteApply) return;
   if(lastState?.is_host) {{
     hostAction("resume");
@@ -1908,7 +2333,10 @@ video.addEventListener("play",()=>{{
     heartbeat(true);
   }}
 }});
-video.addEventListener("pause",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("pause"); }});
+video.addEventListener("pause",()=>{{
+  showPlayerControls(true);
+  if(!remoteApply && lastState?.is_host) hostAction("pause");
+}});
 video.addEventListener("seeked",()=>{{ if(!remoteApply && lastState?.is_host) hostAction("seek",{{seconds:video.currentTime||0}}); }});
 video.addEventListener("loadedmetadata",()=>{{
   streamRetryAttempt=0;
@@ -1967,7 +2395,7 @@ async def movie_night_watch(request: web.Request) -> web.Response:
                 "font-src https://fonts.gstatic.com; "
                 "media-src 'self'; "
                 "connect-src 'self' https://www.gstatic.com https://*.googleapis.com; "
-                "img-src 'self' https://image.tmdb.org; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+                "img-src 'self' https://image.tmdb.org https://cdn.discordapp.com https://media.discordapp.net; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"
             ),
         },
     )
@@ -1975,13 +2403,22 @@ async def movie_night_watch(request: web.Request) -> web.Response:
 
 def register_movie_night_public_routes(app: web.Application) -> None:
     ensure_movie_night_cleanup_task()
+    app.router.add_get(
+        "/movie/assets/dank-cinema-brand.webp",
+        dank_cinema_brand_asset,
+    )
     app.router.add_get("/movie/{room_id}/watch", movie_night_watch)
     app.router.add_get("/movie/{room_id}/state", movie_night_state)
     app.router.add_post("/movie/{room_id}/heartbeat", movie_night_heartbeat)
     app.router.add_post("/movie/{room_id}/action", movie_night_action)
+    app.router.add_post("/movie/{room_id}/host", movie_night_transfer_host)
+    app.router.add_post("/movie/{room_id}/queue", movie_night_queue_action)
 
 
 __all__ = [
+    "dank_cinema_brand_asset",
+    "movie_night_queue_action",
+    "movie_night_transfer_host",
     "movie_night_watch_url",
     "register_movie_night_public_routes",
 ]

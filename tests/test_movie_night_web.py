@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -434,11 +435,12 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
     )
 
     assert "Dank Cinema • The 420 Lobby" in html
-    assert 'class="wordmark"' in html
-    assert 'class="brand-mark"' in html
-    assert "The 420 Lobby" in html
-    assert 'family=Lacquer' in html
-    assert 'viewBox="0 0 132 106"' in html
+    assert 'class="brand-banner"' in html
+    assert 'src="/movie/assets/dank-cinema-brand.webp"' in html
+    assert 'alt="Dank Cinema — A feature of The 420 Lobby"' in html
+    assert 'class="wordmark"' not in html
+    assert 'class="brand-mark"' not in html
+    assert "family=Lacquer" not in html
     assert 'id="videoStage"' in html
     assert 'screen.orientation.lock("landscape")' in html
     assert 'screen.orientation.unlock()' in html
@@ -459,12 +461,11 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
     assert 'event=>event.preventDefault()' in html
     assert "Stream Health:" in html
     assert "<summary>Advanced Stream Details</summary>" in html
-    assert "Discord Controls" in html
     assert "Fullscreen" in html
     assert "Pause for Everyone" in html
     assert "End Private Session" in html
-    assert "Pass Host" not in html
-    assert "Manage Queue" not in html
+    assert "Pass Host" in html
+    assert "Manage Queue" in html
     assert "Cinema notifications are managed" not in html
     assert "Movie discovery and your saved Cinema controls" not in html
 
@@ -557,7 +558,7 @@ def test_movie_night_watch_csp_allows_only_tmdb_remote_images(monkeypatch) -> No
     )
     response = asyncio.run(movie_night_web.movie_night_watch(request))
     csp = response.headers["Content-Security-Policy"]
-    assert "img-src 'self' https://image.tmdb.org" in csp
+    assert "img-src 'self' https://image.tmdb.org https://cdn.discordapp.com https://media.discordapp.net" in csp
     assert "script-src 'unsafe-inline' https://www.gstatic.com" in csp
     assert "connect-src 'self' https://www.gstatic.com https://*.googleapis.com" in csp
     assert "img-src *" not in csp
@@ -649,3 +650,202 @@ def test_dank_cinema_polling_does_not_show_broken_sync_on_one_transient_fetch() 
     assert "stateFetchFailures>=3" in html
     assert "Sync connection lost. Reconnecting…" in html
     assert 'notice.textContent="Sync error: "+message' not in html
+
+
+
+def test_dank_cinema_approved_brand_asset_is_real_webp() -> None:
+    movie_night_web._dank_cinema_brand_bytes.cache_clear()
+    payload = movie_night_web._dank_cinema_brand_bytes()
+
+    assert len(payload) > 5_000
+    assert payload[:4] == b"RIFF"
+    assert payload[8:12] == b"WEBP"
+
+    response = asyncio.run(
+        movie_night_web.dank_cinema_brand_asset(SimpleNamespace())
+    )
+    assert response.content_type == "image/webp"
+    assert response.body == payload
+    assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+
+
+def test_dank_cinema_brand_asset_route_is_registered() -> None:
+    source = Path(movie_night_web.__file__).read_text(encoding="utf-8")
+    assert '"/movie/assets/dank-cinema-brand.webp"' in source
+    assert "dank_cinema_brand_asset" in source
+
+
+
+def test_dank_cinema_player_chrome_auto_hides_and_empty_stage_toggles_it() -> None:
+    html = movie_night_web._watch_html(
+        "room-player-chrome",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert ".video-stage.controls-hidden .player-chrome" in html
+    assert ".video-stage.controls-hidden .center-play" in html
+    assert ".video-stage.controls-hidden .stage-top" in html
+    assert 'videoStage.addEventListener("pointerup"' in html
+    assert 'videoStage.classList.contains("controls-hidden")' in html
+    assert "hidePlayerControls()" in html
+    assert "schedulePlayerControlsHide(2200)" in html
+    assert "cursor:none" in html
+
+
+def test_dank_cinema_private_double_tap_skip_is_host_only() -> None:
+    html = movie_night_web._watch_html(
+        "room-private-tap-skip",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert 'id="tapSkipLeft"' in html
+    assert 'id="tapSkipRight"' in html
+    assert "now-lastStageTapAt<=340" in html
+    assert "lastState?.private && lastState?.is_host" in html
+    assert 'privateTapSkip(side==="left"?-10:10)' in html
+    assert "if(!lastState?.private || !lastState?.is_host || !lastState?.stream_url)" in html
+
+
+def test_discord_viewer_summaries_use_real_member_identity(monkeypatch) -> None:
+    from stoney_verify import globals as globals_module
+
+    class Avatar:
+        url = "https://cdn.discordapp.com/avatars/20/example.webp"
+
+    host = SimpleNamespace(
+        id=10,
+        display_name="Host Person",
+        display_avatar=Avatar(),
+    )
+    viewer = SimpleNamespace(
+        id=20,
+        display_name="Viewer Person",
+        display_avatar=Avatar(),
+    )
+    members = {10: host, 20: viewer}
+    guild = SimpleNamespace(get_member=lambda uid: members.get(int(uid)))
+    fake_bot = SimpleNamespace(
+        get_guild=lambda guild_id: guild if int(guild_id) == 123 else None,
+        get_user=lambda uid: None,
+    )
+    monkeypatch.setattr(globals_module, "bot", fake_bot)
+
+    room = SimpleNamespace(guild_id=123, host_id=10)
+    rows = movie_night_web._discord_viewer_summaries(room, {20, 10})
+
+    assert [row["user_id"] for row in rows] == [10, 20]
+    assert rows[0]["display_name"] == "Host Person"
+    assert rows[0]["is_host"] is True
+    assert rows[1]["display_name"] == "Viewer Person"
+    assert rows[1]["avatar_url"].startswith("https://cdn.discordapp.com/")
+
+
+def test_dank_cinema_web_host_transfer_endpoint_uses_canonical_manager(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=123,
+        channel_id=456,
+        host_id=10,
+        stream_token="",
+    )
+    manager.join_room(room.room_id, user_id=20)
+
+    async def room_and_user(_request):
+        return room, 10
+
+    async def state_payload(current_room, user_id):
+        return {
+            "ok": True,
+            "room_id": current_room.room_id,
+            "is_host": int(user_id) == int(current_room.host_id),
+            "host_id": int(current_room.host_id),
+        }
+
+    async def request_json():
+        return {"new_host_id": 20}
+
+    monkeypatch.setattr(movie_night_web, "_room_and_user", room_and_user)
+    monkeypatch.setattr(movie_night_web, "_state_payload", state_payload)
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+
+    response = asyncio.run(
+        movie_night_web.movie_night_transfer_host(
+            SimpleNamespace(json=request_json)
+        )
+    )
+    payload = json.loads(response.text)
+
+    assert room.host_id == 20
+    assert payload["host_id"] == 20
+    assert payload["is_host"] is False
+
+
+
+def test_dank_cinema_web_queue_endpoint_uses_canonical_manager(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=123,
+        channel_id=456,
+        host_id=10,
+        stream_token="",
+    )
+    first = manager.nominate(
+        room.room_id,
+        user_id=10,
+        title="First",
+        auto_vote=False,
+    )
+    second = manager.nominate(
+        room.room_id,
+        user_id=10,
+        title="Second",
+        auto_vote=False,
+    )
+    room.queue[:] = [first.candidate_id, second.candidate_id]
+
+    async def room_and_user(_request):
+        return room, 10
+
+    async def state_payload(current_room, user_id):
+        return {
+            "ok": True,
+            "queue": list(current_room.queue),
+            "is_host": int(user_id) == int(current_room.host_id),
+        }
+
+    async def request_json():
+        return {
+            "action": "move_up",
+            "candidate_id": second.candidate_id,
+        }
+
+    monkeypatch.setattr(movie_night_web, "_room_and_user", room_and_user)
+    monkeypatch.setattr(movie_night_web, "_state_payload", state_payload)
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+
+    response = asyncio.run(
+        movie_night_web.movie_night_queue_action(
+            SimpleNamespace(json=request_json)
+        )
+    )
+    payload = json.loads(response.text)
+
+    assert payload["queue"] == [second.candidate_id, first.candidate_id]
+
+
+def test_dank_cinema_queue_ui_has_real_host_management_actions() -> None:
+    html = movie_night_web._watch_html(
+        "room-queue-manager",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert 'id="manageQueue"' in html
+    assert 'id="clearQueue"' in html
+    assert '"/movie/"+BOOT.roomId+"/queue"' in html
+    assert '"move_up"' in html
+    assert '"move_down"' in html
+    assert '"remove"' in html
+    assert 'queueAction("clear")' in html

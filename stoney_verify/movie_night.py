@@ -1199,6 +1199,64 @@ class MovieNightManager:
             room.queue.pop(0)
         return None
 
+    def remove_queued(
+        self,
+        room_id: str,
+        *,
+        host_id: int,
+        candidate_id: str,
+    ) -> MovieNightRoom:
+        room = self._require_room(room_id)
+        if int(host_id) != int(room.host_id):
+            raise PermissionError("Only the Cinema host may manage the queue.")
+        candidate_key = str(candidate_id or "")
+        try:
+            room.queue.remove(candidate_key)
+        except ValueError:
+            raise LookupError("Queued movie not found.")
+        return room
+
+    def move_queued(
+        self,
+        room_id: str,
+        *,
+        host_id: int,
+        candidate_id: str,
+        offset: int,
+    ) -> MovieNightRoom:
+        room = self._require_room(room_id)
+        if int(host_id) != int(room.host_id):
+            raise PermissionError("Only the Cinema host may manage the queue.")
+        candidate_key = str(candidate_id or "")
+        try:
+            current_index = room.queue.index(candidate_key)
+        except ValueError:
+            raise LookupError("Queued movie not found.")
+
+        delta = -1 if int(offset) < 0 else 1 if int(offset) > 0 else 0
+        if not delta:
+            return room
+        target_index = max(0, min(len(room.queue) - 1, current_index + delta))
+        if target_index == current_index:
+            return room
+        room.queue[current_index], room.queue[target_index] = (
+            room.queue[target_index],
+            room.queue[current_index],
+        )
+        return room
+
+    def clear_queue(
+        self,
+        room_id: str,
+        *,
+        host_id: int,
+    ) -> MovieNightRoom:
+        room = self._require_room(room_id)
+        if int(host_id) != int(room.host_id):
+            raise PermissionError("Only the Cinema host may manage the queue.")
+        room.queue.clear()
+        return room
+
     def group_buffer_corridor(
         self,
         room_id: str,
@@ -1244,11 +1302,12 @@ class MovieNightManager:
         new_host_id: int,
         now: Optional[float] = None,
     ) -> MovieNightRoom:
-        """Transfer Watch Party playback authority without replacing the room.
+        """Transfer Cinema playback authority without replacing the room.
 
         The canonical playback position is snapshotted at transfer time, then
         the existing playback state continues from the same point under the new
-        host. Private Session keeps one host/controller and does not transfer.
+        host. Private Sessions may transfer only to an active already-authorized
+        viewer, so the private access boundary does not widen during handoff.
         """
 
         room = self._require_room(room_id)
@@ -1256,16 +1315,16 @@ class MovieNightManager:
         old_host = int(current_host_id)
         new_host = int(new_host_id)
 
-        if str(getattr(room, "mode", "watch_party") or "watch_party") != "watch_party":
-            raise PermissionError("Private Session host ownership cannot be transferred.")
         if old_host != int(room.host_id):
-            raise PermissionError("Only the current Movie Night host can pass host control.")
+            raise PermissionError("Only the current Cinema host can pass host control.")
         if new_host == old_host:
             raise ValueError("Choose another active viewer to receive host control.")
 
         active = self.active_viewers(room, now=current)
         if new_host not in active:
-            raise PermissionError("Host control can only be passed to an active Movie Night viewer.")
+            raise PermissionError("Host control can only be passed to an active Cinema viewer.")
+        if not self.user_can_access(room, new_host):
+            raise PermissionError("Host control can only be passed to an authorized Cinema viewer.")
 
         position = room.current_position(current)
         room.playback_position = position

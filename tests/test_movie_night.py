@@ -1320,7 +1320,7 @@ def test_host_handoff_preserves_playback_and_moves_authority() -> None:
         raise AssertionError("previous host unexpectedly kept playback authority")
 
 
-def test_host_handoff_requires_active_viewer_and_is_disabled_for_private() -> None:
+def test_host_handoff_requires_active_viewer_and_private_handoff_stays_authorized() -> None:
     manager = MovieNightManager(viewer_ttl_seconds=30)
     room = manager.create_room(
         guild_id=1,
@@ -1352,17 +1352,25 @@ def test_host_handoff_requires_active_viewer_and_is_disabled_for_private() -> No
         mode="private",
         now=201.0,
     )
-    try:
-        manager.transfer_host(
-            private_room.room_id,
-            current_host_id=10,
-            new_host_id=20,
-            now=202.0,
-        )
-    except PermissionError as exc:
-        assert "private" in str(exc).lower()
-    else:
-        raise AssertionError("private viewing unexpectedly allowed host transfer")
+    manager.invite_private_viewer(
+        private_room.room_id,
+        host_id=10,
+        user_id=20,
+    )
+    manager.join_room(private_room.room_id, user_id=20, now=202.0)
+
+    transferred = manager.transfer_host(
+        private_room.room_id,
+        current_host_id=10,
+        new_host_id=20,
+        now=203.0,
+    )
+
+    assert transferred is private_room
+    assert private_room.host_id == 20
+    assert manager.user_can_access(private_room, 10)
+    assert manager.user_can_access(private_room, 20)
+    assert private_room.viewers[20].sync_ready is True
 
 
 def test_rejoin_restores_active_presence_without_losing_room_state() -> None:
@@ -1433,3 +1441,86 @@ def test_empty_room_timeout_uses_latest_discord_or_watch_presence() -> None:
     assert manager.room_last_presence(room) == 350.0
     assert not manager.room_empty_expired(room, now=649.0)
     assert manager.room_empty_expired(room, now=650.0)
+
+
+
+def test_host_can_remove_reorder_and_clear_cinema_queue() -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        now=100.0,
+    )
+    first = manager.nominate(
+        room.room_id,
+        user_id=10,
+        title="First",
+        auto_vote=False,
+        now=100.0,
+    )
+    second = manager.nominate(
+        room.room_id,
+        user_id=10,
+        title="Second",
+        auto_vote=False,
+        now=101.0,
+    )
+    third = manager.nominate(
+        room.room_id,
+        user_id=10,
+        title="Third",
+        auto_vote=False,
+        now=102.0,
+    )
+    room.queue[:] = [first.candidate_id, second.candidate_id, third.candidate_id]
+
+    manager.move_queued(
+        room.room_id,
+        host_id=10,
+        candidate_id=third.candidate_id,
+        offset=-1,
+    )
+    assert room.queue == [first.candidate_id, third.candidate_id, second.candidate_id]
+
+    manager.remove_queued(
+        room.room_id,
+        host_id=10,
+        candidate_id=third.candidate_id,
+    )
+    assert room.queue == [first.candidate_id, second.candidate_id]
+
+    manager.clear_queue(room.room_id, host_id=10)
+    assert room.queue == []
+
+
+def test_non_host_cannot_manage_cinema_queue() -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        now=100.0,
+    )
+    manager.join_room(room.room_id, user_id=20, now=101.0)
+    candidate = manager.nominate(
+        room.room_id,
+        user_id=10,
+        title="Queued",
+        auto_vote=False,
+        now=102.0,
+    )
+    room.queue.append(candidate.candidate_id)
+
+    try:
+        manager.remove_queued(
+            room.room_id,
+            host_id=20,
+            candidate_id=candidate.candidate_id,
+        )
+    except PermissionError as exc:
+        assert "host" in str(exc).lower()
+    else:
+        raise AssertionError("non-host unexpectedly managed the Cinema queue")

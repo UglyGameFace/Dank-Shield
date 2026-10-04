@@ -2,168 +2,162 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-430 — Dank Cinema premium 420 Lobby theater website**
+**DANK-SHIELD-430 — Dank Cinema exact mockup parity + real Discord-integrated theater controls**
 
 Baseline:
-`main@2397a03626bf49d48ee87dbd7b83480e99baa305` (PR #429 merged).
+`main@aec18e6e9e4cb1399d17e2ef1bb3f89912a36e2f` (PR #433 merged green).
 
 Active branch:
-`fix/430-cinema-mockup-parity`
+`fix/430-cinema-exact-brand-discord`
 
 Issue:
 **#430 — Dank Cinema: match premium 420 Lobby theater website mockup**
 
-Previous merged remediation:
-**#432 — Dank Cinema: replace mockup controls with real web actions** → `9c4f7e99e9fa64d688766aa72e9b7ee50564f632`
-
 Current pull request:
-**#433 — Dank Cinema: match approved theater mockup in production**
+**#434 — Dank Cinema: ship exact brand and real Discord theater controls**
 
 Outcome:
-Rebuild the signed Dank Cinema Watch page to match the owner-approved premium dark-green 420 Lobby theater mockup while preserving the canonical synchronized playback, signed access, torrent runtime, and Discord-owned movie programming paths.
+Make the signed Dank Cinema Watch experience use the owner-approved branding/template as the production contract while ensuring every visible player, host, queue, Cast, fullscreen, and Discord affordance performs a real action.
 
 ## Scope
 
-- signed `/movie/{room_id}/watch` theater page only;
-- approved Dank Cinema / The 420 Lobby visual system;
-- readable graffiti-style wordmark plus inline cinema mark;
-- custom mobile-first video chrome;
-- supported-browser casting through native Remote Playback / AirPlay picker APIs;
-- remove the inline browser download control from the visible player;
-- movie metadata/poster and queue projection from the existing canonical room state;
-- stream-health-first UX with torrent detail kept under advanced diagnostics;
-- mode-correct Private Session / Movie Night wording;
-- focused regression tests and repository CI.
+- approved exact Dank Cinema / The 420 Lobby header asset;
+- signed `/movie/{room_id}/watch` theater page;
+- TMDB movie/poster/backdrop presentation;
+- custom player chrome and mobile/desktop interaction behavior;
+- auto-hide/tap-to-reveal controls;
+- private-session double-tap ±10 second skip for the controlling host only;
+- truthful Google Cast discovery/load behavior;
+- fullscreen + supported landscape orientation request;
+- real Discord viewer identity/avatar projection;
+- real website Pass Host flow using canonical MovieNightManager authority;
+- real website queue remove/reorder/clear controls using canonical room queue state;
+- existing signed access, torrent playback, host/viewer sync, and private-room authorization;
+- regression coverage and exact-head repository CI.
 
 ## Status
 
-**PR #432 merged green, but the real Android/Discloud canary still failed the product Definition of Done. The deployed page materially diverges from the owner-approved Dank Cinema mockup: the logo/wordmark are wrong, the player is black instead of using TMDB cinematic artwork, fullscreen expands a portrait container without requesting landscape, the Cast affordance can appear without a real available Chromecast target, and a single transient poll can surface a scary `Sync error: Failed to fetch` banner. Issue #430 remains open and remediation is active on `fix/430-cinema-mockup-parity`.**
+**Implementation is active on PR #434. PR #433 is already merged and is the production baseline. The follow-up branch is mergeable and changes only the approved Cinema asset, MovieNight authority/web surfaces, ACTIVE_TASK.md, and focused tests. Exact-head CI is currently running; the real Android/desktop Discloud canary is still required before completion can be claimed.**
 
 ## Findings / root cause
 
-1. **The current Watch page is functionally mature but visually still a diagnostics panel.**
-   - native video controls, external Play/Pause/End buttons, room ID text, and torrent statistics dominate the page;
-   - the approved product direction makes the movie/player primary and moves technical diagnostics behind an advanced disclosure.
+1. **The brand should not be approximated in CSS/SVG.**
+   - repeated font/SVG recreations drifted from the owner-approved header;
+   - the approved banner itself is now the production source asset, served by the Cinema route with immutable caching.
 
-2. **Native inline video controls expose browser-owned actions such as download.**
-   - Dank Cinema cannot reliably remove one browser-native menu item across every browser;
-   - using custom player chrome removes the visible inline download control while the signed stream endpoint and authorization remain unchanged.
+2. **The player chrome behaved like a permanent overlay.**
+   - stage-top, center play, timeline, and transport controls had no idle state;
+   - clicks/taps on unused player space therefore did nothing useful and the movie remained visually obstructed;
+   - controls now auto-hide, reappear on pointer activity/tap, and an empty-stage click/tap toggles them directly.
 
-3. **Casting is browser/platform capability dependent.**
-   - no second casting backend is required for the first implementation;
-   - use the standards-based Remote Playback API where available and WebKit's playback target picker for supported Apple browsers;
-   - unsupported browsers show casting as unavailable rather than pretending it worked.
+3. **Tap skipping must not desynchronize shared rooms.**
+   - double-tap left/right ±10 seconds is restricted to a Private Session's controlling host;
+   - group viewers and non-host private viewers cannot trigger this seek affordance.
 
-4. **Existing canonical Cinema data already contains enough metadata for the approved theater composition.**
-   - current candidate metadata can provide title/year/overview/TMDB poster;
-   - room queue candidate IDs can be projected into a safe queue view;
-   - no duplicate movie/session store is needed.
+4. **Discord identity existed but the website showed only counts.**
+   - canonical room presence already has Discord user IDs;
+   - the Watch state now resolves cached Discord members/users to real display names and avatars from the bot's guild/user cache, with strict Discord CDN allowlisting.
 
-5. **Production exposed fake affordances.**
-   - Home/Browse/My Stuff, header search/notifications, Viewers/Chat, Pass Host, and Manage Queue were visible buttons whose handlers only displayed notices;
-   - blank poster cards and synthetic viewer/avatar/profile visuals made missing data look fabricated;
-   - these controls are being removed or replaced with actions that actually navigate, open Discord, reveal live session state, or control playback.
+5. **Approved Pass Host behavior needed a real website path.**
+   - MovieNightManager already had authoritative handoff logic for group sessions;
+   - the approved Private Room template also exposes Pass Host, so private handoff now permits only an already-authorized active private viewer and preserves the private access boundary;
+   - the website calls a signed host-transfer endpoint and renders real eligible Discord viewers.
 
-6. **The first Cast implementation was not Chromecast integration.**
-   - `HTMLMediaElement.remote.prompt()` / AirPlay feature detection does not create a Google Cast sender session;
-   - the remediation uses Google's Web Sender SDK with the Default Media Receiver and a separately signed Cast media URL;
-   - native Remote Playback/AirPlay are only used as fallbacks after the browser reports a real available target;
-   - Cast is hidden unless at least one real casting transport is available and the selected media container is directly castable.
+6. **Manage Queue could not remain decorative.**
+   - canonical queue state already lives on MovieNightRoom;
+   - MovieNightManager now owns host-only remove, move-up/down, and clear operations;
+   - the website queue uses those operations instead of local-only list manipulation.
 
-7. **TMDB metadata existed but the Watch page was reading the wrong shape.**
-   - canonical Movie Night candidates store TMDB identity under `candidate.metadata["catalog"]`;
-   - the Watch serializer was incorrectly reading `year`, `overview`, and `poster_url` only from the candidate metadata root;
-   - this is why a correctly TMDB-matched title could still show a blank poster/description on the website;
-   - the serializer now reads the canonical catalog envelope first and keeps the strict TMDB image-host allowlist.
-
-8. **The approved mockup still was not the production visual contract.**
-   - production used a clean sans/marker-style brand and simplified reel-eye mark instead of the graffiti wordmark/crowned cinema-reel language approved in the mockup;
-   - TMDB search retained poster art but discarded `backdrop_path`, leaving the paused player visually black even when the movie was correctly identified;
-   - fullscreen targeted the outer theater card and never requested landscape orientation;
-   - the Cast icon could be exposed from generic browser capability instead of proven Google Cast device availability;
-   - one failed state fetch immediately rendered `Sync error: Failed to fetch`, even though the 2-second poll would retry automatically.
+7. **Cast and fullscreen remain capability-dependent, not decorative.**
+   - Chromecast stays hidden unless Google Cast reports a real receiver state and the selected media is directly castable;
+   - fullscreen targets the video stage and requests landscape when the browser allows orientation locking.
 
 ## Execution path
 
-`signed Watch URL -> _room_and_user -> _state_payload -> custom Dank Cinema theater UI -> heartbeat/state/action -> canonical MovieNightManager + TorrentMediaManager`.
+Brand:
+`/movie/assets/dank-cinema-brand.webp -> cached decoded approved asset`.
 
-Artwork:
-`candidate.metadata.poster_url -> strict image.tmdb.org allowlist -> CSP-authorized poster rendering`.
+Watch:
+`signed Watch URL -> _room_and_user -> _state_payload -> theater UI -> heartbeat/state/action -> MovieNightManager + TorrentMediaManager`.
 
-Casting:
-`Google Cast Web Sender SDK -> Default Media Receiver -> signed torrent media URL -> room state continues as playback authority`.
+Discord:
+`MovieNightRoom.active_viewers -> bot guild/user cache -> safe Discord viewer summaries -> Watch state -> viewer avatars/session list`.
+
+Pass Host:
+`website viewer row -> signed /host endpoint -> MovieNightManager.transfer_host -> same room/playback clock -> all clients observe new authority on poll`.
+
+Queue:
+`website queue controls -> signed /queue endpoint -> MovieNightManager.remove_queued/move_queued/clear_queue -> canonical room queue -> all clients observe reordered queue`.
+
+Player:
+`videoStage pointer activity -> show/hide timer -> idle chrome hidden; private-host double tap outer left/right -> canonical host seek`.
 
 ## Changes
 
-- Rebuilt the Watch page into the approved charcoal/deep-green premium theater layout.
-- Added readable graffiti-style Dank Cinema branding and an inline graffiti/cinema reel mark without adding a second asset pipeline.
-- Added custom player controls for play/pause, host seek, ±10 seconds, volume/mute, fullscreen, timeline, and cast.
-- Removed native `controls` from the video and retained `controlsList="nodownload"` as an extra browser hint; context-menu download affordance is suppressed on the player.
-- Added native Remote Playback / AirPlay target picking when supported.
-- Added mode-aware room/host wording and `End Private Session` / `End Movie Night` labels.
-- Added movie title/year/overview/TMDB poster projection to Watch state.
-- Added queue projection from the existing room candidates.
-- Added stream-health presentation while keeping progress, seeds/leechers, rate, and buffer target under Advanced Stream Details.
-- Preserved signed access, sync/heartbeat, host action API, progressive torrent playback, and existing room authority.
-- Pass Host and queue programming remain Discord-owned; the web mockup buttons route users back to the canonical Cinema panel rather than creating duplicate authority.
-- Production follow-up removes the fake header/profile/search/notification affordances and fake Home/Browse/My Stuff actions.
-- Navigation now exposes only real Theater, Queue, Details, and Discord actions.
-- Session tab renders real room/viewer/sync state; Chat opens the actual Discord channel.
-- Missing TMDB poster/overview data is hidden instead of replaced with fabricated placeholder content.
-- Host sheet keeps only working Discord Controls, Fullscreen, Pause for Everyone, and End Session actions.
-- Chromecast support now uses Google's Web Sender SDK and Default Media Receiver; availability-gated native Remote Playback/AirPlay remain truthful fallbacks where supported.
-- Signed torrent stream responses now expose narrowly scoped gstatic CORS for Cast receiver fetches; the HMAC URL remains required.
-- Watch metadata now reads the canonical nested TMDB catalog payload, so matched movies render their real TMDB title/year/overview/poster instead of appearing metadata-empty.
-- TMDB catalog now retains real `backdrop_path` artwork and the Watch player uses that backdrop/poster as its paused-stage artwork instead of a blank black rectangle.
-- Branding is rebuilt around the approved crowned film-reel/smoke mark and graffiti-style DANK/CINEMA wordmark; no fake header search/profile controls are reintroduced.
-- Fullscreen now targets the actual video stage, fills the viewport, requests `screen.orientation.lock("landscape")` after fullscreen entry when the browser supports it, and unlocks on exit.
-- Chromecast visibility is now driven by Google Cast `CAST_STATE_CHANGED`; `NO_DEVICES_AVAILABLE` keeps the button hidden. Generic Remote Playback/AirPlay no longer masquerades as the Chromecast control.
-- Polling tolerates isolated fetch failures and only surfaces a reconnecting state after three consecutive failures.
+- Added the approved Dank Cinema banner as the production header asset and removed the reconstructed graffiti font/SVG header from the Watch page.
+- Added a cached same-origin brand asset route with immutable cache headers.
+- Retained TMDB title/year/overview/poster/backdrop rendering and real cinematic player backdrop.
+- Added real Discord viewer summaries, names, and CDN avatars to Watch state and the Session/viewer UI.
+- Expanded CSP only for the trusted Discord avatar CDNs.
+- Added a signed website host-transfer endpoint.
+- Extended canonical host handoff to Private Sessions only when the target is already authorized and active.
+- Added real Pass Host controls beside eligible Discord viewers.
+- Added canonical host-only queue remove/reorder/clear methods plus a signed website queue endpoint.
+- Added real queue controls and Clear Queue behavior; no client-only fake queue mutation.
+- Added player auto-hide, pointer/tap reveal, and empty-space click/tap toggling.
+- Added private-host-only double-tap left/right ±10 second skipping with transient on-player feedback.
+- Kept native browser download UI removed, context-menu suppression intact, and custom controls authoritative.
+- Preserved Google Cast real-device gating, signed Cast stream isolation, fullscreen video-stage targeting, and landscape request.
+- Preserved transient sync-fetch debounce so one dropped poll does not immediately advertise a broken session.
 
 ## Validation / results so far
 
-Regression tests updated/added for:
-- existing sync/heartbeat/host control contracts;
-- new Dank Cinema branding/player structure;
-- casting feature detection hooks;
-- no visible native video download controls;
-- TMDB-only remote artwork sanitization;
-- CSP allowing only the trusted TMDB image host;
-- mode-correct private wording.
+Regression coverage has been added/updated for:
+- exact approved brand asset bytes/route and Watch usage;
+- TMDB metadata/backdrop rendering;
+- Google Cast real-device gating and no Remote Playback placebo fallback;
+- fullscreen + landscape request;
+- player chrome auto-hide and empty-stage toggle contract;
+- Private Session double-tap skip host-only gating;
+- Discord viewer identity/avatar projection;
+- website host-transfer endpoint;
+- authorized Private Session host handoff;
+- canonical queue remove/reorder/clear authority;
+- website queue endpoint and real host queue controls;
+- CSP Discord/TMDB image allowlists;
+- existing signed access, playback sync, refresh, and Cinema runtime contracts.
 
-PR #431 exact-head CI ultimately passed all five workflow families and the PR merged. The production/mobile canary then failed usability because visible controls were not real actions. New regression coverage now asserts the fake navigation/actions/placeholders are absent, Google Cast sender integration is present, and Cast CORS only permits Google receiver origins. Exact-head CI for this remediation branch is pending.
-
-PR #432 subsequently reached an exact-head green state across all six workflow families and merged as `9c4f7e99e9fa64d688766aa72e9b7ee50564f632`. The post-merge Android canary then exposed the remaining visual/fullscreen/Cast defects above, so #430 correctly remains open.
-
-Current mockup-parity branch adds regression coverage for TMDB backdrop retention/rendering, the graffiti-brand contract, video-stage fullscreen + landscape orientation request, Google Cast real-device gating, absence of Remote Playback placebo fallbacks, and transient state-fetch handling. Exact-head CI for this branch has not completed yet.
+Exact-head repository CI has not run on the current branch yet.
 
 ## Cleanup / conflicts
 
-- No second room model, torrent runtime, queue store, provider stack, or playback API was introduced.
-- Private Session host-transfer semantics remain unchanged; the redesign does not silently overturn #429's authority rules.
-- Existing viewer sync/drift correction and stream retry behavior remain authoritative.
-- The user-facing page hides technical torrent detail by default but does not remove diagnostics.
+- No second room model, viewer store, queue store, playback engine, torrent runtime, or provider stack was introduced.
+- Pass Host and queue editing now use MovieNightManager directly; the previous backlog/dead-button approach is superseded.
+- Private host handoff intentionally changes the old `private cannot transfer` rule because the approved product contract requires Pass Host; authorization is not broadened because only already-authorized active private viewers can receive control.
+- Fake Home/Browse/My Stuff/search/notification/profile affordances remain absent until real surfaces exist.
+- Generic Remote Playback/AirPlay does not masquerade as the Chromecast button.
+- The exact asset is repository-owned by this Cinema feature and served same-origin rather than depending on a third-party image host.
 
 ## Blockers / risks
 
-- Google Cast Web Sender support is browser/device dependent. The Chromecast control is now hidden unless Google Cast reports an actual available receiver; unsupported browsers get no Cast button rather than a fake one.
-- Chromecast receiver codec support can still reject a selected release even when local browser playback works.
-- Screen Orientation locking remains browser-policy dependent even after a successful fullscreen request; the app must report a blocked lock rather than pretend rotation occurred.
-- Custom controls need real Android/Discloud validation for fullscreen + landscape, audio gesture, sync, Google Cast discovery/load, TMDB backdrop display, and responsive mockup parity.
-- A determined authorized viewer can still inspect network requests for the signed media URL; hiding the browser Download control is UI hardening, not DRM.
+- Google Cast support/device discovery remains browser and device dependent.
+- Chromecast codec/container support can reject a release that plays locally.
+- Screen Orientation lock may be rejected by some mobile browsers even after successful fullscreen entry; the UI reports that instead of faking rotation.
+- Discord names/avatars depend on the bot's current Discord cache; missing cached identity falls back to the user ID rather than inventing profile data.
+- Auto-hide/tap gestures require a live Android/Samsung Browser and desktop canary to verify there is no accidental control flicker or gesture conflict.
+- Private double-tap skip must be canaried against actual torrent seeking and host state propagation.
 
 ## Backlog
 
-- full standalone Browse/Home/My Stuff website surfaces backed by persistent web identity/session data are outside this focused Watch-page redesign;
-- first-class web Pass Host and queue editing would require explicit authority/API design instead of dead duplicate controls;
-- **RSS Feed surfacing follow-up:** add a clean first-class RSS area in both Discord Cinema and the website using the existing Movie Sources/feed model. Feeds must be organized by source/category/status rather than dumped into one flat RSS list, with per-feed management and clear distinction from Search Providers and Reference Links.
-- **TMDB identity normalization follow-up:** every playable movie/TV item should have a canonical TMDB identity before it is presented as library content. Search/catalog selections already carry one; raw provider text, magnets, and .torrent attachments need a conservative identity step using parsed title/year plus explicit user confirmation when matching is ambiguous. Once identified, persist the TMDB ID and use it as the sole source for title, year/date, overview, poster/backdrop, genres, runtime, certification, cast/crew, and TV season/episode metadata. Never silently attach the wrong poster because a torrent filename looked vaguely similar.
-- **TV Shows / Continue Watching follow-up:** build a first-class TV experience backed by TMDB TV identity, seasons, episode metadata/artwork, and persistent per-user progress. Required product behavior: separate Movies / TV navigation; exact series matching; season grouping; ordered episode lists; episode title/number/runtime/air date/overview/still artwork; Resume / Continue Watching across sessions; per-episode watched/progress state; automatic next-episode suggestion and optional autoplay/countdown; skip-intro/recap support only when real timing metadata exists; season completion/progress; Recently Watched / Up Next; favorites/watchlist; provider/source matching at episode/season level; avoid merging similarly named shows; preserve server/private-room permissions and the canonical Cinema playback engine instead of creating a second TV player.
-- **Cinema viewer-value follow-up:** after TV foundations, evaluate subtitles/audio-track selection, playback-speed controls, quality/source preference, episode/movie history, watchlist/favorites, recently watched, resume cards, next-up queue, parental/adult-content filtering consistency, source-health preference, and optional notifications for queued/starting sessions. Add only features backed by real data/actions; no decorative dead controls.
+- **RSS Feed surfacing:** first-class RSS areas in Discord Cinema and the website using the existing Movie Sources/feed model, organized by source/category/status instead of one flat list.
+- **TMDB identity normalization:** every playable movie/TV item should receive a conservative canonical TMDB identity before library presentation, with explicit confirmation for ambiguous raw torrent/provider names.
+- **TV Shows / Continue Watching:** first-class TV identity, seasons/episodes, persistent per-user progress, resume, Up Next, watched state, season progress, and source matching without creating a second player/runtime.
+- **Full website discovery surfaces:** Home, Browse, My Stuff, search, notifications, profile, watchlist/history, and other mockup surfaces only when backed by real data/actions.
+- **Viewer-value follow-up:** subtitles/audio tracks where present, playback speed, source/quality preference, history/favorites, and other real-data controls.
 
 ## Next step
 
-Open the focused mockup-parity PR, run exact-head repository workflows, repair only evidence-backed failures, inspect the final diff, then repeat the Android/Discloud canary against the approved theater mockup. The canary must verify the graffiti brand treatment, real TMDB stage artwork, video-stage fullscreen/landscape behavior, truthful Cast visibility and real device discovery/load, no one-off false sync-error banner, and intact host/viewer playback authority.
+Run exact-head repository workflows for PR #434, repair only evidence-backed failures, inspect the final diff for accidental/stale logic, then run a real Discloud canary on Android and desktop. The canary must verify the exact header asset, TMDB backdrop, idle auto-hide/tap reveal, private double-tap skip, fullscreen/landscape, truthful Cast discovery/load, real Discord avatars/viewers, Pass Host, queue reorder/remove/clear, and preserved synchronized playback.
 
 ---
 
