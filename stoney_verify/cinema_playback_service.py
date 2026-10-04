@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
 from .cinema_catalog import CinemaEpisode, CinemaMedia
+from .cinema_library_service import CinemaStorageUnavailable, get_cinema_user
 from .cinema_media_identity import (
     episode_catalog_metadata,
     episode_search_query,
@@ -226,6 +227,25 @@ async def start_room_variant(
         candidate_id=candidate.candidate_id,
         variant_id=variant.variant_id,
     )
+
+    try:
+        profile = await get_cinema_user(initial_host_id)
+        preferences = (
+            profile.get("preferences")
+            if isinstance(profile.get("preferences"), Mapping)
+            else {}
+        )
+        preferred_speed = float(preferences.get("playback_speed") or 1.0)
+        if preferred_speed != 1.0:
+            manager.apply_host_action(
+                latest.room_id,
+                host_id=initial_host_id,
+                action="speed",
+                payload={"rate": preferred_speed},
+            )
+    except (CinemaStorageUnavailable, TypeError, ValueError):
+        # Personalization must never prevent otherwise valid Cinema playback.
+        pass
 
     merged_meta = dict(variant.metadata or {})
     merged_meta["release_name"] = dict(
