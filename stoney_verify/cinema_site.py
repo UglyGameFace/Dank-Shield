@@ -9,6 +9,7 @@ movie_night_web remain the playback/session authority.
 
 import asyncio
 import json
+import re
 from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -519,6 +520,69 @@ async def cinema_home_api(request: web.Request) -> web.Response:
     )
 
 
+def _parse_episode_query(query: str) -> Optional[tuple[str, int, int]]:
+    clean = " ".join(str(query or "").split())
+    patterns = (
+        re.compile(r"^(.+?)\s+s(\d{1,2})e(\d{1,3})(?:\b|$)", re.IGNORECASE),
+        re.compile(
+            r"^(.+?)\s+season\s+(\d{1,2})\s+episode\s+(\d{1,3})(?:\b|$)",
+            re.IGNORECASE,
+        ),
+    )
+    for pattern in patterns:
+        match = pattern.search(clean)
+        if not match:
+            continue
+        title = " ".join(match.group(1).split())[:160]
+        season = int(match.group(2))
+        episode = int(match.group(3))
+        if title and season >= 0 and episode > 0:
+            return title, season, episode
+    return None
+
+
+async def _search_episode_query(query: str) -> list[dict[str, Any]]:
+    parsed = _parse_episode_query(query)
+    if parsed is None:
+        return []
+    series_query, season_number, episode_number = parsed
+    try:
+        matches = await search_catalog(series_query, limit=8)
+    except Exception:
+        return []
+    series = next((item for item in matches if item.media_type == "tv"), None)
+    if series is None:
+        return []
+    try:
+        episodes = await get_season(series.tmdb_id, season_number)
+    except Exception:
+        return []
+    episode = next(
+        (
+            item
+            for item in episodes
+            if int(item.episode_number) == int(episode_number)
+        ),
+        None,
+    )
+    if episode is None:
+        return []
+    return [
+        {
+            **episode.to_payload(),
+            "result_kind": "episode",
+            "series_title": series.title,
+            "series_poster_url": series.poster_url,
+            "metadata": {
+                "series_id": int(series.tmdb_id),
+                "series_title": series.title,
+                "poster_url": series.poster_url,
+                "backdrop_url": episode.still_url or series.backdrop_url,
+            },
+        }
+    ]
+
+
 async def cinema_search_api(request: web.Request) -> web.Response:
     guild_id, user_id = _site_identity(request)
     query = " ".join(str(request.query.get("q", "") or "").split())[:180]
@@ -526,13 +590,15 @@ async def cinema_search_api(request: web.Request) -> web.Response:
         return web.json_response({"query": "", "results": []})
 
     catalog_task = asyncio.create_task(search_catalog(query, limit=30))
+    episode_task = asyncio.create_task(_search_episode_query(query))
     media_task = asyncio.create_task(list_user_media(user_id))
     source_task = asyncio.create_task(search_custom_media_sources(guild_id, query))
     discovery_task = asyncio.create_task(
         search_discoveries(guild_id, query, limit=20)
     )
-    catalog_rows, user_rows, source_result, discovery_rows = await asyncio.gather(
+    catalog_rows, episode_rows, user_rows, source_result, discovery_rows = await asyncio.gather(
         catalog_task,
+        episode_task,
         media_task,
         source_task,
         discovery_task,
@@ -548,6 +614,13 @@ async def cinema_search_api(request: web.Request) -> web.Response:
             payload["result_kind"] = "catalog"
             results.append(payload)
             seen.add(media.key)
+
+    if not isinstance(episode_rows, Exception):
+        for payload in episode_rows:
+            key = str(payload.get("key") or "")
+            if key and key not in seen:
+                seen.add(key)
+                results.append(payload)
 
     needle = query.casefold()
     if not isinstance(user_rows, Exception):
