@@ -12,6 +12,7 @@ from typing import Any, Mapping, Optional
 from .cinema_catalog import CinemaEpisode, CinemaMedia
 from .cinema_library_service import CinemaStorageUnavailable, get_cinema_user
 from .cinema_media_identity import (
+    catalog_metadata,
     episode_catalog_metadata,
     episode_search_query,
     filter_outcome_for_catalog,
@@ -101,6 +102,21 @@ def materialize_search_results(
         release_count += 1
 
     return len(candidate_ids), release_count
+
+
+async def search_exact_movie_sources(
+    guild_id: int,
+    *,
+    media: CinemaMedia,
+) -> tuple[dict[str, Any], str, MediaSourceSearchOutcome]:
+    """Search configured providers for one exact canonical movie."""
+
+    if str(media.media_type or "").strip().lower() != "movie":
+        raise ValueError("Exact movie source search requires a movie catalog item.")
+    metadata = catalog_metadata(media)
+    query = _clean(media.title)
+    outcome = await search_movie_sources(int(guild_id), query)
+    return metadata, query, filter_outcome_for_catalog(outcome, metadata)
 
 
 async def search_exact_episode_sources(
@@ -276,5 +292,6 @@ __all__ = [
     "CinemaPlaybackResult",
     "materialize_search_results",
     "search_exact_episode_sources",
+    "search_exact_movie_sources",
     "start_room_variant",
 ]
