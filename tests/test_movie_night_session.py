@@ -93,7 +93,8 @@ def test_web_player_has_terminal_state_before_missing_room_fallback() -> None:
         / "movie_night_web.py"
     ).read_text(encoding="utf-8")
 
-    assert 'id="end" disabled>End Session</button>' in source
+    assert '<button class="host-action danger" id="end"' in source
+    assert 'id="endLabel">End Session</span>' in source
     assert 'hostAction("end")' in source
     assert 'if(s.ended) {' in source
     assert 'terminated=true;' in source

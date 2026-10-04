@@ -2,118 +2,116 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-428 — Private Sessions up to 20 viewers + Movie Sources/RSS cleanup**
+**DANK-SHIELD-430 — Dank Cinema premium 420 Lobby theater website**
 
 Baseline:
-`main@fe5e7b70616eefe401126b19597086cf6621f70e` (PR #427 merged; #405 production canary accepted).
+`main@2397a03626bf49d48ee87dbd7b83480e99baa305` (PR #429 merged).
 
 Active branch:
-`feat/cinema-private20-movie-sources-rss`
+`feat/dank-cinema-theater-site`
 
 Issue:
-**#428 — Dank Cinema: private rooms up to 20 viewers + Movie Sources/RSS cleanup**
+**#430 — Dank Cinema: match premium 420 Lobby theater website mockup**
 
-Pull request:
-**#429 — Dank Cinema: private 20-viewer sessions and Movie Sources RSS**
-
-Turn Private Viewing from host-only isolation into an invite-only **Private Session** for up to **20 total authorized viewers**, while keeping one host/controller. Replace the confusing provider terminology with **Movie Sources**, give RSS/Atom feeds an explicit first-class setup path, fix clean feed URLs that were misread as search APIs, and make all affected private-session controls/copy describe their real behavior.
+Outcome:
+Rebuild the signed Dank Cinema Watch page to match the owner-approved premium dark-green 420 Lobby theater mockup while preserving the canonical synchronized playback, signed access, torrent runtime, and Discord-owned movie programming paths.
 
 ## Scope
 
-- canonical `MovieNightManager` private authorization and viewer cap;
-- Discord Cinema Home / More / Settings / source management surfaces;
-- signed Watch access for invited private viewers;
-- existing media-source registry/resolver only, with no second provider stack;
-- explicit Search Provider / RSS Feed / Reference Link types;
-- tests and task record for these paths.
+- signed `/movie/{room_id}/watch` theater page only;
+- approved Dank Cinema / The 420 Lobby visual system;
+- readable graffiti-style wordmark plus inline cinema mark;
+- custom mobile-first video chrome;
+- supported-browser casting through native Remote Playback / AirPlay picker APIs;
+- remove the inline browser download control from the visible player;
+- movie metadata/poster and queue projection from the existing canonical room state;
+- stream-health-first UX with torrent detail kept under advanced diagnostics;
+- mode-correct Private Session / Movie Night wording;
+- focused regression tests and repository CI.
 
 ## Status
 
-**Implementation is in progress on the focused branch. PR #429's first full CI attempt exposed two evidence-backed regressions: private host actions were still using the generic active-viewer majority inside `_resolve_vote()`, and one lifecycle wording contract still expected the established "live room" phrase. Both are patched on the current head; new exact-head CI, final diff review, and production/mobile canary are still required before completion can be claimed.**
+**Implementation is in progress on the focused branch. The first full PR run reached 2,736 tests with 2,735 passing and one stale markup assertion failing after the approved custom End Session control replaced the old plain button. That assertion is now updated on the current head. New exact-head CI, final diff inspection, and a real mobile/Discloud canary are still required before completion can be claimed.**
 
 ## Findings / root cause
 
-1. **Private mode was hard-coded host-only.**
-   - `user_can_access()` accepted only `room.host_id`.
-   - private active-viewer accounting collapsed to the host.
-   - Discord and Watch-link surfaces therefore could not support invited viewers.
+1. **The current Watch page is functionally mature but visually still a diagnostics panel.**
+   - native video controls, external Play/Pause/End buttons, room ID text, and torrent statistics dominate the page;
+   - the approved product direction makes the movie/player primary and moves technical diagnostics behind an advanced disclosure.
 
-2. **The old In-App Provider UI conflated query APIs and static feeds.**
-   - clean feed URLs such as `https://myrss.org/eztv` do not end in `.rss`, `.xml`, `/feed`, etc.;
-   - the generic resolver therefore treated that URL like a query endpoint and could append `?q=<movie>`;
-   - explicit RSS typing is required so the configured feed URL is authoritative and search filtering happens locally.
+2. **Native inline video controls expose browser-owned actions such as download.**
+   - Dank Cinema cannot reliably remove one browser-native menu item across every browser;
+   - using custom player chrome removes the visible inline download control while the signed stream endpoint and authorization remain unchanged.
 
-3. **Private-session wording inherited Watch Party / Movie Night labels.**
-   - end controls, status/lifecycle text, and web-player labels could describe the wrong session mode.
+3. **Casting is browser/platform capability dependent.**
+   - no second casting backend is required for the first implementation;
+   - use the standards-based Remote Playback API where available and WebKit's playback target picker for supported Apple browsers;
+   - unsupported browsers show casting as unavailable rather than pretending it worked.
+
+4. **Existing canonical Cinema data already contains enough metadata for the approved theater composition.**
+   - current candidate metadata can provide title/year/overview/TMDB poster;
+   - room queue candidate IDs can be projected into a safe queue view;
+   - no duplicate movie/session store is needed.
 
 ## Execution path
 
-Private access:
-`/movie -> active_room_for_user -> user_can_access -> join/heartbeat -> signed Watch URL -> web access guard`.
+`signed Watch URL -> _room_and_user -> _state_payload -> custom Dank Cinema theater UI -> heartbeat/state/action -> canonical MovieNightManager + TorrentMediaManager`.
 
-Private control:
-`Private host -> Find/Queue/Release/Playback/End`; invited viewers get Watch/rejoin/status but do not gain voting or programming authority.
+Artwork:
+`candidate.metadata.poster_url -> strict image.tmdb.org allowlist -> CSP-authorized poster rendering`.
 
-Movie Sources:
-`Cinema Settings -> Movie Sources -> Search Provider | RSS Feed | Reference Link -> existing registry -> existing structured resolver -> normal release ranking/streaming pipeline`.
+Casting:
+`explicit Cast button -> HTMLMediaElement.remote.prompt() when available -> WebKit playback target picker fallback`.
 
 ## Changes
 
-- Added `PRIVATE_VIEWER_LIMIT = 20`.
-- Private rooms maintain an allowlist seeded with the host.
-- Host can add/remove invited viewers; removal also clears active viewer state.
-- Authorized private viewers can reopen the room, heartbeat, and receive their own signed Watch link.
-- Private invited viewers do not receive movie-selection, queue, voting, playback-authority, viewer-management, or end-session controls.
-- Private host remains the only controller and host transfer remains disabled.
-- Added **Private Viewers** manager under More for the private host.
-- Renamed user-facing provider surfaces to **Movie Sources** with **Search Providers**, **RSS Feeds**, and **Reference Links**.
-- Added explicit `feed` source type while preserving legacy JSON provider records.
-- Explicit RSS feeds keep their exact normalized HTTPS URL instead of receiving an invented search query.
-- Private Discord and web-player wording now uses **Private Session** / **End Private Session** where mode-specific.
-- RSS feeds that are structurally valid but contain no playable magnet/info-hash/.torrent reference remain valid feeds but do not masquerade browser-page links as playable releases.
+- Rebuilt the Watch page into the approved charcoal/deep-green premium theater layout.
+- Added readable graffiti-style Dank Cinema branding and an inline graffiti/cinema reel mark without adding a second asset pipeline.
+- Added custom player controls for play/pause, host seek, ±10 seconds, volume/mute, fullscreen, timeline, and cast.
+- Removed native `controls` from the video and retained `controlsList="nodownload"` as an extra browser hint; context-menu download affordance is suppressed on the player.
+- Added native Remote Playback / AirPlay target picking when supported.
+- Added mode-aware room/host wording and `End Private Session` / `End Movie Night` labels.
+- Added movie title/year/overview/TMDB poster projection to Watch state.
+- Added queue projection from the existing room candidates.
+- Added stream-health presentation while keeping progress, seeds/leechers, rate, and buffer target under Advanced Stream Details.
+- Preserved signed access, sync/heartbeat, host action API, progressive torrent playback, and existing room authority.
+- Pass Host and queue programming remain Discord-owned; the web mockup buttons route users back to the canonical Cinema panel rather than creating duplicate authority.
 
 ## Validation / results so far
 
-Regression coverage added/updated for:
-- invite-only private authorization and revocation;
-- 20-total-viewer private cap;
-- invited heartbeat versus uninvited rejection;
-- host-only private programming control;
-- clean-path RSS source persistence;
-- explicit static-feed URL query behavior;
-- Movie Sources labels and RSS controls;
-- private host/viewer Discord control disclosure;
-- private status/end wording;
-- private web-player terminology.
+Regression tests updated/added for:
+- existing sync/heartbeat/host control contracts;
+- new Dank Cinema branding/player structure;
+- casting feature detection hooks;
+- no visible native video download controls;
+- TMDB-only remote artwork sanitization;
+- CSP allowing only the trusted TMDB image host;
+- mode-correct private wording.
 
-PR #429 is open. First full CI on `1e34f6a70d7c491b1645e4cb5f0c1fc9d823d4cc` ran **2,733 tests** and failed only:
-- `test_private_owner_votes_resolve_without_waiting_for_other_viewers`: `_resolve_vote()` duplicated majority math instead of using `required_yes_votes()`, so an invited viewer accidentally raised the private host's threshold;
-- `test_movie_night_lifecycle_text_explains_distinct_timeouts`: wording cleanup changed the established "process restart ends the live room" contract.
-
-The vote resolver now delegates to `required_yes_votes()` (private stays host-only at one yes; Watch Party majority is unchanged), and lifecycle wording preserves the tested room/session contract. A new exact-head run is required; earlier intermediate heads are not completion evidence.
+First PR CI completed with 2,735 passing tests and one failure in `test_web_player_has_terminal_state_before_missing_room_fallback`; the test still required the retired literal `id="end" disabled>End Session</button>` markup. The redesigned control still preserves the same `id="end"`, `hostAction("end")`, terminal-state handling, and missing-room fallback. The regression test now checks the new host-sheet control instead. A new exact-head run is required.
 
 ## Cleanup / conflicts
 
-- No second room model, torrent runtime, resolver, or provider stack was introduced.
-- Existing Watch Party behavior is intended to remain unchanged.
-- Existing JSON provider records remain structured/searchable; existing external-only links remain reference-only.
-- Remaining stale provider/private wording is being checked in the affected Cinema files and tests only.
-- No unrelated backlog work is included.
+- No second room model, torrent runtime, queue store, provider stack, or playback API was introduced.
+- Private Session host-transfer semantics remain unchanged; the redesign does not silently overturn #429's authority rules.
+- Existing viewer sync/drift correction and stream retry behavior remain authoritative.
+- The user-facing page hides technical torrent detail by default but does not remove diagnostics.
 
 ## Blockers / risks
 
-- A valid RSS/Atom feed can legally contain ordinary article/page links rather than playable magnet/info-hash/.torrent references. Dank Cinema must not claim such entries are playable.
-- Live room authority remains in memory, unchanged from the existing Cinema architecture.
-- 20-viewer hosting/network capacity remains subject to the existing practical load/canary constraint; this task enforces the product ceiling but does not manufacture bandwidth.
+- Remote Playback support is browser/device dependent; unsupported browsers cannot be forced to expose a cast target picker.
+- Custom controls need real Android Chrome/Discloud validation for fullscreen, audio gesture, sync, and cast behavior.
+- A determined authorized viewer can still inspect network requests for the signed media URL; hiding the browser Download control is UI hardening, not DRM.
 
 ## Backlog
 
-- persistent room snapshot/recovery across process restart remains separate from #428;
-- broader high-concurrency load testing beyond the 20-viewer product ceiling remains separate capacity work.
+- full standalone Browse/Home/My Stuff website surfaces backed by persistent web identity/session data are outside this focused Watch-page redesign;
+- first-class web Pass Host and queue editing would require explicit authority/API design instead of dead duplicate controls;
+- **RSS Feed surfacing follow-up:** add a clean first-class RSS area in both Discord Cinema and the website using the existing Movie Sources/feed model. Feeds must be organized by source/category/status rather than dumped into one flat RSS list, with per-feed management and clear distinction from Search Providers and Reference Links.
 
 ## Next step
 
-Run the repository's workflow set on the patched exact head, inspect any evidence-backed failures and the final diff, then validate one invited private viewer and one RSS feed on production/mobile before closing #428.
+Open the focused PR, run exact-head repository workflows, repair only evidence-backed failures, inspect the final diff for accidental changes, then run an Android/Discloud Watch-page canary covering host playback, viewer sync/audio, fullscreen, casting availability, private wording, queue display, and end-session behavior.
 
 ---
 
