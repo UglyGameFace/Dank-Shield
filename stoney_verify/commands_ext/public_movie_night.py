@@ -3512,6 +3512,190 @@ async def _open_tv_season_picker(
     )
 
 
+def _catalog_result_embed(
+    media: CinemaMedia,
+    *,
+    index: int,
+    total: int,
+    raw_query: str,
+) -> discord.Embed:
+    kind = "TV Series" if media.media_type == "tv" else "Movie"
+    title = f"{media.title} ({media.year})" if media.year else media.title
+    description_parts = [
+        f"**{kind}**",
+        media.overview or "TMDB did not provide a description for this title.",
+    ]
+    if media.original_title and media.original_title.casefold() != media.title.casefold():
+        description_parts.append(f"Original title: **{media.original_title}**")
+    embed = discord.Embed(
+        title=f"{'📺' if media.media_type == 'tv' else '🎬'} {title}",
+        description="\n\n".join(description_parts),
+        color=discord.Color.blurple(),
+    )
+    if media.poster_url:
+        embed.set_thumbnail(url=media.poster_url)
+    if media.backdrop_url:
+        embed.set_image(url=media.backdrop_url)
+    facts: list[str] = []
+    if media.year:
+        facts.append(str(media.year))
+    if float(media.rating or 0) > 0:
+        facts.append(f"★ {float(media.rating):.1f}")
+    facts.append(kind)
+    embed.add_field(name="Match", value=" • ".join(facts), inline=False)
+    embed.set_footer(
+        text=(
+            f"Result {max(1, index + 1)} of {max(1, total)} • "
+            f'Search: "{_compact(raw_query, 80)}" • TMDB metadata'
+        )
+    )
+    return embed
+
+
+async def _select_catalog_result(
+    interaction: discord.Interaction,
+    *,
+    room_id: str,
+    media: CinemaMedia,
+) -> None:
+    if media.media_type == "tv":
+        await _open_tv_season_picker(
+            interaction,
+            room_id,
+            media,
+        )
+        return
+    await _propose_movie_search_vote(
+        interaction,
+        room_id=room_id,
+        query=media.title,
+        catalog_metadata=_cinema_catalog_metadata(media),
+    )
+
+
+class _CinemaCatalogResultView(_OwnedView):
+    def __init__(
+        self,
+        *,
+        owner_id: int,
+        room_id: str,
+        raw_query: str,
+        catalog: tuple[CinemaMedia, ...],
+        index: int = 0,
+    ) -> None:
+        super().__init__(owner_id)
+        self.room_id = str(room_id)
+        self.raw_query = _compact(raw_query)
+        self.catalog = tuple(catalog)
+        self.index = max(0, min(int(index), max(0, len(self.catalog) - 1)))
+        self.previous.disabled = self.index <= 0
+        self.next.disabled = self.index >= len(self.catalog) - 1
+
+    def _replacement(self, index: int) -> "_CinemaCatalogResultView":
+        return _CinemaCatalogResultView(
+            owner_id=self.owner_id,
+            room_id=self.room_id,
+            raw_query=self.raw_query,
+            catalog=self.catalog,
+            index=index,
+        )
+
+    def _embed(self) -> discord.Embed:
+        return _catalog_result_embed(
+            self.catalog[self.index],
+            index=self.index,
+            total=len(self.catalog),
+            raw_query=self.raw_query,
+        )
+
+    @discord.ui.button(
+        label="Previous",
+        emoji="⬅️",
+        style=discord.ButtonStyle.secondary,
+        row=0,
+        custom_id="dank:cinema:catalog-visual:previous",
+    )
+    async def previous(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        view = self._replacement(self.index - 1)
+        await _replace(interaction, embed=view._embed(), view=view)
+
+    @discord.ui.button(
+        label="Select This Title",
+        emoji="✅",
+        style=discord.ButtonStyle.success,
+        row=0,
+        custom_id="dank:cinema:catalog-visual:select",
+    )
+    async def select(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _select_catalog_result(
+            interaction,
+            room_id=self.room_id,
+            media=self.catalog[self.index],
+        )
+
+    @discord.ui.button(
+        label="Next",
+        emoji="➡️",
+        style=discord.ButtonStyle.secondary,
+        row=0,
+        custom_id="dank:cinema:catalog-visual:next",
+    )
+    async def next(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        view = self._replacement(self.index + 1)
+        await _replace(interaction, embed=view._embed(), view=view)
+
+    @discord.ui.button(
+        label="Use Exact Search Text",
+        emoji="🔎",
+        style=discord.ButtonStyle.primary,
+        row=1,
+        custom_id="dank:cinema:catalog-visual:raw",
+    )
+    async def raw(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await _propose_movie_search_vote(
+            interaction,
+            room_id=self.room_id,
+            query=self.raw_query,
+        )
+
+    @discord.ui.button(
+        label="New Search",
+        emoji="✏️",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+        custom_id="dank:cinema:catalog-visual:new-search",
+    )
+    async def new_search(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await interaction.response.send_modal(
+            MovieSearchModal(owner_id=self.owner_id, room_id=self.room_id)
+        )
+
+
 class MovieSearchModal(discord.ui.Modal, title="1/3 • Find Movie or TV"):
     query = discord.ui.TextInput(
         label="Movie or TV title",
@@ -3573,100 +3757,22 @@ class MovieSearchModal(discord.ui.Modal, title="1/3 • Find Movie or TV"):
                 query=raw_query,
             )
 
-        by_key = {media.key: media for media in catalog}
-
-        async def picked(
-            pick_interaction: discord.Interaction,
-            value: str,
-        ) -> None:
-            if value == "__raw__":
-                return await _propose_movie_search_vote(
-                    pick_interaction,
-                    room_id=self.room_id,
-                    query=raw_query,
-                )
-            media = by_key.get(value)
-            if media is None:
-                room = _room_by_id_for_interaction(
-                    pick_interaction,
-                    self.room_id,
-                )
-                return await _movie_hub_notice(
-                    pick_interaction,
-                    "❌ That catalog result expired. Search again from Dank Cinema.",
-                    room=room,
-                )
-            if media.media_type == "tv":
-                return await _open_tv_season_picker(
-                    pick_interaction,
-                    self.room_id,
-                    media,
-                )
-            await _propose_movie_search_vote(
-                pick_interaction,
-                room_id=self.room_id,
-                query=media.title,
-                catalog_metadata=_cinema_catalog_metadata(media),
-            )
-
-        choices = [
-            DankChoice(
-                label=(
-                    f"{media.title} ({media.year})"
-                    if media.year
-                    else media.title
-                )[:100],
-                value=media.key,
-                description=(
-                    (
-                        "TV Series • "
-                        if media.media_type == "tv"
-                        else "Movie • "
-                    )
-                    + (
-                        media.overview
-                        or media.original_title
-                        or "TMDB title"
-                    )
-                )[:100],
-                emoji="📺" if media.media_type == "tv" else "🎬",
-            )
-            for media in catalog[:24]
-        ]
-        choices.append(
-            DankChoice(
-                label=f'Use exactly "{raw_query}"'[:100],
-                value="__raw__",
-                description=(
-                    "Skip catalog matching and search connected providers "
-                    "with the text you typed."
-                ),
-                emoji="🔎",
-            )
-        )
-
-        picker = DankPickerView(
-            author_id=int(interaction.user.id),
-            choices=choices,
-            on_pick=picked,
-            custom_id=f"dank:cinema:catalog:{self.room_id[:16]}",
-            placeholder="Choose the exact movie or series…",
-            title="1/3 • Choose Title",
-            on_home=lambda back_interaction: open_movie_night(
-                back_interaction,
-                replace_message=True,
-            ),
-            home_label="Dank Cinema",
+        view = _CinemaCatalogResultView(
+            owner_id=int(interaction.user.id),
+            room_id=self.room_id,
+            raw_query=raw_query,
+            catalog=tuple(catalog),
+            index=0,
         )
         await _replace(
             interaction,
             content=(
-                "🔎 **Choose the exact movie or TV series.** TV results continue to "
-                "season and episode selection. Playback still comes only from connected "
-                "providers or a host-supplied magnet/.torrent."
+                "🔎 **Choose the exact movie or TV series visually.** Browse TMDB artwork, "
+                "year, type, rating, and description before selecting. TV results continue "
+                "to season and episode selection."
             ),
-            embed=None,
-            view=picker,
+            embed=view._embed(),
+            view=view,
         )
 
 async def _announce_room(
