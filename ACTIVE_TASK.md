@@ -17,7 +17,7 @@ Previous merged remediation:
 **#432 — Dank Cinema: replace mockup controls with real web actions** → `9c4f7e99e9fa64d688766aa72e9b7ee50564f632`
 
 Current pull request:
-**pending — production mockup-parity remediation**
+**#433 — Dank Cinema: match approved theater mockup in production**
 
 Outcome:
 Rebuild the signed Dank Cinema Watch page to match the owner-approved premium dark-green 420 Lobby theater mockup while preserving the canonical synchronized playback, signed access, torrent runtime, and Discord-owned movie programming paths.
