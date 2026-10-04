@@ -2384,8 +2384,6 @@ function applyQualityMode(preference) {{
   if(note) note.textContent=requested==="auto"
     ?"Auto selected "+effective+". Playback features stay identical in every mode."
     :requested[0].toUpperCase()+requested.slice(1)+" visual mode. Playback features stay identical.";
-  if(typeof lastState!=="undefined" && lastState?.movie)
-    applyMovieArtwork(lastState.movie,lastState);
 }}
 let storedQuality="auto";
 try {{ storedQuality=localStorage.getItem(QUALITY_STORAGE_KEY)||"auto"; }} catch(_) {{}}
@@ -3598,6 +3596,7 @@ qualitySelect.addEventListener("change",()=>{{
   const value=String(qualitySelect.value||"auto");
   try {{ localStorage.setItem(QUALITY_STORAGE_KEY,value); }} catch(_) {{}}
   applyQualityMode(value);
+  if(lastState?.movie) applyMovieArtwork(lastState.movie,lastState);
 }});
 window.addEventListener("resize",()=>{{
   if(document.documentElement.dataset.qualityPreference==="auto") applyQualityMode("auto");
