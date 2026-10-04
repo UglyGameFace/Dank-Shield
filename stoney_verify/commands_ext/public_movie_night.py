@@ -3365,6 +3365,7 @@ async def _propose_movie_search_vote(
     room_id: str,
     query: str,
     catalog_movie: Optional[CatalogMovie] = None,
+    catalog_metadata: Optional[Mapping[str, Any]] = None,
 ) -> None:
     manager = get_movie_night_manager()
     room = _room_by_id_for_interaction(interaction, room_id)
@@ -3380,8 +3381,17 @@ async def _propose_movie_search_vote(
     manager.join_room(room.room_id, user_id=int(interaction.user.id))
 
     payload: dict[str, Any] = {"query": _compact(query)}
-    if catalog_movie is not None:
-        payload["catalog"] = catalog_movie.to_metadata()
+    selected_catalog = (
+        dict(catalog_metadata)
+        if isinstance(catalog_metadata, Mapping)
+        else (
+            catalog_movie.to_metadata()
+            if catalog_movie is not None
+            else {}
+        )
+    )
+    if selected_catalog:
+        payload["catalog"] = selected_catalog
     try:
         vote = manager.propose_vote(
             room_id,
@@ -3404,9 +3414,10 @@ async def _propose_movie_search_vote(
     if vote.resolved and vote.passed:
         return await _execute_passed_vote(interaction, room, vote)
 
-    selected = catalog_movie.title if catalog_movie is not None else _compact(query)
-    if catalog_movie is not None and catalog_movie.year:
-        selected = f"{selected} ({catalog_movie.year})"
+    selected = _compact(selected_catalog.get("title")) if selected_catalog else _compact(query)
+    selected_year = _safe_int(selected_catalog.get("year"), 0) if selected_catalog else 0
+    if selected_year and str(selected_catalog.get("media_type") or "") != "episode":
+        selected = f"{selected} ({selected_year})"
     await _movie_hub_notice(
         interaction,
         (
