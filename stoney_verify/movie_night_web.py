@@ -2581,7 +2581,10 @@ videoStage.addEventListener("pointerdown",event=>{{
 videoStage.addEventListener("focusin",()=>showPlayerControls(false));
 videoStage.addEventListener("focusout",()=>schedulePlayerControlsHide());
 
-function api(path) {{ return path+"?"+BOOT.query; }}
+function api(path) {{
+  const clean=String(path||"");
+  return clean+(clean.includes("?")?"&":"?")+BOOT.query;
+}}
 async function jsonFetch(path, options={{}}) {{
   const response=await fetch(api(path), {{
     cache:"no-store",
@@ -3586,6 +3589,225 @@ document.addEventListener("keydown",event=>{{
   }}
 }});
 
+const FEED_CATEGORY_LABELS={{
+  movies:"Movies",
+  tv:"TV Shows",
+  anime:"Anime",
+  documentaries:"Documentaries",
+  custom:"Custom"
+}};
+let feedCenterLoaded=false;
+let feedCenterState=null;
+
+function feedTime(epoch) {{
+  const value=Number(epoch||0);
+  if(!value) return "Not refreshed this process";
+  try {{ return new Date(value*1000).toLocaleString(); }}
+  catch(_) {{ return "Refreshed"; }}
+}}
+function feedTypeLabel(type) {{
+  if(type==="feed") return "RSS / Atom";
+  if(type==="json") return "Search Provider";
+  if(type==="external") return "Reference Link";
+  return "Source";
+}}
+function resetFeedForm() {{
+  document.getElementById("feedSourceId").value="";
+  document.getElementById("feedLabel").value="";
+  document.getElementById("feedUrl").value="";
+  document.getElementById("feedType").value="feed";
+  document.getElementById("feedCategory").value="custom";
+}}
+function openFeedForm(source=null) {{
+  const form=document.getElementById("feedForm");
+  form.hidden=false;
+  if(source) {{
+    document.getElementById("feedSourceId").value=String(source.source_id||"");
+    document.getElementById("feedLabel").value=String(source.label||"");
+    document.getElementById("feedUrl").value=String(source.endpoint_url||"");
+    document.getElementById("feedType").value=String(source.provider_type||"feed");
+    document.getElementById("feedCategory").value=String(source.category||"custom");
+  }} else {{
+    resetFeedForm();
+  }}
+  document.getElementById("feedLabel").focus();
+}}
+function renderFeedCenter(state) {{
+  feedCenterState=state||{{sources:[]}};
+  const root=document.getElementById("feedGroups");
+  root.textContent="";
+  const sources=Array.isArray(feedCenterState.sources)?feedCenterState.sources:[];
+  const host=!!feedCenterState.is_host;
+  document.getElementById("feedAddToggle").hidden=!host;
+  document.getElementById("feedForm").hidden=true;
+
+  if(!sources.length) {{
+    const empty=document.createElement("div");
+    empty.className="feed-empty";
+    empty.textContent=host
+      ?"No media sources yet. Add a feed or provider when you have one. Empty decorative sections stay out of the rest of Cinema."
+      :"No enabled media feeds are available for this server.";
+    root.appendChild(empty);
+    return;
+  }}
+
+  for(const category of ["movies","tv","anime","documentaries","custom"]) {{
+    const rows=sources.filter(item=>String(item.category||"custom")===category);
+    if(!rows.length) continue;
+    const group=document.createElement("section");
+    group.className="feed-group";
+    const heading=document.createElement("div");
+    heading.className="feed-group-title";
+    const title=document.createElement("span");
+    title.textContent=FEED_CATEGORY_LABELS[category]||"Custom";
+    const count=document.createElement("span");
+    count.textContent=String(rows.length);
+    heading.append(title,count);
+    group.appendChild(heading);
+
+    for(const source of rows) {{
+      const card=document.createElement("article");
+      card.className="feed-card";
+      const top=document.createElement("div");
+      top.className="feed-card-top";
+      const name=document.createElement("div");
+      name.className="feed-card-name";
+      name.textContent=String(source.label||source.source_id||"Media source");
+      const stateBadge=document.createElement("span");
+      stateBadge.className="feed-badge "+(source.enabled?"good":"off");
+      stateBadge.textContent=source.enabled?"Enabled":"Disabled";
+      top.append(name,stateBadge);
+      card.appendChild(top);
+
+      const badges=document.createElement("div");
+      badges.className="feed-badges";
+      for(const text of [
+        feedTypeLabel(String(source.provider_type||"")),
+        source.discovery_capable?"Discovery":"",
+        source.search_capable?"Search":"",
+        source.playback_capable?"Playback":""
+      ].filter(Boolean)) {{
+        const badge=document.createElement("span");
+        badge.className="feed-badge";
+        badge.textContent=text;
+        badges.appendChild(badge);
+      }}
+      card.appendChild(badges);
+
+      const meta=document.createElement("div");
+      meta.className="feed-meta";
+      let refresh="Last refresh: "+feedTime(source.last_refresh_at);
+      if(source.last_refresh_ok===false && source.last_refresh_error)
+        refresh+=" • "+String(source.last_refresh_error);
+      else if(source.last_refresh_ok===true)
+        refresh+=" • reachable";
+      meta.textContent=refresh;
+      card.appendChild(meta);
+
+      const discovered=Array.isArray(source.newly_discovered)?source.newly_discovered:[];
+      if(discovered.length) {{
+        const chips=document.createElement("div");
+        chips.className="feed-discovered";
+        for(const item of discovered) {{
+          const chip=document.createElement("span");
+          chip.className="feed-title-chip";
+          chip.textContent=String(item);
+          chips.appendChild(chip);
+        }}
+        card.appendChild(chips);
+      }}
+
+      if(host) {{
+        const actions=document.createElement("div");
+        actions.className="feed-actions";
+        if(source.provider_type!=="external") {{
+          const refresh=document.createElement("button");
+          refresh.type="button"; refresh.className="feed-action primary"; refresh.textContent="Refresh";
+          refresh.onclick=()=>feedAction("refresh",source);
+          actions.appendChild(refresh);
+        }}
+        const edit=document.createElement("button");
+        edit.type="button"; edit.className="feed-action"; edit.textContent="Edit";
+        edit.onclick=()=>openFeedForm(source);
+        const toggle=document.createElement("button");
+        toggle.type="button"; toggle.className="feed-action";
+        toggle.textContent=source.enabled?"Disable":"Enable";
+        toggle.onclick=()=>feedAction("toggle",source);
+        const remove=document.createElement("button");
+        remove.type="button"; remove.className="feed-action danger"; remove.textContent="Delete";
+        remove.onclick=()=>feedAction("remove",source);
+        actions.append(edit,toggle,remove);
+        card.appendChild(actions);
+      }}
+      group.appendChild(card);
+    }}
+    root.appendChild(group);
+  }}
+}}
+async function loadFeedCenter(force=false) {{
+  if(feedCenterLoaded && !force && feedCenterState) {{
+    renderFeedCenter(feedCenterState);
+    return;
+  }}
+  const root=document.getElementById("feedGroups");
+  root.textContent="";
+  const loading=document.createElement("div");
+  loading.className="feed-empty"; loading.textContent="Loading Cinema sources…";
+  root.appendChild(loading);
+  try {{
+    const state=await jsonFetch("/movie/"+BOOT.roomId+"/sources");
+    feedCenterLoaded=true;
+    renderFeedCenter(state);
+  }} catch(err) {{
+    root.textContent="";
+    const error=document.createElement("div");
+    error.className="feed-empty";
+    error.textContent="Feed Center could not load. "+String(err?.message||err);
+    root.appendChild(error);
+  }}
+}}
+async function feedAction(action,source) {{
+  if(!feedCenterState?.is_host) return;
+  if(action==="remove" && !confirm("Delete "+String(source.label||"this media source")+"?")) return;
+  try {{
+    const state=await jsonFetch("/movie/"+BOOT.roomId+"/sources",{{
+      method:"POST",
+      body:JSON.stringify({{action,source_id:String(source.source_id||"")}})
+    }});
+    feedCenterLoaded=true;
+    renderFeedCenter(state);
+  }} catch(err) {{
+    notice.textContent="Feed Center update failed: "+String(err?.message||err);
+  }}
+}}
+document.getElementById("feedAddToggle").onclick=()=>openFeedForm();
+document.getElementById("feedCancel").onclick=()=>{{
+  document.getElementById("feedForm").hidden=true;
+  resetFeedForm();
+}};
+document.getElementById("feedForm").addEventListener("submit",async event=>{{
+  event.preventDefault();
+  if(!feedCenterState?.is_host) return;
+  const payload={{
+    action:"save",
+    source_id:String(document.getElementById("feedSourceId").value||""),
+    label:String(document.getElementById("feedLabel").value||""),
+    endpoint_url:String(document.getElementById("feedUrl").value||""),
+    provider_type:String(document.getElementById("feedType").value||"feed"),
+    category:String(document.getElementById("feedCategory").value||"custom")
+  }};
+  try {{
+    const state=await jsonFetch("/movie/"+BOOT.roomId+"/sources",{{
+      method:"POST",body:JSON.stringify(payload)
+    }});
+    feedCenterLoaded=true;
+    resetFeedForm();
+    renderFeedCenter(state);
+  }} catch(err) {{
+    notice.textContent="Could not save media source: "+String(err?.message||err);
+  }}
+}});
+
 for(const item of document.querySelectorAll("[data-nav]")) {{
   item.addEventListener("click",()=>{{
     document.querySelectorAll("[data-nav]").forEach(x=>x.classList.toggle("active",x===item));
@@ -3595,6 +3817,11 @@ for(const item of document.querySelectorAll("[data-nav]")) {{
       const details=document.querySelector(".diagnostics");
       details.open=true;
       details.scrollIntoView({{behavior:"smooth",block:"start"}});
+    }} else if(item.dataset.nav==="feeds") {{
+      const panel=document.getElementById("feedPanel");
+      panel.hidden=false;
+      loadFeedCenter();
+      panel.scrollIntoView({{behavior:"smooth",block:"start"}});
     }} else if(item.dataset.nav==="discord") openDiscordRoom();
   }});
 }}
