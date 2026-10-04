@@ -1204,7 +1204,10 @@ def test_dank_cinema_has_real_visual_quality_tiers_and_reduced_motion() -> None:
     assert 'data-quality="standard"' in html
     assert 'data-quality="lite"' in html
     assert "@media (prefers-reduced-motion:reduce)" in html
-    assert "navigator.connection?.saveData" in html
+    assert "navigator.connection||navigator.mozConnection||navigator.webkitConnection" in html
+    assert 'connection?.effectiveType' in html
+    assert 'network==="2g"' in html
+    assert 'network==="3g"' in html
     assert "navigator.deviceMemory" in html
     assert "navigator.hardwareConcurrency" in html
     assert "Playback features stay identical" in html
