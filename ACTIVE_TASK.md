@@ -2,147 +2,129 @@
 
 ## Active task / outcome
 
-**DANK-SHIELD-430 — Dank Cinema production-site parity and real integrated controls**
+**DANK-SHIELD-430 — Dank Cinema Private → Watch Party promotion, responsive player recovery, and integrated branding**
 
 Production baseline:
-`main@a4ec5a1207c515cd570eee4f0dea246ebd0fabbc` (PR #434 merged green).
+`main@e088a74dd4499bc535459c8153d77bdebc9ca03a` (PR #435 merged green).
 
 Active branch:
-`fix/430-cinema-production-polish`
+`fix/430-cinema-invite-responsive-brand`
 
 Issue:
 **#430 — Dank Cinema: match premium 420 Lobby theater website mockup**
 
 Current pull request:
-**#435 — Dank Cinema: finish production theater polish and Discord parity**
+**pending**
 
 Outcome:
-Finish the real Dank Cinema Watch surface after the post-#434 Samsung/desktop canary exposed responsive overflow, mode semantics, Host Controls recovery, Cast discoverability, center-play authority, brand integration, and Discord-integration gaps.
+Finish the evidence-backed production gaps from the latest Samsung canary: let a Private Session host invite a real Discord member and promote the live room into a Watch Party without restarting playback, recover cleanly when mobile browsers switch desktop mode/viewport geometry, and make the approved Cinema branding read as integrated artwork instead of a pasted black rectangle.
 
 ## Scope
 
-- signed `/movie/{room_id}/watch` site and its existing canonical MovieNightManager authority;
-- responsive/mobile layout matching the approved dark-green theater template without horizontal overflow;
-- approved Dank Cinema banner integrated into the page instead of looking like a pasted rectangle;
-- live Private Session vs Watch Party presentation from canonical room mode;
-- recoverable Host Controls after dismissal and after host transfer;
-- truthful Cast control using real Google Cast or browser Remote Playback availability;
-- authoritative center play/pause;
-- visible real Discord guild/channel/user/viewer integration;
-- Discord-side Pass Host parity with the web and canonical Private Session handoff rules;
-- focused regression coverage, exact-head CI, and real Discloud canary.
+- canonical `MovieNightRoom.mode` transition from `private` to `watch_party` in place;
+- real Discord member invitation from both website and Discord Cinema UI;
+- signed per-user Watch link generation and DM/fallback behavior;
+- preserve current room id, media lease/token, movie, playback clock, host, active viewers, and queue during promotion;
+- website controls/copy update from canonical room mode on the next state response;
+- Samsung/Chromium desktop-mode, viewport, orientation, and fullscreen player layout recovery without reloading media;
+- preserve full movie framing rather than cropping;
+- recreate the existing approved crowned-reel/graffiti banner as a transparent same-origin asset at runtime from the repository-owned source, eliminating the visible black rectangle without adding an external asset dependency;
+- focused regression coverage, exact-head CI, and live Android/desktop Discloud validation.
 
 ## Status
 
-**PR #434 merged with all workflow families green, but the real production canary failed the product Definition of Done. The screenshots showed mobile labels/controls overflowing, Host Controls becoming unrecoverable after close, Private Session wording and controls still carrying Watch Party assumptions, the exact banner reading as a pasted rectangular image, Cast disappearing entirely when no Google receiver was exposed, the center control not consistently exercising canonical host authority, and Discord integration being too subtle/inconsistent. Remediation is active in PR #435 on `fix/430-cinema-production-polish`; exact-head CI is running and the Samsung/desktop production canary remains required.**
+**Implementation is active on the focused branch. PR #435 is already merged and green in production. The new branch is ahead of main only in the Cinema room/web/Discord surfaces and focused tests. Exact-head CI has not run on this branch yet, and the real Samsung Browser + desktop-mode Discloud canary is still required before completion can be claimed.**
 
 ## Findings / root cause
 
-1. **Responsive layout still used desktop assumptions.**
-   - the four quick tabs, host actions, queue actions, health pill, and some long copy could exceed the Samsung viewport;
-   - the sheet also lacked a bounded mobile scroll surface.
+1. **Private viewer authorization was not the requested Watch Party transition.**
+   - the backend already supported inviting users into an invite-only Private Session;
+   - that left the room in `private` mode, so Watch Party collaboration/voting semantics never activated;
+   - the product request is an explicit in-place promotion to `watch_party`, not merely adding another private viewer.
 
-2. **Host Controls dismissal was terminal in the web UI.**
-   - closing set `hostSheetDismissed=true`, but no visible control reset it;
-   - a host could therefore permanently lose web host controls until page reload.
+2. **The correct promotion boundary is MovieNightManager.**
+   - room mode controls access, voting, search/release collaboration, UI wording, and sync semantics;
+   - recreating the room would lose or race the current torrent lease, queue, position, viewers, and signed links;
+   - promotion therefore mutates only canonical room mode while preserving all other room authority.
 
-3. **Mode was present in state but not treated as a complete UI contract.**
-   - `room.mode` correctly reported `private`, yet static copy still referred to generic Movie Night/synchronized group behavior;
-   - UI must re-render from current mode on every state poll so Private Session and Watch Party controls/copy stay distinct.
+3. **Discord invitation must use real guild identity.**
+   - website search reads the bot's current guild member cache and excludes bots/the current host;
+   - selected targets are revalidated through `guild.get_member` before promotion;
+   - Discord-native flow uses `DankUserSelect`;
+   - each target receives their own signed Watch URL when possible, with truthful DM/fallback behavior.
 
-4. **Cast was truthful but too aggressively hidden.**
-   - PR #434 hid the Cast icon unless Google Cast already reported a compatible receiver and media container;
-   - that removed placebo behavior but made the feature appear nonexistent;
-   - the corrected control remains visible once media exists, explicitly reports unavailable/unsupported state, and only starts a session when an actual Google Cast or real Remote Playback target exists.
+4. **Mobile → desktop-mode glitches are player layout/compositor state, not torrent state.**
+   - changing Samsung/Chromium viewport mode can resize the CSS box while the composited video layer retains stale geometry;
+   - fullscreen rebuilds that layer, explaining why the glitch disappears there;
+   - the Watch player now reasserts explicit 16:9 stage geometry and the absolute video layer on ResizeObserver, window/visualViewport resize, orientation, pageshow/visibility, fullscreen changes, and media readiness events without replacing the media source.
 
-5. **Center Play/Pause mixed local media state with canonical room authority.**
-   - host clicks could first mutate the local video then rely on media events to update room state;
-   - the button now calls the canonical host action directly, while viewer play re-enters the sync path.
-
-6. **Discord integration existed technically but was not coherent across surfaces.**
-   - the site had real viewer IDs/avatars and an Open Discord link, but no obvious signed-user/guild/channel context;
-   - Discord's own More menu still forbade Private Session Pass Host even though the canonical manager and website now safely support authorized private handoff.
-
-7. **The exact banner still read like an image pasted onto the site.**
-   - the approved asset has its own very dark background;
-   - the header had separate padding/background boundaries;
-   - the site now uses a full-bleed matching header treatment and screen blend so the asset visually dissolves into the theater header rather than sitting inside a card.
+5. **The banner's black export background is the pasted-on look.**
+   - CSS screen blending is browser/compositor dependent and remained visibly rectangular in production;
+   - Pillow is already a production dependency;
+   - the site now flood-removes only the dark background connected to the image edges, preserving enclosed dark reel details, feathers the cut edge, and caches a transparent 1000px WebP served by the existing same-origin brand route;
+   - screen blending is no longer required.
 
 ## Execution path
 
-Mode:
-`MovieNightRoom.mode -> /state -> applyModeSurface() every poll -> Private Session or Watch Party copy/actions`.
+Promotion:
+`Private Session host -> website Discord member search OR Discord DankUserSelect -> validate real guild member -> MovieNightManager.promote_private_to_watch_party -> same room/media/playback/queue -> state poll redraws Watch Party controls`.
 
-Host controls:
-`current host state -> Host quick action/floating launcher -> openHostControls() -> canonical Pass Host / Queue / Pause / End actions`.
+Invite:
+`target Discord user -> user-specific signed Watch URL -> DM when allowed; website retains signed link fallback / Discord native flow directs user back through /movie when DMs are blocked`.
 
-Discord:
-`signed Watch identity + room guild/channel -> bot cache -> discord context + active viewer summaries -> visible Session panel`.
+Player recovery:
+`viewport/orientation/desktop-mode change -> ResizeObserver/visualViewport/window events -> stabilizePlayerLayout() -> current video layer is resized in place; no stream reload`.
 
-Pass Host:
-`web or Discord chooser -> MovieNightManager.transfer_host -> active authorized target -> same room/media/playback clock`.
-
-Cast:
-`Google Cast CastContext receiver availability OR browser RemotePlayback watchAvailability -> visible truthful state -> actual requestSession()/remote.prompt only when available`.
-
-Player:
-`center control -> canonical host pause/resume; viewer play -> sync gesture + heartbeat`.
+Brand:
+`repository source banner -> cached Pillow edge-background removal -> transparent/upscaled WebP -> /movie/assets/dank-cinema-brand.webp -> integrated header artwork`.
 
 ## Changes
 
-- Added full-bleed/responsive header treatment and blend integration for the approved banner.
-- Added horizontal-overflow protection and mobile wrapping for tabs, health state, long copy, queue actions, and Host Controls.
-- Changed mobile Host Controls from one overflowing four-column strip to a responsive 2×2 grid and bounded scroll sheet.
-- Added a persistent `Host Controls` launcher after the bottom sheet is closed.
-- The quick action automatically becomes `♛ Host` for hosts and reopens the sheet; viewers get `⚙ Details` instead.
-- Gaining host authority resets the dismissed-sheet state so transferred hosts receive controls.
-- Added `applyModeSurface()`, driven by live room state on every poll:
-  - Private Room / Private Session labels;
-  - private-specific pause/end/help copy;
-  - Private viewer labels and private-host wording;
-  - Watch Party-specific synchronized wording when public.
-- Removed remaining public-mode joining/ended copy from the Private Session path.
-- Added visible Discord signed-user context: cached avatar/name, guild, and channel, plus real active viewer avatars/names.
-- Aligned Discord's own Pass Host picker with canonical Private Session authority: only active, already-authorized private viewers can receive host control.
-- Made Center Play/Pause call canonical host pause/resume directly.
-- Reworked Cast presentation:
-  - real Google Cast stays primary;
-  - real browser Remote Playback is available only after `watchAvailability` confirms a target;
-  - unavailable/unsupported Cast is shown with a disabled-state visual and truthful reason instead of disappearing or pretending to work.
-- Preserved real queue management, private-only double-tap seek, fullscreen/landscape request, TMDB artwork, signed access, torrent runtime, and viewer synchronization.
+- Added canonical host-only Private Session → Watch Party promotion without room recreation.
+- Promotion clears obsolete private allowlist state after the room becomes public/collaborative.
+- Added website signed endpoints for real Discord invite candidates and promotion.
+- Added real Discord member revalidation, target-specific Watch links, DM attempt, and room-channel promotion announcement.
+- Added website Invite to Watch Party modal with Discord member search, native-Discord fallback, signed-link fallback, and live state transition.
+- Added Discord-native Invite to Watch Party under Cinema More using `DankUserSelect`.
+- Discord promotion and website promotion share MovieNightManager authority.
+- Added player layout stabilization for ResizeObserver, desktop-mode viewport changes, visualViewport, orientation, fullscreen, page resume, and media readiness.
+- Kept the movie frame `object-fit: contain` so recovery never fixes layout by cropping content.
+- Reworked banner serving to generate transparent integrated artwork from the existing source instead of relying on `mix-blend-mode: screen`.
+- Removed an incomplete intermediate transparent-asset payload from the branch.
+- Added focused manager, website, Discord UI, invite, promotion, responsive-player, and banner regression coverage.
 
 ## Validation / results so far
 
-Regression coverage updated/added for:
-- mode-specific Private Session / Watch Party rendering;
-- mobile no-overflow contracts;
-- Host Controls close/reopen flow;
-- banner/header integration treatment;
-- truthful Cast state plus real Remote Playback availability;
-- canonical center-play host action;
-- visible Discord guild/channel/user context;
-- Discord Private Session Pass Host eligibility;
-- existing queue/host handoff/signed access/player/sync contracts.
+Added/updated regression coverage for:
+- in-place promotion preserving stream token, queue, position, host, viewers, and room id;
+- non-host promotion rejection;
+- private-host-only Invite to Watch Party control;
+- Discord native picker promotion + signed DM link;
+- website invite/promotion routes;
+- real cached Discord member filtering and target validation;
+- website mode update after promotion;
+- desktop-mode responsive player recovery hooks;
+- full-frame video rendering;
+- recreated transparent WEBP brand output and removal of screen-blend dependency.
 
-PR #435 head `c20b7b2b0eff2364caf2aca4b8ddec5fbb2073ba` completed 2,765 unit tests with **2,760 passing / 5 failing**. Compile and whitespace checks passed, as did Design Regression, App Command Size, Ticket Owner Override, and Profile Runtime. The five failures were stale string/markup assertions that still required the superseded generic Movie Night wording, old “Open Discord” label, and an implementation-variable spelling for the Host Controls launcher even though the new behavior was present. Those regression assertions were updated to the intended mode-aware Cinema contract on current head `1edb3acf5be6aba789b878a9d806c97df50353d5`; fresh exact-head CI is running now.
+Exact-head CI is pending.
 
 ## Cleanup / conflicts
 
-- No second room model, queue store, Discord identity system, playback engine, torrent runtime, or provider stack was introduced.
-- Website and Discord Pass Host now share MovieNightManager authority instead of contradicting each other.
-- Private handoff still requires an already-authorized active viewer and does not widen private-room access.
-- No fake Home/Browse/My Stuff/search/profile surfaces were reintroduced.
-- Cast unavailable state is descriptive only; no fake cast session is created.
-- The website continues polling canonical state, so mode/host changes update the visible controls without a reload.
+- No second room, playback clock, queue, provider stack, Discord identity store, or torrent runtime was introduced.
+- Private Viewer management remains available for owners who want an invite-only session; Invite to Watch Party is a distinct explicit transition.
+- Existing signed Watch URLs remain valid after promotion because the room id and secret-bound identity do not change.
+- Private-only double-tap seek naturally disables after promotion because live canonical state reports `private=false`.
+- Watch Party vote/collaboration behavior activates through existing mode checks instead of duplicate website logic.
+- The abandoned partial binary banner experiment was removed; production branding remains reproducible from the repository source asset.
 
 ## Blockers / risks
 
-- Google Cast and Remote Playback discovery are browser/device dependent.
-- A visible unavailable Cast state cannot make Samsung Internet provide a casting API it does not expose.
-- Some releases still cannot be sent directly to Chromecast because of container/codec support.
-- Screen Orientation locking remains browser-policy dependent.
-- Brand blending must be rechecked on the actual production background because the approved raster asset itself contains a dark background.
-- Final responsive proof requires the real Samsung Browser canary that exposed this regression.
+- Discord DMs can be disabled; both web and Discord flows must remain useful when delivery fails.
+- Web member discovery depends on the bot's current guild cache; the native Discord picker is the authoritative fallback.
+- Samsung Browser desktop-mode compositor behavior still requires the real-device canary.
+- Google Cast/Remote Playback and orientation lock remain browser/device capability dependent and are unchanged by this slice.
+- The dynamically recreated transparent banner must be visually checked on production desktop and mobile, not accepted solely because its alpha contract passes tests.
 
 ## Backlog
 
@@ -154,7 +136,7 @@ PR #435 head `c20b7b2b0eff2364caf2aca4b8ddec5fbb2073ba` completed 2,765 unit tes
 
 ## Next step
 
-Run exact-head repository workflows for PR #435, repair only evidence-backed failures, inspect the final diff for stale/conflicting Cinema behavior, then repeat the real Samsung Browser + desktop Discloud canary. The canary must verify zero horizontal overflow, Private-vs-Watch-Party wording/control changes, Host Controls recovery, banner integration, Cast status/action truthfulness, center playback authority, visible Discord identity/viewers/Pass Host, and preserved synchronized playback.
+Open the focused PR, run exact-head repository workflows, repair only evidence-backed failures, inspect the final diff for stale/conflicting Cinema behavior, then run the Samsung Browser canary including **mobile → desktop mode → mobile**, normal/fullscreen transitions, Private → Watch Party promotion, signed Discord invite delivery/fallback, live UI mode changes, and banner appearance on both mobile and desktop.
 
 ---
 
