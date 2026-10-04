@@ -1090,7 +1090,9 @@ def _more_embed(
     if room is not None:
         if _private_viewing(room):
             room_value = (
-                "👥 **Private Viewers** • host manages invite-only access\n"
+                "👥 **Private Viewers** • keep this room invite-only\n"
+                "🍿 **Invite to Watch Party** • choose a Discord member and convert the live room "
+                "without restarting the movie\n"
                 "🛑 **End Private Session** • disconnect invited viewers and release streaming media"
             )
         else:
@@ -3978,6 +3980,141 @@ async def _open_private_viewers(
     )
 
 
+class WatchPartyInviteView(_OwnedView):
+    def __init__(self, owner_id: int, room: MovieNightRoom) -> None:
+        super().__init__(owner_id)
+        self.room_id = str(room.room_id)
+        self.add_item(
+            DankUserSelect(
+                author_id=int(owner_id),
+                on_pick=self._picked,
+                placeholder="Choose a Discord member to invite…",
+                row=0,
+            )
+        )
+
+    async def _picked(
+        self,
+        interaction: discord.Interaction,
+        user: discord.User | discord.Member,
+    ) -> None:
+        manager = get_movie_night_manager()
+        room = manager.get(self.room_id)
+        if room is None or room.ended:
+            return await open_movie_night(interaction, replace_message=True)
+        if not _private_viewing(room):
+            return await _movie_hub_notice(
+                interaction,
+                "ℹ️ This Cinema session is already a Watch Party.",
+                room=room,
+            )
+        if int(interaction.user.id) != int(room.host_id):
+            return await _movie_hub_notice(
+                interaction,
+                "❌ Only the Private Session host can start the Watch Party.",
+                room=room,
+            )
+
+        uid = int(getattr(user, "id", 0) or 0)
+        if uid <= 0 or uid == int(room.host_id):
+            return await _private(interaction, "❌ Choose another Discord member.")
+        if bool(getattr(user, "bot", False)):
+            return await _private(interaction, "❌ Bots cannot join a Watch Party.")
+        member = interaction.guild.get_member(uid) if interaction.guild else None
+        if member is None:
+            return await _private(
+                interaction,
+                "❌ Choose a member of this Discord server.",
+            )
+
+        try:
+            manager.promote_private_to_watch_party(
+                room.room_id,
+                host_id=int(interaction.user.id),
+            )
+        except (PermissionError, RuntimeError, ValueError) as exc:
+            return await _private(interaction, f"❌ {exc}")
+
+        watch_url = movie_night_watch_url(room.room_id, uid)
+        dm_sent = False
+        if watch_url:
+            try:
+                await member.send(
+                    "🍿 **Dank Cinema Watch Party invite**\n"
+                    f"<@{int(interaction.user.id)}> invited you to a live Watch Party.\n"
+                    f"{watch_url}",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                dm_sent = True
+            except Exception:
+                dm_sent = False
+
+        notice = (
+            f"✅ Watch Party started without restarting the movie. Sent <@{uid}> their signed Watch link."
+            if dm_sent
+            else (
+                f"✅ Watch Party started without restarting the movie. I could not DM <@{uid}>, "
+                "so send them to **/movie** in this channel to get their own Watch link."
+            )
+        )
+        await _replace(
+            interaction,
+            content=notice,
+            embed=_room_embed(interaction, room),
+            view=MovieNightHubView(int(interaction.user.id), room),
+        )
+
+    @discord.ui.button(
+        label="Back to More",
+        emoji="⬅️",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+        custom_id="dank:movie:watch-party-invite:back",
+    )
+    async def back(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        await open_movie_night_more(interaction, replace_message=True)
+
+
+async def _open_watch_party_invite(
+    interaction: discord.Interaction,
+    room: MovieNightRoom,
+) -> None:
+    if not _private_viewing(room):
+        return await _movie_hub_notice(
+            interaction,
+            "ℹ️ This Cinema session is already a Watch Party.",
+            room=room,
+        )
+    if int(interaction.user.id) != int(room.host_id):
+        return await _movie_hub_notice(
+            interaction,
+            "❌ Only the Private Session host can start the Watch Party.",
+            room=room,
+        )
+
+    embed = discord.Embed(
+        title="🍿 Invite to Watch Party",
+        description=(
+            "Choose a Discord member. Dank Cinema will convert this **live Private Session** "
+            "into a **Watch Party in place**.\n\n"
+            "The movie, playback position, queue, stream, and host stay exactly where they are. "
+            "The website changes to Watch Party controls on its next state update."
+        ),
+        color=discord.Color.green(),
+    )
+    embed.set_footer(text="No restart • no lost progress • same Cinema room")
+    await _replace(
+        interaction,
+        embed=embed,
+        view=WatchPartyInviteView(int(interaction.user.id), room),
+    )
+
+
 class MovieNightMoreView(_OwnedView):
     def __init__(
         self,
@@ -3994,6 +4131,7 @@ class MovieNightMoreView(_OwnedView):
             self.remove_item(self.session_status)
             self.remove_item(self.pass_host)
             self.remove_item(self.private_viewers)
+            self.remove_item(self.invite_watch_party)
         else:
             private_mode = _private_viewing(room)
             is_host = int(owner_id) == int(room.host_id)
@@ -4015,11 +4153,13 @@ class MovieNightMoreView(_OwnedView):
                 self.end_session.label = "End Private Session"
                 if not is_host:
                     self.remove_item(self.private_viewers)
+                    self.remove_item(self.invite_watch_party)
                     self.remove_item(self.end_session)
                 if not can_pass_host:
                     self.remove_item(self.pass_host)
             else:
                 self.remove_item(self.private_viewers)
+                self.remove_item(self.invite_watch_party)
                 if not can_pass_host:
                     self.remove_item(self.pass_host)
         if not self.staff:
@@ -4073,6 +4213,14 @@ class MovieNightMoreView(_OwnedView):
         if room is None:
             return await open_movie_night(interaction, replace_message=True)
         await _open_private_viewers(interaction, room)
+
+    @discord.ui.button(label="Invite to Watch Party", emoji="🍿", style=discord.ButtonStyle.success, row=1, custom_id="dank:movie:more:invite-watch-party")
+    async def invite_watch_party(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        room = self._room()
+        if room is None:
+            return await open_movie_night(interaction, replace_message=True)
+        await _open_watch_party_invite(interaction, room)
 
     @discord.ui.button(label="Refresh Cinema", emoji="🔄", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:more:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
