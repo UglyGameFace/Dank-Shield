@@ -85,9 +85,9 @@ def test_movie_night_player_contains_sync_heartbeat_and_host_controls() -> None:
     assert "Playback will stay put while the buffer catches up." in html
     assert 's.sync_status==="joining"' in html
     assert "Synced Viewer" in html
-    assert "<summary>Playback Details</summary>" in html
+    assert "<summary>Advanced Stream Details</summary>" in html
     assert 'class="now"' in html
-    assert html.index("<video") < html.index("<summary>Playback Details</summary>")
+    assert html.index("<video") < html.index("<summary>Advanced Stream Details</summary>")
 
 
 def test_public_media_server_registers_movie_night_without_admin_api() -> None:
@@ -383,10 +383,11 @@ def test_movie_night_state_exposes_private_room_mode(monkeypatch) -> None:
         "uid=10&exp=9999999999&sig=test",
     )
     assert "Dank Cinema Private Session" in html
-    assert "Private Session Host" in html
+    assert "Hosted by You" in html
     assert "End this Private Session and release its media?" in html
-    assert 's.private?"Private • "' in html
-    assert 's.private&&s.is_host?"Private Session Host"' in html
+    assert 's.private?"Private Room":"Movie Night"' in html
+    assert 's.is_host?"Hosted by You"' in html
+    assert 's.private?"End Private Session":"End Movie Night"' in html
 
 
 def test_watch_state_flips_host_authority_without_new_room(monkeypatch) -> None:
@@ -421,3 +422,75 @@ def test_watch_state_flips_host_authority_without_new_room(monkeypatch) -> None:
     assert after_old["is_host"] is False
     assert after_new["is_host"] is True
     assert after_old["room_id"] == after_new["room_id"] == room.room_id
+
+
+
+def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
+    html = movie_night_web._watch_html(
+        "room-design",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert "Dank Cinema • The 420 Lobby" in html
+    assert 'class="wordmark"' in html
+    assert 'class="brand-mark"' in html
+    assert "The 420 Lobby" in html
+    assert 'id="cast"' in html
+    assert "video.remote.prompt" in html
+    assert "webkitShowPlaybackTargetPicker" in html
+    assert 'controlslist="nodownload"' in html
+    assert '<video id="video" playsinline preload="metadata" controls' not in html
+    assert 'event=>event.preventDefault()' in html
+    assert "Stream Health:" in html
+    assert "<summary>Advanced Stream Details</summary>" in html
+    assert "Pass Host" in html
+    assert "Manage Queue" in html
+    assert "Pause for Everyone" in html
+    assert "End Private Session" in html
+
+
+def test_candidate_web_metadata_allows_only_tmdb_artwork() -> None:
+    candidate = SimpleNamespace(
+        title="Example Movie",
+        metadata={
+            "year": 2026,
+            "overview": "Example overview",
+            "poster_url": "https://image.tmdb.org/t/p/w342/example.jpg",
+        },
+    )
+    metadata = movie_night_web._candidate_web_metadata(candidate)
+    assert metadata == {
+        "title": "Example Movie",
+        "year": 2026,
+        "overview": "Example overview",
+        "poster_url": "https://image.tmdb.org/t/p/w342/example.jpg",
+    }
+
+    candidate.metadata["poster_url"] = "https://example.invalid/poster.jpg"
+    assert movie_night_web._candidate_web_metadata(candidate)["poster_url"] == ""
+
+
+def test_movie_night_watch_csp_allows_only_tmdb_remote_images(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+    )
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(
+        movie_night_web,
+        "_request_identity",
+        lambda request: (room.room_id, 10),
+    )
+
+    request = SimpleNamespace(
+        match_info={"room_id": room.room_id},
+        query={"uid": "10", "exp": "9999999999", "sig": "test"},
+    )
+    response = asyncio.run(movie_night_web.movie_night_watch(request))
+    csp = response.headers["Content-Security-Policy"]
+    assert "img-src 'self' https://image.tmdb.org" in csp
+    assert "img-src *" not in csp
