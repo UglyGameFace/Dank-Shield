@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from urllib.parse import urlsplit
 
 from aiohttp import web
 
@@ -15,6 +16,38 @@ from stoney_verify.torrent_streaming import (
 )
 
 _STREAM_CHUNK_BYTES = 1024 * 1024
+
+
+def _cast_cors_headers(request: web.Request) -> dict[str, str]:
+    """Allow Google's Web Receiver to fetch an already-signed media URL.
+
+    The stream URL remains HMAC-gated. CORS only lets the Cast receiver origin
+    consume a URL that was already authorized for this Cinema session.
+    """
+
+    origin = str(request.headers.get("Origin", "") or "").strip()
+    if not origin:
+        return {}
+    try:
+        parsed = urlsplit(origin)
+        host = str(parsed.hostname or "").casefold()
+    except Exception:
+        return {}
+    if parsed.scheme != "https" or not (
+        host == "gstatic.com"
+        or host == "www.gstatic.com"
+        or host.endswith(".gstatic.com")
+    ):
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Accept-Encoding, Range",
+        "Access-Control-Expose-Headers": (
+            "Accept-Ranges, Content-Length, Content-Range, Content-Type"
+        ),
+        "Vary": "Origin",
+    }
 
 
 def _bounded_partial_response_end(
@@ -57,6 +90,8 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
     if session is None:
         raise web.HTTPNotFound(text="Torrent stream session not found.")
 
+    cors_headers = _cast_cors_headers(request)
+
     try:
         start, end, partial = parse_http_range(
             str(request.headers.get("Range", "") or ""),
@@ -68,6 +103,7 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
             headers={
                 "Content-Range": f"bytes */{session.file_size}",
                 "Accept-Ranges": "bytes",
+                **cors_headers,
             },
         )
 
@@ -83,6 +119,7 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
             "Content-Disposition": f'inline; filename="{session.file_name}"',
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
+            **cors_headers,
         }
         if partial:
             headers["Content-Range"] = (
@@ -134,7 +171,7 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
                 "buffer": status.get("buffer", {}),
             },
             status=503,
-            headers={"Retry-After": "2"},
+            headers={"Retry-After": "2", **cors_headers},
         )
 
     # For a byte-range request, only advertise the contiguous bytes that the
@@ -155,6 +192,7 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
         "Content-Disposition": f'inline; filename="{session.file_name}"',
         "Cache-Control": "private, no-store",
         "X-Content-Type-Options": "nosniff",
+        **cors_headers,
     }
     if partial:
         headers["Content-Range"] = f"bytes {start}-{end}/{session.file_size}"
@@ -214,6 +252,30 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
     return response
 
 
+async def torrent_stream_options(request: web.Request) -> web.Response:
+    """CORS preflight for a signed Cast media URL."""
+
+    manager = get_torrent_manager()
+    token = str(request.match_info.get("token", "") or "")
+    expires = str(request.query.get("exp", "") or "")
+    signature = str(request.query.get("sig", "") or "")
+    consumer_key = str(request.query.get("cid", "") or "").strip()[:96]
+    if not await manager.validate_stream_access(
+        token,
+        expires,
+        signature,
+        consumer_key,
+    ):
+        raise web.HTTPUnauthorized(text="Invalid or expired torrent stream token.")
+    session = await manager.get(token)
+    if session is None:
+        raise web.HTTPNotFound(text="Torrent stream session not found.")
+    headers = _cast_cors_headers(request)
+    if not headers:
+        raise web.HTTPForbidden(text="That cross-origin media request is not allowed.")
+    return web.Response(status=204, headers=headers)
+
+
 async def torrent_status(request: web.Request) -> web.Response:
     manager = get_torrent_manager()
     token = str(request.match_info.get("token", "") or "")
@@ -237,6 +299,10 @@ def register_torrent_public_routes(app: web.Application) -> None:
         torrent_stream,
         allow_head=True,
     )
+    app.router.add_options(
+        "/media/torrent/stream/{token}/{filename}",
+        torrent_stream_options,
+    )
 
 
 def register_torrent_admin_routes(app: web.Application, server: Any) -> None:
@@ -251,4 +317,5 @@ __all__ = [
     "torrent_cancel",
     "torrent_status",
     "torrent_stream",
+    "torrent_stream_options",
 ]
