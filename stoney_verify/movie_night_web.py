@@ -2366,11 +2366,25 @@ const QUALITY_STORAGE_KEY="dank-cinema-quality-v1";
 
 function autoQualityMode() {{
   const reduced=window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
-  const saveData=!!navigator.connection?.saveData;
+  const connection=navigator.connection||navigator.mozConnection||navigator.webkitConnection;
+  const saveData=!!connection?.saveData;
+  const network=String(connection?.effectiveType||"").toLowerCase();
   const memory=Number(navigator.deviceMemory||0);
   const cores=Number(navigator.hardwareConcurrency||0);
-  if(reduced || saveData || (memory>0 && memory<=2) || (cores>0 && cores<=2)) return "lite";
-  if((memory>0 && memory<=4) || (cores>0 && cores<=4) || window.innerWidth<430) return "standard";
+  if(
+    reduced ||
+    saveData ||
+    network==="slow-2g" ||
+    network==="2g" ||
+    (memory>0 && memory<=2) ||
+    (cores>0 && cores<=2)
+  ) return "lite";
+  if(
+    network==="3g" ||
+    (memory>0 && memory<=4) ||
+    (cores>0 && cores<=4) ||
+    window.innerWidth<430
+  ) return "standard";
   return "high";
 }}
 function applyQualityMode(preference) {{
