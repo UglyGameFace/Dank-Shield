@@ -342,7 +342,14 @@
     if (kind === "episode") {
       const seriesId = Number(item?.series_id || item?.metadata?.series_id || 0);
       const season = Number(item?.season_number || 0);
-      if (seriesId > 0) return `details/tv/${seriesId}?season=${season}`;
+      const episode = Number(item?.episode_number || 0);
+      if (seriesId > 0) {
+        const params = new URLSearchParams();
+        if (season > 0) params.set("season", String(season));
+        if (episode > 0) params.set("episode", String(episode));
+        const query = params.toString();
+        return `details/tv/${seriesId}${query ? `?${query}` : ""}`;
+      }
     }
     return "";
   }
@@ -752,7 +759,7 @@
     }
   }
 
-  async function loadSeason(seriesId, seasonNumber, host, hostSession = null) {
+  async function loadSeason(seriesId, seasonNumber, host, hostSession = null, focusEpisode = 0) {
     const key = `${seriesId}:${seasonNumber}`;
     let data = state.seasons.get(key);
     if (!data) {
@@ -770,6 +777,11 @@
     }
     episodes.forEach((ep) => {
       const card = node("article", "episode-card");
+      const episodeNumber = Number(ep.episode_number || 0);
+      if (focusEpisode > 0 && episodeNumber === Number(focusEpisode)) {
+        card.classList.add("episode-current");
+        card.setAttribute("aria-current", "true");
+      }
       const still = node("div", "episode-still");
       const art = safeImage(ep.still_url);
       if (art) {
@@ -811,7 +823,7 @@
     host.appendChild(list);
   }
 
-  async function renderDetails(mediaType, tmdbId, requestedSeason = null) {
+  async function renderDetails(mediaType, tmdbId, requestedSeason = null, requestedEpisode = null) {
     const cacheKey = `${mediaType}:${tmdbId}`;
     const page = node("main", "page");
     page.appendChild(node("div", "hero skeleton"));
@@ -919,11 +931,17 @@
         page.appendChild(tvPanel);
         const initialSeason = Number(requestedSeason || continuation?.season_number || latest?.season_number || select.value || 1);
         select.value = String(initialSeason);
-        select.addEventListener("change", () => loadSeason(d.tmdb_id, Number(select.value), episodeHost, data.host_session).catch((error) => {
+        select.addEventListener("change", () => loadSeason(d.tmdb_id, Number(select.value), episodeHost, data.host_session, 0).catch((error) => {
           episodeHost.textContent = "";
           episodeHost.appendChild(node("div", "state-card", error.message || "Episodes failed to load."));
         }));
-        await loadSeason(d.tmdb_id, initialSeason, episodeHost, data.host_session);
+        await loadSeason(
+          d.tmdb_id,
+          initialSeason,
+          episodeHost,
+          data.host_session,
+          Number(requestedEpisode || 0),
+        );
       }
 
       const detailsGrid = node("div", "details-grid");
@@ -967,8 +985,20 @@
       page.appendChild(detailsGrid);
 
       renderShell(page, "");
+      if (Number(requestedEpisode || 0) > 0) {
+        requestAnimationFrame(() => {
+          const current = page.querySelector(".episode-current");
+          if (!current) return;
+          const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+          current.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
+        });
+      }
     } catch (error) {
-      renderShell(pageError("Title details could not load", error.message || "Try again.", () => renderDetails(mediaType, tmdbId, requestedSeason)), "");
+      renderShell(pageError(
+        "Title details could not load",
+        error.message || "Try again.",
+        () => renderDetails(mediaType, tmdbId, requestedSeason, requestedEpisode),
+      ), "");
     }
   }
 
@@ -1302,7 +1332,12 @@
     if (view === "profile") return renderProfile();
     if (view === "notifications") return renderNotifications();
     if (view === "details" && ["movie", "tv"].includes(parts[1]) && Number(parts[2]) > 0) {
-      return renderDetails(parts[1], Number(parts[2]), params.get("season"));
+      return renderDetails(
+        parts[1],
+        Number(parts[2]),
+        params.get("season"),
+        params.get("episode"),
+      );
     }
     go("home");
   }
