@@ -29,6 +29,8 @@ from .media_source_registry import (
     set_custom_source_enabled,
 )
 from .media_source_resolver import preview_custom_media_source
+from .cinema_discovery_service import record_feed_discoveries
+from .cinema_storage import CinemaStorageUnavailable
 
 CATEGORIES = (
     MEDIA_CATEGORY_MOVIES,
@@ -70,6 +72,7 @@ def _payload(source: Any, *, guild_id: int, include_endpoint: bool) -> dict[str,
         "last_refresh_at": int(runtime.get("refreshed_at") or 0),
         "last_refresh_ok": runtime.get("ok"),
         "last_refresh_error": str(runtime.get("error") or "")[:240],
+        "discovery_warning": str(runtime.get("discovery_warning") or "")[:240],
         "newly_discovered": list(runtime.get("titles") or [])[:8],
     }
     if include_endpoint:
@@ -124,11 +127,32 @@ async def refresh_feed(
         limit=8,
     )
     error = str(outcome.errors[0]) if outcome.errors else ""
+    titles = [str(item.title)[:180] for item in outcome.variants[:8]]
+    discovery_warning = ""
+    if titles:
+        try:
+            await record_feed_discoveries(
+                int(guild_id),
+                source_id=str(source.source_id),
+                source_label=str(source.label),
+                category=str(getattr(source, "category", MEDIA_CATEGORY_CUSTOM) or MEDIA_CATEGORY_CUSTOM),
+                titles=titles,
+            )
+        except CinemaStorageUnavailable:
+            discovery_warning = (
+                "Source refreshed, but Recently Added storage is temporarily unavailable."
+            )
+        except Exception:
+            discovery_warning = (
+                "Source refreshed, but new-title metadata could not be indexed."
+            )
+
     _RUNTIME_STATE[(int(guild_id), source.source_id)] = {
         "refreshed_at": int(time.time()),
         "ok": not bool(error),
         "error": error,
-        "titles": [str(item.title)[:180] for item in outcome.variants[:8]],
+        "discovery_warning": discovery_warning,
+        "titles": titles,
     }
 
 
