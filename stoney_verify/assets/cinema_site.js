@@ -648,7 +648,43 @@
     return episodes[0] || null;
   }
 
-  async function loadSeason(seriesId, seasonNumber, host) {
+  async function playInTheater(item, hostSession, control = null) {
+    const roomId = String(hostSession?.room_id || "");
+    const mediaType = itemKind(item);
+    if (!roomId || !hostSession?.is_host) {
+      toast("Start or host a Cinema session in Discord before replacing Theater playback.", "error");
+      return;
+    }
+    const payload = {
+      room_id: roomId,
+      media_type: mediaType,
+      tmdb_id: Number(item?.tmdb_id || 0),
+    };
+    if (mediaType === "episode") {
+      payload.series_id = Number(item?.series_id || item?.metadata?.series_id || 0);
+      payload.season_number = Number(item?.season_number || 0);
+      payload.episode_number = Number(item?.episode_number || 0);
+    }
+    if (!["movie", "episode"].includes(mediaType)) {
+      toast("Choose a movie or a specific TV episode to play.", "error");
+      return;
+    }
+
+    if (control) control.disabled = true;
+    try {
+      const response = await api("/play", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      if (!response?.watch_url) throw new Error("Cinema did not return a Theater link.");
+      location.href = response.watch_url;
+    } catch (error) {
+      toast(error.message || "Cinema playback could not start.", "error");
+      if (control) control.disabled = false;
+    }
+  }
+
+  async function loadSeason(seriesId, seasonNumber, host, hostSession = null) {
     const key = `${seriesId}:${seasonNumber}`;
     let data = state.seasons.get(key);
     if (!data) {
@@ -687,7 +723,20 @@
         : Number(progress.progress_seconds || 0) > 0
           ? `Resume at ${formatSeconds(progress.progress_seconds)}`
           : "";
-      const stateEl = node("div", "episode-state", label);
+      const stateEl = node("div", "episode-state");
+      if (label) stateEl.appendChild(node("div", "episode-progress-label", label));
+      if (hostSession?.is_host) {
+        const playLabel = Number(progress.progress_seconds || 0) > 0 && !progress.completed
+          ? "▶ Resume in Theater"
+          : "▶ Play in Theater";
+        const play = button(playLabel, "btn secondary episode-play");
+        play.addEventListener("click", () => playInTheater({
+          ...ep,
+          media_type: "episode",
+          series_id: Number(seriesId),
+        }, hostSession, play));
+        stateEl.appendChild(play);
+      }
       card.append(still, copy, stateEl);
       list.appendChild(card);
     });
@@ -745,11 +794,27 @@
       const actions = node("div", "hero-actions");
       if (data.active_session?.watch_url) {
         actions.appendChild(button("▶ Return to Theater", "btn primary", () => { location.href = data.active_session.watch_url; }));
+      } else if (d.media_type === "movie" && data.host_session?.is_host) {
+        const resume = Number(data.library?.progress_seconds || 0) > 0 && !data.library?.completed;
+        const play = button(resume ? "▶ Resume in Theater" : "▶ Play in Theater", "btn primary");
+        play.addEventListener("click", () => playInTheater(d, data.host_session, play));
+        actions.appendChild(play);
+      } else if (d.media_type === "tv" && data.host_session?.is_host && data.continue_episode) {
+        const ep = data.continue_episode;
+        const season = Number(ep.season_number || 0);
+        const number = Number(ep.episode_number || 0);
+        const resume = Number(ep.progress_seconds || 0) > 0 && !ep.completed;
+        const play = button(
+          resume ? `▶ Resume S${season} E${number}` : `▶ Play S${season} E${number}`,
+          "btn primary"
+        );
+        play.addEventListener("click", () => playInTheater(ep, data.host_session, play));
+        actions.appendChild(play);
       }
       const inWatchlist = Boolean(data.library?.watchlisted);
       actions.appendChild(button(inWatchlist ? "✓ In Watchlist" : "+ Watchlist", "btn secondary", () => setWatchlistFromDetails(data, !inWatchlist)));
       if (d.trailer_url) actions.appendChild(button("Trailer", "btn secondary", () => openExternal(d.trailer_url)));
-      if (!data.active_session?.watch_url && data.discord?.discord_url) {
+      if (!data.active_session?.watch_url && !data.host_session?.is_host && data.discord?.discord_url) {
         actions.appendChild(button("Open Discord to Play", "btn discord", () => openExternal(data.discord.discord_url)));
       }
       copy.appendChild(actions);
@@ -782,11 +847,11 @@
         page.appendChild(tvPanel);
         const initialSeason = Number(requestedSeason || latest?.season_number || select.value || 1);
         select.value = String(initialSeason);
-        select.addEventListener("change", () => loadSeason(d.tmdb_id, Number(select.value), episodeHost).catch((error) => {
+        select.addEventListener("change", () => loadSeason(d.tmdb_id, Number(select.value), episodeHost, data.host_session).catch((error) => {
           episodeHost.textContent = "";
           episodeHost.appendChild(node("div", "state-card", error.message || "Episodes failed to load."));
         }));
-        await loadSeason(d.tmdb_id, initialSeason, episodeHost);
+        await loadSeason(d.tmdb_id, initialSeason, episodeHost, data.host_session);
       }
 
       const detailsGrid = node("div", "details-grid");
