@@ -60,7 +60,9 @@ from stoney_verify.cinema_catalog import (
 from stoney_verify.cinema_media_identity import (
     catalog_metadata as _cinema_catalog_metadata,
     episode_catalog_metadata as _cinema_episode_catalog_metadata,
+    filter_adult_provider_results as _filter_adult_provider_results,
     filter_outcome_for_catalog as _filter_outcome_for_catalog,
+    looks_explicit_adult as _looks_explicit_adult,
 )
 from stoney_verify.cinema_playback_service import (
     materialize_search_results as _materialize_search_results,
@@ -116,68 +118,6 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 def _compact(value: Any, limit: int = 180) -> str:
     return " ".join(str(value or "").split())[:limit]
-
-
-_EXPLICIT_ADULT_RE = re.compile(
-    r"(?:^|[^a-z0-9])(?:xxx|porn|pornographic|adult[ _-]?video)(?:$|[^a-z0-9])",
-    re.IGNORECASE,
-)
-
-
-def _looks_explicit_adult(value: Any) -> bool:
-    return bool(_EXPLICIT_ADULT_RE.search(str(value or "")))
-
-
-def _variant_is_explicit_adult(variant: ResolvedMediaVariant) -> bool:
-    if _looks_explicit_adult(variant.title):
-        return True
-    metadata = variant.metadata if isinstance(variant.metadata, Mapping) else {}
-    values: list[Any] = [
-        metadata.get("category"),
-        metadata.get("type"),
-    ]
-    source_reported = (
-        metadata.get("source_reported")
-        if isinstance(metadata.get("source_reported"), Mapping)
-        else {}
-    )
-    values.extend(
-        source_reported.get(key)
-        for key in ("category", "type", "tags", "classification")
-    )
-    explicit_labels = {"adult", "xxx", "porn", "pornographic", "adult video"}
-    for value in values:
-        if not value:
-            continue
-        clean = " ".join(str(value).casefold().replace("_", " ").replace("-", " ").split())
-        if clean in explicit_labels or _looks_explicit_adult(clean):
-            return True
-    return False
-
-
-def _filter_adult_provider_results(
-    outcome: MediaSourceSearchOutcome,
-    *,
-    enabled: bool,
-) -> MediaSourceSearchOutcome:
-    if enabled:
-        return outcome
-    kept = tuple(
-        variant
-        for variant in outcome.variants
-        if not _variant_is_explicit_adult(variant)
-    )
-    removed = len(outcome.variants) - len(kept)
-    if removed <= 0:
-        return outcome
-    errors = list(outcome.errors)
-    errors.append(
-        f"Filtered {removed} explicit adult provider release(s) by server Cinema setting."
-    )
-    return MediaSourceSearchOutcome(
-        variants=kept,
-        errors=tuple(errors[:20]),
-    )
 
 
 def _format_bytes(value: Any) -> str:
