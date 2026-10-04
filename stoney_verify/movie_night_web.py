@@ -2413,31 +2413,59 @@ let castState="NO_DEVICES_AVAILABLE";
 let castActive=false;
 let castWasMuted=false;
 let castLastSyncAt=0;
+let remotePlaybackAvailable=false;
 
-function setCastVisible(visible) {{
-  castButton.hidden=!visible;
-  castButton.disabled=!visible;
-}}
-function refreshCastAvailability() {{
+function googleCastDeviceAvailable() {{
   const noDevices=window.cast?.framework
     ?cast.framework.CastState.NO_DEVICES_AVAILABLE
     :"NO_DEVICES_AVAILABLE";
-  const realDeviceAvailable=!!(
+  return !!(
     castContext &&
     typeof castContext.requestSession==="function" &&
     castState &&
     castState!==noDevices
   );
-  setCastVisible(!!(
-    realDeviceAvailable &&
-    lastState?.cast_stream_url &&
-    lastState?.cast_supported_media
-  ));
+}}
+function castAvailability() {{
+  if(!lastState?.stream_url)
+    return {{show:false,available:false,transport:"",reason:"No media is loaded yet."}};
+
+  if(googleCastDeviceAvailable() && lastState?.cast_supported_media)
+    return {{show:true,available:true,transport:"google",reason:"Chromecast available"}};
+
+  if(remotePlaybackAvailable && video.remote && typeof video.remote.prompt==="function")
+    return {{show:true,available:true,transport:"remote",reason:"Remote playback device available"}};
+
+  if(googleCastDeviceAvailable() && !lastState?.cast_supported_media)
+    return {{
+      show:true,
+      available:false,
+      transport:"",
+      reason:"A Cast device is available, but this release cannot be sent directly. Try an MP4/WebM release."
+    }};
+
+  return {{
+    show:true,
+    available:false,
+    transport:"",
+    reason:"No compatible casting device is currently available in this browser."
+  }};
+}}
+function refreshCastAvailability() {{
+  const status=castAvailability();
+  castButton.hidden=!status.show;
+  castButton.disabled=false;
+  castButton.classList.toggle("unavailable",status.show&&!status.available);
+  castButton.setAttribute("aria-label",status.available?"Cast":"Cast unavailable");
+  castButton.title=status.reason;
+  castButton.dataset.transport=status.transport||"";
 }}
 function initGoogleCast() {{
   try {{
     if(!window.__dankCastApiAvailable || !window.cast?.framework || !window.chrome?.cast?.media) {{
-      setCastVisible(false);
+      castContext=null;
+      castState="NO_DEVICES_AVAILABLE";
+      refreshCastAvailability();
       return false;
     }}
     castContext=cast.framework.CastContext.getInstance();
@@ -2474,7 +2502,7 @@ function initGoogleCast() {{
   }} catch(_) {{
     castContext=null;
     castState="NO_DEVICES_AVAILABLE";
-    setCastVisible(false);
+    refreshCastAvailability();
     return false;
   }}
 }}
@@ -2502,8 +2530,10 @@ function castLoadCurrentMedia() {{
   return session.loadMedia(request);
 }}
 async function startGoogleCast() {{
-  if(!initGoogleCast() || castButton.hidden)
+  if(!initGoogleCast() || !googleCastDeviceAvailable())
     throw new Error("No Chromecast device is currently available in this browser.");
+  if(!lastState?.cast_supported_media)
+    throw new Error("This release cannot be sent directly to Chromecast. Choose an MP4/WebM release.");
   await castContext.requestSession();
   await castLoadCurrentMedia();
   castWasMuted=video.muted;
@@ -2535,13 +2565,46 @@ function syncCastToRoom(s) {{
       media.play(null,()=>{{}},()=>{{}});
   }} catch(_) {{}}
 }}
-setCastVisible(false);
+if(video.remote && typeof video.remote.watchAvailability==="function") {{
+  try {{
+    video.remote.watchAvailability(available=>{{
+      remotePlaybackAvailable=!!available;
+      refreshCastAvailability();
+    }}).catch(()=>{{
+      remotePlaybackAvailable=false;
+      refreshCastAvailability();
+    }});
+    video.remote.addEventListener("connect",()=>{{
+      castButton.classList.add("connected");
+      notice.textContent="Remote playback connected.";
+    }});
+    video.remote.addEventListener("disconnect",()=>{{
+      castButton.classList.remove("connected");
+      refreshCastAvailability();
+    }});
+  }} catch(_) {{
+    remotePlaybackAvailable=false;
+  }}
+}}
+castButton.hidden=true;
 window.addEventListener("dank-cast-api",()=>initGoogleCast());
 setTimeout(()=>initGoogleCast(),1200);
 castButton.onclick=async()=>{{
-  try {{ await startGoogleCast(); }}
-  catch(err) {{
-    setCastVisible(false);
+  const status=castAvailability();
+  if(!status.available) {{
+    notice.textContent=status.reason;
+    return;
+  }}
+  try {{
+    if(status.transport==="google") {{
+      await startGoogleCast();
+      return;
+    }}
+    if(status.transport==="remote" && video.remote && typeof video.remote.prompt==="function") {{
+      await video.remote.prompt();
+      return;
+    }}
+  }} catch(err) {{
     notice.textContent=String(err?.message||"Casting could not start.");
   }}
 }};
