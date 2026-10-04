@@ -51,20 +51,42 @@ class CinemaFeedConflict(RuntimeError):
     pass
 
 
+def _default_refresh_query(category: str) -> str:
+    clean = str(category or MEDIA_CATEGORY_CUSTOM).strip().lower()
+    return {
+        MEDIA_CATEGORY_MOVIES: "movie",
+        MEDIA_CATEGORY_TV: "tv",
+        MEDIA_CATEGORY_ANIME: "anime",
+        MEDIA_CATEGORY_DOCUMENTARIES: "documentary",
+        MEDIA_CATEGORY_CUSTOM: "movie",
+    }.get(clean, "movie")
+
+
 def _payload(source: Any, *, guild_id: int, include_endpoint: bool) -> dict[str, Any]:
     runtime = _RUNTIME_STATE.get((int(guild_id), str(source.source_id)), {})
     provider_type = str(source.provider_type or PROVIDER_TYPE_JSON)
     category = str(
         getattr(source, "category", MEDIA_CATEGORY_CUSTOM) or MEDIA_CATEGORY_CUSTOM
     )
+    last_refresh_ok = runtime.get("ok")
+    if not bool(source.enabled):
+        health_state = "disabled"
+    elif provider_type == PROVIDER_TYPE_EXTERNAL:
+        health_state = "reference"
+    elif last_refresh_ok is True:
+        health_state = "online"
+    elif last_refresh_ok is False:
+        health_state = "offline"
+    else:
+        health_state = "unchecked"
+
     payload: dict[str, Any] = {
         "source_id": str(source.source_id),
         "label": str(source.label),
         "provider_type": provider_type,
         "category": category if category in CATEGORIES else MEDIA_CATEGORY_CUSTOM,
         "enabled": bool(source.enabled),
-        "search_capable": provider_type
-        in {PROVIDER_TYPE_JSON, PROVIDER_TYPE_EXTERNAL},
+        "search_capable": provider_type == PROVIDER_TYPE_JSON,
         "discovery_capable": provider_type
         in {PROVIDER_TYPE_JSON, PROVIDER_TYPE_FEED},
         "playback_capable": provider_type
@@ -72,8 +94,9 @@ def _payload(source: Any, *, guild_id: int, include_endpoint: bool) -> dict[str,
         "supported_media_types": [
             category if category in CATEGORIES else MEDIA_CATEGORY_CUSTOM
         ],
+        "health_state": health_state,
         "last_refresh_at": int(runtime.get("refreshed_at") or 0),
-        "last_refresh_ok": runtime.get("ok"),
+        "last_refresh_ok": last_refresh_ok,
         "last_refresh_error": str(runtime.get("error") or "")[:240],
         "discovery_warning": str(runtime.get("discovery_warning") or "")[:240],
         "newly_discovered": list(runtime.get("titles") or [])[:8],
@@ -112,7 +135,7 @@ async def refresh_feed(
     guild_id: int,
     *,
     source_id: str,
-    query: str = "movie",
+    query: str = "",
 ) -> None:
     _raw, registry = await load_media_source_registry(int(guild_id), refresh=True)
     source = next(
@@ -124,9 +147,12 @@ async def refresh_feed(
     if not source.enabled:
         raise ValueError("Enable this source before refreshing it.")
 
+    refresh_query = " ".join(
+        str(query or _default_refresh_query(getattr(source, "category", MEDIA_CATEGORY_CUSTOM))).split()
+    )[:180]
     outcome = await preview_custom_media_source(
         source,
-        query=str(query or "movie")[:180],
+        query=refresh_query,
         limit=8,
     )
     error = str(outcome.errors[0]) if outcome.errors else ""
@@ -177,7 +203,7 @@ async def mutate_feed(
         await refresh_feed(
             int(guild_id),
             source_id=source_id,
-            query=str(payload.get("query") or "movie"),
+            query=str(payload.get("query") or ""),
         )
         return
 
@@ -264,6 +290,7 @@ def runtime_state() -> dict[tuple[int, str], dict[str, Any]]:
 __all__ = [
     "CATEGORIES",
     "CinemaFeedConflict",
+    "_default_refresh_query",
     "feed_state",
     "mutate_feed",
     "refresh_feed",
