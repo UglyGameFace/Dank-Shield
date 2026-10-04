@@ -1242,7 +1242,7 @@ def test_dank_cinema_player_capability_controls_are_not_placebos() -> None:
     assert "video.requestPictureInPicture" in html
     assert "document.exitPictureInPicture" in html
     assert "video.textTracks" in html
-    assert 'tracks[i].mode="showing"' in html
+    assert 'tracks[i].mode=(i===0 && !anyShowing)?"showing":"disabled"' in html
     assert 'document.addEventListener("keydown"' in html
     assert 'key==="arrowleft"' in html
     assert 'key==="arrowright"' in html
