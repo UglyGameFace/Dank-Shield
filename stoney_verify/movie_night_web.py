@@ -1823,7 +1823,8 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
   </nav>
 </header>
 
-<main>
+<main class="theater-grid">
+  <div class="theater-primary">
   <section class="theater" aria-label="Dank Cinema player">
     <div class="video-stage" id="videoStage">
       <video id="video" playsinline preload="metadata" controlslist="nodownload" aria-label="Dank Cinema video"></video>
@@ -1899,8 +1900,10 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
     <button class="tab" id="contextAction" type="button" data-panel="settings">⚙ Details</button>
   </div>
 
-  <div id="notice"></div>
+  <div id="notice" role="status" aria-live="polite"></div>
+  </div>
 
+  <aside class="theater-sidecar" aria-label="Cinema session tools">
   <section class="queue-panel" id="sessionPanel" hidden>
     <div class="section-head"><h2>Session</h2><span id="sessionMode">Connecting…</span></div>
     <div class="grid">
@@ -1937,6 +1940,7 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
       <div class="stat"><b>Buffer target</b><span id="buffer">—</span></div>
     </div>
   </details>
+  </aside>
 
   <span class="sr-only" id="heading">Dank Cinema</span>
 </main>
