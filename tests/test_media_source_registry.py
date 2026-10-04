@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from stoney_verify.media_source_registry import (
     MEDIA_SOURCE_REGISTRY_KEY,
+    MEDIA_CATEGORY_ANIME,
+    MEDIA_CATEGORY_CUSTOM,
+    MEDIA_CATEGORY_TV,
     PROVIDER_TYPE_EXTERNAL,
     PROVIDER_TYPE_FEED,
     PROVIDER_TYPE_JSON,
@@ -15,6 +18,7 @@ from stoney_verify.media_source_registry import (
     prepare_feed_url,
     remove_custom_source,
     render_provider_search_url,
+    set_custom_source_category,
     set_custom_source_enabled,
 )
 
@@ -38,6 +42,7 @@ def test_custom_media_source_round_trip() -> None:
     assert source.endpoint_url.startswith("https://media.example.com/")
     assert source.added_by == 123
     assert source.enabled
+    assert source.category == MEDIA_CATEGORY_CUSTOM
 
 
 def test_custom_source_can_be_disabled_and_removed() -> None:
@@ -293,3 +298,54 @@ def test_render_provider_search_url_rejects_discord_button_overflow() -> None:
         assert "too long for a discord link button" in str(exc).lower()
     else:
         raise AssertionError("oversized external provider link was accepted")
+
+
+
+def test_media_sources_support_real_feed_categories_without_breaking_legacy_config() -> None:
+    registry = add_custom_source(
+        MediaSourceRegistry(),
+        label="Anime Feed",
+        endpoint_url="https://feeds.example.org/anime.xml",
+        added_by=1,
+        provider_type=PROVIDER_TYPE_FEED,
+        category=MEDIA_CATEGORY_ANIME,
+    )
+    assert registry.sources[0].category == MEDIA_CATEGORY_ANIME
+
+    registry = set_custom_source_category(
+        registry,
+        registry.sources[0].source_id,
+        MEDIA_CATEGORY_TV,
+    )
+    assert registry.sources[0].category == MEDIA_CATEGORY_TV
+
+    parsed = parse_media_source_registry(
+        {
+            MEDIA_SOURCE_REGISTRY_KEY: {
+                "version": 2,
+                "revision": 1,
+                "sources": [
+                    {
+                        "source_id": "legacy-feed",
+                        "label": "Legacy Feed",
+                        "endpoint_url": "https://feeds.example.org/legacy.xml",
+                        "provider_type": PROVIDER_TYPE_FEED,
+                        "enabled": True,
+                    }
+                ],
+            }
+        }
+    )
+    assert parsed.sources[0].category == MEDIA_CATEGORY_CUSTOM
+
+
+def test_unknown_media_source_category_falls_back_to_custom() -> None:
+    registry = add_custom_source(
+        MediaSourceRegistry(),
+        label="Unknown Category",
+        endpoint_url="https://feeds.example.org/list.xml",
+        added_by=1,
+        provider_type=PROVIDER_TYPE_FEED,
+        category="definitely-not-a-category",
+    )
+    assert registry.sources[0].category == MEDIA_CATEGORY_CUSTOM

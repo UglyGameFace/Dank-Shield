@@ -171,11 +171,13 @@ def test_private_host_gets_viewer_manager_and_invited_viewer_gets_watch_only(mon
 
     host_more = _labels(movie_ui.MovieNightMoreView(10, room, staff=False))
     assert "Private Viewers" in host_more
+    assert "Invite to Watch Party" in host_more
     assert "End Private Session" in host_more
     assert "Pass Host" in host_more
 
     viewer_more = _labels(movie_ui.MovieNightMoreView(20, room, staff=False))
     assert "Private Viewers" not in viewer_more
+    assert "Invite to Watch Party" not in viewer_more
     assert "End Private Session" not in viewer_more
     assert "Pass Host" not in viewer_more
     assert "Private Session Status" in viewer_more
@@ -222,6 +224,7 @@ def test_private_status_and_more_copy_never_call_it_movie_night() -> None:
     assert "Authorized viewers: **1 / 20**" in status_text
     assert "End Private Session" in status_text
     assert "End Movie Night" not in status_text
+    assert "Invite to Watch Party" in more_text
     assert "End Private Session" in more_text
     assert "End Movie Night" not in more_text
 
@@ -1772,3 +1775,77 @@ def test_private_more_shows_pass_host_only_with_eligible_viewer(monkeypatch) -> 
     assert "Pass Host" not in _labels(
         movie_ui.MovieNightMoreView(20, room, staff=False)
     )
+
+
+
+def test_private_host_gets_invite_to_watch_party_control(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="",
+        mode="private",
+        now=100.0,
+    )
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+
+    host_labels = _labels(movie_ui.MovieNightMoreView(10, room, staff=False))
+    outsider_labels = _labels(movie_ui.MovieNightMoreView(20, room, staff=False))
+
+    assert "Invite to Watch Party" in host_labels
+    assert "Invite to Watch Party" not in outsider_labels
+
+    manager.promote_private_to_watch_party(room.room_id, host_id=10)
+    watch_party_labels = _labels(movie_ui.MovieNightMoreView(10, room, staff=False))
+    assert "Invite to Watch Party" not in watch_party_labels
+    assert "Private Viewers" not in watch_party_labels
+
+
+def test_watch_party_invite_picker_promotes_room_and_sends_signed_link(monkeypatch) -> None:
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=2,
+        host_id=10,
+        stream_token="stream",
+        mode="private",
+        now=100.0,
+    )
+    monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(
+        movie_ui,
+        "movie_night_watch_url",
+        lambda room_id, user_id: f"https://watch.example/{room_id}?uid={user_id}",
+    )
+
+    sent: list[str] = []
+
+    class Member:
+        id = 20
+        bot = False
+        display_name = "Invitee"
+
+        async def send(self, content: str, **_kwargs):
+            sent.append(content)
+
+    member = Member()
+    guild = SimpleNamespace(get_member=lambda uid: member if int(uid) == 20 else None)
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=10),
+        guild=guild,
+    )
+    view = movie_ui.WatchPartyInviteView(10, room)
+
+    async def fake_replace(_interaction, **kwargs):
+        assert "Watch Party started" in str(kwargs.get("content") or "")
+        assert kwargs.get("view") is not None
+
+    monkeypatch.setattr(movie_ui, "_replace", fake_replace)
+
+    import asyncio
+    asyncio.run(view._picked(interaction, member))
+
+    assert room.mode == "watch_party"
+    assert sent
+    assert f"https://watch.example/{room.room_id}?uid=20" in sent[0]

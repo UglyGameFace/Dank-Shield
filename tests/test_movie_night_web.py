@@ -57,6 +57,8 @@ def test_movie_night_public_routes_are_media_only() -> None:
     assert "/movie/{room_id}/state" in rendered
     assert "/movie/{room_id}/heartbeat" in rendered
     assert "/movie/{room_id}/action" in rendered
+    assert "/movie/{room_id}/invite-options" in rendered
+    assert "/movie/{room_id}/promote" in rendered
     assert "/api/" not in rendered
     assert "/guild/" not in rendered
 
@@ -442,11 +444,13 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
     )
 
     assert "Dank Cinema • The 420 Lobby" in html
-    assert 'class="brand-banner"' in html
-    assert 'src="/movie/assets/dank-cinema-brand.webp"' in html
+    assert 'class="brand-art"' in html
+    assert 'class="brand-mark-art"' in html
+    assert 'class="brand-wordmark-art"' in html
+    assert '/movie/assets/dank-cinema-brand-mark.webp?v=art-system-v3' in html
+    assert '/movie/assets/dank-cinema-brand-wordmark.webp?v=art-system-v3' in html
     assert 'alt="Dank Cinema — A feature of The 420 Lobby"' in html
     assert 'class="wordmark"' not in html
-    assert 'class="brand-mark"' not in html
     assert "family=Lacquer" not in html
     assert 'id="videoStage"' in html
     assert 'screen.orientation.lock("landscape")' in html
@@ -669,15 +673,21 @@ def test_dank_cinema_polling_does_not_show_broken_sync_on_one_transient_fetch() 
 
 
 def test_dank_cinema_approved_brand_asset_is_real_webp() -> None:
-    movie_night_web._dank_cinema_brand_bytes.cache_clear()
-    payload = movie_night_web._dank_cinema_brand_bytes()
+    movie_night_web._dank_cinema_brand_source_bytes.cache_clear()
+    movie_night_web._dank_cinema_brand_rgba.cache_clear()
+    movie_night_web._dank_cinema_brand_variant.cache_clear()
+    payload = movie_night_web._dank_cinema_brand_variant("full")
 
     assert len(payload) > 5_000
     assert payload[:4] == b"RIFF"
     assert payload[8:12] == b"WEBP"
+    assert b"ALPH" in payload
+    assert payload != movie_night_web._dank_cinema_brand_source_bytes()
 
     response = asyncio.run(
-        movie_night_web.dank_cinema_brand_asset(SimpleNamespace())
+        movie_night_web.dank_cinema_brand_asset(
+            SimpleNamespace(match_info={})
+        )
     )
     assert response.content_type == "image/webp"
     assert response.body == payload
@@ -687,6 +697,7 @@ def test_dank_cinema_approved_brand_asset_is_real_webp() -> None:
 def test_dank_cinema_brand_asset_route_is_registered() -> None:
     source = Path(movie_night_web.__file__).read_text(encoding="utf-8")
     assert '"/movie/assets/dank-cinema-brand.webp"' in source
+    assert '"/movie/assets/dank-cinema-brand-{variant}.webp"' in source
     assert "dank_cinema_brand_asset" in source
 
 
@@ -875,6 +886,9 @@ def test_dank_cinema_host_controls_can_be_reopened_after_close() -> None:
     )
 
     assert 'id="hostLauncher"' in html
+    assert "let hostSheetDismissed=true" in html
+    assert "let previousHostState=null" in html
+    assert "previousHostState===false" in html
     assert "function openHostControls()" in html
     assert "function closeHostControls()" in html
     assert "launcher.hidden=!hostSheetDismissed" in html
@@ -890,7 +904,9 @@ def test_dank_cinema_mobile_layout_wraps_controls_instead_of_overflowing() -> No
         "uid=456&exp=9999999999&sig=test",
     )
 
-    assert ".shell { width:min(1120px,100%); margin:0 auto; padding:0 18px 150px; overflow-x:hidden; }" in html
+    assert ".shell { width:min(1480px,100%); margin:0 auto; padding:0 22px 160px; overflow-x:hidden; }" in html
+    assert "@media (min-width:641px) and (max-width:1079px)" in html
+    assert "@media (min-width:1080px)" in html
     assert ".tab {" in html
     assert "white-space:normal;overflow-wrap:anywhere" in html
     assert ".host-actions { grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible; }" in html
@@ -898,16 +914,27 @@ def test_dank_cinema_mobile_layout_wraps_controls_instead_of_overflowing() -> No
     assert ".queue-item.manageable .queue-actions { grid-column:1 / -1;justify-content:flex-end; }" in html
 
 
-def test_dank_cinema_brand_blends_into_theater_header() -> None:
+def test_dank_cinema_brand_is_recreated_as_transparent_header_art() -> None:
     html = movie_night_web._watch_html(
         "room-brand-flush",
         456,
         "uid=456&exp=9999999999&sig=test",
     )
 
-    assert "mix-blend-mode:screen" in html
-    assert "linear-gradient(180deg,#020706 0%,#06110e 72%,transparent 100%)" in html
-    assert 'src="/movie/assets/dank-cinema-brand.webp"' in html
+    assert "mix-blend-mode:screen" not in html
+    assert "ImageDraw.floodfill" not in html
+    assert "drop-shadow(0 10px 28px rgba(0,0,0,.42))" in html
+    assert "rgba(2,7,6,.88)" in html
+    assert 'class="brand-art"' in html
+    assert '/movie/assets/dank-cinema-brand-mark.webp?v=art-system-v3' in html
+    assert '/movie/assets/dank-cinema-brand-wordmark.webp?v=art-system-v3' in html
+
+    source = Path(movie_night_web.__file__).read_text(encoding="utf-8")
+    assert "ImageDraw.floodfill" in source
+    assert "source.putalpha(alpha)" in source
+    assert "target_width = 320" in source
+    assert "target_width = 1040" in source
+    assert "target_width = 1200" in source
 
 
 def test_dank_cinema_center_play_uses_canonical_host_action() -> None:
@@ -1019,3 +1046,423 @@ def test_public_room_fallback_title_is_watch_party(monkeypatch) -> None:
     assert payload["mode"] == "watch_party"
     assert payload["title"] == "Watch Party"
     assert payload["movie"]["title"] == "Watch Party"
+
+
+
+def test_private_watch_page_has_real_invite_to_watch_party_flow() -> None:
+    html = movie_night_web._watch_html(
+        "room-promote",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'id="inviteWatchParty"' in html
+    assert 'id="inviteModal"' in html
+    assert '"/movie/"+BOOT.roomId+"/invite-options?q="' in html
+    assert '"/movie/"+BOOT.roomId+"/promote"' in html
+    assert "turn this Private Session into a Watch Party" in html
+    assert 'inviteWatchParty.hidden=!(s.is_host && privateMode)' in html
+    assert "privateTapSkip" in html
+
+
+def test_discord_invite_options_are_real_cached_non_bot_members(monkeypatch) -> None:
+    from stoney_verify import globals as globals_module
+
+    class Avatar:
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+    host = SimpleNamespace(
+        id=10,
+        bot=False,
+        display_name="Host",
+        name="host",
+        display_avatar=Avatar("https://cdn.discordapp.com/avatars/10/host.webp"),
+    )
+    alice = SimpleNamespace(
+        id=20,
+        bot=False,
+        display_name="Alice Moviefan",
+        name="alice",
+        display_avatar=Avatar("https://cdn.discordapp.com/avatars/20/alice.webp"),
+    )
+    bot_member = SimpleNamespace(
+        id=30,
+        bot=True,
+        display_name="Movie Bot",
+        name="moviebot",
+        display_avatar=Avatar(""),
+    )
+    guild = SimpleNamespace(members=[host, alice, bot_member])
+    monkeypatch.setattr(
+        globals_module,
+        "bot",
+        SimpleNamespace(get_guild=lambda guild_id: guild if int(guild_id) == 123 else None),
+    )
+    room = SimpleNamespace(guild_id=123, host_id=10)
+
+    rows = movie_night_web._discord_invite_options(room, "alice")
+
+    assert [row["user_id"] for row in rows] == [20]
+    assert rows[0]["display_name"] == "Alice Moviefan"
+    assert rows[0]["avatar_url"].startswith("https://cdn.discordapp.com/")
+
+
+def test_web_promote_endpoint_keeps_room_and_returns_target_watch_link(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=123,
+        channel_id=456,
+        host_id=10,
+        stream_token="stream-token",
+        mode="private",
+    )
+    room.playback_position = 42.0
+
+    async def room_and_user(_request):
+        return room, 10
+
+    async def request_json():
+        return {"user_id": 20}
+
+    async def state_payload(current_room, user_id):
+        return {
+            "room_id": current_room.room_id,
+            "mode": current_room.mode,
+            "private": current_room.mode == "private",
+            "is_host": int(user_id) == int(current_room.host_id),
+            "position_seconds": current_room.current_position(),
+        }
+
+    async def dm_invite(_room, *, user_id, watch_url):
+        assert user_id == 20
+        assert "uid=20" in watch_url
+        return True
+
+    monkeypatch.setattr(movie_night_web, "_room_and_user", room_and_user)
+    monkeypatch.setattr(movie_night_web, "_state_payload", state_payload)
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(
+        movie_night_web,
+        "_discord_invite_target",
+        lambda _room, user_id: (
+            {
+                "user_id": 20,
+                "display_name": "Alice",
+                "username": "alice",
+                "avatar_url": "",
+            }
+            if int(user_id) == 20
+            else None
+        ),
+    )
+    monkeypatch.setattr(movie_night_web, "_dm_watch_party_invite", dm_invite)
+
+    async def announce(_room, *, invitee_id):
+        assert invitee_id == 20
+        return True
+
+    monkeypatch.setattr(movie_night_web, "_announce_watch_party_promotion", announce)
+    monkeypatch.setattr(
+        movie_night_web,
+        "movie_night_watch_url",
+        lambda room_id, user_id: f"https://watch.example/{room_id}?uid={user_id}",
+    )
+
+    response = asyncio.run(
+        movie_night_web.movie_night_promote_watch_party(
+            SimpleNamespace(json=request_json)
+        )
+    )
+    payload = json.loads(response.text)
+
+    assert room.mode == "watch_party"
+    assert room.stream_token == "stream-token"
+    assert room.playback_position == 42.0
+    assert payload["private"] is False
+    assert payload["invite"]["dm_sent"] is True
+    assert payload["invite"]["announced"] is True
+    assert payload["invite"]["display_name"] == "Alice"
+    assert payload["invite"]["watch_url"].endswith("uid=20")
+
+
+def test_player_layout_recovers_from_mobile_desktop_mode_resizes() -> None:
+    html = movie_night_web._watch_html(
+        "room-layout",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert "position:absolute; inset:0; z-index:0" in html
+    assert "object-fit:contain" in html
+    assert "contain:layout paint" in html
+    assert "new ResizeObserver(()=>stabilizePlayerLayout())" in html
+    assert 'window.addEventListener("resize",stabilizePlayerLayout' in html
+    assert 'window.visualViewport?.addEventListener("resize",stabilizePlayerLayout' in html
+    assert 'window.addEventListener("orientationchange"' in html
+    assert 'video.addEventListener(eventName,()=>stabilizePlayerLayout())' in html
+    assert 'setTimeout(stabilizePlayerLayout,40)' in html
+
+
+
+def test_dank_cinema_has_real_visual_quality_tiers_and_reduced_motion() -> None:
+    html = movie_night_web._watch_html(
+        "room-quality",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'id="qualityMode"' in html
+    assert 'value="high"' in html
+    assert 'value="standard"' in html
+    assert 'value="lite"' in html
+    assert 'data-quality="high"' in html
+    assert 'data-quality="standard"' in html
+    assert 'data-quality="lite"' in html
+    assert "@media (prefers-reduced-motion:reduce)" in html
+    assert "navigator.connection||navigator.mozConnection||navigator.webkitConnection" in html
+    assert 'connection?.effectiveType' in html
+    assert 'network==="2g"' in html
+    assert 'network==="3g"' in html
+    assert "navigator.deviceMemory" in html
+    assert "navigator.hardwareConcurrency" in html
+    assert "Playback features stay identical" in html
+
+
+def test_dank_cinema_player_capability_controls_are_not_placebos() -> None:
+    html = movie_night_web._watch_html(
+        "room-capabilities",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'id="pip"' in html
+    assert 'id="captions"' in html
+    assert "document.pictureInPictureEnabled" in html
+    assert "video.requestPictureInPicture" in html
+    assert "document.exitPictureInPicture" in html
+    assert "video.textTracks" in html
+    assert 'tracks[i].mode=(i===0 && !anyShowing)?"showing":"disabled"' in html
+    assert 'document.addEventListener("keydown"' in html
+    assert 'key==="arrowleft"' in html
+    assert 'key==="arrowright"' in html
+    assert 'key==="f"' in html
+    assert 'key==="m"' in html
+
+
+def test_dank_cinema_tmdb_art_is_responsive_instead_of_one_size_for_every_device() -> None:
+    html = movie_night_web._watch_html(
+        "room-art",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'loading="lazy" decoding="async"' in html
+    assert 'poster.srcset=w185+" 185w, "+w342+" 342w, "+w500+" 500w"' in html
+    assert 'poster.sizes="(max-width:640px) 78px, (max-width:1079px) 108px, 120px"' in html
+    assert 'return tmdbVariant(url,"w780")||url' in html
+    assert 'return tmdbVariant(url,"w1280")||url' in html
+    assert 'return tmdbVariant(url,"original")||url' in html
+    assert "artworkResizeTimer" in html
+
+
+def test_dank_cinema_desktop_tablet_and_mobile_have_distinct_compositions() -> None:
+    html = movie_night_web._watch_html(
+        "room-responsive",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'class="theater-grid"' in html
+    assert 'class="theater-sidecar"' in html
+    assert "@media (min-width:1080px)" in html
+    assert "grid-template-columns:minmax(0,1fr) minmax(320px,360px)" in html
+    assert "@media (min-width:641px) and (max-width:1079px)" in html
+    assert "@media (max-width:640px)" in html
+    assert "@media (max-width:380px)" in html
+
+
+def test_watch_party_invite_dialog_restores_focus_and_supports_escape() -> None:
+    html = movie_night_web._watch_html(
+        "room-invite-a11y",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'role="dialog"' in html
+    assert 'aria-modal="true"' in html
+    assert 'aria-labelledby="inviteTitle"' in html
+    assert "inviteTrigger=event.currentTarget" in html
+    assert 'if(event.key==="Escape")' in html
+    assert "inviteTrigger.focus()" in html
+
+
+def test_quality_mode_boot_does_not_touch_room_state_before_it_is_declared() -> None:
+    html = movie_night_web._watch_html(
+        "room-quality-boot",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    quality_fn = html.split("function applyQualityMode(preference)", 1)[1].split("let storedQuality", 1)[0]
+    assert "lastState" not in quality_fn
+    assert html.index("applyQualityMode(storedQuality);") < html.index("let lastState=null;")
+
+
+
+def test_feed_center_state_groups_real_sources_and_hides_urls_from_viewers(monkeypatch) -> None:
+    source_enabled = SimpleNamespace(
+        source_id="anime-feed",
+        label="Anime Feed",
+        endpoint_url="https://feeds.example.org/anime.xml",
+        provider_type="feed",
+        category="anime",
+        enabled=True,
+    )
+    source_disabled = SimpleNamespace(
+        source_id="private-json",
+        label="Private JSON",
+        endpoint_url="https://feeds.example.org/private.json",
+        provider_type="json",
+        category="movies",
+        enabled=False,
+    )
+    registry = SimpleNamespace(
+        revision=7,
+        sources=(source_enabled, source_disabled),
+    )
+
+    async def load_registry(_guild_id, *, refresh=False):
+        _ = refresh
+        return {}, registry
+
+    monkeypatch.setattr(movie_night_web, "load_media_source_registry", load_registry)
+    room = SimpleNamespace(guild_id=123, host_id=10)
+
+    viewer_state = asyncio.run(movie_night_web._media_source_state(room, 20))
+    assert viewer_state["is_host"] is False
+    assert [item["source_id"] for item in viewer_state["sources"]] == ["anime-feed"]
+    assert "endpoint_url" not in viewer_state["sources"][0]
+    assert viewer_state["sources"][0]["category"] == "anime"
+    assert viewer_state["sources"][0]["discovery_capable"] is True
+
+    host_state = asyncio.run(movie_night_web._media_source_state(room, 10))
+    assert host_state["is_host"] is True
+    assert {item["source_id"] for item in host_state["sources"]} == {
+        "anime-feed",
+        "private-json",
+    }
+    assert all("endpoint_url" in item for item in host_state["sources"])
+    assert host_state["categories"] == [
+        "movies",
+        "tv",
+        "anime",
+        "documentaries",
+        "custom",
+    ]
+
+
+def test_non_host_cannot_mutate_feed_center(monkeypatch) -> None:
+    room = SimpleNamespace(guild_id=123, host_id=10)
+
+    async def room_and_user(_request):
+        return room, 20
+
+    async def request_json():
+        return {"action": "remove", "source_id": "anime-feed"}
+
+    monkeypatch.setattr(movie_night_web, "_room_and_user", room_and_user)
+
+    try:
+        asyncio.run(
+            movie_night_web.movie_night_source_action(
+                SimpleNamespace(json=request_json)
+            )
+        )
+    except web.HTTPForbidden as exc:
+        assert "host" in exc.text.lower()
+    else:
+        raise AssertionError("non-host unexpectedly mutated the Feed Center")
+
+
+def test_feed_center_ui_exposes_real_source_management_without_fake_catalog_cards() -> None:
+    html = movie_night_web._watch_html(
+        "room-feed-center",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'id="feedPanel"' in html
+    assert 'id="feedAddToggle"' in html
+    assert 'id="feedForm"' in html
+    assert 'id="feedCategory"' in html
+    assert ">Movies<" in html
+    assert ">TV Shows<" in html
+    assert ">Anime<" in html
+    assert ">Documentaries<" in html
+    assert ">Custom<" in html
+    assert '"/movie/"+BOOT.roomId+"/sources"' in html
+    assert 'refresh.textContent="Refresh"' in html
+    assert 'edit.textContent="Edit"' in html
+    assert 'toggle.textContent=source.enabled?"Disable":"Enable"' in html
+    assert 'remove.textContent="Delete"' in html
+
+
+
+def test_brand_art_reserves_real_variant_aspect_ratios_to_avoid_header_cls() -> None:
+    html = movie_night_web._watch_html(
+        "room-brand-ratio",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'class="brand-mark-art"' in html
+    assert 'width="320"' in html
+    assert 'height="245"' in html
+    assert 'class="brand-wordmark-art"' in html
+    assert 'width="1040"' in html
+    assert 'height="289"' in html
+
+
+
+def test_google_cast_sdk_is_deferred_until_after_initial_render() -> None:
+    html = movie_night_web._watch_html(
+        "room-cast-perf",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert "https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1" in html
+    assert 'data-dank-cast-sdk="1"' in html
+    assert 'typeof window.requestIdleCallback==="function"' in html
+    assert "requestIdleCallback(()=>loadGoogleCastSdk()" in html
+    assert "setTimeout(()=>loadGoogleCastSdk(),900)" in html
+
+
+
+def test_desktop_host_controls_use_compact_floating_panel_instead_of_full_width_sheet() -> None:
+    html = movie_night_web._watch_html(
+        "room-desktop-host",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert "left:auto;right:24px;bottom:24px;transform:none" in html
+    assert "width:390px;max-height:min(76vh,620px)" in html
+    assert ".host-actions { grid-template-columns:repeat(2,minmax(0,1fr)); }" in html
+
+
+
+def test_queue_empty_state_is_branded_and_only_offers_real_discord_action() -> None:
+    html = movie_night_web._watch_html(
+        "room-empty-queue",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert "Your Queue Is Empty" in html
+    assert "Add a title from Discord Cinema" in html
+    assert 'if(lastState?.discord_url)' in html
+    assert 'action.textContent="Open Discord"' in html
+    assert "action.onclick=openDiscordRoom" in html
+    assert "Nothing queued yet." not in html

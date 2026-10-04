@@ -1074,6 +1074,30 @@ async def probe_custom_media_source(
         playable_results=len(variants),
     )
 
+
+async def preview_custom_media_source(
+    source: CustomMediaSource,
+    *,
+    query: str = "movie",
+    limit: int = 8,
+) -> MediaSourceSearchOutcome:
+    """Refresh one configured structured source for the Cinema Feed Center.
+
+    This reuses the same SSRF-safe resolver/parser as playback discovery rather
+    than creating a second RSS/JSON fetch path.
+    """
+
+    if source.provider_type not in {PROVIDER_TYPE_FEED, "json"}:
+        return MediaSourceSearchOutcome(
+            variants=(),
+            errors=(f"{source.label}: this source is a reference link, not a structured feed.",),
+        )
+    rows, error = await _search_one(source, query)
+    if error:
+        return MediaSourceSearchOutcome(variants=(), errors=(error,))
+    safe_limit = max(1, min(int(limit), _MAX_SOURCE_RESULTS))
+    return MediaSourceSearchOutcome(variants=tuple(rows[:safe_limit]))
+
 async def fetch_torrent_metadata(
     source_ref: str,
     *,
@@ -1237,6 +1261,7 @@ async def search_movie_sources(
 __all__ = [
     "search_movie_sources",
     "probe_custom_media_source",
+    "preview_custom_media_source",
     "MediaSourceProbeOutcome",
     "INTERNET_ARCHIVE_SOURCE_LABEL",
     "INTERNET_ARCHIVE_SOURCE_ID",
