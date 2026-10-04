@@ -944,8 +944,31 @@ video {{
   background:rgba(72,128,44,.08);white-space:nowrap;
 }}
 .health-dot {{ width:8px;height:8px;border-radius:50%;background:var(--lime);box-shadow:0 0 10px rgba(159,255,86,.6); }}
-.viewer-strip {{ display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px; }}
+.viewer-strip {{ display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;flex-wrap:wrap; }}
+.viewer-cluster {{ display:flex;align-items:center;min-height:32px; }}
+.viewer-avatar {{
+  width:32px;height:32px;margin-left:-7px;border-radius:50%;
+  display:grid;place-items:center;overflow:hidden;
+  border:2px solid #08110e;background:#183229;color:#f1f7f4;
+  font-size:.66rem;font-weight:900;text-transform:uppercase;
+}}
+.viewer-avatar:first-child {{ margin-left:0; }}
+.viewer-avatar.host {{ box-shadow:0 0 0 1px var(--lime),0 0 14px rgba(167,255,100,.18); }}
+.viewer-avatar img {{ width:100%;height:100%;object-fit:cover;display:block; }}
 .watchers {{ display:flex;align-items:center;gap:6px;color:#dbe2df;font-size:.8rem; }}
+.session-viewer-list {{ display:grid;gap:8px;margin-top:12px; }}
+.session-viewer {{
+  display:flex;align-items:center;gap:10px;padding:9px;
+  border:1px solid rgba(255,255,255,.07);border-radius:12px;background:#0b1714;
+}}
+.session-viewer-copy {{ min-width:0;flex:1; }}
+.session-viewer-name {{ font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }}
+.session-viewer-role {{ margin-top:2px;color:#96a49e;font-size:.7rem; }}
+.session-viewer-action {{
+  border:1px solid rgba(151,255,84,.34);border-radius:999px;
+  background:rgba(75,135,45,.12);color:var(--lime);
+  padding:7px 10px;font-size:.7rem;font-weight:850;
+}}
 .quick-tabs {{
   display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;
   margin-top:16px;padding:7px;
@@ -1113,6 +1136,7 @@ video {{
       </div>
       <p class="synopsis" id="overview" hidden></p>
       <div class="viewer-strip">
+        <div class="viewer-cluster" id="viewerAvatars" aria-label="Connected Discord viewers"></div>
         <div class="watchers">👥 <strong id="viewers">0</strong> watching</div>
         <div class="watchers" id="hostPresence">Host status: checking…</div>
       </div>
@@ -1136,6 +1160,7 @@ video {{
       <div class="stat"><b>Your role</b><span id="sessionRole">Connecting…</span></div>
       <div class="stat"><b>Sync</b><span id="sessionSync">Checking…</span></div>
     </div>
+    <div class="session-viewer-list" id="sessionViewerList"></div>
   </section>
 
   <section class="queue-panel" id="queuePanel">
@@ -1319,6 +1344,71 @@ function renderQueue(items) {{
     list.appendChild(row);
   }}
 }}
+function viewerInitials(name) {{
+  const parts=String(name||"").trim().split(/\s+/).filter(Boolean);
+  if(!parts.length) return "?";
+  return (parts[0][0]+(parts.length>1?parts[parts.length-1][0]:"")).slice(0,2).toUpperCase();
+}}
+function buildViewerAvatar(viewer, compact=false) {{
+  const avatar=document.createElement("span");
+  avatar.className="viewer-avatar"+(viewer?.is_host?" host":"");
+  avatar.title=String(viewer?.display_name||viewer?.user_id||"Discord viewer");
+  const url=String(viewer?.avatar_url||"");
+  if(url.startsWith("https://cdn.discordapp.com/")||url.startsWith("https://media.discordapp.net/")) {{
+    const img=document.createElement("img");
+    img.src=url;
+    img.alt="";
+    img.loading="lazy";
+    avatar.appendChild(img);
+  }} else {{
+    avatar.textContent=viewerInitials(viewer?.display_name||viewer?.user_id);
+  }}
+  if(compact) avatar.setAttribute("aria-hidden","true");
+  return avatar;
+}}
+function renderDiscordViewers(s) {{
+  const rows=Array.isArray(s.viewers)?s.viewers:[];
+  const cluster=document.getElementById("viewerAvatars");
+  const list=document.getElementById("sessionViewerList");
+  cluster.textContent="";
+  list.textContent="";
+
+  for(const viewer of rows.slice(0,5))
+    cluster.appendChild(buildViewerAvatar(viewer,true));
+  if(rows.length>5) {{
+    const more=document.createElement("span");
+    more.className="viewer-avatar";
+    more.textContent="+"+String(rows.length-5);
+    cluster.appendChild(more);
+  }}
+
+  for(const viewer of rows) {{
+    const row=document.createElement("div");
+    row.className="session-viewer";
+    row.appendChild(buildViewerAvatar(viewer));
+
+    const copy=document.createElement("div");
+    copy.className="session-viewer-copy";
+    const name=document.createElement("div");
+    name.className="session-viewer-name";
+    name.textContent=String(viewer.display_name||viewer.user_id||"Discord viewer");
+    const role=document.createElement("div");
+    role.className="session-viewer-role";
+    role.textContent=viewer.is_host?"Host":"Viewer";
+    copy.append(name,role);
+    row.appendChild(copy);
+
+    if(s.is_host && !s.private && !viewer.is_host) {{
+      const action=document.createElement("button");
+      action.type="button";
+      action.className="session-viewer-action";
+      action.textContent="Pass Host";
+      action.onclick=()=>transferHost(Number(viewer.user_id||0),String(viewer.display_name||"viewer"));
+      row.appendChild(action);
+    }}
+    list.appendChild(row);
+  }}
+}}
 function streamHealthLabel(s) {{
   if(s.media_missing) return "Source unavailable";
   if(!s.stream_url) return "Waiting for source";
@@ -1372,6 +1462,7 @@ function renderSiteState(s) {{
     document.getElementById("movieInfo").classList.add("no-poster");
   }}
   renderQueue(s.queue||[]);
+  renderDiscordViewers(s);
   const hostOnly=!s.is_host;
   document.getElementById("rewind10").disabled=hostOnly;
   document.getElementById("forward10").disabled=hostOnly;
