@@ -451,6 +451,7 @@ async def cinema_home_api(request: web.Request) -> web.Response:
     return web.json_response(
         {
             "discord": _safe_discord_context(guild_id, user_id),
+            "can_manage_cinema": _can_manage_cinema(guild_id, user_id),
             "profile": profile,
             "notifications_unread": len(notifications),
             "active_sessions": active_rooms,
@@ -688,6 +689,52 @@ async def cinema_profile_api(request: web.Request) -> web.Response:
     )
 
 
+async def cinema_feeds_api(request: web.Request) -> web.Response:
+    guild_id, user_id = _site_identity(request)
+    can_manage = _can_manage_cinema(guild_id, user_id)
+
+    if request.method == "GET":
+        return web.json_response(
+            await cinema_feed_state(
+                guild_id,
+                can_manage=can_manage,
+                refresh=False,
+            )
+        )
+
+    if not can_manage:
+        raise web.HTTPForbidden(
+            text="Manage Server permission is required to change Cinema sources."
+        )
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, Mapping):
+        payload = {}
+    try:
+        await mutate_cinema_feed(
+            guild_id,
+            actor_id=user_id,
+            action=str(payload.get("action") or ""),
+            payload=payload,
+        )
+    except LookupError as exc:
+        raise web.HTTPNotFound(text=str(exc))
+    except CinemaFeedConflict as exc:
+        raise web.HTTPConflict(text=str(exc))
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+
+    return web.json_response(
+        await cinema_feed_state(
+            guild_id,
+            can_manage=True,
+            refresh=False,
+        )
+    )
+
+
 async def cinema_notifications_api(request: web.Request) -> web.Response:
     _guild_id, user_id = _site_identity(request)
     if request.method == "GET":
@@ -796,6 +843,8 @@ def register_cinema_site_routes(app: web.Application) -> None:
     app.router.add_post("/cinema/{guild_id}/api/library", cinema_library_api)
     app.router.add_get("/cinema/{guild_id}/api/profile", cinema_profile_api)
     app.router.add_post("/cinema/{guild_id}/api/profile", cinema_profile_api)
+    app.router.add_get("/cinema/{guild_id}/api/feeds", cinema_feeds_api)
+    app.router.add_post("/cinema/{guild_id}/api/feeds", cinema_feeds_api)
     app.router.add_get(
         "/cinema/{guild_id}/api/notifications",
         cinema_notifications_api,
@@ -807,6 +856,7 @@ def register_cinema_site_routes(app: web.Application) -> None:
 
 
 __all__ = [
+    "cinema_feeds_api",
     "cinema_home_api",
     "cinema_library_api",
     "cinema_notifications_api",
