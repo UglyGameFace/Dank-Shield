@@ -1012,11 +1012,6 @@ video {{
 </section>
 <script>
 const BOOT={boot};
-// Keep signed room credentials in memory for same-origin API calls, but remove
-// them from the browser URL before loading the third-party Google Cast SDK.
-try {{
-  window.history.replaceState(null,"",window.location.pathname);
-}} catch(_) {{}}
 window.__dankCastApiAvailable=false;
 window.__onGCastApiAvailable=function(isAvailable){{
   window.__dankCastApiAvailable=!!isAvailable;
