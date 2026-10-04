@@ -1288,3 +1288,102 @@ def test_quality_mode_boot_does_not_touch_room_state_before_it_is_declared() -> 
     quality_fn = html.split("function applyQualityMode(preference)", 1)[1].split("let storedQuality", 1)[0]
     assert "lastState" not in quality_fn
     assert html.index("applyQualityMode(storedQuality);") < html.index("let lastState=null;")
+
+
+
+def test_feed_center_state_groups_real_sources_and_hides_urls_from_viewers(monkeypatch) -> None:
+    source_enabled = SimpleNamespace(
+        source_id="anime-feed",
+        label="Anime Feed",
+        endpoint_url="https://feeds.example.org/anime.xml",
+        provider_type="feed",
+        category="anime",
+        enabled=True,
+    )
+    source_disabled = SimpleNamespace(
+        source_id="private-json",
+        label="Private JSON",
+        endpoint_url="https://feeds.example.org/private.json",
+        provider_type="json",
+        category="movies",
+        enabled=False,
+    )
+    registry = SimpleNamespace(
+        revision=7,
+        sources=(source_enabled, source_disabled),
+    )
+
+    async def load_registry(_guild_id, *, refresh=False):
+        _ = refresh
+        return {}, registry
+
+    monkeypatch.setattr(movie_night_web, "load_media_source_registry", load_registry)
+    room = SimpleNamespace(guild_id=123, host_id=10)
+
+    viewer_state = asyncio.run(movie_night_web._media_source_state(room, 20))
+    assert viewer_state["is_host"] is False
+    assert [item["source_id"] for item in viewer_state["sources"]] == ["anime-feed"]
+    assert "endpoint_url" not in viewer_state["sources"][0]
+    assert viewer_state["sources"][0]["category"] == "anime"
+    assert viewer_state["sources"][0]["discovery_capable"] is True
+
+    host_state = asyncio.run(movie_night_web._media_source_state(room, 10))
+    assert host_state["is_host"] is True
+    assert {item["source_id"] for item in host_state["sources"]} == {
+        "anime-feed",
+        "private-json",
+    }
+    assert all("endpoint_url" in item for item in host_state["sources"])
+    assert host_state["categories"] == [
+        "movies",
+        "tv",
+        "anime",
+        "documentaries",
+        "custom",
+    ]
+
+
+def test_non_host_cannot_mutate_feed_center(monkeypatch) -> None:
+    room = SimpleNamespace(guild_id=123, host_id=10)
+
+    async def room_and_user(_request):
+        return room, 20
+
+    async def request_json():
+        return {"action": "remove", "source_id": "anime-feed"}
+
+    monkeypatch.setattr(movie_night_web, "_room_and_user", room_and_user)
+
+    try:
+        asyncio.run(
+            movie_night_web.movie_night_source_action(
+                SimpleNamespace(json=request_json)
+            )
+        )
+    except web.HTTPForbidden as exc:
+        assert "host" in exc.text.lower()
+    else:
+        raise AssertionError("non-host unexpectedly mutated the Feed Center")
+
+
+def test_feed_center_ui_exposes_real_source_management_without_fake_catalog_cards() -> None:
+    html = movie_night_web._watch_html(
+        "room-feed-center",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'id="feedPanel"' in html
+    assert 'id="feedAddToggle"' in html
+    assert 'id="feedForm"' in html
+    assert 'id="feedCategory"' in html
+    assert ">Movies<" in html
+    assert ">TV Shows<" in html
+    assert ">Anime<" in html
+    assert ">Documentaries<" in html
+    assert ">Custom<" in html
+    assert '"/movie/"+BOOT.roomId+"/sources"' in html
+    assert 'refresh.textContent="Refresh"' in html
+    assert 'edit.textContent="Edit"' in html
+    assert 'toggle.textContent=source.enabled?"Disable":"Enable"' in html
+    assert 'remove.textContent="Delete"' in html
