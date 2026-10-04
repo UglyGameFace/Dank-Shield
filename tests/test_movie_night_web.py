@@ -1406,3 +1406,18 @@ def test_brand_art_reserves_real_variant_aspect_ratios_to_avoid_header_cls() -> 
     assert 'class="brand-wordmark-art"' in html
     assert 'width="1040"' in html
     assert 'height="289"' in html
+
+
+
+def test_google_cast_sdk_is_deferred_until_after_initial_render() -> None:
+    html = movie_night_web._watch_html(
+        "room-cast-perf",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert "https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1" in html
+    assert 'data-dank-cast-sdk="1"' in html
+    assert 'typeof window.requestIdleCallback==="function"' in html
+    assert "requestIdleCallback(()=>loadGoogleCastSdk()" in html
+    assert "setTimeout(()=>loadGoogleCastSdk(),900)" in html
