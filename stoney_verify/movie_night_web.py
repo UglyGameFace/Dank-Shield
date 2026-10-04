@@ -1472,6 +1472,7 @@ let streamRetryAttempt=0;
 let stateFetchFailures=0;
 let attachedStreamUrl="";
 let hostSheetDismissed=false;
+let previousHostState=false;
 let controlsHideTimer=null;
 let tapSkipFeedbackTimer=null;
 let lastStageTapAt=0;
@@ -1762,7 +1763,9 @@ function renderDiscordViewers(s) {{
     name.textContent=String(viewer.display_name||viewer.user_id||"Discord viewer");
     const role=document.createElement("div");
     role.className="session-viewer-role";
-    role.textContent=viewer.is_host?"Host":"Viewer";
+    role.textContent=viewer.is_host
+      ?(s.private?"Private host":"Watch Party host")
+      :(s.private?"Invited viewer":"Viewer");
     copy.append(name,role);
     row.appendChild(copy);
 
@@ -1777,6 +1780,86 @@ function renderDiscordViewers(s) {{
     list.appendChild(row);
   }}
 }}
+function renderDiscordContext(s) {{
+  const ctx=s.discord||{{}};
+  const panel=document.getElementById("discordContext");
+  const title=document.getElementById("discordIdentityTitle");
+  const sub=document.getElementById("discordIdentitySub");
+  const avatar=document.getElementById("discordIdentityAvatar");
+
+  panel.hidden=!ctx.connected;
+  avatar.textContent="";
+  if(!ctx.connected) return;
+
+  const url=String(ctx.avatar_url||"");
+  if(url.startsWith("https://cdn.discordapp.com/")||url.startsWith("https://media.discordapp.net/")) {{
+    const img=document.createElement("img");
+    img.src=url;
+    img.alt="";
+    img.loading="lazy";
+    avatar.appendChild(img);
+  }} else {{
+    avatar.textContent=viewerInitials(ctx.user_name||ctx.user_id);
+  }}
+
+  title.textContent="Discord linked as "+String(ctx.user_name||ctx.user_id||"viewer");
+  const guild=String(ctx.guild_name||"Discord server");
+  const channel=String(ctx.channel_name||"");
+  sub.textContent=channel?guild+" • #"+channel:guild;
+}}
+function applyModeSurface(s) {{
+  const privateMode=String(s.mode||"")==="private" || !!s.private;
+  document.body.dataset.cinemaMode=privateMode?"private":"watch-party";
+
+  document.getElementById("roomMode").textContent=privateMode?"Private Room":"Watch Party";
+  document.getElementById("endLabel").textContent=privateMode?"End Private Session":"End Movie Night";
+  document.getElementById("endHelp").textContent=privateMode
+    ?"Close this private session"
+    :"Close the Watch Party for everyone";
+  document.getElementById("sessionMode").textContent=privateMode?"Private Session":"Watch Party";
+  document.getElementById("sessionTab").textContent=privateMode?"👥 Private":"👥 Viewers";
+
+  const pauseLabel=document.getElementById("pauseLabel");
+  const pauseHelp=document.getElementById("pauseHelp");
+  if(privateMode) {{
+    pauseLabel.textContent=Number(s.viewer_count||0)>1?"Pause Private Room":"Pause";
+    pauseHelp.textContent=Number(s.viewer_count||0)>1
+      ?"Pause playback for invited viewers"
+      :"Pause your private playback";
+  }} else {{
+    pauseLabel.textContent="Pause for Everyone";
+    pauseHelp.textContent="Pause synchronized playback for all viewers";
+  }}
+
+  const hostSheet=document.getElementById("hostSheet");
+  const launcher=document.getElementById("hostLauncher");
+  const contextAction=document.getElementById("contextAction");
+
+  if(s.is_host && !previousHostState)
+    hostSheetDismissed=false;
+
+  if(s.is_host) {{
+    hostSheet.classList.toggle("show",!hostSheetDismissed);
+    launcher.hidden=!hostSheetDismissed;
+    contextAction.dataset.panel="host";
+    contextAction.textContent="♛ Host";
+    contextAction.title="Open Host Controls";
+  }} else {{
+    hostSheet.classList.remove("show");
+    launcher.hidden=true;
+    contextAction.dataset.panel="settings";
+    contextAction.textContent="⚙ Details";
+    contextAction.title="Advanced Stream Details";
+  }}
+
+  document.getElementById("syncHint").textContent=s.is_host
+    ?(privateMode
+      ?"You control this private session."
+      :"You control synchronized Watch Party playback.")
+    :"";
+
+  previousHostState=!!s.is_host;
+}}
 function streamHealthLabel(s) {{
   if(s.media_missing) return "Source unavailable";
   if(!s.stream_url) return "Waiting for source";
@@ -1790,12 +1873,9 @@ function streamHealthLabel(s) {{
 }}
 function renderSiteState(s) {{
   const movie=s.movie||{{}};
-  document.getElementById("roomMode").textContent=s.private?"Private Room":"Movie Night";
-  document.getElementById("endLabel").textContent=s.private?"End Private Session":"End Movie Night";
-  document.getElementById("hostSheet").classList.toggle("show",!!s.is_host && !hostSheetDismissed);
+  applyModeSurface(s);
   document.getElementById("healthText").textContent="Stream Health: "+streamHealthLabel(s);
   document.getElementById("hostPresence").textContent=s.host_active?"Host online":"Host away";
-  document.getElementById("sessionMode").textContent=s.private?"Private Session":"Movie Night";
   document.getElementById("sessionViewers").textContent=String(s.viewer_count||0);
   document.getElementById("sessionRole").textContent=s.is_host?"Host":"Viewer";
   document.getElementById("sessionSync").textContent=
@@ -1830,12 +1910,12 @@ function renderSiteState(s) {{
     document.getElementById("movieInfo").classList.add("no-poster");
   }}
   renderQueue(s.queue||[]);
+  renderDiscordContext(s);
   renderDiscordViewers(s);
   const hostOnly=!s.is_host;
   document.getElementById("rewind10").disabled=hostOnly;
   document.getElementById("forward10").disabled=hostOnly;
   document.getElementById("timeline").disabled=hostOnly;
-  document.getElementById("syncHint").textContent=s.is_host?"You control synchronized playback.":"";
   updatePlayerChrome();
   refreshCastAvailability();
   syncCastToRoom(s);
