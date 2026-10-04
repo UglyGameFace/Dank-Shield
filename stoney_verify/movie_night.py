@@ -1244,11 +1244,12 @@ class MovieNightManager:
         new_host_id: int,
         now: Optional[float] = None,
     ) -> MovieNightRoom:
-        """Transfer Watch Party playback authority without replacing the room.
+        """Transfer Cinema playback authority without replacing the room.
 
         The canonical playback position is snapshotted at transfer time, then
         the existing playback state continues from the same point under the new
-        host. Private Session keeps one host/controller and does not transfer.
+        host. Private Sessions may transfer only to an active already-authorized
+        viewer, so the private access boundary does not widen during handoff.
         """
 
         room = self._require_room(room_id)
@@ -1256,16 +1257,16 @@ class MovieNightManager:
         old_host = int(current_host_id)
         new_host = int(new_host_id)
 
-        if str(getattr(room, "mode", "watch_party") or "watch_party") != "watch_party":
-            raise PermissionError("Private Session host ownership cannot be transferred.")
         if old_host != int(room.host_id):
-            raise PermissionError("Only the current Movie Night host can pass host control.")
+            raise PermissionError("Only the current Cinema host can pass host control.")
         if new_host == old_host:
             raise ValueError("Choose another active viewer to receive host control.")
 
         active = self.active_viewers(room, now=current)
         if new_host not in active:
-            raise PermissionError("Host control can only be passed to an active Movie Night viewer.")
+            raise PermissionError("Host control can only be passed to an active Cinema viewer.")
+        if not self.user_can_access(room, new_host):
+            raise PermissionError("Host control can only be passed to an authorized Cinema viewer.")
 
         position = room.current_position(current)
         room.playback_position = position
