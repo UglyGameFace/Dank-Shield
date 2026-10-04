@@ -2,11 +2,14 @@ from __future__ import annotations
 
 """Signed synchronized web player for Dank Shield Movie Night."""
 
+import base64
 import hashlib
 import hmac
 import json
 import os
 import time
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlencode
 
@@ -30,6 +33,32 @@ def _secret() -> str:
 
 def _public_base() -> str:
     return str(os.getenv("DANK_MEDIA_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+
+
+_BRAND_ASSET_PATH = (
+    Path(__file__).with_name("assets") / "dank_cinema_brand_500.webp.b64"
+)
+
+
+@lru_cache(maxsize=1)
+def _dank_cinema_brand_bytes() -> bytes:
+    encoded = _BRAND_ASSET_PATH.read_text(encoding="ascii").strip()
+    return base64.b64decode(encoded, validate=True)
+
+
+async def dank_cinema_brand_asset(_request: web.Request) -> web.Response:
+    try:
+        payload = _dank_cinema_brand_bytes()
+    except (OSError, ValueError):
+        raise web.HTTPNotFound(text="Dank Cinema brand asset unavailable.")
+    return web.Response(
+        body=payload,
+        content_type="image/webp",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 def _signature(room_id: str, user_id: int, expires: int) -> str:
@@ -603,7 +632,7 @@ def _watch_html(room_id: str, uid: int, query: str) -> str:
 <meta name="color-scheme" content="dark">
 <title>Dank Cinema • The 420 Lobby</title>
 <style>
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=Lacquer&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap");
 :root {{
   color-scheme:dark;
   font-family:"Inter",ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
@@ -634,64 +663,17 @@ button,input {{ font:inherit; }}
 button {{ -webkit-tap-highlight-color:transparent; }}
 .shell {{ width:min(1120px,100%); margin:0 auto; padding:0 18px 140px; }}
 .site-header {{ position:relative; z-index:20; padding:18px 0 6px; }}
-.brand-row {{ display:flex; align-items:center; justify-content:space-between; gap:16px; }}
-.brand {{ display:flex; align-items:center; gap:12px; min-width:0; }}
-.brand-mark {{
-  width:112px; height:92px; flex:0 0 auto;
-  overflow:visible;
-  filter:drop-shadow(0 0 18px rgba(126,255,65,.24));
+.brand-row {{ display:flex; align-items:center; width:100%; }}
+.brand {{ width:100%; min-width:0; }}
+.brand-banner {{
+  display:block;
+  width:min(500px,100%);
+  height:auto;
+  max-height:116px;
+  object-fit:contain;
+  object-position:left center;
+  filter:drop-shadow(0 0 18px rgba(126,255,65,.12));
 }}
-.brand-copy {{ min-width:0; }}
-.wordmark {{
-  margin:0;
-  display:flex;
-  align-items:flex-end;
-  gap:8px;
-  font-family:"Lacquer","Arial Black",Impact,sans-serif;
-  font-size:clamp(2.15rem,7.8vw,3.65rem);
-  font-weight:400;
-  letter-spacing:-.06em;
-  line-height:.82;
-  text-transform:uppercase;
-  transform:rotate(-1.2deg);
-  filter:drop-shadow(0 4px 0 rgba(0,0,0,.38));
-}}
-.wordmark span {{ position:relative; display:inline-block; }}
-.wordmark .dank {{
-  color:#fff;
-  text-shadow:-1px 1px 0 rgba(255,255,255,.22),2px 3px 0 rgba(0,0,0,.52);
-}}
-.wordmark .cinema {{
-  color:#9cff5c;
-  text-shadow:0 0 20px rgba(142,255,80,.14),2px 3px 0 rgba(0,0,0,.5);
-}}
-.wordmark .cinema::after {{
-  content:"";
-  position:absolute;
-  right:8%;
-  bottom:-12px;
-  width:5px;
-  height:19px;
-  border-radius:0 0 6px 6px;
-  background:#9cff5c;
-  box-shadow:-34px 6px 0 -1px #9cff5c, -78px 2px 0 -1px #9cff5c;
-  opacity:.86;
-}}
-.subbrand {{
-  margin-top:10px;
-  display:flex;
-  align-items:center;
-  gap:7px;
-  color:#d3d9d6;
-  font-size:.68rem;
-  font-weight:800;
-  letter-spacing:.18em;
-  text-transform:uppercase;
-}}
-.subbrand .discord-mark {{
-  width:19px;height:15px;display:inline-block;color:#7389ff;
-}}
-.subbrand strong {{ color:var(--lime); letter-spacing:.01em; text-transform:none; font-size:.79rem; }}
 .nav {{
   display:flex; align-items:center; gap:5px;
   overflow-x:auto; scrollbar-width:none; margin:15px -4px 9px; padding:0 4px 5px;
@@ -918,11 +900,7 @@ video {{
 .sr-only {{ position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }}
 @media (max-width:640px) {{
   .shell {{ padding-left:14px;padding-right:14px; }}
-  .brand-mark {{ width:86px;height:72px; }}
-  .brand {{ gap:8px; }}
-  .wordmark {{ font-size:clamp(1.7rem,8.4vw,2.45rem);gap:5px; }}
-  .subbrand {{ margin-top:7px;font-size:.54rem;letter-spacing:.13em;gap:4px; }}
-  .subbrand strong {{ font-size:.66rem; }}
+  .brand-banner {{ width:100%;max-height:none; }}
   .nav-item {{ padding:9px 11px;font-size:.78rem; }}
   .video-stage {{ min-height:0; }}
   .center-play {{ width:72px;height:72px; }}
@@ -945,33 +923,15 @@ video {{
 <header class="site-header">
   <div class="brand-row">
     <div class="brand">
-      <svg class="brand-mark" viewBox="0 0 132 106" aria-hidden="true">
-        <defs>
-          <filter id="brandGlow"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-        </defs>
-        <g fill="none" stroke="#61d52f" stroke-width="4.5" stroke-linecap="round" opacity=".68" filter="url(#brandGlow)">
-          <path d="M18 55c-13-12-6-25 10-21-10-14 1-25 15-16-1-17 16-21 24-7 8-13 25-9 24 8 15-10 27 2 17 16 17-3 23 15 9 25"/>
-          <path d="M18 70c-14 3-13 17 2 18M112 66c15 1 17 16 3 20"/>
-        </g>
-        <path d="M42 22 49 7l11 10 10-14 8 15 15-10 2 20" fill="none" stroke="#9cff5c" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="49" cy="7" r="3.2" fill="#9cff5c"/><circle cx="70" cy="3" r="3.2" fill="#9cff5c"/><circle cx="93" cy="8" r="3.2" fill="#9cff5c"/>
-        <path d="M25 75c7-34 70-43 84-7-10 26-68 31-84 7Z" fill="#0a0f0d" stroke="#f4f7f5" stroke-width="4"/>
-        <circle cx="67" cy="61" r="24" fill="#e7e9e8" stroke="#0b0e0d" stroke-width="4"/>
-        <circle cx="67" cy="61" r="5" fill="#101311"/>
-        <circle cx="67" cy="45" r="5.5" fill="#101311"/>
-        <circle cx="82" cy="56" r="5.5" fill="#101311"/>
-        <circle cx="76" cy="74" r="5.5" fill="#101311"/>
-        <circle cx="57" cy="74" r="5.5" fill="#101311"/>
-        <circle cx="51" cy="56" r="5.5" fill="#101311"/>
-        <path d="M20 82c24 14 75 14 97-2M31 93c22 10 54 10 76-1" fill="none" stroke="#9cff5c" stroke-width="4" stroke-linecap="round"/>
-      </svg>
-      <div class="brand-copy">
-        <h1 class="wordmark"><span class="dank">Dank</span><span class="cinema">Cinema</span></h1>
-        <div class="subbrand">A feature of
-          <svg class="discord-mark" viewBox="0 0 24 18" aria-hidden="true"><path fill="currentColor" d="M19.8 2.1A16 16 0 0 0 15.8.9l-.5 1a14 14 0 0 0-6.6 0l-.5-1a16 16 0 0 0-4 1.2C1.7 5.8.9 9.4 1.2 13c2.1 1.6 4.1 2.5 6 3.1l1.5-2c-.8-.3-1.6-.7-2.3-1.2l.6-.5c4.4 2 9.2 2 13.6 0l.7.5c-.8.5-1.5.9-2.4 1.2l1.5 2c1.9-.6 3.9-1.5 6-3.1.4-4.1-.7-7.7-3.1-10.9ZM8.5 11.1c-1.3 0-2.4-1.2-2.4-2.6S7.2 6 8.5 6s2.4 1.2 2.4 2.6-1.1 2.5-2.4 2.5Zm7 0c-1.3 0-2.4-1.2-2.4-2.6S14.2 6 15.5 6s2.4 1.2 2.4 2.6-1.1 2.5-2.4 2.5Z"/></svg>
-          <strong>The 420 Lobby</strong>
-        </div>
-      </div>
+      <img
+        class="brand-banner"
+        src="/movie/assets/dank-cinema-brand.webp"
+        alt="Dank Cinema — A feature of The 420 Lobby"
+        width="500"
+        height="116"
+        decoding="async"
+        fetchpriority="high"
+      >
     </div>
   </div>
   <nav class="nav" aria-label="Dank Cinema">
@@ -1975,6 +1935,10 @@ async def movie_night_watch(request: web.Request) -> web.Response:
 
 def register_movie_night_public_routes(app: web.Application) -> None:
     ensure_movie_night_cleanup_task()
+    app.router.add_get(
+        "/movie/assets/dank-cinema-brand.webp",
+        dank_cinema_brand_asset,
+    )
     app.router.add_get("/movie/{room_id}/watch", movie_night_watch)
     app.router.add_get("/movie/{room_id}/state", movie_night_state)
     app.router.add_post("/movie/{room_id}/heartbeat", movie_night_heartbeat)
@@ -1982,6 +1946,7 @@ def register_movie_night_public_routes(app: web.Application) -> None:
 
 
 __all__ = [
+    "dank_cinema_brand_asset",
     "movie_night_watch_url",
     "register_movie_night_public_routes",
 ]
