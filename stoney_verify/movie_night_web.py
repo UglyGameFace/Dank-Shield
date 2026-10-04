@@ -40,7 +40,7 @@ def _public_base() -> str:
 _BRAND_ASSET_PATH = (
     Path(__file__).with_name("assets") / "dank_cinema_brand_500.webp.b64"
 )
-_BRAND_ASSET_VERSION = "transparent-v2"
+_BRAND_ASSET_VERSION = "art-system-v3"
 
 
 @lru_cache(maxsize=1)
@@ -50,14 +50,13 @@ def _dank_cinema_brand_source_bytes() -> bytes:
 
 
 @lru_cache(maxsize=1)
-def _dank_cinema_brand_bytes() -> bytes:
-    """Render the approved Cinema wordmark as a transparent site asset.
+def _dank_cinema_brand_rgba() -> Image.Image:
+    """Build one transparent master from the approved repository artwork.
 
-    The historical repository asset contains the correct crowned reel/smoke
-    artwork and graffiti wordmark but was exported on a black rectangle. That
-    rectangle is what made the production header look pasted on. Remove only
-    the dark background connected to the image edges, preserving enclosed dark
-    reel details, then upscale once for a clean desktop/mobile header.
+    The historical export has the correct art but includes a connected black
+    rectangle. Remove only that edge-connected matte, preserve enclosed dark
+    reel details, and keep the transparent master cached. The website then
+    composes responsive emblem/wordmark variants instead of pasting a banner.
     """
 
     try:
@@ -67,9 +66,6 @@ def _dank_cinema_brand_bytes() -> bytes:
 
     work = source.copy()
     marker = (255, 0, 255, 255)
-    # The background is connected to the outer edge. Flooding from all corners
-    # removes it without erasing the black/charcoal details enclosed by the
-    # crown/reel/graffiti artwork.
     for point in (
         (0, 0),
         (max(0, work.width - 1), 0),
@@ -86,37 +82,65 @@ def _dank_cinema_brand_bytes() -> bytes:
             r, g, b, _a = pixels[x, y]
             if (r, g, b) == marker[:3]:
                 alpha_pixels[x, y] = 0
-
-    # Feather only the cut edge so anti-aliased black export pixels do not form
-    # a rectangular halo on the dark-green site background.
-    alpha = alpha.filter(ImageFilter.GaussianBlur(radius=0.45))
+    alpha = alpha.filter(ImageFilter.GaussianBlur(radius=0.42))
     source.putalpha(alpha)
+    return source
 
-    target_width = 1000
-    if source.width != target_width:
-        target_height = max(1, round(source.height * target_width / source.width))
-        source = source.resize(
-            (target_width, target_height),
-            Image.Resampling.LANCZOS,
-        )
-        source = source.filter(
-            ImageFilter.UnsharpMask(radius=0.7, percent=115, threshold=3)
-        )
+
+def _trim_transparent(image: Image.Image, *, padding: int = 2) -> Image.Image:
+    alpha = image.getchannel("A")
+    bbox = alpha.getbbox()
+    if not bbox:
+        return image
+    left, top, right, bottom = bbox
+    left = max(0, left - padding)
+    top = max(0, top - padding)
+    right = min(image.width, right + padding)
+    bottom = min(image.height, bottom + padding)
+    return image.crop((left, top, right, bottom))
+
+
+@lru_cache(maxsize=8)
+def _dank_cinema_brand_variant(kind: str) -> bytes:
+    source = _dank_cinema_brand_rgba()
+    normalized = str(kind or "full").strip().lower()
+
+    if normalized == "mark":
+        # Crowned reel + smoke emblem.
+        crop = source.crop((0, 0, max(1, round(source.width * 0.33)), source.height))
+        target_width = 320
+    elif normalized == "wordmark":
+        # DANK CINEMA plus "A feature of The 420 Lobby" lockup.
+        crop = source.crop((max(0, round(source.width * 0.255)), 0, source.width, source.height))
+        target_width = 1040
+    elif normalized == "mono":
+        crop = source.copy()
+        target_width = 1040
+        alpha = crop.getchannel("A")
+        monochrome = Image.new("RGBA", crop.size, (246, 248, 247, 0))
+        monochrome.putalpha(alpha)
+        crop = monochrome
+    else:
+        crop = source.copy()
+        target_width = 1200
+
+    crop = _trim_transparent(crop, padding=2)
+    if crop.width > 0 and crop.width != target_width:
+        target_height = max(1, round(crop.height * target_width / crop.width))
+        crop = crop.resize((target_width, target_height), Image.Resampling.LANCZOS)
+        crop = crop.filter(ImageFilter.UnsharpMask(radius=0.55, percent=108, threshold=3))
 
     output = BytesIO()
-    source.save(
-        output,
-        format="WEBP",
-        quality=92,
-        method=6,
-        lossless=False,
-    )
+    crop.save(output, format="WEBP", quality=91, method=6, lossless=False)
     return output.getvalue()
 
 
-async def dank_cinema_brand_asset(_request: web.Request) -> web.Response:
+async def dank_cinema_brand_asset(request: web.Request) -> web.Response:
+    variant = str(request.match_info.get("variant") or "full").strip().lower()
+    if variant not in {"full", "mark", "wordmark", "mono"}:
+        raise web.HTTPNotFound(text="Dank Cinema brand variant not found.")
     try:
-        payload = _dank_cinema_brand_bytes()
+        payload = _dank_cinema_brand_variant(variant)
     except (OSError, ValueError):
         raise web.HTTPNotFound(text="Dank Cinema brand asset unavailable.")
     return web.Response(
@@ -127,7 +151,6 @@ async def dank_cinema_brand_asset(_request: web.Request) -> web.Response:
             "X-Content-Type-Options": "nosniff",
         },
     )
-
 
 def _signature(room_id: str, user_id: int, expires: int) -> str:
     key = _secret().encode("utf-8")
@@ -1185,6 +1208,8 @@ def _watch_html(room_id: str, uid: int, query: str) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#030806">
+<link rel="icon" type="image/webp" href="/movie/assets/dank-cinema-brand-mark.webp?v={_BRAND_ASSET_VERSION}">
 <title>Dank Cinema • The 420 Lobby</title>
 <style>
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap");
@@ -1261,24 +1286,32 @@ button {{ cursor:pointer; }}
 }}
 .brand-row {{ display:flex; align-items:center; justify-content:space-between; width:100%; min-width:0; }}
 .brand {{
-  position:relative;width:min(760px,100%);min-width:0;overflow:visible;
+  position:relative;width:min(790px,100%);min-width:0;overflow:visible;
   isolation:isolate;
 }}
 .brand::before {{
   content:"";
-  position:absolute;inset:12% -6% -8% -4%;z-index:-1;
-  background:radial-gradient(ellipse at 26% 48%,rgba(100,190,66,.09),transparent 56%);
-  filter:blur(18px);pointer-events:none;
+  position:absolute;inset:8% -5% -10% -4%;z-index:-1;
+  background:
+    radial-gradient(ellipse at 17% 50%,rgba(91,191,66,.12),transparent 44%),
+    radial-gradient(ellipse at 58% 50%,rgba(130,255,75,.055),transparent 58%);
+  filter:blur(17px);pointer-events:none;
 }}
-.brand-banner {{
-  display:block;
+.brand-art {{
+  display:grid;
+  grid-template-columns:clamp(92px,15vw,150px) minmax(0,1fr);
+  align-items:center;
+  gap:clamp(3px,.7vw,10px);
   width:100%;
-  height:auto;
-  object-fit:contain;
-  object-position:left center;
+}}
+.brand-mark-art,.brand-wordmark-art {{
+  display:block;max-width:100%;height:auto;object-fit:contain;
   filter:drop-shadow(0 10px 28px rgba(0,0,0,.42));
   transform:translateZ(0);
 }}
+.brand-mark-art {{ width:100%;justify-self:start; }}
+.brand-wordmark-art {{ width:100%;justify-self:start; }}
+
 .nav {{
   display:flex; align-items:center; gap:5px;
   overflow-x:auto; scrollbar-width:none; margin:15px -4px 9px; padding:0 4px 5px;
@@ -1761,7 +1794,7 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
 @media (min-width:641px) and (max-width:1079px) {{
   .shell {{ padding-left:20px;padding-right:20px; }}
   .site-header {{ margin-left:-20px;margin-right:-20px;padding-left:20px;padding-right:20px; }}
-  .brand {{ width:min(680px,82vw); }}
+  .brand {{ width:min(720px,92vw); }}
   .info {{ grid-template-columns:108px minmax(0,1fr);gap:18px; }}
   .poster {{ width:108px; }}
   .host-sheet {{ width:min(760px,calc(100% - 24px));bottom:12px;border-radius:22px;border-bottom:1px solid rgba(197,255,175,.17); }}
@@ -1769,7 +1802,10 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
 @media (max-width:640px) {{
   .shell {{ padding-left:14px;padding-right:14px;padding-bottom:160px; }}
   .site-header {{ margin-left:-14px;margin-right:-14px;padding-left:10px;padding-right:10px; }}
-  .brand-banner {{ width:100%;max-height:none;object-position:center; }}
+  .brand {{ width:100%; }}
+  .brand-art {{ grid-template-columns:clamp(78px,24vw,112px) minmax(0,1fr);gap:0; }}
+  .brand-mark-art {{ transform:translateX(2px) translateZ(0); }}
+  .brand-wordmark-art {{ transform:translateX(-2px) translateZ(0); }}
   .nav {{ margin-top:10px; }}
   .nav-item {{ padding:9px 11px;font-size:.75rem; }}
   .video-stage {{ min-height:0; }}
@@ -1814,15 +1850,27 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
 <header class="site-header">
   <div class="brand-row">
     <div class="brand">
-      <img
-        class="brand-banner"
-        src="/movie/assets/dank-cinema-brand.webp?v={_BRAND_ASSET_VERSION}"
-        alt="Dank Cinema — A feature of The 420 Lobby"
-        width="500"
-        height="116"
-        decoding="async"
-        fetchpriority="high"
-      >
+      <div class="brand-art" aria-label="Dank Cinema — A feature of The 420 Lobby">
+        <img
+          class="brand-mark-art"
+          src="/movie/assets/dank-cinema-brand-mark.webp?v={_BRAND_ASSET_VERSION}"
+          alt=""
+          aria-hidden="true"
+          width="320"
+          height="256"
+          decoding="async"
+          fetchpriority="high"
+        >
+        <img
+          class="brand-wordmark-art"
+          src="/movie/assets/dank-cinema-brand-wordmark.webp?v={_BRAND_ASSET_VERSION}"
+          alt="Dank Cinema — A feature of The 420 Lobby"
+          width="1040"
+          height="250"
+          decoding="async"
+          fetchpriority="high"
+        >
+      </div>
     </div>
   </div>
   <nav class="nav" aria-label="Dank Cinema">
@@ -3567,6 +3615,10 @@ def register_movie_night_public_routes(app: web.Application) -> None:
     ensure_movie_night_cleanup_task()
     app.router.add_get(
         "/movie/assets/dank-cinema-brand.webp",
+        dank_cinema_brand_asset,
+    )
+    app.router.add_get(
+        "/movie/assets/dank-cinema-brand-{variant}.webp",
         dank_cinema_brand_asset,
     )
     app.router.add_get("/movie/{room_id}/watch", movie_night_watch)
