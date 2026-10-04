@@ -2222,7 +2222,10 @@ async function queueAction(action, candidateId="") {{
   }}
 }}
 async function hostAction(action, extra={{}}) {{
-  if(!lastState || !lastState.is_host || remoteApply) return;
+  // Explicit user controls must never be dropped just because a state poll is
+  // currently applying remote media state. Media event listeners themselves
+  // already use remoteApply to suppress feedback loops.
+  if(!lastState || !lastState.is_host) return;
   try {{
     await applyState(await jsonFetch("/movie/"+BOOT.roomId+"/action", {{
       method:"POST",
