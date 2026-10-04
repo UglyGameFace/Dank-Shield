@@ -766,6 +766,7 @@ video {{
   gap:15px;
   padding:20px 3px 4px;
 }}
+.info.no-poster {{ grid-template-columns:1fr; }}
 .poster {{
   width:90px; aspect-ratio:2/3; border-radius:12px; overflow:hidden;
   border:1px solid rgba(255,255,255,.12); background:linear-gradient(145deg,#183529,#091410);
@@ -811,7 +812,7 @@ video {{
 #queueList {{ display:grid;gap:8px; }}
 .queue-empty {{ color:#9ba7a2;font-size:.84rem;padding:6px 0; }}
 .queue-item {{
-  display:grid;grid-template-columns:58px minmax(0,1fr) auto;gap:10px;align-items:center;
+  display:grid;grid-template-columns:58px minmax(0,1fr);gap:10px;align-items:center;
   padding:8px;border:1px solid rgba(255,255,255,.07);border-radius:12px;background:#0a1512;
 }}
 .queue-art {{ width:58px;aspect-ratio:16/10;border-radius:9px;overflow:hidden;background:#13231d; }}
@@ -957,17 +958,17 @@ video {{
     </div>
   </section>
 
-  <section class="info">
+  <section class="info no-poster" id="movieInfo">
     <div class="poster" id="posterWrap" hidden><img id="poster" alt=""></div>
     <div class="meta-main">
       <div class="title-row">
         <div>
           <h2 class="movie-title" id="title">Movie Night</h2>
-          <div class="movie-meta"><span id="year">—</span> &nbsp;•&nbsp; <span id="state">—</span> &nbsp;•&nbsp; <span id="runtime">—</span></div>
+          <div class="movie-meta"><span id="state">—</span> &nbsp;•&nbsp; <span id="runtime">—</span><span id="yearWrap" hidden> &nbsp;•&nbsp; <span id="year"></span></span></div>
         </div>
         <div class="health"><span class="health-dot"></span><span id="healthText">Stream Health: Connecting</span></div>
       </div>
-      <p class="synopsis" id="overview">Your movie details will appear here when the selected title includes metadata.</p>
+      <p class="synopsis" id="overview" hidden></p>
       <div class="viewer-strip">
         <div class="watchers">👥 <strong id="viewers">0</strong> watching</div>
         <div class="watchers" id="hostPresence">Host status: checking…</div>
@@ -1156,10 +1157,7 @@ function renderQueue(items) {{
     sub.className="queue-sub";
     sub.textContent=(item.year?String(item.year)+" • ":"")+(item.is_current?"Now playing":"Up next");
     copy.append(title,sub);
-    const grip=document.createElement("div");
-    grip.className="queue-grip";
-    grip.textContent="☰";
-    row.append(art,copy,grip);
+    row.append(art,copy);
     list.appendChild(row);
   }}
 }}
@@ -1189,8 +1187,9 @@ function renderSiteState(s) {{
   document.getElementById("sessionSync").textContent=
     s.is_host?"Host clock":(s.sync_status==="joining"?"Joining":(s.sync_ready?"Synced":"Waiting"));
   const year=document.getElementById("year");
+  const yearWrap=document.getElementById("yearWrap");
   year.textContent=movie.year?String(movie.year):"";
-  year.parentElement.style.display=movie.year?"":"none";
+  yearWrap.hidden=!movie.year;
   const overview=document.getElementById("overview");
   overview.textContent=movie.overview||"";
   overview.hidden=!movie.overview;
@@ -1200,10 +1199,12 @@ function renderSiteState(s) {{
     if(poster.src!==movie.poster_url) poster.src=movie.poster_url;
     poster.alt=(movie.title||s.title||"Movie")+" poster";
     posterWrap.hidden=false;
+    document.getElementById("movieInfo").classList.remove("no-poster");
   }} else {{
     poster.removeAttribute("src");
     poster.alt="";
     posterWrap.hidden=true;
+    document.getElementById("movieInfo").classList.add("no-poster");
   }}
   renderQueue(s.queue||[]);
   const hostOnly=!s.is_host;
