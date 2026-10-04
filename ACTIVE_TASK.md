@@ -28,12 +28,17 @@ Finish the evidence-backed production gaps from the latest Samsung canary: let a
 - website controls/copy update from canonical room mode on the next state response;
 - Samsung/Chromium desktop-mode, viewport, orientation, and fullscreen player layout recovery without reloading media;
 - preserve full movie framing rather than cropping;
-- recreate the existing approved crowned-reel/graffiti banner as a transparent same-origin asset at runtime from the repository-owned source, eliminating the visible black rectangle without adding an external asset dependency;
+- recreate the existing approved crowned-reel/graffiti banner as transparent responsive brand artwork at runtime from the repository-owned source, eliminating the visible black rectangle without adding an external asset dependency;
+- premium design-token system with distinct desktop, tablet, phone, and ultrawide-aware composition rather than a widened mobile page;
+- High / Standard / Lite visual-quality tiers with automatic low-resource / reduced-motion selection and manual override;
+- responsive TMDB artwork sizing so phones do not decode desktop-sized poster/backdrop assets;
+- real player capabilities only: PiP and subtitle controls render only when the browser/media exposes them; Cast remains capability-driven;
+- first-class Feed Center backed by the existing Media Source registry/resolver, grouped as Movies / TV Shows / Anime / Documentaries / Custom with real add/edit/enable/disable/delete/refresh actions;
 - focused regression coverage, exact-head CI, and live Android/desktop Discloud validation.
 
 ## Status
 
-**Implementation is active in PR #436. PR #435 is already merged and green in production. This follow-up changes only the Cinema room/web/Discord surfaces, ACTIVE_TASK.md, and focused tests. Exact-head CI is starting from the PR head; the real Samsung Browser + desktop-mode Discloud canary is still required before completion can be claimed.**
+**Implementation is active in PR #436. PR #435 is already merged and green in production. The new premium-product contract is being applied without inventing placeholder surfaces: only features with real backend/browser capability are visible. PR #436 now includes Private → Watch Party promotion, responsive theater recovery, integrated brand variants, real Discord invitation, Feed Center/source management, desktop/tablet/mobile composition, quality tiers, responsive TMDB art, and real player capability controls. Exact-head CI and the real Samsung Browser + desktop-mode Discloud canary remain required before completion can be claimed.**
 
 ## Findings / root cause
 
@@ -61,8 +66,27 @@ Finish the evidence-backed production gaps from the latest Samsung canary: let a
 5. **The banner's black export background is the pasted-on look.**
    - CSS screen blending is browser/compositor dependent and remained visibly rectangular in production;
    - Pillow is already a production dependency;
-   - the site now flood-removes only the dark background connected to the image edges, preserving enclosed dark reel details, feathers the cut edge, and caches a transparent 1000px WebP served by the existing same-origin brand route;
-   - screen blending is no longer required.
+   - the site now flood-removes only the dark background connected to the image edges, preserving enclosed dark reel details, feathers the cut edge, and caches responsive full / mark / wordmark / monochrome WebP variants served by the existing same-origin brand route;
+   - the page composes the mark and wordmark as artwork rather than displaying one black rectangular banner.
+
+6. **The old page treated desktop as a larger phone.**
+   - the new layout uses a bounded cinematic primary region plus a sticky session sidecar on desktop, an independent tablet composition, and touch-first mobile stacking;
+   - ultrawide expansion is capped so controls and text do not stretch indefinitely.
+
+7. **Graphics and performance must be the same decision.**
+   - quality tiers now reduce secondary layers/backdrop effects without removing features;
+   - reduced-motion, Save-Data, device memory, CPU count, and viewport size participate in Auto selection;
+   - TMDB poster/backdrop requests are sized for the actual presentation instead of one image size for every device.
+
+8. **The prompt requires real product controls, not decorative buttons.**
+   - Picture-in-Picture is hidden unless the browser exposes the real API;
+   - subtitles are hidden unless the active media exposes text tracks;
+   - Cast remains tied to actual Google Cast/Remote Playback availability;
+   - broader Home/Browse/My Stuff surfaces remain hidden until real persisted data/actions back them.
+
+9. **Feeds already have a canonical backend and should not remain a flat hidden RSS concept.**
+   - the existing Media Source registry/resolver is authoritative;
+   - the website Feed Center groups real sources by Movies / TV / Anime / Documentaries / Custom and exposes only real management/refresh operations.
 
 ## Execution path
 
@@ -76,7 +100,13 @@ Player recovery:
 `viewport/orientation/desktop-mode change -> ResizeObserver/visualViewport/window events -> stabilizePlayerLayout() -> current video layer is resized in place; no stream reload`.
 
 Brand:
-`repository source banner -> cached Pillow edge-background removal -> transparent/upscaled WebP -> /movie/assets/dank-cinema-brand.webp -> integrated header artwork`.
+`repository source banner -> cached Pillow edge-background removal -> transparent full/mark/wordmark/mono WebP variants -> same-origin asset routes -> composed responsive header artwork`.
+
+Feed Center:
+`signed Cinema user -> canonical guild Media Source registry -> grouped website source cards -> existing safe resolver preview/refresh -> compare-and-swap registry persistence`.
+
+Responsive art/performance:
+`TMDB canonical art URL -> device/quality-aware w185/w342/w500 poster srcset + w780/w1280/original backdrop choice -> browser lazy/async decode`.
 
 ## Changes
 
@@ -91,7 +121,15 @@ Brand:
 - Kept the movie frame `object-fit: contain` so recovery never fixes layout by cropping content.
 - Reworked banner serving to generate transparent integrated artwork from the existing source instead of relying on `mix-blend-mode: screen`.
 - Removed an incomplete intermediate transparent-asset payload from the branch.
-- Added focused manager, website, Discord UI, invite, promotion, responsive-player, and banner regression coverage.
+- Added a tokenized dark cinematic design system and separate desktop/tablet/mobile breakpoints.
+- Desktop now uses a bounded theater + sticky sidecar composition instead of centering the phone layout.
+- Added High / Standard / Lite visual tiers plus Auto selection and reduced-motion behavior.
+- Added responsive TMDB poster srcset/sizes and device-aware backdrop variants.
+- Added real browser PiP/subtitle controls that remain hidden when unsupported/unavailable.
+- Added desktop keyboard shortcuts for actual playback/fullscreen/mute/host seeking.
+- Added accessible Discord invite dialog Escape/focus-return behavior.
+- Added a real Feed Center backed by the existing Media Source registry/resolver with categorized source cards and host-only add/edit/toggle/delete/refresh actions.
+- Added focused manager, website, Discord UI, invite, promotion, responsive-player, brand, quality-tier, artwork-performance, capability-control, Feed Center, and accessibility regression coverage.
 
 ## Validation / results so far
 
@@ -105,7 +143,14 @@ Added/updated regression coverage for:
 - website mode update after promotion;
 - desktop-mode responsive player recovery hooks;
 - full-frame video rendering;
-- recreated transparent WEBP brand output and removal of screen-blend dependency.
+- recreated transparent WEBP brand output and removal of screen-blend dependency;
+- responsive full/mark/wordmark brand composition;
+- High / Standard / Lite quality tiers and reduced-motion contract;
+- distinct desktop/tablet/mobile layout breakpoints;
+- real PiP/text-track capability controls and desktop keyboard shortcuts;
+- responsive TMDB srcset/backdrop sizing;
+- Feed Center source categorization/management and legacy source-category compatibility;
+- invite dialog keyboard/focus accessibility and startup quality-mode state safety.
 
 Exact-head CI is pending.
 
@@ -128,15 +173,15 @@ Exact-head CI is pending.
 
 ## Backlog
 
-- **RSS Feed surfacing:** first-class RSS areas in Discord Cinema and the website using the existing Movie Sources/feed model, organized by source/category/status instead of one flat list.
+- **Discord Feed Center parity:** mirror the new categorized website Feed Center management UX into Discord without duplicating the Media Source registry/resolver.
 - **TMDB identity normalization:** every playable movie/TV item should receive a conservative canonical TMDB identity before library presentation, with explicit confirmation for ambiguous raw torrent/provider names.
 - **TV Shows / Continue Watching:** first-class TV identity, seasons/episodes, persistent per-user progress, resume, Up Next, watched state, season progress, and source matching without creating a second player/runtime.
 - **Full website discovery surfaces:** Home, Browse, My Stuff, search, notifications, profile, watchlist/history, and other mockup surfaces only when backed by real data/actions.
-- **Viewer-value follow-up:** subtitles/audio tracks where present, playback speed, source/quality preference, history/favorites, and other real-data controls.
+- **Viewer-value follow-up:** audio-track selection, playback speed, persistent source/quality preference, history/favorites, and other real-data controls. Subtitle UI now appears only when the active media exposes real text tracks.
 
 ## Next step
 
-Run exact-head repository workflows for PR #436, repair only evidence-backed failures, inspect the final diff for stale/conflicting Cinema behavior, then run the Samsung Browser canary including **mobile → desktop mode → mobile**, normal/fullscreen transitions, Private → Watch Party promotion, signed Discord invite delivery/fallback, live UI mode changes, and banner appearance on both mobile and desktop.
+Run exact-head repository workflows for PR #436, repair only evidence-backed failures, inspect the final diff for stale/conflicting Cinema behavior, then run the Samsung Browser + desktop canary including **mobile → desktop mode → mobile**, normal/fullscreen transitions, Private → Watch Party promotion, signed Discord invite delivery/fallback, live UI mode changes, composed brand artwork, Feed Center CRUD/refresh, quality-tier switching, PiP/subtitle capability visibility, responsive TMDB artwork, Cast truthfulness, and preserved synchronized playback. Merge only after exact-head CI is green and the production canary passes these affected paths.
 
 ---
 
