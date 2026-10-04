@@ -12,6 +12,7 @@ import html
 import json
 import os
 import secrets
+import time
 from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -100,6 +101,10 @@ _DISCORD_API_BASE = "https://discord.com/api/v10"
 _CINEMA_OAUTH_TARGET_COOKIE = "dank_cinema_oauth_target"
 
 
+_SITE_MEMBER_CACHE_SECONDS = 30.0
+_SITE_MEMBER_VERIFIED_UNTIL: dict[tuple[int, int], float] = {}
+
+
 def _discord_oauth_client_id() -> int:
     configured = str(os.getenv("DANK_CINEMA_DISCORD_CLIENT_ID", "") or "").strip()
     try:
@@ -152,22 +157,43 @@ def _bot_guild(guild_id: int) -> Any:
 
 
 async def _fetch_site_member(guild_id: int, user_id: int) -> Any:
-    guild = _bot_guild(guild_id)
-    if guild is None:
+    gid = int(guild_id)
+    uid = int(user_id)
+    guild = _bot_guild(gid)
+    if guild is None or gid <= 0 or uid <= 0:
         return None
+
+    key = (gid, uid)
+    now = time.monotonic()
     try:
-        cached = guild.get_member(int(user_id))
+        cached = guild.get_member(uid)
     except Exception:
         cached = None
     if cached is not None:
+        _SITE_MEMBER_VERIFIED_UNTIL[key] = now + _SITE_MEMBER_CACHE_SECONDS
         return cached
+
+    # A successful REST membership check remains valid briefly so a browser
+    # loading Home/Profile/Feeds together cannot turn into a Discord API burst.
+    # Discord member-remove events clear normal guild cache immediately; this
+    # bounded fallback limits any stale browser access to at most 30 seconds.
+    if _SITE_MEMBER_VERIFIED_UNTIL.get(key, 0.0) > now:
+        return True
+
     fetch_member = getattr(guild, "fetch_member", None)
     if not callable(fetch_member):
+        _SITE_MEMBER_VERIFIED_UNTIL.pop(key, None)
         return None
     try:
-        return await fetch_member(int(user_id))
+        member = await fetch_member(uid)
     except Exception:
+        _SITE_MEMBER_VERIFIED_UNTIL.pop(key, None)
         return None
+    if member is None:
+        _SITE_MEMBER_VERIFIED_UNTIL.pop(key, None)
+        return None
+    _SITE_MEMBER_VERIFIED_UNTIL[key] = time.monotonic() + _SITE_MEMBER_CACHE_SECONDS
+    return member
 
 
 def _cached_member_guilds(user_id: int) -> list[Any]:
@@ -558,26 +584,7 @@ async def cinema_open_guild(request: web.Request) -> web.Response:
     return response
 
 
-def _site_member(guild_id: int, user_id: int) -> Any:
-    try:
-        from .globals import bot
-    except Exception:
-        bot = None
-    if bot is None:
-        return None
-    try:
-        guild = bot.get_guild(int(guild_id))
-    except Exception:
-        guild = None
-    if guild is None:
-        return None
-    try:
-        return guild.get_member(int(user_id))
-    except Exception:
-        return None
-
-
-def _site_identity(request: web.Request) -> tuple[int, int]:
+async def _site_identity(request: web.Request) -> tuple[int, int]:
     try:
         guild_id = int(request.match_info.get("guild_id") or 0)
     except Exception:
@@ -599,7 +606,7 @@ def _site_identity(request: web.Request) -> tuple[int, int]:
     if uid is None:
         raise web.HTTPUnauthorized(text="Sign in to Dank Cinema again.")
 
-    if _site_member(guild_id, int(uid)) is None:
+    if await _fetch_site_member(guild_id, int(uid)) is None:
         raise web.HTTPForbidden(
             text="Dank Cinema requires membership in this Discord server."
         )
@@ -1031,7 +1038,7 @@ def _hero_from_sections(
 
 
 async def cinema_home_api(request: web.Request) -> web.Response:
-    guild_id, user_id = _site_identity(request)
+    guild_id, user_id = await _site_identity(request)
     try:
         library_task = asyncio.create_task(library_snapshot(user_id))
         profile_task = asyncio.create_task(get_cinema_user(user_id))
@@ -1217,7 +1224,7 @@ async def _search_episode_query(
 
 
 async def cinema_search_api(request: web.Request) -> web.Response:
-    guild_id, user_id = _site_identity(request)
+    guild_id, user_id = await _site_identity(request)
     query = " ".join(str(request.query.get("q", "") or "").split())[:180]
     if not query:
         return web.json_response({"query": "", "results": []})
@@ -1335,7 +1342,7 @@ async def cinema_search_api(request: web.Request) -> web.Response:
 
 
 async def cinema_details_api(request: web.Request) -> web.Response:
-    _guild_id, user_id = _site_identity(request)
+    _guild_id, user_id = await _site_identity(request)
     media_type = str(request.match_info.get("media_type") or "").strip().lower()
     try:
         tmdb_id = int(request.match_info.get("tmdb_id") or 0)
@@ -1499,7 +1506,7 @@ async def cinema_details_api(request: web.Request) -> web.Response:
 
 
 async def cinema_season_api(request: web.Request) -> web.Response:
-    _guild_id, user_id = _site_identity(request)
+    _guild_id, user_id = await _site_identity(request)
     try:
         series_id = int(request.match_info.get("series_id") or 0)
         season_number = int(request.match_info.get("season_number") or 0)
@@ -1537,7 +1544,7 @@ async def cinema_season_api(request: web.Request) -> web.Response:
 
 
 async def cinema_play_api(request: web.Request) -> web.Response:
-    guild_id, user_id = _site_identity(request)
+    guild_id, user_id = await _site_identity(request)
     try:
         payload = await request.json()
     except Exception:
@@ -1703,7 +1710,7 @@ async def cinema_play_api(request: web.Request) -> web.Response:
 
 
 async def cinema_library_api(request: web.Request) -> web.Response:
-    _guild_id, user_id = _site_identity(request)
+    _guild_id, user_id = await _site_identity(request)
     if request.method == "GET":
         snapshot = await library_snapshot(user_id)
         adult_enabled = await _guild_adult_content_enabled(_guild_id)
@@ -1758,7 +1765,7 @@ async def cinema_library_api(request: web.Request) -> web.Response:
 
 
 async def cinema_profile_api(request: web.Request) -> web.Response:
-    guild_id, user_id = _site_identity(request)
+    guild_id, user_id = await _site_identity(request)
     if request.method == "GET":
         row = await get_cinema_user(user_id)
         return web.json_response(
@@ -1783,7 +1790,7 @@ async def cinema_profile_api(request: web.Request) -> web.Response:
 
 
 async def cinema_feeds_api(request: web.Request) -> web.Response:
-    guild_id, user_id = _site_identity(request)
+    guild_id, user_id = await _site_identity(request)
     can_manage = _can_manage_cinema(guild_id, user_id)
 
     if request.method == "GET":
@@ -1829,7 +1836,7 @@ async def cinema_feeds_api(request: web.Request) -> web.Response:
 
 
 async def cinema_notifications_api(request: web.Request) -> web.Response:
-    _guild_id, user_id = _site_identity(request)
+    _guild_id, user_id = await _site_identity(request)
     if request.method == "GET":
         rows = await list_notifications(
             user_id,
@@ -1904,7 +1911,7 @@ def _site_html(guild_id: int, user_id: int) -> str:
 
 async def cinema_site_page(request: web.Request) -> web.Response:
     try:
-        guild_id, user_id = _site_identity(request)
+        guild_id, user_id = await _site_identity(request)
     except web.HTTPUnauthorized:
         try:
             guild_id = int(request.match_info.get("guild_id") or 0)
