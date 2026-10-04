@@ -59,6 +59,7 @@ def test_movie_night_public_routes_are_media_only() -> None:
     assert "/movie/{room_id}/action" in rendered
     assert "/movie/{room_id}/invite-options" in rendered
     assert "/movie/{room_id}/promote" in rendered
+    assert "/movie/{room_id}/queue-search" in rendered
     progress_methods = {
         method
         for method, resource in routes
@@ -1592,7 +1593,7 @@ def test_desktop_host_controls_use_compact_floating_panel_instead_of_full_width_
 
 
 
-def test_queue_empty_state_is_branded_and_only_offers_real_discord_action() -> None:
+def test_queue_empty_state_keeps_queue_management_inside_theater() -> None:
     html = movie_night_web._watch_html(
         "room-empty-queue",
         10,
@@ -1600,8 +1601,28 @@ def test_queue_empty_state_is_branded_and_only_offers_real_discord_action() -> N
     )
 
     assert "Your Queue Is Empty" in html
-    assert "Add a title from Discord Cinema" in html
-    assert 'if(lastState?.discord_url)' in html
-    assert 'action.textContent="Open Discord"' in html
-    assert "action.onclick=openDiscordRoom" in html
+    assert 'id="queueAddToggle"' in html
+    assert 'id="queueAddForm"' in html
+    assert 'id="queueSearchInput"' in html
+    assert "without leaving the Theater" in html
+    assert "Add a title from Discord Cinema" not in html
+    assert 'action.textContent="Open Discord"' not in html
     assert "Nothing queued yet." not in html
+
+
+def test_queue_manager_exposes_real_add_play_next_reorder_and_remove_controls() -> None:
+    html = movie_night_web._watch_html(
+        "room-queue-controls",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert '"/movie/"+BOOT.roomId+"/queue-search?q="+encodeURIComponent(query)' in html
+    assert 'action:"add"' in html
+    assert '["Play Next","play_next"' in html
+    assert '["↑","move_up"' in html
+    assert '["↓","move_down"' in html
+    assert '["×","remove"' in html
+    assert 'document.getElementById("clearQueue").onclick=()=>queueAction("clear")' in html
+    assert '"Added by "+String(item.added_by)' in html
+    assert "Movie title or exact episode, e.g. Show S3E7" in html
