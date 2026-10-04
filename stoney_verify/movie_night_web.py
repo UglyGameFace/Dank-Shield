@@ -167,6 +167,28 @@ def _swarm_display(torrent_status: dict[str, Any], variant: Any) -> dict[str, An
     return {"seeds": 0, "leechers": 0, "peers": 0, "source": ""}
 
 
+def _safe_movie_art_url(value: Any) -> str:
+    cleaned = str(value or "").strip()
+    if cleaned.startswith("https://image.tmdb.org/"):
+        return cleaned
+    return ""
+
+
+def _candidate_web_metadata(candidate: Any) -> dict[str, Any]:
+    metadata = dict(getattr(candidate, "metadata", {}) or {}) if candidate is not None else {}
+    year = 0
+    try:
+        year = max(0, int(metadata.get("year") or 0))
+    except Exception:
+        year = 0
+    return {
+        "title": str(getattr(candidate, "title", "") or ""),
+        "year": year,
+        "overview": str(metadata.get("overview") or "").strip()[:1200],
+        "poster_url": _safe_movie_art_url(metadata.get("poster_url")),
+    }
+
+
 async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     movie_manager = get_movie_night_manager()
     torrent_manager = get_torrent_manager()
@@ -241,6 +263,25 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     ):
         sync_target = float(viewer.sync_target_position)
     buffer_quorum = movie_manager.buffer_quorum_viewers(room)
+    movie_metadata = _candidate_web_metadata(candidate)
+    if not movie_metadata["title"]:
+        movie_metadata["title"] = str(title or "Movie Night")
+
+    queue_items: list[dict[str, Any]] = []
+    for queued_id in list(room.queue)[:12]:
+        queued = room.candidates.get(str(queued_id))
+        if queued is None:
+            continue
+        queued_meta = _candidate_web_metadata(queued)
+        queue_items.append(
+            {
+                "candidate_id": str(queued.candidate_id),
+                "title": queued_meta["title"] or "Untitled",
+                "year": queued_meta["year"],
+                "poster_url": queued_meta["poster_url"],
+                "is_current": str(queued.candidate_id) == str(room.current_candidate_id or ""),
+            }
+        )
 
     return {
         "ok": True,
@@ -248,6 +289,8 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "mode": str(getattr(room, "mode", "watch_party") or "watch_party"),
         "private": str(getattr(room, "mode", "watch_party") or "watch_party") == "private",
         "title": str(title or "Movie Night"),
+        "movie": movie_metadata,
+        "queue": queue_items,
         "release_source": source,
         "state": room.playback_state,
         "position_seconds": round(room.current_position(), 3),
@@ -516,62 +559,442 @@ def _watch_html(room_id: str, uid: int, query: str) -> str:
 <meta name="color-scheme" content="dark">
 <title>Dank Shield Movie Night</title>
 <style>
-:root {{ font-family: system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#f5f7fb; background:#090b10; }}
+:root {{
+  color-scheme:dark;
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --bg:#06100d;
+  --panel:#0b1714;
+  --panel-2:#0f1d19;
+  --line:rgba(183,255,132,.18);
+  --line-strong:rgba(163,255,94,.48);
+  --lime:#a7ff64;
+  --lime-2:#79ef45;
+  --text:#f6f8f7;
+  --muted:#a9b4b0;
+  --danger:#ff5c68;
+  --shadow:0 18px 50px rgba(0,0,0,.34);
+}}
 * {{ box-sizing:border-box; }}
-body {{ margin:0; min-height:100vh; background:radial-gradient(circle at top,#252b3b 0,#10131b 38%,#090b10 72%); }}
-main {{ width:min(1100px,100%); margin:auto; padding:18px; }}
-header {{ display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; margin-bottom:14px; }}
-h1 {{ font-size:1.15rem; margin:0; }}
-.badge {{ background:#1d2330; border:1px solid #343d51; padding:7px 10px; border-radius:999px; font-size:.82rem; }}
-.card {{ background:rgba(18,22,31,.92); border:1px solid #2d3546; border-radius:18px; padding:14px; box-shadow:0 18px 60px rgba(0,0,0,.35); }}
-video {{ display:block; width:100%; max-height:72vh; background:#000; border-radius:12px; }}
-.grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; margin-top:12px; }}
-.stat {{ background:#111620; border-radius:12px; padding:10px; min-height:58px; }}
-.stat b {{ display:block; font-size:.75rem; color:#98a2b8; margin-bottom:4px; }}
-.controls {{ display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }}
-button {{ border:1px solid #39445a; background:#20283a; color:#fff; padding:10px 14px; border-radius:11px; font-weight:700; }}
-button:disabled {{ opacity:.45; }}
-#sync {{ background:#315bd8; }}
-#notice {{ margin-top:10px; color:#bec6d7; min-height:1.5em; }}
-.now {{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-top:12px; padding:11px 12px; background:#111620; border-radius:12px; }}
-.now strong {{ display:block; }}
-.now small {{ display:block; margin-top:3px; }}
-details {{ margin-top:10px; border-top:1px solid #2d3546; padding-top:10px; }}
-summary {{ cursor:pointer; color:#c7cede; font-weight:700; user-select:none; }}
-small {{ color:#8994aa; }}
+html {{ background:var(--bg); scroll-behavior:smooth; }}
+body {{
+  margin:0;
+  min-height:100vh;
+  color:var(--text);
+  background:
+    radial-gradient(circle at 78% -10%,rgba(35,115,72,.28),transparent 35%),
+    radial-gradient(circle at -12% 24%,rgba(111,255,69,.08),transparent 30%),
+    linear-gradient(180deg,#06110e 0%,#07110f 38%,#030807 100%);
+}}
+button,input {{ font:inherit; }}
+button {{ -webkit-tap-highlight-color:transparent; }}
+.shell {{ width:min(1120px,100%); margin:0 auto; padding:0 18px 140px; }}
+.site-header {{ position:relative; z-index:20; padding:18px 0 6px; }}
+.brand-row {{ display:flex; align-items:center; justify-content:space-between; gap:12px; }}
+.brand {{ display:flex; align-items:center; gap:10px; min-width:0; }}
+.brand-mark {{
+  width:68px; height:68px; flex:0 0 auto;
+  filter:drop-shadow(0 0 16px rgba(132,255,80,.18));
+}}
+.brand-copy {{ min-width:0; }}
+.wordmark {{
+  margin:0;
+  display:flex;
+  align-items:baseline;
+  gap:8px;
+  font-family:"Segoe Print","Brush Script MT","Arial Black",sans-serif;
+  font-size:clamp(1.62rem,6.6vw,2.55rem);
+  font-weight:900;
+  letter-spacing:-.055em;
+  line-height:.9;
+  text-transform:uppercase;
+  transform:rotate(-1deg);
+  text-shadow:1px 1px 0 rgba(255,255,255,.06),0 0 20px rgba(125,255,70,.08);
+}}
+.wordmark .dank {{ color:#fff; }}
+.wordmark .cinema {{ color:var(--lime); }}
+.subbrand {{
+  margin-top:7px;
+  display:flex;
+  align-items:center;
+  gap:6px;
+  color:#c2cbc7;
+  font-size:.68rem;
+  font-weight:800;
+  letter-spacing:.13em;
+  text-transform:uppercase;
+}}
+.subbrand strong {{ color:var(--lime); letter-spacing:.02em; text-transform:none; font-size:.76rem; }}
+.header-actions {{ display:flex; gap:8px; }}
+.icon-button {{
+  width:44px; height:44px; display:grid; place-items:center;
+  border:1px solid rgba(255,255,255,.12);
+  border-radius:50%;
+  color:#edf4f1; background:rgba(12,24,20,.74);
+}}
+.icon-button svg {{ width:21px; height:21px; }}
+.profile-dot {{
+  width:44px; height:44px; border-radius:50%;
+  border:1px solid var(--line-strong);
+  background:
+    radial-gradient(circle at 50% 36%,#9dada7 0 12%,transparent 13%),
+    radial-gradient(circle at 50% 90%,#263c34 0 36%,transparent 37%),
+    linear-gradient(145deg,#183529,#07120e);
+}}
+.nav {{
+  display:flex; align-items:center; gap:5px;
+  overflow-x:auto; scrollbar-width:none; margin:15px -4px 9px; padding:0 4px 5px;
+}}
+.nav::-webkit-scrollbar {{ display:none; }}
+.nav-item {{
+  display:flex; align-items:center; gap:8px; flex:0 0 auto;
+  border:1px solid transparent; border-radius:999px;
+  padding:9px 13px; color:#c6cfcb; background:transparent; font-weight:750;
+}}
+.nav-item svg {{ width:18px; height:18px; }}
+.nav-item.active {{
+  color:var(--lime);
+  border-color:rgba(131,255,66,.45);
+  background:linear-gradient(180deg,rgba(87,178,51,.23),rgba(47,93,35,.18));
+  box-shadow:inset 0 0 22px rgba(108,255,48,.06);
+}}
+.theater {{
+  position:relative;
+  overflow:hidden;
+  border:1px solid rgba(207,255,190,.28);
+  border-radius:20px;
+  background:#000;
+  box-shadow:var(--shadow);
+}}
+.video-stage {{ position:relative; aspect-ratio:16/9; min-height:228px; background:#000; }}
+video {{
+  display:block; width:100%; height:100%;
+  object-fit:contain; background:#000;
+}}
+.stage-top {{
+  position:absolute; inset:12px 12px auto 12px;
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  pointer-events:none;
+}}
+.room-pill {{
+  display:flex; align-items:center; gap:8px;
+  max-width:calc(100% - 58px); padding:8px 11px;
+  border:1px solid rgba(255,255,255,.12);
+  border-radius:12px;
+  background:rgba(3,10,8,.78);
+  backdrop-filter:blur(12px);
+  font-size:.78rem; font-weight:800;
+}}
+.room-pill .live-dot {{ width:8px;height:8px;border-radius:50%;background:var(--lime);box-shadow:0 0 12px rgba(159,255,86,.75); }}
+#role {{ color:#d7dfdc; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+.cast {{
+  pointer-events:auto;
+  width:46px;height:46px; display:grid; place-items:center;
+  border-radius:50%; border:1px solid rgba(255,255,255,.18);
+  color:#fff; background:rgba(3,10,8,.72); backdrop-filter:blur(12px);
+}}
+.cast:disabled {{ opacity:.35; }}
+.cast.connected {{ color:var(--lime); border-color:var(--line-strong); }}
+.cast svg {{ width:23px;height:23px; }}
+.center-play {{
+  position:absolute; inset:50% auto auto 50%; transform:translate(-50%,-50%);
+  width:84px;height:84px; display:grid; place-items:center;
+  border-radius:50%; border:2px solid rgba(255,255,255,.6);
+  color:#fff; background:rgba(5,12,10,.5); backdrop-filter:blur(8px);
+  box-shadow:0 10px 38px rgba(0,0,0,.32);
+}}
+.center-play svg {{ width:34px;height:34px; }}
+.player-chrome {{
+  position:absolute; inset:auto 0 0;
+  padding:44px 14px 13px;
+  background:linear-gradient(180deg,transparent 0%,rgba(0,0,0,.72) 42%,rgba(0,0,0,.93) 100%);
+}}
+.timeline-row {{ display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:10px; font-size:.72rem; font-weight:750; }}
+.timeline {{
+  width:100%; appearance:none; height:4px; border-radius:999px; outline:none;
+  background:linear-gradient(90deg,var(--lime) 0 var(--progress,0%),rgba(255,255,255,.38) var(--progress,0%) 100%);
+}}
+.timeline::-webkit-slider-thumb {{ appearance:none; width:16px;height:16px;border-radius:50%;background:var(--lime);border:0;box-shadow:0 0 0 4px rgba(164,255,96,.12); }}
+.timeline::-moz-range-thumb {{ width:16px;height:16px;border-radius:50%;background:var(--lime);border:0; }}
+.control-row {{ display:flex; align-items:center; justify-content:center; gap:13px; margin-top:10px; }}
+.player-button {{
+  width:36px;height:36px; display:grid;place-items:center;
+  border:0;border-radius:50%; color:#fff;background:transparent;
+}}
+.player-button svg {{ width:22px;height:22px; }}
+.player-button.primary {{ width:44px;height:44px; }}
+.player-button:disabled {{ opacity:.32; }}
+.control-spacer {{ flex:1; }}
+.volume-wrap {{ display:flex;align-items:center;gap:6px; }}
+.volume {{ width:70px; accent-color:var(--lime); }}
+.info {{
+  display:grid;
+  grid-template-columns:90px minmax(0,1fr);
+  gap:15px;
+  padding:20px 3px 4px;
+}}
+.poster {{
+  width:90px; aspect-ratio:2/3; border-radius:12px; overflow:hidden;
+  border:1px solid rgba(255,255,255,.12); background:linear-gradient(145deg,#183529,#091410);
+  box-shadow:0 12px 30px rgba(0,0,0,.28);
+}}
+.poster img {{ width:100%;height:100%;object-fit:cover;display:block; }}
+.poster-fallback {{ height:100%;display:grid;place-items:center;padding:10px;text-align:center;color:#d9e1de;font-weight:900;font-size:.8rem; }}
+.meta-main {{ min-width:0; }}
+.title-row {{ display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap; }}
+.movie-title {{
+  margin:0; font-family:Georgia,"Times New Roman",serif;
+  font-size:clamp(2rem,8vw,3rem); line-height:.95; letter-spacing:-.04em;
+}}
+.movie-meta {{ color:#aab5b0; margin-top:8px; font-size:.9rem; }}
+.synopsis {{ color:#d4dbd8; margin:11px 0 0; line-height:1.46; font-size:.92rem; }}
+.health {{
+  display:flex;align-items:center;gap:7px;
+  border:1px solid rgba(152,255,82,.34);border-radius:999px;
+  padding:8px 11px;color:var(--lime);font-size:.76rem;font-weight:850;
+  background:rgba(72,128,44,.08);white-space:nowrap;
+}}
+.health-dot {{ width:8px;height:8px;border-radius:50%;background:var(--lime);box-shadow:0 0 10px rgba(159,255,86,.6); }}
+.viewer-strip {{ display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px; }}
+.fake-avatars {{ display:flex;align-items:center; }}
+.avatar {{
+  width:31px;height:31px;border-radius:50%;margin-left:-7px;
+  border:2px solid #09120f;
+  background:linear-gradient(145deg,#2c5744,#13231d);
+  display:grid;place-items:center;font-size:.7rem;font-weight:900;color:#e8f0ed;
+}}
+.avatar:first-child {{ margin-left:0; }}
+.watchers {{ display:flex;align-items:center;gap:6px;color:#dbe2df;font-size:.8rem; }}
+.quick-tabs {{
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;
+  margin-top:16px;padding:7px;
+  border:1px solid rgba(255,255,255,.09);border-radius:16px;background:rgba(10,21,17,.72);
+}}
+.tab {{
+  border:0;border-radius:12px;padding:10px 7px;color:#d8dfdc;background:transparent;
+  font-size:.72rem;font-weight:850;white-space:nowrap;
+}}
+.tab.active {{ color:var(--lime); background:linear-gradient(180deg,rgba(86,176,50,.22),rgba(38,77,30,.22)); box-shadow:inset 0 0 0 1px rgba(148,255,80,.28); }}
+#notice {{ min-height:1.35em; margin:12px 3px 0;color:#bdc8c3;font-size:.82rem; }}
+.queue-panel,.diagnostics {{
+  margin-top:12px;padding:15px;
+  border:1px solid rgba(255,255,255,.09);border-radius:16px;
+  background:rgba(8,18,14,.72);
+}}
+.section-head {{ display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px; }}
+.section-head h2 {{ margin:0;font-size:1.04rem; }}
+.section-head span {{ color:#9ca8a3;font-size:.76rem; }}
+#queueList {{ display:grid;gap:8px; }}
+.queue-empty {{ color:#9ba7a2;font-size:.84rem;padding:6px 0; }}
+.queue-item {{
+  display:grid;grid-template-columns:58px minmax(0,1fr) auto;gap:10px;align-items:center;
+  padding:8px;border:1px solid rgba(255,255,255,.07);border-radius:12px;background:#0a1512;
+}}
+.queue-art {{ width:58px;aspect-ratio:16/10;border-radius:9px;overflow:hidden;background:#13231d; }}
+.queue-art img {{ width:100%;height:100%;object-fit:cover; }}
+.queue-title {{ font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }}
+.queue-sub {{ color:#97a39e;font-size:.72rem;margin-top:3px; }}
+.queue-grip {{ color:#82908a;font-size:1.1rem;letter-spacing:-2px; }}
+.diagnostics summary {{ cursor:pointer;color:#cbd5d0;font-weight:850; }}
+.grid {{ display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px; }}
+.stat {{ min-height:62px;padding:10px;border-radius:11px;background:#0d1916; }}
+.stat b {{ display:block;margin-bottom:5px;color:#84928c;font-size:.68rem;text-transform:uppercase;letter-spacing:.07em; }}
+.host-sheet {{
+  position:fixed;left:50%;bottom:0;z-index:40;transform:translateX(-50%);
+  width:min(1120px,100%);padding:9px 18px calc(18px + env(safe-area-inset-bottom));
+  border:1px solid rgba(197,255,175,.17);border-bottom:0;border-radius:22px 22px 0 0;
+  background:rgba(9,20,16,.96);backdrop-filter:blur(18px);box-shadow:0 -20px 55px rgba(0,0,0,.5);
+  display:none;
+}}
+.host-sheet.show {{ display:block; }}
+.sheet-handle {{ width:42px;height:4px;border-radius:999px;background:#596660;margin:0 auto 8px; }}
+.sheet-title {{ display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px; }}
+.sheet-title strong {{ font-size:.94rem; }}
+.close-sheet {{ border:0;background:transparent;color:#d8dfdc;font-size:1.25rem; }}
+.host-actions {{ display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px; }}
+.host-action {{
+  min-height:94px;border:1px solid rgba(255,255,255,.1);border-radius:14px;
+  background:#101b18;color:#f5f7f6;padding:10px 7px;font-weight:850;font-size:.72rem;
+}}
+.host-action small {{ display:block;color:#95a29c;font-size:.63rem;font-weight:650;margin-top:5px;line-height:1.25; }}
+.host-action.danger {{ color:#ff737c;border-color:rgba(255,82,96,.32);background:rgba(91,23,29,.28); }}
+#play {{ position:absolute;left:-9999px; }}
+.sync-row {{ display:flex;align-items:center;gap:8px;margin-top:12px; }}
+#sync {{
+  border:1px solid rgba(143,255,75,.32);border-radius:999px;background:rgba(86,170,52,.12);
+  color:var(--lime);padding:8px 11px;font-weight:850;font-size:.75rem;
+}}
+#sync:disabled {{ opacity:.72; }}
+.sr-only {{ position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }}
+@media (max-width:640px) {{
+  .shell {{ padding-left:14px;padding-right:14px; }}
+  .brand-mark {{ width:58px;height:58px; }}
+  .header-actions .search-only {{ display:none; }}
+  .nav-item {{ padding:9px 11px;font-size:.78rem; }}
+  .video-stage {{ min-height:215px; }}
+  .center-play {{ width:72px;height:72px; }}
+  .player-chrome {{ padding-left:10px;padding-right:10px; }}
+  .volume {{ display:none; }}
+  .info {{ grid-template-columns:78px minmax(0,1fr);gap:12px; }}
+  .poster {{ width:78px; }}
+  .title-row {{ display:block; }}
+  .health {{ margin-top:10px;width:max-content;max-width:100%; }}
+  .synopsis {{ font-size:.84rem; }}
+  .quick-tabs {{ grid-template-columns:repeat(4,minmax(72px,1fr));overflow-x:auto; }}
+  .grid {{ grid-template-columns:1fr; }}
+  .host-actions {{ grid-template-columns:repeat(4,minmax(82px,1fr));overflow-x:auto; }}
+  .host-action {{ min-width:82px; }}
+}}
 </style>
 </head>
 <body>
-<main>
-<header>
-  <div><h1 id="heading">🎬 Dank Shield Movie Night</h1><small>Room {safe_room}</small></div>
-  <span class="badge" id="role">Connecting…</span>
-</header>
-<section class="card">
-  <video id="video" controls playsinline preload="metadata"></video>
-  <div class="controls">
-    <button id="sync">Tap to Sync</button>
-    <button id="play" disabled>Play</button>
-    <button id="pause" disabled>Pause</button>
-    <button id="end" disabled>End Session</button>
-  </div>
-  <div id="notice"></div>
-  <div class="now">
-    <div>
-      <strong id="title">Movie Night</strong>
-      <small><span id="state">—</span> • <span id="viewers">0</span> viewer(s)</small>
+<div class="shell">
+<header class="site-header">
+  <div class="brand-row">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 96 96" aria-hidden="true">
+        <defs>
+          <filter id="glow"><feGaussianBlur stdDeviation="1.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        </defs>
+        <path d="M18 25 27 9l9 10L48 5l9 14 12-10 7 18" fill="none" stroke="#a7ff64" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+        <path d="M13 60c7-27 55-31 69-5-5 25-54 34-69 5Z" fill="#0e1a17" stroke="#eef5f1" stroke-width="4"/>
+        <circle cx="48" cy="55" r="18" fill="#192620" stroke="#a7ff64" stroke-width="3"/>
+        <circle cx="48" cy="55" r="4" fill="#eef5f1"/>
+        <circle cx="48" cy="43" r="4" fill="#eef5f1"/>
+        <circle cx="59" cy="51" r="4" fill="#eef5f1"/>
+        <circle cx="55" cy="63" r="4" fill="#eef5f1"/>
+        <circle cx="41" cy="64" r="4" fill="#eef5f1"/>
+        <circle cx="36" cy="51" r="4" fill="#eef5f1"/>
+        <path d="M10 69c18 10 58 10 76-1M21 78c18 9 41 8 57-1" fill="none" stroke="#79ef45" stroke-width="3" stroke-linecap="round"/>
+      </svg>
+      <div class="brand-copy">
+        <h1 class="wordmark"><span class="dank">Dank</span><span class="cinema">Cinema</span></h1>
+        <div class="subbrand">A feature of <strong>☁ The 420 Lobby</strong></div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button class="icon-button search-only" type="button" aria-label="Search" title="Movie search lives in Discord">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      </button>
+      <div class="profile-dot" aria-label="Dank Cinema profile"></div>
     </div>
   </div>
-  <details>
-    <summary>Playback Details</summary>
+  <nav class="nav" aria-label="Dank Cinema">
+    <button class="nav-item" type="button" data-nav="home">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10"/></svg>Home
+    </button>
+    <button class="nav-item active" type="button" data-nav="movie-nights">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18"/></svg>Movie Nights
+    </button>
+    <button class="nav-item" type="button" data-nav="browse">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>Browse
+    </button>
+    <button class="nav-item" type="button" data-nav="my-stuff">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h12v18l-6-4-6 4Z"/></svg>My Stuff
+    </button>
+  </nav>
+</header>
+
+<main>
+  <section class="theater" aria-label="Dank Cinema player">
+    <div class="video-stage">
+      <video id="video" playsinline preload="metadata" controlslist="nodownload" aria-label="Dank Cinema video"></video>
+      <div class="stage-top">
+        <div class="room-pill"><span class="live-dot"></span><span id="roomMode">Movie Night</span><span>│</span><span id="role">Connecting…</span></div>
+        <button class="cast" id="cast" type="button" aria-label="Cast" title="Cast">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 18a4 4 0 0 1 4 4"/><path d="M2 13a9 9 0 0 1 9 9"/><path d="M2 8a14 14 0 0 1 14 14"/><path d="M6 4h14a2 2 0 0 1 2 2v10"/></svg>
+        </button>
+      </div>
+      <button class="center-play" id="centerPlay" type="button" aria-label="Play or pause">
+        <svg id="centerPlayIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7Z"/></svg>
+      </button>
+      <div class="player-chrome">
+        <div class="timeline-row">
+          <span id="currentTime">0:00</span>
+          <input class="timeline" id="timeline" type="range" min="0" max="1000" value="0" aria-label="Playback position">
+          <span id="duration">0:00</span>
+        </div>
+        <div class="control-row">
+          <button class="player-button" id="rewind10" type="button" aria-label="Back 10 seconds">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 7H4V2"/><path d="M4 7a9 9 0 1 1-1 9"/><text x="8.2" y="16.5" fill="currentColor" stroke="none" font-size="8">10</text></svg>
+          </button>
+          <button class="player-button primary" id="playerToggle" type="button" aria-label="Play or pause">
+            <svg id="playerToggleIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7Z"/></svg>
+          </button>
+          <button class="player-button" id="forward10" type="button" aria-label="Forward 10 seconds">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 7h5V2"/><path d="M20 7a9 9 0 1 0 1 9"/><text x="7.7" y="16.5" fill="currentColor" stroke="none" font-size="8">10</text></svg>
+          </button>
+          <span class="control-spacer"></span>
+          <div class="volume-wrap">
+            <button class="player-button" id="mute" type="button" aria-label="Mute or unmute">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4Z"/><path d="M15 9a4 4 0 0 1 0 6M18 6a8 8 0 0 1 0 12"/></svg>
+            </button>
+            <input class="volume" id="volume" type="range" min="0" max="1" value="1" step=".05" aria-label="Volume">
+          </div>
+          <button class="player-button" id="fullscreen" type="button" aria-label="Fullscreen">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="info">
+    <div class="poster"><img id="poster" alt="" hidden><div id="posterFallback" class="poster-fallback">DANK<br>CINEMA</div></div>
+    <div class="meta-main">
+      <div class="title-row">
+        <div>
+          <h2 class="movie-title" id="title">Movie Night</h2>
+          <div class="movie-meta"><span id="year">—</span> &nbsp;•&nbsp; <span id="state">—</span> &nbsp;•&nbsp; <span id="runtime">—</span></div>
+        </div>
+        <div class="health"><span class="health-dot"></span><span id="healthText">Stream Health: Connecting</span></div>
+      </div>
+      <p class="synopsis" id="overview">Your movie details will appear here when the selected title includes metadata.</p>
+      <div class="viewer-strip">
+        <div class="fake-avatars" id="avatars"></div>
+        <div class="watchers">👥 <strong id="viewers">0</strong> watching</div>
+      </div>
+      <div class="sync-row"><button id="sync" type="button">Tap to Sync</button><span id="syncHint"></span></div>
+    </div>
+  </section>
+
+  <div class="quick-tabs" role="tablist" aria-label="Theater sections">
+    <button class="tab active" type="button" data-panel="queue">▤ Queue</button>
+    <button class="tab" type="button" data-panel="viewers">👥 Viewers</button>
+    <button class="tab" type="button" data-panel="chat">💬 Chat</button>
+    <button class="tab" type="button" data-panel="settings">⚙ Theater Settings</button>
+  </div>
+
+  <div id="notice"></div>
+
+  <section class="queue-panel" id="queuePanel">
+    <div class="section-head"><h2>Up Next</h2><span id="queueCount">0 queued</span></div>
+    <div id="queueList"><div class="queue-empty">Nothing queued yet.</div></div>
+  </section>
+
+  <details class="diagnostics">
+    <summary>Advanced Stream Details</summary>
     <div class="grid">
       <div class="stat"><b>Torrent</b><span id="progress">0%</span></div>
       <div class="stat"><b>Seeds / Leechers</b><span id="peers">0 / 0</span></div>
       <div class="stat"><b>Buffer target</b><span id="buffer">—</span></div>
     </div>
   </details>
-</section>
+
+  <span class="sr-only" id="heading">Dank Cinema</span>
 </main>
+</div>
+
+<section class="host-sheet" id="hostSheet" aria-label="Host controls">
+  <div class="sheet-handle"></div>
+  <div class="sheet-title"><strong>♛ Host Controls</strong><button class="close-sheet" id="closeHostSheet" type="button" aria-label="Close host controls">×</button></div>
+  <div class="host-actions">
+    <button class="host-action" id="passHost" type="button">👤→<br>Pass Host<small>Choose a viewer in Discord</small></button>
+    <button class="host-action" id="manageQueue" type="button">☷<br>Manage Queue<small>Add, remove, reorder titles in Discord</small></button>
+    <button class="host-action" id="pause" type="button">Ⅱ<br>Pause for Everyone<small>Pause synchronized playback</small></button>
+    <button class="host-action danger" id="end" type="button">■<br><span id="endLabel">End Session</span><small>Close the room for everyone</small></button>
+  </div>
+  <button id="play" type="button">Resume</button>
+</section>
 <script>
 const BOOT={boot};
 const video=document.getElementById("video");
