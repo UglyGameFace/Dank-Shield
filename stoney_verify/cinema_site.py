@@ -51,7 +51,6 @@ from .cinema_feed_service import (
 from .media_source_registry import enabled_structured_sources, load_media_source_registry
 from .media_source_resolver import (
     preview_custom_media_source,
-    search_custom_media_sources,
     search_movie_sources,
 )
 from .cinema_media_identity import (
@@ -665,7 +664,7 @@ async def cinema_search_api(request: web.Request) -> web.Response:
     catalog_task = asyncio.create_task(search_catalog(query, limit=30))
     episode_task = asyncio.create_task(_search_episode_query(query))
     media_task = asyncio.create_task(list_user_media(user_id))
-    source_task = asyncio.create_task(search_custom_media_sources(guild_id, query))
+    source_task = asyncio.create_task(search_movie_sources(guild_id, query))
     discovery_task = asyncio.create_task(
         search_discoveries(guild_id, query, limit=20)
     )
