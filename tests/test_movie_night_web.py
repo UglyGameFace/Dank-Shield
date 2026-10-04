@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
