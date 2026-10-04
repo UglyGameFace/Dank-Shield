@@ -203,6 +203,77 @@ def _safe_movie_art_url(value: Any) -> str:
     return ""
 
 
+def _safe_discord_avatar_url(value: Any) -> str:
+    cleaned = str(value or "").strip()
+    if (
+        cleaned.startswith("https://cdn.discordapp.com/")
+        or cleaned.startswith("https://media.discordapp.net/")
+    ):
+        return cleaned
+    return ""
+
+
+def _discord_viewer_summaries(
+    room: MovieNightRoom,
+    viewer_ids: set[int],
+) -> list[dict[str, Any]]:
+    try:
+        from stoney_verify.globals import bot
+    except Exception:
+        bot = None
+
+    guild = None
+    if bot is not None:
+        try:
+            guild = bot.get_guild(int(room.guild_id))
+        except Exception:
+            guild = None
+
+    ordered = sorted(
+        (int(uid) for uid in viewer_ids),
+        key=lambda uid: (uid != int(room.host_id), uid),
+    )
+    summaries: list[dict[str, Any]] = []
+    for uid in ordered:
+        entity = None
+        if guild is not None:
+            try:
+                entity = guild.get_member(uid)
+            except Exception:
+                entity = None
+        if entity is None and bot is not None:
+            try:
+                entity = bot.get_user(uid)
+            except Exception:
+                entity = None
+
+        display_name = ""
+        avatar_url = ""
+        if entity is not None:
+            display_name = str(
+                getattr(entity, "display_name", "")
+                or getattr(entity, "global_name", "")
+                or getattr(entity, "name", "")
+                or ""
+            ).strip()[:80]
+            try:
+                avatar_url = _safe_discord_avatar_url(
+                    getattr(getattr(entity, "display_avatar", None), "url", "")
+                )
+            except Exception:
+                avatar_url = ""
+
+        summaries.append(
+            {
+                "user_id": uid,
+                "display_name": display_name or str(uid),
+                "avatar_url": avatar_url,
+                "is_host": uid == int(room.host_id),
+            }
+        )
+    return summaries
+
+
 def _candidate_web_metadata(candidate: Any) -> dict[str, Any]:
     metadata = dict(getattr(candidate, "metadata", {}) or {}) if candidate is not None else {}
     catalog = (
@@ -319,7 +390,9 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         and viewer.sync_requested
     ):
         sync_target = float(viewer.sync_target_position)
+    active_viewer_ids = movie_manager.active_viewers(room)
     buffer_quorum = movie_manager.buffer_quorum_viewers(room)
+    viewer_summaries = _discord_viewer_summaries(room, active_viewer_ids)
     movie_metadata = _candidate_web_metadata(candidate)
     if not movie_metadata["title"]:
         movie_metadata["title"] = str(title or "Movie Night")
@@ -353,7 +426,8 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "position_seconds": round(room.current_position(), 3),
         "is_host": int(user_id) == int(room.host_id),
         "host_active": movie_manager.host_active(room),
-        "viewer_count": len(movie_manager.active_viewers(room)),
+        "viewer_count": len(active_viewer_ids),
+        "viewers": viewer_summaries,
         "buffer_quorum_count": len(buffer_quorum),
         "sync_status": sync_status,
         "sync_ready": sync_ready,
@@ -1927,7 +2001,7 @@ async def movie_night_watch(request: web.Request) -> web.Response:
                 "font-src https://fonts.gstatic.com; "
                 "media-src 'self'; "
                 "connect-src 'self' https://www.gstatic.com https://*.googleapis.com; "
-                "img-src 'self' https://image.tmdb.org; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+                "img-src 'self' https://image.tmdb.org https://cdn.discordapp.com https://media.discordapp.net; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"
             ),
         },
     )
