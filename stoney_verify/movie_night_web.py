@@ -692,15 +692,6 @@ button {{ -webkit-tap-highlight-color:transparent; }}
   width:19px;height:15px;display:inline-block;color:#7389ff;
 }}
 .subbrand strong {{ color:var(--lime); letter-spacing:.01em; text-transform:none; font-size:.79rem; }}
-.header-status {{
-  border:1px solid rgba(255,255,255,.1);
-  border-radius:999px;
-  padding:8px 11px;
-  color:#b8c3be;
-  background:rgba(8,18,14,.68);
-  font-size:.72rem;
-  font-weight:800;
-}}
 .nav {{
   display:flex; align-items:center; gap:5px;
   overflow-x:auto; scrollbar-width:none; margin:15px -4px 9px; padding:0 4px 5px;
@@ -797,6 +788,7 @@ video {{
   border-radius:50%; border:1px solid rgba(255,255,255,.18);
   color:#fff; background:rgba(3,10,8,.72); backdrop-filter:blur(12px);
 }}
+.cast[hidden] {{ display:none !important; }}
 .cast:disabled {{ opacity:.35; }}
 .cast.connected {{ color:var(--lime); border-color:var(--line-strong); }}
 .cast svg {{ width:23px;height:23px; }}
@@ -931,9 +923,8 @@ video {{
   .wordmark {{ font-size:clamp(1.7rem,8.4vw,2.45rem);gap:5px; }}
   .subbrand {{ margin-top:7px;font-size:.54rem;letter-spacing:.13em;gap:4px; }}
   .subbrand strong {{ font-size:.66rem; }}
-  .header-status {{ max-width:92px;padding:7px 9px;font-size:.62rem; }}
   .nav-item {{ padding:9px 11px;font-size:.78rem; }}
-  .video-stage {{ min-height:215px; }}
+  .video-stage {{ min-height:0; }}
   .center-play {{ width:72px;height:72px; }}
   .player-chrome {{ padding-left:10px;padding-right:10px; }}
   .volume {{ display:none; }}
@@ -982,7 +973,6 @@ video {{
         </div>
       </div>
     </div>
-    <div class="header-status" id="headerStatus">Connecting…</div>
   </div>
   <nav class="nav" aria-label="Dank Cinema">
     <button class="nav-item active" type="button" data-nav="theater">
@@ -1278,8 +1268,6 @@ function renderSiteState(s) {{
   document.getElementById("endLabel").textContent=s.private?"End Private Session":"End Movie Night";
   document.getElementById("hostSheet").classList.toggle("show",!!s.is_host && !hostSheetDismissed);
   document.getElementById("healthText").textContent="Stream Health: "+streamHealthLabel(s);
-  document.getElementById("headerStatus").textContent=
-    (s.private?"Private":"Movie Night")+" • "+String(s.viewer_count||0)+" watching";
   document.getElementById("hostPresence").textContent=s.host_active?"Host online":"Host away";
   document.getElementById("sessionMode").textContent=s.private?"Private Session":"Movie Night";
   document.getElementById("sessionViewers").textContent=String(s.viewer_count||0);
