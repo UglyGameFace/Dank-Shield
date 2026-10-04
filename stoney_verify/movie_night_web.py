@@ -722,6 +722,55 @@ async def movie_night_transfer_host(request: web.Request) -> web.Response:
     return web.json_response(await _state_payload(room, uid))
 
 
+async def movie_night_queue_action(request: web.Request) -> web.Response:
+    room, uid = await _room_and_user(request)
+    if int(uid) != int(room.host_id):
+        raise web.HTTPForbidden(text="Only the active Cinema host can manage the queue.")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    action = str(payload.get("action") or "").strip().lower()
+    candidate_id = str(payload.get("candidate_id") or "").strip()
+    manager = get_movie_night_manager()
+
+    try:
+        if action == "remove":
+            manager.remove_queued(
+                room.room_id,
+                host_id=uid,
+                candidate_id=candidate_id,
+            )
+        elif action == "move_up":
+            manager.move_queued(
+                room.room_id,
+                host_id=uid,
+                candidate_id=candidate_id,
+                offset=-1,
+            )
+        elif action == "move_down":
+            manager.move_queued(
+                room.room_id,
+                host_id=uid,
+                candidate_id=candidate_id,
+                offset=1,
+            )
+        elif action == "clear":
+            manager.clear_queue(room.room_id, host_id=uid)
+        else:
+            raise web.HTTPBadRequest(text="Unsupported Cinema queue action.")
+    except PermissionError as exc:
+        raise web.HTTPForbidden(text=str(exc))
+    except LookupError as exc:
+        raise web.HTTPNotFound(text=str(exc))
+
+    return web.json_response(await _state_payload(room, uid))
+
+
 def _watch_html(room_id: str, uid: int, query: str) -> str:
     boot = json.dumps(
         {
@@ -1023,6 +1072,21 @@ video {{
   display:grid;grid-template-columns:58px minmax(0,1fr);gap:10px;align-items:center;
   padding:8px;border:1px solid rgba(255,255,255,.07);border-radius:12px;background:#0a1512;
 }}
+.queue-item.manageable {{ grid-template-columns:58px minmax(0,1fr) auto; }}
+.queue-actions {{ display:flex;align-items:center;gap:4px; }}
+.queue-action {{
+  width:30px;height:30px;border-radius:9px;
+  border:1px solid rgba(255,255,255,.09);background:#10201a;color:#dce5e1;
+  font-size:.72rem;font-weight:900;
+}}
+.queue-action.danger {{ color:#ff727d;border-color:rgba(255,93,107,.24); }}
+.queue-action:disabled {{ opacity:.28; }}
+.queue-head-actions {{ display:flex;align-items:center;gap:8px; }}
+.queue-clear {{
+  border:0;background:transparent;color:#b7c2bd;
+  padding:4px 0;font-size:.72rem;font-weight:750;
+}}
+.queue-clear[hidden] {{ display:none !important; }}
 .queue-art {{ width:58px;aspect-ratio:16/10;border-radius:9px;overflow:hidden;background:#13231d; }}
 .queue-art img {{ width:100%;height:100%;object-fit:cover; }}
 .queue-title {{ font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }}
@@ -1195,7 +1259,13 @@ video {{
   </section>
 
   <section class="queue-panel" id="queuePanel">
-    <div class="section-head"><h2>Up Next</h2><span id="queueCount">0 queued</span></div>
+    <div class="section-head">
+      <h2>Up Next</h2>
+      <div class="queue-head-actions">
+        <span id="queueCount">0 queued</span>
+        <button class="queue-clear" id="clearQueue" type="button" hidden>Clear Queue</button>
+      </div>
+    </div>
     <div id="queueList"><div class="queue-empty">Nothing queued yet.</div></div>
   </section>
 
@@ -1217,7 +1287,7 @@ video {{
   <div class="sheet-title"><strong>♛ Host Controls</strong><button class="close-sheet" id="closeHostSheet" type="button" aria-label="Close host controls">×</button></div>
   <div class="host-actions">
     <button class="host-action" id="passHost" type="button">👤→<br>Pass Host<small>Choose an active Discord viewer</small></button>
-    <button class="host-action" id="openDiscordControls" type="button">↗<br>Discord<small>Open the Cinema control channel</small></button>
+    <button class="host-action" id="manageQueue" type="button">☷<br>Manage Queue<small>Remove or reorder queued titles</small></button>
     <button class="host-action" id="pause" type="button">Ⅱ<br>Pause for Everyone<small>Pause synchronized playback</small></button>
     <button class="host-action danger" id="end" type="button">■<br><span id="endLabel">End Session</span><small>Close the room for everyone</small></button>
   </div>
@@ -1470,8 +1540,32 @@ function renderQueue(items) {{
     sub.textContent=(item.year?String(item.year)+" • ":"")+(item.is_current?"Now playing":"Up next");
     copy.append(title,sub);
     row.append(art,copy);
+
+    if(lastState?.is_host) {{
+      row.classList.add("manageable");
+      const actions=document.createElement("div");
+      actions.className="queue-actions";
+      const index=rows.indexOf(item);
+      for(const [label,actionName,disabled,danger] of [
+        ["↑","move_up",index===0,false],
+        ["↓","move_down",index===rows.length-1,false],
+        ["×","remove",false,true]
+      ]) {{
+        const button=document.createElement("button");
+        button.type="button";
+        button.className="queue-action"+(danger?" danger":"");
+        button.textContent=label;
+        button.disabled=disabled;
+        button.setAttribute("aria-label",actionName.replace("_"," ")+" "+String(item.title||"title"));
+        button.onclick=()=>queueAction(actionName,String(item.candidate_id||""));
+        actions.appendChild(button);
+      }}
+      row.appendChild(actions);
+    }}
     list.appendChild(row);
   }}
+  const clear=document.getElementById("clearQueue");
+  clear.hidden=!(lastState?.is_host && rows.length);
 }}
 function viewerInitials(name) {{
   const parts=String(name||"").trim().split(/\s+/).filter(Boolean);
@@ -1884,6 +1978,19 @@ async function heartbeat(forceSync=false) {{
     return null;
   }}
 }}
+async function queueAction(action, candidateId="") {{
+  if(!lastState?.is_host) return;
+  if(action==="clear" && !confirm("Clear every queued title?")) return;
+  try {{
+    const state=await jsonFetch("/movie/"+BOOT.roomId+"/queue", {{
+      method:"POST",
+      body:JSON.stringify({{action,candidate_id:candidateId}})
+    }});
+    await applyState(state);
+  }} catch(err) {{
+    notice.textContent="Queue update failed: "+String(err?.message||err);
+  }}
+}}
 async function hostAction(action, extra={{}}) {{
   if(!lastState || !lastState.is_host || remoteApply) return;
   try {{
@@ -2030,7 +2137,11 @@ document.getElementById("passHost").onclick=()=>{{
   panel.scrollIntoView({{behavior:"smooth",block:"nearest"}});
   notice.textContent="Choose an active viewer below to pass host control.";
 }};
-document.getElementById("openDiscordControls").onclick=openDiscordRoom;
+document.getElementById("manageQueue").onclick=()=>{{
+  document.getElementById("queuePanel").scrollIntoView({{behavior:"smooth",block:"nearest"}});
+  notice.textContent="Queue manager is active. Use ↑ ↓ or × on queued titles.";
+}};
+document.getElementById("clearQueue").onclick=()=>queueAction("clear");
 
 for(const item of document.querySelectorAll("[data-nav]")) {{
   item.addEventListener("click",()=>{{
@@ -2301,10 +2412,12 @@ def register_movie_night_public_routes(app: web.Application) -> None:
     app.router.add_post("/movie/{room_id}/heartbeat", movie_night_heartbeat)
     app.router.add_post("/movie/{room_id}/action", movie_night_action)
     app.router.add_post("/movie/{room_id}/host", movie_night_transfer_host)
+    app.router.add_post("/movie/{room_id}/queue", movie_night_queue_action)
 
 
 __all__ = [
     "dank_cinema_brand_asset",
+    "movie_night_queue_action",
     "movie_night_transfer_host",
     "movie_night_watch_url",
     "register_movie_night_public_routes",
