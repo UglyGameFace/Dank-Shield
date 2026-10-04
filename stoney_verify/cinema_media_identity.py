@@ -28,6 +28,30 @@ def normalized_title_tokens(value: Any) -> tuple[str, ...]:
     return tuple(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
 
 
+def parse_episode_query(value: Any) -> Optional[tuple[str, int, int]]:
+    """Parse the episode notation shared by website, Theater, and providers."""
+
+    clean = " ".join(str(value or "").split())
+    patterns = (
+        re.compile(r"^(.+?)\s+s(\d{1,2})\s*e(\d{1,3})(?:\b|$)", re.IGNORECASE),
+        re.compile(r"^(.+?)\s+(\d{1,2})x(\d{1,3})(?:\b|$)", re.IGNORECASE),
+        re.compile(
+            r"^(.+?)\s+season\s+(\d{1,2})\s+episode\s+(\d{1,3})(?:\b|$)",
+            re.IGNORECASE,
+        ),
+    )
+    for pattern in patterns:
+        match = pattern.search(clean)
+        if not match:
+            continue
+        title = " ".join(match.group(1).split())[:160]
+        season = _safe_int(match.group(2), -1)
+        episode = _safe_int(match.group(3), -1)
+        if title and season >= 0 and episode > 0:
+            return title, season, episode
+    return None
+
+
 def catalog_metadata(media: CinemaMedia) -> dict[str, Any]:
     return {
         "catalog_provider": "tmdb",
@@ -206,5 +230,6 @@ __all__ = [
     "episode_search_query",
     "filter_outcome_for_catalog",
     "normalized_title_tokens",
+    "parse_episode_query",
     "release_matches_catalog",
 ]
