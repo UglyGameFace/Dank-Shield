@@ -1199,6 +1199,64 @@ class MovieNightManager:
             room.queue.pop(0)
         return None
 
+    def remove_queued(
+        self,
+        room_id: str,
+        *,
+        host_id: int,
+        candidate_id: str,
+    ) -> MovieNightRoom:
+        room = self._require_room(room_id)
+        if int(host_id) != int(room.host_id):
+            raise PermissionError("Only the Cinema host may manage the queue.")
+        candidate_key = str(candidate_id or "")
+        try:
+            room.queue.remove(candidate_key)
+        except ValueError:
+            raise LookupError("Queued movie not found.")
+        return room
+
+    def move_queued(
+        self,
+        room_id: str,
+        *,
+        host_id: int,
+        candidate_id: str,
+        offset: int,
+    ) -> MovieNightRoom:
+        room = self._require_room(room_id)
+        if int(host_id) != int(room.host_id):
+            raise PermissionError("Only the Cinema host may manage the queue.")
+        candidate_key = str(candidate_id or "")
+        try:
+            current_index = room.queue.index(candidate_key)
+        except ValueError:
+            raise LookupError("Queued movie not found.")
+
+        delta = -1 if int(offset) < 0 else 1 if int(offset) > 0 else 0
+        if not delta:
+            return room
+        target_index = max(0, min(len(room.queue) - 1, current_index + delta))
+        if target_index == current_index:
+            return room
+        room.queue[current_index], room.queue[target_index] = (
+            room.queue[target_index],
+            room.queue[current_index],
+        )
+        return room
+
+    def clear_queue(
+        self,
+        room_id: str,
+        *,
+        host_id: int,
+    ) -> MovieNightRoom:
+        room = self._require_room(room_id)
+        if int(host_id) != int(room.host_id):
+            raise PermissionError("Only the Cinema host may manage the queue.")
+        room.queue.clear()
+        return room
+
     def group_buffer_corridor(
         self,
         room_id: str,
