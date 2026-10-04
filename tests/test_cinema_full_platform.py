@@ -3,7 +3,13 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from stoney_verify import cinema_catalog, cinema_feed_service, cinema_site, movie_night_web
+from stoney_verify import (
+    cinema_catalog,
+    cinema_feed_service,
+    cinema_site,
+    cinema_site_auth,
+    movie_night_web,
+)
 from stoney_verify.cinema_catalog import CinemaDetails, CinemaEpisode, CinemaMedia
 from stoney_verify.cinema_media_identity import (
     episode_catalog_metadata,
@@ -307,6 +313,65 @@ def test_cinema_site_play_requires_existing_host_room(monkeypatch) -> None:
         assert "room that you host" in exc.text
     else:
         raise AssertionError("A non-host site identity must not replace Cinema media.")
+
+
+def test_cinema_browser_session_is_scoped_to_exact_discord_guild(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+    value = cinema_site_auth.cinema_session_value(100, 42, ttl_seconds=3600)
+
+    assert value
+    assert cinema_site_auth.validate_cinema_session(100, value) == 42
+    assert cinema_site_auth.validate_cinema_session(200, value) is None
+
+
+def test_cinema_site_identity_requires_current_member_of_same_guild(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+    value = cinema_site_auth.cinema_session_value(100, 42, ttl_seconds=3600)
+    request = SimpleNamespace(
+        match_info={"guild_id": "100"},
+        query={},
+        cookies={cinema_site_auth.CINEMA_SESSION_COOKIE: value},
+    )
+
+    monkeypatch.setattr(
+        cinema_site,
+        "_site_member",
+        lambda guild_id, user_id: object()
+        if (int(guild_id), int(user_id)) == (100, 42)
+        else None,
+    )
+    assert cinema_site._site_identity(request) == (100, 42)
+
+    monkeypatch.setattr(cinema_site, "_site_member", lambda _guild_id, _user_id: None)
+    try:
+        cinema_site._site_identity(request)
+    except Exception as exc:
+        from aiohttp import web
+
+        assert isinstance(exc, web.HTTPForbidden)
+        assert "requires membership in this Discord server" in exc.text
+    else:
+        raise AssertionError("Cinema access must fail closed after server membership is gone.")
+
+
+def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session() -> None:
+    from pathlib import Path
+
+    source = Path(cinema_site.__file__).read_text(encoding="utf-8")
+    script = (
+        Path(cinema_site.__file__).resolve().parent / "assets" / "cinema_site.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'app.router.add_get("/cinema", cinema_entry_page)' in source
+    assert 'app.router.add_get("/cinema/login", cinema_oauth_login)' in source
+    assert 'app.router.add_get("/cinema/auth/callback", cinema_oauth_callback)' in source
+    assert 'scope": "identify guilds"' in source
+    assert "await _fetch_site_member(target_guild, user_id)" in source
+    assert "cinema_session_value(guild_id, user_id)" in source
+    assert 'path=f"/cinema/{int(guild_id)}"' in source
+    assert 'initialUrl.searchParams.delete("sig")' in script
+    assert 'history.replaceState(' in script
+    assert 'const AUTH_QUERY = "";' in script
 
 
 def test_full_site_episode_playback_is_real_and_host_scoped() -> None:
