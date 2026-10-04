@@ -1191,17 +1191,28 @@ def _watch_html(room_id: str, uid: int, query: str) -> str:
 :root {{
   color-scheme:dark;
   font-family:"Inter",ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-  --bg:#06100d;
-  --panel:#0b1714;
-  --panel-2:#0f1d19;
-  --line:rgba(183,255,132,.18);
-  --line-strong:rgba(163,255,94,.48);
+  --bg:#030806;
+  --bg-raised:#07110e;
+  --panel:#0a1512;
+  --panel-2:#0e1c18;
+  --panel-3:#12231d;
+  --line:rgba(190,255,145,.14);
+  --line-strong:rgba(163,255,94,.46);
   --lime:#a7ff64;
   --lime-2:#79ef45;
+  --discord:#8ea0ff;
   --text:#f6f8f7;
-  --muted:#a9b4b0;
-  --danger:#ff5c68;
-  --shadow:0 18px 50px rgba(0,0,0,.34);
+  --muted:#9fada7;
+  --muted-2:#75827d;
+  --danger:#ff6672;
+  --focus:0 0 0 3px rgba(167,255,100,.22);
+  --shadow:0 24px 70px rgba(0,0,0,.38);
+  --shadow-soft:0 14px 38px rgba(0,0,0,.26);
+  --radius-xl:22px;
+  --radius-lg:16px;
+  --radius-md:12px;
+  --motion-fast:140ms;
+  --motion-medium:240ms;
 }}
 * {{ box-sizing:border-box; }}
 html {{ background:var(--bg); scroll-behavior:smooth; }}
@@ -1211,31 +1222,61 @@ body {{
   overflow-x:hidden;
   color:var(--text);
   background:
-    radial-gradient(circle at 78% -10%,rgba(35,115,72,.28),transparent 35%),
-    radial-gradient(circle at -12% 24%,rgba(111,255,69,.08),transparent 30%),
-    linear-gradient(180deg,#06110e 0%,#07110f 38%,#030807 100%);
+    radial-gradient(70% 40% at 78% -8%,rgba(40,125,77,.22),transparent 68%),
+    radial-gradient(55% 38% at -8% 30%,rgba(111,255,69,.065),transparent 72%),
+    linear-gradient(180deg,#06110e 0%,#050d0b 46%,#020504 100%);
+}}
+body::before {{
+  content:"";
+  position:fixed;inset:0;z-index:-1;pointer-events:none;
+  opacity:.07;
+  background-image:
+    linear-gradient(90deg,rgba(255,255,255,.014) 1px,transparent 1px),
+    linear-gradient(rgba(255,255,255,.012) 1px,transparent 1px);
+  background-size:9px 9px,13px 13px;
+  mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.7) 55%,transparent 100%);
 }}
 button,input {{ font:inherit; }}
 button {{ -webkit-tap-highlight-color:transparent; }}
-.shell {{ width:min(1120px,100%); margin:0 auto; padding:0 18px 150px; overflow-x:hidden; }}
+button,input,select,summary {{ outline:none; }}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible {{
+  box-shadow:var(--focus);
+}}
+button {{ cursor:pointer; }}
+.shell {{ width:min(1480px,100%); margin:0 auto; padding:0 22px 160px; overflow-x:hidden; }}
 .site-header {{
   position:relative; z-index:20;
-  margin:0 -18px;
-  padding:12px 18px 6px;
+  margin:0 -22px;
+  padding:14px 22px 6px;
   overflow:hidden;
   background:
-    radial-gradient(circle at 16% 38%,rgba(82,164,62,.13),transparent 32%),
-    linear-gradient(180deg,rgba(2,7,6,.72) 0%,rgba(6,17,14,.30) 72%,transparent 100%);
+    radial-gradient(420px 150px at 105px 58px,rgba(89,174,67,.12),transparent 74%),
+    linear-gradient(180deg,rgba(2,7,6,.88) 0%,rgba(5,15,12,.36) 78%,transparent 100%);
 }}
-.brand-row {{ display:flex; align-items:center; width:100%; min-width:0; }}
-.brand {{ width:100%; min-width:0; overflow:hidden; isolation:isolate; }}
+.site-header::after {{
+  content:"";
+  position:absolute;left:0;right:0;bottom:0;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(165,255,103,.24),transparent);
+  pointer-events:none;
+}}
+.brand-row {{ display:flex; align-items:center; justify-content:space-between; width:100%; min-width:0; }}
+.brand {{
+  position:relative;width:min(760px,100%);min-width:0;overflow:visible;
+  isolation:isolate;
+}}
+.brand::before {{
+  content:"";
+  position:absolute;inset:12% -6% -8% -4%;z-index:-1;
+  background:radial-gradient(ellipse at 26% 48%,rgba(100,190,66,.09),transparent 56%);
+  filter:blur(18px);pointer-events:none;
+}}
 .brand-banner {{
   display:block;
-  width:min(620px,100%);
+  width:100%;
   height:auto;
   object-fit:contain;
   object-position:left center;
-  filter:drop-shadow(0 8px 22px rgba(0,0,0,.38)) drop-shadow(0 0 18px rgba(126,255,65,.10));
+  filter:drop-shadow(0 10px 28px rgba(0,0,0,.42));
   transform:translateZ(0);
 }}
 .nav {{
@@ -1255,6 +1296,15 @@ button {{ -webkit-tap-highlight-color:transparent; }}
   background:linear-gradient(180deg,rgba(87,178,51,.23),rgba(47,93,35,.18));
   box-shadow:inset 0 0 22px rgba(108,255,48,.06);
 }}
+.theater-grid {{
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  gap:14px 22px;
+  align-items:start;
+}}
+.theater-primary {{ min-width:0; }}
+.theater-sidecar {{ min-width:0; }}
+.theater-sidecar > :first-child {{ margin-top:0; }}
 .theater {{
   position:relative;
   overflow:hidden;
@@ -1629,6 +1679,75 @@ video {{
 }}
 #sync:disabled {{ opacity:.72; }}
 .sr-only {{ position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }}
+html[data-quality="high"] .theater {{
+  box-shadow:0 26px 78px rgba(0,0,0,.44),0 0 0 1px rgba(163,255,94,.025);
+}}
+html[data-quality="high"] .video-stage::before {{
+  background:
+    linear-gradient(180deg,rgba(0,0,0,.02) 0%,rgba(0,0,0,.04) 48%,rgba(0,0,0,.42) 100%),
+    radial-gradient(circle at 50% 48%,transparent 42%,rgba(0,0,0,.28) 100%);
+}}
+html[data-quality="standard"] .brand::before,
+html[data-quality="standard"] body::before {{ opacity:.045; }}
+html[data-quality="lite"] body::before,
+html[data-quality="lite"] .brand::before {{ display:none; }}
+html[data-quality="lite"] .site-header,
+html[data-quality="lite"] .room-pill,
+html[data-quality="lite"] .cast,
+html[data-quality="lite"] .center-play,
+html[data-quality="lite"] .host-sheet,
+html[data-quality="lite"] .host-launcher {{
+  backdrop-filter:none;
+}}
+html[data-quality="lite"] .theater,
+html[data-quality="lite"] .poster {{ box-shadow:none; }}
+html[data-quality="lite"] * {{ text-shadow:none !important; }}
+
+@media (min-width:1080px) {{
+  .theater-grid {{
+    grid-template-columns:minmax(0,1fr) minmax(320px,360px);
+    gap:18px 24px;
+  }}
+  .theater-primary {{ grid-column:1; }}
+  .theater-sidecar {{
+    grid-column:2;
+    position:sticky;
+    top:18px;
+    display:grid;
+    gap:12px;
+    max-height:calc(100vh - 36px);
+    overflow:auto;
+    scrollbar-width:thin;
+    padding-right:2px;
+  }}
+  .theater-sidecar .queue-panel,
+  .theater-sidecar .diagnostics {{ margin-top:0; }}
+  .info {{ padding-top:24px; }}
+  .movie-title {{ font-size:clamp(2.3rem,4vw,4.1rem); }}
+  .synopsis {{ max-width:78ch; }}
+  .quick-tabs {{ max-width:760px; }}
+}}
+@media (min-width:1500px) {{
+  .theater-grid {{ grid-template-columns:minmax(0,1fr) 390px; }}
+  .video-stage {{ min-height:0; }}
+}}
+@media (prefers-reduced-motion:reduce) {{
+  html {{ scroll-behavior:auto; }}
+  *,*::before,*::after {{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+    scroll-behavior:auto !important;
+  }}
+}}
+@media (min-width:641px) and (max-width:1079px) {{
+  .shell {{ padding-left:20px;padding-right:20px; }}
+  .site-header {{ margin-left:-20px;margin-right:-20px;padding-left:20px;padding-right:20px; }}
+  .brand {{ width:min(680px,82vw); }}
+  .info {{ grid-template-columns:108px minmax(0,1fr);gap:18px; }}
+  .poster {{ width:108px; }}
+  .host-sheet {{ width:min(760px,calc(100% - 24px));bottom:12px;border-radius:22px;border-bottom:1px solid rgba(197,255,175,.17); }}
+}}
 @media (max-width:640px) {{
   .shell {{ padding-left:14px;padding-right:14px;padding-bottom:160px; }}
   .site-header {{ margin-left:-14px;margin-right:-14px;padding-left:10px;padding-right:10px; }}
