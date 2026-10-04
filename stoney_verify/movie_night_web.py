@@ -2337,6 +2337,23 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
         <option value="lite">Lite</option>
       </select>
     </div>
+    <div class="quality-control">
+      <label for="playbackSpeed">Playback speed</label>
+      <select class="quality-select" id="playbackSpeed" aria-label="Playback speed">
+        <option value="0.5">0.5×</option>
+        <option value="0.75">0.75×</option>
+        <option value="1" selected>1×</option>
+        <option value="1.25">1.25×</option>
+        <option value="1.5">1.5×</option>
+        <option value="1.75">1.75×</option>
+        <option value="2">2×</option>
+      </select>
+    </div>
+    <div class="quality-control" id="audioControl" hidden>
+      <label for="audioTrack">Audio track</label>
+      <select class="quality-select" id="audioTrack" aria-label="Audio track"></select>
+    </div>
+    <div class="quality-note" id="playbackPreferenceNote">Playback speed is synchronized for everyone when you are the host. Audio selection stays local to each viewer.</div>
     <div class="quality-note" id="qualityNote">Auto balances artwork depth with device and network capability. Playback features stay identical in every mode.</div>
     <div class="keyboard-help" id="keyboardHelp">
       Desktop shortcuts: <kbd>Space</kbd> play/pause, <kbd>←</kbd>/<kbd>→</kbd> seek 10s when you control playback, <kbd>F</kbd> fullscreen, <kbd>M</kbd> mute.
@@ -2456,6 +2473,12 @@ let lastToken="";
 let lastStreamConsumer="";
 let remoteApply=false;
 let lastState=null;
+let cinemaPreferences={{}};
+let preferredAudioLanguage="";
+let preferredSubtitleLanguage="";
+let lastProgressPersistAt=0;
+let lastProgressMediaKey="";
+let progressStorageWarned=false;
 let terminated=false;
 let syncRequested=false;
 let syncGestureGranted=false;
@@ -2683,6 +2706,29 @@ function refreshNativePlayerCapabilities() {{
     for(let i=0;i<tracks.length;i++) if(tracks[i].mode==="showing") showing=true;
   }}
   captions.classList.toggle("active",showing);
+
+  const audioControl=document.getElementById("audioControl");
+  const audioSelect=document.getElementById("audioTrack");
+  const audioTracks=video.audioTracks;
+  const count=audioTracks && Number(audioTracks.length||0);
+  audioControl.hidden=!(count>1);
+  if(count>1) {{
+    const previous=audioSelect.value;
+    audioSelect.textContent="";
+    for(let i=0;i<count;i++) {{
+      const track=audioTracks[i];
+      const option=document.createElement("option");
+      option.value=String(i);
+      option.textContent=String(
+        track.label ||
+        track.language ||
+        "Audio "+String(i+1)
+      );
+      if(track.enabled) option.selected=true;
+      audioSelect.appendChild(option);
+    }}
+    if(previous && Number(previous)<count) audioSelect.value=previous;
+  }}
 }}
 function updatePlayerChrome() {{
   const duration=Number.isFinite(video.duration)?video.duration:0;
@@ -3026,14 +3072,30 @@ function renderSiteState(s) {{
   document.getElementById("rewind10").disabled=hostOnly;
   document.getElementById("forward10").disabled=hostOnly;
   document.getElementById("timeline").disabled=hostOnly;
+  updatePlaybackPreferenceControls();
   updatePlayerChrome();
   refreshCastAvailability();
   syncCastToRoom(s);
 }}
+function canonicalPlaybackRate() {{
+  const raw=Number(lastState?.playback_rate||1);
+  const allowed=[0.5,0.75,1,1.25,1.5,1.75,2];
+  return allowed.reduce((best,value)=>Math.abs(value-raw)<Math.abs(best-raw)?value:best,1);
+}}
 function resetPlaybackRate() {{
+  const rate=canonicalPlaybackRate();
   try {{
-    if(Math.abs(Number(video.playbackRate||1)-1)>0.001) video.playbackRate=1;
+    if(Math.abs(Number(video.playbackRate||1)-rate)>0.001) video.playbackRate=rate;
   }} catch(_) {{}}
+}}
+function updatePlaybackPreferenceControls() {{
+  const speed=document.getElementById("playbackSpeed");
+  const rate=canonicalPlaybackRate();
+  speed.value=String(rate);
+  speed.disabled=!lastState?.is_host;
+  speed.title=lastState?.is_host
+    ?"Playback speed is synchronized for the Cinema session."
+    :"Only the current host can change synchronized playback speed.";
 }}
 
 
@@ -3102,12 +3164,12 @@ function correctSyncedDrift(target) {{
       resetPlaybackRate();
       if(safeSeek(target)) lastHardSyncSeekAt=now;
     }} else {{
-      video.playbackRate=signed<0?1.04:0.96;
+      video.playbackRate=signed<0?Math.min(2,canonicalPlaybackRate()*1.04):Math.max(0.25,canonicalPlaybackRate()*0.96);
     }}
     return;
   }}
   if(drift>=SOFT_DRIFT_START) {{
-    video.playbackRate=signed<0?1.04:0.96;
+    video.playbackRate=signed<0?Math.min(2,canonicalPlaybackRate()*1.04):Math.max(0.25,canonicalPlaybackRate()*0.96);
     return;
   }}
   if(drift<=SOFT_DRIFT_STOP) resetPlaybackRate();
@@ -3450,7 +3512,18 @@ document.getElementById("captions").onclick=()=>{{
   if(!tracks || !tracks.length) return;
   let anyShowing=false;
   for(let i=0;i<tracks.length;i++) if(tracks[i].mode==="showing") anyShowing=true;
-  for(let i=0;i<tracks.length;i++) tracks[i].mode=(i===0 && !anyShowing)?"showing":"disabled";
+  let preferredIndex=0;
+  if(preferredSubtitleLanguage) {{
+    for(let i=0;i<tracks.length;i++) {{
+      const lang=String(tracks[i].language||tracks[i].label||"").casefold?.()||String(tracks[i].language||tracks[i].label||"").toLowerCase();
+      if(lang.includes(preferredSubtitleLanguage.toLowerCase())) {{
+        preferredIndex=i;
+        break;
+      }}
+    }}
+  }}
+  for(let i=0;i<tracks.length;i++)
+    tracks[i].mode=(i===preferredIndex && !anyShowing)?"showing":"disabled";
   refreshNativePlayerCapabilities();
 }};
 video.addEventListener("enterpictureinpicture",refreshNativePlayerCapabilities);
@@ -3672,6 +3745,54 @@ qualitySelect.addEventListener("change",()=>{{
   try {{ localStorage.setItem(QUALITY_STORAGE_KEY,value); }} catch(_) {{}}
   applyQualityMode(value);
   if(lastState?.movie) applyMovieArtwork(lastState.movie,lastState);
+}});
+async function saveCinemaPreferences(updates) {{
+  try {{
+    const response=await jsonFetch("/movie/"+BOOT.roomId+"/preferences", {{
+      method:"POST",
+      body:JSON.stringify(updates)
+    }});
+    cinemaPreferences=response.preferences||cinemaPreferences;
+  }} catch(_) {{}}
+}}
+async function loadCinemaPreferences() {{
+  try {{
+    const response=await jsonFetch("/movie/"+BOOT.roomId+"/preferences");
+    cinemaPreferences=response.preferences||{{}};
+    preferredAudioLanguage=String(cinemaPreferences.default_audio_language||"");
+    preferredSubtitleLanguage=String(cinemaPreferences.default_subtitle_language||"");
+    const quality=String(cinemaPreferences.visual_quality||"auto");
+    if(["auto","high","standard","lite"].includes(quality)) {{
+      qualitySelect.value=quality;
+      applyQualityMode(quality);
+    }}
+    refreshNativePlayerCapabilities();
+  }} catch(_) {{}}
+}}
+qualitySelect.addEventListener("change",()=>{{
+  saveCinemaPreferences({{visual_quality:String(qualitySelect.value||"auto")}});
+}});
+document.getElementById("playbackSpeed").addEventListener("change",async event=>{{
+  if(!lastState?.is_host) {{
+    updatePlaybackPreferenceControls();
+    return;
+  }}
+  const rate=Number(event.target.value||1);
+  await hostAction("speed",{{rate}});
+  saveCinemaPreferences({{playback_speed:rate}});
+}});
+document.getElementById("audioTrack").addEventListener("change",event=>{{
+  const tracks=video.audioTracks;
+  if(!tracks || !tracks.length) return;
+  const selected=Number(event.target.value||0);
+  for(let i=0;i<tracks.length;i++) {{
+    try {{ tracks[i].enabled=i===selected; }} catch(_) {{}}
+  }}
+  const track=tracks[selected];
+  preferredAudioLanguage=String(track?.language||track?.label||"");
+  if(preferredAudioLanguage)
+    saveCinemaPreferences({{default_audio_language:preferredAudioLanguage}});
+  refreshNativePlayerCapabilities();
 }});
 window.addEventListener("resize",()=>{{
   if(document.documentElement.dataset.qualityPreference==="auto") applyQualityMode("auto");
@@ -4186,6 +4307,17 @@ video.addEventListener("loadedmetadata",()=>{{
   streamRetryAttempt=0;
   cancelStreamRetry();
   updatePlayerChrome();
+  refreshNativePlayerCapabilities();
+  const tracks=video.audioTracks;
+  if(tracks && tracks.length && preferredAudioLanguage) {{
+    const target=preferredAudioLanguage.toLowerCase();
+    for(let i=0;i<tracks.length;i++) {{
+      const label=String(tracks[i].language||tracks[i].label||"").toLowerCase();
+      if(label.includes(target)) {{
+        try {{ tracks[i].enabled=true; }} catch(_) {{}}
+      }}
+    }}
+  }}
 }});
 video.addEventListener("durationchange",updatePlayerChrome);
 video.addEventListener("timeupdate",updatePlayerChrome);
@@ -4208,6 +4340,49 @@ video.addEventListener("stalled",()=>{{
 video.addEventListener("error",()=>{{
   if(lastState?.stream_url) scheduleStreamRetry();
 }});
+async function persistWatchProgress(force=false) {{
+  const movie=lastState?.movie||{{}};
+  const mediaType=String(movie.media_type||"");
+  const tmdbId=Number(movie.tmdb_id||0);
+  if(!["movie","episode"].includes(mediaType) || tmdbId<=0) return;
+  const now=Date.now();
+  if(!force && now-lastProgressPersistAt<30000) return;
+  const duration=Number.isFinite(video.duration)?Number(video.duration):0;
+  const position=Math.max(0,Number(video.currentTime||0));
+  if(duration<=0 && position<=0) return;
+  const key=mediaType+":"+String(tmdbId)+":"+String(movie.season_number||0)+":"+String(movie.episode_number||0);
+  lastProgressMediaKey=key;
+  lastProgressPersistAt=now;
+  try {{
+    const response=await fetch(api("/movie/"+BOOT.roomId+"/progress"), {{
+      method:"POST",
+      headers:{{"Content-Type":"application/json"}},
+      body:JSON.stringify({{
+        progress_seconds:position,
+        duration_seconds:duration,
+        completed:duration>0 && position>=Math.max(30,duration*.92)
+      }}),
+      keepalive:!!force
+    }});
+    if(!response.ok && !progressStorageWarned) {{
+      progressStorageWarned=true;
+      notice.textContent="Playback is continuing, but Continue Watching could not be saved right now.";
+    }}
+  }} catch(_) {{
+    if(!progressStorageWarned) {{
+      progressStorageWarned=true;
+      notice.textContent="Playback is continuing, but Continue Watching could not be saved right now.";
+    }}
+  }}
+}}
+video.addEventListener("timeupdate",()=>persistWatchProgress(false));
+video.addEventListener("pause",()=>persistWatchProgress(true));
+video.addEventListener("ended",()=>persistWatchProgress(true));
+window.addEventListener("pagehide",()=>persistWatchProgress(true));
+document.addEventListener("visibilitychange",()=>{{
+  if(document.hidden) persistWatchProgress(true);
+}});
+loadCinemaPreferences();
 heartbeat(false).then(state=>{{ if(state) applyState(state); else poll(); }});
 setInterval(poll,2000);
 setInterval(()=>heartbeat(false),3000);
