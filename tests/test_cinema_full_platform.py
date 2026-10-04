@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from stoney_verify import cinema_catalog, movie_night_web
+from stoney_verify import cinema_catalog, cinema_site, movie_night_web
 from stoney_verify.cinema_catalog import CinemaDetails, CinemaEpisode, CinemaMedia
 from stoney_verify.cinema_media_identity import (
     episode_catalog_metadata,
@@ -241,3 +241,96 @@ def test_next_episode_get_hides_control_without_playable_source(monkeypatch) -> 
     assert payload["available"] is False
     assert payload["reason"] == "source_unavailable"
     assert payload["next_episode"]["episode_number"] == 8
+
+
+def test_watch_party_picks_only_use_real_accessible_room_media(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=100,
+        channel_id=200,
+        host_id=42,
+        stream_token="",
+    )
+    candidate = manager.nominate(
+        room.room_id,
+        user_id=42,
+        title="Example Show S03E07",
+        metadata={
+            "catalog": episode_catalog_metadata(
+                series=_series(),
+                episode=_episode(),
+            )
+        },
+        auto_vote=False,
+    )
+    room.current_candidate_id = candidate.candidate_id
+    room.queue.append(candidate.candidate_id)
+    monkeypatch.setattr(cinema_site, "get_movie_night_manager", lambda: manager)
+
+    rows = cinema_site._watch_party_picks(100, 42)
+
+    assert len(rows) == 1
+    assert rows[0]["result_kind"] == "watch_party_pick"
+    assert rows[0]["media_type"] == "episode"
+    assert rows[0]["series_id"] == 77
+    assert rows[0]["season_number"] == 3
+    assert rows[0]["episode_number"] == 7
+    assert rows[0]["watch_party_active"] is True
+
+
+def test_cinema_site_play_requires_existing_host_room(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=100,
+        channel_id=200,
+        host_id=42,
+        stream_token="",
+    )
+    monkeypatch.setattr(cinema_site, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(cinema_site, "_site_identity", lambda _request: (100, 99))
+
+    class Request:
+        async def json(self):
+            return {
+                "room_id": room.room_id,
+                "media_type": "movie",
+                "tmdb_id": 123,
+            }
+
+    try:
+        asyncio.run(cinema_site.cinema_play_api(Request()))
+    except Exception as exc:
+        from aiohttp import web
+
+        assert isinstance(exc, web.HTTPForbidden)
+        assert "room that you host" in exc.text
+    else:
+        raise AssertionError("A non-host site identity must not replace Cinema media.")
+
+
+def test_full_site_episode_playback_is_real_and_host_scoped() -> None:
+    from pathlib import Path
+
+    root = Path(cinema_site.__file__).resolve().parent
+    script = (root / "assets" / "cinema_site.js").read_text(encoding="utf-8")
+    styles = (root / "assets" / "cinema_site.css").read_text(encoding="utf-8")
+
+    assert 'await api("/play"' in script
+    assert 'media_type: mediaType' in script
+    assert 'payload.series_id = Number' in script
+    assert 'payload.season_number = Number' in script
+    assert 'payload.episode_number = Number' in script
+    assert 'hostSession?.is_host' in script
+    assert '"▶ Resume in Theater"' in script
+    assert '"▶ Play in Theater"' in script
+    assert ".episode-play" in styles
+
+
+def test_tv_details_do_not_claim_series_title_is_a_playable_source() -> None:
+    source = __import__("pathlib").Path(cinema_site.__file__).read_text(encoding="utf-8")
+
+    assert 'if media_type == "movie":' in source
+    assert "filter_outcome_for_catalog(" in source
+    assert "variant.swarm_health" not in source
+    assert '"watch_party_picks",' in source
+    assert 'catalog.get("top_movies"' not in source
