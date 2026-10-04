@@ -23,6 +23,10 @@ from stoney_verify.cinema_feed_service import (
     mutate_feed as mutate_cinema_feed,
     runtime_state as cinema_feed_runtime_state,
 )
+from stoney_verify.cinema_catalog import (
+    get_details as get_cinema_details,
+    get_next_episode,
+)
 from stoney_verify.cinema_library_service import (
     CinemaStorageUnavailable,
     get_cinema_user,
@@ -30,6 +34,11 @@ from stoney_verify.cinema_library_service import (
     notify_watch_party_invite,
     record_progress,
     update_cinema_preferences,
+)
+from stoney_verify.cinema_playback_service import (
+    materialize_search_results,
+    search_exact_episode_sources,
+    start_room_variant,
 )
 from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
 from stoney_verify.movie_night_session import (
@@ -1390,6 +1399,166 @@ async def movie_night_progress(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "tracked": True, "item": row})
 
 
+
+def _episode_identity(media: Mapping[str, Any]) -> tuple[int, int, int, int] | None:
+    if str(media.get("media_type") or "").strip().lower() != "episode":
+        return None
+    series_id = int(media.get("series_id") or 0)
+    season = int(media.get("season_number") or 0)
+    episode = int(media.get("episode_number") or 0)
+    tmdb_id = int(media.get("tmdb_id") or 0)
+    if series_id <= 0 or tmdb_id <= 0:
+        return None
+    return series_id, season, episode, tmdb_id
+
+
+async def _next_episode_context(
+    room: MovieNightRoom,
+) -> tuple[dict[str, Any], Any, dict[str, Any], str, Any]:
+    candidate = (
+        room.candidates.get(room.current_candidate_id)
+        if room.current_candidate_id
+        else None
+    )
+    media = _candidate_web_metadata(candidate)
+    identity = _episode_identity(media)
+    if identity is None:
+        return media, None, {}, "", None
+
+    series_id, season, episode, _tmdb_id = identity
+    next_episode = await get_next_episode(series_id, season, episode)
+    if next_episode is None:
+        return media, None, {}, "", None
+
+    details = await get_cinema_details("tv", series_id)
+    metadata, query, outcome = await search_exact_episode_sources(
+        int(room.guild_id),
+        series=details.media,
+        episode=next_episode,
+    )
+    return media, next_episode, metadata, query, outcome
+
+
+async def movie_night_next_episode(request: web.Request) -> web.Response:
+    room, uid = await _room_and_user(request)
+    baseline_candidate = (
+        room.candidates.get(room.current_candidate_id)
+        if room.current_candidate_id
+        else None
+    )
+    baseline_media = _candidate_web_metadata(baseline_candidate)
+    baseline_identity = _episode_identity(baseline_media)
+    if baseline_identity is None:
+        return web.json_response(
+            {"available": False, "reason": "not_episode", "next_episode": None}
+        )
+
+    if request.method == "POST" and int(uid) != int(room.host_id):
+        raise web.HTTPForbidden(text="Only the current Cinema host can start the next episode.")
+
+    try:
+        _media, next_episode, metadata, query, outcome = await _next_episode_context(room)
+    except Exception as exc:
+        raise web.HTTPServiceUnavailable(
+            text="Next episode information is temporarily unavailable."
+        ) from exc
+
+    if next_episode is None:
+        return web.json_response(
+            {"available": False, "reason": "series_complete", "next_episode": None}
+        )
+
+    next_payload = {
+        **next_episode.to_payload(),
+        "series_title": str(metadata.get("series_title") or ""),
+        "poster_url": str(metadata.get("poster_url") or ""),
+        "backdrop_url": str(metadata.get("backdrop_url") or ""),
+    }
+    variants = tuple(getattr(outcome, "variants", ()) or ()) if outcome is not None else ()
+    if request.method == "GET":
+        return web.json_response(
+            {
+                "available": bool(variants),
+                "reason": "ready" if variants else "source_unavailable",
+                "next_episode": next_payload,
+                "playable_source_count": len(variants),
+            }
+        )
+
+    if not variants:
+        raise web.HTTPConflict(
+            text="The next episode exists, but no playable source is currently available."
+        )
+
+    manager = get_movie_night_manager()
+    latest = manager.get(room.room_id)
+    latest_candidate = (
+        latest.candidates.get(latest.current_candidate_id)
+        if latest is not None and latest.current_candidate_id
+        else None
+    )
+    latest_media = _candidate_web_metadata(latest_candidate)
+    if (
+        latest is None
+        or latest.ended
+        or int(latest.host_id) != int(uid)
+        or _episode_identity(latest_media) != baseline_identity
+    ):
+        raise web.HTTPConflict(
+            text="Cinema changed while the next episode was being prepared. Try again from the current episode."
+        )
+
+    manager.join_room(latest.room_id, user_id=int(uid))
+    materialize_search_results(
+        latest,
+        outcome,
+        proposer_id=int(uid),
+        query=query,
+        catalog_metadata=metadata,
+    )
+    candidate = manager.find_candidate_by_title(
+        latest.room_id,
+        str(metadata.get("title") or ""),
+    )
+    if candidate is None:
+        raise web.HTTPConflict(text="The next episode could not be attached to this Cinema room.")
+    ranked = manager.ranked_variants(latest.room_id, candidate.candidate_id)
+    if not ranked:
+        raise web.HTTPConflict(text="No playable next-episode release is available.")
+
+    try:
+        playback = await start_room_variant(
+            latest.room_id,
+            actor_id=int(uid),
+            candidate_id=candidate.candidate_id,
+            variant_id=ranked[0].variant_id,
+        )
+    except Exception as exc:
+        raise web.HTTPBadGateway(
+            text="The next episode source could not be started. Try another source from Cinema."
+        ) from exc
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    autoplay = bool(body.get("autoplay")) if isinstance(body, dict) else False
+    if autoplay:
+        manager.apply_host_action(
+            playback.room.room_id,
+            host_id=int(uid),
+            action="resume",
+        )
+
+    state = await _state_payload(playback.room, int(uid))
+    state["next_episode_transition"] = {
+        "started": True,
+        "autoplay": autoplay,
+        "episode": next_payload,
+    }
+    return web.json_response(state)
+
+
 async def movie_night_preferences(request: web.Request) -> web.Response:
     _room, uid = await _room_and_user(request)
     try:
@@ -2275,6 +2444,9 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
           <button class="player-button" id="forward10" type="button" aria-label="Forward 10 seconds">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 7h5V2"/><path d="M20 7a9 9 0 1 0 1 9"/><text x="7.7" y="16.5" fill="currentColor" stroke="none" font-size="8">10</text></svg>
           </button>
+          <button class="player-button" id="nextEpisode" type="button" aria-label="Next episode" title="Next episode" hidden disabled>
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 4v16l11-8Z"/><path d="M18 4h2v16h-2Z"/></svg>
+          </button>
           <span class="control-spacer"></span>
           <div class="volume-wrap">
             <button class="player-button" id="mute" type="button" aria-label="Mute or unmute">
@@ -2571,6 +2743,9 @@ let lastProgressRestoreKey="";
 let pendingProgressResume=null;
 let progressResumeApplying=false;
 let hostSeekCommitTimer=null;
+let lastNextEpisodeKey="";
+let nextEpisodeState=null;
+let nextEpisodeLoading=false;
 let progressStorageWarned=false;
 let terminated=false;
 let syncRequested=false;
@@ -3165,6 +3340,7 @@ function renderSiteState(s) {{
   document.getElementById("rewind10").disabled=hostOnly;
   document.getElementById("forward10").disabled=hostOnly;
   document.getElementById("timeline").disabled=hostOnly;
+  updateNextEpisodeControl();
   updatePlaybackPreferenceControls();
   updatePlayerChrome();
   refreshCastAvailability();
@@ -3319,6 +3495,80 @@ function scheduleHostSeekCommit() {{
   }},250);
 }}
 
+function updateNextEpisodeControl() {{
+  const button=document.getElementById("nextEpisode");
+  const isEpisode=String(lastState?.movie?.media_type||"")==="episode";
+  const show=!!(
+    lastState?.is_host &&
+    isEpisode &&
+    nextEpisodeState?.available
+  );
+  button.hidden=!show;
+  button.disabled=!show || nextEpisodeLoading;
+  if(show) {{
+    const item=nextEpisodeState.next_episode||{{}};
+    const season=Number(item.season_number||0);
+    const episode=Number(item.episode_number||0);
+    button.title="Play next • S"+String(season)+" E"+String(episode);
+    button.setAttribute("aria-label",button.title);
+  }}
+}}
+
+async function loadNextEpisodeAvailability(s=lastState) {{
+  const key=progressIdentity(s?.movie);
+  const isEpisode=String(s?.movie?.media_type||"")==="episode";
+  if(!s?.is_host || !isEpisode || !key) {{
+    nextEpisodeState=null;
+    lastNextEpisodeKey="";
+    updateNextEpisodeControl();
+    return;
+  }}
+  if(key===lastNextEpisodeKey) {{
+    updateNextEpisodeControl();
+    return;
+  }}
+  lastNextEpisodeKey=key;
+  nextEpisodeState=null;
+  nextEpisodeLoading=true;
+  updateNextEpisodeControl();
+  try {{
+    const response=await jsonFetch("/movie/"+BOOT.roomId+"/next-episode");
+    if(progressIdentity()!==key || !lastState?.is_host) return;
+    nextEpisodeState=response||null;
+  }} catch(_) {{
+    if(progressIdentity()===key) nextEpisodeState=null;
+  }} finally {{
+    if(progressIdentity()===key) {{
+      nextEpisodeLoading=false;
+      updateNextEpisodeControl();
+    }}
+  }}
+}}
+
+async function playNextEpisode(autoplay=true) {{
+  if(!lastState?.is_host || !nextEpisodeState?.available || nextEpisodeLoading) return;
+  nextEpisodeLoading=true;
+  updateNextEpisodeControl();
+  const item=nextEpisodeState.next_episode||{{}};
+  const label=String(item.title||"next episode");
+  notice.textContent="Preparing "+label+"…";
+  try {{
+    const state=await jsonFetch("/movie/"+BOOT.roomId+"/next-episode", {{
+      method:"POST",
+      body:JSON.stringify({{autoplay:!!autoplay}})
+    }});
+    nextEpisodeState=null;
+    lastNextEpisodeKey="";
+    await applyState(state);
+    notice.textContent=autoplay?"Next episode started.":"Next episode is ready.";
+  }} catch(err) {{
+    notice.textContent="Next episode could not start: "+String(err?.message||err);
+  }} finally {{
+    nextEpisodeLoading=false;
+    updateNextEpisodeControl();
+  }}
+}}
+
 function correctSyncedDrift(target) {{
   if(!Number.isFinite(target)) return;
   const signed=(video.currentTime||0)-target;
@@ -3409,8 +3659,12 @@ async function applyState(s) {{
     cancelStreamRetry();
     attachStream(s.stream_url);
     void maybeRestoreWatchProgress(s);
+    void loadNextEpisodeAvailability(s);
   }}
+  if(s.stream_url) void loadNextEpisodeAvailability(s);
   if(!s.stream_url) {{
+    nextEpisodeState=null;
+    updateNextEpisodeControl();
     if(s.media_missing) {{
       notice.textContent=s.private
         ?"The attached media session expired or was reclaimed. Your Private Session is still active; return to Discord and choose the release again."
@@ -3654,6 +3908,7 @@ document.getElementById("rewind10").onclick=()=>{{
 document.getElementById("forward10").onclick=()=>{{
   if(lastState?.is_host) safeSeek(Math.min(Number.isFinite(video.duration)?video.duration:Infinity,(video.currentTime||0)+10));
 }};
+document.getElementById("nextEpisode").onclick=()=>playNextEpisode(true);
 document.getElementById("timeline").addEventListener("input",event=>{{
   if(!lastState?.is_host || !Number.isFinite(video.duration) || video.duration<=0) return;
   safeSeek((Number(event.target.value||0)/1000)*video.duration);
@@ -4546,7 +4801,14 @@ async function persistWatchProgress(force=false) {{
 }}
 video.addEventListener("timeupdate",()=>persistWatchProgress(false));
 video.addEventListener("pause",()=>persistWatchProgress(true));
-video.addEventListener("ended",()=>persistWatchProgress(true));
+video.addEventListener("ended",async()=>{{
+  await persistWatchProgress(true);
+  if(
+    lastState?.is_host &&
+    cinemaPreferences.autoplay_next!==false &&
+    nextEpisodeState?.available
+  ) await playNextEpisode(true);
+}});
 window.addEventListener("pagehide",()=>persistWatchProgress(true));
 document.addEventListener("visibilitychange",()=>{{
   if(document.hidden) persistWatchProgress(true);
@@ -4609,6 +4871,8 @@ def register_movie_night_public_routes(app: web.Application) -> None:
     app.router.add_post("/movie/{room_id}/queue", movie_night_queue_action)
     app.router.add_get("/movie/{room_id}/progress", movie_night_progress)
     app.router.add_post("/movie/{room_id}/progress", movie_night_progress)
+    app.router.add_get("/movie/{room_id}/next-episode", movie_night_next_episode)
+    app.router.add_post("/movie/{room_id}/next-episode", movie_night_next_episode)
     app.router.add_get("/movie/{room_id}/preferences", movie_night_preferences)
     app.router.add_post("/movie/{room_id}/preferences", movie_night_preferences)
     app.router.add_get("/movie/{room_id}/sources", movie_night_sources)
@@ -4618,6 +4882,7 @@ def register_movie_night_public_routes(app: web.Application) -> None:
 __all__ = [
     "dank_cinema_brand_asset",
     "movie_night_invite_options",
+    "movie_night_next_episode",
     "movie_night_preferences",
     "movie_night_progress",
     "movie_night_promote_watch_party",
