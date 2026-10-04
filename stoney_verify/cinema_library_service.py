@@ -402,6 +402,26 @@ async def create_notification(
     return rows[0] if rows else payload
 
 
+async def notify_watch_party_invite(
+    user_id: int,
+    *,
+    guild_id: int,
+    host_name: str,
+    room_id: str,
+) -> dict[str, Any]:
+    clean_host = " ".join(str(host_name or "Cinema host").split())[:80]
+    clean_room = " ".join(str(room_id or "").split())[:120]
+    return await create_notification(
+        int(user_id),
+        guild_id=int(guild_id),
+        kind="watch_party_invite",
+        title="Watch Party invite",
+        body=f"{clean_host} invited you to a live Dank Cinema Watch Party.",
+        action={"kind": "room", "room_id": clean_room},
+        dedupe_key=f"watch-party:{clean_room}",
+    )
+
+
 async def list_notifications(
     user_id: int,
     *,
@@ -454,6 +474,7 @@ __all__ = [
     "list_notifications",
     "list_user_media",
     "mark_notification_read",
+    "notify_watch_party_invite",
     "record_progress",
     "set_watchlist",
     "update_cinema_preferences",
