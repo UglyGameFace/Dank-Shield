@@ -1216,8 +1216,8 @@ video {{
   <div class="sheet-handle"></div>
   <div class="sheet-title"><strong>♛ Host Controls</strong><button class="close-sheet" id="closeHostSheet" type="button" aria-label="Close host controls">×</button></div>
   <div class="host-actions">
-    <button class="host-action" id="openDiscordControls" type="button">↗<br>Discord Controls<small>Open the real Cinema control channel</small></button>
-    <button class="host-action" id="fullscreenHost" type="button">⛶<br>Fullscreen<small>Expand the theater player</small></button>
+    <button class="host-action" id="passHost" type="button">👤→<br>Pass Host<small>Choose an active Discord viewer</small></button>
+    <button class="host-action" id="openDiscordControls" type="button">↗<br>Discord<small>Open the Cinema control channel</small></button>
     <button class="host-action" id="pause" type="button">Ⅱ<br>Pause for Everyone<small>Pause synchronized playback</small></button>
     <button class="host-action danger" id="end" type="button">■<br><span id="endLabel">End Session</span><small>Close the room for everyone</small></button>
   </div>
@@ -1527,7 +1527,7 @@ function renderDiscordViewers(s) {{
     copy.append(name,role);
     row.appendChild(copy);
 
-    if(s.is_host && !s.private && !viewer.is_host) {{
+    if(s.is_host && !viewer.is_host) {{
       const action=document.createElement("button");
       action.type="button";
       action.className="session-viewer-action";
@@ -1705,6 +1705,11 @@ async function applyState(s) {{
   document.getElementById("play").disabled=!s.is_host;
   document.getElementById("pause").disabled=!s.is_host;
   document.getElementById("end").disabled=!s.is_host;
+  document.getElementById("passHost").disabled=!(
+    s.is_host &&
+    Array.isArray(s.viewers) &&
+    s.viewers.some(viewer=>!viewer.is_host)
+  );
   syncButton.hidden=!!s.is_host;
   syncButton.disabled=!!s.is_host;
   if(!s.is_host && s.sync_status==="joining") syncButton.textContent=syncRequested?"Syncing…":"Tap to Sync";
@@ -1996,6 +2001,21 @@ document.getElementById("closeHostSheet").onclick=()=>{{
   hostSheetDismissed=true;
   document.getElementById("hostSheet").classList.remove("show");
 }};
+async function transferHost(newHostId, displayName="viewer") {{
+  if(!lastState?.is_host || !Number(newHostId)) return;
+  const target=String(displayName||"viewer");
+  if(!confirm("Pass host control to "+target+"?")) return;
+  try {{
+    const state=await jsonFetch("/movie/"+BOOT.roomId+"/host", {{
+      method:"POST",
+      body:JSON.stringify({{new_host_id:Number(newHostId)}})
+    }});
+    await applyState(state);
+    notice.textContent="Host control passed to "+target+".";
+  }} catch(err) {{
+    notice.textContent="Pass Host failed: "+String(err?.message||err);
+  }}
+}}
 function openDiscordRoom() {{
   const url=String(lastState?.discord_url||"");
   if(!url) {{
@@ -2004,8 +2024,13 @@ function openDiscordRoom() {{
   }}
   window.location.href=url;
 }}
+document.getElementById("passHost").onclick=()=>{{
+  const panel=document.getElementById("sessionPanel");
+  panel.hidden=false;
+  panel.scrollIntoView({{behavior:"smooth",block:"nearest"}});
+  notice.textContent="Choose an active viewer below to pass host control.";
+}};
 document.getElementById("openDiscordControls").onclick=openDiscordRoom;
-document.getElementById("fullscreenHost").onclick=()=>document.getElementById("fullscreen").click();
 
 for(const item of document.querySelectorAll("[data-nav]")) {{
   item.addEventListener("click",()=>{{
