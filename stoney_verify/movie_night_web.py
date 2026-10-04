@@ -1740,6 +1740,14 @@ async def movie_night_queue_action(request: web.Request) -> web.Response:
     candidate_id = str(payload.get("candidate_id") or "").strip()
     manager = get_movie_night_manager()
 
+    def payload_int(name: str, default: int = 0) -> int:
+        try:
+            return int(payload.get(name) or default)
+        except (TypeError, ValueError) as exc:
+            raise web.HTTPBadRequest(
+                text=f"Invalid Cinema queue field: {name}."
+            ) from exc
+
     try:
         if action == "add":
             media_type = str(payload.get("media_type") or "").strip().lower()
@@ -1748,7 +1756,7 @@ async def movie_night_queue_action(request: web.Request) -> web.Response:
             outcome: Any
 
             if media_type == "movie":
-                tmdb_id = int(payload.get("tmdb_id") or 0)
+                tmdb_id = payload_int("tmdb_id")
                 if tmdb_id <= 0:
                     raise web.HTTPBadRequest(text="Invalid movie identity.")
                 details = await get_cinema_details("movie", tmdb_id)
@@ -1769,10 +1777,10 @@ async def movie_night_queue_action(request: web.Request) -> web.Response:
                     media=details.media,
                 )
             elif media_type == "episode":
-                series_id = int(payload.get("series_id") or 0)
-                season_number = int(payload.get("season_number") or 0)
-                episode_number = int(payload.get("episode_number") or 0)
-                requested_tmdb_id = int(payload.get("tmdb_id") or 0)
+                series_id = payload_int("series_id")
+                season_number = payload_int("season_number")
+                episode_number = payload_int("episode_number")
+                requested_tmdb_id = payload_int("tmdb_id")
                 if series_id <= 0 or season_number < 0 or episode_number <= 0:
                     raise web.HTTPBadRequest(text="Invalid TV episode identity.")
                 details = await get_cinema_details("tv", series_id)
