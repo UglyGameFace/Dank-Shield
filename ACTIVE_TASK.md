@@ -8,13 +8,16 @@ Baseline:
 `main@2397a03626bf49d48ee87dbd7b83480e99baa305` (PR #429 merged).
 
 Active branch:
-`fix/430-cinema-real-controls`
+`fix/430-cinema-mockup-parity`
 
 Issue:
 **#430 — Dank Cinema: match premium 420 Lobby theater website mockup**
 
-Pull request:
-**#432 — Dank Cinema: replace mockup controls with real web actions**
+Previous merged remediation:
+**#432 — Dank Cinema: replace mockup controls with real web actions** → `9c4f7e99e9fa64d688766aa72e9b7ee50564f632`
+
+Current pull request:
+**pending — production mockup-parity remediation**
 
 Outcome:
 Rebuild the signed Dank Cinema Watch page to match the owner-approved premium dark-green 420 Lobby theater mockup while preserving the canonical synchronized playback, signed access, torrent runtime, and Discord-owned movie programming paths.
@@ -34,7 +37,7 @@ Rebuild the signed Dank Cinema Watch page to match the owner-approved premium da
 
 ## Status
 
-**Production canary failed the UX Definition of Done after PR #431 merged as `5783dcfdc0a1d4d1e817e6ccf8881e0ccf8bde5e`. The page looked like a mockup rather than a real product because several visible controls only wrote instructional text instead of performing actions, placeholder poster/avatar/profile elements rendered as if they were real data, and the Cast button relied on generic Remote Playback feature detection rather than a real Google Cast sender session. Issue #430 is reopened and remediation is active on `fix/430-cinema-real-controls`.**
+**PR #432 merged green, but the real Android/Discloud canary still failed the product Definition of Done. The deployed page materially diverges from the owner-approved Dank Cinema mockup: the logo/wordmark are wrong, the player is black instead of using TMDB cinematic artwork, fullscreen expands a portrait container without requesting landscape, the Cast affordance can appear without a real available Chromecast target, and a single transient poll can surface a scary `Sync error: Failed to fetch` banner. Issue #430 remains open and remediation is active on `fix/430-cinema-mockup-parity`.**
 
 ## Findings / root cause
 
@@ -73,6 +76,13 @@ Rebuild the signed Dank Cinema Watch page to match the owner-approved premium da
    - this is why a correctly TMDB-matched title could still show a blank poster/description on the website;
    - the serializer now reads the canonical catalog envelope first and keeps the strict TMDB image-host allowlist.
 
+8. **The approved mockup still was not the production visual contract.**
+   - production used a clean sans/marker-style brand and simplified reel-eye mark instead of the graffiti wordmark/crowned cinema-reel language approved in the mockup;
+   - TMDB search retained poster art but discarded `backdrop_path`, leaving the paused player visually black even when the movie was correctly identified;
+   - fullscreen targeted the outer theater card and never requested landscape orientation;
+   - the Cast icon could be exposed from generic browser capability instead of proven Google Cast device availability;
+   - one failed state fetch immediately rendered `Sync error: Failed to fetch`, even though the 2-second poll would retry automatically.
+
 ## Execution path
 
 `signed Watch URL -> _room_and_user -> _state_payload -> custom Dank Cinema theater UI -> heartbeat/state/action -> canonical MovieNightManager + TorrentMediaManager`.
@@ -104,6 +114,11 @@ Casting:
 - Chromecast support now uses Google's Web Sender SDK and Default Media Receiver; availability-gated native Remote Playback/AirPlay remain truthful fallbacks where supported.
 - Signed torrent stream responses now expose narrowly scoped gstatic CORS for Cast receiver fetches; the HMAC URL remains required.
 - Watch metadata now reads the canonical nested TMDB catalog payload, so matched movies render their real TMDB title/year/overview/poster instead of appearing metadata-empty.
+- TMDB catalog now retains real `backdrop_path` artwork and the Watch player uses that backdrop/poster as its paused-stage artwork instead of a blank black rectangle.
+- Branding is rebuilt around the approved crowned film-reel/smoke mark and graffiti-style DANK/CINEMA wordmark; no fake header search/profile controls are reintroduced.
+- Fullscreen now targets the actual video stage, fills the viewport, requests `screen.orientation.lock("landscape")` after fullscreen entry when the browser supports it, and unlocks on exit.
+- Chromecast visibility is now driven by Google Cast `CAST_STATE_CHANGED`; `NO_DEVICES_AVAILABLE` keeps the button hidden. Generic Remote Playback/AirPlay no longer masquerades as the Chromecast control.
+- Polling tolerates isolated fetch failures and only surfaces a reconnecting state after three consecutive failures.
 
 ## Validation / results so far
 
@@ -118,7 +133,9 @@ Regression tests updated/added for:
 
 PR #431 exact-head CI ultimately passed all five workflow families and the PR merged. The production/mobile canary then failed usability because visible controls were not real actions. New regression coverage now asserts the fake navigation/actions/placeholders are absent, Google Cast sender integration is present, and Cast CORS only permits Google receiver origins. Exact-head CI for this remediation branch is pending.
 
-PR #432 head `d9533eb7...` then completed 2,742 tests with **2,741 passing / 1 failing**. The sole failure was the theater contract still requiring player context-menu suppression (`event=>event.preventDefault()`), which had been accidentally dropped while replacing the fake control block. The suppression has been restored on current head `52b6397193...`; fresh exact-head CI is required.
+PR #432 subsequently reached an exact-head green state across all six workflow families and merged as `9c4f7e99e9fa64d688766aa72e9b7ee50564f632`. The post-merge Android canary then exposed the remaining visual/fullscreen/Cast defects above, so #430 correctly remains open.
+
+Current mockup-parity branch adds regression coverage for TMDB backdrop retention/rendering, the graffiti-brand contract, video-stage fullscreen + landscape orientation request, Google Cast real-device gating, absence of Remote Playback placebo fallbacks, and transient state-fetch handling. Exact-head CI for this branch has not completed yet.
 
 ## Cleanup / conflicts
 
@@ -129,9 +146,10 @@ PR #432 head `d9533eb7...` then completed 2,742 tests with **2,741 passing / 1 f
 
 ## Blockers / risks
 
-- Google Cast Web Sender and native remote-playback support are browser/device dependent. Unsupported browsers get no Cast button rather than a fake one.
+- Google Cast Web Sender support is browser/device dependent. The Chromecast control is now hidden unless Google Cast reports an actual available receiver; unsupported browsers get no Cast button rather than a fake one.
 - Chromecast receiver codec support can still reject a selected release even when local browser playback works.
-- Custom controls need real Android/Discloud validation for fullscreen, audio gesture, sync, Google Cast discovery/load, and fallback behavior.
+- Screen Orientation locking remains browser-policy dependent even after a successful fullscreen request; the app must report a blocked lock rather than pretend rotation occurred.
+- Custom controls need real Android/Discloud validation for fullscreen + landscape, audio gesture, sync, Google Cast discovery/load, TMDB backdrop display, and responsive mockup parity.
 - A determined authorized viewer can still inspect network requests for the signed media URL; hiding the browser Download control is UI hardening, not DRM.
 
 ## Backlog
@@ -145,7 +163,7 @@ PR #432 head `d9533eb7...` then completed 2,742 tests with **2,741 passing / 1 f
 
 ## Next step
 
-Run exact-head repository workflows for PR #432, repair only evidence-backed failures, inspect the final diff, then repeat the Android/Discloud canary. The canary must verify that every visible control performs a real action, unsupported Cast is hidden, supported Google Cast actually opens device discovery and loads the signed stream, missing metadata does not render fake content, and core host/viewer sync remains intact.
+Open the focused mockup-parity PR, run exact-head repository workflows, repair only evidence-backed failures, inspect the final diff, then repeat the Android/Discloud canary against the approved theater mockup. The canary must verify the graffiti brand treatment, real TMDB stage artwork, video-stage fullscreen/landscape behavior, truthful Cast visibility and real device discovery/load, no one-off false sync-error banner, and intact host/viewer playback authority.
 
 ---
 
