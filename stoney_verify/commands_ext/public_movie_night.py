@@ -63,9 +63,10 @@ from stoney_verify.cinema_media_identity import (
     filter_adult_provider_results as _filter_adult_provider_results,
     filter_outcome_for_catalog as _filter_outcome_for_catalog,
     looks_explicit_adult as _looks_explicit_adult,
+    release_matches_catalog as _release_matches_catalog,
 )
 from stoney_verify.cinema_playback_service import (
-    materialize_search_results as _materialize_search_results,
+    materialize_search_results as _shared_materialize_search_results,
     start_room_variant,
 )
 from stoney_verify.movie_night import (
@@ -118,6 +119,24 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 def _compact(value: Any, limit: int = 180) -> str:
     return " ".join(str(value or "").split())[:limit]
+
+
+def _materialize_search_results(
+    room: MovieNightRoom,
+    outcome: MediaSourceSearchOutcome,
+    *,
+    proposer_id: int,
+    query: str,
+    catalog_metadata: Optional[Mapping[str, Any]] = None,
+) -> tuple[int, int]:
+    return _shared_materialize_search_results(
+        room,
+        outcome,
+        proposer_id=proposer_id,
+        query=query,
+        catalog_metadata=catalog_metadata,
+        manager=get_movie_night_manager(),
+    )
 
 
 def _format_bytes(value: Any) -> str:
