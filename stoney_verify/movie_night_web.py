@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import html
 import json
 import os
 import time
@@ -558,7 +557,6 @@ async def movie_night_action(request: web.Request) -> web.Response:
 
 
 def _watch_html(room_id: str, uid: int, query: str) -> str:
-    safe_room = html.escape(room_id, quote=True)
     boot = json.dumps(
         {
             "roomId": room_id,
@@ -658,27 +656,6 @@ button {{ -webkit-tap-highlight-color:transparent; }}
   background:rgba(8,18,14,.68);
   font-size:.72rem;
   font-weight:800;
-}}
-.icon-button {{
-  width:44px; height:44px; display:grid; place-items:center;
-  border:1px solid rgba(255,255,255,.12);
-  border-radius:50%;
-  color:#edf4f1; background:rgba(12,24,20,.74);
-}}
-.icon-button svg {{ width:21px; height:21px; }}
-.bell-button {{ position:relative; }}
-.bell-button::after {{
-  content:""; position:absolute; top:8px; right:8px;
-  width:7px; height:7px; border-radius:50%; background:var(--lime);
-  box-shadow:0 0 9px rgba(167,255,100,.72);
-}}
-.profile-dot {{
-  width:44px; height:44px; border-radius:50%;
-  border:1px solid var(--line-strong);
-  background:
-    radial-gradient(circle at 50% 36%,#9dada7 0 12%,transparent 13%),
-    radial-gradient(circle at 50% 90%,#263c34 0 36%,transparent 37%),
-    linear-gradient(145deg,#183529,#07120e);
 }}
 .nav {{
   display:flex; align-items:center; gap:5px;
@@ -825,7 +802,6 @@ video {{
 .queue-art img {{ width:100%;height:100%;object-fit:cover; }}
 .queue-title {{ font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }}
 .queue-sub {{ color:#97a39e;font-size:.72rem;margin-top:3px; }}
-.queue-grip {{ color:#82908a;font-size:1.1rem;letter-spacing:-2px; }}
 .diagnostics summary {{ cursor:pointer;color:#cbd5d0;font-weight:850; }}
 .grid {{ display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px; }}
 .stat {{ min-height:62px;padding:10px;border-radius:11px;background:#0d1916; }}
