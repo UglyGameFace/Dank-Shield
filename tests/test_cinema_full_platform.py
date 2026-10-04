@@ -822,3 +822,49 @@ def test_cinema_search_and_queue_honor_shared_adult_policy() -> None:
     assert "looks_explicit_adult(query)" in watch_source
     assert "include_adult=adult_enabled" in watch_source
     assert "Adult-content Cinema search is disabled for this server." in watch_source
+
+
+
+def test_theater_queue_add_rejects_malformed_identity_as_bad_request(monkeypatch) -> None:
+    from aiohttp import web
+
+    room = SimpleNamespace(room_id="room-1", guild_id=100, host_id=42)
+
+    async def room_and_user(_request):
+        return room, 42
+
+    class Request:
+        async def json(self):
+            return {
+                "action": "add",
+                "media_type": "movie",
+                "tmdb_id": "not-a-number",
+            }
+
+    monkeypatch.setattr(movie_night_web, "_room_and_user", room_and_user)
+    monkeypatch.setattr(
+        movie_night_web,
+        "get_movie_night_manager",
+        lambda: SimpleNamespace(),
+    )
+
+    try:
+        asyncio.run(movie_night_web.movie_night_queue_action(Request()))
+    except Exception as exc:
+        assert isinstance(exc, web.HTTPBadRequest)
+        assert "tmdb_id" in exc.text
+    else:
+        raise AssertionError("Malformed Queue Add identity must be rejected as HTTP 400.")
+
+
+def test_watch_player_is_the_only_durable_playback_progress_writer() -> None:
+    from pathlib import Path
+
+    site_source = Path(cinema_site.__file__).read_text(encoding="utf-8")
+    watch_source = Path(movie_night_web.__file__).read_text(encoding="utf-8")
+    script = (Path(cinema_site.__file__).resolve().parent / "assets" / "cinema_site.js").read_text(encoding="utf-8")
+
+    assert 'if action == "progress":' not in site_source
+    assert 'action: "progress"' not in script
+    assert 'app.router.add_post("/movie/{room_id}/progress", movie_night_progress)' in watch_source
+    assert "record_progress(" in watch_source
