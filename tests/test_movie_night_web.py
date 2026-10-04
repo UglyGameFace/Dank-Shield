@@ -437,18 +437,24 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
     assert 'class="brand-mark"' in html
     assert "The 420 Lobby" in html
     assert 'id="cast"' in html
-    assert "video.remote.prompt" in html
-    assert "webkitShowPlaybackTargetPicker" in html
+    assert "cast_sender.js?loadCastFramework=1" in html
+    assert "DEFAULT_MEDIA_RECEIVER_APP_ID" in html
+    assert "requestSession()" in html
+    assert "session.loadMedia(request)" in html
     assert 'controlslist="nodownload"' in html
     assert '<video id="video" controls' not in html
     assert '<video id="video" playsinline preload="metadata" controls>' not in html
     assert 'event=>event.preventDefault()' in html
     assert "Stream Health:" in html
     assert "<summary>Advanced Stream Details</summary>" in html
-    assert "Pass Host" in html
-    assert "Manage Queue" in html
+    assert "Discord Controls" in html
+    assert "Fullscreen" in html
     assert "Pause for Everyone" in html
     assert "End Private Session" in html
+    assert "Pass Host" not in html
+    assert "Manage Queue" not in html
+    assert "Cinema notifications are managed" not in html
+    assert "Movie discovery and your saved Cinema controls" not in html
 
 
 def test_candidate_web_metadata_allows_only_tmdb_artwork() -> None:
@@ -494,4 +500,39 @@ def test_movie_night_watch_csp_allows_only_tmdb_remote_images(monkeypatch) -> No
     response = asyncio.run(movie_night_web.movie_night_watch(request))
     csp = response.headers["Content-Security-Policy"]
     assert "img-src 'self' https://image.tmdb.org" in csp
+    assert "script-src 'unsafe-inline' https://www.gstatic.com" in csp
+    assert "connect-src 'self' https://www.gstatic.com https://*.googleapis.com" in csp
     assert "img-src *" not in csp
+
+
+
+def test_dank_cinema_navigation_only_exposes_real_actions() -> None:
+    html = movie_night_web._watch_html(
+        "room-real-actions",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert 'data-nav="theater"' in html
+    assert 'data-nav="queue"' in html
+    assert 'data-nav="details"' in html
+    assert 'data-nav="discord"' in html
+    assert 'data-nav="browse"' not in html
+    assert 'data-nav="my-stuff"' not in html
+    assert "openDiscordRoom()" in html
+    assert 'id="sessionPanel"' in html
+    assert 'data-panel="chat">💬 Open Discord' in html
+
+
+def test_dank_cinema_hides_placeholder_art_and_fake_avatars() -> None:
+    html = movie_night_web._watch_html(
+        "room-real-ui",
+        456,
+        "uid=456&exp=9999999999&sig=test",
+    )
+
+    assert 'id="posterWrap" hidden' in html
+    assert "posterFallback" not in html
+    assert "fake-avatars" not in html
+    assert "renderAvatars" not in html
+    assert "A synchronized Dank Cinema session in The 420 Lobby." not in html
