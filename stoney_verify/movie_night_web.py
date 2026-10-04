@@ -2880,7 +2880,7 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
         <div class="queue-empty-mark" aria-hidden="true">▤</div>
         <div class="queue-empty-copy">
           <div class="queue-empty-title">Your Queue Is Empty</div>
-          <div class="queue-empty-sub">Add a title from Discord Cinema and it will appear here for everyone in the session.</div>
+          <div class="queue-empty-sub">Use Add Title above to search movies or an exact TV episode without leaving the Theater.</div>
         </div>
       </div>
     </div>
