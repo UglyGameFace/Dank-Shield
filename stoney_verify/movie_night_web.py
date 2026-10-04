@@ -2329,10 +2329,19 @@ document.addEventListener("fullscreenchange",()=>{{
     try {{ screen.orientation.unlock(); }} catch(_) {{}}
   }}
 }});
-document.getElementById("closeHostSheet").onclick=()=>{{
+function openHostControls() {{
+  if(!lastState?.is_host) return;
+  hostSheetDismissed=false;
+  document.getElementById("hostSheet").classList.add("show");
+  document.getElementById("hostLauncher").hidden=true;
+}}
+function closeHostControls() {{
   hostSheetDismissed=true;
   document.getElementById("hostSheet").classList.remove("show");
-}};
+  document.getElementById("hostLauncher").hidden=!lastState?.is_host;
+}}
+document.getElementById("closeHostSheet").onclick=closeHostControls;
+document.getElementById("hostLauncher").onclick=openHostControls;
 async function transferHost(newHostId, displayName="viewer") {{
   if(!lastState?.is_host || !Number(newHostId)) return;
   const target=String(displayName||"viewer");
@@ -2392,6 +2401,8 @@ for(const tab of document.querySelectorAll("[data-panel]")) {{
       const details=document.querySelector(".diagnostics");
       details.open=true;
       details.scrollIntoView({{behavior:"smooth",block:"nearest"}});
+    }} else if(tab.dataset.panel==="host") {{
+      openHostControls();
     }} else if(tab.dataset.panel==="chat") openDiscordRoom();
   }});
 }}
