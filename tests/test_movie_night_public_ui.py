@@ -158,10 +158,9 @@ def test_private_host_gets_viewer_manager_and_invited_viewer_gets_watch_only(mon
         host_id=10,
         stream_token="private-stream",
         mode="private",
-        now=100.0,
     )
     manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
-    manager.join_room(room.room_id, user_id=20, now=101.0)
+    manager.join_room(room.room_id, user_id=20)
 
     monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
     monkeypatch.setattr(
@@ -1784,12 +1783,11 @@ def test_private_host_handoff_choices_include_only_authorized_active_viewers(mon
         host_id=10,
         stream_token="",
         mode="private",
-        now=100.0,
     )
     manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
     manager.invite_private_viewer(room.room_id, host_id=10, user_id=30)
-    manager.join_room(room.room_id, user_id=20, now=101.0)
-    manager.join_room(room.room_id, user_id=30, now=101.0)
+    manager.join_room(room.room_id, user_id=20)
+    manager.join_room(room.room_id, user_id=30)
     room.viewers[30].last_seen = -1_000_000.0
     monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
 
@@ -1816,7 +1814,6 @@ def test_private_more_shows_pass_host_only_with_eligible_viewer(monkeypatch) -> 
         host_id=10,
         stream_token="",
         mode="private",
-        now=100.0,
     )
     monkeypatch.setattr(movie_ui, "get_movie_night_manager", lambda: manager)
 
@@ -1825,7 +1822,7 @@ def test_private_more_shows_pass_host_only_with_eligible_viewer(monkeypatch) -> 
     )
 
     manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
-    manager.join_room(room.room_id, user_id=20, now=101.0)
+    manager.join_room(room.room_id, user_id=20)
 
     assert "Pass Host" in _labels(
         movie_ui.MovieNightMoreView(10, room, staff=False)
