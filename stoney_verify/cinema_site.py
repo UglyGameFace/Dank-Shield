@@ -37,6 +37,11 @@ from .cinema_library_service import (
     update_cinema_preferences,
 )
 from .cinema_site_auth import cinema_site_url, validate_cinema_site_access
+from .cinema_feed_service import (
+    CinemaFeedConflict,
+    feed_state as cinema_feed_state,
+    mutate_feed as mutate_cinema_feed,
+)
 from .media_source_registry import enabled_structured_sources, load_media_source_registry
 from .media_source_resolver import (
     preview_custom_media_source,
@@ -64,6 +69,34 @@ def _site_identity(request: web.Request) -> tuple[int, int]:
     if guild_id <= 0 or uid is None:
         raise web.HTTPUnauthorized(text="Invalid or expired Dank Cinema link.")
     return guild_id, int(uid)
+
+
+def _can_manage_cinema(guild_id: int, user_id: int) -> bool:
+    try:
+        from .globals import bot
+    except Exception:
+        bot = None
+    if bot is None:
+        return False
+    try:
+        guild = bot.get_guild(int(guild_id))
+    except Exception:
+        guild = None
+    if guild is None:
+        return False
+    if int(getattr(guild, "owner_id", 0) or 0) == int(user_id):
+        return True
+    try:
+        member = guild.get_member(int(user_id))
+    except Exception:
+        member = None
+    if member is None:
+        return False
+    permissions = getattr(member, "guild_permissions", None)
+    return bool(
+        getattr(permissions, "administrator", False)
+        or getattr(permissions, "manage_guild", False)
+    )
 
 
 def _safe_discord_context(guild_id: int, user_id: int) -> dict[str, Any]:
