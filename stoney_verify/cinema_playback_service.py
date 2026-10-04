@@ -141,6 +141,41 @@ def materialize_search_results(
     return len(candidate_ids), release_count
 
 
+async def select_preferred_variant(
+    user_id: int,
+    variants: Any,
+) -> Any:
+    """Choose the user's preferred real source when available, otherwise best-ranked first."""
+
+    rows = list(variants or ())
+    if not rows:
+        return None
+    try:
+        profile = await get_cinema_user(int(user_id))
+        preferences = (
+            profile.get("preferences")
+            if isinstance(profile.get("preferences"), Mapping)
+            else {}
+        )
+        preferred = str(preferences.get("preferred_source") or "").strip().casefold()
+    except (CinemaStorageUnavailable, TypeError, ValueError):
+        preferred = ""
+
+    if preferred:
+        match = next(
+            (
+                item
+                for item in rows
+                if preferred == str(getattr(item, "source_id", "") or "").casefold()
+                or preferred in str(getattr(item, "source_label", "") or "").casefold()
+            ),
+            None,
+        )
+        if match is not None:
+            return match
+    return rows[0]
+
+
 async def search_exact_movie_sources(
     guild_id: int,
     *,
@@ -331,5 +366,6 @@ __all__ = [
     "materialize_search_results",
     "search_exact_episode_sources",
     "search_exact_movie_sources",
+    "select_preferred_variant",
     "start_room_variant",
 ]
