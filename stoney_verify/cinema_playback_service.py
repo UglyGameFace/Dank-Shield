@@ -85,10 +85,11 @@ def materialize_search_results(
     proposer_id: int,
     query: str,
     catalog_metadata: Optional[Mapping[str, Any]] = None,
+    manager: Any = None,
 ) -> tuple[int, int]:
     """Attach normalized provider releases to canonical room candidates."""
 
-    manager = get_movie_night_manager()
+    manager = manager or get_movie_night_manager()
     candidate_ids: set[str] = set()
     release_count = 0
 
