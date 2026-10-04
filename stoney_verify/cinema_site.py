@@ -145,6 +145,11 @@ def _safe_discord_context(guild_id: int, user_id: int) -> dict[str, Any]:
             or user_id
         )[:80],
         "avatar_url": avatar_url,
+        "discord_url": (
+            f"https://discord.com/channels/{int(guild_id)}"
+            if int(guild_id) > 0
+            else ""
+        ),
     }
 
 
@@ -198,6 +203,15 @@ def _active_rooms_payload(guild_id: int, user_id: int) -> list[dict[str, Any]]:
                     or getattr(candidate, "title", "")
                     or "Cinema session"
                 )[:180],
+                "media_type": str(
+                    metadata.get("media_type")
+                    or ("movie" if metadata.get("catalog_provider") == "tmdb" else "")
+                )[:20],
+                "tmdb_id": int(
+                    metadata.get("tmdb_id")
+                    or metadata.get("catalog_id")
+                    or 0
+                ),
                 "poster_url": str(metadata.get("poster_url") or ""),
                 "backdrop_url": str(metadata.get("backdrop_url") or ""),
                 "watch_url": movie_night_watch_url(room.room_id, int(user_id)),
@@ -563,11 +577,23 @@ async def cinema_details_api(request: web.Request) -> web.Response:
         )
         == tmdb_id
     ]
+    active_sessions = _active_rooms_payload(_guild_id, user_id)
+    active_session = next(
+        (
+            room
+            for room in active_sessions
+            if str(room.get("media_type") or "") == media_type
+            and int(room.get("tmdb_id") or 0) == tmdb_id
+        ),
+        None,
+    )
     return web.json_response(
         {
             "details": details.to_payload(),
             "library": matching[0] if matching else None,
             "episode_progress": episode_progress,
+            "active_session": active_session,
+            "discord": _safe_discord_context(_guild_id, user_id),
         }
     )
 
