@@ -213,7 +213,7 @@ def test_movie_night_player_contains_sync_heartbeat_and_host_controls() -> None:
     assert '"Joining "+joiningLabel+"… buffering around "' in html
     assert "Playback will stay put while the buffer catches up." in html
     assert 's.sync_status==="joining"' in html
-    assert "Synced Viewer" in html
+    assert 'return "Synced"' in html
     assert "<summary>Advanced Stream Details</summary>" in html
     assert 'class="theater"' in html
     assert html.index("<video") < html.index("<summary>Advanced Stream Details</summary>")
@@ -253,7 +253,8 @@ def test_movie_night_viewer_sync_is_explicit_and_drift_safe() -> None:
     assert "safeSeek(joinTarget)" in html
     assert "SOFT_DRIFT_START=0.35" in html
     assert "HARD_DRIFT_SECONDS=5.0" in html
-    assert "video.playbackRate=signed<0?1.04:0.96" in html
+    assert "canonicalPlaybackRate()*1.04" in html
+    assert "canonicalPlaybackRate()*0.96" in html
     assert "if(drift>1.75" not in html
     assert "if(Math.abs((video.currentTime||0)-Number(lastState.position_seconds||0))>0.5)" not in html
 
@@ -571,7 +572,8 @@ def test_dank_cinema_player_matches_mobile_theater_contract() -> None:
     assert 'class="brand-art"' in html
     assert 'class="brand-lockup-art"' in html
     assert '/movie/assets/dank-cinema-brand.webp?v=art-system-v5' in html
-    assert '/movie/assets/dank-cinema-brand-mark.webp?v=' not in html
+    assert '<link rel="icon" type="image/webp" href="/movie/assets/dank-cinema-brand-mark.webp?v=art-system-v5">' in html
+    assert '<img src="/movie/assets/dank-cinema-brand-mark.webp?v=' not in html
     assert '/movie/assets/dank-cinema-brand-wordmark.webp?v=' not in html
     assert 'alt="Dank Cinema — A feature of The 420 Lobby"' in html
     assert 'class="wordmark"' not in html
@@ -623,6 +625,15 @@ def test_candidate_web_metadata_allows_only_tmdb_artwork() -> None:
         "overview": "Example overview",
         "poster_url": "https://image.tmdb.org/t/p/w342/example.jpg",
         "backdrop_url": "",
+        "media_type": "",
+        "tmdb_id": 0,
+        "series_id": 0,
+        "series_title": "",
+        "season_number": 0,
+        "episode_number": 0,
+        "episode_title": "",
+        "adult": False,
+        "runtime_minutes": 0,
     }
 
     candidate.metadata["poster_url"] = "https://example.invalid/poster.jpg"
@@ -652,6 +663,15 @@ def test_candidate_web_metadata_reads_canonical_catalog_envelope() -> None:
         "overview": "Art the Clown returns.",
         "poster_url": "https://image.tmdb.org/t/p/w342/terrifier3.jpg",
         "backdrop_url": "https://image.tmdb.org/t/p/w780/terrifier3-bg.jpg",
+        "media_type": "movie",
+        "tmdb_id": 1034541,
+        "series_id": 0,
+        "series_title": "",
+        "season_number": 0,
+        "episode_number": 0,
+        "episode_title": "",
+        "adult": False,
+        "runtime_minutes": 0,
     }
 
 
@@ -1052,7 +1072,8 @@ def test_dank_cinema_brand_is_recreated_as_transparent_header_art() -> None:
     assert 'class="brand-art"' in html
     assert 'class="brand-lockup-art"' in html
     assert '/movie/assets/dank-cinema-brand.webp?v=art-system-v5' in html
-    assert '/movie/assets/dank-cinema-brand-mark.webp?v=' not in html
+    assert '<link rel="icon" type="image/webp" href="/movie/assets/dank-cinema-brand-mark.webp?v=art-system-v5">' in html
+    assert '<img src="/movie/assets/dank-cinema-brand-mark.webp?v=' not in html
     assert '/movie/assets/dank-cinema-brand-wordmark.webp?v=' not in html
 
     source = Path(movie_night_web.__file__).read_text(encoding="utf-8")
@@ -1368,7 +1389,7 @@ def test_dank_cinema_player_capability_controls_are_not_placebos() -> None:
     assert "video.requestPictureInPicture" in html
     assert "document.exitPictureInPicture" in html
     assert "video.textTracks" in html
-    assert 'tracks[i].mode=(i===0 && !anyShowing)?"showing":"disabled"' in html
+    assert 'tracks[i].mode=(i===preferredIndex && !anyShowing)?"showing":"disabled"' in html
     assert 'document.addEventListener("keydown"' in html
     assert 'key==="arrowleft"' in html
     assert 'key==="arrowright"' in html
