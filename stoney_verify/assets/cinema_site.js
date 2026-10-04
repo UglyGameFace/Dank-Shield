@@ -46,11 +46,13 @@
 
   function autoQualityMode() {
     const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
-    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection || {};
+    /** @type {any} */
+    const nav = navigator;
+    const connection = nav.connection || nav.mozConnection || nav.webkitConnection || {};
     const saveData = connection.saveData === true;
     const effective = String(connection.effectiveType || "").toLowerCase();
-    const memory = Number(navigator.deviceMemory || 0);
-    const cores = Number(navigator.hardwareConcurrency || 0);
+    const memory = Number(nav.deviceMemory || 0);
+    const cores = Number(nav.hardwareConcurrency || 0);
     const width = Math.max(window.innerWidth || 0, document.documentElement.clientWidth || 0);
 
     if (
@@ -1315,8 +1317,10 @@
   window.addEventListener("resize", () => {
     if (document.documentElement.dataset.qualityPreference === "auto") applyVisualQuality("auto");
   }, { passive: true });
-  if (navigator.connection && typeof navigator.connection.addEventListener === "function") {
-    navigator.connection.addEventListener("change", () => {
+  /** @type {any} */
+  const runtimeNavigator = navigator;
+  if (runtimeNavigator.connection && typeof runtimeNavigator.connection.addEventListener === "function") {
+    runtimeNavigator.connection.addEventListener("change", () => {
       if (document.documentElement.dataset.qualityPreference === "auto") applyVisualQuality("auto");
     });
   }
