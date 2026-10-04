@@ -181,7 +181,7 @@ def test_movie_night_player_restores_progress_only_through_host_authority() -> N
     assert "if(!s?.is_host || !s?.stream_url) return;" in html
     assert 'const saved=await jsonFetch("/movie/"+BOOT.roomId+"/progress")' in html
     assert 'await hostAction("seek",{seconds:target})' in html
-    assert "video.addEventListener("seeked",scheduleHostSeekCommit)" in html
+    assert 'video.addEventListener("seeked",scheduleHostSeekCommit)' in html
     assert "hostSeekCommitTimer=setTimeout" in html
     assert "persistWatchProgress(true)" in html
     assert "if(key!==lastProgressMediaKey) lastProgressPersistAt=0;" in html
