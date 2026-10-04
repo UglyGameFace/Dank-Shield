@@ -820,6 +820,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "release_source": source,
         "state": room.playback_state,
         "position_seconds": round(room.current_position(), 3),
+        "playback_rate": round(float(getattr(room, "playback_rate", 1.0) or 1.0), 2),
         "is_host": int(user_id) == int(room.host_id),
         "host_active": movie_manager.host_active(room),
         "viewer_count": len(active_viewer_ids),
