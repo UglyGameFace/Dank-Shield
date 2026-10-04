@@ -333,18 +333,22 @@ def test_cinema_site_identity_requires_current_member_of_same_guild(monkeypatch)
         cookies={cinema_site_auth.CINEMA_SESSION_COOKIE: value},
     )
 
-    monkeypatch.setattr(
-        cinema_site,
-        "_site_member",
-        lambda guild_id, user_id: object()
-        if (int(guild_id), int(user_id)) == (100, 42)
-        else None,
-    )
-    assert cinema_site._site_identity(request) == (100, 42)
+    async def current_member(guild_id: int, user_id: int):
+        return (
+            object()
+            if (int(guild_id), int(user_id)) == (100, 42)
+            else None
+        )
 
-    monkeypatch.setattr(cinema_site, "_site_member", lambda _guild_id, _user_id: None)
+    monkeypatch.setattr(cinema_site, "_fetch_site_member", current_member)
+    assert asyncio.run(cinema_site._site_identity(request)) == (100, 42)
+
+    async def departed_member(_guild_id: int, _user_id: int):
+        return None
+
+    monkeypatch.setattr(cinema_site, "_fetch_site_member", departed_member)
     try:
-        cinema_site._site_identity(request)
+        asyncio.run(cinema_site._site_identity(request))
     except Exception as exc:
         from aiohttp import web
 
@@ -367,6 +371,8 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'app.router.add_get("/cinema/auth/callback", cinema_oauth_callback)' in source
     assert 'scope": "identify guilds"' in source
     assert "await _fetch_site_member(target_guild, user_id)" in source
+    assert "if await _fetch_site_member(guild_id, int(uid)) is None:" in source
+    assert "_SITE_MEMBER_CACHE_SECONDS = 30.0" in source
     assert "cinema_session_value(guild_id, user_id)" in source
     assert 'path=f"/cinema/{int(guild_id)}"' in source
     assert 'initialUrl.searchParams.delete("sig")' in script
