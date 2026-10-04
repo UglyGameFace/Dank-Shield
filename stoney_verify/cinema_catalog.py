@@ -271,6 +271,77 @@ def _media_rows(
     return tuple(output)
 
 
+def _normalized_search_text(value: Any) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold())
+    return " ".join(cleaned.split())
+
+
+def _search_title_and_year(query: str) -> tuple[str, int]:
+    clean = _clean_text(query, 180)
+    year_match = re.search(r"(?:^|\s|\()((?:19|20)\d{2})(?:\)|\s|$)", clean)
+    year = _safe_int(year_match.group(1)) if year_match else 0
+    title = clean
+    if year_match:
+        title = (clean[: year_match.start(1)] + clean[year_match.end(1) :]).strip()
+        title = re.sub(r"[()]+", " ", title)
+    return _normalized_search_text(title or clean), year
+
+
+def _search_rank(
+    media: CinemaMedia,
+    *,
+    query_title: str,
+    query_year: int,
+    original_index: int,
+) -> tuple[Any, ...]:
+    title = _normalized_search_text(media.title)
+    original = _normalized_search_text(media.original_title)
+    query_tokens = set(query_title.split())
+    title_tokens = set(title.split())
+    original_tokens = set(original.split())
+
+    exact = bool(query_title and (title == query_title or original == query_title))
+    starts = bool(
+        query_title
+        and (
+            title.startswith(query_title + " ")
+            or original.startswith(query_title + " ")
+        )
+    )
+    contains_all = bool(
+        query_tokens
+        and (
+            query_tokens.issubset(title_tokens)
+            or query_tokens.issubset(original_tokens)
+        )
+    )
+
+    if exact:
+        title_tier = 0
+    elif starts:
+        title_tier = 1
+    elif contains_all:
+        title_tier = 2
+    else:
+        overlap = max(
+            len(query_tokens & title_tokens),
+            len(query_tokens & original_tokens),
+        )
+        title_tier = 3 if overlap else 4
+
+    year_penalty = 0
+    if query_year:
+        year_penalty = 0 if int(media.year or 0) == int(query_year) else 1
+
+    return (
+        title_tier,
+        year_penalty,
+        -float(media.popularity or 0.0),
+        -float(media.rating or 0.0),
+        int(original_index),
+    )
+
+
 async def search_catalog(
     query: str,
     *,
@@ -290,11 +361,23 @@ async def search_catalog(
         },
         cache_ttl=90.0,
     )
-    return _media_rows(
+    rows = _media_rows(
         payload.get("results") if isinstance(payload, Mapping) else [],
-        limit=limit,
+        limit=40,
         include_adult=include_adult,
     )
+    query_title, query_year = _search_title_and_year(clean)
+    ranked = sorted(
+        enumerate(rows),
+        key=lambda pair: _search_rank(
+            pair[1],
+            query_title=query_title,
+            query_year=query_year,
+            original_index=pair[0],
+        ),
+    )
+    cap = max(1, min(int(limit), 40))
+    return tuple(media for _index, media in ranked[:cap])
 
 
 async def catalog_home() -> dict[str, tuple[CinemaMedia, ...]]:
