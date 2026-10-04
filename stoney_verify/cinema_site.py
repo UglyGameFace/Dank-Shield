@@ -61,6 +61,7 @@ from .cinema_playback_service import (
     materialize_search_results,
     search_exact_episode_sources,
     search_exact_movie_sources,
+    select_preferred_variant,
     start_room_variant,
 )
 from .movie_night import get_movie_night_manager
@@ -1049,29 +1050,9 @@ async def cinema_play_api(request: web.Request) -> web.Response:
     if not ranked:
         raise web.HTTPConflict(text="No playable release remains for this title.")
 
-    try:
-        profile = await get_cinema_user(user_id)
-    except CinemaStorageUnavailable:
-        profile = {"preferences": {}}
-    preferences = (
-        profile.get("preferences")
-        if isinstance(profile.get("preferences"), Mapping)
-        else {}
-    )
-    preferred = str(preferences.get("preferred_source") or "").strip().casefold()
-    selected = ranked[0]
-    if preferred:
-        preferred_variant = next(
-            (
-                item
-                for item in ranked
-                if preferred == str(item.source_id or "").casefold()
-                or preferred in str(item.source_label or "").casefold()
-            ),
-            None,
-        )
-        if preferred_variant is not None:
-            selected = preferred_variant
+    selected = await select_preferred_variant(user_id, ranked)
+    if selected is None:
+        raise web.HTTPConflict(text="No playable release remains for this title.")
 
     try:
         playback = await start_room_variant(
