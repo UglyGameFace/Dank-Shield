@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from io import BytesIO
 import hmac
 import json
 import os
@@ -14,6 +15,7 @@ from typing import Any, Optional
 from urllib.parse import urlencode
 
 from aiohttp import web
+from PIL import Image, ImageDraw, ImageFilter
 
 from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
 from stoney_verify.movie_night_session import (
@@ -41,9 +43,74 @@ _BRAND_ASSET_PATH = (
 
 
 @lru_cache(maxsize=1)
-def _dank_cinema_brand_bytes() -> bytes:
+def _dank_cinema_brand_source_bytes() -> bytes:
     encoded = _BRAND_ASSET_PATH.read_text(encoding="ascii").strip()
     return base64.b64decode(encoded, validate=True)
+
+
+@lru_cache(maxsize=1)
+def _dank_cinema_brand_bytes() -> bytes:
+    """Render the approved Cinema wordmark as a transparent site asset.
+
+    The historical repository asset contains the correct crowned reel/smoke
+    artwork and graffiti wordmark but was exported on a black rectangle. That
+    rectangle is what made the production header look pasted on. Remove only
+    the dark background connected to the image edges, preserving enclosed dark
+    reel details, then upscale once for a clean desktop/mobile header.
+    """
+
+    try:
+        source = Image.open(BytesIO(_dank_cinema_brand_source_bytes())).convert("RGBA")
+    except Exception as exc:
+        raise ValueError("Dank Cinema source brand asset is unreadable.") from exc
+
+    work = source.copy()
+    marker = (255, 0, 255, 255)
+    # The background is connected to the outer edge. Flooding from all corners
+    # removes it without erasing the black/charcoal details enclosed by the
+    # crown/reel/graffiti artwork.
+    for point in (
+        (0, 0),
+        (max(0, work.width - 1), 0),
+        (0, max(0, work.height - 1)),
+        (max(0, work.width - 1), max(0, work.height - 1)),
+    ):
+        ImageDraw.floodfill(work, point, marker, thresh=34)
+
+    alpha = Image.new("L", work.size, 255)
+    alpha_pixels = alpha.load()
+    pixels = work.load()
+    for y in range(work.height):
+        for x in range(work.width):
+            r, g, b, _a = pixels[x, y]
+            if (r, g, b) == marker[:3]:
+                alpha_pixels[x, y] = 0
+
+    # Feather only the cut edge so anti-aliased black export pixels do not form
+    # a rectangular halo on the dark-green site background.
+    alpha = alpha.filter(ImageFilter.GaussianBlur(radius=0.45))
+    source.putalpha(alpha)
+
+    target_width = 1000
+    if source.width != target_width:
+        target_height = max(1, round(source.height * target_width / source.width))
+        source = source.resize(
+            (target_width, target_height),
+            Image.Resampling.LANCZOS,
+        )
+        source = source.filter(
+            ImageFilter.UnsharpMask(radius=0.7, percent=115, threshold=3)
+        )
+
+    output = BytesIO()
+    source.save(
+        output,
+        format="WEBP",
+        quality=92,
+        method=6,
+        lossless=False,
+    )
+    return output.getvalue()
 
 
 async def dank_cinema_brand_asset(_request: web.Request) -> web.Response:
@@ -1156,8 +1223,8 @@ button {{ -webkit-tap-highlight-color:transparent; }}
   padding:12px 18px 6px;
   overflow:hidden;
   background:
-    radial-gradient(circle at 17% 32%,rgba(69,143,54,.16),transparent 28%),
-    linear-gradient(180deg,#020706 0%,#06110e 72%,transparent 100%);
+    radial-gradient(circle at 16% 38%,rgba(82,164,62,.13),transparent 32%),
+    linear-gradient(180deg,rgba(2,7,6,.72) 0%,rgba(6,17,14,.30) 72%,transparent 100%);
 }}
 .brand-row {{ display:flex; align-items:center; width:100%; min-width:0; }}
 .brand {{ width:100%; min-width:0; overflow:hidden; isolation:isolate; }}
@@ -1167,8 +1234,7 @@ button {{ -webkit-tap-highlight-color:transparent; }}
   height:auto;
   object-fit:contain;
   object-position:left center;
-  mix-blend-mode:screen;
-  filter:contrast(1.05) saturate(1.04) drop-shadow(0 0 18px rgba(126,255,65,.10));
+  filter:drop-shadow(0 8px 22px rgba(0,0,0,.38)) drop-shadow(0 0 18px rgba(126,255,65,.10));
   transform:translateZ(0);
 }}
 .nav {{
