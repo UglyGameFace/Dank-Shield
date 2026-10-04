@@ -1320,10 +1320,10 @@ async function applyState(s) {{
   document.getElementById("play").disabled=!s.is_host;
   document.getElementById("pause").disabled=!s.is_host;
   document.getElementById("end").disabled=!s.is_host;
+  syncButton.hidden=!!s.is_host;
   syncButton.disabled=!!s.is_host;
-  if(s.is_host) syncButton.textContent="Host";
-  else if(s.sync_status==="joining") syncButton.textContent=syncRequested?"Syncing…":"Tap to Sync";
-  else syncButton.textContent="Synced";
+  if(!s.is_host && s.sync_status==="joining") syncButton.textContent=syncRequested?"Syncing…":"Tap to Sync";
+  else if(!s.is_host) syncButton.textContent="Synced";
 
   if(s.ended) {{
     terminated=true;
