@@ -1140,3 +1140,24 @@ Validation required:
 - after merge/deploy, Discord global command sync must visibly expose `/cinema` and all children while `/movie` still works.
 
 Do not claim this canary defect resolved until the exact-head CI, merge/deploy, and live Discord autocomplete check pass.
+
+
+## PR #443 first exact-head CI failure and correction
+
+Exact head `7d22c069632e74927b73beaa8a5a40a843a55707` reached the complete unit suite and finished with **2842 passed / 2 failed**.
+
+Both failures were stale final-command-tree expectations:
+- `tests/test_command_ux_024_reassertion.py` still required the pre-Cinema root set;
+- `tests/test_welcome_card_live_command_tree.py` still required the pre-Cinema root set.
+
+The actual final command tree was correct in both failures and contained:
+`captions, cinema, dank, mod, movie, role, ticket, tickets, toke, verify`
+plus the `View Dank Profile` context command.
+
+Correction:
+- update both stale root-set expectations to include `cinema`;
+- strengthen the live command-tree regression to require `/cinema` to be an `app_commands.Group`;
+- require exactly the intended children: `home/start/private/join/leave/queue/info/vote`;
+- preserve the existing assertion that all legacy fast doorways remain standalone commands.
+
+No runtime Cinema implementation changed in this correction. Validate the new exact head before marking PR #443 ready.
