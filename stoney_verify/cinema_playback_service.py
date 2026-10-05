@@ -220,6 +220,7 @@ async def search_exact_episode_sources(
         series.title,
         episode.season_number,
         episode.episode_number,
+        series.year,
     )
     outcome = await search_movie_sources(int(guild_id), query)
     try:
