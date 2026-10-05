@@ -3,8 +3,10 @@ from __future__ import annotations
 """Signed HTTP byte-range routes for progressive torrent playback."""
 
 import asyncio
+import os
+import shutil
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
@@ -16,6 +18,85 @@ from stoney_verify.torrent_streaming import (
 )
 
 _STREAM_CHUNK_BYTES = 1024 * 1024
+
+
+_AUDIO_CHUNK_BYTES = 64 * 1024
+_AUDIO_TRANSCODE_LOOP: asyncio.AbstractEventLoop | None = None
+_AUDIO_TRANSCODE_SEMAPHORE: asyncio.Semaphore | None = None
+
+
+def _audio_transcode_limit() -> int:
+    try:
+        value = int(str(os.getenv("DANK_CINEMA_AUDIO_TRANSCODE_LIMIT", "20") or "20"))
+    except Exception:
+        value = 20
+    return max(1, min(value, 20))
+
+
+def _audio_transcode_semaphore() -> asyncio.Semaphore:
+    global _AUDIO_TRANSCODE_LOOP
+    global _AUDIO_TRANSCODE_SEMAPHORE
+    loop = asyncio.get_running_loop()
+    if _AUDIO_TRANSCODE_LOOP is not loop:
+        _AUDIO_TRANSCODE_LOOP = loop
+        _AUDIO_TRANSCODE_SEMAPHORE = asyncio.Semaphore(_audio_transcode_limit())
+    assert _AUDIO_TRANSCODE_SEMAPHORE is not None
+    return _AUDIO_TRANSCODE_SEMAPHORE
+
+
+def _audio_start_seconds(value: str) -> float:
+    try:
+        parsed = float(str(value or "0").strip())
+    except Exception:
+        return 0.0
+    if not (parsed >= 0):
+        return 0.0
+    return min(parsed, 12 * 60 * 60.0)
+
+
+def _ffmpeg_audio_command(
+    ffmpeg: str,
+    input_url: str,
+    *,
+    start_seconds: float = 0.0,
+) -> list[str]:
+    command = [
+        ffmpeg,
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+    ]
+    if start_seconds > 0.05:
+        command.extend(["-ss", f"{start_seconds:.3f}"])
+    command.extend(
+        [
+            "-re",
+            "-i",
+            input_url,
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-sn",
+            "-dn",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "160k",
+            "-ac",
+            "2",
+            "-ar",
+            "48000",
+            "-af",
+            "aresample=async=1:first_pts=0",
+            "-movflags",
+            "frag_keyframe+empty_moov+default_base_moof",
+            "-f",
+            "mp4",
+            "pipe:1",
+        ]
+    )
+    return command
 
 
 def _cast_cors_headers(request: web.Request) -> dict[str, str]:
@@ -252,6 +333,112 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
     return response
 
 
+async def torrent_audio_compat(request: web.Request) -> web.StreamResponse:
+    """Transcode only the selected torrent's audio to browser-safe AAC.
+
+    Video remains on the canonical byte-range stream. The Watch player uses this
+    route as a synchronized audio sidecar only when metadata says the embedded
+    audio codec is risky for browser playback.
+    """
+
+    manager = get_torrent_manager()
+    token = str(request.match_info.get("token", "") or "")
+    expires = str(request.query.get("exp", "") or "")
+    signature = str(request.query.get("sig", "") or "")
+    consumer_key = str(request.query.get("cid", "") or "").strip()[:96]
+    if not await manager.validate_stream_access(
+        token,
+        expires,
+        signature,
+        consumer_key,
+    ):
+        raise web.HTTPUnauthorized(text="Invalid or expired Cinema audio token.")
+
+    session = await manager.get(token)
+    if session is None:
+        raise web.HTTPNotFound(text="Cinema media session not found.")
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise web.HTTPServiceUnavailable(
+            text="FFmpeg audio compatibility is unavailable on this host."
+        )
+
+    start_seconds = _audio_start_seconds(str(request.query.get("start", "") or ""))
+    try:
+        port = int(str(os.getenv("DANK_MEDIA_PORT", "8080") or "8080"))
+    except Exception:
+        port = 8080
+    port = port if 0 < port <= 65535 else 8080
+
+    filename = quote(session.file_name, safe="")
+    consumer_query = f"&cid={quote(consumer_key, safe='')}" if consumer_key else ""
+    input_url = (
+        f"http://127.0.0.1:{port}/media/torrent/stream/{session.token}/{filename}"
+        f"?exp={quote(expires, safe='')}&sig={quote(signature, safe='')}{consumer_query}"
+    )
+    command = _ffmpeg_audio_command(
+        ffmpeg,
+        input_url,
+        start_seconds=start_seconds,
+    )
+
+    semaphore = _audio_transcode_semaphore()
+    await semaphore.acquire()
+    process: asyncio.subprocess.Process | None = None
+    response = web.StreamResponse(
+        status=200,
+        headers={
+            "Content-Type": "audio/mp4",
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-Dank-Cinema-Audio": "ffmpeg-aac",
+        },
+    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await response.prepare(request)
+        stdout = process.stdout
+        if stdout is None:
+            raise web.HTTPServiceUnavailable(text="FFmpeg audio output was unavailable.")
+
+        while True:
+            chunk = await stdout.read(_AUDIO_CHUNK_BYTES)
+            if not chunk:
+                break
+            await response.write(chunk)
+        try:
+            await response.write_eof()
+        except ConnectionError:
+            pass
+        return response
+    except (ConnectionError, asyncio.CancelledError):
+        if process is not None and process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+        if isinstance(asyncio.current_task(), asyncio.Task) and asyncio.current_task().cancelled():
+            raise
+        return response
+    finally:
+        if process is not None and process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+        if process is not None:
+            try:
+                await asyncio.wait_for(process.wait(), timeout=3.0)
+            except Exception:
+                pass
+        semaphore.release()
+
+
 async def torrent_stream_options(request: web.Request) -> web.Response:
     """CORS preflight for a signed Cast media URL."""
 
@@ -303,6 +490,11 @@ def register_torrent_public_routes(app: web.Application) -> None:
         "/media/torrent/stream/{token}/{filename}",
         torrent_stream_options,
     )
+    app.router.add_get(
+        "/media/torrent/audio/{token}/{filename}",
+        torrent_audio_compat,
+        allow_head=False,
+    )
 
 
 def register_torrent_admin_routes(app: web.Application, server: Any) -> None:
@@ -314,6 +506,8 @@ def register_torrent_admin_routes(app: web.Application, server: Any) -> None:
 __all__ = [
     "register_torrent_admin_routes",
     "register_torrent_public_routes",
+    "_ffmpeg_audio_command",
+    "torrent_audio_compat",
     "torrent_cancel",
     "torrent_status",
     "torrent_stream",
