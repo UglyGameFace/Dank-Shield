@@ -522,6 +522,7 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert "_issue_oauth_state(target_guild)" in source
     assert "_consume_oauth_state(returned_state)" in source
     assert "if target_guild not in shared_ids:" in source
+    assert "await _fetch_site_member(target_guild, user_id)" not in source
     assert "def _recent_oauth_guild_proof(" in source
     assert "validate_cinema_guilds(" in source
     assert "not _recent_oauth_guild_proof(request, int(uid), guild_id)" in source
