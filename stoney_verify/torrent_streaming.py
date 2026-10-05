@@ -21,7 +21,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 from urllib.parse import parse_qs, quote, urlsplit
 
 from stoney_verify.media_metadata import (
@@ -1695,6 +1695,120 @@ class TorrentMediaManager:
         suffix = f":{consumer}" if consumer else ""
         payload = f"{session.token}:{int(expires)}:{session.secret}{suffix}".encode("utf-8")
         return hmac.new(key, payload, hashlib.sha256).hexdigest()
+
+    @staticmethod
+    def browser_audio_compatibility(session: TorrentStreamSession) -> dict[str, Any]:
+        """Describe whether browser playback should use the FFmpeg AAC sidecar.
+
+        Verified codec metadata wins. Release-name tags are only a conservative
+        fallback while the bounded media probe is still warming up.
+        """
+
+        verified = (
+            session.verified_metadata
+            if isinstance(session.verified_metadata, Mapping)
+            else {}
+        )
+        tracks = verified.get("audio_tracks")
+        codecs = {
+            str(row.get("codec") or "").strip().casefold()
+            for row in tracks
+            if isinstance(row, Mapping)
+        } if isinstance(tracks, list) else set()
+        codecs.discard("")
+
+        browser_safe = {
+            "aac",
+            "mp3",
+            "opus",
+            "vorbis",
+        }
+        risky = {
+            "ac3",
+            "eac3",
+            "dca",
+            "dts",
+            "truehd",
+            "mlp",
+            "pcm_s16le",
+            "pcm_s24le",
+            "pcm_s32le",
+        }
+        if codecs:
+            unsupported = sorted(codec for codec in codecs if codec not in browser_safe)
+            return {
+                "required": bool(unsupported),
+                "reason": (
+                    "verified:" + ",".join(unsupported)
+                    if unsupported
+                    else "verified_browser_safe"
+                ),
+                "codecs": sorted(codecs),
+                "source": "verified",
+            }
+
+        release = (
+            session.release_metadata
+            if isinstance(session.release_metadata, Mapping)
+            else {}
+        )
+        tags = {
+            str(value or "").strip().casefold()
+            for value in list(release.get("audio_tags") or [])
+            if str(value or "").strip()
+        }
+        if any("aac" in tag or "opus" in tag for tag in tags):
+            return {
+                "required": False,
+                "reason": "release_browser_safe",
+                "codecs": sorted(tags),
+                "source": "release",
+            }
+        risky_markers = (
+            "ddp",
+            "eac3",
+            "dd ",
+            "ac3",
+            "dts",
+            "truehd",
+            "atmos",
+        )
+        if any(any(marker in tag for marker in risky_markers) for tag in tags):
+            return {
+                "required": True,
+                "reason": "release_audio_codec",
+                "codecs": sorted(tags),
+                "source": "release",
+            }
+
+        suffix = Path(session.file_name).suffix.casefold()
+        # Matroska commonly carries AC-3/E-AC-3/DTS. Do not force a sidecar
+        # purely from the container, but ask the player to keep probing.
+        return {
+            "required": False,
+            "reason": "unknown_mkv" if suffix == ".mkv" else "unknown",
+            "codecs": [],
+            "source": "",
+        }
+
+    def compat_audio_url(
+        self,
+        session: TorrentStreamSession,
+        *,
+        ttl_seconds: int = 3600,
+        consumer_key: str = "",
+    ) -> str:
+        if not self.public_base_url or not self.stream_secret:
+            return ""
+        expires = int(time.time()) + max(60, min(int(ttl_seconds), 21600))
+        consumer = str(consumer_key or "").strip()[:96]
+        signature = self._signature(session, expires, consumer)
+        filename = quote(Path(session.file_name).stem + ".m4a", safe="")
+        consumer_query = f"&cid={quote(consumer, safe='')}" if consumer else ""
+        return (
+            f"{self.public_base_url}/media/torrent/audio/{session.token}/{filename}"
+            f"?exp={expires}&sig={signature}{consumer_query}"
+        )
 
     def stream_url(
         self,
