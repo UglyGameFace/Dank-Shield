@@ -811,6 +811,14 @@ async def _site_identity(request: web.Request) -> tuple[int, int]:
             raise web.HTTPForbidden(
                 text="That Dank Cinema server is no longer available."
             )
+        if _cinema_member_revoked(guild_id, int(signed_uid)):
+            print(
+                "⚠️ cinema_site auth denied reason=member_remove_event_signed "
+                f"guild={guild_id} user={int(signed_uid)}"
+            )
+            raise web.HTTPForbidden(
+                text="Dank Cinema requires membership in this Discord server."
+            )
         note_cinema_member_join(guild_id, int(signed_uid))
         return guild_id, int(signed_uid)
 
@@ -2167,7 +2175,7 @@ def _site_html(guild_id: int, user_id: int) -> str:
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=3" defer></script>
+  <script src="/cinema/assets/site.js?v=4" defer></script>
 </body>
 </html>"""
 

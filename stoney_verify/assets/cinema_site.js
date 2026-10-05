@@ -8,7 +8,13 @@
   /** @type {CinemaBoot} */
   const BOOT = window.__DANK_CINEMA_BOOT__ || { guildId: 0, userId: 0 };
   const initialUrl = new URL(window.location.href);
-  const hadSignedEntry = ["uid", "exp", "sig"].some((key) => initialUrl.searchParams.has(key));
+  const signedAuth = new URLSearchParams();
+  for (const key of ["uid", "exp", "sig"]) {
+    const value = initialUrl.searchParams.get(key);
+    if (value) signedAuth.set(key, value);
+  }
+  const hadSignedEntry = ["uid", "exp", "sig"].every((key) => signedAuth.has(key));
+  const AUTH_QUERY = hadSignedEntry ? `?${signedAuth.toString()}` : "";
   if (hadSignedEntry) {
     initialUrl.searchParams.delete("uid");
     initialUrl.searchParams.delete("exp");
@@ -20,7 +26,6 @@
       initialUrl.pathname + (cleanSearch ? `?${cleanSearch}` : "") + initialUrl.hash,
     );
   }
-  const AUTH_QUERY = "";
   const API_BASE = `/cinema/${BOOT.guildId}/api`;
   const app = document.getElementById("app");
   if (!app) return;

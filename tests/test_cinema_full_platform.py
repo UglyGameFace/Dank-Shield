@@ -497,6 +497,38 @@ def test_discord_signed_cinema_link_establishes_browser_session_without_member_r
     assert cinema_site_auth.CINEMA_GUILDS_COOKIE in response.cookies
 
 
+def test_discord_signed_api_fallback_honors_member_remove_revocation(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+
+    signed_url = cinema_site_auth.cinema_site_url(100, 42, ttl_seconds=900)
+    parsed = urlsplit(signed_url)
+    query = {key: values[0] for key, values in parse_qs(parsed.query).items()}
+    request = SimpleNamespace(
+        match_info={"guild_id": "100"},
+        query=query,
+        cookies={},
+    )
+    monkeypatch.setattr(
+        cinema_site,
+        "_bot_guild",
+        lambda guild_id: object() if int(guild_id) == 100 else None,
+    )
+
+    cinema_site.note_cinema_member_remove(100, 42)
+    try:
+        asyncio.run(cinema_site._site_identity(request))
+    except Exception as exc:
+        from aiohttp import web
+
+        assert isinstance(exc, web.HTTPForbidden)
+        assert "requires membership in this Discord server" in exc.text
+    else:
+        raise AssertionError("Signed API fallback must not bypass member-remove revocation.")
+    finally:
+        cinema_site.note_cinema_member_join(100, 42)
+
+
 def test_discord_signed_cinema_link_still_requires_bot_to_share_target_guild(monkeypatch) -> None:
     monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
     monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
@@ -657,9 +689,14 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert "_SITE_MEMBER_CACHE_SECONDS = 5 * 60.0" in source
     assert "cinema_session_value(guild_id, user_id)" in source
     assert 'path=f"/cinema/{int(guild_id)}"' in source
+    assert 'const signedAuth = new URLSearchParams();' in script
+    assert 'signedAuth.set(key, value)' in script
+    assert 'const hadSignedEntry = ["uid", "exp", "sig"].every((key) => signedAuth.has(key));' in script
+    assert 'const AUTH_QUERY = hadSignedEntry ? `?${signedAuth.toString()}` : "";' in script
     assert 'initialUrl.searchParams.delete("sig")' in script
     assert 'history.replaceState(' in script
-    assert 'const AUTH_QUERY = "";' in script
+    assert 'return `${path}${AUTH_QUERY ? join + AUTH_QUERY.slice(1) : ""}`;' in script
+    assert 'src="/cinema/assets/site.js?v=4"' in source
 
 
 def test_cinema_oauth_state_survives_mobile_cookie_handoff_and_is_one_time() -> None:
@@ -775,7 +812,7 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
     assert 'href="/cinema/assets/site.css?v=3"' in source
-    assert 'src="/cinema/assets/site.js?v=3"' in source
+    assert 'src="/cinema/assets/site.js?v=4"' in source
 
 
 def test_full_site_auto_quality_and_source_search_controls_are_real() -> None:
