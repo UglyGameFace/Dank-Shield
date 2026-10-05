@@ -522,6 +522,25 @@ def test_discord_signed_cinema_link_still_requires_bot_to_share_target_guild(mon
         raise AssertionError("A signed Cinema link must not work after Dank Shield leaves the guild.")
 
 
+def test_cinema_session_is_bounded_to_signed_entry_window(monkeypatch) -> None:
+    import time
+
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+    value = cinema_site_auth.cinema_session_value(
+        100,
+        42,
+        ttl_seconds=30 * 24 * 60 * 60,
+    )
+    parts = value.split(".")
+    assert len(parts) == 4
+    expires = int(parts[2])
+    remaining = expires - int(time.time())
+
+    assert cinema_site_auth.CINEMA_SESSION_TTL_SECONDS == 6 * 60 * 60
+    assert 5 * 60 * 60 < remaining <= 6 * 60 * 60
+    assert cinema_site_auth.validate_cinema_session(100, value) == 42
+
+
 def test_cinema_browser_session_is_scoped_to_exact_discord_guild(monkeypatch) -> None:
     monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
     value = cinema_site_auth.cinema_session_value(100, 42, ttl_seconds=3600)
@@ -531,7 +550,7 @@ def test_cinema_browser_session_is_scoped_to_exact_discord_guild(monkeypatch) ->
     assert cinema_site_auth.validate_cinema_session(200, value) is None
 
 
-def test_cinema_site_identity_requires_current_member_of_same_guild(monkeypatch) -> None:
+def test_verified_cinema_session_does_not_recheck_member_rest(monkeypatch) -> None:
     monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
     value = cinema_site_auth.cinema_session_value(100, 42, ttl_seconds=3600)
     request = SimpleNamespace(
@@ -541,30 +560,18 @@ def test_cinema_site_identity_requires_current_member_of_same_guild(monkeypatch)
     )
 
     cinema_site._SITE_MEMBER_REVOKED.discard((100, 42))
+    monkeypatch.setattr(
+        cinema_site,
+        "_bot_guild",
+        lambda guild_id: object() if int(guild_id) == 100 else None,
+    )
 
-    async def current_member(guild_id: int, user_id: int):
-        return (
-            "present"
-            if (int(guild_id), int(user_id)) == (100, 42)
-            else "absent"
-        )
+    async def must_not_run(_guild_id: int, _user_id: int):
+        raise AssertionError("verified exact-guild Cinema session must not call member REST")
 
-    monkeypatch.setattr(cinema_site, "_site_member_state", current_member)
+    monkeypatch.setattr(cinema_site, "_site_member_state", must_not_run)
+
     assert asyncio.run(cinema_site._site_identity(request)) == (100, 42)
-
-    async def departed_member(_guild_id: int, _user_id: int):
-        return "absent"
-
-    monkeypatch.setattr(cinema_site, "_site_member_state", departed_member)
-    try:
-        asyncio.run(cinema_site._site_identity(request))
-    except Exception as exc:
-        from aiohttp import web
-
-        assert isinstance(exc, web.HTTPForbidden)
-        assert "requires membership in this Discord server" in exc.text
-    else:
-        raise AssertionError("Cinema access must fail closed after server membership is gone.")
 
 
 def test_exact_guild_session_survives_temporary_membership_api_failure(monkeypatch) -> None:
@@ -575,6 +582,11 @@ def test_exact_guild_session_survives_temporary_membership_api_failure(monkeypat
         match_info={"guild_id": "100"},
         query={},
         cookies={cinema_site_auth.CINEMA_SESSION_COOKIE: value},
+    )
+    monkeypatch.setattr(
+        cinema_site,
+        "_bot_guild",
+        lambda guild_id: object() if int(guild_id) == 100 else None,
     )
 
     async def unavailable_member(_guild_id: int, _user_id: int):
@@ -592,6 +604,11 @@ def test_member_remove_revokes_existing_cinema_session_and_rejoin_restores_it(mo
         match_info={"guild_id": "100"},
         query={},
         cookies={cinema_site_auth.CINEMA_SESSION_COOKIE: value},
+    )
+    monkeypatch.setattr(
+        cinema_site,
+        "_bot_guild",
+        lambda guild_id: object() if int(guild_id) == 100 else None,
     )
 
     cinema_site.note_cinema_member_join(100, 42)

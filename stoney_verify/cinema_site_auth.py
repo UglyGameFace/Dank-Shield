@@ -18,7 +18,7 @@ CINEMA_SESSION_COOKIE = "dank_cinema_session"
 CINEMA_IDENTITY_COOKIE = "dank_cinema_identity"
 CINEMA_GUILDS_COOKIE = "dank_cinema_guilds"
 CINEMA_OAUTH_STATE_COOKIE = "dank_cinema_oauth_state"
-CINEMA_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
+CINEMA_SESSION_TTL_SECONDS = 6 * 60 * 60
 CINEMA_IDENTITY_TTL_SECONDS = 7 * 24 * 60 * 60
 CINEMA_GUILDS_TTL_SECONDS = 15 * 60
 
@@ -116,7 +116,7 @@ def cinema_identity_value(
     uid = int(user_id)
     if not secret or uid <= 0:
         return ""
-    ttl = max(3600, min(int(ttl_seconds), 30 * 24 * 60 * 60))
+    ttl = max(300, min(int(ttl_seconds), CINEMA_SESSION_TTL_SECONDS))
     expires = int(time.time()) + ttl
     signature = _identity_signature(uid, expires)
     return f"{uid}.{expires}.{signature}"
@@ -209,7 +209,7 @@ def cinema_session_value(
     uid = int(user_id)
     if not secret or gid <= 0 or uid <= 0:
         return ""
-    ttl = max(3600, min(int(ttl_seconds), 30 * 24 * 60 * 60))
+    ttl = max(300, min(int(ttl_seconds), CINEMA_SESSION_TTL_SECONDS))
     expires = int(time.time()) + ttl
     signature = _session_signature(gid, uid, expires)
     return f"{gid}.{uid}.{expires}.{signature}"
@@ -237,7 +237,7 @@ def validate_cinema_session(
         or cookie_gid != expected_gid
         or uid <= 0
         or expires < now
-        or expires > now + 30 * 24 * 60 * 60 + 60
+        or expires > now + CINEMA_SESSION_TTL_SECONDS + 60
     ):
         return None
     expected = _session_signature(cookie_gid, uid, expires)

@@ -1306,3 +1306,44 @@ Acceptance:
 - member-remove immediately revokes an existing session and rejoin restores it;
 - wrong-guild sessions/proofs remain rejected;
 - exact-head CI and all companion workflows must pass before merge/deploy.
+
+## Evidence-backed follow-up — verified Cinema session is the authorization artifact
+
+Evidence from the 2026-10-05 10:49 Samsung/Discord screenshots:
+- `/cinema home` produces a signed URL containing the exact guild ID, user ID, expiry, and HMAC signature;
+- the URL expiry shown in Discord is 2026-10-05 20:49:41 UTC, so it was valid at screenshot time;
+- Samsung Browser loads the Cinema HTML shell and the deployed real SVG icons;
+- the first Home API call then returns `Dank Cinema requires membership in this Discord server.`
+
+What is proven from current main:
+- that error text can only come from session revocation, session membership state `absent`, or identity membership state `absent`;
+- screenshots alone do not distinguish those server-side branches, so no branch-specific claim is justified without Discloud request logs;
+- every `dank_cinema_session` cookie is minted only after an authoritative entry proof succeeds: signed Discord guild/user link, Discord OAuth shared-guild proof, or verified guild-open flow.
+
+Correction contract:
+- a valid exact-guild Cinema session cookie is the authorization artifact for Cinema API browsing;
+- Home/Profile/Search/My Stuff/Feeds do not call Discord member REST again while that session remains valid;
+- the bot must still share the exact guild;
+- canonical `on_member_remove` remains the immediate in-process revocation owner;
+- REST `NotFound` may deny an identity-only/open-guild request but no longer creates a process-lifetime session revocation;
+- identity-only access still requires fresh membership proof and remains fail-closed;
+- Cinema exact-guild session TTL is bounded to six hours, matching the signed Discord entry window, instead of seven days;
+- old longer-lived session cookies are rejected by the stricter validator after deployment;
+- `/health` exposes `cinema_auth_contract: signed-session-v3` so production deployment can be proven directly.
+
+Do not claim fixed live until exact-head CI is green, the PR is merged/deployed, `/health` reports `signed-session-v3`, and `/cinema home -> Open Dank Cinema` loads Home plus Profile on Samsung without a membership error.
+
+## PR #447 first exact-head CI failure
+
+Exact head `18df68c13dfb128b857c96bff41864ade1b69612` compiled successfully and ran the full unit suite, finishing with `2850 passed / 3 failed`.
+
+Evidence-backed failures:
+- `test_cinema_session_is_bounded_to_signed_entry_window` exposed a real implementation miss: `cinema_session_value()` still clamped caller TTL to 30 days even though the validator/constant had been changed to six hours.
+- `test_exact_guild_session_survives_temporary_membership_api_failure` and `test_member_remove_revokes_existing_cinema_session_and_rejoin_restores_it` omitted a `_bot_guild()` fixture, so the newly intentional exact-guild bot-presence guard rejected the synthetic guild.
+
+Correction:
+- clamp `cinema_session_value()` directly to `CINEMA_SESSION_TTL_SECONDS` with a five-minute minimum;
+- add the missing exact-guild bot fixture only to those two tests;
+- do not change the signed-session-v3 authorization contract.
+
+Re-run exact-head CI before marking #447 ready.
