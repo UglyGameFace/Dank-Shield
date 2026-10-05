@@ -1472,3 +1472,38 @@ Correction:
 - a focused regression proves guild removal invalidates positive REST cache and guild rejoin restores it.
 
 Do not merge #450 until the new exact head completes green.
+
+## Evidence-backed follow-up — /cinema must be guild-installed, not user-installed
+
+Production evidence after merged PR #450:
+- Cinema diagnostics report `botGuildRest=absent` and `botGuildCache=no` for the guild route;
+- Discord simultaneously allows `/cinema home` to execute in that server;
+- browser transport is not the blocker (`cookieHeader=yes`, identity cookie valid, revocation false).
+
+Discord install-context evidence:
+- Discord supports apps installed to a user account; those apps can run commands inside servers without the bot being installed as a server member;
+- server-installed apps appear as server members and have guild integration context;
+- discord.py 2.7 exposes `Interaction.is_guild_integration()` / `is_user_integration()` and `AppInstallationType` on command groups.
+
+Repository root cause:
+- `build_cinema_command_group()` did not set `allowed_installs` or `allowed_contexts`, so `/cinema` inherited the Discord application's install defaults;
+- if the application allows user installs, Discord can expose `/cinema` through that personal install even though Cinema requires the server-installed bot;
+- Cinema then correctly fails REST guild verification because the bot user behind that integration is not a member of the target server.
+
+Active branch:
+`fix/cinema-guild-install-context`
+
+Correction contract:
+- `/cinema` root group sets `allowed_installs=AppInstallationType(guild=True, user=False)`;
+- `/cinema` root group sets guild-only allowed contexts (no DM/private-channel contexts);
+- every `/cinema` child has a runtime guard using `Interaction.is_guild_integration()` so stale user-install command copies fail before generating a website link;
+- runtime logs record only safe booleans: guild context, guild install, user install, and application/client identity match;
+- command payload/fingerprint changes because discord.py serializes integration types, forcing a global command resync;
+- `/health` marker becomes `signed-session-v7-guild-install`.
+
+Acceptance:
+- exact-head CI and companion workflows green;
+- after deploy `/health` reports `signed-session-v7-guild-install`;
+- `/cinema` must be offered only through the server-installed app;
+- stale/personal `/cinema` invocation must show the explicit server-install requirement instead of opening the site;
+- a guild-installed `/cinema home` interaction must generate Open Dank Cinema and the web runtime must resolve that guild through Discord REST.
