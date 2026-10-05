@@ -14,6 +14,7 @@ from stoney_verify.movie_night_web import register_movie_night_public_routes
 from stoney_verify.cinema_site import (
     cinema_oauth_ready,
     cinema_oauth_redirect_uri,
+    cinema_oauth_status,
     register_cinema_site_routes,
 )
 from stoney_verify.torrent_streaming import get_torrent_manager
@@ -75,6 +76,7 @@ def _validate_public_base_url() -> None:
 async def _health(request: web.Request) -> web.Response:
     _ = request
     manager = get_torrent_manager()
+    oauth = cinema_oauth_status()
     return web.json_response(
         {
             "ok": True,
@@ -83,6 +85,9 @@ async def _health(request: web.Request) -> web.Response:
             "stream_signing_configured": bool(manager.stream_secret),
             "cinema_ffmpeg_audio_ready": bool(shutil.which("ffmpeg")),
             "cinema_standalone_login_configured": bool(cinema_oauth_ready()),
+            "cinema_oauth_client_id_ready": bool(oauth["client_id_ready"]),
+            "cinema_oauth_client_secret_ready": bool(oauth["client_secret_ready"]),
+            "cinema_oauth_redirect_ready": bool(oauth["redirect_uri_ready"]),
             "cinema_oauth_redirect_uri": cinema_oauth_redirect_uri(),
         }
     )
