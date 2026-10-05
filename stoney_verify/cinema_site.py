@@ -115,7 +115,7 @@ _SITE_GUILD_UNAVAILABLE_CACHE_SECONDS = 30.0
 _SITE_GUILD_REST_CACHE: dict[int, tuple[float, Any]] = {}
 _SITE_GUILD_ABSENT_UNTIL: dict[int, float] = {}
 _SITE_GUILD_UNAVAILABLE_UNTIL: dict[int, float] = {}
-_CINEMA_AUTH_CONTRACT = "signed-session-v6-guild-rest"
+_CINEMA_AUTH_CONTRACT = "signed-session-v8-snowflake-safe"
 
 
 def _clean_env_value(value: Any) -> str:
@@ -2462,8 +2462,8 @@ async def cinema_notifications_api(request: web.Request) -> web.Response:
 def _site_html(guild_id: int, user_id: int) -> str:
     boot = json.dumps(
         {
-            "guildId": int(guild_id),
-            "userId": int(user_id),
+            "guildId": str(int(guild_id)),
+            "userId": str(int(user_id)),
         },
         separators=(",", ":"),
     ).replace("</", "<\/")
@@ -2479,7 +2479,7 @@ def _site_html(guild_id: int, user_id: int) -> str:
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=6" defer></script>
+  <script src="/cinema/assets/site.js?v=7" defer></script>
 </body>
 </html>"""
 
