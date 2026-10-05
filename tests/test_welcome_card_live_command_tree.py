@@ -17,7 +17,7 @@ from stoney_verify.commands_ext.public_setup_group import dank_group
 
 
 EXPECTED_DANK_CHILDREN = {"home", "purge", "setup", "upload"}
-EXPECTED_GLOBAL_ROOTS = {"captions", "dank", "mod", "movie", "role", "ticket", "tickets", "toke", "verify"}
+EXPECTED_GLOBAL_ROOTS = {"captions", "cinema", "dank", "mod", "movie", "role", "ticket", "tickets", "toke", "verify"}
 
 
 def _child_names(group: Any) -> set[str]:
@@ -61,6 +61,19 @@ def test_final_fast_doorways_are_commands_not_subcommand_groups() -> None:
         command = commands_module.bot.tree.get_command(name, guild=None)
         assert isinstance(command, app_commands.Command)
         assert not isinstance(command, app_commands.Group)
+
+    cinema = commands_module.bot.tree.get_command("cinema", guild=None)
+    assert isinstance(cinema, app_commands.Group)
+    assert {str(command.name) for command in cinema.commands} == {
+        "home",
+        "start",
+        "private",
+        "join",
+        "leave",
+        "queue",
+        "info",
+        "vote",
+    }
 
     assert commands_module.bot.tree.get_command("ticket-intake", guild=None) is None
     assert commands_module.bot.tree.get_command("ticket-category", guild=None) is None
