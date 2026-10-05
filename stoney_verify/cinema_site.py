@@ -251,12 +251,17 @@ def _consume_oauth_state(value: str) -> Optional[int]:
     return max(0, int(target_guild or 0))
 
 
-def _bot_guild(guild_id: int) -> Any:
-    """Return only the gateway-cached guild, if present."""
+def _bot_client() -> Any:
     try:
         from .globals import bot
     except Exception:
-        bot = None
+        return None
+    return bot
+
+
+def _bot_guild(guild_id: int) -> Any:
+    """Return only the gateway-cached guild, if present."""
+    bot = _bot_client()
     if bot is None:
         return None
     try:
@@ -299,10 +304,7 @@ async def _resolve_bot_guild(guild_id: int) -> tuple[str, Any]:
     if _SITE_GUILD_UNAVAILABLE_UNTIL.get(gid, 0.0) > now:
         return "unavailable", None
 
-    try:
-        from .globals import bot
-    except Exception:
-        bot = None
+    bot = _bot_client()
     fetch_guild = getattr(bot, "fetch_guild", None) if bot is not None else None
     if not callable(fetch_guild):
         _SITE_GUILD_UNAVAILABLE_UNTIL[gid] = now + _SITE_GUILD_UNAVAILABLE_CACHE_SECONDS
