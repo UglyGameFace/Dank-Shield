@@ -1103,3 +1103,40 @@ Repair:
 - update the provider-safety regression to assert the current solo controls and explicitly verify no primary candidate button carries an external URL.
 
 No provider runtime, torrent runtime, queue semantics, or collaborative multi-viewer voting behavior was weakened.
+
+## Post-#442 canary defect — missing Discord /cinema command surface
+
+Production baseline:
+`main@d004d4ea1cdab1dffbbb59f289e4e84419b401bf` (PR #442 merged; post-merge Dank Shield CI, Cinema SQL, Ticket Owner Override, and Supabase migration workflows green).
+
+Android/Discord canary evidence:
+- the user cannot see a `/cinema` command or the planned Cinema shortcut commands;
+- current production exposes only the legacy `/movie` Cinema doorway.
+
+Root cause:
+- the website `/cinema` route was implemented, but the Discord public registrar still intentionally compacted the global application-command tree to the old 10-item contract;
+- `public_command_surface_v2` rejected any root outside `captions/dank/mod/movie/role/ticket/tickets/toke/verify`;
+- the planned branded Discord command group therefore never reached global sync.
+
+Active correction branch:
+`fix/cinema-discord-command-surface`
+
+Correction contract:
+- keep `/movie` unchanged for backward compatibility and its optional magnet/.torrent attachment fields;
+- expose one branded `/cinema` application-command group;
+- expose `/cinema home`, `start`, `private`, `join`, `leave`, `queue`, `info`, and `vote`;
+- all shortcuts reuse the existing MovieNightManager, room lookup, queue, vote, status, sync, and lifecycle owners;
+- do not create duplicate room state, queue state, voting, persistence, or playback authority;
+- `/cinema join` never creates a room;
+- `/cinema leave` never ends a room and preserves the existing host-away lifecycle;
+- private-session access remains fail-closed.
+
+Validation required:
+- command-contract and command-friction audits;
+- command group regression proving all eight children and Yes/No vote choices;
+- existing `/movie` parameter regression remains green;
+- full Dank Shield CI and all triggered companion workflows on the exact PR head;
+- branch 0 behind current main and final diff hygiene;
+- after merge/deploy, Discord global command sync must visibly expose `/cinema` and all children while `/movie` still works.
+
+Do not claim this canary defect resolved until the exact-head CI, merge/deploy, and live Discord autocomplete check pass.
