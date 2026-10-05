@@ -1270,3 +1270,39 @@ Regression requirements:
 - valid signed entry must return the Cinema page and set session, identity, and guild proof cookies even when member REST is unavailable;
 - signed entry must fail if Dank Shield no longer shares the target guild;
 - full exact-head CI and companion workflows must pass before merge/deploy.
+
+## Production canary follow-up — Cinema APIs eject valid sessions after guild proof expiry
+
+Observed after merged PR #445 on Samsung Browser:
+- `/cinema home -> Open Dank Cinema` successfully reaches the new Cinema shell and real icons;
+- after the short-lived guild proof ages out, Home/Profile APIs return `Dank Cinema requires membership in this Discord server`;
+- the exact-guild browser session cookie itself is still valid.
+
+Root cause:
+- `CINEMA_GUILDS_TTL_SECONDS` is 15 minutes;
+- once that signed guild-list proof expires, every Cinema API request calls the bot-side member lookup again;
+- the old member lookup collapsed every failure mode into `None`;
+- Discord `NotFound` (definitely not a member), rate limiting, forbidden member REST, timeouts, and transient HTTP failures were therefore all treated as the same "member left" result;
+- the browser was ejected from a valid exact-guild Cinema session because Discord REST was unavailable, not because Discord confirmed membership ended.
+
+Active correction branch:
+`fix/cinema-membership-session-resilience`
+
+Correction contract:
+- membership checks become tri-state: `present`, `absent`, or `unavailable`;
+- only definitive `discord.NotFound` or the canonical `on_member_remove` event means absent;
+- temporary REST/API failures are availability problems, never proof of departure;
+- an already-valid exact-guild Cinema session survives temporary membership REST unavailability;
+- identity-only access without an exact-guild session still fails closed when membership cannot be proven;
+- canonical `on_member_remove` immediately revokes Cinema access for that guild/user;
+- canonical `on_member_join` restores access for a rejoined member;
+- fresh signed Discord Cinema links and fresh OAuth guild proofs refresh the positive membership state;
+- successful membership verification is cached for five minutes and temporary-unavailable state for one minute to avoid hammering Discord REST from Home/Profile/Feeds/Search loading in parallel.
+
+Acceptance:
+- Home, Profile, Search, My Stuff, and Feeds remain usable for the active exact-guild Cinema browser session after the 15-minute OAuth guild proof expires;
+- temporary Discord REST failure does not produce a false `requires membership` error;
+- definitive member absence still returns 403;
+- member-remove immediately revokes an existing session and rejoin restores it;
+- wrong-guild sessions/proofs remain rejected;
+- exact-head CI and all companion workflows must pass before merge/deploy.
