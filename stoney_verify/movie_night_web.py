@@ -3819,7 +3819,7 @@ function stopCompatAudio() {{
   compatAudioOffset=0;
 }}
 async function restartCompatAudio(seconds, shouldPlay=false) {{
-  if(!compatAudioUrl) return;
+  if(!compatAudioUrl) return false;
   const target=Math.max(0,Number(seconds||0));
   compatAudioRestartAt=Date.now();
   try {{ compatAudio.pause(); }} catch(_) {{}}
@@ -3828,11 +3828,44 @@ async function restartCompatAudio(seconds, shouldPlay=false) {{
   try {{ compatAudio.load(); }} catch(_) {{}}
   applyUserAudioState(false);
   if(shouldPlay && !userMuted) {{
-    try {{ await compatAudio.play(); }}
-    catch(_) {{
+    try {{
+      await compatAudio.play();
+      return true;
+    }} catch(_) {{
       notice.textContent="Tap Play or Sync once to allow the AAC compatibility audio.";
+      return false;
     }}
   }}
+  return true;
+}}
+function startCompatAudioFromGesture(seconds, keepPlaying) {{
+  if(!compatAudioUrl || userMuted) return Promise.resolve(true);
+  const target=Math.max(0,Number(seconds||0));
+  compatAudioRestartAt=Date.now();
+  try {{ compatAudio.pause(); }} catch(_) {{}}
+  compatAudioOffset=target;
+  compatAudio.src=compatAudioTargetUrl(target);
+  try {{ compatAudio.load(); }} catch(_) {{}}
+  applyUserAudioState(true);
+
+  // This play() must be created synchronously inside the user's Tap to Sync /
+  // Play gesture. Waiting for heartbeat or state polling first loses mobile
+  // autoplay permission on Samsung/Chromium.
+  let playPromise;
+  try {{
+    playPromise=compatAudio.play();
+  }} catch(_) {{
+    return Promise.resolve(false);
+  }}
+  return Promise.resolve(playPromise).then(
+    ()=>{{
+      if(!keepPlaying) {{
+        try {{ compatAudio.pause(); }} catch(_) {{}}
+      }}
+      return true;
+    }},
+    ()=>false,
+  );
 }}
 function scheduleCompatAudioRestart(seconds, shouldPlay=!video.paused) {{
   if(!compatAudioUrl) return;
@@ -4464,22 +4497,41 @@ syncButton.onclick=async()=>{{
     if(Math.abs((video.currentTime||0)-joinTarget)>0.35)
       safeSeek(joinTarget);
 
-    if(lastState.state==="playing") {{
-      try {{
-        await video.play();
-      }} catch(_) {{
-        playbackBlocked=true;
-        notice.textContent="Your browser blocked playback. Tap the video Play control once, then Tap to Sync again.";
-      }}
-    }} else {{
-      // Prime audible playback inside the real user gesture so a later host Play
-      // is not rejected by mobile autoplay policy.
-      try {{
-        await video.play();
-        video.pause();
-        if(Math.abs((video.currentTime||0)-joinTarget)>0.5)
-          safeSeek(joinTarget);
-      }} catch(_) {{}}
+    const keepPlaying=lastState.state==="playing";
+
+    // Start BOTH media outputs while this click still owns user activation.
+    // Do not await heartbeat/state/video before creating the AAC play promise.
+    const compatGesturePromise=compatAudioActive()
+      ?startCompatAudioFromGesture(joinTarget,keepPlaying)
+      :Promise.resolve(true);
+
+    let videoGesturePromise=Promise.resolve(true);
+    try {{
+      const started=video.play();
+      videoGesturePromise=Promise.resolve(started).then(
+        ()=>{{
+          if(!keepPlaying) {{
+            video.pause();
+            if(Math.abs((video.currentTime||0)-joinTarget)>0.5)
+              safeSeek(joinTarget);
+          }}
+          return true;
+        }},
+        ()=>false,
+      );
+    }} catch(_) {{
+      videoGesturePromise=Promise.resolve(false);
+    }}
+
+    const [compatStarted,videoStarted]=await Promise.all([
+      compatGesturePromise,
+      videoGesturePromise,
+    ]);
+    if(!videoStarted || (compatAudioActive() && !userMuted && !compatStarted)) {{
+      playbackBlocked=true;
+      notice.textContent=compatAudioActive() && !compatStarted
+        ?"Your browser blocked AAC compatibility audio. Tap Sync again to grant sound playback."
+        :"Your browser blocked playback. Tap the video Play control once, then Tap to Sync again.";
     }}
   }} finally {{
     setTimeout(()=>{{remoteApply=false;}},150);
@@ -4508,7 +4560,21 @@ async function togglePlayerPlayback() {{
     syncRequested=true;
     syncGestureGranted=true;
     try {{
-      await video.play();
+      const target=Number(
+        lastState.sync_target_position??lastState.position_seconds??video.currentTime??0
+      );
+      const compatGesturePromise=compatAudioActive()
+        ?startCompatAudioFromGesture(target,true)
+        :Promise.resolve(true);
+      const videoGesturePromise=Promise.resolve(video.play()).then(()=>true,()=>false);
+      const [compatStarted,videoStarted]=await Promise.all([
+        compatGesturePromise,
+        videoGesturePromise,
+      ]);
+      if(!videoStarted)
+        throw new Error("video playback was blocked");
+      if(compatAudioActive() && !userMuted && !compatStarted)
+        throw new Error("AAC compatibility audio was blocked");
       await heartbeat(true);
       notice.textContent=lastState.private
         ?"Private playback resumed and resynced."
