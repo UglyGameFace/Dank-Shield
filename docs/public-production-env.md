@@ -195,16 +195,18 @@ structured/admin API remains on its existing loopback listener.
 Use these production environment values:
 
 ```env
-DANK_MEDIA_PUBLIC_BASE_URL=https://YOUR-DISCLOUD-SITE.discloud.app
+DANK_MEDIA_PUBLIC_BASE_URL=https://YOUR-DISCLOUD-SITE.discloud.dev
 DANK_MEDIA_SERVER_ENABLED=true
 DANK_MEDIA_BIND_HOST=0.0.0.0
 DANK_MEDIA_PORT=8080
 DANK_CINEMA_DISCORD_CLIENT_ID=
 DANK_CINEMA_DISCORD_CLIENT_SECRET=<DISCORD APPLICATION CLIENT SECRET>
+DANK_CINEMA_DISCORD_REDIRECT_URI=https://YOUR-DISCLOUD-SITE.discloud.dev/cinema/auth/callback
 DANK_TORRENT_STREAM_SECRET=<NEW RANDOM SECRET, DO NOT REUSE ANOTHER TOKEN>
 
-# Register this exact redirect URI in Discord Developer Portal > OAuth2:
-# https://YOUR-DISCLOUD-SITE.discloud.app/cinema/auth/callback
+# Register this exact same redirect URI in Discord Developer Portal > OAuth2:
+# https://YOUR-DISCLOUD-SITE.discloud.dev/cinema/auth/callback
+# OAuth redirect matching is exact. Do not substitute .discloud.app for .discloud.dev.
 
 DANK_PROCESS_MEMORY_LIMIT_MB=1495
 DANK_MOVIE_NIGHT_MEMORY_RESERVE_MB=350
