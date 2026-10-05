@@ -812,7 +812,7 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
     assert 'href="/cinema/assets/site.css?v=3"' in source
-    assert 'src="/cinema/assets/site.js?v=3"' in source
+    assert 'src="/cinema/assets/site.js?v=4"' in source
 
 
 def test_full_site_auto_quality_and_source_search_controls_are_real() -> None:
