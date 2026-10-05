@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 from stoney_verify import (
     cinema_catalog,
@@ -462,6 +463,63 @@ def test_standalone_oauth_guild_proof_is_exact_guild_scoped(monkeypatch) -> None
         assert "requires membership in this Discord server" in exc.text
     else:
         raise AssertionError("OAuth guild proof must never authorize a different guild.")
+
+
+def test_discord_signed_cinema_link_establishes_browser_session_without_member_rest(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+
+    signed_url = cinema_site_auth.cinema_site_url(100, 42, ttl_seconds=900)
+    parsed = urlsplit(signed_url)
+    query = {key: values[0] for key, values in parse_qs(parsed.query).items()}
+    request = SimpleNamespace(
+        match_info={"guild_id": "100"},
+        query=query,
+        cookies={},
+    )
+
+    monkeypatch.setattr(
+        cinema_site,
+        "_bot_guild",
+        lambda guild_id: object() if int(guild_id) == 100 else None,
+    )
+
+    async def should_not_fetch_member(_guild_id: int, _user_id: int):
+        raise AssertionError("valid Discord signed entry must not require member REST before cookie exchange")
+
+    monkeypatch.setattr(cinema_site, "_fetch_site_member", should_not_fetch_member)
+
+    response = asyncio.run(cinema_site.cinema_site_page(request))
+
+    assert response.status == 200
+    assert cinema_site_auth.CINEMA_SESSION_COOKIE in response.cookies
+    assert cinema_site_auth.CINEMA_IDENTITY_COOKIE in response.cookies
+    assert cinema_site_auth.CINEMA_GUILDS_COOKIE in response.cookies
+
+
+def test_discord_signed_cinema_link_still_requires_bot_to_share_target_guild(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+
+    signed_url = cinema_site_auth.cinema_site_url(100, 42, ttl_seconds=900)
+    parsed = urlsplit(signed_url)
+    query = {key: values[0] for key, values in parse_qs(parsed.query).items()}
+    request = SimpleNamespace(
+        match_info={"guild_id": "100"},
+        query=query,
+        cookies={},
+    )
+    monkeypatch.setattr(cinema_site, "_bot_guild", lambda _guild_id: None)
+
+    try:
+        asyncio.run(cinema_site._site_identity(request))
+    except Exception as exc:
+        from aiohttp import web
+
+        assert isinstance(exc, web.HTTPForbidden)
+        assert "no longer available" in exc.text
+    else:
+        raise AssertionError("A signed Cinema link must not work after Dank Shield leaves the guild.")
 
 
 def test_cinema_browser_session_is_scoped_to_exact_discord_guild(monkeypatch) -> None:

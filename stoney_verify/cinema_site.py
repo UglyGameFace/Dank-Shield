@@ -721,17 +721,28 @@ async def _site_identity(request: web.Request) -> tuple[int, int]:
     if guild_id <= 0:
         raise web.HTTPUnauthorized(text="Invalid Dank Cinema server.")
 
-    uid = validate_cinema_site_access(
+    signed_uid = validate_cinema_site_access(
         guild_id,
         str(request.query.get("uid", "") or ""),
         str(request.query.get("exp", "") or ""),
         str(request.query.get("sig", "") or ""),
     )
-    if uid is None:
-        uid = validate_cinema_session(
-            guild_id,
-            str(request.cookies.get(CINEMA_SESSION_COOKIE, "") or ""),
-        )
+    if signed_uid is not None:
+        # The Discord command created this guild+user bearer link from a live
+        # interaction inside that guild. Let the first browser request exchange
+        # that valid signed link for the normal HttpOnly Cinema cookies instead
+        # of demanding a second REST member lookup before those cookies exist.
+        # The bot must still currently share the target guild.
+        if _bot_guild(guild_id) is None:
+            raise web.HTTPForbidden(
+                text="That Dank Cinema server is no longer available."
+            )
+        return guild_id, int(signed_uid)
+
+    uid = validate_cinema_session(
+        guild_id,
+        str(request.cookies.get(CINEMA_SESSION_COOKIE, "") or ""),
+    )
     if uid is None:
         uid = validate_cinema_identity(
             str(request.cookies.get(CINEMA_IDENTITY_COOKIE, "") or "")

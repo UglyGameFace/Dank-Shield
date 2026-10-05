@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import discord
 from discord import app_commands
@@ -29,6 +30,26 @@ def _labels(view: discord.ui.View) -> set[str]:
         for item in view.children
         if str(getattr(item, "label", "") or "")
     }
+
+
+def test_cinema_home_open_site_button_is_signed_to_guild_and_user(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+
+    view = movie_ui.MovieNightHubView(owner_id=42, room=None, guild_id=100)
+    open_button = next(
+        item
+        for item in view.children
+        if getattr(item, "label", "") == "Open Dank Cinema"
+    )
+
+    parsed = urlsplit(str(open_button.url))
+    params = parse_qs(parsed.query)
+
+    assert parsed.path == "/cinema/100"
+    assert params["uid"] == ["42"]
+    assert int(params["exp"][0]) > 0
+    assert params["sig"][0]
 
 
 def test_movie_is_one_compact_public_doorway() -> None:
