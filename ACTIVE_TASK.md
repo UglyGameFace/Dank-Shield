@@ -1332,3 +1332,18 @@ Correction contract:
 - `/health` exposes `cinema_auth_contract: signed-session-v3` so production deployment can be proven directly.
 
 Do not claim fixed live until exact-head CI is green, the PR is merged/deployed, `/health` reports `signed-session-v3`, and `/cinema home -> Open Dank Cinema` loads Home plus Profile on Samsung without a membership error.
+
+## PR #447 first exact-head CI failure
+
+Exact head `18df68c13dfb128b857c96bff41864ade1b69612` compiled successfully and ran the full unit suite, finishing with `2850 passed / 3 failed`.
+
+Evidence-backed failures:
+- `test_cinema_session_is_bounded_to_signed_entry_window` exposed a real implementation miss: `cinema_session_value()` still clamped caller TTL to 30 days even though the validator/constant had been changed to six hours.
+- `test_exact_guild_session_survives_temporary_membership_api_failure` and `test_member_remove_revokes_existing_cinema_session_and_rejoin_restores_it` omitted a `_bot_guild()` fixture, so the newly intentional exact-guild bot-presence guard rejected the synthetic guild.
+
+Correction:
+- clamp `cinema_session_value()` directly to `CINEMA_SESSION_TTL_SECONDS` with a five-minute minimum;
+- add the missing exact-guild bot fixture only to those two tests;
+- do not change the signed-session-v3 authorization contract.
+
+Re-run exact-head CI before marking #447 ready.
