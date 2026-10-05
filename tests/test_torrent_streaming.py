@@ -140,6 +140,7 @@ def test_public_site_root_redirects_to_dank_cinema() -> None:
 
 def test_media_health_reports_standalone_cinema_oauth_readiness(monkeypatch) -> None:
     monkeypatch.setattr(torrent_media_server, "cinema_oauth_ready", lambda: True)
+    monkeypatch.setattr(torrent_media_server.shutil, "which", lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None)
     monkeypatch.setattr(
         torrent_media_server,
         "cinema_oauth_redirect_uri",
@@ -154,6 +155,7 @@ def test_media_health_reports_standalone_cinema_oauth_readiness(monkeypatch) -> 
     response = asyncio.run(torrent_media_server._health(SimpleNamespace()))
     payload = __import__("json").loads(response.text)
 
+    assert payload["cinema_ffmpeg_audio_ready"] is True
     assert payload["cinema_standalone_login_configured"] is True
     assert payload["cinema_oauth_redirect_uri"].endswith("/cinema/auth/callback")
 
