@@ -1347,3 +1347,37 @@ Correction:
 - do not change the signed-session-v3 authorization contract.
 
 Re-run exact-head CI before marking #447 ready.
+
+## Production canary follow-up — signed entry proof was discarded before Cinema API calls
+
+Evidence from the 2026-10-05 11:33 Samsung screenshots and repository history:
+- Cinema HTML shell renders and every tab first shows its loading skeleton;
+- every tab then fails with the same membership error;
+- API routes are correctly nested under `/cinema/{guild_id}/api/...`, so the cookie Path shape is not the mismatch;
+- JavaScript fetches use `credentials: "same-origin"`, so credentials are not explicitly omitted;
+- commit `af8c6e286acf5211af87e2d7cfff6ca728e80d4a` changed `AUTH_QUERY = window.location.search` to stripping `uid/exp/sig` and forcing `AUTH_QUERY = ""` after the page load.
+
+Root cause:
+- the top-level signed Discord link authenticates the HTML request;
+- the SPA then deliberately deletes the signed guild/user proof from the visible URL and from its API transport;
+- if Samsung Browser does not present the newly minted HttpOnly Cinema cookie on the immediate SPA API request, every Home/Profile/Search/My Stuff/Feeds call becomes identity-only and falls into the membership gate;
+- this explains the identical skeleton-then-membership-failure pattern across every menu surface.
+
+Active correction branch:
+`fix/cinema-samsung-signed-api-fallback`
+
+Correction contract:
+- capture `uid/exp/sig` in JavaScript memory before stripping them from the visible address bar;
+- continue removing the bearer values from browser history immediately;
+- reuse that signed proof only for same-origin `/cinema/{guild}/api/...` calls during the current page lifetime;
+- keep `credentials: same-origin` so the normal HttpOnly session remains the preferred path;
+- signed fallback must obey canonical member-remove revocation and bot-guild presence;
+- bump `site.js` to `v=4` to defeat Samsung Browser asset caching;
+- expose `/health` marker `cinema_auth_contract: signed-session-v4` so production deployment can be proven directly.
+
+Acceptance:
+- `/cinema home -> Open Dank Cinema` loads Home on Samsung without a membership error;
+- Home, Search, My Stuff, Feeds, Profile, and Notifications all use the same authenticated API transport;
+- visible browser URL no longer contains `uid`, `exp`, or `sig` after page boot;
+- signed fallback cannot bypass a real member-remove event;
+- exact-head CI and companion workflows pass before merge/deploy.
