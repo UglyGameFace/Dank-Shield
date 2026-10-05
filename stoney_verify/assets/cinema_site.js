@@ -101,6 +101,37 @@
     return resolved;
   }
 
+  async function authDiagnostics() {
+    try {
+      const response = await fetch(authUrl(API_BASE + "/auth-debug"), {
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { "Accept": "application/json" },
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      return data && typeof data === "object" ? data : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function authDiagnosticText(data) {
+    if (!data) return "";
+    const parts = [
+      `contract=${data.contract || "unknown"}`,
+      `signed=${data.signed_query || "unknown"}`,
+      `session=${data.session_cookie || "unknown"}`,
+      `identity=${data.identity_cookie || "unknown"}`,
+      `guildProof=${data.guild_proof_cookie || "unknown"}`,
+      `source=${data.selected_source || "unknown"}`,
+      `botGuild=${data.bot_guild_present ? "yes" : "no"}`,
+      `revoked=${data.member_revoked ? "yes" : "no"}`,
+      `cookieHeader=${data.cookie_header_present ? "yes" : "no"}`,
+    ];
+    return `Diagnostic: ${parts.join(" · ")}`;
+  }
+
   async function api(path, options = {}) {
     const response = await fetch(authUrl(API_BASE + path), {
       credentials: "same-origin",
@@ -113,7 +144,9 @@
     });
     if (!response.ok) {
       const text = (await response.text()).trim();
-      throw new Error(text || `Cinema request failed (${response.status}).`);
+      const diagnostic = authDiagnosticText(await authDiagnostics());
+      const message = text || `Cinema request failed (${response.status}).`;
+      throw new Error(diagnostic ? `${message}\n\n${diagnostic}` : message);
     }
     return response.json();
   }
