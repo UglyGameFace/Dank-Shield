@@ -39,17 +39,17 @@
   };
 
   const icon = {
-    home: "⌂",
-    search: "⌕",
-    library: "▤",
-    feeds: "≋",
-    profile: "●",
-    bell: "♢",
-    info: "ⓘ",
-    play: "▶",
     add: "+",
     check: "✓",
-    discord: "◈",
+  };
+
+  const SVG_ICON_PATHS = {
+    home: '<path d="M3 10.5 12 3l9 7.5v8a2 2 0 0 1-2 2h-4.5v-6h-5v6H5a2 2 0 0 1-2-2z"/>',
+    search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 5 5"/>',
+    library: '<rect x="4" y="3.5" width="16" height="17" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+    feeds: '<path d="M5 7a12 12 0 0 1 12 12M5 12a7 7 0 0 1 7 7"/><circle cx="5" cy="19" r="1.25" fill="currentColor" stroke="none"/>',
+    profile: '<circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/>',
+    bell: '<path d="M18 9a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/>',
   };
 
   function authUrl(path) {
@@ -120,6 +120,21 @@
     return element;
   }
 
+  function uiIcon(name) {
+    const wrap = node("span", "ui-icon");
+    wrap.setAttribute("aria-hidden", "true");
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.innerHTML = SVG_ICON_PATHS[name] || "";
+    wrap.appendChild(svg);
+    return wrap;
+  }
+
   function button(label, className = "btn", onClick = null) {
     const el = node("button", className, label);
     el.type = "button";
@@ -171,8 +186,9 @@
   }
 
   function initials(name) {
-    const parts = String(name || "?").trim().split(/\s+/).filter(Boolean);
-    return (parts[0]?.[0] || "?") + (parts.length > 1 ? parts.at(-1)?.[0] || "" : "");
+    const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return "";
+    return (parts[0]?.[0] || "") + (parts.length > 1 ? parts.at(-1)?.[0] || "" : "");
   }
 
   function formatDuration(minutes) {
@@ -284,11 +300,13 @@
     );
 
     const actions = node("div", "top-actions");
-    const searchBtn = button(icon.search, "icon-btn", () => go("search"));
+    const searchBtn = button("", "icon-btn", () => go("search"));
     searchBtn.setAttribute("aria-label", "Search");
-    const bell = button(icon.bell, `icon-btn ${unread ? "badge-dot" : ""}`, () => go("notifications"));
+    searchBtn.appendChild(uiIcon("search"));
+    const bell = button("", `icon-btn ${unread ? "badge-dot" : ""}`, () => go("notifications"));
     bell.setAttribute("aria-label", "Notifications");
     bell.dataset.count = String(Math.min(99, unread));
+    bell.appendChild(uiIcon("bell"));
     const avatar = button("", "icon-btn avatar-btn", () => go("profile"));
     avatar.setAttribute("aria-label", "Profile");
     const avatarUrl = safeImage(discord.avatar_url);
@@ -299,7 +317,12 @@
       image.loading = "lazy";
       avatar.appendChild(image);
     } else {
-      avatar.appendChild(node("span", "avatar-fallback", initials(discord.user_name)));
+      const fallback = initials(discord.user_name);
+      avatar.appendChild(
+        fallback
+          ? node("span", "avatar-fallback", fallback)
+          : uiIcon("profile"),
+      );
     }
     actions.append(searchBtn, bell, avatar);
     inner.append(brand, nav, actions);
@@ -307,15 +330,16 @@
 
     const bottom = node("nav", "bottom-nav");
     bottom.setAttribute("aria-label", "Cinema mobile navigation");
-    for (const [route, glyph, label] of [
-      ["home", icon.home, "Home"],
-      ["search", icon.search, "Search"],
-      ["library", icon.library, "My Stuff"],
-      ["feeds", icon.feeds, "Feeds"],
-      ["profile", icon.profile, "Profile"],
+    for (const [route, iconName, label] of [
+      ["home", "home", "Home"],
+      ["search", "search", "Search"],
+      ["library", "library", "My Stuff"],
+      ["feeds", "feeds", "Feeds"],
+      ["profile", "profile", "Profile"],
     ]) {
-      const b = button(`${glyph}\n${label}`, activeView === route ? "active" : "");
-      b.style.whiteSpace = "pre-line";
+      const b = button("", activeView === route ? "active" : "");
+      b.setAttribute("aria-label", label);
+      b.append(uiIcon(iconName), node("span", "bottom-nav-label", label));
       b.addEventListener("click", () => go(route));
       bottom.appendChild(b);
     }
