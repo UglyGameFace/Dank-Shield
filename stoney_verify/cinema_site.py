@@ -309,6 +309,31 @@ def _cached_member_guilds(user_id: int) -> list[Any]:
     return output
 
 
+def _recent_oauth_guild_proof(
+    request: web.Request,
+    user_id: int,
+    guild_id: int,
+) -> bool:
+    """Accept the short-lived signed guild list returned by Discord OAuth.
+
+    Standalone Cinema login already asks Discord for the member's current guilds.
+    Requiring a second bot REST member lookup on every Home/Search/Profile API
+    request made valid standalone browsing depend on bot member-cache/REST health.
+    The signed guild proof lasts only CINEMA_GUILDS_TTL_SECONDS and is accepted
+    only while Dank Shield itself still shares that guild.
+    """
+
+    uid = int(user_id)
+    gid = int(guild_id)
+    if uid <= 0 or gid <= 0 or _bot_guild(gid) is None:
+        return False
+    allowed = validate_cinema_guilds(
+        uid,
+        str(request.cookies.get(CINEMA_GUILDS_COOKIE, "") or ""),
+    )
+    return gid in allowed
+
+
 def _cinema_entry_html(
     *,
     user_id: int = 0,
@@ -372,7 +397,7 @@ def _cinema_entry_html(
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=2">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=3">
 </head>
 <body>
   <div class="app-shell">
@@ -595,16 +620,9 @@ async def cinema_oauth_callback(request: web.Request) -> web.Response:
                 ),
                 status=403,
             )
-        member = await _fetch_site_member(target_guild, user_id)
-        if member is None:
-            return _cinema_entry_response(
-                user_id=user_id,
-                error=(
-                    "Dank Shield could not verify current membership in that "
-                    "Cinema server."
-                ),
-                status=403,
-            )
+        # Discord's fresh /users/@me/guilds response is the authoritative
+        # standalone-login membership proof. Do not immediately require a
+        # second bot REST member lookup that can fail on cache/REST health.
         response: web.StreamResponse = web.HTTPFound(
             f"/cinema/{target_guild}"
         )
@@ -670,8 +688,10 @@ async def cinema_open_guild(request: web.Request) -> web.Response:
             error="That Dank Cinema server is unavailable.",
             status=404,
         )
-    member = await _fetch_site_member(guild_id, int(user_id))
-    if member is None:
+    if (
+        not _recent_oauth_guild_proof(request, int(user_id), guild_id)
+        and await _fetch_site_member(guild_id, int(user_id)) is None
+    ):
         return _cinema_entry_response(
             user_id=int(user_id),
             error="You must currently be a member of that Discord server.",
@@ -719,7 +739,10 @@ async def _site_identity(request: web.Request) -> tuple[int, int]:
     if uid is None:
         raise web.HTTPUnauthorized(text="Sign in to Dank Cinema again.")
 
-    if await _fetch_site_member(guild_id, int(uid)) is None:
+    if (
+        not _recent_oauth_guild_proof(request, int(uid), guild_id)
+        and await _fetch_site_member(guild_id, int(uid)) is None
+    ):
         raise web.HTTPForbidden(
             text="Dank Cinema requires membership in this Discord server."
         )
@@ -2012,12 +2035,12 @@ def _site_html(guild_id: int, user_id: int) -> str:
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=1">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=3">
 </head>
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=1" defer></script>
+  <script src="/cinema/assets/site.js?v=3" defer></script>
 </body>
 </html>"""
 
