@@ -4934,42 +4934,50 @@ class MovieNightHubView(_OwnedView):
         await self._cast_latest(interaction, False)
 
     async def _cast_latest(self, interaction: discord.Interaction, approve: bool) -> None:
-        room = _room_for_interaction(interaction)
-        if room is None:
-            return await _movie_hub_notice(
-                interaction,
-                "ℹ️ No Movie Night room is active here.",
-            )
-        manager = get_movie_night_manager()
-        manager.join_room(room.room_id, user_id=int(interaction.user.id))
-        vote = _latest_open_vote(room)
-        if vote is None:
-            return await _movie_hub_notice(
-                interaction,
-                "ℹ️ There is no open Movie Night vote.",
-                room=room,
-            )
-        try:
-            vote = manager.cast_vote(
-                room.room_id,
-                vote.vote_id,
-                user_id=int(interaction.user.id),
-                approve=approve,
-            )
-        except Exception as exc:
-            return await _movie_hub_notice(
-                interaction,
-                f"❌ Vote failed: {exc}",
-                room=room,
-            )
-        if vote.resolved and vote.passed and vote.action in {"search", "play_variant", "end"}:
-            return await _execute_passed_vote(interaction, room, vote)
-        await open_movie_night(interaction, replace_message=True)
+        await _cast_latest_cinema_vote(interaction, approve=approve)
 
     @discord.ui.button(label="More", style=discord.ButtonStyle.secondary, row=1, custom_id="dank:movie:hub:more")
     async def more(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_movie_night_more(interaction, replace_message=True)
+
+
+async def _cast_latest_cinema_vote(
+    interaction: discord.Interaction,
+    *,
+    approve: bool,
+) -> None:
+    room = _room_for_interaction(interaction)
+    if room is None:
+        return await _movie_hub_notice(
+            interaction,
+            "ℹ️ No Dank Cinema session is active here.",
+        )
+    manager = get_movie_night_manager()
+    manager.join_room(room.room_id, user_id=int(interaction.user.id))
+    vote = _latest_open_vote(room)
+    if vote is None:
+        return await _movie_hub_notice(
+            interaction,
+            "ℹ️ There is no open Dank Cinema vote.",
+            room=room,
+        )
+    try:
+        vote = manager.cast_vote(
+            room.room_id,
+            vote.vote_id,
+            user_id=int(interaction.user.id),
+            approve=approve,
+        )
+    except Exception as exc:
+        return await _movie_hub_notice(
+            interaction,
+            f"❌ Vote failed: {exc}",
+            room=room,
+        )
+    if vote.resolved and vote.passed and vote.action in {"search", "play_variant", "end"}:
+        return await _execute_passed_vote(interaction, room, vote)
+    await open_movie_night(interaction, replace_message=True)
 
 
 async def open_movie_night(
@@ -5211,14 +5219,165 @@ async def open_movie_night_command(
     await open_movie_night(interaction, replace_message=False)
 
 
+async def open_cinema_home_command(interaction: discord.Interaction) -> None:
+    await open_movie_night(interaction, replace_message=False)
+
+
+async def start_cinema_watch_party_command(interaction: discord.Interaction) -> None:
+    await _start_or_join_room(interaction, mode="watch_party")
+
+
+async def start_cinema_private_command(interaction: discord.Interaction) -> None:
+    await _start_or_join_room(interaction, mode="private")
+
+
+async def join_cinema_command(interaction: discord.Interaction) -> None:
+    guild = interaction.guild
+    channel = interaction.channel
+    if guild is None or channel is None:
+        return await _private(interaction, "❌ Dank Cinema only works inside a server.")
+
+    manager = get_movie_night_manager()
+    room = manager.active_room_for_channel(int(guild.id), int(channel.id))
+    if room is None:
+        return await _private(
+            interaction,
+            "ℹ️ No Dank Cinema session is active in this channel. Use /cinema start or /cinema private.",
+        )
+    if not manager.user_can_access(room, int(interaction.user.id)):
+        return await _private(
+            interaction,
+            "🔒 This Private Session is invite-only.",
+        )
+
+    manager.join_room(room.room_id, user_id=int(interaction.user.id))
+    await open_movie_night(
+        interaction,
+        replace_message=False,
+        recovery_notice="✅ Joined the active Dank Cinema session.",
+    )
+
+
+async def leave_cinema_command(interaction: discord.Interaction) -> None:
+    guild = interaction.guild
+    channel = interaction.channel
+    if guild is None or channel is None:
+        return await _private(interaction, "❌ Dank Cinema only works inside a server.")
+
+    manager = get_movie_night_manager()
+    room = manager.active_room_for_channel(int(guild.id), int(channel.id))
+    if room is None:
+        return await _private(interaction, "ℹ️ No Dank Cinema session is active in this channel.")
+
+    user_id = int(interaction.user.id)
+    if not manager.user_can_access(room, user_id):
+        return await _private(interaction, "🔒 This Private Session is invite-only.")
+    if user_id not in room.viewers:
+        return await _private(interaction, "ℹ️ You are not currently joined to this Dank Cinema session.")
+
+    was_host = user_id == int(room.host_id)
+    manager.leave_room(room.room_id, user_id=user_id)
+    await _private(
+        interaction,
+        (
+            "👑 You left the session. The room stays active and enters the existing host-away flow; "
+            "use Pass Host before leaving when another viewer should take control."
+            if was_host
+            else "✅ You left the Dank Cinema session. The room continues for the remaining viewers."
+        ),
+    )
+
+
+async def open_cinema_queue_command(interaction: discord.Interaction) -> None:
+    room = _room_for_interaction(interaction)
+    if room is None:
+        return await _movie_hub_notice(
+            interaction,
+            "ℹ️ No accessible Dank Cinema session is active here.",
+        )
+    get_movie_night_manager().join_room(
+        room.room_id,
+        user_id=int(interaction.user.id),
+    )
+    await _replace(
+        interaction,
+        embed=_queue_embed(room),
+        view=_movie_hub_view(interaction, room),
+    )
+
+
+async def open_cinema_info_command(interaction: discord.Interaction) -> None:
+    room = _room_for_interaction(interaction)
+    if room is None:
+        return await _movie_hub_notice(
+            interaction,
+            "ℹ️ No accessible Dank Cinema session is active here.",
+        )
+    await _replace(
+        interaction,
+        embed=_session_status_embed(interaction, room),
+        view=_movie_hub_view(interaction, room),
+    )
+
+
+@app_commands.describe(choice="Vote yes or no on the current open Dank Cinema vote.")
+@app_commands.choices(
+    choice=[
+        app_commands.Choice(name="Yes", value="yes"),
+        app_commands.Choice(name="No", value="no"),
+    ]
+)
+async def vote_cinema_command(
+    interaction: discord.Interaction,
+    choice: str,
+) -> None:
+    approve = str(choice or "").casefold() == "yes"
+    await _cast_latest_cinema_vote(interaction, approve=approve)
+
+
+def build_cinema_command_group() -> app_commands.Group:
+    group = app_commands.Group(
+        name="cinema",
+        description="Open and control Dank Cinema.",
+    )
+    commands = (
+        ("home", "Open the Dank Cinema hub.", open_cinema_home_command),
+        ("start", "Start or rejoin a Watch Party in this channel.", start_cinema_watch_party_command),
+        ("private", "Start or rejoin a Private Session in this channel.", start_cinema_private_command),
+        ("join", "Join the active Dank Cinema session in this channel.", join_cinema_command),
+        ("leave", "Leave the active session without ending it.", leave_cinema_command),
+        ("queue", "Show the active Dank Cinema queue.", open_cinema_queue_command),
+        ("info", "Show session, host, viewer, and lifecycle status.", open_cinema_info_command),
+        ("vote", "Vote on the current open Dank Cinema action.", vote_cinema_command),
+    )
+    for name, description, callback in commands:
+        group.add_command(
+            app_commands.Command(
+                name=name,
+                description=description,
+                callback=callback,
+            )
+        )
+    return group
+
+
 __all__ = [
     "CustomSourceModal",
     "MovieNightHubView",
     "MovieNightSetupView",
     "MovieNightSourcesView",
     "SourceActionView",
+    "build_cinema_command_group",
+    "join_cinema_command",
+    "leave_cinema_command",
+    "open_cinema_home_command",
+    "open_cinema_info_command",
+    "open_cinema_queue_command",
     "open_movie_night",
     "open_movie_night_command",
     "open_movie_night_setup",
     "open_movie_night_sources",
+    "start_cinema_private_command",
+    "start_cinema_watch_party_command",
+    "vote_cinema_command",
 ]

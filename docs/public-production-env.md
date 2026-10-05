@@ -70,21 +70,22 @@ public_server_env_id_guard public mode active; deployment-level Discord IDs are 
 globals: startup summary: {'guild': 0, ...}
 globals: supabase status: state=ready ... service_role_present=True
 commands_ext registration complete. ... profile=public
-public_command_surface_v2 compact UI installed roots=['View Dank Profile', 'captions', 'dank', 'mod', 'movie', 'role', 'ticket', 'tickets', 'toke', 'verify'] dank_children=['home', 'purge', 'setup', 'upload'] ...
+public_command_surface_v2 compact UI installed roots=['View Dank Profile', 'captions', 'cinema', 'dank', 'mod', 'movie', 'role', 'ticket', 'tickets', 'toke', 'verify'] dank_children=['home', 'purge', 'setup', 'upload'] ...
 ```
 
-The intentional **final** public global application-command surface is exactly **10** commands/items:
+The intentional **final** public global application-command surface is exactly **11** commands/items:
 
 1. `/dank` — app-style Dank Shield entry group
 2. `/captions` — ordinary-server Live Captions, session status, and personal voice consent
-3. `/mod` — one moderation/member center doorway
-4. `/movie` — Movie Night hub; optional authorized magnet or .torrent attachment starts/changes the room media
-5. `/role` — smart Roles & Profiles doorway; optional member/role shortcuts reuse existing guarded surfaces
-6. `/ticket` — one current-ticket controls doorway
-7. `/tickets` — one ticket queues/setup/routing doorway
-8. `/toke` — ping the configured opt-in crowd with optional short text or image/GIF media; Community & Pings starter role required
-9. `/verify` — one verification status/repair doorway
-10. `View Dank Profile` user context menu
+3. `/cinema` — branded Dank Cinema command group with `home`, `start`, `private`, `join`, `leave`, `queue`, `info`, and `vote`
+4. `/mod` — one moderation/member center doorway
+5. `/movie` — backward-compatible Movie Night hub; optional authorized magnet or .torrent attachment starts/changes the room media
+6. `/role` — smart Roles & Profiles doorway; optional member/role shortcuts reuse existing guarded surfaces
+7. `/ticket` — one current-ticket controls doorway
+8. `/tickets` — one ticket queues/setup/routing doorway
+9. `/toke` — ping the configured opt-in crowd with optional short text or image/GIF media; Community & Pings starter role required
+10. `/verify` — one verification status/repair doorway
+11. `View Dank Profile` user context menu
 
 `/dank` intentionally exposes only four direct children:
 
@@ -92,6 +93,23 @@ The intentional **final** public global application-command surface is exactly *
 - `/dank purge` — the compact destructive-cleanup entrypoint that remains a direct command for explicit targeting and confirmation.
 - `/dank setup` — the guided onboarding/setup entrypoint restored for discoverability while advanced setup tools stay inside the UI. Its **Live Captions** section can select/create the ordinary-server caption output, allow all VCs or selected VCs/categories/exclusions, and choose **Original**, **English**, or **Original + English** caption text. Gemini Live input defaults to automatic detection across its supported languages and code-switching.
 - `/dank upload` — the compact **card-asset** attachment command for a Join Card background, Exit Card background, or custom card font. The only other approved attachment doorways are `/toke upload:` for optional Toke image/GIF media and `/movie torrent:` for Movie Night torrent metadata. Discord buttons still cannot provide attachment fields.
+
+
+
+### Dank Cinema Discord shortcuts
+
+The branded `/cinema` group is a thin command facade over the same canonical Movie Night/Cinema runtime used by `/movie` and the website. It does not create a second room, queue, vote, sync, or persistence owner.
+
+- `/cinema home` — open the Cinema hub.
+- `/cinema start` — start or rejoin a Watch Party in the current channel.
+- `/cinema private` — start or rejoin a Private Session in the current channel.
+- `/cinema join` — join an already-active accessible session without creating one.
+- `/cinema leave` — leave without ending the room; a host who leaves enters the existing host-away lifecycle.
+- `/cinema queue` — show the canonical active queue.
+- `/cinema info` — show canonical session/host/viewer/lifecycle status.
+- `/cinema vote` — vote Yes/No on the current open Cinema action.
+
+`/movie` remains available for compatibility and for its optional magnet/.torrent attachment fields.
 
 Former roots such as `/ticket-intake`, `/ticket-category`, and `/ticket-panel` are not public autocomplete commands anymore. Their implementation modules remain loaded and their actions are available inside `/tickets`. Likewise, former `/dank` shortcuts such as status/diagnostics/welcome are reached through `/dank home` rather than separate autocomplete entries.
 

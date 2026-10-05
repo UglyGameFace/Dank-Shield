@@ -123,8 +123,9 @@ def _help_embed() -> discord.Embed:
         name="Optional fast doorways",
         value=(
             "`/captions` — ordinary server voice captions and personal consent\n"
+            "`/cinema` — Dank Cinema session, queue, info, and vote shortcuts\n"
             "`/mod` — moderation/member center\n"
-            "`/movie` — Movie Night hub; optional magnet or .torrent attachment starts media\n"
+            "`/movie` — backward-compatible Movie Night hub; optional magnet or .torrent attachment starts media\n"
             "`/role` — smart Roles & Profiles doorway with member/role shortcuts\n"
             "`/ticket` — current ticket controls\n"
             "`/tickets` — queues, ticket setup, routing, categories\n"
@@ -844,7 +845,7 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
 
     from .public_live_captions import open_server_live_captions_command
     from .public_mod_command_center import open_mod_command_center
-    from .public_movie_night import open_movie_night_command
+    from .public_movie_night import build_cinema_command_group, open_movie_night_command
     from .public_role_center import open_role_command
     from .public_ticket_command_center import (
         open_current_ticket_center,
@@ -867,12 +868,15 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
         _remove_tree_command(tree, name)
         tree.add_command(_standalone(name, description, callback))
 
+    _remove_tree_command(tree, "cinema")
+    tree.add_command(build_cinema_command_group())
+
     for retired_root in ("ticket-intake", "ticket-category", "ticket-panel"):
         _remove_tree_command(tree, retired_root)
 
     size = _compact_dank_children(tree)
     roots = sorted(str(getattr(item, "name", "")) for item in tree.get_commands(guild=None))
-    expected_roots = {"captions", "dank", "mod", "movie", "role", "ticket", "tickets", "toke", "verify"}
+    expected_roots = {"captions", "cinema", "dank", "mod", "movie", "role", "ticket", "tickets", "toke", "verify"}
     command_roots = {name for name in roots if name != "View Dank Profile"}
     if command_roots != expected_roots:
         raise RuntimeError(

@@ -32,10 +32,11 @@ def _labels(view: discord.ui.View) -> set[str]:
 
 
 def test_movie_is_one_compact_public_doorway() -> None:
-    assert PUBLIC_GLOBAL_COMMAND_COUNT == 10
+    assert PUBLIC_GLOBAL_COMMAND_COUNT == 11
     assert PUBLIC_GLOBAL_COMMAND_NAMES == (
         "dank",
         "captions",
+        "cinema",
         "mod",
         "movie",
         "role",
@@ -58,6 +59,36 @@ def test_movie_is_one_compact_public_doorway() -> None:
     assert params["torrent"].type is discord.AppCommandOptionType.attachment
     assert not bool(getattr(params["magnet"], "required", True))
     assert not bool(getattr(params["torrent"], "required", True))
+
+
+def test_cinema_group_exposes_branded_shortcuts_and_keeps_movie_compatibility() -> None:
+    group = movie_ui.build_cinema_command_group()
+    assert isinstance(group, app_commands.Group)
+    assert group.name == "cinema"
+
+    commands = {command.name: command for command in group.commands}
+    assert set(commands) == {
+        "home",
+        "start",
+        "private",
+        "join",
+        "leave",
+        "queue",
+        "info",
+        "vote",
+    }
+    assert set(getattr(commands["vote"], "_params", {})) == {"choice"}
+    choice = commands["vote"]._params["choice"]
+    assert choice.type is discord.AppCommandOptionType.string
+    assert {item.value for item in choice.choices} == {"yes", "no"}
+
+    movie = _standalone(
+        "movie",
+        "Open Movie Night.",
+        movie_ui.open_movie_night_command,
+    )
+    assert isinstance(movie, app_commands.Command)
+    assert movie.name == "movie"
 
 
 def test_movie_night_hub_and_admin_surfaces_are_progressively_disclosed() -> None:

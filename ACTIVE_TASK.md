@@ -1103,3 +1103,80 @@ Repair:
 - update the provider-safety regression to assert the current solo controls and explicitly verify no primary candidate button carries an external URL.
 
 No provider runtime, torrent runtime, queue semantics, or collaborative multi-viewer voting behavior was weakened.
+
+## Post-#442 canary defect — missing Discord /cinema command surface
+
+Production baseline:
+`main@d004d4ea1cdab1dffbbb59f289e4e84419b401bf` (PR #442 merged; post-merge Dank Shield CI, Cinema SQL, Ticket Owner Override, and Supabase migration workflows green).
+
+Android/Discord canary evidence:
+- the user cannot see a `/cinema` command or the planned Cinema shortcut commands;
+- current production exposes only the legacy `/movie` Cinema doorway.
+
+Root cause:
+- the website `/cinema` route was implemented, but the Discord public registrar still intentionally compacted the global application-command tree to the old 10-item contract;
+- `public_command_surface_v2` rejected any root outside `captions/dank/mod/movie/role/ticket/tickets/toke/verify`;
+- the planned branded Discord command group therefore never reached global sync.
+
+Active correction branch:
+`fix/cinema-discord-command-surface`
+
+Correction contract:
+- keep `/movie` unchanged for backward compatibility and its optional magnet/.torrent attachment fields;
+- expose one branded `/cinema` application-command group;
+- expose `/cinema home`, `start`, `private`, `join`, `leave`, `queue`, `info`, and `vote`;
+- all shortcuts reuse the existing MovieNightManager, room lookup, queue, vote, status, sync, and lifecycle owners;
+- do not create duplicate room state, queue state, voting, persistence, or playback authority;
+- `/cinema join` never creates a room;
+- `/cinema leave` never ends a room and preserves the existing host-away lifecycle;
+- private-session access remains fail-closed.
+
+Validation required:
+- command-contract and command-friction audits;
+- command group regression proving all eight children and Yes/No vote choices;
+- existing `/movie` parameter regression remains green;
+- full Dank Shield CI and all triggered companion workflows on the exact PR head;
+- branch 0 behind current main and final diff hygiene;
+- after merge/deploy, Discord global command sync must visibly expose `/cinema` and all children while `/movie` still works.
+
+Do not claim this canary defect resolved until the exact-head CI, merge/deploy, and live Discord autocomplete check pass.
+
+
+## PR #443 first exact-head CI failure and correction
+
+Exact head `7d22c069632e74927b73beaa8a5a40a843a55707` reached the complete unit suite and finished with **2842 passed / 2 failed**.
+
+Both failures were stale final-command-tree expectations:
+- `tests/test_command_ux_024_reassertion.py` still required the pre-Cinema root set;
+- `tests/test_welcome_card_live_command_tree.py` still required the pre-Cinema root set.
+
+The actual final command tree was correct in both failures and contained:
+`captions, cinema, dank, mod, movie, role, ticket, tickets, toke, verify`
+plus the `View Dank Profile` context command.
+
+Correction:
+- update both stale root-set expectations to include `cinema`;
+- strengthen the live command-tree regression to require `/cinema` to be an `app_commands.Group`;
+- require exactly the intended children: `home/start/private/join/leave/queue/info/vote`;
+- preserve the existing assertion that all legacy fast doorways remain standalone commands.
+
+No runtime Cinema implementation changed in this correction. Validate the new exact head before marking PR #443 ready.
+
+
+## PR #443 command-contract sweep after first CI failure
+
+The first CI failure stopped before standalone tool/audit steps, so the same command-surface root cause was checked across remaining validation/runtime documentation.
+
+Additional stale pre-Cinema contracts found and corrected:
+- `tools/test_dank_command_payload.py` still rejected any final root set containing `cinema`; it now expects the canonical Cinema root.
+- `public_help_group.BORING_PUBLIC_TARGET` did not include `cinema`, which would have falsely labeled the new canonical command as unexpected in the command audit UI.
+- the compact Home help embed did not advertise `/cinema`.
+- `CLAUDE.md` and `docs/COMMAND_NATIVE_OWNERSHIP_AUDIT.md` still described the old ten-item public surface.
+
+These are not unrelated cleanups. They are the same command-surface contract that caused the first #443 CI failure and are required so runtime diagnostics, standalone validation, and architecture documentation agree with the registrar.
+
+Next step:
+- validate the new exact head through full Dank Shield CI and all companion workflows;
+- patch only evidence-backed failures;
+- if green, verify branch is 0 behind main, final diff hygiene, then mark PR #443 ready for review;
+- after merge/deploy, verify Discord autocomplete exposes `/cinema` and all eight children while `/movie` remains available.

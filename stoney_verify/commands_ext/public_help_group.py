@@ -68,6 +68,7 @@ STALE_TOP_LEVEL_MOVES = {
 BORING_PUBLIC_TARGET = {
     "dank",
     "captions",
+    "cinema",
     "mod",
     "movie",
     "role",
@@ -198,8 +199,9 @@ def _overview_embed() -> discord.Embed:
         "What the command groups mean",
         "`/dank` setup and the main app-style control center\n"
         "`/captions` ordinary-server Live Captions and personal voice consent\n"
+        "`/cinema` branded Dank Cinema shortcuts for sessions, queue, info, and voting\n"
         "`/mod` moderation/member center\n"
-        "`/movie` Movie Night hub, setup, group voting, and authorized torrent/media playback\n"
+        "`/movie` backward-compatible Movie Night hub with magnet/.torrent attachment support\n"
         "`/role` Roles & Profiles, self-service roles, and guarded staff shortcuts\n"
         "`/ticket` actions for the current ticket\n"
         "`/tickets` server-wide ticket management\n"

@@ -17,6 +17,7 @@ The normal public application-command surface remains exactly:
 
 - `/dank`
 - `/captions`
+- `/cinema`
 - `/mod`
 - `/movie`
 - `/role`
@@ -149,7 +150,7 @@ Exact-head validation for this migration must prove:
 
 1. importing the four legacy guard modules leaves discord.py classes unchanged;
 2. `create_discord_bot(...)` produces the native Bot or AutoShardedBot owner and a `DankCommandTree`;
-3. the public ten-command and four-child `/dank` contract passes when correct and fails closed on drift;
+3. the public eleven-item and four-child `/dank` contract passes when correct and fails closed on drift;
 4. unchanged global sync state persists and is honored;
 5. beta-sync defaults false unless explicitly overridden;
 6. existing command surface, setup, invite, ticket, design, role, and event-boundary audits remain green;
