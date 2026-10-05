@@ -100,6 +100,8 @@ The intentional **final** public global application-command surface is exactly *
 
 The branded `/cinema` group is a thin command facade over the same canonical Movie Night/Cinema runtime used by `/movie` and the website. It does not create a second room, queue, vote, sync, or persistence owner.
 
+`/cinema` is intentionally **guild-install only** and guild-context only. Cinema requires the server-installed Dank Shield bot because website access verifies the exact Discord server through that bot identity. A user-installed/personal app invocation is rejected before any Cinema link is generated.
+
 - `/cinema home` — open the Cinema hub.
 - `/cinema start` — start or rejoin a Watch Party in the current channel.
 - `/cinema private` — start or rejoin a Private Session in the current channel.
