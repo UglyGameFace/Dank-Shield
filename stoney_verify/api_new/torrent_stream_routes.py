@@ -81,6 +81,8 @@ def _ffmpeg_audio_command(
             "-dn",
             "-c:a",
             "aac",
+            "-threads",
+            "1",
             "-b:a",
             "160k",
             "-ac",
