@@ -612,6 +612,10 @@ async def _site_identity(request: web.Request) -> tuple[int, int]:
             str(request.cookies.get(CINEMA_SESSION_COOKIE, "") or ""),
         )
     if uid is None:
+        uid = validate_cinema_identity(
+            str(request.cookies.get(CINEMA_IDENTITY_COOKIE, "") or "")
+        )
+    if uid is None:
         raise web.HTTPUnauthorized(text="Sign in to Dank Cinema again.")
 
     if await _fetch_site_member(guild_id, int(uid)) is None:
@@ -1956,6 +1960,37 @@ async def cinema_site_page(request: web.Request) -> web.Response:
             secure=True,
             samesite="Lax",
             path=f"/cinema/{int(guild_id)}",
+        )
+
+    identity = cinema_identity_value(user_id)
+    if identity:
+        response.set_cookie(
+            CINEMA_IDENTITY_COOKIE,
+            identity,
+            max_age=CINEMA_IDENTITY_TTL_SECONDS,
+            httponly=True,
+            secure=True,
+            samesite="Lax",
+            path="/cinema",
+        )
+
+    remembered = set(
+        validate_cinema_guilds(
+            user_id,
+            str(request.cookies.get(CINEMA_GUILDS_COOKIE, "") or ""),
+        )
+    )
+    remembered.add(int(guild_id))
+    guilds_value = cinema_guilds_value(user_id, sorted(remembered))
+    if guilds_value:
+        response.set_cookie(
+            CINEMA_GUILDS_COOKIE,
+            guilds_value,
+            max_age=CINEMA_GUILDS_TTL_SECONDS,
+            httponly=True,
+            secure=True,
+            samesite="Lax",
+            path="/cinema",
         )
     return response
 
