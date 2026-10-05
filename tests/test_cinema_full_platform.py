@@ -462,6 +462,8 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'app.router.add_get("/cinema/login", cinema_oauth_login)' in source
     assert 'app.router.add_get("/cinema/auth/callback", cinema_oauth_callback)' in source
     assert 'scope": "identify guilds"' in source
+    assert "_issue_oauth_state(target_guild)" in source
+    assert "_consume_oauth_state(returned_state)" in source
     assert "await _fetch_site_member(target_guild, user_id)" in source
     assert "if await _fetch_site_member(guild_id, int(uid)) is None:" in source
     assert "_SITE_MEMBER_CACHE_SECONDS = 30.0" in source
@@ -470,6 +472,50 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'initialUrl.searchParams.delete("sig")' in script
     assert 'history.replaceState(' in script
     assert 'const AUTH_QUERY = "";' in script
+
+
+def test_cinema_oauth_state_survives_mobile_cookie_handoff_and_is_one_time() -> None:
+    cinema_site._CINEMA_OAUTH_STATES.clear()
+    state = cinema_site._issue_oauth_state(123)
+
+    assert state
+    assert cinema_site._consume_oauth_state(state) == 123
+    assert cinema_site._consume_oauth_state(state) is None
+
+
+def test_cinema_oauth_env_normalizes_quotes_and_supports_exact_redirect_override(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_CINEMA_DISCORD_CLIENT_ID", '"123456"')
+    monkeypatch.setenv("DANK_CINEMA_DISCORD_CLIENT_SECRET", "'secret-value'")
+    monkeypatch.setenv(
+        "DANK_CINEMA_DISCORD_REDIRECT_URI",
+        '"https://stoneyverify.discloud.dev/cinema/auth/callback"',
+    )
+
+    status = cinema_site.cinema_oauth_status()
+
+    assert status["ready"] is True
+    assert status["client_id_ready"] is True
+    assert status["client_secret_ready"] is True
+    assert status["redirect_uri_ready"] is True
+    assert (
+        status["redirect_uri"]
+        == "https://stoneyverify.discloud.dev/cinema/auth/callback"
+    )
+
+
+def test_cinema_oauth_rejects_wrong_redirect_shape(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_CINEMA_DISCORD_CLIENT_ID", "123456")
+    monkeypatch.setenv("DANK_CINEMA_DISCORD_CLIENT_SECRET", "secret-value")
+    monkeypatch.setenv(
+        "DANK_CINEMA_DISCORD_REDIRECT_URI",
+        "https://stoneyverify.discloud.dev/wrong/callback",
+    )
+
+    status = cinema_site.cinema_oauth_status()
+
+    assert status["ready"] is False
+    assert status["redirect_uri_ready"] is False
+    assert status["redirect_uri"] == ""
 
 
 def test_full_site_episode_playback_is_real_and_host_scoped() -> None:
