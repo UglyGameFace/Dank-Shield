@@ -16,7 +16,7 @@ import time
 from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import aiohttp
 from aiohttp import web
@@ -99,14 +99,25 @@ _JS_PATH = _ASSET_DIR / "cinema_site.js"
 
 _DISCORD_API_BASE = "https://discord.com/api/v10"
 _CINEMA_OAUTH_TARGET_COOKIE = "dank_cinema_oauth_target"
+_CINEMA_OAUTH_STATE_TTL_SECONDS = 10 * 60
+_CINEMA_OAUTH_STATES: dict[str, tuple[float, int]] = {}
 
 
 _SITE_MEMBER_CACHE_SECONDS = 30.0
 _SITE_MEMBER_VERIFIED_UNTIL: dict[tuple[int, int], float] = {}
 
 
+def _clean_env_value(value: Any) -> str:
+    text = str(value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        text = text[1:-1].strip()
+    return text
+
+
 def _discord_oauth_client_id() -> int:
-    configured = str(os.getenv("DANK_CINEMA_DISCORD_CLIENT_ID", "") or "").strip()
+    configured = _clean_env_value(
+        os.getenv("DANK_CINEMA_DISCORD_CLIENT_ID", "")
+    )
     try:
         if configured:
             return int(configured)
@@ -127,16 +138,42 @@ def _discord_oauth_client_id() -> int:
 
 
 def _discord_oauth_client_secret() -> str:
-    return str(
+    return _clean_env_value(
         os.getenv("DANK_CINEMA_DISCORD_CLIENT_SECRET", "")
         or os.getenv("DISCORD_CLIENT_SECRET", "")
         or ""
-    ).strip()
+    )
 
 
 def _discord_oauth_redirect_uri() -> str:
-    base = cinema_public_base()
-    return f"{base}/cinema/auth/callback" if base else ""
+    override = _clean_env_value(
+        os.getenv("DANK_CINEMA_DISCORD_REDIRECT_URI", "")
+    )
+    if override:
+        try:
+            parsed = urlsplit(override)
+        except Exception:
+            return ""
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or parsed.path.rstrip("/") != "/cinema/auth/callback"
+            or parsed.query
+            or parsed.fragment
+        ):
+            return ""
+        return override.rstrip("/")
+
+    base = _clean_env_value(cinema_public_base()).rstrip("/")
+    if not base:
+        return ""
+    try:
+        parsed = urlsplit(base)
+    except Exception:
+        return ""
+    if parsed.scheme != "https" or not parsed.netloc:
+        return ""
+    return f"{base}/cinema/auth/callback"
 
 
 def _discord_oauth_ready() -> bool:
@@ -153,6 +190,54 @@ def cinema_oauth_ready() -> bool:
 
 def cinema_oauth_redirect_uri() -> str:
     return _discord_oauth_redirect_uri()
+
+
+def cinema_oauth_status() -> dict[str, Any]:
+    client_id = _discord_oauth_client_id()
+    secret = _discord_oauth_client_secret()
+    redirect_uri = _discord_oauth_redirect_uri()
+    return {
+        "ready": bool(client_id > 0 and secret and redirect_uri),
+        "client_id_ready": bool(client_id > 0),
+        "client_secret_ready": bool(secret),
+        "redirect_uri_ready": bool(redirect_uri),
+        "redirect_uri": redirect_uri,
+    }
+
+
+def _purge_oauth_states(now: Optional[float] = None) -> None:
+    current = time.monotonic() if now is None else float(now)
+    expired = [
+        key
+        for key, (expires_at, _guild_id) in _CINEMA_OAUTH_STATES.items()
+        if float(expires_at) <= current
+    ]
+    for key in expired:
+        _CINEMA_OAUTH_STATES.pop(key, None)
+
+
+def _issue_oauth_state(target_guild: int = 0) -> str:
+    _purge_oauth_states()
+    state = secrets.token_urlsafe(32)
+    _CINEMA_OAUTH_STATES[state] = (
+        time.monotonic() + _CINEMA_OAUTH_STATE_TTL_SECONDS,
+        max(0, int(target_guild or 0)),
+    )
+    return state
+
+
+def _consume_oauth_state(value: str) -> Optional[int]:
+    _purge_oauth_states()
+    key = str(value or "").strip()
+    if not key:
+        return None
+    row = _CINEMA_OAUTH_STATES.pop(key, None)
+    if row is None:
+        return None
+    expires_at, target_guild = row
+    if float(expires_at) <= time.monotonic():
+        return None
+    return max(0, int(target_guild or 0))
 
 
 def _bot_guild(guild_id: int) -> Any:
@@ -272,12 +357,11 @@ def _cinema_entry_html(
                 'Continue with Discord</a></div>'
                 if _discord_oauth_ready()
                 else (
-                    '<div class="state-card">Standalone Discord login needs the Discord '
-                    'application client secret. Set <strong>DANK_CINEMA_DISCORD_CLIENT_SECRET</strong> '
-                    '(or <strong>DISCORD_CLIENT_SECRET</strong>) and register '
-                    '<strong>/cinema/auth/callback</strong> as the OAuth2 redirect URI. '
-                    'A valid bot-issued Cinema link can still bootstrap this browser once, after '
-                    'which direct /cinema return access works while server membership remains valid.</div>'
+                    '<div class="state-card">Standalone Discord login is not ready on this deployment. '
+                    f'Client ID: <strong>{"ready" if _discord_oauth_client_id() > 0 else "missing"}</strong> • '
+                    f'Client secret: <strong>{"loaded" if bool(_discord_oauth_client_secret()) else "missing"}</strong> • '
+                    f'Redirect URI: <strong>{html.escape(_discord_oauth_redirect_uri() or "missing/invalid")}</strong>. '
+                    'The Discord Developer Portal redirect must match that URI exactly.</div>'
                 )
             )
         )
@@ -352,15 +436,21 @@ async def cinema_entry_page(request: web.Request) -> web.Response:
 
 async def cinema_oauth_login(request: web.Request) -> web.Response:
     if not _discord_oauth_ready():
+        status = cinema_oauth_status()
         return _cinema_entry_response(
-            error="Standalone Discord login is not configured yet.",
+            error=(
+                "Standalone Discord login is not ready. "
+                f"Client ID={'ready' if status['client_id_ready'] else 'missing'}, "
+                f"client secret={'loaded' if status['client_secret_ready'] else 'missing'}, "
+                f"redirect={status['redirect_uri'] or 'missing/invalid'}."
+            ),
             status=503,
         )
-    state = secrets.token_urlsafe(32)
     try:
         target_guild = int(str(request.query.get("guild_id", "") or "") or 0)
     except Exception:
         target_guild = 0
+    state = _issue_oauth_state(target_guild)
     params = {
         "response_type": "code",
         "client_id": str(_discord_oauth_client_id()),
@@ -371,10 +461,13 @@ async def cinema_oauth_login(request: web.Request) -> web.Response:
     response = web.HTTPFound(
         "https://discord.com/oauth2/authorize?" + urlencode(params)
     )
+    # Keep the old cookies only as compatibility breadcrumbs. Validation no
+    # longer depends on them, so Discord/mobile browser handoff cannot break
+    # the callback merely by returning in a fresh browser context.
     response.set_cookie(
         CINEMA_OAUTH_STATE_COOKIE,
         state,
-        max_age=600,
+        max_age=_CINEMA_OAUTH_STATE_TTL_SECONDS,
         httponly=True,
         secure=True,
         samesite="Lax",
@@ -384,7 +477,7 @@ async def cinema_oauth_login(request: web.Request) -> web.Response:
         response.set_cookie(
             _CINEMA_OAUTH_TARGET_COOKIE,
             str(target_guild),
-            max_age=600,
+            max_age=_CINEMA_OAUTH_STATE_TTL_SECONDS,
             httponly=True,
             secure=True,
             samesite="Lax",
@@ -396,20 +489,15 @@ async def cinema_oauth_login(request: web.Request) -> web.Response:
 
 
 async def cinema_oauth_callback(request: web.Request) -> web.Response:
-    expected_state = str(
-        request.cookies.get(CINEMA_OAUTH_STATE_COOKIE, "") or ""
-    )
     returned_state = str(request.query.get("state", "") or "")
     code = str(request.query.get("code", "") or "").strip()
-    if (
-        not expected_state
-        or not returned_state
-        or not secrets.compare_digest(expected_state, returned_state)
-        or not code
-        or not _discord_oauth_ready()
-    ):
+    target_guild = _consume_oauth_state(returned_state)
+    if target_guild is None or not code or not _discord_oauth_ready():
         return _cinema_entry_response(
-            error="Discord sign-in expired or could not be verified. Try again.",
+            error=(
+                "Discord sign-in expired or could not be verified. "
+                "Start again from this Cinema site."
+            ),
             status=401,
         )
 
@@ -428,8 +516,20 @@ async def cinema_oauth_callback(request: web.Request) -> web.Response:
                 headers={"Accept": "application/json"},
             ) as token_response:
                 if token_response.status != 200:
-                    raise RuntimeError(
-                        f"Discord token exchange returned HTTP {token_response.status}."
+                    failure_text = (await token_response.text())[:500]
+                    print(
+                        "⚠️ Dank Cinema OAuth token exchange rejected "
+                        f"status={token_response.status} "
+                        f"redirect={_discord_oauth_redirect_uri()} "
+                        f"body={failure_text!r}"
+                    )
+                    return _cinema_entry_response(
+                        error=(
+                            "Discord rejected the Cinema login callback "
+                            f"(HTTP {token_response.status}). Verify the client secret "
+                            "and the exact OAuth2 redirect URI shown on /cinema."
+                        ),
+                        status=502,
                     )
                 token_payload = await token_response.json(content_type=None)
             access_token = str(token_payload.get("access_token") or "").strip()
@@ -484,13 +584,6 @@ async def cinema_oauth_callback(request: web.Request) -> web.Response:
         if guild_id > 0 and _bot_guild(guild_id) is not None:
             shared_ids.append(guild_id)
     shared_ids = sorted(set(shared_ids))[:50]
-
-    try:
-        target_guild = int(
-            str(request.cookies.get(_CINEMA_OAUTH_TARGET_COOKIE, "") or "") or 0
-        )
-    except Exception:
-        target_guild = 0
 
     if target_guild > 0:
         if target_guild not in shared_ids:
