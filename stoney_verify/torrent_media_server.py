@@ -84,7 +84,7 @@ async def _health(request: web.Request) -> web.Response:
             "public_base_url_configured": bool(manager.public_base_url),
             "stream_signing_configured": bool(manager.stream_secret),
             "cinema_ffmpeg_audio_ready": bool(shutil.which("ffmpeg")),
-            "cinema_auth_contract": "signed-session-v6-guild-rest",
+            "cinema_auth_contract": "signed-session-v7-guild-install",
             "cinema_standalone_login_configured": bool(cinema_oauth_ready()),
             "cinema_oauth_client_id_ready": bool(oauth["client_id_ready"]),
             "cinema_oauth_client_secret_ready": bool(oauth["client_secret_ready"]),
