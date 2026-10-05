@@ -12,6 +12,7 @@ import stoney_verify.torrent_streaming as torrent_streaming
 from stoney_verify.api_new.torrent_stream_routes import (
     _bounded_partial_response_end,
     _cast_cors_headers,
+    _ffmpeg_audio_command,
 )
 from stoney_verify import torrent_media_server
 from stoney_verify.torrent_media_server import _validate_public_base_url
@@ -139,6 +140,7 @@ def test_public_site_root_redirects_to_dank_cinema() -> None:
 
 def test_media_health_reports_standalone_cinema_oauth_readiness(monkeypatch) -> None:
     monkeypatch.setattr(torrent_media_server, "cinema_oauth_ready", lambda: True)
+    monkeypatch.setattr(torrent_media_server.shutil, "which", lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None)
     monkeypatch.setattr(
         torrent_media_server,
         "cinema_oauth_redirect_uri",
@@ -153,6 +155,7 @@ def test_media_health_reports_standalone_cinema_oauth_readiness(monkeypatch) -> 
     response = asyncio.run(torrent_media_server._health(SimpleNamespace()))
     payload = __import__("json").loads(response.text)
 
+    assert payload["cinema_ffmpeg_audio_ready"] is True
     assert payload["cinema_standalone_login_configured"] is True
     assert payload["cinema_oauth_redirect_uri"].endswith("/cinema/auth/callback")
 
@@ -780,6 +783,92 @@ def test_stream_url_is_signed_and_expiring(monkeypatch, tmp_path: Path) -> None:
             "bad-signature",
         )
     )
+
+
+def test_browser_audio_compatibility_and_signed_aac_sidecar(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://media.example")
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "audio-secret")
+    manager = _manager(monkeypatch, tmp_path)
+    session = TorrentStreamSession(
+        token="audio",
+        secret="session-secret",
+        owner_id=2,
+        guild_id=1,
+        source_kind="magnet",
+        source_identity="btih:audio",
+        save_root=tmp_path,
+        handle=_FakeHandle(),
+        info=object(),
+        file_index=0,
+        file_path="show.mkv",
+        file_name="show.mkv",
+        file_size=1024 * 1024,
+        file_offset=0,
+        piece_length=256 * 1024,
+        first_piece=0,
+        last_piece=3,
+        created_at=0.0,
+        last_access=0.0,
+        release_metadata={"audio_tags": ["DDP 5.1", "Atmos"]},
+    )
+    manager._sessions[session.token] = session
+
+    release = manager.browser_audio_compatibility(session)
+    assert release["required"] is True
+    assert release["source"] == "release"
+
+    url = manager.compat_audio_url(
+        session,
+        ttl_seconds=600,
+        consumer_key="movie:42:device",
+    )
+    parsed = urlsplit(url)
+    query = parse_qs(parsed.query)
+    assert parsed.path.startswith("/media/torrent/audio/audio/")
+    assert parsed.path.endswith(".m4a")
+    assert query["cid"] == ["movie:42:device"]
+    assert asyncio.run(
+        manager.validate_stream_access(
+            session.token,
+            query["exp"][0],
+            query["sig"][0],
+            query["cid"][0],
+        )
+    )
+
+    session.verified_metadata = {
+        "available": True,
+        "audio_tracks": [{"codec": "aac"}],
+    }
+    verified_safe = manager.browser_audio_compatibility(session)
+    assert verified_safe["required"] is False
+    assert verified_safe["source"] == "verified"
+
+    session.verified_metadata = {
+        "available": True,
+        "audio_tracks": [{"codec": "eac3"}],
+    }
+    verified_risky = manager.browser_audio_compatibility(session)
+    assert verified_risky["required"] is True
+    assert verified_risky["reason"] == "verified:eac3"
+
+
+def test_ffmpeg_audio_sidecar_transcodes_audio_only_to_fragmented_aac() -> None:
+    command = _ffmpeg_audio_command(
+        "/usr/bin/ffmpeg",
+        "http://127.0.0.1:8080/media/torrent/stream/token/movie.mkv?exp=1&sig=x",
+        start_seconds=91.25,
+    )
+
+    assert command[0] == "/usr/bin/ffmpeg"
+    assert "-re" in command
+    assert "-ss" in command
+    assert "91.250" in command
+    assert ["-c:a", "aac"] == command[command.index("-c:a"):command.index("-c:a") + 2]
+    assert "-vn" in command
+    assert "-c:v" not in command
+    assert "frag_keyframe+empty_moov+default_base_moof" in command
+    assert command[-2:] == ["mp4", "pipe:1"]
 
 
 def test_public_media_url_requires_https_outside_localhost(monkeypatch) -> None:

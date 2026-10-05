@@ -3,6 +3,7 @@ from __future__ import annotations
 """Dedicated public media server for signed progressive torrent playback."""
 
 import os
+import shutil
 from typing import Optional
 from urllib.parse import urlsplit
 
@@ -80,6 +81,7 @@ async def _health(request: web.Request) -> web.Response:
             "service": "dank_torrent_media",
             "public_base_url_configured": bool(manager.public_base_url),
             "stream_signing_configured": bool(manager.stream_secret),
+            "cinema_ffmpeg_audio_ready": bool(shutil.which("ffmpeg")),
             "cinema_standalone_login_configured": bool(cinema_oauth_ready()),
             "cinema_oauth_redirect_uri": cinema_oauth_redirect_uri(),
         }
@@ -113,6 +115,11 @@ async def start_torrent_media_server() -> bool:
         print(
             "⚠️ Torrent media server starting without DANK_MEDIA_PUBLIC_BASE_URL; "
             "Site health remains available but no playback URL can be issued yet."
+        )
+    if not shutil.which("ffmpeg"):
+        print(
+            "⚠️ Dank Cinema FFmpeg AAC compatibility is unavailable; "
+            "browser playback will fall back to the source audio codec."
         )
     if not cinema_oauth_ready():
         print(

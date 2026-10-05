@@ -181,7 +181,8 @@ def test_movie_night_player_restores_progress_only_through_host_authority() -> N
     assert "if(!s?.is_host || !s?.stream_url) return;" in html
     assert 'const saved=await jsonFetch("/movie/"+BOOT.roomId+"/progress")' in html
     assert 'await hostAction("seek",{seconds:target})' in html
-    assert 'video.addEventListener("seeked",scheduleHostSeekCommit)' in html
+    assert 'video.addEventListener("seeked",()=>{' in html
+    assert "scheduleHostSeekCommit();" in html
     assert "hostSeekCommitTimer=setTimeout" in html
     assert "persistWatchProgress(true)" in html
     assert "if(key!==lastProgressMediaKey) lastProgressPersistAt=0;" in html
@@ -1354,6 +1355,26 @@ def test_player_layout_recovers_from_mobile_desktop_mode_resizes() -> None:
     assert 'video.style.pointerEvents="none"' in html
     assert "videoStage.style.maxHeight=height+\"px\"" in html
 
+
+
+def test_dank_cinema_uses_ffmpeg_aac_sidecar_without_replacing_video_clock() -> None:
+    html = movie_night_web._watch_html(
+        "room-audio-compat",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    assert 'id="compatAudio"' in html
+    assert "function compatAudioActive()" in html
+    assert "function restartCompatAudio(seconds, shouldPlay=false)" in html
+    assert "function syncCompatAudio(force=false)" in html
+    assert "s?.audio_compat_required && s?.audio_compat_url" in html
+    assert "video.muted=true" in html
+    assert "compatAudio.volume=target" in html
+    assert 'url.searchParams.set("start"' in html
+    assert 'video.addEventListener("seeked",()=>{' in html
+    assert "scheduleCompatAudioRestart(Number(video.currentTime||0)" in html
+    assert "position_seconds:video.currentTime||0" in html
 
 
 def test_dank_cinema_has_real_visual_quality_tiers_and_reduced_motion() -> None:
