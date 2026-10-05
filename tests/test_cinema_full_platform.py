@@ -627,7 +627,10 @@ def test_discord_signed_cinema_link_still_requires_bot_to_share_target_guild(mon
         query=query,
         cookies={},
     )
-    monkeypatch.setattr(cinema_site, "_bot_guild", lambda _guild_id: None)
+    async def absent_guild(_guild_id: int):
+        return "absent", None
+
+    monkeypatch.setattr(cinema_site, "_resolve_bot_guild", absent_guild)
 
     try:
         asyncio.run(cinema_site._site_identity(request))
@@ -635,9 +638,31 @@ def test_discord_signed_cinema_link_still_requires_bot_to_share_target_guild(mon
         from aiohttp import web
 
         assert isinstance(exc, web.HTTPForbidden)
-        assert "no longer available" in exc.text
+        assert "not installed in this Discord server" in exc.text
     else:
         raise AssertionError("A signed Cinema link must not work after Dank Shield leaves the guild.")
+
+
+def test_cinema_guild_remove_invalidates_positive_rest_cache_and_join_restores(monkeypatch) -> None:
+    cinema_site._SITE_GUILD_REST_CACHE.clear()
+    cinema_site._SITE_GUILD_ABSENT_UNTIL.clear()
+    cinema_site._SITE_GUILD_UNAVAILABLE_UNTIL.clear()
+
+    guild = SimpleNamespace(id=100)
+    cinema_site.note_cinema_guild_join(100, guild)
+
+    assert 100 in cinema_site._SITE_GUILD_REST_CACHE
+    assert 100 not in cinema_site._SITE_GUILD_ABSENT_UNTIL
+
+    cinema_site.note_cinema_guild_remove(100)
+
+    assert 100 not in cinema_site._SITE_GUILD_REST_CACHE
+    assert cinema_site._SITE_GUILD_ABSENT_UNTIL.get(100, 0.0) > 0.0
+
+    cinema_site.note_cinema_guild_join(100, guild)
+
+    assert 100 in cinema_site._SITE_GUILD_REST_CACHE
+    assert 100 not in cinema_site._SITE_GUILD_ABSENT_UNTIL
 
 
 def test_cinema_session_is_bounded_to_signed_entry_window(monkeypatch) -> None:
