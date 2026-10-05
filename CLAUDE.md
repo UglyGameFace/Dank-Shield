@@ -71,7 +71,7 @@ Critical, non-obvious facts (verified — do not assume otherwise):
   `startup_guards.interaction_action_lock_guard`.
 - **Slash commands register as an import side effect** (`commands.py` calls
   `register_all_commands(bot, bot.tree)` at module top level). The canonical
-  public surface is ten application commands total: `/dank`, `/captions`, `/mod`,
+  public surface is eleven application commands/items total: `/dank`, `/captions`, `/cinema`, `/mod`,
   `/movie`, `/role`, `/ticket`, `/tickets`, `/toke`, `/verify`, plus `View Dank Profile`. Before normal ready handling,
   the native setup hook fails closed if those roots or the approved direct
   `/dank` children (`home`, `purge`, `setup`, `upload`) drift or disappear.
