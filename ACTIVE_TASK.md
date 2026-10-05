@@ -1161,3 +1161,22 @@ Correction:
 - preserve the existing assertion that all legacy fast doorways remain standalone commands.
 
 No runtime Cinema implementation changed in this correction. Validate the new exact head before marking PR #443 ready.
+
+
+## PR #443 command-contract sweep after first CI failure
+
+The first CI failure stopped before standalone tool/audit steps, so the same command-surface root cause was checked across remaining validation/runtime documentation.
+
+Additional stale pre-Cinema contracts found and corrected:
+- `tools/test_dank_command_payload.py` still rejected any final root set containing `cinema`; it now expects the canonical Cinema root.
+- `public_help_group.BORING_PUBLIC_TARGET` did not include `cinema`, which would have falsely labeled the new canonical command as unexpected in the command audit UI.
+- the compact Home help embed did not advertise `/cinema`.
+- `CLAUDE.md` and `docs/COMMAND_NATIVE_OWNERSHIP_AUDIT.md` still described the old ten-item public surface.
+
+These are not unrelated cleanups. They are the same command-surface contract that caused the first #443 CI failure and are required so runtime diagnostics, standalone validation, and architecture documentation agree with the registrar.
+
+Next step:
+- validate the new exact head through full Dank Shield CI and all companion workflows;
+- patch only evidence-backed failures;
+- if green, verify branch is 0 behind main, final diff hygiene, then mark PR #443 ready for review;
+- after merge/deploy, verify Discord autocomplete exposes `/cinema` and all eight children while `/movie` remains available.
