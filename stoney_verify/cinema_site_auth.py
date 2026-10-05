@@ -209,7 +209,7 @@ def cinema_session_value(
     uid = int(user_id)
     if not secret or gid <= 0 or uid <= 0:
         return ""
-    ttl = max(3600, min(int(ttl_seconds), 30 * 24 * 60 * 60))
+    ttl = max(300, min(int(ttl_seconds), CINEMA_SESSION_TTL_SECONDS))
     expires = int(time.time()) + ttl
     signature = _session_signature(gid, uid, expires)
     return f"{gid}.{uid}.{expires}.{signature}"
