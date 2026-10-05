@@ -165,11 +165,18 @@ def episode_catalog_metadata(
     }
 
 
-def episode_search_query(series_title: Any, season_number: Any, episode_number: Any) -> str:
+def episode_search_query(
+    series_title: Any,
+    season_number: Any,
+    episode_number: Any,
+    series_year: Any = 0,
+) -> str:
     title = _clean(series_title)
     season = max(0, _safe_int(season_number))
     episode = max(0, _safe_int(episode_number))
-    return f"{title} S{season:02d}E{episode:02d}".strip()
+    year = max(0, _safe_int(series_year))
+    identity = f"{title} {year}" if year else title
+    return f"{identity} S{season:02d}E{episode:02d}".strip()
 
 
 def episode_release_matches(
@@ -187,6 +194,16 @@ def episode_release_matches(
     series_tokens = normalized_title_tokens(series_title)
     if not series_tokens or not all(token in release_tokens for token in series_tokens):
         return False
+
+    year = _safe_int(metadata.get("year"), 0)
+    if year:
+        release_years = {
+            int(token)
+            for token in release_tokens
+            if len(token) == 4 and token.isdigit() and 1900 <= int(token) <= 2100
+        }
+        if release_years and year not in release_years:
+            return False
 
     compact = re.sub(r"[^a-z0-9]+", "", release_text)
     patterns = (
