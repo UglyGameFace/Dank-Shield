@@ -125,7 +125,8 @@
       `identity=${data.identity_cookie || "unknown"}`,
       `guildProof=${data.guild_proof_cookie || "unknown"}`,
       `source=${data.selected_source || "unknown"}`,
-      `botGuild=${data.bot_guild_present ? "yes" : "no"}`,
+      `botGuildRest=${data.bot_guild_state || "unknown"}`,
+      `botGuildCache=${data.bot_guild_cache_present ? "yes" : "no"}`,
       `revoked=${data.member_revoked ? "yes" : "no"}`,
       `cookieHeader=${data.cookie_header_present ? "yes" : "no"}`,
     ];

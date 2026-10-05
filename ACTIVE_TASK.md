@@ -1409,3 +1409,66 @@ Acceptance:
 - after deploy, `/health` reports `signed-session-v5-observable`;
 - reproduce the failure once in any browser/device and capture the displayed `Diagnostic:` line or matching Discloud `cinema_auth_debug` log;
 - only then modify auth behavior according to the observed state.
+
+## Evidence-backed root cause — Cinema used guild cache as installation authority
+
+Production diagnostics from `signed-session-v5-observable` reported:
+- `signed=invalid`;
+- `session=missing`;
+- `identity=valid`;
+- `guildProof=invalid`;
+- `source=identity`;
+- `botGuild=no`;
+- `revoked=no`;
+- `cookieHeader=yes`.
+
+What this proves:
+- browser cookies are reaching aiohttp (`cookieHeader=yes`);
+- the identity cookie validates with the current server secret;
+- the canonical member lifecycle did not revoke the user;
+- the server-side guild gate fails because `cinema_site._bot_guild()` calls only `bot.get_guild(guild_id)` and treats a gateway cache miss as proof that Dank Shield is not in the guild.
+
+Discord.py behavior relevant to the fix:
+- `Client.get_guild()` is cache-backed;
+- Discord REST guild/member fetches are the authoritative fallback when cache state is missing;
+- a cache miss must not be treated as guild absence.
+
+Active correction branch:
+`fix/cinema-guild-rest-resolution`
+
+Correction contract:
+- add `_resolve_bot_guild()` with cache -> Discord REST fallback;
+- resolver returns `present`, `absent`, or `unavailable`;
+- Discord REST NotFound/Forbidden means bot genuinely absent;
+- HTTP/rate-limit/timeout/transport failure means temporarily unavailable, never absent;
+- positive REST guild resolution is cached for five minutes, absent for one minute, unavailable for 30 seconds;
+- Cinema member verification uses the resolved Guild object and can then call `fetch_member()` normally;
+- signed links, exact-guild sessions, targeted OAuth, and identity-only access all use REST-confirmed guild presence instead of cache-only presence;
+- targeted OAuth distinguishes `user is not in guild` from `Dank Shield is not installed in guild`;
+- user-facing errors stop blaming member status when the bot itself is absent;
+- diagnostics report `botGuildRest=present|absent|unavailable` separately from `botGuildCache=yes|no`;
+- `/health` marker becomes `signed-session-v6-guild-rest`.
+
+Acceptance:
+- exact-head CI and companion workflows green;
+- after deploy `/health` reports `signed-session-v6-guild-rest`;
+- reproduce `/cinema home -> Open Dank Cinema`;
+- if gateway cache still misses but REST confirms the guild, Home/Search/My Stuff/Feeds/Profile must load;
+- if REST confirms the bot is absent, Cinema must explicitly report that Dank Shield is not installed instead of `requires membership`.
+
+## PR #450 first exact-head CI failure
+
+Exact head `c442acac070002834da445d109daa08832d84bd9` compiled successfully and ran the full suite, finishing with `2857 passed / 1 failed`.
+
+Failure:
+- `test_discord_signed_cinema_link_still_requires_bot_to_share_target_guild` still mocked only the retired cache-only `_bot_guild()` helper, while the production path now uses `_resolve_bot_guild()`;
+- the new positive REST guild cache also revealed a real lifecycle edge case: without explicit invalidation, a recently removed bot could remain REST-confirmed in memory for up to five minutes.
+
+Correction:
+- canonical `on_guild_remove` now calls `note_cinema_guild_remove()` to drop positive REST guild state immediately and mark the guild absent;
+- canonical `on_guild_join` calls `note_cinema_guild_join()` to clear absence and seed positive guild state;
+- member verification caches for that guild are cleared on bot removal;
+- the signed-link regression now mocks the new tri-state resolver instead of the retired cache-only helper;
+- a focused regression proves guild removal invalidates positive REST cache and guild rejoin restores it.
+
+Do not merge #450 until the new exact head completes green.

@@ -203,6 +203,11 @@ async def _create_neutral_config_row(guild: discord.Guild, *, joined: bool) -> N
 
 async def _on_guild_join(guild: discord.Guild) -> None:
     try:
+        try:
+            from ..cinema_site import note_cinema_guild_join
+            note_cinema_guild_join(int(guild.id), guild)
+        except Exception:
+            pass
         await _create_neutral_config_row(guild, joined=True)
         channel = _best_setup_channel(guild)
         if channel is not None:
@@ -217,6 +222,11 @@ async def _on_guild_join(guild: discord.Guild) -> None:
 
 async def _on_guild_remove(guild: discord.Guild) -> None:
     try:
+        try:
+            from ..cinema_site import note_cinema_guild_remove
+            note_cinema_guild_remove(int(guild.id))
+        except Exception:
+            pass
         await _create_neutral_config_row(guild, joined=False)
         print(f"ℹ️ public_onboarding marked bot inactive guild={guild.id} name={guild.name!r}")
     except Exception as e:
