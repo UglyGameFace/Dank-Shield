@@ -766,7 +766,8 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'scope": "identify guilds"' in source
     assert "_issue_oauth_state(target_guild)" in source
     assert "_consume_oauth_state(returned_state)" in source
-    assert "if target_guild not in shared_ids:" in source
+    assert "if target_guild not in user_guild_ids:" in source
+    assert "guild_state, _guild = await _resolve_bot_guild(target_guild)" in source
     assert "await _fetch_site_member(target_guild, user_id)" not in source
     assert "def _recent_oauth_guild_proof(" in source
     assert "validate_cinema_guilds(" in source
@@ -789,6 +790,8 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert "async function authDiagnostics()" in script
     assert 'API_BASE + "/auth-debug"' in script
     assert "function authDiagnosticText(data)" in script
+    assert 'botGuildRest=${data.bot_guild_state || "unknown"}' in script
+    assert 'botGuildCache=${data.bot_guild_cache_present ? "yes" : "no"}' in script
     assert 'return `Diagnostic: ${parts.join(" · ")}`;' in script
 
 
