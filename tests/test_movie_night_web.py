@@ -1368,6 +1368,7 @@ def test_dank_cinema_uses_ffmpeg_aac_sidecar_without_replacing_video_clock() -> 
     assert "function compatAudioActive()" in html
     assert "function restartCompatAudio(seconds, shouldPlay=false)" in html
     assert "function syncCompatAudio(force=false)" in html
+    assert "function startCompatAudioFromGesture(seconds, keepPlaying)" in html
     assert "s?.audio_compat_required && s?.audio_compat_url" in html
     assert "video.muted=true" in html
     assert "compatAudio.volume=target" in html
@@ -1375,6 +1376,27 @@ def test_dank_cinema_uses_ffmpeg_aac_sidecar_without_replacing_video_clock() -> 
     assert 'video.addEventListener("seeked",()=>{' in html
     assert "scheduleCompatAudioRestart(Number(video.currentTime||0)" in html
     assert "position_seconds:video.currentTime||0" in html
+
+
+def test_viewer_sync_starts_aac_compatibility_inside_user_gesture() -> None:
+    html = movie_night_web._watch_html(
+        "room-aac-sync",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+
+    sync_start = html.index("syncButton.onclick=async()=>")
+    sync_end = html.index('document.getElementById("play").onclick', sync_start)
+    sync_block = html[sync_start:sync_end]
+
+    assert "const compatGesturePromise=compatAudioActive()" in sync_block
+    assert "startCompatAudioFromGesture(joinTarget,keepPlaying)" in sync_block
+    assert "const started=video.play();" in sync_block
+    assert "Promise.all([" in sync_block
+    assert sync_block.index("startCompatAudioFromGesture") < sync_block.index("await Promise.all")
+    assert sync_block.index("video.play()") < sync_block.index("await Promise.all")
+    assert sync_block.index("await Promise.all") < sync_block.index("heartbeat(true)")
+    assert "Your browser blocked AAC compatibility audio" in sync_block
 
 
 def test_dank_cinema_has_real_visual_quality_tiers_and_reduced_motion() -> None:
