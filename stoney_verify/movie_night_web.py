@@ -3878,9 +3878,12 @@ function applyCompatAudioState(s) {{
     return;
   }}
   if(compatAudioToken!==token || !compatAudioUrl) {{
+    const tokenChanged=compatAudioToken!==token;
     compatAudioToken=token;
     compatAudioUrl=String(s.audio_compat_url||"");
-    const target=Number(video.currentTime||s.position_seconds||0);
+    const target=tokenChanged
+      ?Number(s.position_seconds||0)
+      :Number(video.currentTime||s.position_seconds||0);
     void restartCompatAudio(target,!video.paused);
   }}
 }}
