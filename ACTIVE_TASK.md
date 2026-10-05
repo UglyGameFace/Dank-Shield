@@ -1242,3 +1242,31 @@ PR #444 contains only the screenshot-backed canary correction:
 - focused regressions.
 
 Do not merge #444 until exact-head CI and every companion workflow are green and the branch remains 0 behind main.
+
+
+## Production canary follow-up — /cinema home signed link does not establish browser login
+
+Observed after merged PR #444:
+- user runs `/cinema home`;
+- presses **Open Dank Cinema**;
+- the Discord button URL is correctly generated as a signed guild/user deep link;
+- Samsung Browser reaches Cinema but is not established as signed in and falls back into the membership/sign-in failure path.
+
+Root cause:
+- `MovieNightHubView` already calls `cinema_site_url(guild_id, user_id)` and includes `uid/exp/sig`;
+- `_site_identity` validates that signature successfully;
+- before returning the first HTML response and minting the HttpOnly session/identity/guild cookies, it still required `_fetch_site_member()`;
+- a member REST/cache miss therefore rejected the valid signed Discord deep link before the browser-session exchange could complete.
+
+Active correction:
+- valid signed Discord Cinema links may perform the one-time initial browser-session exchange without a second member REST lookup;
+- Dank Shield must still currently share the exact target guild;
+- after the initial page response, normal HttpOnly session, identity, and short-lived guild proof cookies are issued;
+- unsigned/expired links do not bypass normal auth/membership checks;
+- existing OAuth exact-guild proof behavior remains unchanged.
+
+Regression requirements:
+- `/cinema home` Open Dank Cinema button must contain exact guild/user `uid/exp/sig`;
+- valid signed entry must return the Cinema page and set session, identity, and guild proof cookies even when member REST is unavailable;
+- signed entry must fail if Dank Shield no longer shares the target guild;
+- full exact-head CI and companion workflows must pass before merge/deploy.
