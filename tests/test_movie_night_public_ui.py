@@ -86,6 +86,13 @@ def test_cinema_group_exposes_branded_shortcuts_and_keeps_movie_compatibility() 
     group = movie_ui.build_cinema_command_group()
     assert isinstance(group, app_commands.Group)
     assert group.name == "cinema"
+    assert group.allowed_installs is not None
+    assert group.allowed_installs.guild is True
+    assert group.allowed_installs.user is False
+    assert group.allowed_contexts is not None
+    assert group.allowed_contexts.guild is True
+    assert group.allowed_contexts.dm_channel is False
+    assert group.allowed_contexts.private_channel is False
 
     commands = {command.name: command for command in group.commands}
     assert set(commands) == {
@@ -110,6 +117,50 @@ def test_cinema_group_exposes_branded_shortcuts_and_keeps_movie_compatibility() 
     )
     assert isinstance(movie, app_commands.Command)
     assert movie.name == "movie"
+
+
+def test_cinema_runtime_rejects_user_install_context(monkeypatch) -> None:
+    notices: list[str] = []
+
+    async def private(_interaction, message: str) -> None:
+        notices.append(message)
+
+    monkeypatch.setattr(movie_ui, "_private", private)
+    interaction = SimpleNamespace(
+        guild_id=100,
+        application_id=555,
+        client=SimpleNamespace(application_id=555),
+        is_guild_integration=lambda: False,
+        is_user_integration=lambda: True,
+    )
+
+    allowed = asyncio.run(movie_ui._require_cinema_guild_install(interaction))
+
+    assert allowed is False
+    assert len(notices) == 1
+    assert "server-installed" in notices[0]
+    assert "personal/user app installation" in notices[0]
+
+
+def test_cinema_runtime_accepts_guild_install_context(monkeypatch) -> None:
+    notices: list[str] = []
+
+    async def private(_interaction, message: str) -> None:
+        notices.append(message)
+
+    monkeypatch.setattr(movie_ui, "_private", private)
+    interaction = SimpleNamespace(
+        guild_id=100,
+        application_id=555,
+        client=SimpleNamespace(application_id=555),
+        is_guild_integration=lambda: True,
+        is_user_integration=lambda: False,
+    )
+
+    allowed = asyncio.run(movie_ui._require_cinema_guild_install(interaction))
+
+    assert allowed is True
+    assert notices == []
 
 
 def test_movie_night_hub_and_admin_surfaces_are_progressively_disclosed() -> None:
