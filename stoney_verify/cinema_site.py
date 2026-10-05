@@ -349,6 +349,34 @@ async def _resolve_bot_guild(guild_id: int) -> tuple[str, Any]:
     return "present", guild
 
 
+def note_cinema_guild_join(guild_id: int, guild: Any = None) -> None:
+    gid = int(guild_id)
+    if gid <= 0:
+        return
+    _SITE_GUILD_ABSENT_UNTIL.pop(gid, None)
+    _SITE_GUILD_UNAVAILABLE_UNTIL.pop(gid, None)
+    if guild is not None:
+        _SITE_GUILD_REST_CACHE[gid] = (
+            time.monotonic() + _SITE_GUILD_CACHE_SECONDS,
+            guild,
+        )
+
+
+def note_cinema_guild_remove(guild_id: int) -> None:
+    gid = int(guild_id)
+    if gid <= 0:
+        return
+    _SITE_GUILD_REST_CACHE.pop(gid, None)
+    _SITE_GUILD_UNAVAILABLE_UNTIL.pop(gid, None)
+    _SITE_GUILD_ABSENT_UNTIL[gid] = (
+        time.monotonic() + _SITE_GUILD_ABSENT_CACHE_SECONDS
+    )
+    for key in [key for key in _SITE_MEMBER_VERIFIED_UNTIL if key[0] == gid]:
+        _SITE_MEMBER_VERIFIED_UNTIL.pop(key, None)
+    for key in [key for key in _SITE_MEMBER_UNAVAILABLE_UNTIL if key[0] == gid]:
+        _SITE_MEMBER_UNAVAILABLE_UNTIL.pop(key, None)
+
+
 def note_cinema_member_join(guild_id: int, user_id: int) -> None:
     gid = int(guild_id)
     uid = int(user_id)
