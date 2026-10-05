@@ -146,6 +146,17 @@ def test_media_health_reports_standalone_cinema_oauth_readiness(monkeypatch) -> 
         "cinema_oauth_redirect_uri",
         lambda: "https://cinema.example/cinema/auth/callback",
     )
+    monkeypatch.setattr(
+        torrent_media_server,
+        "cinema_oauth_status",
+        lambda: {
+            "ready": True,
+            "client_id_ready": True,
+            "client_secret_ready": True,
+            "redirect_uri_ready": True,
+            "redirect_uri": "https://cinema.example/cinema/auth/callback",
+        },
+    )
 
     class Manager:
         public_base_url = "https://cinema.example"
@@ -157,6 +168,9 @@ def test_media_health_reports_standalone_cinema_oauth_readiness(monkeypatch) -> 
 
     assert payload["cinema_ffmpeg_audio_ready"] is True
     assert payload["cinema_standalone_login_configured"] is True
+    assert payload["cinema_oauth_client_id_ready"] is True
+    assert payload["cinema_oauth_client_secret_ready"] is True
+    assert payload["cinema_oauth_redirect_ready"] is True
     assert payload["cinema_oauth_redirect_uri"].endswith("/cinema/auth/callback")
 
 
