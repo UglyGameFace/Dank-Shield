@@ -1381,3 +1381,31 @@ Acceptance:
 - visible browser URL no longer contains `uid`, `exp`, or `sig` after page boot;
 - signed fallback cannot bypass a real member-remove event;
 - exact-head CI and companion workflows pass before merge/deploy.
+
+## Evidence phase — browser-neutral Cinema auth observability
+
+Why this phase exists:
+- repeated production screenshots prove the Cinema shell loads but API-backed Home/Search/My Stuff/Feeds/Profile can still fail with the same membership message;
+- browser standards do not support the previous guesses: same-origin fetches send cookies, the session Path covers deeper Cinema API paths, SameSite=Lax is valid for same-site/top-level navigation, and history.replaceState does not reload the document;
+- current tooling cannot reach the public Discloud hostname from the coding environment, so live request headers/cookies cannot be inspected remotely from here.
+
+Active branch:
+`fix/cinema-auth-observability`
+
+Contract:
+- do not change authorization decisions in this phase;
+- add `/cinema/{guild_id}/api/auth-debug` that reports only safe status labels/booleans, never raw cookie values, signatures, Discord IDs, or bearer tokens;
+- distinguish signed query missing/invalid/valid;
+- distinguish Cinema session cookie missing/invalid/valid;
+- distinguish identity cookie missing/invalid/valid;
+- distinguish guild-proof cookie missing/invalid/valid;
+- report selected auth source, bot-guild presence, canonical member-revocation state, whether any Cookie header reached the server, request secure flag, and forwarded protocol;
+- on any Cinema SPA API failure, automatically fetch this safe diagnostic state and append it to the visible error card;
+- log the same non-secret diagnostic summary server-side for Discloud logs;
+- bump client asset cache to `site.js?v=5` and health contract to `signed-session-v5-observable` so deployment can be proven.
+
+Acceptance:
+- exact-head CI and companion workflows green;
+- after deploy, `/health` reports `signed-session-v5-observable`;
+- reproduce the failure once in any browser/device and capture the displayed `Diagnostic:` line or matching Discloud `cinema_auth_debug` log;
+- only then modify auth behavior according to the observed state.
