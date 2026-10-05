@@ -482,7 +482,6 @@ def _recent_oauth_guild_proof(
     if (
         uid <= 0
         or gid <= 0
-        or _bot_guild(gid) is None
         or _cinema_member_revoked(gid, uid)
     ):
         return False
@@ -946,14 +945,33 @@ async def cinema_open_guild(request: web.Request) -> web.Response:
         guild_id = int(request.match_info.get("guild_id") or 0)
     except Exception:
         guild_id = 0
-    if guild_id <= 0 or _bot_guild(guild_id) is None:
+    if guild_id <= 0:
         return _cinema_entry_response(
             user_id=int(user_id),
             error="That Dank Cinema server is unavailable.",
             status=404,
         )
+    guild_state, _guild = await _resolve_bot_guild(guild_id)
+    if guild_state == "absent":
+        return _cinema_entry_response(
+            user_id=int(user_id),
+            error="Dank Shield is not installed in that Discord server.",
+            status=403,
+        )
+    if guild_state != "present":
+        return _cinema_entry_response(
+            user_id=int(user_id),
+            error="Discord could not verify that Cinema server right now. Try again shortly.",
+            status=503,
+        )
     if not _recent_oauth_guild_proof(request, int(user_id), guild_id):
         membership_state = await _site_member_state(guild_id, int(user_id))
+        if membership_state == "bot_absent":
+            return _cinema_entry_response(
+                user_id=int(user_id),
+                error="Dank Shield is not installed in that Discord server.",
+                status=403,
+            )
         if membership_state == "absent":
             return _cinema_entry_response(
                 user_id=int(user_id),
@@ -1005,9 +1023,14 @@ async def _site_identity(request: web.Request) -> tuple[int, int]:
         # that valid signed link for the normal HttpOnly Cinema cookies instead
         # of demanding a second REST member lookup before those cookies exist.
         # The bot must still currently share the target guild.
-        if _bot_guild(guild_id) is None:
+        guild_state, _guild = await _resolve_bot_guild(guild_id)
+        if guild_state == "absent":
             raise web.HTTPForbidden(
-                text="That Dank Cinema server is no longer available."
+                text="Dank Shield is not installed in this Discord server."
+            )
+        if guild_state != "present":
+            raise web.HTTPServiceUnavailable(
+                text="Discord could not verify this Cinema server right now."
             )
         if _cinema_member_revoked(guild_id, int(signed_uid)):
             print(
@@ -1031,13 +1054,18 @@ async def _site_identity(request: web.Request) -> tuple[int, int]:
         # Do not re-run guild.fetch_member() on every Home/Profile/Search API
         # request. That REST call is not an authentication primitive and can
         # fail independently of membership.
-        if _bot_guild(guild_id) is None:
+        guild_state, _guild = await _resolve_bot_guild(guild_id)
+        if guild_state == "absent":
             print(
-                "⚠️ cinema_site auth denied reason=bot_not_in_guild "
+                "⚠️ cinema_site auth denied reason=bot_not_installed "
                 f"guild={guild_id} user={int(session_uid)}"
             )
             raise web.HTTPForbidden(
-                text="That Dank Cinema server is no longer available."
+                text="Dank Shield is not installed in this Discord server."
+            )
+        if guild_state != "present":
+            raise web.HTTPServiceUnavailable(
+                text="Discord could not verify this Cinema server right now."
             )
         if _cinema_member_revoked(guild_id, int(session_uid)):
             print(
@@ -1056,10 +1084,27 @@ async def _site_identity(request: web.Request) -> tuple[int, int]:
         raise web.HTTPUnauthorized(text="Sign in to Dank Cinema again.")
 
     if _recent_oauth_guild_proof(request, int(uid), guild_id):
+        guild_state, _guild = await _resolve_bot_guild(guild_id)
+        if guild_state == "absent":
+            raise web.HTTPForbidden(
+                text="Dank Shield is not installed in this Discord server."
+            )
+        if guild_state != "present":
+            raise web.HTTPServiceUnavailable(
+                text="Discord could not verify this Cinema server right now."
+            )
         note_cinema_member_join(guild_id, int(uid))
         return guild_id, int(uid)
 
     membership_state = await _site_member_state(guild_id, int(uid))
+    if membership_state == "bot_absent":
+        print(
+            "⚠️ cinema_site auth denied reason=bot_not_installed "
+            f"guild={guild_id} user={int(uid)}"
+        )
+        raise web.HTTPForbidden(
+            text="Dank Shield is not installed in this Discord server."
+        )
     if membership_state == "absent":
         print(
             "⚠️ cinema_site auth denied reason=identity_membership_absent "
