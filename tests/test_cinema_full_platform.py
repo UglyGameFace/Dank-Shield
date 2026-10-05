@@ -583,6 +583,11 @@ def test_exact_guild_session_survives_temporary_membership_api_failure(monkeypat
         query={},
         cookies={cinema_site_auth.CINEMA_SESSION_COOKIE: value},
     )
+    monkeypatch.setattr(
+        cinema_site,
+        "_bot_guild",
+        lambda guild_id: object() if int(guild_id) == 100 else None,
+    )
 
     async def unavailable_member(_guild_id: int, _user_id: int):
         return "unavailable"
@@ -599,6 +604,11 @@ def test_member_remove_revokes_existing_cinema_session_and_rejoin_restores_it(mo
         match_info={"guild_id": "100"},
         query={},
         cookies={cinema_site_auth.CINEMA_SESSION_COOKIE: value},
+    )
+    monkeypatch.setattr(
+        cinema_site,
+        "_bot_guild",
+        lambda guild_id: object() if int(guild_id) == 100 else None,
     )
 
     cinema_site.note_cinema_member_join(100, 42)
