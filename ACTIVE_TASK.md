@@ -1218,3 +1218,27 @@ Acceptance:
 - no active Movie Night/Private Session is required merely to browse Cinema;
 - header shows recognizable notification/profile icons, never a diamond or question-mark placeholder;
 - full exact-head CI and companion workflows must pass before merge/deploy.
+
+
+## Active follow-up PR after #443 merged
+
+PR #443 merged before the Samsung standalone-Home screenshot fixes were added, so those post-merge commits were moved onto a clean branch from current production `main@21f910444979eae5a92a0026736a01ba96d478b1`.
+
+Active branch:
+`fix/cinema-standalone-home-mobile-header`
+
+Active PR:
+`#444 — Fix standalone Dank Cinema Home and mobile header icons`
+
+PR #444 contains only the screenshot-backed canary correction:
+- standalone OAuth guild proof reuse for browsing without an active room;
+- exact-guild denial retained;
+- live membership fallback retained when fresh OAuth guild proof is absent;
+- real SVG header/mobile-nav icons;
+- no diamond notification glyph;
+- no question-mark profile placeholder;
+- stronger mobile icon visibility;
+- Cinema site CSS/JS cache-bust to `v=3`;
+- focused regressions.
+
+Do not merge #444 until exact-head CI and every companion workflow are green and the branch remains 0 behind main.
