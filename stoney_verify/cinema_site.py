@@ -574,6 +574,15 @@ def _cinema_auth_debug_payload(request: web.Request) -> dict[str, Any]:
 
 async def cinema_auth_debug_api(request: web.Request) -> web.Response:
     payload = _cinema_auth_debug_payload(request)
+    try:
+        guild_id = int(request.match_info.get("guild_id") or 0)
+    except Exception:
+        guild_id = 0
+    cache_present = bool(payload.get("bot_guild_present"))
+    guild_state, _guild = await _resolve_bot_guild(guild_id)
+    payload["bot_guild_cache_present"] = cache_present
+    payload["bot_guild_state"] = guild_state
+    payload["bot_guild_present"] = guild_state == "present"
     print(
         "🎞️ cinema_auth_debug "
         f"contract={payload['contract']} "
@@ -582,7 +591,8 @@ async def cinema_auth_debug_api(request: web.Request) -> web.Response:
         f"identity={payload['identity_cookie']} "
         f"guild_proof={payload['guild_proof_cookie']} "
         f"selected={payload['selected_source']} "
-        f"bot_guild={int(payload['bot_guild_present'])} "
+        f"bot_cache={int(cache_present)} "
+        f"bot_guild_state={guild_state} "
         f"revoked={int(payload['member_revoked'])} "
         f"cookie_header={int(payload['cookie_header_present'])}"
     )
@@ -859,6 +869,7 @@ async def cinema_oauth_callback(request: web.Request) -> web.Response:
             status=401,
         )
 
+    user_guild_ids: set[int] = set()
     shared_ids: list[int] = []
     for row in user_guilds if isinstance(user_guilds, list) else []:
         if not isinstance(row, Mapping):
@@ -867,14 +878,14 @@ async def cinema_oauth_callback(request: web.Request) -> web.Response:
             guild_id = int(row.get("id") or 0)
         except Exception:
             guild_id = 0
-        if guild_id > 0 and _bot_guild(guild_id) is not None:
+        if guild_id <= 0:
+            continue
+        user_guild_ids.add(guild_id)
+        if _bot_guild(guild_id) is not None:
             shared_ids.append(guild_id)
-    shared_ids = sorted(set(shared_ids))[:50]
-    for shared_guild_id in shared_ids:
-        note_cinema_member_join(shared_guild_id, user_id)
 
     if target_guild > 0:
-        if target_guild not in shared_ids:
+        if target_guild not in user_guild_ids:
             return _cinema_entry_response(
                 user_id=user_id,
                 error=(
@@ -883,6 +894,26 @@ async def cinema_oauth_callback(request: web.Request) -> web.Response:
                 ),
                 status=403,
             )
+        guild_state, _guild = await _resolve_bot_guild(target_guild)
+        if guild_state == "absent":
+            return _cinema_entry_response(
+                user_id=user_id,
+                error="Dank Shield is not installed in that Discord server.",
+                status=403,
+            )
+        if guild_state != "present":
+            return _cinema_entry_response(
+                user_id=user_id,
+                error="Discord could not verify that Cinema server right now. Try again shortly.",
+                status=503,
+            )
+        shared_ids.append(target_guild)
+
+    shared_ids = sorted(set(shared_ids))[:50]
+    for shared_guild_id in shared_ids:
+        note_cinema_member_join(shared_guild_id, user_id)
+
+    if target_guild > 0:
         # Discord's fresh /users/@me/guilds response is the authoritative
         # standalone-login membership proof. Do not immediately require a
         # second bot REST member lookup that can fail on cache/REST health.
