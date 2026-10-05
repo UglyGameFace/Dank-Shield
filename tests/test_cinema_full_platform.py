@@ -407,6 +407,63 @@ def test_cinema_identity_cookie_can_reopen_exact_guild_after_membership_recheck(
     assert asyncio.run(cinema_site._site_identity(request)) == (100, 42)
 
 
+def test_standalone_oauth_guild_proof_allows_browsing_when_bot_member_rest_is_unavailable(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+    identity = cinema_site_auth.cinema_identity_value(42, ttl_seconds=3600)
+    guilds = cinema_site_auth.cinema_guilds_value(42, [100], ttl_seconds=900)
+    request = SimpleNamespace(
+        match_info={"guild_id": "100"},
+        query={},
+        cookies={
+            cinema_site_auth.CINEMA_IDENTITY_COOKIE: identity,
+            cinema_site_auth.CINEMA_GUILDS_COOKIE: guilds,
+        },
+    )
+
+    monkeypatch.setattr(
+        cinema_site,
+        "_bot_guild",
+        lambda guild_id: object() if int(guild_id) == 100 else None,
+    )
+
+    async def unavailable_member_rest(_guild_id: int, _user_id: int):
+        return None
+
+    monkeypatch.setattr(cinema_site, "_fetch_site_member", unavailable_member_rest)
+
+    assert asyncio.run(cinema_site._site_identity(request)) == (100, 42)
+
+
+def test_standalone_oauth_guild_proof_is_exact_guild_scoped(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+    identity = cinema_site_auth.cinema_identity_value(42, ttl_seconds=3600)
+    guilds = cinema_site_auth.cinema_guilds_value(42, [200], ttl_seconds=900)
+    request = SimpleNamespace(
+        match_info={"guild_id": "100"},
+        query={},
+        cookies={
+            cinema_site_auth.CINEMA_IDENTITY_COOKIE: identity,
+            cinema_site_auth.CINEMA_GUILDS_COOKIE: guilds,
+        },
+    )
+    monkeypatch.setattr(cinema_site, "_bot_guild", lambda _guild_id: object())
+
+    async def departed_member(_guild_id: int, _user_id: int):
+        return None
+
+    monkeypatch.setattr(cinema_site, "_fetch_site_member", departed_member)
+
+    try:
+        asyncio.run(cinema_site._site_identity(request))
+    except Exception as exc:
+        from aiohttp import web
+
+        assert isinstance(exc, web.HTTPForbidden)
+        assert "requires membership in this Discord server" in exc.text
+    else:
+        raise AssertionError("OAuth guild proof must never authorize a different guild.")
+
+
 def test_cinema_browser_session_is_scoped_to_exact_discord_guild(monkeypatch) -> None:
     monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
     value = cinema_site_auth.cinema_session_value(100, 42, ttl_seconds=3600)
@@ -464,8 +521,10 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'scope": "identify guilds"' in source
     assert "_issue_oauth_state(target_guild)" in source
     assert "_consume_oauth_state(returned_state)" in source
-    assert "await _fetch_site_member(target_guild, user_id)" in source
-    assert "if await _fetch_site_member(guild_id, int(uid)) is None:" in source
+    assert "if target_guild not in shared_ids:" in source
+    assert "def _recent_oauth_guild_proof(" in source
+    assert "validate_cinema_guilds(" in source
+    assert "not _recent_oauth_guild_proof(request, int(uid), guild_id)" in source
     assert "_SITE_MEMBER_CACHE_SECONDS = 30.0" in source
     assert "cinema_session_value(guild_id, user_id)" in source
     assert 'path=f"/cinema/{int(guild_id)}"' in source
@@ -566,6 +625,28 @@ def test_full_site_uses_single_composed_brand_and_responsive_tmdb_art() -> None:
     assert 'kind === "backdrop"' in script
     assert 'kind === "still"' in script
     assert 'kind === "profile"' in script
+
+
+def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
+    from pathlib import Path
+
+    root = Path(cinema_site.__file__).resolve().parent
+    script = (root / "assets" / "cinema_site.js").read_text(encoding="utf-8")
+    styles = (root / "assets" / "cinema_site.css").read_text(encoding="utf-8")
+    source = Path(cinema_site.__file__).read_text(encoding="utf-8")
+
+    assert 'bell: "♢"' not in script
+    assert '"⌂"' not in script
+    assert "const SVG_ICON_PATHS = {" in script
+    assert 'bell: \'<path d="M18 9' in script
+    assert 'searchBtn.appendChild(uiIcon("search"))' in script
+    assert 'bell.appendChild(uiIcon("bell"))' in script
+    assert ': uiIcon("profile")' in script
+    assert 'b.append(uiIcon(iconName), node("span", "bottom-nav-label", label))' in script
+    assert ".ui-icon svg" in styles
+    assert ".bottom-nav-label" in styles
+    assert 'href="/cinema/assets/site.css?v=3"' in source
+    assert 'src="/cinema/assets/site.js?v=3"' in source
 
 
 def test_full_site_auto_quality_and_source_search_controls_are_real() -> None:
