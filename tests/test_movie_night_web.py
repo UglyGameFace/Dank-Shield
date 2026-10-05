@@ -181,7 +181,8 @@ def test_movie_night_player_restores_progress_only_through_host_authority() -> N
     assert "if(!s?.is_host || !s?.stream_url) return;" in html
     assert 'const saved=await jsonFetch("/movie/"+BOOT.roomId+"/progress")' in html
     assert 'await hostAction("seek",{seconds:target})' in html
-    assert 'video.addEventListener("seeked",scheduleHostSeekCommit)' in html
+    assert 'video.addEventListener("seeked",()=>{' in html
+    assert "scheduleHostSeekCommit();" in html
     assert "hostSeekCommitTimer=setTimeout" in html
     assert "persistWatchProgress(true)" in html
     assert "if(key!==lastProgressMediaKey) lastProgressPersistAt=0;" in html
@@ -1371,7 +1372,7 @@ def test_dank_cinema_uses_ffmpeg_aac_sidecar_without_replacing_video_clock() -> 
     assert "video.muted=true" in html
     assert "compatAudio.volume=target" in html
     assert 'url.searchParams.set("start"' in html
-    assert 'video.addEventListener("seeked",()=>{{' in html
+    assert 'video.addEventListener("seeked",()=>{' in html
     assert "scheduleCompatAudioRestart(Number(video.currentTime||0)" in html
     assert "position_seconds:video.currentTime||0" in html
 
