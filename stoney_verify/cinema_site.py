@@ -127,7 +127,11 @@ def _discord_oauth_client_id() -> int:
 
 
 def _discord_oauth_client_secret() -> str:
-    return str(os.getenv("DANK_CINEMA_DISCORD_CLIENT_SECRET", "") or "").strip()
+    return str(
+        os.getenv("DANK_CINEMA_DISCORD_CLIENT_SECRET", "")
+        or os.getenv("DISCORD_CLIENT_SECRET", "")
+        or ""
+    ).strip()
 
 
 def _discord_oauth_redirect_uri() -> str:
@@ -268,8 +272,12 @@ def _cinema_entry_html(
                 'Continue with Discord</a></div>'
                 if _discord_oauth_ready()
                 else (
-                    '<div class="state-card">Standalone Discord login is not configured '
-                    'yet. Open Dank Cinema from the bot until OAuth is configured.</div>'
+                    '<div class="state-card">Standalone Discord login needs the Discord '
+                    'application client secret. Set <strong>DANK_CINEMA_DISCORD_CLIENT_SECRET</strong> '
+                    '(or <strong>DISCORD_CLIENT_SECRET</strong>) and register '
+                    '<strong>/cinema/auth/callback</strong> as the OAuth2 redirect URI. '
+                    'A valid bot-issued Cinema link can still bootstrap this browser once, after '
+                    'which direct /cinema return access works while server membership remains valid.</div>'
                 )
             )
         )
