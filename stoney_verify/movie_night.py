@@ -65,6 +65,53 @@ class MovieSourceVariant:
     metadata: dict[str, Any] = field(default_factory=dict)
     votes: set[int] = field(default_factory=set)
 
+    def browser_audio_risk_key(self) -> int:
+        """0=safest for browsers, 1=unknown/conditional, 2=known risky."""
+
+        meta = dict(self.metadata or {})
+        verified = meta.get("verified") if isinstance(meta.get("verified"), Mapping) else {}
+        tracks = verified.get("audio_tracks") if isinstance(verified, Mapping) else None
+        codecs: set[str] = set()
+        if isinstance(tracks, list):
+            for row in tracks:
+                if not isinstance(row, Mapping):
+                    continue
+                codec = str(row.get("codec") or "").strip().casefold()
+                if codec:
+                    codecs.add(codec)
+
+        widely_safe = {"aac", "mp3"}
+        conditional = {"opus", "vorbis"}
+        risky = {"ac3", "eac3", "dts", "truehd", "flac"}
+
+        if codecs & widely_safe:
+            return 0
+        if codecs:
+            if codecs <= risky:
+                return 2
+            if codecs & conditional:
+                return 1
+
+        release = (
+            meta.get("release_name")
+            if isinstance(meta.get("release_name"), Mapping)
+            else {}
+        )
+        audio_tags = " ".join(
+            str(value or "")
+            for value in list(release.get("audio_tags") or [])
+        ).casefold()
+        if "aac" in audio_tags:
+            return 0
+        if "opus" in audio_tags or "vorbis" in audio_tags:
+            return 1
+        if any(
+            token in audio_tags
+            for token in ("ddp", "eac3", "dd 5.1", "ac3", "dts", "truehd", "flac")
+        ):
+            return 2
+        return 1
+
     @property
     def swarm_health(self) -> dict[str, Any]:
         seeds = max(0, int(self.seeds))
@@ -1080,6 +1127,7 @@ class MovieNightManager:
             return (
                 -votes,
                 0 if seeds > 0 else 1,
+                item.browser_audio_risk_key(),
                 -seeds,
                 -ratio,
                 leechers,

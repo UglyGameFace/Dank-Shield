@@ -342,6 +342,93 @@ def test_default_variant_order_is_seed_first_and_zero_seed_is_last() -> None:
     assert prettier_but_dead.swarm_health["label"] == "dead"
 
 
+def test_browser_safe_audio_beats_known_risky_audio_when_both_are_seeded() -> None:
+    manager, room_id = _room_with_three_viewers()
+    candidate = manager.nominate(
+        room_id,
+        user_id=20,
+        title="Audio Compatibility",
+        now=105.0,
+    )
+    risky = manager.add_variant(
+        room_id,
+        candidate.candidate_id,
+        user_id=20,
+        source_ref="authorized:eac3",
+        file_size=4_000_000_000,
+        seeds=80,
+        leechers=10,
+        peers=90,
+        metadata={
+            "release_name": {
+                "source": "WEB-DL",
+                "audio_tags": ["DDP 5.1"],
+            },
+        },
+        now=106.0,
+    )
+    safe = manager.add_variant(
+        room_id,
+        candidate.candidate_id,
+        user_id=30,
+        source_ref="authorized:aac",
+        file_size=4_000_000_000,
+        seeds=12,
+        leechers=3,
+        peers=15,
+        metadata={
+            "release_name": {
+                "source": "WEB-DL",
+                "audio_tags": ["AAC"],
+            },
+        },
+        now=107.0,
+    )
+
+    ranked = manager.ranked_variants(room_id, candidate.candidate_id, now=108.0)
+
+    assert safe.browser_audio_risk_key() == 0
+    assert risky.browser_audio_risk_key() == 2
+    assert ranked[0].variant_id == safe.variant_id
+
+
+def test_zero_seed_browser_safe_audio_still_loses_to_seeded_release() -> None:
+    manager, room_id = _room_with_three_viewers()
+    candidate = manager.nominate(
+        room_id,
+        user_id=20,
+        title="Audio Availability",
+        now=105.0,
+    )
+    seeded = manager.add_variant(
+        room_id,
+        candidate.candidate_id,
+        user_id=20,
+        source_ref="authorized:seeded",
+        seeds=2,
+        leechers=1,
+        peers=3,
+        metadata={"release_name": {"audio_tags": ["DDP 5.1"]}},
+        now=106.0,
+    )
+    dead_safe = manager.add_variant(
+        room_id,
+        candidate.candidate_id,
+        user_id=30,
+        source_ref="authorized:dead-aac",
+        seeds=0,
+        leechers=0,
+        peers=0,
+        metadata={"release_name": {"audio_tags": ["AAC"]}},
+        now=107.0,
+    )
+
+    ranked = manager.ranked_variants(room_id, candidate.candidate_id, now=108.0)
+
+    assert ranked[0].variant_id == seeded.variant_id
+    assert ranked[-1].variant_id == dead_safe.variant_id
+
+
 def test_variant_selection_can_use_room_vote_winner() -> None:
     manager, room_id = _room_with_three_viewers()
     candidate = manager.nominate(

@@ -127,7 +127,11 @@ def _discord_oauth_client_id() -> int:
 
 
 def _discord_oauth_client_secret() -> str:
-    return str(os.getenv("DANK_CINEMA_DISCORD_CLIENT_SECRET", "") or "").strip()
+    return str(
+        os.getenv("DANK_CINEMA_DISCORD_CLIENT_SECRET", "")
+        or os.getenv("DISCORD_CLIENT_SECRET", "")
+        or ""
+    ).strip()
 
 
 def _discord_oauth_redirect_uri() -> str:
@@ -268,8 +272,12 @@ def _cinema_entry_html(
                 'Continue with Discord</a></div>'
                 if _discord_oauth_ready()
                 else (
-                    '<div class="state-card">Standalone Discord login is not configured '
-                    'yet. Open Dank Cinema from the bot until OAuth is configured.</div>'
+                    '<div class="state-card">Standalone Discord login needs the Discord '
+                    'application client secret. Set <strong>DANK_CINEMA_DISCORD_CLIENT_SECRET</strong> '
+                    '(or <strong>DISCORD_CLIENT_SECRET</strong>) and register '
+                    '<strong>/cinema/auth/callback</strong> as the OAuth2 redirect URI. '
+                    'A valid bot-issued Cinema link can still bootstrap this browser once, after '
+                    'which direct /cinema return access works while server membership remains valid.</div>'
                 )
             )
         )
@@ -610,6 +618,10 @@ async def _site_identity(request: web.Request) -> tuple[int, int]:
         uid = validate_cinema_session(
             guild_id,
             str(request.cookies.get(CINEMA_SESSION_COOKIE, "") or ""),
+        )
+    if uid is None:
+        uid = validate_cinema_identity(
+            str(request.cookies.get(CINEMA_IDENTITY_COOKIE, "") or "")
         )
     if uid is None:
         raise web.HTTPUnauthorized(text="Sign in to Dank Cinema again.")
@@ -1956,6 +1968,37 @@ async def cinema_site_page(request: web.Request) -> web.Response:
             secure=True,
             samesite="Lax",
             path=f"/cinema/{int(guild_id)}",
+        )
+
+    identity = cinema_identity_value(user_id)
+    if identity:
+        response.set_cookie(
+            CINEMA_IDENTITY_COOKIE,
+            identity,
+            max_age=CINEMA_IDENTITY_TTL_SECONDS,
+            httponly=True,
+            secure=True,
+            samesite="Lax",
+            path="/cinema",
+        )
+
+    remembered = set(
+        validate_cinema_guilds(
+            user_id,
+            str(request.cookies.get(CINEMA_GUILDS_COOKIE, "") or ""),
+        )
+    )
+    remembered.add(int(guild_id))
+    guilds_value = cinema_guilds_value(user_id, sorted(remembered))
+    if guilds_value:
+        response.set_cookie(
+            CINEMA_GUILDS_COOKIE,
+            guilds_value,
+            max_age=CINEMA_GUILDS_TTL_SECONDS,
+            httponly=True,
+            secure=True,
+            samesite="Lax",
+            path="/cinema",
         )
     return response
 

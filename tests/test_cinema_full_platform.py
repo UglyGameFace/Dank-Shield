@@ -13,6 +13,7 @@ from stoney_verify import (
 from stoney_verify.cinema_catalog import CinemaDetails, CinemaEpisode, CinemaMedia
 from stoney_verify.cinema_media_identity import (
     episode_catalog_metadata,
+    episode_search_query,
     filter_outcome_for_catalog,
     parse_episode_query,
     release_matches_catalog,
@@ -73,6 +74,28 @@ def test_episode_identity_requires_exact_series_and_episode_marker() -> None:
     )
     assert not release_matches_catalog(
         "Different.Show.S03E07.1080p.WEB-DL",
+        metadata,
+        {},
+    )
+
+
+def test_episode_identity_uses_series_year_when_available() -> None:
+    metadata = episode_catalog_metadata(series=_series(), episode=_episode())
+
+    assert episode_search_query("Example Show", 3, 7, 2026) == "Example Show 2026 S03E07"
+    assert release_matches_catalog(
+        "Example.Show.2026.S03E07.1080p.WEB-DL",
+        metadata,
+        {},
+    )
+    assert not release_matches_catalog(
+        "Example.Show.2005.S03E07.1080p.WEB-DL",
+        metadata,
+        {},
+    )
+    # Providers often omit a series year, so exact title + episode remains valid.
+    assert release_matches_catalog(
+        "Example.Show.S03E07.1080p.WEB-DL",
         metadata,
         {},
     )
@@ -366,6 +389,22 @@ def test_cinema_site_play_requires_existing_host_room(monkeypatch) -> None:
         assert "room that you host" in exc.text
     else:
         raise AssertionError("A non-host site identity must not replace Cinema media.")
+
+
+def test_cinema_identity_cookie_can_reopen_exact_guild_after_membership_recheck(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+    identity = cinema_site_auth.cinema_identity_value(42, ttl_seconds=3600)
+    request = SimpleNamespace(
+        match_info={"guild_id": "100"},
+        query={},
+        cookies={cinema_site_auth.CINEMA_IDENTITY_COOKIE: identity},
+    )
+
+    async def member(guild_id: int, user_id: int):
+        return object() if (int(guild_id), int(user_id)) == (100, 42) else None
+
+    monkeypatch.setattr(cinema_site, "_fetch_site_member", member)
+    assert asyncio.run(cinema_site._site_identity(request)) == (100, 42)
 
 
 def test_cinema_browser_session_is_scoped_to_exact_discord_guild(monkeypatch) -> None:
