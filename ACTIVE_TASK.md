@@ -1180,3 +1180,41 @@ Next step:
 - patch only evidence-backed failures;
 - if green, verify branch is 0 behind main, final diff hygiene, then mark PR #443 ready for review;
 - after merge/deploy, verify Discord autocomplete exposes `/cinema` and all eight children while `/movie` remains available.
+
+
+## PR #443 production canary evidence — standalone Cinema Home + mobile header
+
+Samsung Browser production screenshot after the post-#442 deployment showed two remaining Cinema defects while opening Dank Cinema without hosting a session:
+
+1. the full Cinema shell loaded, but Home failed with `Dank Cinema requires membership in this Discord server.`;
+2. mobile header controls used placeholder-style glyphs, including a literal diamond notification icon and a `?` profile fallback.
+
+Root cause — standalone Home:
+- standalone Discord OAuth already requests `identify guilds` and receives the user's current guild list;
+- that exact guild list is signed into the short-lived `dank_cinema_guilds` cookie;
+- despite that fresh Discord proof, `_site_identity` and `cinema_open_guild` immediately required another bot-side `guild.fetch_member()` check;
+- a transient/cache/REST failure therefore rejected valid standalone browsing even though Discord OAuth had just proven the user shares the guild with Dank Shield.
+
+Correction:
+- accept the signed short-lived OAuth guild list as standalone browsing membership proof only for the exact guild and only while Dank Shield still shares that guild;
+- if no valid OAuth guild proof exists, retain the live bot membership fetch and fail closed;
+- targeted OAuth login with a current guild no longer performs a redundant second member REST lookup immediately after Discord's own `/users/@me/guilds` result;
+- signed watch links/session flows without fresh OAuth guild proof still retain the live membership check;
+- preserve exact-guild scoping and add regressions for both allowed and wrong-guild cases.
+
+Root cause — header:
+- `cinema_site.js` literally defined `bell: "♢"` and old text glyphs for navigation;
+- when Home failed before Discord profile payload arrived, the avatar fallback rendered `?`.
+
+Correction:
+- replace header/mobile navigation glyphs with local inline SVG icons;
+- use a real bell icon, real profile fallback, and real bottom-nav icons;
+- strengthen icon contrast/borders on mobile;
+- bump Cinema CSS/JS asset query versions to `v=3` so Samsung Browser does not reuse the old five-minute cached assets.
+
+Acceptance:
+- direct standalone `/cinema` login can browse Home/Search/My Stuff/Feeds/Profile with no active room;
+- exact server membership remains required;
+- no active Movie Night/Private Session is required merely to browse Cinema;
+- header shows recognizable notification/profile icons, never a diamond or question-mark placeholder;
+- full exact-head CI and companion workflows must pass before merge/deploy.
