@@ -696,7 +696,93 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'initialUrl.searchParams.delete("sig")' in script
     assert 'history.replaceState(' in script
     assert 'return `${path}${AUTH_QUERY ? join + AUTH_QUERY.slice(1) : ""}`;' in script
-    assert 'src="/cinema/assets/site.js?v=4"' in source
+    assert 'src="/cinema/assets/site.js?v=5"' in source
+    assert '"/cinema/{guild_id}/api/auth-debug"' in source
+    assert "def _cinema_auth_debug_payload(" in source
+    assert "signed-session-v5-observable" in source
+    assert "async function authDiagnostics()" in script
+    assert 'API_BASE + "/auth-debug"' in script
+    assert "function authDiagnosticText(data)" in script
+    assert 'return `Diagnostic: ${parts.join(" · ")}`;' in script
+
+
+def test_cinema_auth_debug_reports_request_auth_state_without_secret_values(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+
+    signed_url = cinema_site_auth.cinema_site_url(100, 42, ttl_seconds=900)
+    parsed = urlsplit(signed_url)
+    query = {key: values[0] for key, values in parse_qs(parsed.query).items()}
+    session = cinema_site_auth.cinema_session_value(100, 42, ttl_seconds=900)
+    identity = cinema_site_auth.cinema_identity_value(42, ttl_seconds=900)
+    guilds = cinema_site_auth.cinema_guilds_value(42, [100], ttl_seconds=900)
+    request = SimpleNamespace(
+        match_info={"guild_id": "100"},
+        query=query,
+        cookies={
+            cinema_site_auth.CINEMA_SESSION_COOKIE: session,
+            cinema_site_auth.CINEMA_IDENTITY_COOKIE: identity,
+            cinema_site_auth.CINEMA_GUILDS_COOKIE: guilds,
+        },
+        headers={"Cookie": "present", "X-Forwarded-Proto": "https"},
+        secure=False,
+    )
+    monkeypatch.setattr(
+        cinema_site,
+        "_bot_guild",
+        lambda guild_id: object() if int(guild_id) == 100 else None,
+    )
+    cinema_site._SITE_MEMBER_REVOKED.discard((100, 42))
+
+    payload = cinema_site._cinema_auth_debug_payload(request)
+
+    assert payload == {
+        "contract": "signed-session-v5-observable",
+        "route_guild_valid": True,
+        "signed_query": "valid",
+        "signed_query_complete": True,
+        "session_cookie": "valid",
+        "identity_cookie": "valid",
+        "guild_proof_cookie": "valid",
+        "selected_source": "signed",
+        "bot_guild_present": True,
+        "member_revoked": False,
+        "cookie_header_present": True,
+        "request_secure": False,
+        "forwarded_proto": "https",
+    }
+    rendered = repr(payload)
+    assert query["sig"] not in rendered
+    assert session not in rendered
+    assert identity not in rendered
+    assert guilds not in rendered
+
+
+def test_cinema_auth_debug_distinguishes_missing_and_invalid_credentials(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+    request = SimpleNamespace(
+        match_info={"guild_id": "100"},
+        query={"uid": "42", "exp": "1", "sig": "bad"},
+        cookies={
+            cinema_site_auth.CINEMA_SESSION_COOKIE: "bad-session",
+            cinema_site_auth.CINEMA_IDENTITY_COOKIE: "bad-identity",
+        },
+        headers={},
+        secure=True,
+    )
+    monkeypatch.setattr(cinema_site, "_bot_guild", lambda _guild_id: object())
+
+    payload = cinema_site._cinema_auth_debug_payload(request)
+
+    assert payload["signed_query"] == "invalid"
+    assert payload["signed_query_complete"] is True
+    assert payload["session_cookie"] == "invalid"
+    assert payload["identity_cookie"] == "invalid"
+    assert payload["guild_proof_cookie"] == "missing"
+    assert payload["selected_source"] == "none"
+    assert payload["bot_guild_present"] is True
+    assert payload["member_revoked"] is False
+    assert payload["cookie_header_present"] is False
 
 
 def test_cinema_oauth_state_survives_mobile_cookie_handoff_and_is_one_time() -> None:
@@ -812,7 +898,7 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
     assert 'href="/cinema/assets/site.css?v=3"' in source
-    assert 'src="/cinema/assets/site.js?v=4"' in source
+    assert 'src="/cinema/assets/site.js?v=5"' in source
 
 
 def test_full_site_auto_quality_and_source_search_controls_are_real() -> None:

@@ -109,6 +109,7 @@ _SITE_MEMBER_UNAVAILABLE_CACHE_SECONDS = 60.0
 _SITE_MEMBER_VERIFIED_UNTIL: dict[tuple[int, int], float] = {}
 _SITE_MEMBER_UNAVAILABLE_UNTIL: dict[tuple[int, int], float] = {}
 _SITE_MEMBER_REVOKED: set[tuple[int, int]] = set()
+_CINEMA_AUTH_CONTRACT = "signed-session-v5-observable"
 
 
 def _clean_env_value(value: Any) -> str:
@@ -396,6 +397,109 @@ def _recent_oauth_guild_proof(
         str(request.cookies.get(CINEMA_GUILDS_COOKIE, "") or ""),
     )
     return gid in allowed
+
+
+def _auth_state_label(present: bool, valid: bool) -> str:
+    if not present:
+        return "missing"
+    return "valid" if valid else "invalid"
+
+
+def _cinema_auth_debug_payload(request: web.Request) -> dict[str, Any]:
+    try:
+        guild_id = int(request.match_info.get("guild_id") or 0)
+    except Exception:
+        guild_id = 0
+
+    signed_values = {
+        "uid": str(request.query.get("uid", "") or ""),
+        "exp": str(request.query.get("exp", "") or ""),
+        "sig": str(request.query.get("sig", "") or ""),
+    }
+    signed_present = any(bool(value) for value in signed_values.values())
+    signed_complete = all(bool(value) for value in signed_values.values())
+    signed_uid = (
+        validate_cinema_site_access(
+            guild_id,
+            signed_values["uid"],
+            signed_values["exp"],
+            signed_values["sig"],
+        )
+        if signed_complete and guild_id > 0
+        else None
+    )
+
+    session_raw = str(request.cookies.get(CINEMA_SESSION_COOKIE, "") or "")
+    session_uid = (
+        validate_cinema_session(guild_id, session_raw)
+        if session_raw and guild_id > 0
+        else None
+    )
+    identity_raw = str(request.cookies.get(CINEMA_IDENTITY_COOKIE, "") or "")
+    identity_uid = validate_cinema_identity(identity_raw) if identity_raw else None
+    guilds_raw = str(request.cookies.get(CINEMA_GUILDS_COOKIE, "") or "")
+
+    candidate_uid = signed_uid or session_uid or identity_uid
+    guild_proof_valid = False
+    if candidate_uid is not None and guild_id > 0 and guilds_raw:
+        guild_proof_valid = guild_id in validate_cinema_guilds(
+            int(candidate_uid),
+            guilds_raw,
+        )
+
+    selected_source = (
+        "signed"
+        if signed_uid is not None
+        else "session"
+        if session_uid is not None
+        else "identity"
+        if identity_uid is not None
+        else "none"
+    )
+    revoked = (
+        _cinema_member_revoked(guild_id, int(candidate_uid))
+        if candidate_uid is not None and guild_id > 0
+        else False
+    )
+
+    return {
+        "contract": _CINEMA_AUTH_CONTRACT,
+        "route_guild_valid": guild_id > 0,
+        "signed_query": _auth_state_label(signed_present, signed_uid is not None),
+        "signed_query_complete": bool(signed_complete),
+        "session_cookie": _auth_state_label(bool(session_raw), session_uid is not None),
+        "identity_cookie": _auth_state_label(bool(identity_raw), identity_uid is not None),
+        "guild_proof_cookie": _auth_state_label(bool(guilds_raw), guild_proof_valid),
+        "selected_source": selected_source,
+        "bot_guild_present": bool(guild_id > 0 and _bot_guild(guild_id) is not None),
+        "member_revoked": bool(revoked),
+        "cookie_header_present": bool(str(request.headers.get("Cookie", "") or "")),
+        "request_secure": bool(getattr(request, "secure", False)),
+        "forwarded_proto": str(request.headers.get("X-Forwarded-Proto", "") or "")[:16],
+    }
+
+
+async def cinema_auth_debug_api(request: web.Request) -> web.Response:
+    payload = _cinema_auth_debug_payload(request)
+    print(
+        "🎞️ cinema_auth_debug "
+        f"contract={payload['contract']} "
+        f"signed={payload['signed_query']} "
+        f"session={payload['session_cookie']} "
+        f"identity={payload['identity_cookie']} "
+        f"guild_proof={payload['guild_proof_cookie']} "
+        f"selected={payload['selected_source']} "
+        f"bot_guild={int(payload['bot_guild_present'])} "
+        f"revoked={int(payload['member_revoked'])} "
+        f"cookie_header={int(payload['cookie_header_present'])}"
+    )
+    return web.json_response(
+        payload,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Dank-Cinema-Auth-Contract": _CINEMA_AUTH_CONTRACT,
+        },
+    )
 
 
 def _cinema_entry_html(
@@ -2175,7 +2279,7 @@ def _site_html(guild_id: int, user_id: int) -> str:
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=4" defer></script>
+  <script src="/cinema/assets/site.js?v=5" defer></script>
 </body>
 </html>"""
 
@@ -2287,6 +2391,10 @@ def register_cinema_site_routes(app: web.Application) -> None:
     app.router.add_get("/cinema/open/{guild_id}", cinema_open_guild)
     app.router.add_get("/cinema/assets/{name}", cinema_site_asset)
     app.router.add_get("/cinema/{guild_id}", cinema_site_page)
+    app.router.add_get(
+        "/cinema/{guild_id}/api/auth-debug",
+        cinema_auth_debug_api,
+    )
     app.router.add_get("/cinema/{guild_id}/api/home", cinema_home_api)
     app.router.add_get("/cinema/{guild_id}/api/search", cinema_search_api)
     app.router.add_get(
