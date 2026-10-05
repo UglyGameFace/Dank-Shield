@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+
+import discord
 from urllib.parse import parse_qs, urlsplit
 
 from stoney_verify import (
@@ -408,6 +410,90 @@ def test_cinema_identity_cookie_can_reopen_exact_guild_after_membership_recheck(
     assert asyncio.run(cinema_site._site_identity(request)) == (100, 42)
 
 
+def test_cinema_guild_cache_miss_falls_back_to_discord_rest(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+    cinema_site._SITE_GUILD_REST_CACHE.clear()
+    cinema_site._SITE_GUILD_ABSENT_UNTIL.clear()
+    cinema_site._SITE_GUILD_UNAVAILABLE_UNTIL.clear()
+    cinema_site._SITE_MEMBER_REVOKED.discard((100, 42))
+
+    class FakeGuild:
+        id = 100
+
+        def get_member(self, user_id: int):
+            return object() if int(user_id) == 42 else None
+
+        async def fetch_member(self, user_id: int):
+            return object() if int(user_id) == 42 else None
+
+    class FakeBot:
+        def __init__(self):
+            self.fetch_calls = 0
+
+        def get_guild(self, _guild_id: int):
+            return None
+
+        async def fetch_guild(self, guild_id: int):
+            self.fetch_calls += 1
+            assert int(guild_id) == 100
+            return FakeGuild()
+
+    fake_bot = FakeBot()
+    monkeypatch.setattr(cinema_site, "_bot_client", lambda: fake_bot)
+
+    identity = cinema_site_auth.cinema_identity_value(42, ttl_seconds=3600)
+    request = SimpleNamespace(
+        match_info={"guild_id": "100"},
+        query={},
+        cookies={cinema_site_auth.CINEMA_IDENTITY_COOKIE: identity},
+    )
+
+    assert asyncio.run(cinema_site._site_identity(request)) == (100, 42)
+    assert fake_bot.fetch_calls == 1
+
+    state, guild = asyncio.run(cinema_site._resolve_bot_guild(100))
+    assert state == "present"
+    assert int(guild.id) == 100
+    assert fake_bot.fetch_calls == 1
+
+
+def test_cinema_rest_confirms_bot_is_not_installed(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+    cinema_site._SITE_GUILD_REST_CACHE.clear()
+    cinema_site._SITE_GUILD_ABSENT_UNTIL.clear()
+    cinema_site._SITE_GUILD_UNAVAILABLE_UNTIL.clear()
+    cinema_site._SITE_MEMBER_REVOKED.discard((100, 42))
+
+    class FakeBot:
+        def get_guild(self, _guild_id: int):
+            return None
+
+        async def fetch_guild(self, _guild_id: int):
+            raise discord.NotFound(
+                SimpleNamespace(status=404, reason="missing"),
+                "missing",
+            )
+
+    monkeypatch.setattr(cinema_site, "_bot_client", lambda: FakeBot())
+
+    identity = cinema_site_auth.cinema_identity_value(42, ttl_seconds=3600)
+    request = SimpleNamespace(
+        match_info={"guild_id": "100"},
+        query={},
+        cookies={cinema_site_auth.CINEMA_IDENTITY_COOKIE: identity},
+    )
+
+    try:
+        asyncio.run(cinema_site._site_identity(request))
+    except Exception as exc:
+        from aiohttp import web
+
+        assert isinstance(exc, web.HTTPForbidden)
+        assert "not installed in this Discord server" in exc.text
+    else:
+        raise AssertionError("Cinema must reject a guild Discord REST confirms the bot is not in.")
+
+
 def test_standalone_oauth_guild_proof_allows_browsing_when_bot_member_rest_is_unavailable(monkeypatch) -> None:
     monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
     identity = cinema_site_auth.cinema_identity_value(42, ttl_seconds=3600)
@@ -696,10 +782,10 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'initialUrl.searchParams.delete("sig")' in script
     assert 'history.replaceState(' in script
     assert 'return `${path}${AUTH_QUERY ? join + AUTH_QUERY.slice(1) : ""}`;' in script
-    assert 'src="/cinema/assets/site.js?v=5"' in source
+    assert 'src="/cinema/assets/site.js?v=6"' in source
     assert '"/cinema/{guild_id}/api/auth-debug"' in source
     assert "def _cinema_auth_debug_payload(" in source
-    assert "signed-session-v5-observable" in source
+    assert "signed-session-v6-guild-rest" in source
     assert "async function authDiagnostics()" in script
     assert 'API_BASE + "/auth-debug"' in script
     assert "function authDiagnosticText(data)" in script
@@ -737,7 +823,7 @@ def test_cinema_auth_debug_reports_request_auth_state_without_secret_values(monk
     payload = cinema_site._cinema_auth_debug_payload(request)
 
     assert payload == {
-        "contract": "signed-session-v5-observable",
+        "contract": "signed-session-v6-guild-rest",
         "route_guild_valid": True,
         "signed_query": "valid",
         "signed_query_complete": True,
@@ -898,7 +984,7 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
     assert 'href="/cinema/assets/site.css?v=3"' in source
-    assert 'src="/cinema/assets/site.js?v=5"' in source
+    assert 'src="/cinema/assets/site.js?v=6"' in source
 
 
 def test_full_site_auto_quality_and_source_search_controls_are_real() -> None:
