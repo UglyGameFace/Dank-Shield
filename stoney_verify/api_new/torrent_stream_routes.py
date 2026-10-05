@@ -416,14 +416,19 @@ async def torrent_audio_compat(request: web.Request) -> web.StreamResponse:
         except ConnectionError:
             pass
         return response
-    except (ConnectionError, asyncio.CancelledError):
+    except asyncio.CancelledError:
         if process is not None and process.returncode is None:
             try:
                 process.kill()
             except ProcessLookupError:
                 pass
-        if isinstance(asyncio.current_task(), asyncio.Task) and asyncio.current_task().cancelled():
-            raise
+        raise
+    except ConnectionError:
+        if process is not None and process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
         return response
     finally:
         if process is not None and process.returncode is None:
