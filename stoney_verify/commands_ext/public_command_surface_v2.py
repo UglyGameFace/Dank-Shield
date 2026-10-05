@@ -123,8 +123,9 @@ def _help_embed() -> discord.Embed:
         name="Optional fast doorways",
         value=(
             "`/captions` — ordinary server voice captions and personal consent\n"
+            "`/cinema` — Dank Cinema session, queue, info, and vote shortcuts\n"
             "`/mod` — moderation/member center\n"
-            "`/movie` — Movie Night hub; optional magnet or .torrent attachment starts media\n"
+            "`/movie` — backward-compatible Movie Night hub; optional magnet or .torrent attachment starts media\n"
             "`/role` — smart Roles & Profiles doorway with member/role shortcuts\n"
             "`/ticket` — current ticket controls\n"
             "`/tickets` — queues, ticket setup, routing, categories\n"
