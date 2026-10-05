@@ -109,7 +109,13 @@ _SITE_MEMBER_UNAVAILABLE_CACHE_SECONDS = 60.0
 _SITE_MEMBER_VERIFIED_UNTIL: dict[tuple[int, int], float] = {}
 _SITE_MEMBER_UNAVAILABLE_UNTIL: dict[tuple[int, int], float] = {}
 _SITE_MEMBER_REVOKED: set[tuple[int, int]] = set()
-_CINEMA_AUTH_CONTRACT = "signed-session-v5-observable"
+_SITE_GUILD_CACHE_SECONDS = 5 * 60.0
+_SITE_GUILD_ABSENT_CACHE_SECONDS = 60.0
+_SITE_GUILD_UNAVAILABLE_CACHE_SECONDS = 30.0
+_SITE_GUILD_REST_CACHE: dict[int, tuple[float, Any]] = {}
+_SITE_GUILD_ABSENT_UNTIL: dict[int, float] = {}
+_SITE_GUILD_UNAVAILABLE_UNTIL: dict[int, float] = {}
+_CINEMA_AUTH_CONTRACT = "signed-session-v6-guild-rest"
 
 
 def _clean_env_value(value: Any) -> str:
@@ -246,6 +252,7 @@ def _consume_oauth_state(value: str) -> Optional[int]:
 
 
 def _bot_guild(guild_id: int) -> Any:
+    """Return only the gateway-cached guild, if present."""
     try:
         from .globals import bot
     except Exception:
@@ -256,6 +263,88 @@ def _bot_guild(guild_id: int) -> Any:
         return bot.get_guild(int(guild_id))
     except Exception:
         return None
+
+
+async def _resolve_bot_guild(guild_id: int) -> tuple[str, Any]:
+    """Resolve bot guild membership as present, absent, or unavailable.
+
+    A cache miss from Client.get_guild() is not proof the bot is absent.
+    Fall back to Discord REST via Client.fetch_guild() before denying Cinema.
+    """
+
+    gid = int(guild_id)
+    if gid <= 0:
+        return "absent", None
+
+    cached = _bot_guild(gid)
+    if cached is not None:
+        _SITE_GUILD_REST_CACHE[gid] = (
+            time.monotonic() + _SITE_GUILD_CACHE_SECONDS,
+            cached,
+        )
+        _SITE_GUILD_ABSENT_UNTIL.pop(gid, None)
+        _SITE_GUILD_UNAVAILABLE_UNTIL.pop(gid, None)
+        return "present", cached
+
+    now = time.monotonic()
+    cached_row = _SITE_GUILD_REST_CACHE.get(gid)
+    if cached_row is not None:
+        expires_at, guild = cached_row
+        if float(expires_at) > now and guild is not None:
+            return "present", guild
+        _SITE_GUILD_REST_CACHE.pop(gid, None)
+
+    if _SITE_GUILD_ABSENT_UNTIL.get(gid, 0.0) > now:
+        return "absent", None
+    if _SITE_GUILD_UNAVAILABLE_UNTIL.get(gid, 0.0) > now:
+        return "unavailable", None
+
+    try:
+        from .globals import bot
+    except Exception:
+        bot = None
+    fetch_guild = getattr(bot, "fetch_guild", None) if bot is not None else None
+    if not callable(fetch_guild):
+        _SITE_GUILD_UNAVAILABLE_UNTIL[gid] = now + _SITE_GUILD_UNAVAILABLE_CACHE_SECONDS
+        return "unavailable", None
+
+    try:
+        guild = await fetch_guild(gid)
+    except (discord.NotFound, discord.Forbidden) as exc:
+        _SITE_GUILD_ABSENT_UNTIL[gid] = time.monotonic() + _SITE_GUILD_ABSENT_CACHE_SECONDS
+        _SITE_GUILD_REST_CACHE.pop(gid, None)
+        print(
+            "⚠️ cinema_site guild resolution absent "
+            f"guild={gid} error={type(exc).__name__}"
+        )
+        return "absent", None
+    except (discord.HTTPException, asyncio.TimeoutError) as exc:
+        _SITE_GUILD_UNAVAILABLE_UNTIL[gid] = time.monotonic() + _SITE_GUILD_UNAVAILABLE_CACHE_SECONDS
+        print(
+            "⚠️ cinema_site guild resolution unavailable "
+            f"guild={gid} error={type(exc).__name__}"
+        )
+        return "unavailable", None
+    except Exception as exc:
+        _SITE_GUILD_UNAVAILABLE_UNTIL[gid] = time.monotonic() + _SITE_GUILD_UNAVAILABLE_CACHE_SECONDS
+        print(
+            "⚠️ cinema_site guild resolution unavailable "
+            f"guild={gid} error={type(exc).__name__}"
+        )
+        return "unavailable", None
+
+    if guild is None:
+        _SITE_GUILD_UNAVAILABLE_UNTIL[gid] = time.monotonic() + _SITE_GUILD_UNAVAILABLE_CACHE_SECONDS
+        return "unavailable", None
+
+    _SITE_GUILD_REST_CACHE[gid] = (
+        time.monotonic() + _SITE_GUILD_CACHE_SECONDS,
+        guild,
+    )
+    _SITE_GUILD_ABSENT_UNTIL.pop(gid, None)
+    _SITE_GUILD_UNAVAILABLE_UNTIL.pop(gid, None)
+    print(f"🎞️ cinema_site guild resolution REST-confirmed guild={gid}")
+    return "present", guild
 
 
 def note_cinema_member_join(guild_id: int, user_id: int) -> None:
@@ -295,9 +384,14 @@ async def _site_member_state(guild_id: int, user_id: int) -> str:
 
     gid = int(guild_id)
     uid = int(user_id)
-    guild = _bot_guild(gid)
-    if guild is None or gid <= 0 or uid <= 0:
+    if gid <= 0 or uid <= 0:
         return "absent"
+
+    guild_state, guild = await _resolve_bot_guild(gid)
+    if guild_state == "absent":
+        return "bot_absent"
+    if guild_state != "present" or guild is None:
+        return "unavailable"
 
     key = (gid, uid)
     if key in _SITE_MEMBER_REVOKED:
