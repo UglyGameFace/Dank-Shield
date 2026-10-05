@@ -323,7 +323,11 @@ async def _site_member_state(guild_id: int, user_id: int) -> str:
     try:
         member = await fetch_member(uid)
     except discord.NotFound:
-        note_cinema_member_remove(gid, uid)
+        # A REST NotFound is authoritative for this request, but it must not
+        # become a process-lifetime revocation. Only Discord's canonical
+        # on_member_remove event owns durable in-process revocation state.
+        _SITE_MEMBER_VERIFIED_UNTIL.pop(key, None)
+        _SITE_MEMBER_UNAVAILABLE_UNTIL.pop(key, None)
         return "absent"
     except (discord.Forbidden, discord.HTTPException, asyncio.TimeoutError) as exc:
         _SITE_MEMBER_UNAVAILABLE_UNTIL[key] = time.monotonic() + _SITE_MEMBER_UNAVAILABLE_CACHE_SECONDS
@@ -815,22 +819,28 @@ async def _site_identity(request: web.Request) -> tuple[int, int]:
         str(request.cookies.get(CINEMA_SESSION_COOKIE, "") or ""),
     )
     if session_uid is not None:
+        # This exact-guild session cookie is minted only after one of the
+        # authoritative entry proofs succeeds: a signed Discord interaction,
+        # Discord OAuth guild membership, or a previously verified guild open.
+        # Do not re-run guild.fetch_member() on every Home/Profile/Search API
+        # request. That REST call is not an authentication primitive and can
+        # fail independently of membership.
+        if _bot_guild(guild_id) is None:
+            print(
+                "⚠️ cinema_site auth denied reason=bot_not_in_guild "
+                f"guild={guild_id} user={int(session_uid)}"
+            )
+            raise web.HTTPForbidden(
+                text="That Dank Cinema server is no longer available."
+            )
         if _cinema_member_revoked(guild_id, int(session_uid)):
+            print(
+                "⚠️ cinema_site auth denied reason=member_remove_event "
+                f"guild={guild_id} user={int(session_uid)}"
+            )
             raise web.HTTPForbidden(
                 text="Dank Cinema requires membership in this Discord server."
             )
-        if _recent_oauth_guild_proof(request, int(session_uid), guild_id):
-            note_cinema_member_join(guild_id, int(session_uid))
-            return guild_id, int(session_uid)
-
-        membership_state = await _site_member_state(guild_id, int(session_uid))
-        if membership_state == "absent":
-            raise web.HTTPForbidden(
-                text="Dank Cinema requires membership in this Discord server."
-            )
-        # A valid exact-guild Cinema session was created only after a signed
-        # Discord interaction or successful OAuth membership proof. Temporary
-        # REST unavailability must not eject that already-authorized browser.
         return guild_id, int(session_uid)
 
     uid = validate_cinema_identity(
@@ -845,10 +855,18 @@ async def _site_identity(request: web.Request) -> tuple[int, int]:
 
     membership_state = await _site_member_state(guild_id, int(uid))
     if membership_state == "absent":
+        print(
+            "⚠️ cinema_site auth denied reason=identity_membership_absent "
+            f"guild={guild_id} user={int(uid)}"
+        )
         raise web.HTTPForbidden(
             text="Dank Cinema requires membership in this Discord server."
         )
     if membership_state == "unavailable":
+        print(
+            "⚠️ cinema_site auth deferred reason=identity_membership_unavailable "
+            f"guild={guild_id} user={int(uid)}"
+        )
         raise web.HTTPServiceUnavailable(
             text=(
                 "Discord membership verification is temporarily unavailable. "
