@@ -824,6 +824,44 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         if session is not None
         else ""
     )
+    audio_compat: dict[str, Any] = {
+        "required": False,
+        "reason": "",
+        "codecs": [],
+        "source": "",
+    }
+    audio_compat_url = ""
+    if session is not None:
+        try:
+            torrent_manager.schedule_metadata_probe(session)
+        except Exception:
+            pass
+        classify_audio = getattr(
+            torrent_manager,
+            "browser_audio_compatibility",
+            None,
+        )
+        if callable(classify_audio):
+            try:
+                value = classify_audio(session)
+                if isinstance(value, dict):
+                    audio_compat.update(value)
+            except Exception:
+                pass
+        if bool(audio_compat.get("required")):
+            compat_url = getattr(torrent_manager, "compat_audio_url", None)
+            if callable(compat_url):
+                try:
+                    audio_compat_url = str(
+                        compat_url(
+                            session,
+                            ttl_seconds=21600,
+                            consumer_key=consumer_key,
+                        )
+                        or ""
+                    )
+                except Exception:
+                    audio_compat_url = ""
     cast_stream_url = (
         torrent_manager.stream_url(
             session,
@@ -933,6 +971,10 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "stream_token": room.stream_token,
         "stream_consumer": consumer_key,
         "stream_url": stream_url,
+        "audio_compat_url": audio_compat_url,
+        "audio_compat_required": bool(audio_compat.get("required")),
+        "audio_compat_reason": str(audio_compat.get("reason") or ""),
+        "audio_codecs": list(audio_compat.get("codecs") or [])[:8],
         "cast_stream_url": cast_stream_url,
         "media_content_type": (
             media_content_type(session.file_name)
