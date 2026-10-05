@@ -5219,19 +5219,70 @@ async def open_movie_night_command(
     await open_movie_night(interaction, replace_message=False)
 
 
+def _cinema_install_context(interaction: discord.Interaction) -> tuple[bool, bool]:
+    try:
+        guild_install = bool(interaction.is_guild_integration())
+    except Exception:
+        guild_install = False
+    try:
+        user_install = bool(interaction.is_user_integration())
+    except Exception:
+        user_install = False
+    return guild_install, user_install
+
+
+async def _require_cinema_guild_install(interaction: discord.Interaction) -> bool:
+    guild_install, user_install = _cinema_install_context(interaction)
+    try:
+        app_matches_client = int(getattr(interaction, "application_id", 0) or 0) == int(
+            getattr(getattr(interaction, "client", None), "application_id", 0) or 0
+        )
+    except Exception:
+        app_matches_client = False
+    print(
+        "🎞️ cinema_command_install_context "
+        f"guild_context={int(getattr(interaction, 'guild_id', None) is not None)} "
+        f"guild_install={int(guild_install)} "
+        f"user_install={int(user_install)} "
+        f"app_matches_client={int(app_matches_client)}"
+    )
+    if getattr(interaction, "guild_id", None) is None:
+        await _private(interaction, "❌ Dank Cinema only works inside a Discord server.")
+        return False
+    if not guild_install:
+        await _private(
+            interaction,
+            (
+                "❌ Dank Cinema needs the **server-installed** Dank Shield app. "
+                "This command is running from a personal/user app installation, "
+                "which cannot verify server membership for Cinema."
+            ),
+        )
+        return False
+    return True
+
+
 async def open_cinema_home_command(interaction: discord.Interaction) -> None:
+    if not await _require_cinema_guild_install(interaction):
+        return
     await open_movie_night(interaction, replace_message=False)
 
 
 async def start_cinema_watch_party_command(interaction: discord.Interaction) -> None:
+    if not await _require_cinema_guild_install(interaction):
+        return
     await _start_or_join_room(interaction, mode="watch_party")
 
 
 async def start_cinema_private_command(interaction: discord.Interaction) -> None:
+    if not await _require_cinema_guild_install(interaction):
+        return
     await _start_or_join_room(interaction, mode="private")
 
 
 async def join_cinema_command(interaction: discord.Interaction) -> None:
+    if not await _require_cinema_guild_install(interaction):
+        return
     guild = interaction.guild
     channel = interaction.channel
     if guild is None or channel is None:
@@ -5259,6 +5310,8 @@ async def join_cinema_command(interaction: discord.Interaction) -> None:
 
 
 async def leave_cinema_command(interaction: discord.Interaction) -> None:
+    if not await _require_cinema_guild_install(interaction):
+        return
     guild = interaction.guild
     channel = interaction.channel
     if guild is None or channel is None:
@@ -5289,6 +5342,8 @@ async def leave_cinema_command(interaction: discord.Interaction) -> None:
 
 
 async def open_cinema_queue_command(interaction: discord.Interaction) -> None:
+    if not await _require_cinema_guild_install(interaction):
+        return
     room = _room_for_interaction(interaction)
     if room is None:
         return await _movie_hub_notice(
@@ -5307,6 +5362,8 @@ async def open_cinema_queue_command(interaction: discord.Interaction) -> None:
 
 
 async def open_cinema_info_command(interaction: discord.Interaction) -> None:
+    if not await _require_cinema_guild_install(interaction):
+        return
     room = _room_for_interaction(interaction)
     if room is None:
         return await _movie_hub_notice(
@@ -5331,6 +5388,8 @@ async def vote_cinema_command(
     interaction: discord.Interaction,
     choice: str,
 ) -> None:
+    if not await _require_cinema_guild_install(interaction):
+        return
     approve = str(choice or "").casefold() == "yes"
     await _cast_latest_cinema_vote(interaction, approve=approve)
 
@@ -5339,6 +5398,15 @@ def build_cinema_command_group() -> app_commands.Group:
     group = app_commands.Group(
         name="cinema",
         description="Open and control Dank Cinema.",
+        allowed_contexts=app_commands.AppCommandContext(
+            guild=True,
+            dm_channel=False,
+            private_channel=False,
+        ),
+        allowed_installs=app_commands.AppInstallationType(
+            guild=True,
+            user=False,
+        ),
     )
     commands = (
         ("home", "Open the Dank Cinema hub.", open_cinema_home_command),
