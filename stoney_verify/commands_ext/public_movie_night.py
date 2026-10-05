@@ -177,10 +177,21 @@ def _variant_choice_text(variant: Any) -> tuple[str, str]:
     source = _release_source_label(metadata)
     hint = _release_hint_label(metadata)
     health = variant.swarm_health
+    try:
+        audio_risk = int(variant.browser_audio_risk_key())
+    except Exception:
+        audio_risk = 1
+    audio_label = (
+        " • 🔊 browser-safe audio"
+        if audio_risk == 0
+        else " • ⚠️ browser audio risk"
+        if audio_risk >= 2
+        else ""
+    )
     label = f"{hint or source} • {_format_bytes(variant.file_size)}"
     description = (
-        f"{source} • {health['seeds']} seeds • {health['leechers']} leeches • "
-        f"{variant.source_label or variant.source_id or 'provider'}"
+        f"{source} • {health['seeds']} seeds • {health['leechers']} leeches"
+        f"{audio_label} • {variant.source_label or variant.source_id or 'provider'}"
     )
     return label[:100], description[:100]
 
