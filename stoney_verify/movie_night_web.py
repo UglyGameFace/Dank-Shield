@@ -2761,6 +2761,7 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
   <section class="theater" aria-label="Dank Cinema player">
     <div class="video-stage" id="videoStage">
       <video id="video" playsinline preload="metadata" controlslist="nodownload" aria-label="Dank Cinema video"></video>
+      <audio id="compatAudio" preload="none" hidden aria-hidden="true"></audio>
       <div class="tap-skip-feedback left" id="tapSkipLeft" aria-live="polite">↶ 10s</div>
       <div class="tap-skip-feedback right" id="tapSkipRight" aria-live="polite">10s ↷</div>
       <div class="stage-top">
@@ -3079,6 +3080,7 @@ else
   setTimeout(()=>loadGoogleCastSdk(),900);
 
 const video=document.getElementById("video");
+const compatAudio=document.getElementById("compatAudio");
 const notice=document.getElementById("notice");
 const syncButton=document.getElementById("sync");
 let lastToken="";
@@ -3114,6 +3116,12 @@ let controlsHideTimer=null;
 let tapSkipFeedbackTimer=null;
 let lastStageTapAt=0;
 let lastStageTapSide="";
+let compatAudioUrl="";
+let compatAudioToken="";
+let compatAudioOffset=0;
+let compatAudioRestartAt=0;
+let compatAudioLastSyncAt=0;
+let compatAudioRestartTimer=null;
 const AUDIO_STORAGE_KEY="dank-cinema-audio:"+BOOT.uid;
 let userMuted=false;
 let preferredVolume=1;
@@ -3784,6 +3792,99 @@ function cancelStreamRetry() {{
   }}
 }}
 
+function compatAudioActive() {{
+  return !!compatAudioUrl;
+}}
+function compatAudioClock() {{
+  return Number(compatAudioOffset||0)+Number(compatAudio.currentTime||0);
+}}
+function compatAudioTargetUrl(seconds) {{
+  if(!compatAudioUrl) return "";
+  try {{
+    const url=new URL(compatAudioUrl,window.location.origin);
+    url.searchParams.set("start",Math.max(0,Number(seconds||0)).toFixed(3));
+    return url.pathname+url.search;
+  }} catch(_) {{
+    return compatAudioUrl;
+  }}
+}}
+function stopCompatAudio() {{
+  if(compatAudioRestartTimer!==null) {{
+    clearTimeout(compatAudioRestartTimer);
+    compatAudioRestartTimer=null;
+  }}
+  try {{ compatAudio.pause(); }} catch(_) {{}}
+  compatAudio.removeAttribute("src");
+  try {{ compatAudio.load(); }} catch(_) {{}}
+  compatAudioOffset=0;
+}}
+async function restartCompatAudio(seconds, shouldPlay=false) {{
+  if(!compatAudioUrl) return;
+  const target=Math.max(0,Number(seconds||0));
+  compatAudioRestartAt=Date.now();
+  try {{ compatAudio.pause(); }} catch(_) {{}}
+  compatAudioOffset=target;
+  compatAudio.src=compatAudioTargetUrl(target);
+  try {{ compatAudio.load(); }} catch(_) {{}}
+  applyUserAudioState(false);
+  if(shouldPlay && !userMuted) {{
+    try {{ await compatAudio.play(); }}
+    catch(_) {{
+      notice.textContent="Tap Play or Sync once to allow the AAC compatibility audio.";
+    }}
+  }}
+}}
+function scheduleCompatAudioRestart(seconds, shouldPlay=!video.paused) {{
+  if(!compatAudioUrl) return;
+  if(compatAudioRestartTimer!==null) clearTimeout(compatAudioRestartTimer);
+  compatAudioRestartTimer=setTimeout(()=>{{
+    compatAudioRestartTimer=null;
+    void restartCompatAudio(seconds,shouldPlay);
+  }},140);
+}}
+async function syncCompatAudio(force=false) {{
+  if(!compatAudioUrl) return;
+  const now=Date.now();
+  if(!force && now-compatAudioLastSyncAt<900) return;
+  compatAudioLastSyncAt=now;
+  const target=Number(video.currentTime||0);
+  const drift=Math.abs(compatAudioClock()-target);
+  if(
+    force ||
+    !compatAudio.getAttribute("src") ||
+    drift>1.35
+  ) {{
+    if(now-compatAudioRestartAt>750)
+      await restartCompatAudio(target,!video.paused);
+    return;
+  }}
+  try {{ compatAudio.playbackRate=Number(video.playbackRate||1); }} catch(_) {{}}
+  if(video.paused) {{
+    if(!compatAudio.paused) compatAudio.pause();
+  }} else if(compatAudio.paused && !userMuted) {{
+    try {{ await compatAudio.play(); }} catch(_) {{}}
+  }}
+}}
+function applyCompatAudioState(s) {{
+  const required=!!(s?.audio_compat_required && s?.audio_compat_url);
+  const token=String(s?.stream_token||"");
+  if(!required) {{
+    if(compatAudioUrl) {{
+      compatAudioUrl="";
+      compatAudioToken="";
+      stopCompatAudio();
+      applyUserAudioState(false);
+    }}
+    return;
+  }}
+  if(compatAudioToken!==token || !compatAudioUrl) {{
+    compatAudioToken=token;
+    compatAudioUrl=String(s.audio_compat_url||"");
+    const target=Number(video.currentTime||s.position_seconds||0);
+    void restartCompatAudio(target,!video.paused);
+  }}
+}}
+
 function attachStream(url, force=false) {{
   const clean=String(url||"");
   if(!clean) return;
@@ -4002,6 +4103,7 @@ function correctSyncedDrift(target) {{
 
 async function applyState(s) {{
   lastState=s;
+  applyCompatAudioState(s);
   document.getElementById("title").textContent=s.title||(s.private?"Private Session":"Watch Party");
   document.getElementById("heading").textContent=
     s.private?"🔒 Dank Cinema Private Session":"🎬 Dank Cinema Watch Party";
@@ -4037,6 +4139,9 @@ async function applyState(s) {{
     cancelStreamRetry();
     resetPlaybackRate();
     video.pause();
+    compatAudioUrl="";
+    compatAudioToken="";
+    stopCompatAudio();
     video.removeAttribute("src");
     video.load();
     document.getElementById("play").disabled=true;
@@ -4440,23 +4545,36 @@ function saveUserAudioState() {{
     );
   }} catch(_) {{}}
 }}
+function activeAudioElement() {{
+  return compatAudioActive()?compatAudio:video;
+}}
 function syncVolumeControls() {{
-  const effectiveMuted=video.muted || Number(video.volume||0)<=0;
+  const output=activeAudioElement();
+  const effectiveMuted=!!userMuted || output.muted || Number(output.volume||0)<=0;
   muteControl.classList.toggle("active",effectiveMuted);
   muteControl.setAttribute("aria-pressed",effectiveMuted?"true":"false");
   muteControl.setAttribute("aria-label",effectiveMuted?"Unmute":"Mute");
   if(document.activeElement!==volumeControl)
-    volumeControl.value=String(Math.max(0,Math.min(1,Number(video.volume||0))));
+    volumeControl.value=String(Math.max(0,Math.min(1,Number(output.volume||preferredVolume||1))));
 }}
 function applyUserAudioState(forceAudible=false) {{
-  try {{
-    const target=Math.max(0.05,Math.min(1,Number(preferredVolume||1)));
-    if(Number(video.volume||0)<=0 || Math.abs(Number(video.volume||0)-target)>0.001)
+  const target=Math.max(0.05,Math.min(1,Number(preferredVolume||1)));
+  if(compatAudioActive()) {{
+    try {{
+      video.muted=true;
+      compatAudio.volume=target;
+      compatAudio.muted=forceAudible && !userMuted ? false : !!userMuted;
+    }} catch(_) {{}}
+  }} else {{
+    try {{
       video.volume=target;
-  }} catch(_) {{}}
-  try {{
-    video.muted=forceAudible && !userMuted ? false : !!userMuted;
-  }} catch(_) {{}}
+      video.muted=forceAudible && !userMuted ? false : !!userMuted;
+    }} catch(_) {{}}
+    try {{
+      compatAudio.muted=true;
+      compatAudio.pause();
+    }} catch(_) {{}}
+  }}
   syncVolumeControls();
 }}
 async function primeAudiblePlaybackGesture() {{
@@ -4465,6 +4583,12 @@ async function primeAudiblePlaybackGesture() {{
     return;
   }}
   applyUserAudioState(true);
+  if(compatAudioActive() && compatAudio.getAttribute("src")) {{
+    try {{
+      await compatAudio.play();
+      compatAudio.pause();
+    }} catch(_) {{}}
+  }}
   if(!video.paused || !video.getAttribute("src")) return;
   try {{
     await video.play();
@@ -4477,20 +4601,30 @@ volumeControl.addEventListener("input",event=>{{
   const next=Math.max(0,Math.min(1,Number(event.target.value||0)));
   if(next>0) preferredVolume=next;
   userMuted=next<=0;
-  try {{ video.volume=next>0?next:preferredVolume; }} catch(_) {{}}
-  try {{ video.muted=userMuted; }} catch(_) {{}}
-  saveUserAudioState();
-  syncVolumeControls();
-}});
-muteControl.onclick=()=>{{
-  const effectiveMuted=video.muted || Number(video.volume||0)<=0 || userMuted;
-  userMuted=!effectiveMuted;
-  if(!userMuted && Number(video.volume||0)<=0) preferredVolume=Math.max(.5,preferredVolume);
   saveUserAudioState();
   applyUserAudioState(!userMuted);
+}});
+muteControl.onclick=()=>{{
+  const output=activeAudioElement();
+  const effectiveMuted=!!userMuted || output.muted || Number(output.volume||0)<=0;
+  userMuted=!effectiveMuted;
+  if(!userMuted && Number(output.volume||0)<=0) preferredVolume=Math.max(.5,preferredVolume);
+  saveUserAudioState();
+  applyUserAudioState(!userMuted);
+  if(!userMuted && compatAudioActive() && !video.paused)
+    void syncCompatAudio(true);
   showPlayerControls(true);
 }};
 video.addEventListener("volumechange",syncVolumeControls);
+compatAudio.addEventListener("volumechange",syncVolumeControls);
+compatAudio.addEventListener("error",()=>{{
+  if(!compatAudioUrl) return;
+  compatAudioUrl="";
+  compatAudioToken="";
+  stopCompatAudio();
+  applyUserAudioState(true);
+  notice.textContent="AAC compatibility audio could not start. Trying the source audio instead.";
+}});
 applyUserAudioState(false);
 document.getElementById("pip").onclick=async()=>{{
   try {{
@@ -5331,6 +5465,7 @@ document.getElementById("end").onclick=()=>{{
 }};
 video.addEventListener("play",()=>{{
   schedulePlayerControlsHide(2200);
+  if(compatAudioActive()) void syncCompatAudio(false);
   if(remoteApply) return;
   if(lastState?.is_host) {{
     hostAction("resume");
@@ -5351,9 +5486,14 @@ video.addEventListener("play",()=>{{
 }});
 video.addEventListener("pause",()=>{{
   showPlayerControls(true);
+  if(compatAudioActive() && !compatAudio.paused) compatAudio.pause();
   if(!remoteApply && lastState?.is_host) hostAction("pause");
 }});
-video.addEventListener("seeked",scheduleHostSeekCommit);
+video.addEventListener("seeked",()=>{{
+  scheduleHostSeekCommit();
+  if(compatAudioActive())
+    scheduleCompatAudioRestart(Number(video.currentTime||0),!video.paused);
+}});
 video.addEventListener("loadedmetadata",()=>{{
   streamRetryAttempt=0;
   cancelStreamRetry();
@@ -5372,7 +5512,15 @@ video.addEventListener("loadedmetadata",()=>{{
   void applyPendingProgressResume();
 }});
 video.addEventListener("durationchange",updatePlayerChrome);
-video.addEventListener("timeupdate",updatePlayerChrome);
+video.addEventListener("timeupdate",()=>{{
+  updatePlayerChrome();
+  if(compatAudioActive()) void syncCompatAudio(false);
+}});
+video.addEventListener("ratechange",()=>{{
+  if(compatAudioActive()) {{
+    try {{ compatAudio.playbackRate=Number(video.playbackRate||1); }} catch(_) {{}}
+  }}
+}});
 video.addEventListener("play",updatePlayerChrome);
 video.addEventListener("pause",updatePlayerChrome);
 video.addEventListener("canplay",()=>{{
