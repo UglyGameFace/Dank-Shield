@@ -401,10 +401,10 @@ def test_cinema_identity_cookie_can_reopen_exact_guild_after_membership_recheck(
         cookies={cinema_site_auth.CINEMA_IDENTITY_COOKIE: identity},
     )
 
-    async def member(guild_id: int, user_id: int):
-        return object() if (int(guild_id), int(user_id)) == (100, 42) else None
+    async def member_state(guild_id: int, user_id: int):
+        return "present" if (int(guild_id), int(user_id)) == (100, 42) else "absent"
 
-    monkeypatch.setattr(cinema_site, "_fetch_site_member", member)
+    monkeypatch.setattr(cinema_site, "_site_member_state", member_state)
     assert asyncio.run(cinema_site._site_identity(request)) == (100, 42)
 
 
@@ -427,10 +427,10 @@ def test_standalone_oauth_guild_proof_allows_browsing_when_bot_member_rest_is_un
         lambda guild_id: object() if int(guild_id) == 100 else None,
     )
 
-    async def unavailable_member_rest(_guild_id: int, _user_id: int):
-        return None
+    async def should_not_recheck_member(_guild_id: int, _user_id: int):
+        raise AssertionError("fresh OAuth guild proof must bypass member REST")
 
-    monkeypatch.setattr(cinema_site, "_fetch_site_member", unavailable_member_rest)
+    monkeypatch.setattr(cinema_site, "_site_member_state", should_not_recheck_member)
 
     assert asyncio.run(cinema_site._site_identity(request)) == (100, 42)
 
@@ -450,9 +450,9 @@ def test_standalone_oauth_guild_proof_is_exact_guild_scoped(monkeypatch) -> None
     monkeypatch.setattr(cinema_site, "_bot_guild", lambda _guild_id: object())
 
     async def departed_member(_guild_id: int, _user_id: int):
-        return None
+        return "absent"
 
-    monkeypatch.setattr(cinema_site, "_fetch_site_member", departed_member)
+    monkeypatch.setattr(cinema_site, "_site_member_state", departed_member)
 
     try:
         asyncio.run(cinema_site._site_identity(request))
@@ -487,7 +487,7 @@ def test_discord_signed_cinema_link_establishes_browser_session_without_member_r
     async def should_not_fetch_member(_guild_id: int, _user_id: int):
         raise AssertionError("valid Discord signed entry must not require member REST before cookie exchange")
 
-    monkeypatch.setattr(cinema_site, "_fetch_site_member", should_not_fetch_member)
+    monkeypatch.setattr(cinema_site, "_site_member_state", should_not_fetch_member)
 
     response = asyncio.run(cinema_site.cinema_site_page(request))
 
@@ -540,20 +540,22 @@ def test_cinema_site_identity_requires_current_member_of_same_guild(monkeypatch)
         cookies={cinema_site_auth.CINEMA_SESSION_COOKIE: value},
     )
 
+    cinema_site._SITE_MEMBER_REVOKED.discard((100, 42))
+
     async def current_member(guild_id: int, user_id: int):
         return (
-            object()
+            "present"
             if (int(guild_id), int(user_id)) == (100, 42)
-            else None
+            else "absent"
         )
 
-    monkeypatch.setattr(cinema_site, "_fetch_site_member", current_member)
+    monkeypatch.setattr(cinema_site, "_site_member_state", current_member)
     assert asyncio.run(cinema_site._site_identity(request)) == (100, 42)
 
     async def departed_member(_guild_id: int, _user_id: int):
-        return None
+        return "absent"
 
-    monkeypatch.setattr(cinema_site, "_fetch_site_member", departed_member)
+    monkeypatch.setattr(cinema_site, "_site_member_state", departed_member)
     try:
         asyncio.run(cinema_site._site_identity(request))
     except Exception as exc:
@@ -563,6 +565,56 @@ def test_cinema_site_identity_requires_current_member_of_same_guild(monkeypatch)
         assert "requires membership in this Discord server" in exc.text
     else:
         raise AssertionError("Cinema access must fail closed after server membership is gone.")
+
+
+def test_exact_guild_session_survives_temporary_membership_api_failure(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+    cinema_site._SITE_MEMBER_REVOKED.discard((100, 42))
+    value = cinema_site_auth.cinema_session_value(100, 42, ttl_seconds=3600)
+    request = SimpleNamespace(
+        match_info={"guild_id": "100"},
+        query={},
+        cookies={cinema_site_auth.CINEMA_SESSION_COOKIE: value},
+    )
+
+    async def unavailable_member(_guild_id: int, _user_id: int):
+        return "unavailable"
+
+    monkeypatch.setattr(cinema_site, "_site_member_state", unavailable_member)
+
+    assert asyncio.run(cinema_site._site_identity(request)) == (100, 42)
+
+
+def test_member_remove_revokes_existing_cinema_session_and_rejoin_restores_it(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+    value = cinema_site_auth.cinema_session_value(100, 42, ttl_seconds=3600)
+    request = SimpleNamespace(
+        match_info={"guild_id": "100"},
+        query={},
+        cookies={cinema_site_auth.CINEMA_SESSION_COOKIE: value},
+    )
+
+    cinema_site.note_cinema_member_join(100, 42)
+
+    async def unavailable_member(_guild_id: int, _user_id: int):
+        return "unavailable"
+
+    monkeypatch.setattr(cinema_site, "_site_member_state", unavailable_member)
+    assert asyncio.run(cinema_site._site_identity(request)) == (100, 42)
+
+    cinema_site.note_cinema_member_remove(100, 42)
+    try:
+        asyncio.run(cinema_site._site_identity(request))
+    except Exception as exc:
+        from aiohttp import web
+
+        assert isinstance(exc, web.HTTPForbidden)
+        assert "requires membership in this Discord server" in exc.text
+    else:
+        raise AssertionError("Member removal must revoke an existing Cinema session.")
+
+    cinema_site.note_cinema_member_join(100, 42)
+    assert asyncio.run(cinema_site._site_identity(request)) == (100, 42)
 
 
 def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session() -> None:
@@ -583,8 +635,9 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert "await _fetch_site_member(target_guild, user_id)" not in source
     assert "def _recent_oauth_guild_proof(" in source
     assert "validate_cinema_guilds(" in source
-    assert "not _recent_oauth_guild_proof(request, int(uid), guild_id)" in source
-    assert "_SITE_MEMBER_CACHE_SECONDS = 30.0" in source
+    assert "def _site_member_state(" in source
+    assert 'return "unavailable"' in source
+    assert "_SITE_MEMBER_CACHE_SECONDS = 5 * 60.0" in source
     assert "cinema_session_value(guild_id, user_id)" in source
     assert 'path=f"/cinema/{int(guild_id)}"' in source
     assert 'initialUrl.searchParams.delete("sig")' in script

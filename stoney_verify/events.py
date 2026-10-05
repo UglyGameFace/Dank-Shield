@@ -1206,6 +1206,12 @@ async def on_member_join(member: discord.Member):
         guild = member.guild
         gid = int(guild.id)
 
+        try:
+            from .cinema_site import note_cinema_member_join
+            note_cinema_member_join(gid, int(member.id))
+        except Exception:
+            pass
+
         _ensure_gid_join_deque(JOIN_TIMES, gid)
         _ensure_gid_dict(RAID_RECENT_JOINERS, gid)
 
@@ -1535,6 +1541,12 @@ async def on_member_remove(member: discord.Member):
     try:
         guild = member.guild
         gid = int(guild.id)
+
+        try:
+            from .cinema_site import note_cinema_member_remove
+            note_cinema_member_remove(gid, int(member.id))
+        except Exception:
+            pass
 
         try:
             _ensure_gid_dict(RAID_RECENT_JOINERS, gid)

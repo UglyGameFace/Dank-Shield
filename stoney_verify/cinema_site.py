@@ -19,6 +19,7 @@ from typing import Any, Mapping, Optional
 from urllib.parse import urlencode, urlsplit
 
 import aiohttp
+import discord
 from aiohttp import web
 
 from .cinema_catalog import (
@@ -103,8 +104,11 @@ _CINEMA_OAUTH_STATE_TTL_SECONDS = 10 * 60
 _CINEMA_OAUTH_STATES: dict[str, tuple[float, int]] = {}
 
 
-_SITE_MEMBER_CACHE_SECONDS = 30.0
+_SITE_MEMBER_CACHE_SECONDS = 5 * 60.0
+_SITE_MEMBER_UNAVAILABLE_CACHE_SECONDS = 60.0
 _SITE_MEMBER_VERIFIED_UNTIL: dict[tuple[int, int], float] = {}
+_SITE_MEMBER_UNAVAILABLE_UNTIL: dict[tuple[int, int], float] = {}
+_SITE_MEMBER_REVOKED: set[tuple[int, int]] = set()
 
 
 def _clean_env_value(value: Any) -> str:
@@ -253,44 +257,95 @@ def _bot_guild(guild_id: int) -> Any:
         return None
 
 
-async def _fetch_site_member(guild_id: int, user_id: int) -> Any:
+def note_cinema_member_join(guild_id: int, user_id: int) -> None:
+    gid = int(guild_id)
+    uid = int(user_id)
+    if gid <= 0 or uid <= 0:
+        return
+    key = (gid, uid)
+    _SITE_MEMBER_REVOKED.discard(key)
+    _SITE_MEMBER_UNAVAILABLE_UNTIL.pop(key, None)
+    _SITE_MEMBER_VERIFIED_UNTIL[key] = time.monotonic() + _SITE_MEMBER_CACHE_SECONDS
+
+
+def note_cinema_member_remove(guild_id: int, user_id: int) -> None:
+    gid = int(guild_id)
+    uid = int(user_id)
+    if gid <= 0 or uid <= 0:
+        return
+    key = (gid, uid)
+    _SITE_MEMBER_REVOKED.add(key)
+    _SITE_MEMBER_VERIFIED_UNTIL.pop(key, None)
+    _SITE_MEMBER_UNAVAILABLE_UNTIL.pop(key, None)
+
+
+def _cinema_member_revoked(guild_id: int, user_id: int) -> bool:
+    return (int(guild_id), int(user_id)) in _SITE_MEMBER_REVOKED
+
+
+async def _site_member_state(guild_id: int, user_id: int) -> str:
+    """Return present, absent, or unavailable without conflating REST failures.
+
+    Only a definitive Discord NotFound or a canonical member-remove event means
+    the user is absent. Rate limits, forbidden REST reads, timeouts, and other
+    transport failures are availability problems, not proof that membership
+    disappeared.
+    """
+
     gid = int(guild_id)
     uid = int(user_id)
     guild = _bot_guild(gid)
     if guild is None or gid <= 0 or uid <= 0:
-        return None
+        return "absent"
 
     key = (gid, uid)
+    if key in _SITE_MEMBER_REVOKED:
+        return "absent"
+
     now = time.monotonic()
     try:
         cached = guild.get_member(uid)
     except Exception:
         cached = None
     if cached is not None:
-        _SITE_MEMBER_VERIFIED_UNTIL[key] = now + _SITE_MEMBER_CACHE_SECONDS
-        return cached
+        note_cinema_member_join(gid, uid)
+        return "present"
 
-    # A successful REST membership check remains valid briefly so a browser
-    # loading Home/Profile/Feeds together cannot turn into a Discord API burst.
-    # Discord member-remove events clear normal guild cache immediately; this
-    # bounded fallback limits any stale browser access to at most 30 seconds.
     if _SITE_MEMBER_VERIFIED_UNTIL.get(key, 0.0) > now:
-        return True
+        return "present"
+    if _SITE_MEMBER_UNAVAILABLE_UNTIL.get(key, 0.0) > now:
+        return "unavailable"
 
     fetch_member = getattr(guild, "fetch_member", None)
     if not callable(fetch_member):
-        _SITE_MEMBER_VERIFIED_UNTIL.pop(key, None)
-        return None
+        _SITE_MEMBER_UNAVAILABLE_UNTIL[key] = now + _SITE_MEMBER_UNAVAILABLE_CACHE_SECONDS
+        return "unavailable"
     try:
         member = await fetch_member(uid)
-    except Exception:
-        _SITE_MEMBER_VERIFIED_UNTIL.pop(key, None)
-        return None
+    except discord.NotFound:
+        note_cinema_member_remove(gid, uid)
+        return "absent"
+    except (discord.Forbidden, discord.HTTPException, asyncio.TimeoutError) as exc:
+        _SITE_MEMBER_UNAVAILABLE_UNTIL[key] = time.monotonic() + _SITE_MEMBER_UNAVAILABLE_CACHE_SECONDS
+        print(
+            "⚠️ cinema_site membership verification unavailable "
+            f"guild={gid} user={uid} error={type(exc).__name__}"
+        )
+        return "unavailable"
+    except Exception as exc:
+        _SITE_MEMBER_UNAVAILABLE_UNTIL[key] = time.monotonic() + _SITE_MEMBER_UNAVAILABLE_CACHE_SECONDS
+        print(
+            "⚠️ cinema_site membership verification unavailable "
+            f"guild={gid} user={uid} error={type(exc).__name__}"
+        )
+        return "unavailable"
+
     if member is None:
-        _SITE_MEMBER_VERIFIED_UNTIL.pop(key, None)
-        return None
-    _SITE_MEMBER_VERIFIED_UNTIL[key] = time.monotonic() + _SITE_MEMBER_CACHE_SECONDS
-    return member
+        _SITE_MEMBER_UNAVAILABLE_UNTIL[key] = time.monotonic() + _SITE_MEMBER_UNAVAILABLE_CACHE_SECONDS
+        return "unavailable"
+
+    note_cinema_member_join(gid, uid)
+    return "present"
 
 
 def _cached_member_guilds(user_id: int) -> list[Any]:
@@ -325,7 +380,12 @@ def _recent_oauth_guild_proof(
 
     uid = int(user_id)
     gid = int(guild_id)
-    if uid <= 0 or gid <= 0 or _bot_guild(gid) is None:
+    if (
+        uid <= 0
+        or gid <= 0
+        or _bot_guild(gid) is None
+        or _cinema_member_revoked(gid, uid)
+    ):
         return False
     allowed = validate_cinema_guilds(
         uid,
@@ -609,6 +669,8 @@ async def cinema_oauth_callback(request: web.Request) -> web.Response:
         if guild_id > 0 and _bot_guild(guild_id) is not None:
             shared_ids.append(guild_id)
     shared_ids = sorted(set(shared_ids))[:50]
+    for shared_guild_id in shared_ids:
+        note_cinema_member_join(shared_guild_id, user_id)
 
     if target_guild > 0:
         if target_guild not in shared_ids:
@@ -688,15 +750,23 @@ async def cinema_open_guild(request: web.Request) -> web.Response:
             error="That Dank Cinema server is unavailable.",
             status=404,
         )
-    if (
-        not _recent_oauth_guild_proof(request, int(user_id), guild_id)
-        and await _fetch_site_member(guild_id, int(user_id)) is None
-    ):
-        return _cinema_entry_response(
-            user_id=int(user_id),
-            error="You must currently be a member of that Discord server.",
-            status=403,
-        )
+    if not _recent_oauth_guild_proof(request, int(user_id), guild_id):
+        membership_state = await _site_member_state(guild_id, int(user_id))
+        if membership_state == "absent":
+            return _cinema_entry_response(
+                user_id=int(user_id),
+                error="You must currently be a member of that Discord server.",
+                status=403,
+            )
+        if membership_state == "unavailable":
+            return _cinema_entry_response(
+                user_id=int(user_id),
+                error=(
+                    "Discord membership verification is temporarily unavailable. "
+                    "Open Dank Cinema again from Discord to refresh access."
+                ),
+                status=503,
+            )
 
     response = web.HTTPFound(f"/cinema/{guild_id}")
     session_value = cinema_session_value(guild_id, int(user_id))
@@ -737,25 +807,53 @@ async def _site_identity(request: web.Request) -> tuple[int, int]:
             raise web.HTTPForbidden(
                 text="That Dank Cinema server is no longer available."
             )
+        note_cinema_member_join(guild_id, int(signed_uid))
         return guild_id, int(signed_uid)
 
-    uid = validate_cinema_session(
+    session_uid = validate_cinema_session(
         guild_id,
         str(request.cookies.get(CINEMA_SESSION_COOKIE, "") or ""),
     )
-    if uid is None:
-        uid = validate_cinema_identity(
-            str(request.cookies.get(CINEMA_IDENTITY_COOKIE, "") or "")
-        )
+    if session_uid is not None:
+        if _cinema_member_revoked(guild_id, int(session_uid)):
+            raise web.HTTPForbidden(
+                text="Dank Cinema requires membership in this Discord server."
+            )
+        if _recent_oauth_guild_proof(request, int(session_uid), guild_id):
+            note_cinema_member_join(guild_id, int(session_uid))
+            return guild_id, int(session_uid)
+
+        membership_state = await _site_member_state(guild_id, int(session_uid))
+        if membership_state == "absent":
+            raise web.HTTPForbidden(
+                text="Dank Cinema requires membership in this Discord server."
+            )
+        # A valid exact-guild Cinema session was created only after a signed
+        # Discord interaction or successful OAuth membership proof. Temporary
+        # REST unavailability must not eject that already-authorized browser.
+        return guild_id, int(session_uid)
+
+    uid = validate_cinema_identity(
+        str(request.cookies.get(CINEMA_IDENTITY_COOKIE, "") or "")
+    )
     if uid is None:
         raise web.HTTPUnauthorized(text="Sign in to Dank Cinema again.")
 
-    if (
-        not _recent_oauth_guild_proof(request, int(uid), guild_id)
-        and await _fetch_site_member(guild_id, int(uid)) is None
-    ):
+    if _recent_oauth_guild_proof(request, int(uid), guild_id):
+        note_cinema_member_join(guild_id, int(uid))
+        return guild_id, int(uid)
+
+    membership_state = await _site_member_state(guild_id, int(uid))
+    if membership_state == "absent":
         raise web.HTTPForbidden(
             text="Dank Cinema requires membership in this Discord server."
+        )
+    if membership_state == "unavailable":
+        raise web.HTTPServiceUnavailable(
+            text=(
+                "Discord membership verification is temporarily unavailable. "
+                "Open Dank Cinema from Discord to refresh access."
+            )
         )
     return guild_id, int(uid)
 
