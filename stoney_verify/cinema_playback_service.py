@@ -39,6 +39,7 @@ class CinemaPlaybackResult:
     candidate: Any
     variant: Any
     stream_url: str
+    session: Any = None
 
 
 def _clean(value: Any, limit: int = 180) -> str:
@@ -409,6 +410,7 @@ async def start_room_variant(
         candidate=candidate,
         variant=variant,
         stream_url=stream_url,
+        session=session,
     )
 
 

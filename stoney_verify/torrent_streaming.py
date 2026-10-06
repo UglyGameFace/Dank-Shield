@@ -262,6 +262,9 @@ class TorrentStreamSession:
     last_piece: int
     created_at: float
     last_access: float
+    startup_started_at: float = 0.0
+    metadata_ready_at: float = 0.0
+    launch_timing: dict[str, int] = field(default_factory=dict)
     candidates: tuple[TorrentFileCandidate, ...] = ()
     smoothed_download_rate: float = 0.0
     smoothed_consume_rate: float = 0.0
@@ -902,6 +905,7 @@ class TorrentMediaManager:
         if not identity:
             raise ValueError("That is not a valid BitTorrent magnet link.")
 
+        startup_started_at = time.monotonic()
         await self.cleanup_expired()
         async with self._identity_lock(identity):
             existing = await self._reuse_session(
@@ -926,6 +930,7 @@ class TorrentMediaManager:
                 atp.save_path = str(save_root)
                 handle = self._session.add_torrent(atp)
                 info = await self._wait_metadata(handle)
+                metadata_ready_at = time.monotonic()
                 return await self._finalize_session(
                     token=token,
                     save_root=save_root,
@@ -938,6 +943,8 @@ class TorrentMediaManager:
                     lease_key=lease_key,
                     replace_token=replace_token,
                     start_rss_mb=start_rss_mb,
+                    startup_started_at=startup_started_at,
+                    metadata_ready_at=metadata_ready_at,
                 )
             except Exception:
                 self._safe_remove_handle(handle)
@@ -962,6 +969,7 @@ class TorrentMediaManager:
         if not data or len(data) > self.max_metadata_bytes:
             raise ValueError("The .torrent metadata file is empty or exceeds the configured limit.")
 
+        startup_started_at = time.monotonic()
         await self.cleanup_expired()
         token = secrets.token_urlsafe(18)
         save_root = Path(tempfile.mkdtemp(prefix=f"{token}-", dir=str(self.root)))
@@ -971,6 +979,7 @@ class TorrentMediaManager:
         reserved = False
         try:
             info = self.lt.torrent_info(str(torrent_path))
+            metadata_ready_at = time.monotonic()
             source_identity = self._info_identity(info)
             async with self._identity_lock(source_identity):
                 existing = await self._reuse_session(
@@ -1005,6 +1014,8 @@ class TorrentMediaManager:
                     lease_key=lease_key,
                     replace_token=replace_token,
                     start_rss_mb=start_rss_mb,
+                    startup_started_at=startup_started_at,
+                    metadata_ready_at=metadata_ready_at,
                 )
         except Exception:
             self._safe_remove_handle(handle)
@@ -1151,6 +1162,8 @@ class TorrentMediaManager:
         lease_key: str = "",
         replace_token: str = "",
         start_rss_mb: float | None = None,
+        startup_started_at: float = 0.0,
+        metadata_ready_at: float = 0.0,
     ) -> TorrentStreamSession:
         candidates = self._playable_candidates(info)
         if not candidates:
@@ -1166,6 +1179,7 @@ class TorrentMediaManager:
         if piece_length <= 0:
             raise RuntimeError("Torrent metadata reported an invalid piece length.")
 
+        session_created_at = time.monotonic()
         session = TorrentStreamSession(
             token=token,
             secret=secrets.token_urlsafe(24),
@@ -1185,8 +1199,18 @@ class TorrentMediaManager:
             piece_length=piece_length,
             first_piece=0,
             last_piece=0,
-            created_at=time.monotonic(),
-            last_access=time.monotonic(),
+            created_at=session_created_at,
+            last_access=session_created_at,
+            startup_started_at=(
+                float(startup_started_at)
+                if float(startup_started_at or 0.0) > 0
+                else session_created_at
+            ),
+            metadata_ready_at=(
+                float(metadata_ready_at)
+                if float(metadata_ready_at or 0.0) > 0
+                else session_created_at
+            ),
             leases={str(lease_key).strip()[:180]} if str(lease_key or "").strip() else set(),
             lease_guild_ids=(
                 {str(lease_key).strip()[:180]: int(guild_id)}
@@ -1442,6 +1466,119 @@ class TorrentMediaManager:
                     session.smoothed_download_rate * 0.70 + live * 0.30
                 )
         return max(0.0, session.smoothed_download_rate or live)
+
+    def record_stream_timing(
+        self,
+        session: TorrentStreamSession,
+        consumer_key: str,
+        *,
+        event: str,
+        start: int = 0,
+        end: int = 0,
+        elapsed_ms: float = 0.0,
+        ready: Optional[bool] = None,
+    ) -> None:
+        """Record numeric startup timings for one signed stream consumer.
+
+        This is diagnostic state only. It never changes buffering, priorities,
+        admission, or playback decisions.
+        """
+
+        key = str(consumer_key or "").strip()[:96]
+        if not key:
+            return
+        now = time.monotonic()
+        state = session.consumer_playback.setdefault(
+            key,
+            {
+                "last_request_at": 0.0,
+                "last_request_bytes": 0,
+                "last_request_end": -1,
+                "smoothed_consume_rate": 0.0,
+                "last_access": now,
+            },
+        )
+        state["last_access"] = now
+        name = str(event or "").strip().lower()
+        startup_origin = float(
+            getattr(session, "startup_started_at", 0.0)
+            or session.created_at
+        )
+        from_start_ms = max(0.0, (now - startup_origin) * 1000.0)
+
+        if name == "request":
+            state["request_count"] = int(state.get("request_count", 0) or 0) + 1
+            state["last_range_start"] = max(0, int(start))
+            state["last_range_end"] = max(int(start), int(end))
+            state["last_request_from_start_ms"] = from_start_ms
+            if "first_request_from_start_ms" not in state:
+                state["first_request_from_start_ms"] = from_start_ms
+                state["first_range_start"] = max(0, int(start))
+                state["first_range_end"] = max(int(start), int(end))
+        elif name == "wait":
+            state["last_wait_ms"] = max(0.0, float(elapsed_ms))
+            state["last_wait_ready"] = 1 if ready else 0
+            if "first_wait_ms" not in state:
+                state["first_wait_ms"] = max(0.0, float(elapsed_ms))
+                state["first_wait_ready"] = 1 if ready else 0
+        elif name == "headers":
+            if "first_headers_from_start_ms" not in state:
+                state["first_headers_from_start_ms"] = from_start_ms
+        elif name == "first_byte":
+            if "first_byte_from_start_ms" not in state:
+                state["first_byte_from_start_ms"] = from_start_ms
+
+    def consumer_startup_status(
+        self,
+        session: TorrentStreamSession,
+        consumer_key: str,
+    ) -> dict[str, Any]:
+        key = str(consumer_key or "").strip()[:96]
+        state = session.consumer_playback.get(key) if key else None
+        if not isinstance(state, dict):
+            state = {}
+
+        def _ms(name: str) -> int:
+            try:
+                return max(0, int(round(float(state.get(name, 0.0) or 0.0))))
+            except Exception:
+                return 0
+
+        startup_origin = float(getattr(session, "startup_started_at", 0.0) or 0.0)
+        metadata_ready = float(getattr(session, "metadata_ready_at", 0.0) or 0.0)
+        finalized = float(getattr(session, "created_at", 0.0) or 0.0)
+        metadata_ms = (
+            max(0, int(round((metadata_ready - startup_origin) * 1000.0)))
+            if startup_origin > 0 and metadata_ready >= startup_origin
+            else 0
+        )
+        finalize_ms = (
+            max(0, int(round((finalized - startup_origin) * 1000.0)))
+            if startup_origin > 0 and finalized >= startup_origin
+            else 0
+        )
+
+        launch = dict(getattr(session, "launch_timing", {}) or {})
+        return {
+            "site_source_ms": max(0, int(launch.get("site_source_ms", 0) or 0)),
+            "site_torrent_start_ms": max(0, int(launch.get("site_torrent_start_ms", 0) or 0)),
+            "site_session_ready_ms": max(0, int(launch.get("site_session_ready_ms", 0) or 0)),
+            "site_response_ready_ms": max(0, int(launch.get("site_response_ready_ms", 0) or 0)),
+            "metadata_ms": metadata_ms,
+            "session_ready_ms": finalize_ms,
+            "request_count": max(0, int(state.get("request_count", 0) or 0)),
+            "first_request_ms": _ms("first_request_from_start_ms"),
+            "first_range_start": max(0, int(state.get("first_range_start", 0) or 0)),
+            "first_range_end": max(0, int(state.get("first_range_end", 0) or 0)),
+            "first_wait_ms": _ms("first_wait_ms"),
+            "first_wait_ready": bool(int(state.get("first_wait_ready", 0) or 0)),
+            "first_headers_ms": _ms("first_headers_from_start_ms"),
+            "first_byte_ms": _ms("first_byte_from_start_ms"),
+            "last_range_start": max(0, int(state.get("last_range_start", 0) or 0)),
+            "last_range_end": max(0, int(state.get("last_range_end", 0) or 0)),
+            "last_wait_ms": _ms("last_wait_ms"),
+            "last_wait_ready": bool(int(state.get("last_wait_ready", 0) or 0)),
+        }
 
     def prepare_playback_request(
         self,

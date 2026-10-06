@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import time
 from typing import Any
 from urllib.parse import quote, urlsplit
 
@@ -211,6 +212,13 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
         return web.Response(status=status_code, headers=headers)
 
     first_end = min(requested_end, start + _STREAM_CHUNK_BYTES - 1)
+    manager.record_stream_timing(
+        session,
+        consumer_key,
+        event="request",
+        start=start,
+        end=requested_end,
+    )
     try:
         plan = manager.prepare_playback_request(
             session,
@@ -219,11 +227,19 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
             consumer_key=consumer_key,
         )
         startup_wait_end = max(first_end, plan.startup_wait_end)
+        wait_started = time.monotonic()
         ready = await manager.wait_range(
             session,
             start,
             startup_wait_end,
             readahead_bytes=plan.target_bytes,
+        )
+        manager.record_stream_timing(
+            session,
+            consumer_key,
+            event="wait",
+            elapsed_ms=(time.monotonic() - wait_started) * 1000.0,
+            ready=ready,
         )
     except TorrentSessionUnavailableError:
         await manager.discard_unusable_session(token)
@@ -284,6 +300,11 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
 
     response = web.StreamResponse(status=status_code, headers=headers)
     await response.prepare(request)
+    manager.record_stream_timing(
+        session,
+        consumer_key,
+        event="headers",
+    )
 
     cursor = start
     client_disconnected = False
@@ -309,6 +330,12 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
             if not payload:
                 break
             await response.write(payload)
+            if cursor == start:
+                manager.record_stream_timing(
+                    session,
+                    consumer_key,
+                    event="first_byte",
+                )
             cursor += len(payload)
     except TorrentSessionUnavailableError:
         # The HTTP response may already be committed at this point, so do not

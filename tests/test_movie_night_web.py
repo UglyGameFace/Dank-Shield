@@ -223,6 +223,11 @@ def test_movie_night_player_contains_sync_heartbeat_and_host_controls() -> None:
     assert 's.sync_status==="joining"' in html
     assert 'return "Synced"' in html
     assert "<summary>Advanced Stream Details</summary>" in html
+    assert 'id="serverStartup"' in html
+    assert 'id="browserStartup"' in html
+    assert "renderStartupDiagnostics(t.startup||{})" in html
+    assert "requestVideoFrameCallback" in html
+    assert '"Play→playing "' in html
     assert 'class="theater"' in html
     assert html.index("<video") < html.index("<summary>Advanced Stream Details</summary>")
 
@@ -1435,7 +1440,9 @@ def test_player_layout_recovers_from_mobile_desktop_mode_resizes() -> None:
     assert 'window.addEventListener("resize",stabilizePlayerLayout' in html
     assert 'window.visualViewport?.addEventListener("resize",stabilizePlayerLayout' in html
     assert 'window.addEventListener("orientationchange",recoverPlayerFromViewportChange' in html
-    assert 'video.addEventListener(eventName,()=>stabilizePlayerLayout())' in html
+    assert 'video.addEventListener(eventName,()=>{' in html
+    assert "stabilizePlayerLayout();" in html
+    assert "markStartupEvent(eventName);" in html
     assert "function recoverPlayerFromViewportChange()" in html
     assert 'video.addEventListener("webkitendfullscreen"' in html
     assert 'document.addEventListener("webkitfullscreenchange",handleFullscreenChange)' in html

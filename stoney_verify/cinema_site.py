@@ -2363,6 +2363,7 @@ async def cinema_season_api(request: web.Request) -> web.Response:
 
 
 async def cinema_play_api(request: web.Request) -> web.Response:
+    play_request_started_at = time.monotonic()
     guild_id, user_id = await _site_identity(request)
     try:
         payload = await request.json()
@@ -2485,6 +2486,7 @@ async def cinema_play_api(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(text="Cinema can start a movie or a specific TV episode.")
 
     variants = tuple(outcome.variants or ())
+    source_ready_at = time.monotonic()
     if not variants:
         print(
             "⚠️ cinema_site source unavailable "
@@ -2604,6 +2606,37 @@ async def cinema_play_api(request: web.Request) -> web.Response:
         raise web.HTTPBadGateway(
             text="The selected Cinema source could not be started."
         ) from exc
+
+    response_ready_at = time.monotonic()
+    torrent_session = getattr(playback, "session", None)
+    if torrent_session is not None:
+        torrent_started_at = float(
+            getattr(torrent_session, "startup_started_at", 0.0)
+            or getattr(torrent_session, "created_at", response_ready_at)
+            or response_ready_at
+        )
+        session_ready_at = float(
+            getattr(torrent_session, "created_at", response_ready_at)
+            or response_ready_at
+        )
+        torrent_session.launch_timing = {
+            "site_source_ms": max(
+                0,
+                int(round((source_ready_at - play_request_started_at) * 1000.0)),
+            ),
+            "site_torrent_start_ms": max(
+                0,
+                int(round((torrent_started_at - play_request_started_at) * 1000.0)),
+            ),
+            "site_session_ready_ms": max(
+                0,
+                int(round((session_ready_at - play_request_started_at) * 1000.0)),
+            ),
+            "site_response_ready_ms": max(
+                0,
+                int(round((response_ready_at - play_request_started_at) * 1000.0)),
+            ),
+        }
 
     return web.json_response(
         {
