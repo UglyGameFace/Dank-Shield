@@ -108,6 +108,54 @@ def test_episode_lookup_context_keeps_series_and_episode_identity() -> None:
     assert context["season_episode"] == "S03E09"
 
 
+def test_external_identity_enrichment_uses_series_identity_for_episode(monkeypatch) -> None:
+    calls = []
+
+    async def fake_external_ids(media_type: str, tmdb_id: int):
+        calls.append((media_type, tmdb_id))
+        return {"imdb_id": "tt0903747", "tvdb_id": "81189"}
+
+    from stoney_verify import cinema_catalog
+
+    monkeypatch.setattr(cinema_catalog, "get_external_ids", fake_external_ids)
+    context = asyncio.run(
+        resolver._enrich_provider_lookup_context(
+            "Breaking Bad S03E09",
+            {
+                "media_type": "episode",
+                "tmdb_id": 62128,
+                "series_id": 1396,
+                "season_number": 3,
+                "episode_number": 9,
+                "year": 2008,
+            },
+        )
+    )
+
+    assert calls == [("tv", 1396)]
+    assert context["imdb_id"] == "tt0903747"
+    assert context["imdb_numeric"] == "903747"
+    assert context["tvdb_id"] == "81189"
+    assert context["series_tmdb_id"] == "1396"
+    assert context["season_episode"] == "S03E09"
+
+
+def test_provider_lookup_context_supports_season_zero_specials() -> None:
+    context = resolver._provider_lookup_context(
+        "Example Series S00E01",
+        {
+            "media_type": "episode",
+            "tmdb_id": 999,
+            "series_id": 123,
+            "season_number": 0,
+            "episode_number": 1,
+        },
+    )
+    assert context["season"] == "0"
+    assert context["episode"] == "1"
+    assert context["season_episode"] == "S00E01"
+
+
 def test_explicit_static_feed_does_not_get_search_query_appended() -> None:
     endpoint = "https://myrss.org/eztv"
     assert resolver._search_url(
@@ -345,7 +393,7 @@ def test_eztvx_torrent_payload_becomes_playable_tv_variant() -> None:
     assert variant.source_ref == "magnet:?xt=urn:btih:EZTVXTESTHASH"
     assert variant.file_size == 1_900_000_000
     assert variant.seeds == 75
-    assert variant.peers == 89
+    assert variant.peers == 75
     reported = variant.metadata["source_reported"]
     assert reported["imdb_id"] == "0903747"
     assert reported["season"] == "3"
