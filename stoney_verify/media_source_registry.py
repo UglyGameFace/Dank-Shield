@@ -187,6 +187,8 @@ _PROVIDER_TEMPLATE_TOKENS = (
     "{imdb_numeric}",
     "{tmdb_id}",
     "{series_tmdb_id}",
+    "{tvdb_id}",
+    "{year}",
     "{season}",
     "{episode}",
     "{season_episode}",
@@ -209,6 +211,8 @@ _TEXT_QUERY_KEYS = {
 }
 _IMDB_KEYS = {"imdb", "imdb_id", "imdbid"}
 _TMDB_KEYS = {"tmdb", "tmdb_id", "tmdbid"}
+_TVDB_KEYS = {"tvdb", "tvdb_id", "tvdbid"}
+_YEAR_KEYS = {"year", "release_year", "releaseyear"}
 _SEASON_KEYS = {"season", "season_number", "seasonnumber"}
 _EPISODE_KEYS = {"episode", "episode_number", "episodenumber"}
 _SEASON_EPISODE_KEYS = {"season_episode", "seasonepisode", "sxe"}
@@ -295,6 +299,11 @@ def prepare_example_search_url(value: Any) -> str:
         elif normalized in _TMDB_KEYS:
             updated.append((key, "{tmdb_id}"))
             replaced_primary = True
+        elif normalized in _TVDB_KEYS:
+            updated.append((key, "{tvdb_id}"))
+            replaced_primary = True
+        elif normalized in _YEAR_KEYS:
+            updated.append((key, "{year}"))
         elif normalized in _SEASON_KEYS:
             updated.append((key, "{season}"))
         elif normalized in _EPISODE_KEYS:
