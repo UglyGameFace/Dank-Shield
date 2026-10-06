@@ -1691,14 +1691,22 @@ async def cinema_home_api(request: web.Request) -> web.Response:
         library,
         adult_enabled=adult_enabled,
     )
-    recent = list(library.get("recently_watched") or [])
-    try:
-        recommended = await recommendations_for_history(recent, limit=20)
-    except Exception:
-        recommended = ()
-    new_episodes = await _next_episode_rows(library)
     active_rooms = _active_rooms_payload(guild_id, user_id)
-    watch_party_picks = _watch_party_picks(guild_id, user_id)
+    group_user_ids = _active_group_user_ids(guild_id, user_id)
+    try:
+        intelligence = await home_intelligence(
+            guild_id,
+            user_id,
+            include_adult=adult_enabled,
+            group_user_ids=group_user_ids,
+        )
+    except Exception:
+        intelligence = {
+            "because_you_watched": [],
+            "recommended": [],
+            "upcoming": [],
+            "group_recommendations": [],
+        }
 
     sections: list[dict[str, Any]] = []
 
@@ -1712,7 +1720,11 @@ async def cinema_home_api(request: web.Request) -> web.Response:
         "Continue Watching",
         [_media_payload(row) for row in library.get("continue_watching") or []],
     )
-    add("new_episodes", "New Episodes", new_episodes)
+    add(
+        "upcoming",
+        "Upcoming & Available From Your Shows",
+        intelligence.get("upcoming") or [],
+    )
     add(
         "trending",
         "Trending",
@@ -1744,15 +1756,20 @@ async def cinema_home_api(request: web.Request) -> web.Response:
         [_media_payload(row) for row in library.get("watch_again") or []],
     )
     add(
-        "watch_party_picks",
-        "Watch Party Picks",
-        watch_party_picks,
+        "group_recommendations",
+        "Good for the Room",
+        intelligence.get("group_recommendations") or [],
     )
     add("feeds", "From Your Feeds", feeds)
     add(
+        "because_you_watched",
+        "Because You Watched",
+        intelligence.get("because_you_watched") or [],
+    )
+    add(
         "recommended",
         "Recommended For You",
-        [item.to_payload() for item in recommended],
+        intelligence.get("recommended") or [],
     )
     add(
         "recently_watched",
