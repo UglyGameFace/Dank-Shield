@@ -69,6 +69,13 @@ from .cinema_feed_service import (
     feed_state as cinema_feed_state,
     mutate_feed as mutate_cinema_feed,
 )
+from .cinema_feed_personalization import (
+    CinemaFeedRuleError,
+    delete_feed_rule,
+    list_feed_rules,
+    refresh_private_source,
+    save_feed_rule,
+)
 from .media_source_registry import enabled_structured_sources, load_media_source_registry
 from .media_source_resolver import (
     preview_custom_media_source,
@@ -698,7 +705,7 @@ def _cinema_entry_html(
   <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=5">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=7">
 </head>
 <body>
   <div class="app-shell">
@@ -2370,11 +2377,24 @@ async def cinema_feeds_api(request: web.Request) -> web.Response:
     can_manage = _can_manage_cinema(guild_id, user_id)
 
     if request.method == "GET":
+        query = " ".join(str(request.query.get("q") or "").split())[:120]
+        try:
+            page = max(1, int(request.query.get("page") or 1))
+        except Exception:
+            page = 1
+        try:
+            page_size = max(1, min(int(request.query.get("page_size") or 8), 24))
+        except Exception:
+            page_size = 8
         return web.json_response(
             await cinema_feed_state(
                 guild_id,
                 can_manage=can_manage,
+                user_id=user_id,
                 refresh=False,
+                query=query,
+                page=page,
+                page_size=page_size,
             )
         )
 
@@ -2406,8 +2426,223 @@ async def cinema_feeds_api(request: web.Request) -> web.Response:
         await cinema_feed_state(
             guild_id,
             can_manage=True,
+            user_id=user_id,
+            refresh=False,
+            query="",
+            page=1,
+            page_size=8,
+        )
+    )
+
+
+async def cinema_feed_queue_api(request: web.Request) -> web.Response:
+    """Add one Feed Center suggestion to the current host-owned Cinema queue."""
+
+    guild_id, user_id = await _site_identity(request)
+    manager = get_movie_night_manager()
+    rooms = [
+        room
+        for room in manager.active_rooms_for_guild(guild_id)
+        if not room.ended and int(room.host_id) == int(user_id)
+    ]
+    if not rooms:
+        raise web.HTTPConflict(
+            text="Start or host a Cinema session before adding a feed match to Up Next."
+        )
+    room = max(rooms, key=lambda item: float(item.created_at))
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, Mapping):
+        payload = {}
+
+    media_type = str(payload.get("media_type") or "").strip().lower()
+    try:
+        tmdb_id = int(payload.get("tmdb_id") or 0)
+        season_number = int(payload.get("season_number") or 0)
+        episode_number = int(payload.get("episode_number") or 0)
+    except (TypeError, ValueError) as exc:
+        raise web.HTTPBadRequest(text="Invalid feed queue identity.") from exc
+
+    if tmdb_id <= 0 or media_type not in {"movie", "tv"}:
+        raise web.HTTPBadRequest(
+            text="This feed result needs a canonical Cinema identity before it can be queued."
+        )
+
+    try:
+        _raw, cinema_preferences = await load_movie_night_preferences(
+            int(guild_id),
             refresh=False,
         )
+        adult_enabled = bool(cinema_preferences.adult_content_enabled)
+    except Exception:
+        adult_enabled = False
+
+    if media_type == "movie":
+        details = await get_details("movie", tmdb_id)
+        if bool(details.media.adult) and not adult_enabled:
+            raise web.HTTPForbidden(
+                text="Adult-content Cinema playback is disabled for this server."
+            )
+        metadata, query, outcome = await search_exact_movie_sources(
+            int(guild_id),
+            media=details.media,
+        )
+    else:
+        if episode_number <= 0:
+            raise web.HTTPBadRequest(
+                text="TV feed queue suggestions need an exact season and episode."
+            )
+        details = await get_details("tv", tmdb_id)
+        if bool(details.media.adult) and not adult_enabled:
+            raise web.HTTPForbidden(
+                text="Adult-content Cinema playback is disabled for this server."
+            )
+        episodes = await get_season(tmdb_id, season_number)
+        episode = next(
+            (
+                item
+                for item in episodes
+                if int(item.episode_number) == int(episode_number)
+            ),
+            None,
+        )
+        if episode is None:
+            raise web.HTTPNotFound(text="That feed episode is no longer in the Cinema catalog.")
+        metadata, query, outcome = await search_exact_episode_sources(
+            int(guild_id),
+            series=details.media,
+            episode=episode,
+        )
+
+    if not tuple(outcome.variants or ()):
+        raise web.HTTPConflict(
+            text="No playable source currently matches this feed suggestion."
+        )
+
+    latest = manager.get(room.room_id)
+    if (
+        latest is None
+        or latest.ended
+        or int(latest.host_id) != int(user_id)
+    ):
+        raise web.HTTPConflict(
+            text="Your Cinema session changed while that feed match was being prepared."
+        )
+
+    manager.join_room(latest.room_id, user_id=int(user_id))
+    materialize_search_results(
+        latest,
+        outcome,
+        proposer_id=int(user_id),
+        query=query,
+        catalog_metadata=metadata,
+    )
+    candidate = find_catalog_candidate(latest, metadata)
+    if candidate is None:
+        raise web.HTTPConflict(
+            text="Cinema could not attach that feed match to the queue."
+        )
+    if str(candidate.candidate_id) == str(latest.current_candidate_id or ""):
+        raise web.HTTPConflict(text="That title is already playing.")
+
+    manager.queue_winner(
+        latest.room_id,
+        candidate_id=candidate.candidate_id,
+    )
+    return web.json_response(
+        {
+            "ok": True,
+            "room_id": str(latest.room_id),
+            "title": str(candidate.title or ""),
+            "queue_count": len(latest.queue),
+        }
+    )
+
+
+async def cinema_feed_rules_api(request: web.Request) -> web.Response:
+    guild_id, user_id = await _site_identity(request)
+    can_manage = _can_manage_cinema(guild_id, user_id)
+
+    if request.method == "GET":
+        try:
+            rules = await list_feed_rules(
+                guild_id,
+                user_id,
+                include_disabled=True,
+            )
+        except CinemaStorageUnavailable as exc:
+            raise web.HTTPServiceUnavailable(
+                text="Cinema Feed Rules storage is unavailable."
+            ) from exc
+        return web.json_response(
+            {
+                "rules": rules,
+                "can_manage": bool(can_manage),
+            }
+        )
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, Mapping):
+        payload = {}
+
+    action = str(payload.get("action") or "save").strip().lower()
+    try:
+        if action == "save":
+            saved = await save_feed_rule(
+                guild_id,
+                user_id,
+                payload,
+                can_manage=can_manage,
+            )
+            result = {"saved": saved}
+        elif action == "delete":
+            await delete_feed_rule(
+                guild_id,
+                user_id,
+                str(payload.get("id") or ""),
+                can_manage=can_manage,
+            )
+            result = {"deleted": True}
+        elif action == "refresh_private":
+            result = await refresh_private_source(
+                guild_id,
+                user_id,
+                str(payload.get("id") or ""),
+            )
+        else:
+            raise CinemaFeedRuleError("Unsupported Feed Rule action.")
+    except PermissionError as exc:
+        raise web.HTTPForbidden(text=str(exc))
+    except LookupError as exc:
+        raise web.HTTPNotFound(text=str(exc))
+    except CinemaFeedRuleError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+    except CinemaStorageUnavailable as exc:
+        raise web.HTTPServiceUnavailable(
+            text="Cinema Feed Rules storage is unavailable."
+        ) from exc
+
+    state = await cinema_feed_state(
+        guild_id,
+        can_manage=can_manage,
+        user_id=user_id,
+        refresh=False,
+        query="",
+        page=1,
+        page_size=8,
+    )
+    return web.json_response(
+        {
+            "ok": True,
+            **result,
+            "feed_state": state,
+        }
     )
 
 
@@ -2475,12 +2710,12 @@ def _site_html(guild_id: int, user_id: int) -> str:
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=3">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=7">
 </head>
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=9" defer></script>
+  <script src="/cinema/assets/site.js?v=11" defer></script>
 </body>
 </html>"""
 
@@ -2613,6 +2848,18 @@ def register_cinema_site_routes(app: web.Application) -> None:
     app.router.add_post("/cinema/{guild_id}/api/profile", cinema_profile_api)
     app.router.add_get("/cinema/{guild_id}/api/feeds", cinema_feeds_api)
     app.router.add_post("/cinema/{guild_id}/api/feeds", cinema_feeds_api)
+    app.router.add_post(
+        "/cinema/{guild_id}/api/feed-queue",
+        cinema_feed_queue_api,
+    )
+    app.router.add_get(
+        "/cinema/{guild_id}/api/feed-rules",
+        cinema_feed_rules_api,
+    )
+    app.router.add_post(
+        "/cinema/{guild_id}/api/feed-rules",
+        cinema_feed_rules_api,
+    )
     app.router.add_get(
         "/cinema/{guild_id}/api/notifications",
         cinema_notifications_api,
@@ -2624,6 +2871,8 @@ def register_cinema_site_routes(app: web.Application) -> None:
 
 
 __all__ = [
+    "cinema_feed_queue_api",
+    "cinema_feed_rules_api",
     "cinema_feeds_api",
     "cinema_home_api",
     "cinema_library_api",

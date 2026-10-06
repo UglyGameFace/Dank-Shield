@@ -82,6 +82,13 @@ def test_cinema_library_runtime_defaults_and_episode_lookup(monkeypatch) -> None
         "default_audio_language": "",
         "default_subtitle_language": "",
         "visual_quality": "auto",
+        "feed_notification_mode": "instant",
+        "feed_playable_only": True,
+        "feed_min_seeds": 0,
+        "feed_preferred_resolutions": [],
+        "feed_preferred_codecs": [],
+        "feed_preferred_languages": [],
+        "feed_queue_suggestions": True,
     }
     assert issubclass(cinema_library_service.InvalidCinemaState, ValueError)
 

@@ -29,6 +29,13 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "default_audio_language": "",
     "default_subtitle_language": "",
     "visual_quality": "auto",
+    "feed_notification_mode": "instant",
+    "feed_playable_only": True,
+    "feed_min_seeds": 0,
+    "feed_preferred_resolutions": [],
+    "feed_preferred_codecs": [],
+    "feed_preferred_languages": [],
+    "feed_queue_suggestions": True,
 }
 
 _CACHE_TTL = 20.0
@@ -67,6 +74,60 @@ def _normalize_preferences(value: Any) -> dict[str, Any]:
     result["default_subtitle_language"] = " ".join(
         str(raw.get("default_subtitle_language") or "").split()
     )[:40]
+
+    notification_mode = str(
+        raw.get("feed_notification_mode") or "instant"
+    ).strip().lower()
+    result["feed_notification_mode"] = (
+        notification_mode
+        if notification_mode in {"off", "instant", "daily"}
+        else "instant"
+    )
+    result["feed_playable_only"] = bool(
+        raw.get("feed_playable_only", True)
+    )
+    try:
+        result["feed_min_seeds"] = max(
+            0,
+            min(int(raw.get("feed_min_seeds") or 0), 100000),
+        )
+    except Exception:
+        result["feed_min_seeds"] = 0
+
+    def clean_list(key: str, *, limit: int = 10, item_limit: int = 24) -> list[str]:
+        value = raw.get(key)
+        if not isinstance(value, (list, tuple, set)):
+            return []
+        output: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            clean = " ".join(str(item or "").split()).lower()[:item_limit]
+            if not clean or clean in seen:
+                continue
+            seen.add(clean)
+            output.append(clean)
+            if len(output) >= limit:
+                break
+        return output
+
+    result["feed_preferred_resolutions"] = clean_list(
+        "feed_preferred_resolutions",
+        limit=8,
+        item_limit=16,
+    )
+    result["feed_preferred_codecs"] = clean_list(
+        "feed_preferred_codecs",
+        limit=8,
+        item_limit=24,
+    )
+    result["feed_preferred_languages"] = clean_list(
+        "feed_preferred_languages",
+        limit=12,
+        item_limit=24,
+    )
+    result["feed_queue_suggestions"] = bool(
+        raw.get("feed_queue_suggestions", True)
+    )
     return result
 
 

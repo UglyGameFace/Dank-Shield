@@ -39,6 +39,10 @@
     activeView: "",
     searchController: null,
     searchTimer: null,
+    feedQuery: "",
+    feedPage: 1,
+    feedMode: "latest",
+    feedSearchTimer: null,
     details: new Map(),
     seasons: new Map(),
   };
@@ -1132,19 +1136,26 @@
       form.append(
         selectField("Visual quality", "visual_quality", [["auto","Auto"],["high","High"],["standard","Standard"],["lite","Lite"]]),
         selectField("Playback speed", "playback_speed", [["0.5","0.5×"],["0.75","0.75×"],["1","1×"],["1.25","1.25×"],["1.5","1.5×"],["1.75","1.75×"],["2","2×"]]),
+        selectField("Feed alerts", "feed_notification_mode", [["instant","Instant Cinema inbox"],["daily","Daily digest"],["off","Off"]]),
       );
 
       for (const [label, key, placeholder] of [
         ["Preferred source", "preferred_source", "Optional source name"],
         ["Default audio language", "default_audio_language", "Example: English"],
         ["Default subtitle language", "default_subtitle_language", "Example: English"],
+        ["Feed minimum seeds", "feed_min_seeds", "0"],
+        ["Preferred feed resolutions", "feed_preferred_resolutions", "2160p, 1080p"],
+        ["Preferred feed codecs", "feed_preferred_codecs", "x265, av1"],
+        ["Preferred feed languages", "feed_preferred_languages", "English"],
       ]) {
         const field = node("div", "field");
         field.appendChild(node("label", "", label));
         const input = node("input");
         input.dataset.pref = key;
         input.placeholder = placeholder;
-        input.value = String(prefs[key] || "");
+        input.value = Array.isArray(prefs[key])
+          ? prefs[key].join(", ")
+          : String(prefs[key] ?? "");
         field.appendChild(input);
         form.appendChild(field);
       }
@@ -1157,6 +1168,22 @@
       check.dataset.pref = "autoplay_next";
       autoplay.appendChild(check);
 
+      const feedPlayable = node("div", "switch-row");
+      feedPlayable.appendChild(node("div", "", "Only show playable feed matches"));
+      const feedPlayableCheck = node("input");
+      feedPlayableCheck.type = "checkbox";
+      feedPlayableCheck.checked = prefs.feed_playable_only !== false;
+      feedPlayableCheck.dataset.pref = "feed_playable_only";
+      feedPlayable.appendChild(feedPlayableCheck);
+
+      const queueSuggestions = node("div", "switch-row");
+      queueSuggestions.appendChild(node("div", "", "Suggest feed matches for the Theater queue"));
+      const queueCheck = node("input");
+      queueCheck.type = "checkbox";
+      queueCheck.checked = prefs.feed_queue_suggestions !== false;
+      queueCheck.dataset.pref = "feed_queue_suggestions";
+      queueSuggestions.appendChild(queueCheck);
+
       const save = button("Save Cinema Preferences", "btn primary", async () => {
         const payload = {};
         settings.querySelectorAll("[data-pref]").forEach((field) => {
@@ -1164,6 +1191,15 @@
           else payload[field.dataset.pref] = field.value;
         });
         if ("playback_speed" in payload) payload.playback_speed = Number(payload.playback_speed);
+        if ("feed_min_seeds" in payload) payload.feed_min_seeds = Math.max(0, Number(payload.feed_min_seeds || 0));
+        for (const key of ["feed_preferred_resolutions", "feed_preferred_codecs", "feed_preferred_languages"]) {
+          if (typeof payload[key] === "string") {
+            payload[key] = payload[key]
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean);
+          }
+        }
         try {
           const response = await api("/profile", { method: "POST", body: JSON.stringify(payload) });
           state.profile = { ...data, preferences: response.preferences };
@@ -1173,7 +1209,7 @@
           toast(error.message || "Preferences could not be saved.", "error");
         }
       });
-      settings.append(form, autoplay, save);
+      settings.append(form, autoplay, feedPlayable, queueSuggestions, save);
       layout.append(profileCard, settings);
       page.textContent = "";
       page.appendChild(layout);
@@ -1207,6 +1243,371 @@
     const result = await api("/feeds", { method: "POST", body: JSON.stringify(payload) });
     state.feeds = result;
     return result;
+  }
+
+  async function feedRuleAction(payload) {
+    const result = await api("/feed-rules", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    if (result.feed_state) state.feeds = result.feed_state;
+    return result;
+  }
+
+  function feedRuleTypeLabel(value) {
+    return {
+      follow: "Followed title",
+      saved_search: "Saved search",
+      filter: "Filter",
+      collection: "Collection",
+      routing: "Routing rule",
+      person: "Actor / creator",
+      genre: "Genre",
+      studio: "Studio",
+      franchise: "Franchise",
+      private_source: "Private source",
+    }[String(value || "")] || "Feed Rule";
+  }
+
+  function openFeedRuleEditor(rule = null, defaults = {}) {
+    const initial = { ...(defaults || {}), ...(rule || {}) };
+    const filters = initial.filters && typeof initial.filters === "object"
+      ? initial.filters
+      : {};
+    const actions = initial.actions && typeof initial.actions === "object"
+      ? initial.actions
+      : {};
+    const backdrop = node("div", "modal-backdrop");
+    const modal = node("section", "modal feed-rule-modal");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    const head = node("div", "modal-head");
+    head.appendChild(node("h2", "", rule ? "Edit Feed Rule" : "Create Feed Rule"));
+    const close = button("×", "modal-close", () => backdrop.remove());
+    close.setAttribute("aria-label", "Close Feed Rule editor");
+    head.appendChild(close);
+
+    const form = node("div", "form-grid");
+    const fields = {};
+
+    function textField(label, key, value = "", type = "text") {
+      const wrap = node("div", "field");
+      wrap.appendChild(node("label", "", label));
+      const input = node("input");
+      input.type = type;
+      input.value = String(value ?? "");
+      fields[key] = input;
+      wrap.appendChild(input);
+      return wrap;
+    }
+
+    function selectField(label, key, value, options) {
+      const wrap = node("div", "field");
+      wrap.appendChild(node("label", "", label));
+      const select = node("select");
+      options.forEach(([optionValue, optionLabel, disabled]) => {
+        const option = node("option");
+        option.value = optionValue;
+        option.textContent = optionLabel;
+        option.disabled = Boolean(disabled);
+        if (String(optionValue) === String(value || "")) option.selected = true;
+        select.appendChild(option);
+      });
+      fields[key] = select;
+      wrap.appendChild(select);
+      return wrap;
+    }
+
+    function checkField(label, key, checked) {
+      const wrap = node("label", "switch-row feed-rule-switch");
+      wrap.appendChild(node("div", "", label));
+      const input = node("input");
+      input.type = "checkbox";
+      input.checked = Boolean(checked);
+      fields[key] = input;
+      wrap.appendChild(input);
+      return wrap;
+    }
+
+    const scopeValue = String(initial.scope || "user");
+    const typeValue = String(initial.rule_type || defaults.rule_type || "saved_search");
+    const typeField = selectField("Rule type", "rule_type", typeValue, [
+      ["follow", "Follow a title"],
+      ["saved_search", "Saved search"],
+      ["filter", "Personal filter"],
+      ["collection", "Curated collection"],
+      ["routing", "Routing rule"],
+      ["person", "Actor / creator"],
+      ["genre", "Genre"],
+      ["studio", "Studio"],
+      ["franchise", "Franchise"],
+      ["private_source", "Private RSS / JSON source"],
+    ]);
+    const scopeField = selectField("Visibility", "scope", scopeValue, [
+      ["user", "Only me"],
+      ["guild", "Server-wide", !Boolean(state.feeds?.can_manage)],
+    ]);
+    form.append(
+      textField("Name", "name", initial.name || ""),
+      typeField,
+      scopeField,
+      textField("Title / search", "query", initial.query || ""),
+      selectField("Media type", "media_type", initial.media_type || "", [
+        ["", "Any"],
+        ["movie", "Movie"],
+        ["tv", "TV"],
+      ]),
+      textField("TMDB ID", "tmdb_id", initial.tmdb_id || "", "number"),
+      textField("Minimum seeds", "min_seeds", filters.min_seeds || 0, "number"),
+      textField("Minimum file size (GB)", "min_size_gb", Number(filters.min_size_bytes || 0) / 1073741824 || 0, "number"),
+      textField("Maximum file size (GB)", "max_size_gb", Number(filters.max_size_bytes || 0) / 1073741824 || 0, "number"),
+      textField("Preferred resolutions", "resolutions", (filters.resolutions || []).join(", ")),
+      textField("Preferred codecs", "codecs", (filters.codecs || []).join(", ")),
+      textField("Preferred languages", "languages", (filters.languages || []).join(", ")),
+      textField("Exclude terms", "excluded_terms", (filters.excluded_terms || []).join(", ")),
+      textField("Collection / folder", "collection", actions.collection || ""),
+      selectField("Alert mode", "notify", actions.notify || "instant", [
+        ["instant", "Instant Cinema inbox"],
+        ["daily", "Daily digest"],
+        ["off", "Off"],
+      ]),
+      checkField("Only playable matches", "playable_only", filters.playable_only !== false),
+      checkField("Require HDR", "hdr_only", Boolean(filters.hdr_only)),
+      checkField("Require subtitles", "subtitles_only", Boolean(filters.subtitles_only)),
+      checkField("Suggest matches for Theater queue", "queue_suggest", Boolean(actions.queue_suggest)),
+    );
+
+    const privateWrap = node("div", "feed-private-fields");
+    privateWrap.append(
+      textField("Private HTTPS endpoint", "endpoint_url", filters.endpoint_url || ""),
+      selectField("Private source type", "provider_type", filters.provider_type || "feed", [
+        ["feed", "RSS / Atom"],
+        ["json", "Structured JSON API"],
+      ]),
+      selectField("Private source category", "category", filters.category || "custom", [
+        ["movies", "Movies"],
+        ["tv", "TV"],
+        ["anime", "Anime"],
+        ["documentaries", "Documentaries"],
+        ["custom", "Custom"],
+      ]),
+    );
+    form.appendChild(privateWrap);
+
+    function syncPrivateFields() {
+      privateWrap.hidden = String(fields.rule_type.value) !== "private_source";
+      if (String(fields.rule_type.value) === "private_source") {
+        fields.scope.value = "user";
+        fields.scope.disabled = true;
+      } else {
+        fields.scope.disabled = false;
+      }
+    }
+    fields.rule_type.addEventListener("change", syncPrivateFields);
+    syncPrivateFields();
+
+    const save = button("Save Feed Rule", "btn primary", async () => {
+      save.disabled = true;
+      const list = (value) => String(value || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      try {
+        await feedRuleAction({
+          action: "save",
+          id: initial.id || "",
+          name: fields.name.value,
+          scope: fields.scope.value,
+          rule_type: fields.rule_type.value,
+          query: fields.query.value,
+          media_type: fields.media_type.value,
+          tmdb_id: Number(fields.tmdb_id.value || 0),
+          enabled: initial.enabled !== false,
+          filters: {
+            playable_only: fields.playable_only.checked,
+            min_seeds: Math.max(0, Number(fields.min_seeds.value || 0)),
+            min_size_bytes: Math.max(0, Number(fields.min_size_gb.value || 0)) * 1073741824,
+            max_size_bytes: Math.max(0, Number(fields.max_size_gb.value || 0)) * 1073741824,
+            resolutions: list(fields.resolutions.value),
+            codecs: list(fields.codecs.value),
+            languages: list(fields.languages.value),
+            excluded_terms: list(fields.excluded_terms.value),
+            hdr_only: fields.hdr_only.checked,
+            subtitles_only: fields.subtitles_only.checked,
+            endpoint_url: fields.endpoint_url.value,
+            provider_type: fields.provider_type.value,
+            category: fields.category.value,
+          },
+          actions: {
+            notify: fields.notify.value,
+            collection: fields.collection.value,
+            queue_suggest: fields.queue_suggest.checked,
+          },
+        });
+        backdrop.remove();
+        toast("Feed Rule saved.");
+        renderFeeds();
+      } catch (error) {
+        toast(error.message || "Feed Rule could not be saved.", "error");
+      } finally {
+        save.disabled = false;
+      }
+    });
+
+    modal.append(
+      head,
+      node("p", "section-sub", "Use one rule for titles, franchises, actors, creators, genres, studios, saved searches, filters, collections, routing, alerts, or a private feed."),
+      form,
+      save,
+    );
+    backdrop.appendChild(modal);
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) backdrop.remove();
+    });
+    document.body.appendChild(backdrop);
+    setTimeout(() => fields.name.focus(), 30);
+  }
+
+  function feedRuleCard(rule) {
+    const card = node("article", "feed-rule-card");
+    const heading = node("div", "feed-rule-heading");
+    heading.append(
+      node("div", "feed-title", rule.name || feedRuleTypeLabel(rule.rule_type)),
+      node("div", "feed-category", (rule.scope === "guild" ? "Server" : "Personal") + " • " + feedRuleTypeLabel(rule.rule_type)),
+    );
+    card.appendChild(heading);
+    const details = [];
+    if (rule.query) details.push("Match: " + rule.query);
+    if (rule.media_type) details.push(rule.media_type === "tv" ? "TV" : "Movie");
+    if (rule.tmdb_id) details.push("TMDB " + rule.tmdb_id);
+    const filters = rule.filters || {};
+    if (Number(filters.min_seeds || 0) > 0) details.push("≥ " + Number(filters.min_seeds) + " seeds");
+    if (Array.isArray(filters.resolutions) && filters.resolutions.length) details.push(filters.resolutions.join(", "));
+    if (Array.isArray(filters.codecs) && filters.codecs.length) details.push(filters.codecs.join(", "));
+    if (filters.hdr_only) details.push("HDR");
+    if (filters.subtitles_only) details.push("Subtitles");
+    if (Number(filters.min_size_bytes || 0) > 0) details.push("≥ " + formatFeedBytes(filters.min_size_bytes));
+    if (Number(filters.max_size_bytes || 0) > 0) details.push("≤ " + formatFeedBytes(filters.max_size_bytes));
+    if (details.length) card.appendChild(node("div", "feed-meta", details.join(" • ")));
+    const actionsMeta = rule.actions || {};
+    const actionBits = [];
+    if (actionsMeta.notify && actionsMeta.notify !== "off") actionBits.push("Alerts: " + actionsMeta.notify);
+    if (actionsMeta.collection) actionBits.push("Folder: " + actionsMeta.collection);
+    if (actionsMeta.queue_suggest) actionBits.push("Queue suggestions");
+    if (actionBits.length) card.appendChild(node("div", "feed-meta", actionBits.join(" • ")));
+
+    const actions = node("div", "feed-result-actions");
+    const canEditRule = rule.scope !== "guild" || Boolean(state.feeds?.can_manage);
+    if (rule.rule_type === "private_source" && canEditRule) {
+      actions.appendChild(button("Refresh Private Feed", "btn secondary", async () => {
+        try {
+          const result = await feedRuleAction({ action: "refresh_private", id: rule.id });
+          toast("Private feed refreshed: " + Number(result.result_count || 0) + " result" + (Number(result.result_count || 0) === 1 ? "" : "s") + ".");
+          renderFeeds();
+        } catch (error) {
+          toast(error.message || "Private feed refresh failed.", "error");
+        }
+      }));
+    }
+    if (canEditRule) {
+      actions.append(
+        button("Edit", "btn secondary", () => openFeedRuleEditor(rule)),
+        button("Delete", "btn danger", async () => {
+          if (!confirm("Delete " + (rule.name || "this Feed Rule") + "?")) return;
+          try {
+            await feedRuleAction({ action: "delete", id: rule.id });
+            toast("Feed Rule deleted.");
+            renderFeeds();
+          } catch (error) {
+            toast(error.message || "Feed Rule deletion failed.", "error");
+          }
+        }),
+      );
+    } else {
+      actions.appendChild(node("span", "feed-meta", "Server curated"));
+    }
+    card.appendChild(actions);
+    return card;
+  }
+
+  function isFollowingFeedResult(result) {
+    const rules = Array.isArray(state.feeds?.feed_rules) ? state.feeds.feed_rules : [];
+    const tmdbId = Number(result?.tmdb_id || 0);
+    const mediaType = String(result?.media_type || "");
+    const title = itemTitle(result).toLowerCase();
+    return rules.some((rule) => {
+      if (rule.scope !== "user" || rule.rule_type !== "follow" || rule.enabled === false) return false;
+      if (tmdbId > 0 && Number(rule.tmdb_id || 0) === tmdbId && String(rule.media_type || "") === mediaType) return true;
+      return !Number(rule.tmdb_id || 0) && String(rule.query || "").toLowerCase() === title;
+    });
+  }
+
+  async function followFeedResult(result) {
+    if (isFollowingFeedResult(result)) {
+      toast("You already follow this title.");
+      return;
+    }
+    try {
+      await feedRuleAction({
+        action: "save",
+        name: itemTitle(result),
+        scope: "user",
+        rule_type: "follow",
+        query: itemTitle(result),
+        media_type: ["movie", "tv"].includes(String(result.media_type || "")) ? result.media_type : "",
+        tmdb_id: Number(result.tmdb_id || 0),
+        filters: { playable_only: true },
+        actions: { notify: "instant", queue_suggest: true },
+      });
+      toast("Now following " + itemTitle(result) + ".");
+      renderFeeds();
+    } catch (error) {
+      toast(error.message || "Follow could not be saved.", "error");
+    }
+  }
+
+  function feedReleaseComparison(result) {
+    const releases = Array.isArray(result?.releases) ? result.releases : [];
+    if (!releases.length) return null;
+    const details = node("details", "feed-release-comparison");
+    const summary = node("summary", "", releases.length + " release" + (releases.length === 1 ? "" : "s") + " • " + Number(result.source_count || 0) + " source" + (Number(result.source_count || 0) === 1 ? "" : "s"));
+    details.appendChild(summary);
+    const list = node("div", "feed-release-list");
+    releases.forEach((release) => {
+      const row = node("div", "feed-release-row");
+      const left = node("div");
+      left.append(
+        node("div", "feed-release-name", release.release_title || "Release"),
+        node("div", "feed-meta", [
+          release.source_label || "",
+          release.resolution || "",
+          release.codec || "",
+          Array.isArray(release.hdr_tags) && release.hdr_tags.length ? release.hdr_tags.join("/") : "",
+          Number(release.seeds || 0) > 0 ? Number(release.seeds) + " seeds" : "",
+          Array.isArray(release.subtitle_languages) && release.subtitle_languages.length
+            ? "Subs: " + release.subtitle_languages.join("/")
+            : (release.has_subtitles ? "Subtitles" : ""),
+          formatFeedBytes(release.file_size),
+        ].filter(Boolean).join(" • ")),
+      );
+      if (release.release_group) {
+        left.appendChild(node("div", "feed-meta", "Group: " + release.release_group));
+      }
+      const history = [];
+      if (release.first_seen_at) {
+        const firstSeen = new Date(release.first_seen_at);
+        if (!Number.isNaN(firstSeen.getTime())) history.push("First seen " + firstSeen.toLocaleString());
+      }
+      if (release.last_seen_at && release.last_seen_at !== release.first_seen_at) {
+        const lastSeen = new Date(release.last_seen_at);
+        if (!Number.isNaN(lastSeen.getTime())) history.push("Last seen " + lastSeen.toLocaleString());
+      }
+      if (history.length) left.appendChild(node("div", "feed-meta", history.join(" • ")));
+      row.appendChild(left);
+      list.appendChild(row);
+    });
+    details.appendChild(list);
+    return details;
   }
 
   function openFeedEditor(source = null) {
@@ -1307,40 +1708,79 @@
     if (artUrl) {
       const image = node("img");
       configureArtwork(image, artUrl, "poster");
-      image.alt = `${itemTitle(result)} poster`;
+      image.alt = itemTitle(result) + " poster";
       image.loading = "lazy";
       image.decoding = "async";
       art.appendChild(image);
     } else {
       const placeholder = node("div", "feed-result-placeholder");
-      placeholder.appendChild(uiIcon("feeds"));
+      const resultInitials = itemTitle(result)
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part[0]?.toUpperCase() || "")
+        .join("");
+      placeholder.append(
+        uiIcon("feeds"),
+        node("span", "feed-result-placeholder-text", resultInitials || "DC"),
+      );
       art.appendChild(placeholder);
     }
 
     const copy = node("div", "feed-result-copy");
+    const best = result.best_release && typeof result.best_release === "object"
+      ? result.best_release
+      : result;
     const sourceLine = [
-      result.source_label || "",
-      categoryLabel(result.category || ""),
+      Number(result.source_count || 0) > 1
+        ? Number(result.source_count) + " sources"
+        : best.source_label || result.source_label || "",
+      categoryLabel(best.category || result.category || ""),
     ].filter(Boolean).join(" • ");
     if (sourceLine) copy.appendChild(node("div", "feed-category", sourceLine));
     copy.appendChild(node("div", "feed-result-title", itemTitle(result)));
 
+    const badges = node("div", "feed-badges");
+    if (result.new_episode) {
+      const season = Number(result.season_number || 0);
+      const episode = Number(result.episode_number || 0);
+      badges.appendChild(node("span", "feed-badge", "New S" + String(season).padStart(2, "0") + "E" + String(episode).padStart(2, "0")));
+    }
+    if (result.watchlist_match) badges.appendChild(node("span", "feed-badge", "Watchlist"));
+    if (result.followed_match) badges.appendChild(node("span", "feed-badge", "Following"));
+    if (result.upgrade_available) badges.appendChild(node("span", "feed-badge", "Quality upgrade"));
+    if (result.queue_suggested) badges.appendChild(node("span", "feed-badge", "Queue suggestion"));
+    if (result.private) badges.appendChild(node("span", "feed-badge", "Private"));
+    if (badges.childNodes.length) copy.appendChild(badges);
+
+    const reasons = Array.isArray(result.match_reasons) ? result.match_reasons.filter(Boolean) : [];
+    if (reasons.length) {
+      copy.appendChild(node("div", "feed-meta", "Matched: " + reasons.slice(0, 4).join(" • ")));
+    }
+
     const meta = [];
     if (result.year) meta.push(String(result.year));
-    if (Number(result.rating || 0) > 0) meta.push(`★ ${Number(result.rating).toFixed(1)}`);
-    if (Number(result.seeds || 0) > 0) meta.push(`${Number(result.seeds)} seeds`);
-    const size = formatFeedBytes(result.file_size);
+    if (Number(result.rating || 0) > 0) meta.push("★ " + Number(result.rating).toFixed(1));
+    if (best.resolution) meta.push(String(best.resolution).toUpperCase());
+    if (best.codec) meta.push(String(best.codec));
+    if (Number(best.seeds || result.seeds || 0) > 0) meta.push(Number(best.seeds || result.seeds) + " seeds");
+    const size = formatFeedBytes(best.file_size || result.file_size);
     if (size) meta.push(size);
-    if (result.first_seen_at) {
-      const seen = new Date(result.first_seen_at);
-      if (!Number.isNaN(seen.getTime())) meta.push(`Found ${seen.toLocaleDateString()}`);
+    if (Number(result.release_count || 0) > 1) meta.push(Number(result.release_count) + " releases");
+    const foundAt = best.first_seen_at || result.first_seen_at;
+    if (foundAt) {
+      const seen = new Date(foundAt);
+      if (!Number.isNaN(seen.getTime())) meta.push("Found " + seen.toLocaleDateString());
     }
     if (meta.length) copy.appendChild(node("div", "feed-meta", meta.join(" • ")));
 
-    const releaseTitle = String(result.release_title || "");
+    const releaseTitle = String(best.release_title || result.release_title || "");
     if (releaseTitle && releaseTitle !== itemTitle(result)) {
       copy.appendChild(node("div", "feed-result-release", releaseTitle));
     }
+
+    const comparison = feedReleaseComparison(result);
+    if (comparison) copy.appendChild(comparison);
 
     const actions = node("div", "feed-result-actions");
     const target = detailsTarget(result);
@@ -1348,7 +1788,36 @@
       actions.appendChild(button("View Details", "btn primary", () => go(target)));
     } else {
       actions.appendChild(button("Search in Cinema", "btn secondary", () => {
-        go(`search?q=${encodeURIComponent(itemTitle(result))}`);
+        go("search?q=" + encodeURIComponent(itemTitle(result)));
+      }));
+    }
+    const follow = button(
+      isFollowingFeedResult(result) ? "Following" : "Follow",
+      "btn secondary",
+      () => followFeedResult(result),
+    );
+    follow.disabled = isFollowingFeedResult(result);
+    actions.appendChild(follow);
+    if (result.queue_suggested) {
+      actions.appendChild(button("Add to Queue", "btn ghost", async (event) => {
+        const control = event.currentTarget;
+        if (control instanceof HTMLButtonElement) control.disabled = true;
+        try {
+          const response = await api("/feed-queue", {
+            method: "POST",
+            body: JSON.stringify({
+              media_type: String(result.media_type || ""),
+              tmdb_id: Number(result.tmdb_id || 0),
+              season_number: Number(result.season_number || 0),
+              episode_number: Number(result.episode_number || 0),
+            }),
+          });
+          toast("Added " + String(response.title || itemTitle(result)) + " to Up Next.");
+        } catch (error) {
+          toast(error.message || "Feed suggestion could not be queued.", "error");
+        } finally {
+          if (control instanceof HTMLButtonElement) control.disabled = false;
+        }
       }));
     }
     copy.appendChild(actions);
@@ -1356,53 +1825,258 @@
     return card;
   }
 
-
   async function renderFeeds() {
     const page = node("main", "page");
     renderShell(skeletonPage(), "feeds");
     try {
-      const data = state.feeds || await api("/feeds");
+      const params = new URLSearchParams({
+        page: String(Math.max(1, Number(state.feedPage || 1))),
+        page_size: "8",
+      });
+      const cleanFeedQuery = String(state.feedQuery || "").trim();
+      if (cleanFeedQuery) params.set("q", cleanFeedQuery);
+      const data = await api("/feeds?" + params.toString());
       state.feeds = data;
+      const pagination = data.pagination || {};
+      state.feedQuery = String(pagination.query || cleanFeedQuery);
+      state.feedPage = Math.max(1, Number(pagination.page || 1));
       page.textContent = "";
+
       const head = node("div", "section-head");
       const title = node("div");
-      title.append(node("h1", "", "Feed Center"), node("p", "section-sub", "Real RSS, structured search, and reference sources organized by media type."));
+      title.append(
+        node("h1", "", "Feed Center"),
+        node("p", "section-sub", "RSS and structured sources become personalized discovery, subscriptions, collections, alerts, and release comparisons."),
+      );
       head.appendChild(title);
-      if (data.can_manage) head.appendChild(button("+ Add Source", "btn primary", () => openFeedEditor()));
+      const headActions = node("div", "hero-actions");
+      headActions.appendChild(button("+ Feed Rule", "btn secondary", () => openFeedRuleEditor()));
+      if (data.can_manage) {
+        headActions.appendChild(button("+ Add Source", "btn primary", () => openFeedEditor()));
+      }
+      head.appendChild(headActions);
       page.appendChild(head);
 
-      const results = Array.isArray(data.results) ? data.results : [];
-      const resultSection = node("section", "section feed-results-section");
-      const resultHead = node("div", "section-head");
-      const resultTitle = node("div");
-      resultTitle.append(
-        node("h2", "section-title", "Latest Feed Results"),
-        node("p", "section-sub", "Actual items discovered from your enabled RSS and structured sources."),
-      );
-      resultHead.appendChild(resultTitle);
-      resultSection.appendChild(resultHead);
+      const modes = node("div", "feed-mode-tabs");
+      [
+        ["latest", "Latest", Number(pagination.total || 0)],
+        ["my", "My Feed", Array.isArray(data.my_feed) ? data.my_feed.length : 0],
+        ["collections", "Collections", Array.isArray(data.collections) ? data.collections.length : 0],
+        ["rules", "Rules", Array.isArray(data.feed_rules) ? data.feed_rules.length : 0],
+      ].forEach(([key, label, count]) => {
+        const tab = button(
+          label + (Number(count) > 0 ? " " + Number(count) : ""),
+          state.feedMode === key ? "btn feed-mode active" : "btn feed-mode",
+          () => {
+            state.feedMode = key;
+            renderFeeds();
+          },
+        );
+        modes.appendChild(tab);
+      });
+      page.appendChild(modes);
 
-      if (data.results_warning) {
-        resultSection.appendChild(node("div", "state-card", data.results_warning));
+      if (state.feedMode === "latest") {
+        const results = Array.isArray(data.grouped_results) && data.grouped_results.length
+          ? data.grouped_results
+          : (Array.isArray(data.results) ? data.results : []);
+        const resultSection = node("section", "section feed-results-section");
+        const resultHead = node("div", "section-head feed-results-head");
+        const resultTitle = node("div");
+        const totalResults = Math.max(0, Number(pagination.total || 0));
+        resultTitle.append(
+          node("h2", "section-title", "Latest Feed Results"),
+          node(
+            "p",
+            "section-sub",
+            "Actual items discovered from your enabled RSS and structured sources.",
+          ),
+          node(
+            "div",
+            "feed-meta",
+            cleanFeedQuery
+              ? totalResults + " saved result" + (totalResults === 1 ? "" : "s") + " matching “" + state.feedQuery + "”."
+              : totalResults + " saved feed result" + (totalResults === 1 ? "" : "s") + " across your enabled sources.",
+          ),
+        );
+        resultHead.appendChild(resultTitle);
+        resultSection.appendChild(resultHead);
+
+        const searchBar = node("div", "feed-search-bar");
+        const searchInput = node("input", "search-input");
+        searchInput.type = "search";
+        searchInput.placeholder = "Search feed results…";
+        searchInput.value = state.feedQuery;
+        searchInput.autocomplete = "off";
+        searchInput.setAttribute("aria-label", "Search feed results");
+        const searchButton = button("Search", "btn primary", () => {
+          state.feedQuery = searchInput.value.trim();
+          state.feedPage = 1;
+          renderFeeds();
+        });
+        searchInput.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          state.feedQuery = searchInput.value.trim();
+          state.feedPage = 1;
+          renderFeeds();
+        });
+        searchInput.addEventListener("input", () => {
+          if (state.feedSearchTimer) clearTimeout(state.feedSearchTimer);
+          state.feedSearchTimer = setTimeout(() => {
+            if (searchInput.value.trim() === state.feedQuery) return;
+            state.feedQuery = searchInput.value.trim();
+            state.feedPage = 1;
+            renderFeeds();
+          }, 450);
+        });
+        searchBar.append(searchInput, searchButton);
+        if (state.feedQuery) {
+          searchBar.append(
+            button("Save Search", "btn secondary", () => openFeedRuleEditor(null, {
+              name: state.feedQuery,
+              rule_type: "saved_search",
+              query: state.feedQuery,
+              scope: "user",
+            })),
+            button("Clear", "btn secondary", () => {
+              state.feedQuery = "";
+              state.feedPage = 1;
+              renderFeeds();
+            }),
+          );
+        }
+        resultSection.appendChild(searchBar);
+
+        if (data.results_warning) {
+          resultSection.appendChild(node("div", "state-card", data.results_warning));
+        }
+        if (!results.length) {
+          resultSection.appendChild(node(
+            "div",
+            "state-card",
+            "No feed results yet. Refresh an enabled RSS or structured source below and its discovered titles will appear here.",
+          ));
+        } else {
+          const resultGrid = node("div", "feed-result-grid");
+          results.forEach((result) => resultGrid.appendChild(feedResultCard(result)));
+          resultSection.appendChild(resultGrid);
+        }
+
+        const totalPages = Math.max(1, Number(pagination.total_pages || 1));
+        if (totalResults > 0 || state.feedQuery) {
+          const pager = node("div", "feed-pager");
+          const previous = button("Previous", "btn secondary", () => {
+            if (!pagination.has_previous) return;
+            state.feedPage = Math.max(1, Number(state.feedPage || 1) - 1);
+            renderFeeds();
+          });
+          previous.disabled = !pagination.has_previous;
+          const status = node(
+            "div",
+            "feed-page-status",
+            "Page " + Math.max(1, Number(pagination.page || 1)) + " of " + totalPages,
+          );
+          const next = button("Next", "btn secondary", () => {
+            if (!pagination.has_next) return;
+            state.feedPage = Math.max(1, Number(state.feedPage || 1) + 1);
+            renderFeeds();
+          });
+          next.disabled = !pagination.has_next;
+          pager.append(previous, status, next);
+          resultSection.appendChild(pager);
+        }
+        page.appendChild(resultSection);
       }
-      if (!results.length) {
-        resultSection.appendChild(node(
-          "div",
-          "state-card",
-          "No feed results yet. Refresh an enabled RSS or structured source below and its discovered titles will appear here.",
-        ));
-      } else {
-        const resultGrid = node("div", "feed-result-grid");
-        results.forEach((result) => resultGrid.appendChild(feedResultCard(result)));
-        resultSection.appendChild(resultGrid);
+
+      if (state.feedMode === "my") {
+        const myFeed = Array.isArray(data.my_feed) ? data.my_feed : [];
+        const section = node("section", "section feed-results-section");
+        const sectionHead = node("div", "section-head");
+        const sectionTitle = node("div");
+        sectionTitle.append(
+          node("h2", "section-title", "My Feed"),
+          node("p", "section-sub", "Watchlist matches, followed titles, saved searches, private feeds, quality upgrades, and queue suggestions in one place."),
+          node("div", "feed-meta", Number(data.watchlist_match_count || 0) + " watchlist matches • " + Number(data.queue_suggestion_count || 0) + " queue suggestions"),
+        );
+        sectionHead.append(
+          sectionTitle,
+          button("+ Personal Rule", "btn primary", () => openFeedRuleEditor()),
+        );
+        section.appendChild(sectionHead);
+        if (!myFeed.length) {
+          section.appendChild(node(
+            "div",
+            "state-card",
+            "My Feed is empty. Follow a title, save a search, add a personal filter, or refresh a private feed.",
+          ));
+        } else {
+          const grid = node("div", "feed-result-grid");
+          myFeed.forEach((result) => grid.appendChild(feedResultCard(result)));
+          section.appendChild(grid);
+        }
+        page.appendChild(section);
       }
-      page.appendChild(resultSection);
+
+      if (state.feedMode === "collections") {
+        const collections = Array.isArray(data.collections) ? data.collections : [];
+        if (!collections.length) {
+          const empty = node("section", "section");
+          empty.append(
+            node("h2", "section-title", "Collections"),
+            node("div", "state-card", data.can_manage
+              ? "No curated collections yet. Create a server Collection or Routing rule."
+              : "This server has no curated feed collections yet."),
+          );
+          if (data.can_manage) {
+            empty.appendChild(button("+ Server Collection", "btn primary", () => openFeedRuleEditor(null, {
+              scope: "guild",
+              rule_type: "collection",
+            })));
+          }
+          page.appendChild(empty);
+        } else {
+          collections.forEach((collection) => {
+            const section = node("section", "section");
+            section.appendChild(node("h2", "section-title", collection.name || "Collection"));
+            const items = Array.isArray(collection.items) ? collection.items : [];
+            const grid = node("div", "feed-result-grid");
+            items.forEach((result) => grid.appendChild(feedResultCard(result)));
+            section.appendChild(grid);
+            page.appendChild(section);
+          });
+        }
+      }
+
+      if (state.feedMode === "rules") {
+        const rules = Array.isArray(data.feed_rules) ? data.feed_rules : [];
+        const section = node("section", "section");
+        const ruleHead = node("div", "section-head");
+        const ruleTitle = node("div");
+        ruleTitle.append(
+          node("h2", "section-title", "Feed Rules"),
+          node("p", "section-sub", "Follow titles, save searches, filter releases, build folders, route matches, or add a private source."),
+        );
+        ruleHead.append(
+          ruleTitle,
+          button("+ New Feed Rule", "btn primary", () => openFeedRuleEditor()),
+        );
+        section.appendChild(ruleHead);
+        if (!rules.length) {
+          section.appendChild(node("div", "state-card", "No Feed Rules yet."));
+        } else {
+          const grid = node("div", "feed-rule-grid");
+          rules.forEach((rule) => grid.appendChild(feedRuleCard(rule)));
+          section.appendChild(grid);
+        }
+        page.appendChild(section);
+      }
 
       const sourceHead = node("div", "section-head section");
       const sourceTitle = node("div");
       sourceTitle.append(
         node("h2", "section-title", "Sources"),
-        node("p", "section-sub", "Manage where Feed Center discovers movies and shows."),
+        node("p", "section-sub", "Manage where Feed Center discovers movies and shows. Trust is based on real refresh history and playable-result output."),
       );
       sourceHead.appendChild(sourceTitle);
       page.appendChild(sourceHead);
@@ -1433,7 +2107,7 @@
               ? source.supported_media_types.map(categoryLabel).filter(Boolean)
               : [];
             if (supported.length) {
-              card.appendChild(node("div", "feed-meta", `Supports: ${supported.join(", ")}`));
+              card.appendChild(node("div", "feed-meta", "Supports: " + supported.join(", ")));
             }
             const healthState = String(source.health_state || "");
             const statusClass = healthState === "online"
@@ -1441,21 +2115,33 @@
               : healthState === "offline" || healthState === "disabled"
                 ? "offline"
                 : "";
-            const status = node("div", `status-pill ${statusClass}`.trim());
+            const status = node("div", ("status-pill " + statusClass).trim());
             status.append(node("span", "status-dot"), node("span", "", sourceHealthLabel(source)));
             card.appendChild(status);
+
+            const trust = source.trust && typeof source.trust === "object" ? source.trust : {};
+            if (trust.trust_score !== null && trust.trust_score !== undefined) {
+              card.appendChild(node(
+                "div",
+                "feed-trust",
+                "Trust: " + (trust.trust_label || "Unrated") + " • " + Number(trust.trust_score) + "/100 • " + Math.round(Number(trust.success_rate || 0) * 100) + "% refresh success",
+              ));
+            } else {
+              card.appendChild(node("div", "feed-meta", "Trust: Unrated until this source has refresh history."));
+            }
+
             if (source.last_refresh_at) {
               const count = Number(source.last_refresh_result_count || 0);
               card.appendChild(node(
                 "div",
                 "feed-meta",
-                `Last refresh: ${new Date(source.last_refresh_at * 1000).toLocaleString()} • ${count} playable result${count === 1 ? "" : "s"}`,
+                "Last refresh: " + new Date(source.last_refresh_at * 1000).toLocaleString() + " • " + count + " playable result" + (count === 1 ? "" : "s"),
               ));
             }
             if (source.last_refresh_error) card.appendChild(node("div", "feed-meta", source.last_refresh_error));
             if (source.discovery_warning) card.appendChild(node("div", "feed-meta", source.discovery_warning));
             if (Array.isArray(source.newly_discovered) && source.newly_discovered.length) {
-              const discovered = node("div", "feed-meta", `Newly discovered: ${source.newly_discovered.slice(0, 4).join(" • ")}`);
+              const discovered = node("div", "feed-meta", "Newly discovered: " + source.newly_discovered.slice(0, 4).join(" • "));
               card.appendChild(discovered);
             }
             if (data.can_manage) {
@@ -1468,7 +2154,7 @@
                       ? refreshed.sources.find((item) => item.source_id === source.source_id)
                       : null;
                     const count = Number(updated?.last_refresh_result_count || 0);
-                    toast(`Source refreshed: ${count} playable result${count === 1 ? "" : "s"}.`);
+                    toast("Source refreshed: " + count + " playable result" + (count === 1 ? "" : "s") + ".");
                     renderFeeds();
                   } catch (error) {
                     toast(error.message || "Refresh failed.", "error");
@@ -1478,13 +2164,21 @@
               actions.append(
                 button("Edit", "btn secondary", () => openFeedEditor(source)),
                 button(source.enabled ? "Disable" : "Enable", "btn secondary", async () => {
-                  try { await feedAction({ action: "toggle", source_id: source.source_id }); renderFeeds(); }
-                  catch (error) { toast(error.message || "Source update failed.", "error"); }
+                  try {
+                    await feedAction({ action: "toggle", source_id: source.source_id });
+                    renderFeeds();
+                  } catch (error) {
+                    toast(error.message || "Source update failed.", "error");
+                  }
                 }),
                 button("Delete", "btn danger", async () => {
-                  if (!confirm(`Delete ${source.label}?`)) return;
-                  try { await feedAction({ action: "remove", source_id: source.source_id }); renderFeeds(); }
-                  catch (error) { toast(error.message || "Source deletion failed.", "error"); }
+                  if (!confirm("Delete " + source.label + "?")) return;
+                  try {
+                    await feedAction({ action: "remove", source_id: source.source_id });
+                    renderFeeds();
+                  } catch (error) {
+                    toast(error.message || "Source deletion failed.", "error");
+                  }
                 }),
               );
               card.appendChild(actions);
@@ -1497,7 +2191,10 @@
       }
       renderShell(page, "feeds");
     } catch (error) {
-      renderShell(pageError("Feed Center could not load", error.message || "Try again.", () => { state.feeds = null; renderFeeds(); }), "feeds");
+      renderShell(pageError("Feed Center could not load", error.message || "Try again.", () => {
+        state.feeds = null;
+        renderFeeds();
+      }), "feeds");
     }
   }
 
@@ -1532,19 +2229,40 @@
           const action = notification.action && typeof notification.action === "object"
             ? notification.action
             : {};
+          async function markReadBestEffort() {
+            if (notification.read_at) return;
+            try {
+              await api("/notifications", {
+                method: "POST",
+                body: JSON.stringify({ notification_id: notification.id }),
+              });
+            } catch (_) {
+              // Navigation remains useful even if the inbox write is transiently unavailable.
+            }
+          }
+
           if (action.kind === "room" && action.watch_url) {
             item.appendChild(button("Join Theater", "btn primary", async () => {
-              if (!notification.read_at) {
-                try {
-                  await api("/notifications", {
-                    method: "POST",
-                    body: JSON.stringify({ notification_id: notification.id }),
-                  });
-                } catch (_) {
-                  // A transient inbox write must not block a still-valid room invite.
-                }
-              }
+              await markReadBestEffort();
               location.href = action.watch_url;
+            }));
+          } else if (action.kind === "feeds") {
+            item.appendChild(button("Open My Feed", "btn primary", async () => {
+              await markReadBestEffort();
+              state.feedMode = "my";
+              go("feeds");
+            }));
+          } else if (action.kind === "feed_result") {
+            const mediaType = String(action.media_type || "");
+            const tmdbId = Number(action.tmdb_id || 0);
+            item.appendChild(button("View Match", "btn primary", async () => {
+              await markReadBestEffort();
+              if (["movie", "tv"].includes(mediaType) && tmdbId > 0) {
+                go("details/" + mediaType + "/" + tmdbId);
+              } else {
+                state.feedMode = "my";
+                go("feeds");
+              }
             }));
           }
           if (!notification.read_at) {
