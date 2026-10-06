@@ -31,7 +31,7 @@ This remains the single active task:
 
 ## Status
 
-**Implementation has been rebuilt cleanly on current main; PR #460 still needs its head moved to the rebuilt commit and exact-head CI rerun.**
+**Implementation has been rebuilt cleanly on current main; exact-head PR #460 CI is the next validation gate.**
 
 The old PR #460 head diverged after PR #459 merged into main. That conflict prevented new pull-request workflows from being created for the subsequent test-only commits because GitHub could no longer synthesize the PR merge ref.
 
@@ -91,8 +91,7 @@ Earlier failed PR #460 run:
 - failures 2–3: legacy assertions expected two-mode Watch JavaScript after standalone became a third mode.
 
 Pending:
-- move PR #460 head to this clean current-main rebuild;
-- exact-head canonical CI and Cinema SQL;
+- exact-head canonical CI and Cinema SQL on the clean current-main rebuild;
 - final mergeability/diff inspection;
 - Discloud Samsung Browser + desktop canary for direct movie play, Continue Watching resume, season switch, episode tap, Private/Watch Party isolation, progress persistence, and guild-membership revocation.
 
@@ -117,7 +116,7 @@ Unrelated Dank Shield work remains outside this task.
 
 ## Next step
 
-Move PR #460's branch ref to the clean rebuild head, verify GitHub recreates exact-head checks, repair only evidence-backed failures, then run the Discloud device canary.
+Verify PR #460 exact-head checks on the clean current-main rebuild, repair only evidence-backed failures, then run the Discloud device canary.
 
 ---
 
