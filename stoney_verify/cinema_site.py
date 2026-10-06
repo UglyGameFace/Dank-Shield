@@ -1737,18 +1737,37 @@ def _hero_from_sections(
     if continue_rows:
         row = dict(continue_rows[0])
         metadata = row.get("metadata") if isinstance(row.get("metadata"), Mapping) else {}
+        media_type = str(row.get("media_type") or "").strip().lower()
+        tmdb_id = int(row.get("tmdb_id") or 0)
+        action: dict[str, Any] = {}
+        if media_type == "movie" and tmdb_id > 0:
+            action = {
+                "kind": "play",
+                "media_type": "movie",
+                "tmdb_id": tmdb_id,
+                "label": "Resume",
+            }
+        elif media_type == "episode" and tmdb_id > 0:
+            series_id = int(row.get("series_id") or metadata.get("series_id") or 0)
+            season_number = int(row.get("season_number") or 0)
+            episode_number = int(row.get("episode_number") or 0)
+            if series_id > 0 and episode_number > 0:
+                action = {
+                    "kind": "play",
+                    "media_type": "episode",
+                    "tmdb_id": tmdb_id,
+                    "series_id": series_id,
+                    "season_number": season_number,
+                    "episode_number": episode_number,
+                    "label": "Resume",
+                }
         return {
             "kind": "resume",
             "title": row.get("title") or "Continue Watching",
             "subtitle": "Pick up where you left off.",
             "backdrop_url": str(metadata.get("backdrop_url") or ""),
             "poster_url": str(metadata.get("poster_url") or ""),
-            "action": {
-                "kind": "details",
-                "media_type": row.get("media_type"),
-                "tmdb_id": row.get("tmdb_id"),
-                "label": "Resume",
-            },
+            "action": action,
         }
     if trending:
         row = dict(trending[0])
@@ -3278,7 +3297,7 @@ def _site_html(guild_id: int, user_id: int) -> str:
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=16" defer></script>
+  <script src="/cinema/assets/site.js?v=17" defer></script>
 </body>
 </html>"""
 
