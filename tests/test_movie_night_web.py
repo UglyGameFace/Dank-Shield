@@ -1440,7 +1440,9 @@ def test_player_layout_recovers_from_mobile_desktop_mode_resizes() -> None:
     assert 'window.addEventListener("resize",stabilizePlayerLayout' in html
     assert 'window.visualViewport?.addEventListener("resize",stabilizePlayerLayout' in html
     assert 'window.addEventListener("orientationchange",recoverPlayerFromViewportChange' in html
-    assert 'video.addEventListener(eventName,()=>stabilizePlayerLayout())' in html
+    assert 'video.addEventListener(eventName,()=>{' in html
+    assert "stabilizePlayerLayout();" in html
+    assert "markStartupEvent(eventName);" in html
     assert "function recoverPlayerFromViewportChange()" in html
     assert 'video.addEventListener("webkitendfullscreen"' in html
     assert 'document.addEventListener("webkitfullscreenchange",handleFullscreenChange)' in html
