@@ -3602,9 +3602,11 @@ function renderDiscordViewers(s) {{
     name.textContent=String(viewer.display_name||viewer.user_id||"Discord viewer");
     const role=document.createElement("div");
     role.className="session-viewer-role";
-    role.textContent=viewer.is_host
-      ?(s.private?"Private host":"Watch Party host")
-      :(s.private?"Invited viewer":"Viewer");
+    role.textContent=standaloneSession(s)
+      ?"Standalone viewer"
+      :(viewer.is_host
+        ?(s.private?"Private host":"Watch Party host")
+        :(s.private?"Invited viewer":"Viewer"));
     copy.append(name,role);
     row.appendChild(copy);
 
@@ -3629,7 +3631,7 @@ function renderDiscordContext(s) {{
   const liveText=document.getElementById("discordLiveText");
 
   panel.hidden=!ctx.connected;
-  live.hidden=!ctx.connected;
+  live.hidden=!ctx.connected || standaloneSession(s);
   avatar.textContent="";
   if(!ctx.connected) {{
     liveText.textContent="Discord unavailable";
@@ -3656,21 +3658,36 @@ function renderDiscordContext(s) {{
     ?"Discord • "+guild+" • #"+channel
     :"Discord • "+guild;
 }}
+function standaloneSession(s) {{
+  return String(s?.mode||"")==="standalone" || !!s?.standalone;
+}}
 function applyModeSurface(s) {{
   const privateMode=String(s.mode||"")==="private" || !!s.private;
-  document.body.dataset.cinemaMode=privateMode?"private":"watch-party";
+  const standaloneMode=standaloneSession(s);
+  document.body.dataset.cinemaMode=standaloneMode?"standalone":(privateMode?"private":"watch-party");
 
-  document.getElementById("roomMode").textContent=privateMode?"Private Room":"Watch Party";
-  document.getElementById("endLabel").textContent=privateMode?"End Private Session":"End Movie Night";
-  document.getElementById("endHelp").textContent=privateMode
-    ?"Close this private session"
-    :"Close the Watch Party for everyone";
-  document.getElementById("sessionMode").textContent=privateMode?"Private Session":"Watch Party";
-  document.getElementById("sessionTab").textContent=privateMode?"👥 Private":"👥 Viewers";
+  document.getElementById("roomMode").textContent=standaloneMode
+    ?"My Cinema"
+    :(privateMode?"Private Room":"Watch Party");
+  document.getElementById("endLabel").textContent=standaloneMode
+    ?"End Playback"
+    :(privateMode?"End Private Session":"End Movie Night");
+  document.getElementById("endHelp").textContent=standaloneMode
+    ?"Close this standalone Cinema playback"
+    :(privateMode?"Close this private session":"Close the Watch Party for everyone");
+  document.getElementById("sessionMode").textContent=standaloneMode
+    ?"Standalone"
+    :(privateMode?"Private Session":"Watch Party");
+  document.getElementById("sessionTab").textContent=standaloneMode
+    ?"👤 You"
+    :(privateMode?"👥 Private":"👥 Viewers");
 
   const pauseLabel=document.getElementById("pauseLabel");
   const pauseHelp=document.getElementById("pauseHelp");
-  if(privateMode) {{
+  if(standaloneMode) {{
+    pauseLabel.textContent="Pause";
+    pauseHelp.textContent="Pause your playback";
+  }} else if(privateMode) {{
     pauseLabel.textContent=Number(s.viewer_count||0)>1?"Pause Private Room":"Pause";
     pauseHelp.textContent=Number(s.viewer_count||0)>1
       ?"Pause playback for invited viewers"
@@ -3684,7 +3701,9 @@ function applyModeSurface(s) {{
   const launcher=document.getElementById("hostLauncher");
   const contextAction=document.getElementById("contextAction");
   const inviteWatchParty=document.getElementById("inviteWatchParty");
-  inviteWatchParty.hidden=!(s.is_host && privateMode);
+  const passHost=document.getElementById("passHost");
+  inviteWatchParty.hidden=standaloneMode || !(s.is_host && privateMode);
+  passHost.hidden=standaloneMode;
   if(!privateMode) document.getElementById("inviteModal").hidden=true;
 
   if(s.is_host && previousHostState===false)
@@ -3705,9 +3724,11 @@ function applyModeSurface(s) {{
   }}
 
   document.getElementById("syncHint").textContent=s.is_host
-    ?(privateMode
-      ?"You control this private session."
-      :"You control synchronized Watch Party playback.")
+    ?(standaloneMode
+      ?"You control this standalone playback."
+      :(privateMode
+        ?"You control this private session."
+        :"You control synchronized Watch Party playback."))
     :"";
 
   previousHostState=!!s.is_host;
@@ -4183,9 +4204,12 @@ function correctSyncedDrift(target) {{
 async function applyState(s) {{
   lastState=s;
   applyCompatAudioState(s);
-  document.getElementById("title").textContent=s.title||(s.private?"Private Session":"Watch Party");
-  document.getElementById("heading").textContent=
-    s.private?"🔒 Dank Cinema Private Session":"🎬 Dank Cinema Watch Party";
+  document.getElementById("title").textContent=s.title||(
+    standaloneSession(s)?"Dank Cinema":(s.private?"Private Session":"Watch Party")
+  );
+  document.getElementById("heading").textContent=standaloneSession(s)
+    ?"🍿 Dank Cinema"
+    :(s.private?"🔒 Dank Cinema Private Session":"🎬 Dank Cinema Watch Party");
   document.getElementById("state").textContent=s.state||"—";
   document.getElementById("viewers").textContent=String(s.viewer_count||0);
   const sessionStatus=humanSessionStatus(s);
@@ -4227,7 +4251,9 @@ async function applyState(s) {{
     document.getElementById("pause").disabled=true;
     document.getElementById("end").disabled=true;
     syncButton.disabled=true;
-    notice.textContent=s.private?"Private Session has ended.":"Watch Party has ended.";
+    notice.textContent=standaloneSession(s)
+      ?"Cinema playback has ended."
+      :(s.private?"Private Session has ended.":"Watch Party has ended.");
     document.getElementById("hostSheet").classList.remove("show");
     return;
   }}
@@ -4261,9 +4287,11 @@ async function applyState(s) {{
     nextEpisodeState=null;
     updateNextEpisodeControl();
     if(s.media_missing) {{
-      notice.textContent=s.private
-        ?"The attached media session expired or was reclaimed. Your Private Session is still active; return to Discord and choose the release again."
-        :"The attached media session expired or was reclaimed. The Watch Party is still active; return to Discord and choose the release again.";
+      notice.textContent=standaloneSession(s)
+        ?"The attached media session expired or was reclaimed. Open Dank Cinema and choose the title again."
+        :(s.private
+          ?"The attached media session expired or was reclaimed. Your Private Session is still active; return to Discord and choose the release again."
+          :"The attached media session expired or was reclaimed. The Watch Party is still active; return to Discord and choose the release again.");
     }} else {{
       notice.textContent="Waiting for the host to choose media.";
     }}
@@ -4315,7 +4343,7 @@ async function applyState(s) {{
         }}
 
         if(!notice.textContent || notice.textContent.startsWith("Joining ")) {{
-          const joiningLabel=s.private?"Private Session":"Watch Party";
+          const joiningLabel=standaloneSession(s)?"Dank Cinema":(s.private?"Private Session":"Watch Party");
           notice.textContent=
             "Joining "+joiningLabel+"… buffering around "+Math.floor((joinTarget||0)/60)+":"+
             String(Math.floor((joinTarget||0)%60)).padStart(2,"0")+
@@ -5572,8 +5600,12 @@ castButton.onclick=async()=>{{
   }}
 }};
 document.getElementById("end").onclick=()=>{{
-  if(confirm((lastState&&lastState.private)?"End this Private Session and release its media?":"End this Movie Night for everyone and release the room media session?"))
-    hostAction("end");
+  const prompt=standaloneSession(lastState)
+    ?"End this standalone Cinema playback and release its media?"
+    :((lastState&&lastState.private)
+      ?"End this Private Session and release its media?"
+      :"End this Movie Night for everyone and release the room media session?");
+  if(confirm(prompt)) hostAction("end");
 }};
 video.addEventListener("play",()=>{{
   schedulePlayerControlsHide(2200);
