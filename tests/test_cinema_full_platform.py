@@ -1490,7 +1490,7 @@ def test_runtime_feed_result_preserves_real_variant_stats() -> None:
     assert "source_ref" not in result
 
 
-def test_full_site_feed_center_does_not_fake_external_refresh_or_search() -> None:
+def test_full_site_feed_center_uses_real_search_pagination_and_source_capabilities() -> None:
     from pathlib import Path
 
     script = (Path(cinema_site.__file__).resolve().parent / "assets" / "cinema_site.js").read_text(encoding="utf-8")
@@ -1501,7 +1501,8 @@ def test_full_site_feed_center_does_not_fake_external_refresh_or_search() -> Non
     assert 'source.provider_type !== "external"' in script
     assert "function feedResultCard(result)" in script
     assert '"Latest Feed Results"' in script
-    assert '"Actual items discovered from your enabled RSS and structured sources."' in script
+    assert 'saved feed result' in script
+    assert 'matching “${state.feedQuery}”.' in script
     assert '"No feed results yet. Refresh an enabled RSS or structured source below' in script
     assert '"Search in Cinema"' in script
     assert '"View Details"' in script
