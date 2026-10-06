@@ -1941,6 +1941,7 @@ async def cinema_details_api(request: web.Request) -> web.Response:
             source_outcome = await search_movie_sources(
                 int(_guild_id),
                 str(details.media.title),
+                catalog_metadata=catalog_metadata(details.media),
             )
             source_outcome = filter_adult_provider_results(
                 source_outcome,

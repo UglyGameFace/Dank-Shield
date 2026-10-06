@@ -180,59 +180,155 @@ def _looks_like_static_feed_url(value: str) -> bool:
         "xml",
     }
 
-def prepare_example_search_url(value: Any) -> str:
-    """Turn a pasted working search URL into a reusable Movie Night template.
 
-    Admins should not have to hand-write the query placeholder. Common search
-    parameters are detected automatically. A bare endpoint with no query string
-    remains valid because the resolver already appends q= at search time.
+_PROVIDER_TEMPLATE_TOKENS = (
+    "{query}",
+    "{imdb_id}",
+    "{imdb_numeric}",
+    "{tmdb_id}",
+    "{series_tmdb_id}",
+    "{tvdb_id}",
+    "{year}",
+    "{media_type}",
+    "{season}",
+    "{episode}",
+    "{season_episode}",
+)
+_TEXT_QUERY_KEYS = {
+    "q",
+    "query",
+    "query_term",
+    "queryterm",
+    "search",
+    "search_query",
+    "searchquery",
+    "search_term",
+    "searchterm",
+    "term",
+    "keyword",
+    "keywords",
+    "title",
+    "s",
+}
+_IMDB_KEYS = {"imdb", "imdb_id", "imdbid"}
+_TMDB_KEYS = {"tmdb", "tmdb_id", "tmdbid"}
+_TVDB_KEYS = {"tvdb", "tvdb_id", "tvdbid"}
+_YEAR_KEYS = {"year", "release_year", "releaseyear"}
+_SEASON_KEYS = {"season", "season_number", "seasonnumber"}
+_EPISODE_KEYS = {"episode", "episode_number", "episodenumber"}
+_SEASON_EPISODE_KEYS = {"season_episode", "seasonepisode", "sxe"}
+_EZTV_API_HOSTS = {
+    "eztvx.to",
+    "eztv.re",
+    "eztv.ag",
+    "eztv.it",
+    "eztv.ch",
+    "eztv.li",
+}
+
+
+def _known_provider_template(value: str) -> str:
+    """Apply narrowly-scoped adapters where an API cannot accept title text."""
+
+    parsed = urlsplit(str(value or "").strip())
+    host = str(parsed.hostname or "").casefold().strip(".")
+    path = str(parsed.path or "").casefold().rstrip("/")
+    if host not in _EZTV_API_HOSTS or path != "/api/get-torrents":
+        return ""
+
+    pairs = list(parse_qsl(parsed.query, keep_blank_values=True))
+    updated: list[tuple[str, str]] = []
+    found_imdb = False
+    for key, raw_value in pairs:
+        normalized = str(key or "").strip().casefold()
+        if normalized in _IMDB_KEYS:
+            updated.append((key, "{imdb_numeric}"))
+            found_imdb = True
+        else:
+            updated.append((key, raw_value))
+    if not found_imdb:
+        updated.append(("imdb_id", "{imdb_numeric}"))
+
+    query = urlencode(updated, doseq=True).replace(
+        "%7Bimdb_numeric%7D",
+        "{imdb_numeric}",
+    )
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            query,
+            "",
+        )
+    )
+
+
+def prepare_example_search_url(value: Any) -> str:
+    """Turn a pasted provider URL into a reusable Cinema request template.
+
+    Title-query APIs continue to use {query}. Identifier-driven APIs can use
+    IMDb/TMDB/episode placeholders, and known APIs that cannot accept title text
+    can be normalized automatically.
     """
 
     clean = _normalize_endpoint_url(value)
-    if "{query}" in clean:
+    if any(token in clean for token in _PROVIDER_TEMPLATE_TOKENS):
         return clean
+
+    known_template = _known_provider_template(clean)
+    if known_template:
+        return known_template
 
     parsed = urlsplit(clean)
     pairs = list(parse_qsl(parsed.query, keep_blank_values=True))
     if not pairs:
         return clean
 
-    common_keys = {
-        "q",
-        "query",
-        "query_term",
-        "queryterm",
-        "search",
-        "search_query",
-        "searchquery",
-        "search_term",
-        "searchterm",
-        "term",
-        "keyword",
-        "keywords",
-        "title",
-        "s",
-    }
     updated: list[tuple[str, str]] = []
-    replaced = False
+    replaced_primary = False
     for key, raw_value in pairs:
-        if not replaced and str(key or "").strip().casefold() in common_keys:
+        normalized = str(key or "").strip().casefold()
+        raw_text = str(raw_value or "").strip()
+        if normalized in _TEXT_QUERY_KEYS:
             updated.append((key, "{query}"))
-            replaced = True
+            replaced_primary = True
+        elif normalized in _IMDB_KEYS:
+            token = "{imdb_id}" if raw_text.casefold().startswith("tt") else "{imdb_numeric}"
+            updated.append((key, token))
+            replaced_primary = True
+        elif normalized in _TMDB_KEYS:
+            updated.append((key, "{tmdb_id}"))
+            replaced_primary = True
+        elif normalized in _TVDB_KEYS:
+            updated.append((key, "{tvdb_id}"))
+            replaced_primary = True
+        elif normalized in _YEAR_KEYS:
+            updated.append((key, "{year}"))
+        elif normalized in _SEASON_KEYS:
+            updated.append((key, "{season}"))
+        elif normalized in _EPISODE_KEYS:
+            updated.append((key, "{episode}"))
+        elif normalized in _SEASON_EPISODE_KEYS:
+            updated.append((key, "{season_episode}"))
         else:
             updated.append((key, raw_value))
 
-    if not replaced:
+    if not replaced_primary:
         if _looks_like_static_feed_url(clean):
             return clean
         raise ValueError(
             "Dank Shield could not find the movie-search part of that URL. "
-            "Use a common search parameter (for example q=, query=, query_term=, "
-            "search=, term=, keyword=, title=, or s=), include {query} yourself, "
-            "or provide a recognizable RSS/Atom feed URL."
+            "Use a title parameter such as q=, query=, query_term=, search=, term=, "
+            "keyword=, title=, or s=; use an IMDb/TMDB parameter; include a supported "
+            "placeholder such as {query}, {imdb_id}, {imdb_numeric}, or {tmdb_id}; "
+            "or add it as an RSS/Atom feed."
         )
 
-    query = urlencode(updated, doseq=True).replace("%7Bquery%7D", "{query}")
+    query = urlencode(updated, doseq=True)
+    for token in _PROVIDER_TEMPLATE_TOKENS:
+        encoded = quote_plus(token)
+        query = query.replace(encoded, token)
     return urlunsplit(
         (
             parsed.scheme,

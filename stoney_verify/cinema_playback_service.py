@@ -197,7 +197,11 @@ async def search_exact_movie_sources(
         raise ValueError("Exact movie source search requires a movie catalog item.")
     metadata = catalog_metadata(media)
     query = _clean(media.title)
-    outcome = await search_movie_sources(int(guild_id), query)
+    outcome = await search_movie_sources(
+        int(guild_id),
+        query,
+        catalog_metadata=metadata,
+    )
     try:
         _raw, preferences = await load_movie_night_preferences(int(guild_id), refresh=False)
         adult_enabled = bool(preferences.adult_content_enabled)
@@ -222,7 +226,11 @@ async def search_exact_episode_sources(
         episode.episode_number,
         series.year,
     )
-    outcome = await search_movie_sources(int(guild_id), query)
+    outcome = await search_movie_sources(
+        int(guild_id),
+        query,
+        catalog_metadata=metadata,
+    )
     try:
         _raw, preferences = await load_movie_night_preferences(int(guild_id), refresh=False)
         adult_enabled = bool(preferences.adult_content_enabled)
