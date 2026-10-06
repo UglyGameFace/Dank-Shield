@@ -371,7 +371,16 @@ async def save_feed_rule(
         )
 
     saved = rows(response)
-    return _normalize_rule(saved[0] if saved else {**write_payload, "id": clean_id})
+    normalized = _normalize_rule(saved[0] if saved else {**write_payload, "id": clean_id})
+    if normalized.get("rule_type") == "private_source" and normalized.get("id"):
+        try:
+            await ensure_source_health(
+                int(guild_id),
+                f"private-{str(normalized['id'])[:36]}",
+            )
+        except Exception:
+            pass
+    return normalized
 
 
 async def delete_feed_rule(
@@ -948,6 +957,58 @@ async def list_due_source_targets(
     return targets
 
 
+async def list_due_private_source_targets(
+    *,
+    refresh_seconds: int,
+    limit: int = 12,
+) -> list[tuple[int, int, str]]:
+    safe_seconds = max(300, min(int(refresh_seconds), 86400))
+    safe_limit = max(1, min(int(limit), 50))
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(seconds=safe_seconds)
+    ).isoformat()
+
+    def read_health(client: Any):
+        return (
+            client.table(HEALTH_TABLE)
+            .select("guild_id,source_id,last_refreshed_at")
+            .like("source_id", "private-%")
+            .or_(f"last_refreshed_at.is.null,last_refreshed_at.lt.{cutoff}")
+            .order("last_refreshed_at")
+            .limit(safe_limit * 2)
+            .execute()
+        )
+
+    health_rows = rows(
+        await execute("read due private Cinema feed targets", read_health)
+    )
+    output: list[tuple[int, int, str]] = []
+    for health in health_rows:
+        guild_id = _safe_int(health.get("guild_id"))
+        source_id = _clean(health.get("source_id"), 100)
+        rule_id = source_id.removeprefix("private-")
+        if guild_id <= 0 or not rule_id:
+            continue
+        try:
+            rule = await _get_rule(rule_id)
+        except Exception:
+            continue
+        if (
+            not rule
+            or int(rule.get("guild_id") or 0) != guild_id
+            or rule.get("rule_type") != "private_source"
+            or not bool(rule.get("enabled", True))
+        ):
+            continue
+        owner_user_id = int(rule.get("owner_user_id") or 0)
+        if owner_user_id <= 0:
+            continue
+        output.append((guild_id, owner_user_id, str(rule.get("id") or "")))
+        if len(output) >= safe_limit:
+            break
+    return output
+
+
 async def list_source_health(guild_id: int) -> dict[str, dict[str, Any]]:
     gid = int(guild_id)
 
@@ -1262,6 +1323,7 @@ async def refresh_private_source(
         or int(rule.get("guild_id") or 0) != int(guild_id)
         or int(rule.get("owner_user_id") or 0) != int(user_id)
         or rule.get("rule_type") != "private_source"
+        or not bool(rule.get("enabled", True))
     ):
         raise LookupError("Private Feed Rule not found.")
     filters = dict(rule.get("filters") or {})
@@ -1526,6 +1588,7 @@ __all__ = [
     "ensure_source_health",
     "group_feed_results",
     "list_feed_rules",
+    "list_due_private_source_targets",
     "list_due_source_targets",
     "list_private_discoveries",
     "list_source_health",
