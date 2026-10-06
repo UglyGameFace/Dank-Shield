@@ -1552,3 +1552,43 @@ Acceptance after deploy:
 - `/health` reports `signed-session-v8-snowflake-safe`;
 - a fresh `/cinema home` link for guild `1514374173517152418` must cause API/log routes to use that exact same ID, never `1514374173517152500`;
 - Home/Search/My Stuff/Feeds/Profile must no longer fail from the rounded-guild membership error.
+
+## Production follow-up — Cinema responsive layout and mobile scale
+
+Observed after the snowflake/auth fix succeeded:
+- Cinema details now load successfully, proving the auth chain is working;
+- on a phone, the whole SPA can render visually shrunken, with tiny header/nav/details content that resembles a desktop page scaled down;
+- the mobile bottom navigation is visible, proving the mobile breakpoint is active even while the visual scale is too small.
+
+Scope:
+- layout and viewport only;
+- do not change auth, playback, Watch Party/Private Session logic, providers, queues, or persistence.
+
+Responsive correction contract:
+- keep desktop content capped at 1560px and preserve the desktop multi-column experience;
+- preserve tablet breakpoints at 1199px/820px and phone breakpoints at 620px/390px;
+- strengthen viewport meta with `initial-scale=1` and `minimum-scale=1` while leaving zoom-in available;
+- add `interactive-widget=resizes-content` for supporting browsers so the keyboard can resize layout content cleanly;
+- normalize text-size adjustment across mobile browsers;
+- guarantee shell/page/grid children can shrink without horizontal min-content blowouts;
+- collapse phone details into a readable stacked hero with controlled backdrop height;
+- make cast and media rails touch-scroll cleanly;
+- make source/feed/error copy wrap anywhere instead of expanding the page;
+- make bottom navigation use equal minmax tracks with larger touch targets;
+- use a two-column phone result grid and a one-column phone source/feed layout;
+- cache-bust Cinema CSS to `site.css?v=4`.
+
+Cross-browser intent:
+- same CSS/HTML path for Chrome/Chromium, Samsung Internet, Firefox Android, Safari/iOS, desktop Chrome/Edge/Firefox/Safari;
+- no user-agent sniffing and no Samsung-only rules;
+- real desktops remain governed by viewport width and the existing 1560px content cap.
+
+Acceptance:
+- phone portrait/landscape opens at readable scale and does not look like a miniaturized desktop page;
+- header logo/actions and bottom navigation remain thumb-readable;
+- details title/poster/overview/actions stack without horizontal overflow;
+- Cast and Similar Titles scroll horizontally instead of forcing page width;
+- source rows wrap safely;
+- tablet layout remains balanced;
+- desktop and ultrawide retain intentional multi-column spacing and do not inherit phone stacking;
+- exact-head CI and companion workflows green before merge.
