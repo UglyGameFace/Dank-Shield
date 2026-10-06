@@ -93,28 +93,64 @@ def _matches_release(media: CinemaMedia, release_title: str) -> bool:
     return True
 
 
+def _looks_like_episode_release(value: Any) -> bool:
+    text = " ".join(_tokens(value))
+    return bool(
+        re.search(r"\bs\d{1,2}e\d{1,3}\b", text)
+        or re.search(r"\b\d{1,2}x\d{1,3}\b", text)
+    )
+
+
+def _discovery_search_queries(title: str) -> tuple[str, ...]:
+    primary = _clean_search_title(title)
+    if not primary:
+        return ()
+    queries: list[str] = [primary]
+    if _looks_like_episode_release(title):
+        stripped = re.sub(
+            r"\b(?:19|20)\d{2}\b",
+            " ",
+            primary,
+        )
+        stripped = " ".join(stripped.split())
+        if stripped and stripped not in queries:
+            queries.insert(0, stripped)
+    return tuple(queries)
+
+
 async def _resolve_media(title: str, category: str) -> CinemaMedia | None:
-    query = _clean_search_title(title)
-    if not query:
-        return None
-    try:
-        candidates = await search_catalog(query, limit=5, include_adult=False)
-    except Exception:
+    queries = _discovery_search_queries(title)
+    if not queries:
         return None
 
-    wanted_type = "tv" if category in {"tv", "anime"} else ""
-    for media in candidates:
-        if wanted_type and media.media_type != wanted_type:
+    wanted_type = (
+        "tv"
+        if category in {"tv", "anime"} or _looks_like_episode_release(title)
+        else ""
+    )
+    seen: set[str] = set()
+    for query in queries:
+        try:
+            candidates = await search_catalog(query, limit=8, include_adult=False)
+        except Exception:
             continue
-        if _matches_release(media, title):
-            return media
-    for media in candidates:
-        if wanted_type and media.media_type != wanted_type:
-            continue
-        normalized_query = set(_tokens(query))
-        normalized_title = set(_tokens(media.title))
-        if normalized_title and normalized_title == normalized_query:
-            return media
+
+        for media in candidates:
+            if media.key in seen:
+                continue
+            seen.add(media.key)
+            if wanted_type and media.media_type != wanted_type:
+                continue
+            if _matches_release(media, title):
+                return media
+
+        for media in candidates:
+            if wanted_type and media.media_type != wanted_type:
+                continue
+            normalized_query = set(_tokens(query))
+            normalized_title = set(_tokens(media.title))
+            if normalized_title and normalized_title == normalized_query:
+                return media
     return None
 
 
@@ -210,6 +246,57 @@ async def record_feed_discoveries(
     return payloads
 
 
+async def page_discoveries(
+    guild_id: int,
+    *,
+    query: str = "",
+    page: int = 1,
+    page_size: int = 8,
+) -> dict[str, Any]:
+    gid = int(guild_id)
+    clean_query = " ".join(str(query or "").split())[:120]
+    size = max(1, min(int(page_size), 24))
+    current_page = max(1, int(page))
+    offset = (current_page - 1) * size
+
+    def read(client: Any):
+        request = (
+            client.table(TABLE)
+            .select("*", count="exact")
+            .eq("guild_id", gid)
+        )
+        if clean_query:
+            request = request.ilike("title", f"%{clean_query}%")
+        return (
+            request
+            .order("first_seen_at", desc=True)
+            .range(offset, offset + size - 1)
+            .execute()
+        )
+
+    response = await execute(
+        f"page Cinema feed discoveries {gid}",
+        read,
+    )
+    page_rows = rows(response)
+    raw_count = getattr(response, "count", None)
+    total = int(raw_count) if raw_count is not None else offset + len(page_rows)
+    total_pages = max(1, (total + size - 1) // size) if total else 1
+    if current_page > total_pages and total:
+        current_page = total_pages
+
+    return {
+        "rows": page_rows,
+        "query": clean_query,
+        "page": current_page,
+        "page_size": size,
+        "total": total,
+        "total_pages": total_pages,
+        "has_previous": current_page > 1,
+        "has_next": current_page < total_pages,
+    }
+
+
 async def list_recent_discoveries(
     guild_id: int,
     *,
@@ -257,6 +344,7 @@ async def search_discoveries(
 
 __all__ = [
     "list_recent_discoveries",
+    "page_discoveries",
     "record_feed_discoveries",
     "search_discoveries",
 ]
