@@ -135,6 +135,7 @@ _SITE_GUILD_REST_CACHE: dict[int, tuple[float, Any]] = {}
 _SITE_GUILD_ABSENT_UNTIL: dict[int, float] = {}
 
 _SOURCE_SNAPSHOT_TTL_SECONDS = 90.0
+_SOURCE_SNAPSHOT_MAX_ENTRIES = 1024
 _SOURCE_SNAPSHOT_CACHE: dict[
     tuple[int, int, str, int],
     tuple[float, dict[str, Any], str, Any],
@@ -1447,9 +1448,25 @@ def _cache_source_snapshot(
     query: str,
     outcome: Any,
 ) -> None:
+    now = time.monotonic()
+    expired = [
+        key
+        for key, cached in _SOURCE_SNAPSHOT_CACHE.items()
+        if float(cached[0]) <= now
+    ]
+    for key in expired:
+        _SOURCE_SNAPSHOT_CACHE.pop(key, None)
+
+    if len(_SOURCE_SNAPSHOT_CACHE) >= _SOURCE_SNAPSHOT_MAX_ENTRIES:
+        oldest_key = min(
+            _SOURCE_SNAPSHOT_CACHE,
+            key=lambda item: float(_SOURCE_SNAPSHOT_CACHE[item][0]),
+        )
+        _SOURCE_SNAPSHOT_CACHE.pop(oldest_key, None)
+
     key = _source_snapshot_key(guild_id, user_id, media_type, tmdb_id)
     _SOURCE_SNAPSHOT_CACHE[key] = (
-        time.monotonic() + _SOURCE_SNAPSHOT_TTL_SECONDS,
+        now + _SOURCE_SNAPSHOT_TTL_SECONDS,
         dict(metadata),
         str(query or "")[:180],
         outcome,
