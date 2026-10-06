@@ -1332,7 +1332,7 @@ def _media_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         "completed": bool(row.get("completed")),
         "watchlisted": bool(row.get("watchlisted")),
         "favorite": bool(row.get("favorite")),
-        "rating": int(row.get("rating") or 0),
+        "user_rating": int(row.get("rating") or 0),
         "play_count": max(0, int(row.get("play_count") or 0)),
         "first_watched_at": str(row.get("first_watched_at") or ""),
         "last_watched_at": str(row.get("last_watched_at") or ""),
