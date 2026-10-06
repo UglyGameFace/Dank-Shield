@@ -242,6 +242,9 @@ _PROVIDER_TEMPLATE_FIELDS = {
     "{imdb_numeric}": "imdb_numeric",
     "{tmdb_id}": "tmdb_id",
     "{series_tmdb_id}": "series_tmdb_id",
+    "{tvdb_id}": "tvdb_id",
+    "{year}": "year",
+    "{media_type}": "media_type",
     "{season}": "season",
     "{episode}": "episode",
     "{season_episode}": "season_episode",
@@ -258,6 +261,11 @@ def _provider_lookup_context(
 
     context: dict[str, str] = {"query": clean_query}
     media_type = str(metadata.get("media_type") or "").strip().casefold()
+    if media_type:
+        context["media_type"] = media_type
+    year = _safe_int(metadata.get("year"))
+    if year > 0:
+        context["year"] = str(year)
 
     tmdb_id = _safe_int(metadata.get("tmdb_id"))
     series_tmdb_id = _safe_int(metadata.get("series_id"))
@@ -278,13 +286,17 @@ def _provider_lookup_context(
         context["imdb_id"] = imdb_id
         context["imdb_numeric"] = imdb_match.group(1)
 
-    season = _safe_int(metadata.get("season_number"))
-    episode = _safe_int(metadata.get("episode_number"))
-    if season > 0:
+    season_raw = metadata.get("season_number")
+    episode_raw = metadata.get("episode_number")
+    has_season = season_raw is not None and str(season_raw).strip() != ""
+    has_episode = episode_raw is not None and str(episode_raw).strip() != ""
+    season = _safe_int(season_raw)
+    episode = _safe_int(episode_raw)
+    if has_season:
         context["season"] = str(season)
-    if episode > 0:
+    if has_episode and episode > 0:
         context["episode"] = str(episode)
-    if season > 0 and episode > 0:
+    if has_season and has_episode and episode > 0:
         context["season_episode"] = f"S{season:02d}E{episode:02d}"
     return context
 
@@ -323,6 +335,9 @@ async def _enrich_provider_lookup_context(
     if imdb_match:
         context["imdb_id"] = imdb_id
         context["imdb_numeric"] = imdb_match.group(1)
+    tvdb_id = _safe_int(external_ids.get("tvdb_id"))
+    if tvdb_id > 0:
+        context["tvdb_id"] = str(tvdb_id)
     return context
 
 
@@ -361,6 +376,9 @@ def _search_url(
                     "imdb_numeric": "IMDb identity",
                     "tmdb_id": "TMDB identity",
                     "series_tmdb_id": "series TMDB identity",
+                    "tvdb_id": "TVDB identity",
+                    "year": "release year",
+                    "media_type": "media type",
                     "season": "season number",
                     "episode": "episode number",
                     "season_episode": "season/episode identity",
