@@ -2011,7 +2011,7 @@
         );
         ruleHead.append(
           ruleTitle,
-          button("+ New Rule", "btn primary", () => openFeedRuleEditor()),
+          button("+ New Feed Rule", "btn primary", () => openFeedRuleEditor()),
         );
         section.appendChild(ruleHead);
         if (!rules.length) {
