@@ -8,7 +8,7 @@ import re
 import time
 from typing import Any, Mapping, Sequence
 
-from .cinema_catalog import CinemaMedia, search_catalog
+from .cinema_catalog import CinemaDetails, CinemaMedia, get_details, search_catalog
 from .cinema_storage import execute, rows, utc_now
 from .media_metadata import parse_release_name
 
@@ -299,14 +299,23 @@ async def record_feed_discoveries(
 
     semaphore = asyncio.Semaphore(3)
 
-    async def resolve(title: str) -> tuple[str, CinemaMedia | None]:
+    async def resolve(
+        title: str,
+    ) -> tuple[str, CinemaMedia | None, CinemaDetails | None]:
         async with semaphore:
-            return title, await _resolve_media(title, str(category or "custom"))
+            media = await _resolve_media(title, str(category or "custom"))
+            details = None
+            if media is not None:
+                try:
+                    details = await get_details(media.media_type, media.tmdb_id)
+                except Exception:
+                    details = None
+            return title, media, details
 
     resolved = await asyncio.gather(*(resolve(title) for title in clean_titles))
     now = utc_now()
     payloads: list[dict[str, Any]] = []
-    for title, media in resolved:
+    for title, media, details in resolved:
         extra = {}
         if isinstance(release_metadata, Mapping):
             candidate = release_metadata.get(title.casefold())
@@ -350,6 +359,21 @@ async def record_feed_discoveries(
                     "rating": media.rating,
                 }
             )
+            if details is not None:
+                metadata.update(
+                    {
+                        "genres": list(details.genres)[:12],
+                        "studios": list(details.studios)[:16],
+                        "people": [
+                            str(row.get("name") or "")[:100]
+                            for row in list(details.cast)[:20]
+                            if isinstance(row, Mapping)
+                            and str(row.get("name") or "").strip()
+                        ],
+                        "directors": list(details.directors)[:8],
+                        "creators": list(details.creators)[:8],
+                    }
+                )
         payloads.append(
             {
                 "guild_id": gid,
