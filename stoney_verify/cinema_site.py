@@ -695,10 +695,10 @@ def _cinema_entry_html(
 <html lang="en" data-quality="standard">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=3">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=4">
 </head>
 <body>
   <div class="app-shell">
