@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 
 from .cinema_catalog import CinemaMedia, search_catalog
 from .cinema_storage import execute, rows, utc_now
+from .media_metadata import parse_release_name
 
 TABLE = "dank_cinema_feed_discoveries"
 
@@ -281,6 +282,7 @@ async def record_feed_discoveries(
     source_label: str,
     category: str,
     titles: Sequence[str],
+    release_metadata: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     gid = int(guild_id)
     clean_titles: list[str] = []
@@ -305,11 +307,33 @@ async def record_feed_discoveries(
     now = utc_now()
     payloads: list[dict[str, Any]] = []
     for title, media in resolved:
+        extra = {}
+        if isinstance(release_metadata, Mapping):
+            candidate = release_metadata.get(title.casefold())
+            if isinstance(candidate, Mapping):
+                extra = dict(candidate)
         metadata: dict[str, Any] = {
             "source_label": str(source_label or "")[:80],
             "category": str(category or "custom")[:40],
             "release_title": title,
+            "release_name": parse_release_name(title),
+            "seeds": max(0, int(extra.get("seeds") or 0)),
+            "leechers": max(0, int(extra.get("leechers") or 0)),
+            "peers": max(0, int(extra.get("peers") or 0)),
+            "file_size": max(0, int(extra.get("file_size") or 0)),
+            "languages": [
+                " ".join(str(item or "").split()).lower()[:24]
+                for item in list(extra.get("languages") or [])[:12]
+                if str(item or "").strip()
+            ],
         }
+        source_reported = extra.get("source_reported")
+        if isinstance(source_reported, Mapping):
+            metadata["source_reported"] = {
+                str(key)[:80]: value
+                for key, value in list(source_reported.items())[:32]
+                if isinstance(value, (str, int, float, bool)) or value is None
+            }
         media_type = None
         tmdb_id = None
         display_title = title
