@@ -86,6 +86,7 @@ class _FakeHandle:
     def __init__(self) -> None:
         self.file_priorities = None
         self.piece_updates: list[tuple[int, int]] = []
+        self.deadline_updates: list[tuple[int, int]] = []
         self.available: set[int] = set()
         self.download_rate = 1234
         self.upload_rate = 50
@@ -95,6 +96,9 @@ class _FakeHandle:
 
     def prioritize_pieces(self, updates) -> None:
         self.piece_updates.extend((int(a), int(b)) for a, b in updates)
+
+    def set_piece_deadline(self, piece: int, deadline_ms: int) -> None:
+        self.deadline_updates.append((int(piece), int(deadline_ms)))
 
     def have_piece(self, piece: int) -> bool:
         return int(piece) in self.available
@@ -172,6 +176,96 @@ def test_media_health_reports_standalone_cinema_oauth_readiness(monkeypatch) -> 
     assert payload["cinema_oauth_client_secret_ready"] is True
     assert payload["cinema_oauth_redirect_ready"] is True
     assert payload["cinema_oauth_redirect_uri"].endswith("/cinema/auth/callback")
+
+
+def test_torrent_session_uses_fast_start_peer_settings_by_default(monkeypatch, tmp_path: Path) -> None:
+    for name in (
+        "DANK_TORRENT_CONNECTION_LIMIT",
+        "DANK_TORRENT_CONNECTION_SPEED",
+        "DANK_TORRENT_CONNECT_BOOST",
+        "DANK_TORRENT_PEER_CONNECT_TIMEOUT_SECONDS",
+        "DANK_TORRENT_DOWNLOAD_RATE_BYTES",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    manager = _manager(monkeypatch, tmp_path)
+    settings = manager.lt.settings
+
+    assert settings["connections_limit"] == 200
+    assert settings["connection_speed"] == 80
+    assert settings["torrent_connect_boost"] == 80
+    assert settings["peer_connect_timeout"] == 8
+    assert settings["download_rate_limit"] == 64 * 1024 * 1024
+
+
+def test_requested_playback_pieces_use_time_critical_deadlines(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.time_critical_base_deadline_ms = 500
+    manager.time_critical_step_ms = 350
+    handle = _FakeHandle()
+    session = TorrentStreamSession(
+        token="deadline",
+        secret="secret",
+        owner_id=2,
+        guild_id=1,
+        source_kind="magnet",
+        source_identity="btih:deadline",
+        save_root=tmp_path,
+        handle=handle,
+        info=object(),
+        file_index=0,
+        file_path="movie.mp4",
+        file_name="movie.mp4",
+        file_size=20 * 1024 * 1024,
+        file_offset=0,
+        piece_length=1024 * 1024,
+        first_piece=0,
+        last_piece=19,
+        created_at=0.0,
+        last_access=0.0,
+    )
+
+    manager.prioritize_range(
+        session,
+        2 * 1024 * 1024,
+        4 * 1024 * 1024 - 1,
+        readahead_bytes=4 * 1024 * 1024,
+    )
+
+    assert handle.deadline_updates == [(2, 500), (3, 850)]
+    priorities = dict(handle.piece_updates)
+    assert priorities[2] == 7
+    assert priorities[3] == 7
+    assert priorities[4] == 6
+
+
+def test_tail_probe_priority_does_not_compete_as_time_critical(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.bootstrap_bytes = 2 * 1024 * 1024
+    manager.tail_probe_bytes = 1024 * 1024
+    info = _FakeInfo(
+        [("movie.mp4", 8 * 1024 * 1024, 0)],
+        piece_length=1024 * 1024,
+    )
+    handle = _FakeHandle()
+
+    session = asyncio.run(
+        manager._finalize_session(
+            token="tail-deadline",
+            save_root=tmp_path,
+            handle=handle,
+            info=info,
+            guild_id=1,
+            owner_id=2,
+            source_kind="torrent",
+            source_identity="btih:tail-deadline",
+        )
+    )
+
+    assert session.file_index == 0
+    assert (0, 500) in handle.deadline_updates
+    assert (1, 850) in handle.deadline_updates
+    assert all(piece < 2 for piece, _deadline in handle.deadline_updates)
 
 
 def test_live_torrent_status_exposes_seed_and_leech_counts(monkeypatch, tmp_path: Path) -> None:
