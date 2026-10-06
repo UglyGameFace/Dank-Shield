@@ -1245,6 +1245,333 @@
     return result;
   }
 
+  async function feedRuleAction(payload) {
+    const result = await api("/feed-rules", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    if (result.feed_state) state.feeds = result.feed_state;
+    return result;
+  }
+
+  function feedRuleTypeLabel(value) {
+    return {
+      follow: "Followed title",
+      saved_search: "Saved search",
+      filter: "Filter",
+      collection: "Collection",
+      routing: "Routing rule",
+      private_source: "Private source",
+    }[String(value || "")] || "Feed Rule";
+  }
+
+  function openFeedRuleEditor(rule = null, defaults = {}) {
+    const initial = { ...(defaults || {}), ...(rule || {}) };
+    const filters = initial.filters && typeof initial.filters === "object"
+      ? initial.filters
+      : {};
+    const actions = initial.actions && typeof initial.actions === "object"
+      ? initial.actions
+      : {};
+    const backdrop = node("div", "modal-backdrop");
+    const modal = node("section", "modal feed-rule-modal");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    const head = node("div", "modal-head");
+    head.appendChild(node("h2", "", rule ? "Edit Feed Rule" : "Create Feed Rule"));
+    const close = button("×", "modal-close", () => backdrop.remove());
+    close.setAttribute("aria-label", "Close Feed Rule editor");
+    head.appendChild(close);
+
+    const form = node("div", "form-grid");
+    const fields = {};
+
+    function textField(label, key, value = "", type = "text") {
+      const wrap = node("div", "field");
+      wrap.appendChild(node("label", "", label));
+      const input = node("input");
+      input.type = type;
+      input.value = String(value ?? "");
+      fields[key] = input;
+      wrap.appendChild(input);
+      return wrap;
+    }
+
+    function selectField(label, key, value, options) {
+      const wrap = node("div", "field");
+      wrap.appendChild(node("label", "", label));
+      const select = node("select");
+      options.forEach(([optionValue, optionLabel, disabled]) => {
+        const option = node("option");
+        option.value = optionValue;
+        option.textContent = optionLabel;
+        option.disabled = Boolean(disabled);
+        if (String(optionValue) === String(value || "")) option.selected = true;
+        select.appendChild(option);
+      });
+      fields[key] = select;
+      wrap.appendChild(select);
+      return wrap;
+    }
+
+    function checkField(label, key, checked) {
+      const wrap = node("label", "switch-row feed-rule-switch");
+      wrap.appendChild(node("div", "", label));
+      const input = node("input");
+      input.type = "checkbox";
+      input.checked = Boolean(checked);
+      fields[key] = input;
+      wrap.appendChild(input);
+      return wrap;
+    }
+
+    const scopeValue = String(initial.scope || "user");
+    const typeValue = String(initial.rule_type || defaults.rule_type || "saved_search");
+    const typeField = selectField("Rule type", "rule_type", typeValue, [
+      ["follow", "Follow a title"],
+      ["saved_search", "Saved search"],
+      ["filter", "Personal filter"],
+      ["collection", "Curated collection"],
+      ["routing", "Routing rule"],
+      ["private_source", "Private RSS / JSON source"],
+    ]);
+    const scopeField = selectField("Visibility", "scope", scopeValue, [
+      ["user", "Only me"],
+      ["guild", "Server-wide", !Boolean(state.feeds?.can_manage)],
+    ]);
+    form.append(
+      textField("Name", "name", initial.name || ""),
+      typeField,
+      scopeField,
+      textField("Title / search", "query", initial.query || ""),
+      selectField("Media type", "media_type", initial.media_type || "", [
+        ["", "Any"],
+        ["movie", "Movie"],
+        ["tv", "TV"],
+      ]),
+      textField("TMDB ID", "tmdb_id", initial.tmdb_id || "", "number"),
+      textField("Minimum seeds", "min_seeds", filters.min_seeds || 0, "number"),
+      textField("Preferred resolutions", "resolutions", (filters.resolutions || []).join(", ")),
+      textField("Preferred codecs", "codecs", (filters.codecs || []).join(", ")),
+      textField("Preferred languages", "languages", (filters.languages || []).join(", ")),
+      textField("Exclude terms", "excluded_terms", (filters.excluded_terms || []).join(", ")),
+      textField("Collection / folder", "collection", actions.collection || ""),
+      selectField("Alert mode", "notify", actions.notify || "instant", [
+        ["instant", "Instant Cinema inbox"],
+        ["daily", "Daily digest"],
+        ["off", "Off"],
+      ]),
+      checkField("Only playable matches", "playable_only", filters.playable_only !== false),
+      checkField("Suggest matches for Theater queue", "queue_suggest", Boolean(actions.queue_suggest)),
+    );
+
+    const privateWrap = node("div", "feed-private-fields");
+    privateWrap.append(
+      textField("Private HTTPS endpoint", "endpoint_url", filters.endpoint_url || ""),
+      selectField("Private source type", "provider_type", filters.provider_type || "feed", [
+        ["feed", "RSS / Atom"],
+        ["json", "Structured JSON API"],
+      ]),
+      selectField("Private source category", "category", filters.category || "custom", [
+        ["movies", "Movies"],
+        ["tv", "TV"],
+        ["anime", "Anime"],
+        ["documentaries", "Documentaries"],
+        ["custom", "Custom"],
+      ]),
+    );
+    form.appendChild(privateWrap);
+
+    function syncPrivateFields() {
+      privateWrap.hidden = String(fields.rule_type.value) !== "private_source";
+      if (String(fields.rule_type.value) === "private_source") {
+        fields.scope.value = "user";
+        fields.scope.disabled = true;
+      } else {
+        fields.scope.disabled = false;
+      }
+    }
+    fields.rule_type.addEventListener("change", syncPrivateFields);
+    syncPrivateFields();
+
+    const save = button("Save Feed Rule", "btn primary", async () => {
+      save.disabled = true;
+      const list = (value) => String(value || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      try {
+        await feedRuleAction({
+          action: "save",
+          id: initial.id || "",
+          name: fields.name.value,
+          scope: fields.scope.value,
+          rule_type: fields.rule_type.value,
+          query: fields.query.value,
+          media_type: fields.media_type.value,
+          tmdb_id: Number(fields.tmdb_id.value || 0),
+          enabled: initial.enabled !== false,
+          filters: {
+            playable_only: fields.playable_only.checked,
+            min_seeds: Math.max(0, Number(fields.min_seeds.value || 0)),
+            resolutions: list(fields.resolutions.value),
+            codecs: list(fields.codecs.value),
+            languages: list(fields.languages.value),
+            excluded_terms: list(fields.excluded_terms.value),
+            endpoint_url: fields.endpoint_url.value,
+            provider_type: fields.provider_type.value,
+            category: fields.category.value,
+          },
+          actions: {
+            notify: fields.notify.value,
+            collection: fields.collection.value,
+            queue_suggest: fields.queue_suggest.checked,
+          },
+        });
+        backdrop.remove();
+        toast("Feed Rule saved.");
+        renderFeeds();
+      } catch (error) {
+        toast(error.message || "Feed Rule could not be saved.", "error");
+      } finally {
+        save.disabled = false;
+      }
+    });
+
+    modal.append(
+      head,
+      node("p", "section-sub", "Use one rule for follows, saved searches, filters, collections, routing, alerts, or a private feed."),
+      form,
+      save,
+    );
+    backdrop.appendChild(modal);
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) backdrop.remove();
+    });
+    document.body.appendChild(backdrop);
+    setTimeout(() => fields.name.focus(), 30);
+  }
+
+  function feedRuleCard(rule) {
+    const card = node("article", "feed-rule-card");
+    const heading = node("div", "feed-rule-heading");
+    heading.append(
+      node("div", "feed-title", rule.name || feedRuleTypeLabel(rule.rule_type)),
+      node("div", "feed-category", (rule.scope === "guild" ? "Server" : "Personal") + " • " + feedRuleTypeLabel(rule.rule_type)),
+    );
+    card.appendChild(heading);
+    const details = [];
+    if (rule.query) details.push("Match: " + rule.query);
+    if (rule.media_type) details.push(rule.media_type === "tv" ? "TV" : "Movie");
+    if (rule.tmdb_id) details.push("TMDB " + rule.tmdb_id);
+    const filters = rule.filters || {};
+    if (Number(filters.min_seeds || 0) > 0) details.push("≥ " + Number(filters.min_seeds) + " seeds");
+    if (Array.isArray(filters.resolutions) && filters.resolutions.length) details.push(filters.resolutions.join(", "));
+    if (Array.isArray(filters.codecs) && filters.codecs.length) details.push(filters.codecs.join(", "));
+    if (details.length) card.appendChild(node("div", "feed-meta", details.join(" • ")));
+    const actionsMeta = rule.actions || {};
+    const actionBits = [];
+    if (actionsMeta.notify && actionsMeta.notify !== "off") actionBits.push("Alerts: " + actionsMeta.notify);
+    if (actionsMeta.collection) actionBits.push("Folder: " + actionsMeta.collection);
+    if (actionsMeta.queue_suggest) actionBits.push("Queue suggestions");
+    if (actionBits.length) card.appendChild(node("div", "feed-meta", actionBits.join(" • ")));
+
+    const actions = node("div", "feed-result-actions");
+    if (rule.rule_type === "private_source") {
+      actions.appendChild(button("Refresh Private Feed", "btn secondary", async () => {
+        try {
+          const result = await feedRuleAction({ action: "refresh_private", id: rule.id });
+          toast("Private feed refreshed: " + Number(result.result_count || 0) + " result" + (Number(result.result_count || 0) === 1 ? "" : "s") + ".");
+          renderFeeds();
+        } catch (error) {
+          toast(error.message || "Private feed refresh failed.", "error");
+        }
+      }));
+    }
+    actions.append(
+      button("Edit", "btn secondary", () => openFeedRuleEditor(rule)),
+      button("Delete", "btn danger", async () => {
+        if (!confirm("Delete " + (rule.name || "this Feed Rule") + "?")) return;
+        try {
+          await feedRuleAction({ action: "delete", id: rule.id });
+          toast("Feed Rule deleted.");
+          renderFeeds();
+        } catch (error) {
+          toast(error.message || "Feed Rule deletion failed.", "error");
+        }
+      }),
+    );
+    card.appendChild(actions);
+    return card;
+  }
+
+  function isFollowingFeedResult(result) {
+    const rules = Array.isArray(state.feeds?.feed_rules) ? state.feeds.feed_rules : [];
+    const tmdbId = Number(result?.tmdb_id || 0);
+    const mediaType = String(result?.media_type || "");
+    const title = itemTitle(result).toLowerCase();
+    return rules.some((rule) => {
+      if (rule.scope !== "user" || rule.rule_type !== "follow" || rule.enabled === false) return false;
+      if (tmdbId > 0 && Number(rule.tmdb_id || 0) === tmdbId && String(rule.media_type || "") === mediaType) return true;
+      return !Number(rule.tmdb_id || 0) && String(rule.query || "").toLowerCase() === title;
+    });
+  }
+
+  async function followFeedResult(result) {
+    if (isFollowingFeedResult(result)) {
+      toast("You already follow this title.");
+      return;
+    }
+    try {
+      await feedRuleAction({
+        action: "save",
+        name: itemTitle(result),
+        scope: "user",
+        rule_type: "follow",
+        query: itemTitle(result),
+        media_type: ["movie", "tv"].includes(String(result.media_type || "")) ? result.media_type : "",
+        tmdb_id: Number(result.tmdb_id || 0),
+        filters: { playable_only: true },
+        actions: { notify: "instant", queue_suggest: true },
+      });
+      toast("Now following " + itemTitle(result) + ".");
+      renderFeeds();
+    } catch (error) {
+      toast(error.message || "Follow could not be saved.", "error");
+    }
+  }
+
+  function feedReleaseComparison(result) {
+    const releases = Array.isArray(result?.releases) ? result.releases : [];
+    if (!releases.length) return null;
+    const details = node("details", "feed-release-comparison");
+    const summary = node("summary", "", releases.length + " release" + (releases.length === 1 ? "" : "s") + " • " + Number(result.source_count || 0) + " source" + (Number(result.source_count || 0) === 1 ? "" : "s"));
+    details.appendChild(summary);
+    const list = node("div", "feed-release-list");
+    releases.forEach((release) => {
+      const row = node("div", "feed-release-row");
+      const left = node("div");
+      left.append(
+        node("div", "feed-release-name", release.release_title || "Release"),
+        node("div", "feed-meta", [
+          release.source_label || "",
+          release.resolution || "",
+          release.codec || "",
+          Array.isArray(release.hdr_tags) && release.hdr_tags.length ? release.hdr_tags.join("/") : "",
+          Number(release.seeds || 0) > 0 ? Number(release.seeds) + " seeds" : "",
+          formatFeedBytes(release.file_size),
+        ].filter(Boolean).join(" • ")),
+      );
+      if (release.release_group) {
+        left.appendChild(node("div", "feed-meta", "Group: " + release.release_group));
+      }
+      row.appendChild(left);
+      list.appendChild(row);
+    });
+    details.appendChild(list);
+    return details;
+  }
+
   function openFeedEditor(source = null) {
     const backdrop = node("div", "modal-backdrop");
     const modal = node("section", "modal");
