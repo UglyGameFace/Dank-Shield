@@ -3463,6 +3463,10 @@ function renderStartupDiagnostics(server={{}}) {{
   const browserEl=document.getElementById("browserStartup");
   if(serverEl) {{
     const bits=[];
+    if(Number(server.metadata_ms||0)>0)
+      bits.push("metadata "+fmtDiagnosticMs(server.metadata_ms));
+    if(Number(server.session_ready_ms||0)>0)
+      bits.push("session "+fmtDiagnosticMs(server.session_ready_ms));
     if(Number(server.first_request_ms||0)>0)
       bits.push("request "+fmtDiagnosticMs(server.first_request_ms));
     if(Number(server.first_wait_ms||0)>0)
