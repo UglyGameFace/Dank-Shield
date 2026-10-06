@@ -689,8 +689,13 @@
     }
     if (kind === "episode") {
       art.appendChild(node("span", "card-badge", `S${item.season_number || 0} E${item.episode_number || 0}`));
-    } else if (item.playable) {
-      art.appendChild(node("span", "card-badge", "Playable"));
+    } else if (item.available_now || item.playable) {
+      art.appendChild(node("span", "card-badge", item.available_now ? "Available" : "Playable"));
+    }
+    if (item.availability_label && !item.available_now) {
+      art.appendChild(node("span", "card-badge card-badge-right", String(item.availability_label)));
+    } else if (item.favorite) {
+      art.appendChild(node("span", "card-badge card-badge-right", "Favorite"));
     }
     const ratio = Number(item.progress_ratio || 0);
     if (ratio > 0 && ratio < 1) {
@@ -706,6 +711,7 @@
       node("div", "card-title", itemTitle(item)),
       node("div", "card-meta", metadataLine(item)),
     );
+    if (item.reason) copy.appendChild(node("div", "card-reason", String(item.reason)));
     card.append(art, copy);
 
     const target = detailsTarget(item);
@@ -728,15 +734,24 @@
       card.addEventListener("click", () => go(`search?q=${encodeURIComponent(itemTitle(item))}`));
     }
 
-    if (["movie", "tv"].includes(kind) && Number(item.tmdb_id || 0) > 0) {
+    if (["movie", "tv", "episode"].includes(kind) && Number(item.tmdb_id || 0) > 0) {
       const hover = node("div", "card-hover");
-      const add = button(item.watchlisted ? icon.check : icon.add, `mini-action ${item.watchlisted ? "active" : ""}`);
-      add.setAttribute("aria-label", item.watchlisted ? "Remove from Watchlist" : "Add to Watchlist");
-      add.addEventListener("click", (event) => {
+      if (["movie", "tv"].includes(kind)) {
+        const add = button(item.watchlisted ? icon.check : icon.add, `mini-action ${item.watchlisted ? "active" : ""}`);
+        add.setAttribute("aria-label", item.watchlisted ? "Remove from Watchlist" : "Add to Watchlist");
+        add.addEventListener("click", (event) => {
+          event.stopPropagation();
+          toggleWatchlist(item, !item.watchlisted);
+        });
+        hover.appendChild(add);
+      }
+      const favorite = button("♥", `mini-action ${item.favorite ? "active" : ""}`);
+      favorite.setAttribute("aria-label", item.favorite ? "Remove from Favorites" : "Add to Favorites");
+      favorite.addEventListener("click", (event) => {
         event.stopPropagation();
-        toggleWatchlist(item, !item.watchlisted);
+        toggleFavorite(item, !item.favorite);
       });
-      hover.appendChild(add);
+      hover.appendChild(favorite);
       card.appendChild(hover);
     }
     return card;
