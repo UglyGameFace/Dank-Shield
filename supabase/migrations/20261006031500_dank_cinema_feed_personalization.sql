@@ -30,6 +30,7 @@ create table if not exists public.dank_cinema_feed_rules (
                 'person',
                 'genre',
                 'studio',
+                'franchise',
                 'private_source'
             )
         ),
