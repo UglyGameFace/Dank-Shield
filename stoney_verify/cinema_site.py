@@ -2487,12 +2487,16 @@ async def cinema_library_api(request: web.Request) -> web.Response:
 
     try:
         if action == "save_list":
+            try:
+                list_position = max(0, int(payload.get("position") or 0))
+            except Exception as exc:
+                raise InvalidCinemaState("Cinema list position is invalid.") from exc
             row = await save_custom_list(
                 user_id,
                 name=str(payload.get("name") or ""),
                 description=str(payload.get("description") or ""),
                 list_id=str(payload.get("list_id") or ""),
-                position=max(0, int(payload.get("position") or 0)),
+                position=list_position,
             )
             return web.json_response({"ok": True, "list": row})
 
@@ -2568,6 +2572,10 @@ async def cinema_library_api(request: web.Request) -> web.Response:
                 watched=bool(payload.get("watched", True)),
             )
         elif action == "list_item":
+            try:
+                item_position = max(0, int(payload.get("position") or 0))
+            except Exception as exc:
+                raise InvalidCinemaState("Cinema list item position is invalid.") from exc
             row = await set_custom_list_item(
                 user_id,
                 list_id=str(payload.get("list_id") or ""),
@@ -2578,7 +2586,7 @@ async def cinema_library_api(request: web.Request) -> web.Response:
                 title=str(target["title"]),
                 metadata=target["metadata"],
                 enabled=bool(payload.get("enabled", True)),
-                position=max(0, int(payload.get("position") or 0)),
+                position=item_position,
             )
         else:
             raise InvalidCinemaState("Unsupported Cinema library action.")
