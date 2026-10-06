@@ -262,6 +262,8 @@ class TorrentStreamSession:
     last_piece: int
     created_at: float
     last_access: float
+    startup_started_at: float = 0.0
+    metadata_ready_at: float = 0.0
     candidates: tuple[TorrentFileCandidate, ...] = ()
     smoothed_download_rate: float = 0.0
     smoothed_consume_rate: float = 0.0
@@ -902,6 +904,7 @@ class TorrentMediaManager:
         if not identity:
             raise ValueError("That is not a valid BitTorrent magnet link.")
 
+        startup_started_at = time.monotonic()
         await self.cleanup_expired()
         async with self._identity_lock(identity):
             existing = await self._reuse_session(
@@ -926,6 +929,7 @@ class TorrentMediaManager:
                 atp.save_path = str(save_root)
                 handle = self._session.add_torrent(atp)
                 info = await self._wait_metadata(handle)
+                metadata_ready_at = time.monotonic()
                 return await self._finalize_session(
                     token=token,
                     save_root=save_root,
@@ -938,6 +942,8 @@ class TorrentMediaManager:
                     lease_key=lease_key,
                     replace_token=replace_token,
                     start_rss_mb=start_rss_mb,
+                    startup_started_at=startup_started_at,
+                    metadata_ready_at=metadata_ready_at,
                 )
             except Exception:
                 self._safe_remove_handle(handle)
@@ -962,6 +968,7 @@ class TorrentMediaManager:
         if not data or len(data) > self.max_metadata_bytes:
             raise ValueError("The .torrent metadata file is empty or exceeds the configured limit.")
 
+        startup_started_at = time.monotonic()
         await self.cleanup_expired()
         token = secrets.token_urlsafe(18)
         save_root = Path(tempfile.mkdtemp(prefix=f"{token}-", dir=str(self.root)))
@@ -971,6 +978,7 @@ class TorrentMediaManager:
         reserved = False
         try:
             info = self.lt.torrent_info(str(torrent_path))
+            metadata_ready_at = time.monotonic()
             source_identity = self._info_identity(info)
             async with self._identity_lock(source_identity):
                 existing = await self._reuse_session(
@@ -1151,6 +1159,8 @@ class TorrentMediaManager:
         lease_key: str = "",
         replace_token: str = "",
         start_rss_mb: float | None = None,
+        startup_started_at: float = 0.0,
+        metadata_ready_at: float = 0.0,
     ) -> TorrentStreamSession:
         candidates = self._playable_candidates(info)
         if not candidates:
@@ -1166,6 +1176,7 @@ class TorrentMediaManager:
         if piece_length <= 0:
             raise RuntimeError("Torrent metadata reported an invalid piece length.")
 
+        session_created_at = time.monotonic()
         session = TorrentStreamSession(
             token=token,
             secret=secrets.token_urlsafe(24),
@@ -1185,8 +1196,18 @@ class TorrentMediaManager:
             piece_length=piece_length,
             first_piece=0,
             last_piece=0,
-            created_at=time.monotonic(),
-            last_access=time.monotonic(),
+            created_at=session_created_at,
+            last_access=session_created_at,
+            startup_started_at=(
+                float(startup_started_at)
+                if float(startup_started_at or 0.0) > 0
+                else session_created_at
+            ),
+            metadata_ready_at=(
+                float(metadata_ready_at)
+                if float(metadata_ready_at or 0.0) > 0
+                else session_created_at
+            ),
             leases={str(lease_key).strip()[:180]} if str(lease_key or "").strip() else set(),
             lease_guild_ids=(
                 {str(lease_key).strip()[:180]: int(guild_id)}
@@ -1516,7 +1537,23 @@ class TorrentMediaManager:
             except Exception:
                 return 0
 
+        startup_origin = float(getattr(session, "startup_started_at", 0.0) or 0.0)
+        metadata_ready = float(getattr(session, "metadata_ready_at", 0.0) or 0.0)
+        finalized = float(getattr(session, "created_at", 0.0) or 0.0)
+        metadata_ms = (
+            max(0, int(round((metadata_ready - startup_origin) * 1000.0)))
+            if startup_origin > 0 and metadata_ready >= startup_origin
+            else 0
+        )
+        finalize_ms = (
+            max(0, int(round((finalized - startup_origin) * 1000.0)))
+            if startup_origin > 0 and finalized >= startup_origin
+            else 0
+        )
+
         return {
+            "metadata_ms": metadata_ms,
+            "session_ready_ms": finalize_ms,
             "request_count": max(0, int(state.get("request_count", 0) or 0)),
             "first_request_ms": _ms("first_request_from_start_ms"),
             "first_range_start": max(0, int(state.get("first_range_start", 0) or 0)),
