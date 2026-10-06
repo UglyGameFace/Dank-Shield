@@ -1711,6 +1711,9 @@ Expanded RSS / Feed Center contract:
 - new-episode/feed-match alerts use the existing Cinema inbox with dedupe and instant/daily/off behavior rather than unsolicited DMs;
 - source trust is derived from durable refresh success/failure and playable-result history;
 - Add to Queue uses the canonical MovieNightRoom queue and exact source resolver, and only succeeds for the current signed-in host of an active room;
+- Feed Rules include title, franchise, actor/creator, genre, studio, saved search, filter, collection, routing, and private-source matching;
+- release filters include playable-only, minimum seeds/peers, resolution, codec, language, HDR, subtitles, excluded terms, source/category, and minimum/maximum file size;
+- shared and private structured feeds participate in a durable bounded auto-refresh scheduler (15-minute default, 5-minute floor, paced requests, bounded batches); private refresh remains owner-isolated;
 - raw magnet/torrent/source refs remain excluded from Feed Center and personalization payloads;
 - a new service-role-only migration owns Feed Rules, private discoveries, and durable source health; Cinema SQL CI replays and audits both Cinema migrations.
 
