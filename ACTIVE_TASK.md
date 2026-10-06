@@ -2,133 +2,103 @@
 
 ## Active task / outcome
 
-**DANK-CINEMA-FAST-START-CANARY — minimize healthy-swarm startup latency without weakening playback safety**
+**DANK-CINEMA-FAST-START-FOLLOWUP — diagnose and remove remaining startup latency on healthy live swarms**
 
 Production baseline:
-`main@fd4fc7ba7e6650d33cb8f56890fd71abdb4fa1fd` (PR #462 merged).
+`main@deeeb00fb61468efafef49f2e59d9e50854f2de7` (PR #463 merged).
 
 Active branch:
-`fix/cinema-faster-startup`
+`fix/cinema-playback-startup-followup`
 
 Outcome:
-When a valid Cinema release has a healthy swarm, Dank Cinema should connect to useful peers quickly, prioritize the exact startup bytes the browser needs, and avoid imposing an unnecessary process download bottleneck. Provider-reported seed counts must also be labeled truthfully so users do not mistake index metadata for already-connected peers.
+When Dank Cinema has a genuinely healthy **live** swarm, playback should reach the first rendered frame as quickly as the browser/container/network path allows. The previous fast-start changes improved connection fan-out and time-critical piece scheduling, but the production canary still showed unacceptable startup latency even with roughly **152 connected seeds / 193 peers at ~3.9 MiB/s**. That means the active task is **not complete**.
+
+## Product/browser scope
+
+Dank Cinema is a **cross-browser product**, not a Samsung-only product.
+
+Required compatibility/validation includes:
+- Chromium-based desktop browsers;
+- Chrome/Chromium on Android;
+- Samsung Internet;
+- Firefox-family browsers where supported by the media stack;
+- Safari/WebKit on supported Apple devices;
+- tablet/mobile/desktop layouts and playback behavior.
+
+Samsung Internet is one real-device canary because it is currently available for production testing. It is **not** the implementation target and must never be used as justification for browser-specific architecture unless a proven browser defect requires an isolated compatibility path.
 
 ## Scope
 
-This remains the single active production-playback task.
+This remains the single active engineering task.
 
-- Preserve the canonical torrent runtime, MovieNightRoom model, signed byte-range stream, adaptive buffering, and all RAM/disk/session admission guards.
-- Preserve Automatic/manual source selection and current browser-audio safety ranking.
-- Improve initial peer fan-out for newly started torrents.
-- Use libtorrent's streaming-specific time-critical piece mechanism for requested playback bytes.
-- Do not let MP4 tail-probe work compete with the startup range as time-critical.
-- Raise the old conservative process download ceiling enough that a healthy swarm is not artificially limited by Dank Cinema.
-- Keep settings configurable for operators and document the production values.
-- Clearly distinguish provider-reported seed counts from live connected swarm telemetry.
-- Exact-head CI, diff cleanup, and a Samsung Browser healthy-swarm canary are required before completion.
+- Measure the real startup path instead of assuming seed count alone determines startup.
+- Trace `Play -> Watch state -> video src -> browser Range request -> torrent wait_for_range -> first 206 bytes -> media metadata readiness -> play()`.
+- Determine where time is spent when live connected peers and throughput are already healthy.
+- Inspect startup range size, bootstrap bytes, adaptive buffer target, browser media-probe/range behavior, MP4/MKV metadata placement, audio-compat sidecar interaction, and any duplicated waits.
+- Preserve current peer fan-out, time-critical piece deadlines, source selection, signed streaming, admission controls, and session safety unless evidence shows they are causal.
+- Do not lower buffers blindly if that merely trades startup delay for immediate rebuffering.
+- Add instrumentation/regressions sufficient to distinguish swarm acquisition latency from server buffering, container/media probing, browser readiness, and player-start latency.
+- Validate behavior across the supported browser classes above, not only Samsung Internet.
 
 ## Status
 
-**Implementation is in draft PR #463. Exact-head CI on implementation head `13b8183bb1a1213cf0751850c4abe155d7d13b68` passed all required workflow families. This record-only update is the final branch change before rechecking exact-head status and moving to the production canary.**
+**Production canary failed the intended outcome: playback still felt slow despite a strong live swarm. Investigation must continue from the measured startup path.**
 
-## Findings / root cause
+Known production evidence:
+- PR #463 merged successfully.
+- Fast-start env values were added to production.
+- Theater reported live swarm telemetry rather than only provider metadata.
+- Canary screenshot showed approximately `152 connected seeds / 193 peers` and `3.9 MiB/s`.
+- Despite that, first playback still did not feel fast enough.
 
-1. A source card showing, for example, 100+ seeds does **not** mean Dank Cinema already has 100 seed connections. That number is provider/index metadata collected before the torrent session exists. The Watch player already switches to live libtorrent `num_seeds/num_peers` after peers connect, but the Details card simply said “seeds,” which made the distinction invisible.
-2. The production torrent session was configured with a process-wide connection limit of only **80**, while libtorrent itself supports a much larger normal peer pool. New torrents also relied on default connection-attempt pacing instead of an explicit fast-start policy.
-3. The old process download cap was **16 MiB/s**. That is plenty for many movies once buffered, but it can unnecessarily cap how quickly a healthy swarm builds the first playback buffer.
-4. Requested and readahead pieces were correctly given high normal priorities, but Dank Cinema did not use libtorrent's dedicated **time-critical piece deadlines**. Normal priority influences the picker; time-critical deadlines activate the streaming scheduler that attempts to source urgent blocks from peers with the shortest estimated queues.
-5. The startup buffer itself is already bounded and sensible: the player waits for the requested first chunk plus a small startup window rather than downloading the whole file. The missing optimization was getting those pieces from the swarm faster, not blindly shrinking the buffer and inviting stalls.
-6. DHT remains enabled. LSD/UPnP/NAT-PMP remain disabled because they do not materially improve a cloud-hosted public torrent client and broadening network behavior without evidence would be cargo-cult tuning.
+This evidence rules out the simplistic explanation that the delay is merely "not enough seeds." The next fix must be based on measured stage timing.
 
-## Execution path
+## Findings so far
 
-`Play Here / selected source -> canonical variant -> start_room_variant -> TorrentMediaManager.start_magnet/start_torrent_bytes -> libtorrent peer discovery -> selected-file bootstrap priority -> browser Range request -> time-critical startup piece deadlines -> bounded startup buffer -> progressive 206 stream`.
+1. Provider-reported seed counts and live connected peers are distinct; Theater now exposes the live swarm.
+2. The torrent runtime now has aggressive peer fan-out and time-critical requested-piece deadlines.
+3. A healthy live swarm can still coexist with poor startup if the bottleneck is:
+   - waiting for too much initial byte range;
+   - repeated/overlapping buffer waits;
+   - container metadata not yet available where the browser expects it;
+   - browser issuing a different initial Range than our bootstrap assumption;
+   - media-element readiness/play gating;
+   - compatibility-audio startup;
+   - origin/Cloudflare interruption;
+   - or another server/player handoff delay.
+4. The production screenshot provides enough live-swarm evidence that further connection-limit guessing would be unjustified.
 
-Automatic source choice remains:
-`preferred provider (when configured) -> canonical variant ranking -> nonzero swarm -> browser audio safety -> reported seeds/ratio -> quality efficiency -> size`.
+## Validation / Definition of Done
 
-## Changes
-
-### Peer startup
-- Raised default process-wide `DANK_TORRENT_CONNECTION_LIMIT` from 80 to **200**.
-- Added `DANK_TORRENT_CONNECTION_SPEED=80` so new peer attempts can fan out faster.
-- Added `DANK_TORRENT_CONNECT_BOOST=80` so newly started torrents can immediately try more peer candidates after discovery.
-- Added `DANK_TORRENT_PEER_CONNECT_TIMEOUT_SECONDS=8` so dead/unresponsive endpoints stop occupying startup attempts as long as the previous 15-second-style behavior.
-- Raised the configurable process download ceiling from 16 MiB/s to **64 MiB/s**. Existing RAM/disk/session admission limits remain unchanged.
-- Kept upload capped at 512 KiB/s.
-
-### Streaming-piece urgency
-- Added `DANK_TORRENT_TIME_CRITICAL_BASE_DEADLINE_MS=500`.
-- Added `DANK_TORRENT_TIME_CRITICAL_STEP_MS=350`.
-- Requested playback pieces now receive libtorrent `set_piece_deadline()` deadlines in addition to priority 7.
-- Readahead remains priority 6.
-- The MP4/MOV tail metadata probe remains prioritized but is explicitly **not** time-critical, so it cannot compete with head/startup bytes.
-- Deadline support gracefully falls back to the existing priority behavior if an alternate binding lacks the API.
-
-### Truthful telemetry
-- Details source cards now say **reported seeds**.
-- The Watch player remains authoritative for actual connected/live seed, peer, download-rate, and buffer telemetry.
-
-### Deployment/docs
-- Updated `.env.example`, public production env docs, and the torrent runbook with the new connection/rate/deadline settings.
-- Documentation explicitly warns that existing Discloud environment variables override code defaults. A production deployment still pinning the old 80 / 16 MiB/s values must be updated there for the new tuning to take effect.
-- Cinema site JS asset version bumped from v15 to v16 for the seed-label change.
-
-## Validation / results
-
-Added focused regressions for:
-- fast-start libtorrent defaults;
-- time-critical deadlines on requested playback pieces;
-- readahead remaining ordinary priority;
-- tail probe not receiving competing time-critical deadlines;
-- truthful “reported seeds” source-card copy;
-- updated site asset version.
-
-Confirmed by inspection:
-- no second torrent downloader, provider resolver, stream server, or buffer implementation was added;
-- adaptive buffering and byte-range correctness remain authoritative;
-- existing memory, disk, per-guild, soft/hard session, and lease guards remain unchanged;
-- no sequential-download mode was added;
-- source selection rules remain unchanged;
-- settings remain operator-overridable.
-
-Validated on implementation head `13b8183bb1a1213cf0751850c4abe155d7d13b68`:
-- Dank Shield CI: success;
-- Dank Design Regression CI: success;
-- Dank Cinema SQL: success;
-- Application Command Size Diagnostics: success;
-- Profile Runtime Diagnostics: success;
-- Ticket Owner Emergency Override: success;
-- PR remained mergeable;
-- final diff review found no conflict markers, debug leftovers, or secret-bearing changes.
-
-Pending:
-- exact-head recheck after this task-record-only commit;
-- production env verification/update for the newly documented swarm values;
-- Samsung Browser healthy-swarm canary comparing provider-reported availability against actual live connected peers/download rate and time-to-first-play.
-
-## Cleanup / conflicts
-
-- PR #462 is merged and untouched.
-- This branch starts from its production merge commit.
-- No feed-art/TMDB enrichment work is included; that remains backlogged.
-- No unrelated Dank Shield cleanup is included.
-
-## Blockers / risks
-
-- High reported seed counts can still correspond to few reachable/fast peers. Dank Cinema can connect aggressively, but it cannot force remote peers to upload faster.
-- A Discloud network/container ceiling below 64 MiB/s will remain the real cap regardless of application configuration.
-- Explicit old torrent env values on Discloud will override these new code defaults until changed.
-- More peer attempts increase network/socket activity, so the production canary must confirm startup improvement without destabilizing the bot process.
+The task is not complete until:
+- stage timing identifies the dominant startup delay;
+- the smallest structural fix is implemented;
+- focused and relevant regressions pass;
+- exact-head CI passes;
+- no duplicate waits/fallbacks/temporary instrumentation remain;
+- startup is canaried with at least one healthy source;
+- browser behavior is reviewed across the supported browser classes, with real-device/browser evidence where available;
+- remaining browser-specific limitations are stated explicitly.
 
 ## Backlog
 
-- Canonical TMDB enrichment/artwork for **From Your Feeds**.
-- Investigate recurring Cloudflare/origin 502 separately if it reappears independently of playback.
+These are real issues but **not active** because no FORCE SWITCH was given:
+
+- **Audio-track selector:** clicking Audio Track currently opens a tiny blank dropdown. Investigation already found the UI depends on `video.audioTracks`, which is not a reliable cross-browser source of selectable tracks; server-verified ffprobe/PyAV audio metadata should likely become authoritative. Do not implement until the active startup-latency task is complete or explicitly force-switched.
+- **Home Resume:** Continue Watching hero Resume can do nothing.
+- **Transient Cloudflare/origin 502:** one retry succeeded; investigate separately if it recurs enough to block playback.
+- **From Your Feeds artwork:** canonical TMDB enrichment/poster identity for feed releases.
+
+## Cleanup / conflicts
+
+- The prematurely created `fix/cinema-audio-track-selector` branch contains no code changes and is identical to production main.
+- No audio-selector implementation has been started.
+- PR #463 is merged and remains the authoritative fast-start baseline.
+- No unrelated cleanup is included.
 
 ## Next step
 
-Recheck PR #463 exact-head CI after this record-only commit, then use the merge/deploy canary to verify the effective production env values and measure the first-buffer path on Samsung Browser with a healthy source.
+Instrument and trace the full startup path on this branch so the next change is based on measured elapsed time between torrent start, first requested range, range availability, first response bytes, media readiness, and actual play start. Do not guess from seed count alone.
 
 ---
 
