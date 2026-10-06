@@ -8,6 +8,7 @@ movie_night_web remain the playback/session authority.
 """
 
 import asyncio
+import hashlib
 import html
 import json
 import os
@@ -716,7 +717,7 @@ def _cinema_entry_html(
   <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=9">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=10">
 </head>
 <body>
   <div class="app-shell">
@@ -1406,6 +1407,15 @@ def _standalone_channel_id(user_id: int) -> int:
     return -abs(int(user_id))
 
 
+def _source_choice_id(source_ref: Any) -> str:
+    """Return a stable opaque browser-safe id without exposing a magnet/torrent URL."""
+
+    raw = str(source_ref or "").strip()
+    if not raw:
+        return ""
+    return hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()[:24]
+
+
 def _active_rooms_payload(guild_id: int, user_id: int) -> list[dict[str, Any]]:
     manager = get_movie_night_manager()
     rows: list[dict[str, Any]] = []
@@ -2054,6 +2064,7 @@ async def cinema_details_api(request: web.Request) -> web.Response:
                     {
                         "source_id": str(variant.source_id or ""),
                         "source_label": str(variant.source_label or "Cinema source"),
+                        "source_choice": _source_choice_id(variant.source_ref),
                         "title": str(variant.title or "")[:180],
                         "file_size": int(variant.file_size or 0),
                         "seeds": seeds,
@@ -2217,6 +2228,7 @@ async def cinema_play_api(request: web.Request) -> web.Response:
         payload = {}
 
     requested_room_id = str(payload.get("room_id") or "").strip()
+    requested_source_choice = str(payload.get("source_choice") or "").strip()[:64]
     media_type = str(payload.get("media_type") or "").strip().lower()
     manager = get_movie_night_manager()
 
@@ -2316,6 +2328,21 @@ async def cinema_play_api(request: web.Request) -> web.Response:
             text="No playable source currently matches this exact Cinema title."
         )
 
+    requested_source_ref = ""
+    if requested_source_choice:
+        requested_source_ref = next(
+            (
+                str(item.source_ref or "")
+                for item in variants
+                if _source_choice_id(item.source_ref) == requested_source_choice
+            ),
+            "",
+        )
+        if not requested_source_ref:
+            raise web.HTTPConflict(
+                text="That Cinema source changed or is no longer available. Refresh the title and try again."
+            )
+
     if room is None:
         # Create the website-only room only after a real playable source exists.
         # That avoids leaving dead sessions behind for failed searches.
@@ -2382,7 +2409,17 @@ async def cinema_play_api(request: web.Request) -> web.Response:
     if not ranked:
         raise web.HTTPConflict(text="No playable release remains for this title.")
 
-    selected = await select_preferred_variant(user_id, ranked)
+    if requested_source_ref:
+        selected = next(
+            (
+                item
+                for item in ranked
+                if str(item.source_ref or "") == requested_source_ref
+            ),
+            None,
+        )
+    else:
+        selected = await select_preferred_variant(user_id, ranked)
     if selected is None:
         raise web.HTTPConflict(text="No playable release remains for this title.")
 
@@ -2408,6 +2445,7 @@ async def cinema_play_api(request: web.Request) -> web.Response:
             "source": {
                 "source_id": str(selected.source_id or ""),
                 "source_label": str(selected.source_label or "Cinema source"),
+                "selection_mode": "manual" if requested_source_ref else "automatic",
             },
         }
     )
@@ -3032,12 +3070,12 @@ def _site_html(guild_id: int, user_id: int) -> str:
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=9">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=10">
 </head>
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=13" defer></script>
+  <script src="/cinema/assets/site.js?v=14" defer></script>
 </body>
 </html>"""
 
