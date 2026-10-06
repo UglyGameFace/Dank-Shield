@@ -1448,6 +1448,12 @@ def _cache_source_snapshot(
     query: str,
     outcome: Any,
 ) -> None:
+    variants = tuple(getattr(outcome, "variants", ()) or ())
+    if not variants:
+        # Never pin an empty/flaky provider response. A subsequent Play should
+        # get one fresh chance instead of inheriting a 90-second false negative.
+        return
+
     now = time.monotonic()
     expired = [
         key
@@ -1480,13 +1486,14 @@ def _cached_source_snapshot(
     tmdb_id: int,
 ) -> Optional[tuple[dict[str, Any], str, Any]]:
     key = _source_snapshot_key(guild_id, user_id, media_type, tmdb_id)
-    cached = _SOURCE_SNAPSHOT_CACHE.get(key)
+    cached = _SOURCE_SNAPSHOT_CACHE.pop(key, None)
     if cached is None:
         return None
     expires_at, metadata, query, outcome = cached
     if float(expires_at) <= time.monotonic():
-        _SOURCE_SNAPSHOT_CACHE.pop(key, None)
         return None
+    # Details -> Play is a one-shot consistency bridge, not a long-lived source
+    # cache. Consuming it prevents a later play from inheriting an old release.
     return dict(metadata), str(query or ""), outcome
 
 
