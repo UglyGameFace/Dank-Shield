@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from stoney_verify import (
     cinema_catalog,
+    cinema_discovery_service,
     cinema_feed_service,
     cinema_site,
     cinema_site_auth,
@@ -808,7 +809,7 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'initialUrl.searchParams.delete("sig")' in script
     assert 'history.replaceState(' in script
     assert 'return `${path}${AUTH_QUERY ? join + AUTH_QUERY.slice(1) : ""}`;' in script
-    assert 'src="/cinema/assets/site.js?v=9"' in source
+    assert 'src="/cinema/assets/site.js?v=10"' in source
     assert '"/cinema/{guild_id}/api/auth-debug"' in source
     assert "def _cinema_auth_debug_payload(" in source
     assert "signed-session-v8-snowflake-safe" in source
@@ -1033,8 +1034,8 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert 'b.append(uiIcon(iconName), node("span", "bottom-nav-label", label))' in script
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
-    assert 'href="/cinema/assets/site.css?v=5"' in source
-    assert 'src="/cinema/assets/site.js?v=9"' in source
+    assert 'href="/cinema/assets/site.css?v=6"' in source
+    assert 'src="/cinema/assets/site.js?v=10"' in source
 
 
 def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop() -> None:
@@ -1049,7 +1050,7 @@ def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop
         'content="width=device-width,initial-scale=1,minimum-scale=1,'
         'viewport-fit=cover,interactive-widget=resizes-content">'
     ) in source
-    assert 'href="/cinema/assets/site.css?v=5"' in source
+    assert 'href="/cinema/assets/site.css?v=6"' in source
 
     assert "--content:min(1560px,calc(100vw - 48px))" in styles
     assert "@media(min-width:1800px)" in styles
@@ -1268,59 +1269,125 @@ def test_structured_search_refresh_keeps_category_default_query(monkeypatch) -> 
     assert captured == ["movie"]
 
 
-def test_feed_state_returns_real_recent_discoveries(monkeypatch) -> None:
+def test_feed_state_returns_real_paged_discoveries(monkeypatch) -> None:
+    row = {
+        "guild_id": 123,
+        "source_id": "eztv",
+        "discovery_key": "abc",
+        "title": "Example Show",
+        "media_type": "tv",
+        "tmdb_id": 42,
+        "metadata": {
+            "source_label": "EzTV",
+            "category": "tv",
+            "release_title": "Example.Show.S03E09.1080p",
+            "poster_url": "https://image.tmdb.org/t/p/w500/example.jpg",
+            "year": 2026,
+            "rating": 8.1,
+        },
+        "playable": True,
+        "first_seen_at": "2026-10-05T21:30:00+00:00",
+        "last_seen_at": "2026-10-05T21:35:00+00:00",
+    }
+
     async def fake_registry(_guild_id: int, *, refresh: bool = False):
         return {}, SimpleNamespace(revision=7, sources=[])
 
-    async def fake_recent(_guild_id: int, *, limit: int = 30):
-        assert limit == 36
-        return [
-            {
-                "guild_id": 123,
-                "source_id": "eztv",
-                "discovery_key": "abc",
-                "title": "Example Show",
-                "media_type": "tv",
-                "tmdb_id": 42,
-                "metadata": {
-                    "source_label": "EzTV",
-                    "category": "tv",
-                    "release_title": "Example.Show.S03E09.1080p",
-                    "poster_url": "https://image.tmdb.org/t/p/w500/example.jpg",
-                    "year": 2026,
-                    "rating": 8.1,
-                },
-                "playable": True,
-                "first_seen_at": "2026-10-05T21:30:00+00:00",
-                "last_seen_at": "2026-10-05T21:35:00+00:00",
-            }
-        ]
+    async def fake_page(_guild_id: int, *, query: str, page: int, page_size: int):
+        assert query == "Example"
+        assert page == 2
+        assert page_size == 8
+        return {
+            "rows": [row],
+            "query": query,
+            "page": 2,
+            "page_size": 8,
+            "total": 17,
+            "total_pages": 3,
+            "has_previous": True,
+            "has_next": True,
+        }
+
+    async def fake_enrich(_guild_id: int, rows, *, max_items: int = 4):
+        assert max_items == 4
+        return list(rows)
 
     monkeypatch.setattr(cinema_feed_service, "load_media_source_registry", fake_registry)
-    monkeypatch.setattr(cinema_feed_service, "list_recent_discoveries", fake_recent)
+    monkeypatch.setattr(cinema_feed_service, "page_discoveries", fake_page)
+    monkeypatch.setattr(cinema_feed_service, "enrich_discovery_rows", fake_enrich)
 
     data = asyncio.run(
         cinema_feed_service.feed_state(
             123,
             can_manage=True,
             refresh=False,
+            query="Example",
+            page=2,
+            page_size=8,
         )
     )
 
     assert data["revision"] == 7
     assert data["results_warning"] == ""
+    assert data["pagination"] == {
+        "query": "Example",
+        "page": 2,
+        "page_size": 8,
+        "total": 17,
+        "total_pages": 3,
+        "has_previous": True,
+        "has_next": True,
+    }
     assert len(data["results"]) == 1
     result = data["results"][0]
-    assert result["result_kind"] == "feed_discovery"
     assert result["source_id"] == "eztv"
-    assert result["source_label"] == "EzTV"
-    assert result["category"] == "tv"
     assert result["title"] == "Example Show"
-    assert result["release_title"] == "Example.Show.S03E09.1080p"
-    assert result["media_type"] == "tv"
     assert result["tmdb_id"] == 42
     assert result["poster_url"].endswith("example.jpg")
-    assert result["playable"] is True
+
+
+def test_episode_release_enrichment_retries_without_year_and_forces_tv(monkeypatch) -> None:
+    queries: list[str] = []
+
+    async def fake_search(query: str, *, limit: int, include_adult: bool):
+        queries.append(query)
+        assert limit == 8
+        assert include_adult is False
+        if query == "collision":
+            return (
+                CinemaMedia(
+                    media_type="tv",
+                    tmdb_id=331033,
+                    title="Collision",
+                    year=2026,
+                    poster_url="https://image.tmdb.org/t/p/w500/collision.jpg",
+                ),
+            )
+        return ()
+
+    monkeypatch.setattr(cinema_discovery_service, "search_catalog", fake_search)
+
+    media = asyncio.run(
+        cinema_discovery_service._resolve_media(
+            "Collision 2026 S01E21 1080p HEVC x265-MeGusta",
+            "custom",
+        )
+    )
+
+    assert queries[0] == "collision"
+    assert media is not None
+    assert media.media_type == "tv"
+    assert media.tmdb_id == 331033
+    assert media.poster_url.endswith("collision.jpg")
+
+
+def test_feed_discovery_query_builder_detects_episode_release() -> None:
+    assert cinema_discovery_service._looks_like_episode_release(
+        "Collision.2026.S01E21.1080p"
+    )
+    assert cinema_discovery_service._discovery_search_queries(
+        "Collision 2026 S01E21 1080p HEVC"
+    ) == ("collision", "collision 2026")
 
 
 def test_runtime_feed_result_preserves_real_variant_stats() -> None:
@@ -1370,6 +1437,12 @@ def test_full_site_feed_center_does_not_fake_external_refresh_or_search() -> Non
     assert "last_refresh_result_count" in script
     assert "playable result" in script
     assert "source.discovery_warning" in script
+    assert '"Search feed results…"' in script
+    assert '"Previous"' in script
+    assert '"Next"' in script
+    assert '"feed-page-status"' in script
+    assert "pagination.total_pages" in script
+    assert 'page_size: "8"' in script
     assert 'feedAction({ action: "refresh", source_id: source.source_id })' in script
     assert 'query: "movie"' not in script
     assert "Supports:" in script
