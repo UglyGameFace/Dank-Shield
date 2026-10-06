@@ -59,6 +59,56 @@ def _series() -> CinemaMedia:
     )
 
 
+def test_movie_identity_rejects_explicit_game_and_software_categories() -> None:
+    metadata = {
+        "media_type": "movie",
+        "catalog_id": "123",
+        "title": "Resident Evil",
+        "year": 2026,
+    }
+
+    assert not release_matches_catalog(
+        "Resident Evil (GOG)",
+        metadata,
+        {"source_reported": {"category": "Games"}},
+    )
+    assert not release_matches_catalog(
+        "Resident Evil Requiem voices38",
+        metadata,
+        {"source_reported": {"category": "400"}},
+    )
+    assert not release_matches_catalog(
+        "Resident Evil 2026 installer",
+        metadata,
+        {"source_reported": {"category": "Applications"}},
+    )
+
+
+def test_movie_identity_keeps_video_or_unknown_provider_categories() -> None:
+    metadata = {
+        "media_type": "movie",
+        "catalog_id": "123",
+        "title": "Resident Evil",
+        "year": 2026,
+    }
+
+    assert release_matches_catalog(
+        "Resident Evil 2026 1080p WEB-DL",
+        metadata,
+        {"source_reported": {"category": "Movies"}},
+    )
+    assert release_matches_catalog(
+        "Resident Evil 2026 1080p WEB-DL",
+        metadata,
+        {"source_reported": {"category": "205"}},
+    )
+    assert release_matches_catalog(
+        "Resident Evil 2026 1080p WEB-DL",
+        metadata,
+        {"source_reported": {"category": "custom-release"}},
+    )
+
+
 def test_episode_identity_requires_exact_series_and_episode_marker() -> None:
     metadata = episode_catalog_metadata(series=_series(), episode=_episode())
 
