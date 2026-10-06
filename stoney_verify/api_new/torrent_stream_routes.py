@@ -227,17 +227,25 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
             consumer_key=consumer_key,
         )
         startup_wait_end = max(first_end, plan.startup_wait_end)
+        # A Range client only needs the first response chunk before it can begin
+        # parsing media. Waiting for the entire adaptive startup corridor made
+        # first byte all-or-nothing: one slow piece anywhere in that corridor
+        # held every byte until the 20s buffering timeout. Keep prioritizing the
+        # wider corridor, but gate the first 206 only on its first chunk.
+        initial_wait_end = first_end if partial else startup_wait_end
         wait_started = time.monotonic()
         ready = await manager.wait_range(
             session,
             start,
-            startup_wait_end,
+            initial_wait_end,
             readahead_bytes=plan.target_bytes,
         )
         manager.record_stream_timing(
             session,
             consumer_key,
             event="wait",
+            start=start,
+            end=initial_wait_end,
             elapsed_ms=(time.monotonic() - wait_started) * 1000.0,
             ready=ready,
         )
@@ -273,14 +281,25 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
             headers={"Retry-After": "2", **cors_headers},
         )
 
-    # For a byte-range request, only advertise the contiguous bytes that the
-    # startup wait above has already proven available. Browsers can request the
-    # remainder with the next Range request. This avoids a protocol-invalid
-    # short body when a weak swarm cannot deliver a later chunk in time.
+    # For a byte-range request, advertise only the contiguous prefix that is
+    # actually complete right now. The first chunk is guaranteed by the wait
+    # above; any additional already-complete pieces can ride in the same 206.
+    # Missing later pieces do not block first byte, and we still never promise a
+    # Content-Length that the torrent cannot currently satisfy.
+    buffered_end = startup_wait_end
+    if partial:
+        buffered_end = max(
+            first_end,
+            manager.contiguous_available_end(
+                session,
+                start,
+                startup_wait_end,
+            ),
+        )
     end = _bounded_partial_response_end(
         start,
         requested_end,
-        startup_wait_end,
+        buffered_end,
         partial=partial,
     )
     length = end - start + 1
