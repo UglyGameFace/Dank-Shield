@@ -2,103 +2,151 @@
 
 ## Active task / outcome
 
-**DANK-CINEMA-SOURCE-SELECTION-CANARY — make website source choice obvious without sacrificing one-tap playback**
+**DANK-CINEMA-SOURCE-SELECTION-CANARY — finish production canary: Details reliability and source consistency**
 
 Production baseline:
-`main@72d01609b4970f00f4c62b930f2005bc3387d54e` (PR #460 merged).
+`main@fe27764cb55fca83bbea828b328bf5dc009e0cf4` (PR #461 merged).
 
 Active branch:
-`fix/cinema-site-source-selection`
+`fix/cinema-details-500`
 
 Outcome:
-Keep **Play Here** simple by automatically choosing the best available release, while making the visible **Playback Source** cards real manual overrides. A user who does not care about torrent details should press Play once; a user who does care can tap a source and play that exact release without exposing magnet or .torrent URLs to the browser.
+Finish the same direct-play/source-selection canary by eliminating two production blockers discovered on Samsung Browser:
+
+1. authenticated title Details/Season requests can collapse into an opaque generic 500 when optional Cinema Library storage fails;
+2. the Details page can show playable source cards, then **Play Here** can immediately say no playable source matches because Play performs a second independent provider search.
 
 ## Scope
 
-This is the single active task and a direct continuation of the PR #460 production canary.
+This remains one implementation task because both defects block the same production path:
+`Title Details -> source selection -> Play Here`.
 
-- **Play Here** defaults to automatic best-source selection.
-- Automatic selection continues to use the existing saved preferred provider plus canonical room ranking for browser-audio risk, swarm health, and quality.
-- Movie source cards on the website are selectable manual overrides instead of read-only decoration.
-- Manual selection must start the exact selected release, not merely its provider.
-- The browser receives only an opaque source-choice id; raw magnet/.torrent references remain server-side.
-- A local **Play Automatically / Play Selected Source** button sits beside the source list so mobile users do not have to scroll back to the hero.
-- Direct website playback, Private Session, and Watch Party boundaries from PR #460 remain unchanged.
-- Focused regressions, exact-head CI, diff cleanup, and Samsung Browser canary are required.
+- Keep Discord auth/membership behavior unchanged.
+- Keep PR #461 automatic/manual source UX unchanged.
+- Treat TMDB title/episode metadata as required for Details/Season rendering.
+- Treat per-user Library/progress storage as optional for browsing and playback.
+- Reuse the exact source result shown on Details for the immediate Play request instead of racing a second provider lookup.
+- Keep raw magnet/.torrent references server-side.
+- Preserve automatic ranking and manual exact-release override.
+- Preserve Private Session / Watch Party / standalone separation.
+- Bound any source snapshot cache for production scale.
+- Exact-head CI and Samsung Browser canary are required before completion.
 
 ## Status
 
-**Implementation is on a clean current-main branch; PR and exact-head validation are next.**
+**Implementation is in draft PR #462; the first exact-head CI run exposed three regression failures, and the source-snapshot semantics/tests have been corrected. Fresh exact-head validation is active.**
 
 ## Findings / root cause
 
-1. PR #460 correctly restored direct website playback, but the Details page rendered **Available Cinema Sources** as non-interactive cards.
-2. Pressing **Play Here** already selected a release server-side through `select_preferred_variant()` and the room's `ranked_variants()`, so users who wanted the simplest path were already supposed to get an automatic choice.
-3. The UI did not explain that behavior, and it offered no way to override the automatic choice despite visibly presenting multiple torrent releases. Humans, quite reasonably for once, interpreted visible source cards as controls.
-4. Exposing raw magnet or .torrent URLs to make those cards selectable would weaken the existing browser/server boundary. The correct implementation is an opaque choice id that is re-resolved against the fresh exact-title provider result during `/api/play`.
-5. PR #460 has already merged. The source-selector follow-up is therefore replayed from production `main@72d0160...` instead of extending the merged PR branch.
+1. The screenshot auth diagnostics are healthy: signed/session/identity valid, bot guild present, member not revoked. Missing guild proof in the earlier screenshot was not causal because the signed/session path already authenticated the request.
+2. The generic Details error came from an unguarded `asyncio.gather(get_details(...), list_user_media(...))`. Required TMDB metadata and optional Library storage failures were collapsed into the same default aiohttp 500.
+3. The later **No playable source...** error exposed a second structural flaw. Details and Play did not share one source snapshot:
+   - Details searched providers and rendered source cards;
+   - Play immediately searched providers again;
+   - a flaky/rate-limited provider or changed result set could therefore make a source visible and then unavailable seconds later.
+4. This mismatch existed even for **Automatic** mode and was worse for manual selection because the browser intentionally never receives raw source refs.
+5. Details also used its own generic source lookup/filter path instead of the exact playback helper, creating needless duplication between what the user sees and what playback accepts.
+6. The Resident Evil canary exposed a second correctness problem in the old title matcher: releases such as **Resident Evil (GOG)** and **Resident Evil Requiem voices38** could pass title-token matching even when the provider explicitly classified them as Games/Applications. Those are not movie releases and must never be offered as Cinema playback.
 
 ## Execution path
 
-Automatic:
-`Play Here -> /cinema/{guild}/api/play -> exact source search -> room ranked_variants -> saved preferred provider when available -> best canonical release -> start_room_variant`.
+Details:
+`identity -> required TMDB details + optional Library read -> exact movie source search -> exact catalog filter -> short-lived server-side source snapshot -> source cards`.
 
-Manual:
-`tap source card -> browser stores opaque source_choice -> Play Selected Source -> /api/play -> fresh exact source search -> opaque id matched to one current source_ref server-side -> exact room variant -> start_room_variant`.
+Immediate Play:
+`Play Here / Play Selected Source -> same guild+user+movie snapshot -> automatic ranking or opaque manual source match -> materialize room variant -> playback`.
+
+Cache miss/expired:
+`Play -> fresh exact source search -> refresh snapshot -> normal ranking/manual matching`.
+
+TV Season:
+`identity -> required TMDB season metadata + optional Library progress -> episodes`.
 
 ## Changes
 
-- Added a stable opaque `source_choice` id derived server-side from each source reference.
-- Added `source_choice` to movie Details source payloads without returning `source_ref`.
-- Added optional `source_choice` handling to direct website playback.
-- Manual source choice bypasses automatic preference only when that exact source still exists in the fresh exact-title result; stale choices fail with a refresh message rather than silently switching releases.
-- Automatic playback behavior remains unchanged when no override is supplied.
-- Renamed the UI section to **Playback Source** and added explicit explanatory copy.
-- Added a selected **Automatic** option by default.
-- Made individual source cards accessible toggle buttons with visible selected state.
-- Added inline **Play Automatically / Play Selected Source** control for mobile ergonomics.
-- Bumped Cinema site cache assets to CSS v10 / JS v14.
-- Added regression coverage proving a low-ranked manual source overrides the automatic high-ranked source and proving raw source references are not returned.
+### Details / Library degradation
+- Changed Details and Season dependency joins to `return_exceptions=True`.
+- Required catalog failures now produce a classified 503 with phase-specific server logging.
+- Library failures degrade to empty progress/library state instead of a generic 500.
+- Details response exposes `library_available` plus a safe notice.
+- Season response exposes `library_available`.
+- Site keeps Play/Resume, Trailer, source selection, cast, recommendations, and episode browsing available during Library degradation.
+- Watchlist/Favorite/List/Watched/Rating controls are hidden while storage is unavailable rather than pretending writes can succeed.
+- Episode Library controls follow the same rule.
+- Site JS cache version bumped to v15.
+
+### Source consistency
+- Details now uses the same `search_exact_movie_sources()` helper as playback instead of a duplicate generic search/filter path.
+- The exact source outcome shown on Details is cached server-side for 90 seconds under exact guild+user+media+TMDB identity.
+- Immediate automatic or manual Play reuses that snapshot, so it does not issue a second provider search seconds after rendering the source cards.
+- Raw source refs remain server-side; the browser still receives only opaque `source_choice` ids.
+- If the snapshot expires or is missing, Play falls back to a fresh exact search.
+- Snapshot storage is bounded to 1024 entries and expired entries are pruned before insertion.
+- Empty exact outcomes now log a safe count of provider/search errors and return a clearer refresh instruction.
+- Exact movie matching now rejects provider results explicitly categorized as Games, Applications/Software, Audio/Music, Books/eBooks, or Pictures/Images, including TPB-style numeric Audio/Application/Game buckets.
+- Video/movie categories and unknown custom taxonomies remain eligible so legitimate providers are not rejected merely for using their own category names.
 
 ## Validation / results
 
-Confirmed by inspection:
-- branch starts from current production main after PR #460;
-- source-selection changes are limited to Cinema site backend/client/CSS, focused tests, and this task record;
-- browser JavaScript contains no `source_ref` handling;
-- manual choice is revalidated against the fresh exact source search before playback;
-- no second provider resolver, torrent runtime, room manager, or player was introduced.
+Confirmed by code inspection:
+- branch is based on current production main after PR #461;
+- no auth contract changes;
+- no provider resolver, torrent runtime, room manager, database schema, or Watch player duplication;
+- Details and Play now share the same exact source outcome;
+- browser JavaScript still contains no raw `source_ref` handling;
+- source snapshot is short-lived, user/guild/title scoped, and bounded;
+- changed files are limited to Cinema site backend/client, focused tests, and this task record.
+
+Regression coverage added for:
+- Details rendering through Library storage outage;
+- catalog failure returning classified 503 instead of generic 500;
+- TV Season rendering through Library storage outage;
+- client Library-control gating;
+- Details-to-Play exact source snapshot reuse without a second provider search;
+- rejection of explicit game/software torrents that merely share the movie title, while valid video/unknown-category releases still pass.
+
+First PR #462 exact-head result:
+- 2904 passed / 3 failed;
+- two failures were caused by a stale source snapshot leaking between repeated plays/tests for the same guild+user+movie key;
+- one failure was an obsolete structural assertion that still expected the removed duplicate `filter_outcome_for_catalog()` call in `cinema_site.py`.
+
+Corrections:
+- empty provider outcomes are no longer cached, so a transient empty Details result cannot poison Play for 90 seconds;
+- a valid Details source snapshot is consumed once by Play instead of acting as a long-lived source cache;
+- focused tests now clear shared source state where appropriate and assert the snapshot is consumed;
+- the TV Details structural test now requires the authoritative `search_exact_movie_sources()` helper and explicitly rejects the duplicate site-level filter.
 
 Pending:
-- focused/exact-head CI on this new PR;
-- mergeability and final diff review;
-- Discloud Samsung Browser canary:
-  1. press **Play Here** without touching sources and confirm automatic playback;
-  2. return to Details, select a lower-ranked source, confirm selected styling;
-  3. use **Play Selected Source** and confirm that exact release starts;
-  4. switch back to **Automatic** and confirm normal ranking resumes;
-  5. confirm Private Session / Watch Party remain unaffected.
+- exact-head PR #462 CI and mergeability/diff inspection;
+- Samsung Browser canary:
+  1. open a movie Details page and confirm no generic 500;
+  2. confirm source cards render;
+  3. press **Play Here** immediately and confirm it starts without re-search failure;
+  4. return, choose a manual source, and confirm exact selected source starts;
+  5. verify Library outage degrades controls without blocking playback;
+  6. confirm Private Session / Watch Party remain unaffected.
 
 ## Cleanup / conflicts
 
-- The already-merged PR #460 branch is not being reopened or rewritten.
-- No Library intelligence or schema behavior is changed by this follow-up.
-- Raw torrent references remain server-side.
-- No unrelated feature cleanup is included.
+- PR #461 is already merged and remains untouched.
+- This branch starts from that merged production state.
+- No unrelated Dank Shield feature work is included.
+- The previously observed Cloudflare 502 remains backlog unless it blocks this exact canary again.
 
 ## Blockers / risks
 
-- A source can disappear between Details load and Play; the endpoint intentionally rejects that stale manual choice and asks for refresh.
-- Provider/source availability remains external.
-- The screenshot also showed a Cloudflare 502 diagnostic overlay. That is recorded separately and is not being mixed into source-selector implementation unless it blocks the playback canary.
+- A source snapshot can still expire after 90 seconds; that intentionally falls back to a fresh exact search.
+- Provider availability remains external after the snapshot window.
+- Process restart clears the snapshot cache, which safely falls back to a fresh provider search.
+- Completion still depends on exact-head CI and live-device evidence.
 
 ## Backlog
 
-- Investigate the observed Cloudflare 502/origin diagnostic separately if it recurs outside the selector canary or prevents playback.
+- Investigate recurring Cloudflare/origin 502 separately if it recurs outside or independently blocks this source canary.
 
 ## Next step
 
-Open a focused PR from this branch, run exact-head CI, repair only evidence-backed failures, then deploy/canary the automatic and manual source paths on Samsung Browser.
+Finish PR #462 exact-head CI, repair only evidence-backed failures, then deploy/canary the Details -> source -> Play path on Samsung Browser.
 
 ---
 

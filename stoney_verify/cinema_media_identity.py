@@ -216,12 +216,74 @@ def episode_release_matches(
     return any(pattern in compact for pattern in patterns)
 
 
+def _source_category_is_explicitly_non_video(
+    release_metadata: Optional[Mapping[str, Any]],
+) -> bool:
+    if not isinstance(release_metadata, Mapping):
+        return False
+    reported = (
+        release_metadata.get("source_reported")
+        if isinstance(release_metadata.get("source_reported"), Mapping)
+        else {}
+    )
+    raw = reported.get("category") or release_metadata.get("category")
+    clean = " ".join(str(raw or "").casefold().replace("_", " ").replace("-", " ").split())
+    if not clean:
+        return False
+
+    if clean.isdigit():
+        category = int(clean)
+        # The Pirate Bay-style categories: 2xx is Video. Explicitly reject the
+        # known Audio/Applications/Games buckets; leave unknown/custom numeric
+        # taxonomies alone instead of assuming every provider copies TPB.
+        if 100 <= category < 200:
+            return True
+        if 300 <= category < 500:
+            return True
+        return False
+
+    non_video_markers = (
+        "game",
+        "games",
+        "pc game",
+        "console game",
+        "software",
+        "application",
+        "applications",
+        "app",
+        "apps",
+        "audio",
+        "music",
+        "ebook",
+        "ebooks",
+        "book",
+        "books",
+        "picture",
+        "pictures",
+        "image",
+        "images",
+    )
+    return any(
+        clean == marker
+        or clean.startswith(marker + " ")
+        or clean.endswith(" " + marker)
+        or f" {marker} " in f" {clean} "
+        for marker in non_video_markers
+    )
+
+
 def release_matches_catalog(
     release_title: Any,
     metadata: Optional[Mapping[str, Any]],
     release_metadata: Optional[Mapping[str, Any]] = None,
 ) -> bool:
     if not isinstance(metadata, Mapping):
+        return False
+
+    media_type = str(metadata.get("media_type") or "").strip().lower()
+    if media_type in {"movie", "tv", "episode"} and _source_category_is_explicitly_non_video(
+        release_metadata
+    ):
         return False
 
     if str(metadata.get("media_type") or "").strip().lower() == "episode":

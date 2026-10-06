@@ -133,6 +133,13 @@ _SITE_GUILD_ABSENT_CACHE_SECONDS = 60.0
 _SITE_GUILD_UNAVAILABLE_CACHE_SECONDS = 30.0
 _SITE_GUILD_REST_CACHE: dict[int, tuple[float, Any]] = {}
 _SITE_GUILD_ABSENT_UNTIL: dict[int, float] = {}
+
+_SOURCE_SNAPSHOT_TTL_SECONDS = 90.0
+_SOURCE_SNAPSHOT_MAX_ENTRIES = 1024
+_SOURCE_SNAPSHOT_CACHE: dict[
+    tuple[int, int, str, int],
+    tuple[float, dict[str, Any], str, Any],
+] = {}
 _SITE_GUILD_UNAVAILABLE_UNTIL: dict[int, float] = {}
 _CINEMA_AUTH_CONTRACT = "signed-session-v8-snowflake-safe"
 
@@ -1416,6 +1423,80 @@ def _source_choice_id(source_ref: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()[:24]
 
 
+
+def _source_snapshot_key(
+    guild_id: int,
+    user_id: int,
+    media_type: str,
+    tmdb_id: int,
+) -> tuple[int, int, str, int]:
+    return (
+        int(guild_id),
+        int(user_id),
+        str(media_type or "").strip().lower(),
+        int(tmdb_id),
+    )
+
+
+def _cache_source_snapshot(
+    guild_id: int,
+    user_id: int,
+    media_type: str,
+    tmdb_id: int,
+    *,
+    metadata: Mapping[str, Any],
+    query: str,
+    outcome: Any,
+) -> None:
+    variants = tuple(getattr(outcome, "variants", ()) or ())
+    if not variants:
+        # Never pin an empty/flaky provider response. A subsequent Play should
+        # get one fresh chance instead of inheriting a 90-second false negative.
+        return
+
+    now = time.monotonic()
+    expired = [
+        key
+        for key, cached in _SOURCE_SNAPSHOT_CACHE.items()
+        if float(cached[0]) <= now
+    ]
+    for key in expired:
+        _SOURCE_SNAPSHOT_CACHE.pop(key, None)
+
+    if len(_SOURCE_SNAPSHOT_CACHE) >= _SOURCE_SNAPSHOT_MAX_ENTRIES:
+        oldest_key = min(
+            _SOURCE_SNAPSHOT_CACHE,
+            key=lambda item: float(_SOURCE_SNAPSHOT_CACHE[item][0]),
+        )
+        _SOURCE_SNAPSHOT_CACHE.pop(oldest_key, None)
+
+    key = _source_snapshot_key(guild_id, user_id, media_type, tmdb_id)
+    _SOURCE_SNAPSHOT_CACHE[key] = (
+        now + _SOURCE_SNAPSHOT_TTL_SECONDS,
+        dict(metadata),
+        str(query or "")[:180],
+        outcome,
+    )
+
+
+def _cached_source_snapshot(
+    guild_id: int,
+    user_id: int,
+    media_type: str,
+    tmdb_id: int,
+) -> Optional[tuple[dict[str, Any], str, Any]]:
+    key = _source_snapshot_key(guild_id, user_id, media_type, tmdb_id)
+    cached = _SOURCE_SNAPSHOT_CACHE.pop(key, None)
+    if cached is None:
+        return None
+    expires_at, metadata, query, outcome = cached
+    if float(expires_at) <= time.monotonic():
+        return None
+    # Details -> Play is a one-shot consistency bridge, not a long-lived source
+    # cache. Consuming it prevents a later play from inheriting an old release.
+    return dict(metadata), str(query or ""), outcome
+
+
 def _active_rooms_payload(guild_id: int, user_id: int) -> list[dict[str, Any]]:
     manager = get_movie_night_manager()
     rows: list[dict[str, Any]] = []
@@ -2026,7 +2107,33 @@ async def cinema_details_api(request: web.Request) -> web.Response:
 
     details_task = asyncio.create_task(get_details(media_type, tmdb_id))
     library_task = asyncio.create_task(list_user_media(user_id))
-    details, rows = await asyncio.gather(details_task, library_task)
+    details_result, library_result = await asyncio.gather(
+        details_task,
+        library_task,
+        return_exceptions=True,
+    )
+    if isinstance(details_result, Exception):
+        print(
+            "⚠️ cinema_site details unavailable "
+            f"phase=catalog guild={int(_guild_id)} user={int(user_id)} "
+            f"media={media_type}:{tmdb_id} error={type(details_result).__name__}"
+        )
+        raise web.HTTPServiceUnavailable(
+            text="Cinema title metadata is temporarily unavailable. Try again."
+        )
+    details = details_result
+
+    library_available = not isinstance(library_result, Exception)
+    if library_available:
+        rows = list(library_result or [])
+    else:
+        print(
+            "⚠️ cinema_site details degraded "
+            f"phase=library guild={int(_guild_id)} user={int(user_id)} "
+            f"media={media_type}:{tmdb_id} error={type(library_result).__name__}"
+        )
+        rows = []
+
     adult_enabled = await _guild_adult_content_enabled(_guild_id)
     if bool(details.media.adult) and not adult_enabled:
         raise web.HTTPNotFound(
@@ -2036,18 +2143,18 @@ async def cinema_details_api(request: web.Request) -> web.Response:
     source_rows: list[dict[str, Any]] = []
     if media_type == "movie":
         try:
-            source_outcome = await search_movie_sources(
+            source_metadata, source_query, source_outcome = await search_exact_movie_sources(
                 int(_guild_id),
-                str(details.media.title),
-                catalog_metadata=catalog_metadata(details.media),
+                media=details.media,
             )
-            source_outcome = filter_adult_provider_results(
-                source_outcome,
-                enabled=adult_enabled,
-            )
-            source_outcome = filter_outcome_for_catalog(
-                source_outcome,
-                catalog_metadata(details.media),
+            _cache_source_snapshot(
+                _guild_id,
+                user_id,
+                "movie",
+                tmdb_id,
+                metadata=source_metadata,
+                query=source_query,
+                outcome=source_outcome,
             )
             for variant in source_outcome.variants[:8]:
                 seeds = max(0, int(variant.seeds or 0))
@@ -2170,6 +2277,12 @@ async def cinema_details_api(request: web.Request) -> web.Response:
         {
             "details": details.to_payload(),
             "library": matching[0] if matching else None,
+            "library_available": bool(library_available),
+            "library_notice": (
+                ""
+                if library_available
+                else "Your Cinema library is temporarily unavailable. Playback and title details still work."
+            ),
             "episode_progress": episode_progress,
             "continue_episode": continue_episode,
             "sources": source_rows,
@@ -2189,7 +2302,33 @@ async def cinema_season_api(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(text="Invalid season.")
     episodes_task = asyncio.create_task(get_season(series_id, season_number))
     media_task = asyncio.create_task(list_user_media(user_id))
-    episodes, rows = await asyncio.gather(episodes_task, media_task)
+    episodes_result, media_result = await asyncio.gather(
+        episodes_task,
+        media_task,
+        return_exceptions=True,
+    )
+    if isinstance(episodes_result, Exception):
+        print(
+            "⚠️ cinema_site season unavailable "
+            f"phase=catalog guild={int(_guild_id)} user={int(user_id)} "
+            f"series={series_id} season={season_number} "
+            f"error={type(episodes_result).__name__}"
+        )
+        raise web.HTTPServiceUnavailable(
+            text="Cinema episode metadata is temporarily unavailable. Try again."
+        )
+    episodes = episodes_result
+    library_available = not isinstance(media_result, Exception)
+    if library_available:
+        rows = list(media_result or [])
+    else:
+        print(
+            "⚠️ cinema_site season degraded "
+            f"phase=library guild={int(_guild_id)} user={int(user_id)} "
+            f"series={series_id} season={season_number} "
+            f"error={type(media_result).__name__}"
+        )
+        rows = []
 
     progress = {
         (
@@ -2215,7 +2354,12 @@ async def cinema_season_api(request: web.Request) -> web.Response:
             (episode.season_number, episode.episode_number)
         )
         output.append(payload)
-    return web.json_response({"episodes": output})
+    return web.json_response(
+        {
+            "episodes": output,
+            "library_available": bool(library_available),
+        }
+    )
 
 
 async def cinema_play_api(request: web.Request) -> web.Response:
@@ -2273,10 +2417,28 @@ async def cinema_play_api(request: web.Request) -> web.Response:
                 raise web.HTTPForbidden(
                     text="Adult-content Cinema playback is disabled for this server."
                 )
-            metadata, query, outcome = await search_exact_movie_sources(
-                int(guild_id),
-                media=details.media,
+            cached_source = _cached_source_snapshot(
+                guild_id,
+                user_id,
+                "movie",
+                tmdb_id,
             )
+            if cached_source is not None:
+                metadata, query, outcome = cached_source
+            else:
+                metadata, query, outcome = await search_exact_movie_sources(
+                    int(guild_id),
+                    media=details.media,
+                )
+                _cache_source_snapshot(
+                    guild_id,
+                    user_id,
+                    "movie",
+                    tmdb_id,
+                    metadata=metadata,
+                    query=query,
+                    outcome=outcome,
+                )
         except web.HTTPException:
             raise
         except Exception as exc:
@@ -2324,8 +2486,16 @@ async def cinema_play_api(request: web.Request) -> web.Response:
 
     variants = tuple(outcome.variants or ())
     if not variants:
+        print(
+            "⚠️ cinema_site source unavailable "
+            f"guild={int(guild_id)} user={int(user_id)} media={media_type} "
+            f"errors={len(tuple(getattr(outcome, 'errors', ()) or ()))}"
+        )
         raise web.HTTPConflict(
-            text="No playable source currently matches this exact Cinema title."
+            text=(
+                "No playable source is available for this exact Cinema title right now. "
+                "Refresh the title to retry connected sources."
+            )
         )
 
     requested_source_ref = ""
@@ -3075,7 +3245,7 @@ def _site_html(guild_id: int, user_id: int) -> str:
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=14" defer></script>
+  <script src="/cinema/assets/site.js?v=15" defer></script>
 </body>
 </html>"""
 
