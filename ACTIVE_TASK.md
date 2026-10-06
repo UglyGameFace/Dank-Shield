@@ -1692,6 +1692,14 @@ Evidence:
 Active branch:
 `fix/cinema-feed-search-pagination-enrichment`
 
+Current status:
+- PR #456 is the single active implementation task and remains draft;
+- exact-head CI previously reached 2870 passed / 1 failed;
+- the only failure was the Feed Center provenance copy regression;
+- current head restores the original real-discovery provenance sentence while preserving the new result count/search/pagination;
+- branch is 0 behind main and mergeable;
+- PR #457 (EZTV/provider identity routing) is suspended until #456 reaches its Definition of Done.
+
 Correction contract:
 - database-backed Feed Center pagination uses PostgREST exact count plus range/offset, default 8 results per page and max 24;
 - search covers both canonical discovery title and `metadata.release_title`, so `FBI`, `Collision`, or `S01E21` can match;
