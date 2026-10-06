@@ -198,6 +198,23 @@ def test_torrent_session_uses_fast_start_peer_settings_by_default(monkeypatch, t
     assert settings["download_rate_limit"] == 64 * 1024 * 1024
 
 
+def test_torrent_fast_start_settings_remain_operator_overridable(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DANK_TORRENT_CONNECTION_LIMIT", "120")
+    monkeypatch.setenv("DANK_TORRENT_CONNECTION_SPEED", "40")
+    monkeypatch.setenv("DANK_TORRENT_CONNECT_BOOST", "25")
+    monkeypatch.setenv("DANK_TORRENT_PEER_CONNECT_TIMEOUT_SECONDS", "12")
+    monkeypatch.setenv("DANK_TORRENT_DOWNLOAD_RATE_BYTES", str(20 * 1024 * 1024))
+
+    manager = _manager(monkeypatch, tmp_path)
+    settings = manager.lt.settings
+
+    assert settings["connections_limit"] == 120
+    assert settings["connection_speed"] == 40
+    assert settings["torrent_connect_boost"] == 25
+    assert settings["peer_connect_timeout"] == 12
+    assert settings["download_rate_limit"] == 20 * 1024 * 1024
+
+
 def test_requested_playback_pieces_use_time_critical_deadlines(monkeypatch, tmp_path: Path) -> None:
     manager = _manager(monkeypatch, tmp_path)
     manager.time_critical_base_deadline_ms = 500
