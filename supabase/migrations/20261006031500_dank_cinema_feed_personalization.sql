@@ -27,6 +27,9 @@ create table if not exists public.dank_cinema_feed_rules (
                 'filter',
                 'collection',
                 'routing',
+                'person',
+                'genre',
+                'studio',
                 'private_source'
             )
         ),
