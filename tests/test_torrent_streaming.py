@@ -202,6 +202,8 @@ def test_stream_startup_timing_is_per_consumer_and_first_stage_stable(monkeypatc
         last_piece=19,
         created_at=now - 0.250,
         last_access=now,
+        startup_started_at=now - 0.600,
+        metadata_ready_at=now - 0.300,
     )
 
     manager.record_stream_timing(
@@ -230,8 +232,10 @@ def test_stream_startup_timing_is_per_consumer_and_first_stage_stable(monkeypatc
     )
 
     first = manager.consumer_startup_status(session, "movie:2:client-a")
+    assert first["metadata_ms"] == 300
+    assert first["session_ready_ms"] == 350
     assert first["request_count"] == 1
-    assert first["first_request_ms"] >= 200
+    assert first["first_request_ms"] >= 500
     assert first["first_range_start"] == 0
     assert first["first_range_end"] == 1024 * 1024 - 1
     assert first["first_wait_ms"] == 321
