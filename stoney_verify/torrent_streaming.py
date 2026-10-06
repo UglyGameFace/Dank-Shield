@@ -1013,6 +1013,8 @@ class TorrentMediaManager:
                     lease_key=lease_key,
                     replace_token=replace_token,
                     start_rss_mb=start_rss_mb,
+                    startup_started_at=startup_started_at,
+                    metadata_ready_at=metadata_ready_at,
                 )
         except Exception:
             self._safe_remove_handle(handle)
