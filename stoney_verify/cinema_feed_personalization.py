@@ -1186,17 +1186,25 @@ async def process_feed_notifications(
             .eq("guild_id", gid)
             .eq("scope", "user")
             .eq("enabled", True)
-            .neq("rule_type", "private_source")
             .limit(500)
             .execute()
         )
 
     rule_rows = rows(await execute(f"read notification Feed Rules {gid}", read_rules))
     rules = [_normalize_rule(row) for row in rule_rows]
+    eligible_users = {
+        int(rule.get("owner_user_id") or 0)
+        for rule in rules
+        if int(rule.get("owner_user_id") or 0) > 0
+    }
+    matching_rules = [
+        rule for rule in rules
+        if rule.get("rule_type") != "private_source"
+    ]
 
     matched: dict[int, list[tuple[dict[str, Any], str, str]]] = {}
     for group in groups:
-        for rule in rules:
+        for rule in matching_rules:
             if not _rule_matches(group, rule):
                 continue
             uid = int(rule.get("owner_user_id") or 0)
@@ -1236,7 +1244,7 @@ async def process_feed_notifications(
             watched_rows = []
         for row in watched_rows:
             uid = int(row.get("user_id") or 0)
-            if uid <= 0:
+            if uid <= 0 or uid not in eligible_users:
                 continue
             matched.setdefault(uid, []).append((dict(group), "Watchlist", "instant"))
 
