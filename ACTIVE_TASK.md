@@ -1735,3 +1735,44 @@ Acceptance:
 - Collision-style episode releases can resolve as TV and gain TMDB poster/details when metadata exists;
 - existing general Cinema search, source refresh, playback refs, and source management remain unchanged;
 - exact-head CI and companion workflows green before merge.
+
+
+## ACTIVE — Cinema Library Intelligence / bot-native Trakt-style experience
+
+Production baseline:
+`main @ 3e86f4ffd701fc1801bc492331393c23d84b8bd3` (PR #456 merged)
+
+Active branch:
+`feat/cinema-library-intelligence`
+
+Single active task:
+Build a bot-native Cinema Library intelligence layer. This is intentionally scoped to activity that happens inside Dank Cinema/Dank Shield; no cross-platform scrobbling or external Trakt-style account synchronization.
+
+Ownership contract:
+- Cinema Library owns durable user state: watch history, progress, watched/unwatched, watchlist, favorites, ratings, custom lists, rewatch counts, stats, and recommendation signals.
+- Dank Theater remains the only playback/progress authority and writes Library activity through one service path.
+- TMDB remains canonical identity/metadata and supplies seasons, episode dates, genres, cast, studios, franchises, and recommendation candidates.
+- Feed Center remains availability/release intelligence and overlays whether a Library/recommendation/upcoming item currently has playable discoveries.
+- My Feed continues to own feed-driven notifications; Library may supply watchlist/history/rating/favorite signals to personalize those matches.
+- Notifications remain inside the existing Cinema inbox; no unsolicited DM behavior is introduced.
+
+Implementation goals:
+- durable first-watch / last-watch / completion / rewatch tracking without writing a history row on every heartbeat;
+- favorites and 1–10 ratings on canonical movie/TV items;
+- custom personal lists with ordered items;
+- manual mark watched / unwatched while preserving canonical progress behavior;
+- richer My Stuff views: Continue Watching, Watchlist, Favorites, History, Watch Again, Lists, Stats;
+- Because You Watched and Recommended For You rails derived from Dank Cinema activity only;
+- upcoming / next-episode intelligence from TMDB for followed/watchlisted/in-progress TV;
+- Feed availability overlay for watchlist, recommendations, and upcoming episodes;
+- new-episode availability stays feed-driven, not air-date-driven;
+- watch-party/private-session context recorded in watch events for stats;
+- group recommendation support must be derived from active room participants without exposing one user's private Library to another user;
+- mobile-first UI remains usable on Samsung Browser while desktop/tablet/ultrawide remain first-class.
+
+Definition of Done:
+- migration is idempotent and service-role-only;
+- existing progress/watchlist contracts remain backward compatible;
+- exact-head CI + Cinema SQL + companion workflows green;
+- no raw playback/source refs added to Library payloads;
+- existing Feed Center and Theater ownership boundaries remain intact.
