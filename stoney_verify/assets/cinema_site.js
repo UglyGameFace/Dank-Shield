@@ -1781,125 +1781,248 @@
       });
       const cleanFeedQuery = String(state.feedQuery || "").trim();
       if (cleanFeedQuery) params.set("q", cleanFeedQuery);
-      const data = await api(`/feeds?${params.toString()}`);
+      const data = await api("/feeds?" + params.toString());
       state.feeds = data;
       const pagination = data.pagination || {};
       state.feedQuery = String(pagination.query || cleanFeedQuery);
       state.feedPage = Math.max(1, Number(pagination.page || 1));
       page.textContent = "";
+
       const head = node("div", "section-head");
       const title = node("div");
-      title.append(node("h1", "", "Feed Center"), node("p", "section-sub", "Real RSS, structured search, and reference sources organized by media type."));
+      title.append(
+        node("h1", "", "Feed Center"),
+        node("p", "section-sub", "RSS and structured sources become personalized discovery, subscriptions, collections, alerts, and release comparisons."),
+      );
       head.appendChild(title);
-      if (data.can_manage) head.appendChild(button("+ Add Source", "btn primary", () => openFeedEditor()));
+      const headActions = node("div", "hero-actions");
+      headActions.appendChild(button("+ Feed Rule", "btn secondary", () => openFeedRuleEditor()));
+      if (data.can_manage) {
+        headActions.appendChild(button("+ Add Source", "btn primary", () => openFeedEditor()));
+      }
+      head.appendChild(headActions);
       page.appendChild(head);
 
-      const results = Array.isArray(data.results) ? data.results : [];
-      const resultSection = node("section", "section feed-results-section");
-      const resultHead = node("div", "section-head feed-results-head");
-      const resultTitle = node("div");
-      const totalResults = Math.max(0, Number(pagination.total || 0));
-      resultTitle.append(
-        node("h2", "section-title", "Latest Feed Results"),
-        node(
-          "p",
-          "section-sub",
-          "Actual items discovered from your enabled RSS and structured sources.",
-        ),
-        node(
-          "div",
-          "feed-meta",
-          cleanFeedQuery
-            ? `${totalResults} saved result${totalResults === 1 ? "" : "s"} matching “${state.feedQuery}”.`
-            : `${totalResults} saved feed result${totalResults === 1 ? "" : "s"} across your enabled sources.`,
-        ),
-      );
-      resultHead.appendChild(resultTitle);
-      resultSection.appendChild(resultHead);
+      const modes = node("div", "feed-mode-tabs");
+      [
+        ["latest", "Latest", Number(pagination.total || 0)],
+        ["my", "My Feed", Array.isArray(data.my_feed) ? data.my_feed.length : 0],
+        ["collections", "Collections", Array.isArray(data.collections) ? data.collections.length : 0],
+        ["rules", "Rules", Array.isArray(data.feed_rules) ? data.feed_rules.length : 0],
+      ].forEach(([key, label, count]) => {
+        const tab = button(
+          label + (Number(count) > 0 ? " " + Number(count) : ""),
+          state.feedMode === key ? "btn feed-mode active" : "btn feed-mode",
+          () => {
+            state.feedMode = key;
+            renderFeeds();
+          },
+        );
+        modes.appendChild(tab);
+      });
+      page.appendChild(modes);
 
-      const searchBar = node("div", "feed-search-bar");
-      const searchInput = node("input", "search-input");
-      searchInput.type = "search";
-      searchInput.placeholder = "Search feed results…";
-      searchInput.value = state.feedQuery;
-      searchInput.autocomplete = "off";
-      searchInput.setAttribute("aria-label", "Search feed results");
-      const searchButton = button("Search", "btn primary", () => {
-        state.feedQuery = searchInput.value.trim();
-        state.feedPage = 1;
-        renderFeeds();
-      });
-      searchInput.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter") return;
-        event.preventDefault();
-        state.feedQuery = searchInput.value.trim();
-        state.feedPage = 1;
-        renderFeeds();
-      });
-      searchInput.addEventListener("input", () => {
-        if (state.feedSearchTimer) clearTimeout(state.feedSearchTimer);
-        state.feedSearchTimer = setTimeout(() => {
-          if (searchInput.value.trim() === state.feedQuery) return;
+      if (state.feedMode === "latest") {
+        const results = Array.isArray(data.grouped_results) && data.grouped_results.length
+          ? data.grouped_results
+          : (Array.isArray(data.results) ? data.results : []);
+        const resultSection = node("section", "section feed-results-section");
+        const resultHead = node("div", "section-head feed-results-head");
+        const resultTitle = node("div");
+        const totalResults = Math.max(0, Number(pagination.total || 0));
+        resultTitle.append(
+          node("h2", "section-title", "Latest Feed Results"),
+          node(
+            "p",
+            "section-sub",
+            "Actual items discovered from your enabled RSS and structured sources.",
+          ),
+          node(
+            "div",
+            "feed-meta",
+            cleanFeedQuery
+              ? totalResults + " saved result" + (totalResults === 1 ? "" : "s") + " matching “" + state.feedQuery + "”."
+              : totalResults + " saved feed result" + (totalResults === 1 ? "" : "s") + " across your enabled sources.",
+          ),
+        );
+        resultHead.appendChild(resultTitle);
+        resultSection.appendChild(resultHead);
+
+        const searchBar = node("div", "feed-search-bar");
+        const searchInput = node("input", "search-input");
+        searchInput.type = "search";
+        searchInput.placeholder = "Search feed results…";
+        searchInput.value = state.feedQuery;
+        searchInput.autocomplete = "off";
+        searchInput.setAttribute("aria-label", "Search feed results");
+        const searchButton = button("Search", "btn primary", () => {
           state.feedQuery = searchInput.value.trim();
           state.feedPage = 1;
           renderFeeds();
-        }, 450);
-      });
-      searchBar.append(searchInput, searchButton);
-      if (state.feedQuery) {
-        searchBar.appendChild(button("Clear", "btn secondary", () => {
-          state.feedQuery = "";
+        });
+        searchInput.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          state.feedQuery = searchInput.value.trim();
           state.feedPage = 1;
           renderFeeds();
-        }));
-      }
-      resultSection.appendChild(searchBar);
-
-      if (data.results_warning) {
-        resultSection.appendChild(node("div", "state-card", data.results_warning));
-      }
-      if (!results.length) {
-        resultSection.appendChild(node(
-          "div",
-          "state-card",
-          "No feed results yet. Refresh an enabled RSS or structured source below and its discovered titles will appear here.",
-        ));
-      } else {
-        const resultGrid = node("div", "feed-result-grid");
-        results.forEach((result) => resultGrid.appendChild(feedResultCard(result)));
-        resultSection.appendChild(resultGrid);
-      }
-
-      const totalPages = Math.max(1, Number(pagination.total_pages || 1));
-      if (totalResults > 0 || state.feedQuery) {
-        const pager = node("div", "feed-pager");
-        const previous = button("Previous", "btn secondary", () => {
-          if (!pagination.has_previous) return;
-          state.feedPage = Math.max(1, Number(state.feedPage || 1) - 1);
-          renderFeeds();
         });
-        previous.disabled = !pagination.has_previous;
-        const status = node(
-          "div",
-          "feed-page-status",
-          `Page ${Math.max(1, Number(pagination.page || 1))} of ${totalPages}`,
+        searchInput.addEventListener("input", () => {
+          if (state.feedSearchTimer) clearTimeout(state.feedSearchTimer);
+          state.feedSearchTimer = setTimeout(() => {
+            if (searchInput.value.trim() === state.feedQuery) return;
+            state.feedQuery = searchInput.value.trim();
+            state.feedPage = 1;
+            renderFeeds();
+          }, 450);
+        });
+        searchBar.append(searchInput, searchButton);
+        if (state.feedQuery) {
+          searchBar.append(
+            button("Save Search", "btn secondary", () => openFeedRuleEditor(null, {
+              name: state.feedQuery,
+              rule_type: "saved_search",
+              query: state.feedQuery,
+              scope: "user",
+            })),
+            button("Clear", "btn secondary", () => {
+              state.feedQuery = "";
+              state.feedPage = 1;
+              renderFeeds();
+            }),
+          );
+        }
+        resultSection.appendChild(searchBar);
+
+        if (data.results_warning) {
+          resultSection.appendChild(node("div", "state-card", data.results_warning));
+        }
+        if (!results.length) {
+          resultSection.appendChild(node(
+            "div",
+            "state-card",
+            "No feed results yet. Refresh an enabled RSS or structured source below and its discovered titles will appear here.",
+          ));
+        } else {
+          const resultGrid = node("div", "feed-result-grid");
+          results.forEach((result) => resultGrid.appendChild(feedResultCard(result)));
+          resultSection.appendChild(resultGrid);
+        }
+
+        const totalPages = Math.max(1, Number(pagination.total_pages || 1));
+        if (totalResults > 0 || state.feedQuery) {
+          const pager = node("div", "feed-pager");
+          const previous = button("Previous", "btn secondary", () => {
+            if (!pagination.has_previous) return;
+            state.feedPage = Math.max(1, Number(state.feedPage || 1) - 1);
+            renderFeeds();
+          });
+          previous.disabled = !pagination.has_previous;
+          const status = node(
+            "div",
+            "feed-page-status",
+            "Page " + Math.max(1, Number(pagination.page || 1)) + " of " + totalPages,
+          );
+          const next = button("Next", "btn secondary", () => {
+            if (!pagination.has_next) return;
+            state.feedPage = Math.max(1, Number(state.feedPage || 1) + 1);
+            renderFeeds();
+          });
+          next.disabled = !pagination.has_next;
+          pager.append(previous, status, next);
+          resultSection.appendChild(pager);
+        }
+        page.appendChild(resultSection);
+      }
+
+      if (state.feedMode === "my") {
+        const myFeed = Array.isArray(data.my_feed) ? data.my_feed : [];
+        const section = node("section", "section feed-results-section");
+        const sectionHead = node("div", "section-head");
+        const sectionTitle = node("div");
+        sectionTitle.append(
+          node("h2", "section-title", "My Feed"),
+          node("p", "section-sub", "Watchlist matches, followed titles, saved searches, private feeds, quality upgrades, and queue suggestions in one place."),
+          node("div", "feed-meta", Number(data.watchlist_match_count || 0) + " watchlist matches • " + Number(data.queue_suggestion_count || 0) + " queue suggestions"),
         );
-        const next = button("Next", "btn secondary", () => {
-          if (!pagination.has_next) return;
-          state.feedPage = Math.max(1, Number(state.feedPage || 1) + 1);
-          renderFeeds();
-        });
-        next.disabled = !pagination.has_next;
-        pager.append(previous, status, next);
-        resultSection.appendChild(pager);
+        sectionHead.append(
+          sectionTitle,
+          button("+ Personal Rule", "btn primary", () => openFeedRuleEditor()),
+        );
+        section.appendChild(sectionHead);
+        if (!myFeed.length) {
+          section.appendChild(node(
+            "div",
+            "state-card",
+            "My Feed is empty. Follow a title, save a search, add a personal filter, or refresh a private feed.",
+          ));
+        } else {
+          const grid = node("div", "feed-result-grid");
+          myFeed.forEach((result) => grid.appendChild(feedResultCard(result)));
+          section.appendChild(grid);
+        }
+        page.appendChild(section);
       }
-      page.appendChild(resultSection);
+
+      if (state.feedMode === "collections") {
+        const collections = Array.isArray(data.collections) ? data.collections : [];
+        if (!collections.length) {
+          const empty = node("section", "section");
+          empty.append(
+            node("h2", "section-title", "Collections"),
+            node("div", "state-card", data.can_manage
+              ? "No curated collections yet. Create a server Collection or Routing rule."
+              : "This server has no curated feed collections yet."),
+          );
+          if (data.can_manage) {
+            empty.appendChild(button("+ Server Collection", "btn primary", () => openFeedRuleEditor(null, {
+              scope: "guild",
+              rule_type: "collection",
+            })));
+          }
+          page.appendChild(empty);
+        } else {
+          collections.forEach((collection) => {
+            const section = node("section", "section");
+            section.appendChild(node("h2", "section-title", collection.name || "Collection"));
+            const items = Array.isArray(collection.items) ? collection.items : [];
+            const grid = node("div", "feed-result-grid");
+            items.forEach((result) => grid.appendChild(feedResultCard(result)));
+            section.appendChild(grid);
+            page.appendChild(section);
+          });
+        }
+      }
+
+      if (state.feedMode === "rules") {
+        const rules = Array.isArray(data.feed_rules) ? data.feed_rules : [];
+        const section = node("section", "section");
+        const ruleHead = node("div", "section-head");
+        const ruleTitle = node("div");
+        ruleTitle.append(
+          node("h2", "section-title", "Feed Rules"),
+          node("p", "section-sub", "Follow titles, save searches, filter releases, build folders, route matches, or add a private source."),
+        );
+        ruleHead.append(
+          ruleTitle,
+          button("+ New Rule", "btn primary", () => openFeedRuleEditor()),
+        );
+        section.appendChild(ruleHead);
+        if (!rules.length) {
+          section.appendChild(node("div", "state-card", "No Feed Rules yet."));
+        } else {
+          const grid = node("div", "feed-rule-grid");
+          rules.forEach((rule) => grid.appendChild(feedRuleCard(rule)));
+          section.appendChild(grid);
+        }
+        page.appendChild(section);
+      }
 
       const sourceHead = node("div", "section-head section");
       const sourceTitle = node("div");
       sourceTitle.append(
         node("h2", "section-title", "Sources"),
-        node("p", "section-sub", "Manage where Feed Center discovers movies and shows."),
+        node("p", "section-sub", "Manage where Feed Center discovers movies and shows. Trust is based on real refresh history and playable-result output."),
       );
       sourceHead.appendChild(sourceTitle);
       page.appendChild(sourceHead);
@@ -1930,7 +2053,7 @@
               ? source.supported_media_types.map(categoryLabel).filter(Boolean)
               : [];
             if (supported.length) {
-              card.appendChild(node("div", "feed-meta", `Supports: ${supported.join(", ")}`));
+              card.appendChild(node("div", "feed-meta", "Supports: " + supported.join(", ")));
             }
             const healthState = String(source.health_state || "");
             const statusClass = healthState === "online"
@@ -1938,21 +2061,33 @@
               : healthState === "offline" || healthState === "disabled"
                 ? "offline"
                 : "";
-            const status = node("div", `status-pill ${statusClass}`.trim());
+            const status = node("div", ("status-pill " + statusClass).trim());
             status.append(node("span", "status-dot"), node("span", "", sourceHealthLabel(source)));
             card.appendChild(status);
+
+            const trust = source.trust && typeof source.trust === "object" ? source.trust : {};
+            if (trust.trust_score !== null && trust.trust_score !== undefined) {
+              card.appendChild(node(
+                "div",
+                "feed-trust",
+                "Trust: " + (trust.trust_label || "Unrated") + " • " + Number(trust.trust_score) + "/100 • " + Math.round(Number(trust.success_rate || 0) * 100) + "% refresh success",
+              ));
+            } else {
+              card.appendChild(node("div", "feed-meta", "Trust: Unrated until this source has refresh history."));
+            }
+
             if (source.last_refresh_at) {
               const count = Number(source.last_refresh_result_count || 0);
               card.appendChild(node(
                 "div",
                 "feed-meta",
-                `Last refresh: ${new Date(source.last_refresh_at * 1000).toLocaleString()} • ${count} playable result${count === 1 ? "" : "s"}`,
+                "Last refresh: " + new Date(source.last_refresh_at * 1000).toLocaleString() + " • " + count + " playable result" + (count === 1 ? "" : "s"),
               ));
             }
             if (source.last_refresh_error) card.appendChild(node("div", "feed-meta", source.last_refresh_error));
             if (source.discovery_warning) card.appendChild(node("div", "feed-meta", source.discovery_warning));
             if (Array.isArray(source.newly_discovered) && source.newly_discovered.length) {
-              const discovered = node("div", "feed-meta", `Newly discovered: ${source.newly_discovered.slice(0, 4).join(" • ")}`);
+              const discovered = node("div", "feed-meta", "Newly discovered: " + source.newly_discovered.slice(0, 4).join(" • "));
               card.appendChild(discovered);
             }
             if (data.can_manage) {
@@ -1965,7 +2100,7 @@
                       ? refreshed.sources.find((item) => item.source_id === source.source_id)
                       : null;
                     const count = Number(updated?.last_refresh_result_count || 0);
-                    toast(`Source refreshed: ${count} playable result${count === 1 ? "" : "s"}.`);
+                    toast("Source refreshed: " + count + " playable result" + (count === 1 ? "" : "s") + ".");
                     renderFeeds();
                   } catch (error) {
                     toast(error.message || "Refresh failed.", "error");
@@ -1975,13 +2110,21 @@
               actions.append(
                 button("Edit", "btn secondary", () => openFeedEditor(source)),
                 button(source.enabled ? "Disable" : "Enable", "btn secondary", async () => {
-                  try { await feedAction({ action: "toggle", source_id: source.source_id }); renderFeeds(); }
-                  catch (error) { toast(error.message || "Source update failed.", "error"); }
+                  try {
+                    await feedAction({ action: "toggle", source_id: source.source_id });
+                    renderFeeds();
+                  } catch (error) {
+                    toast(error.message || "Source update failed.", "error");
+                  }
                 }),
                 button("Delete", "btn danger", async () => {
-                  if (!confirm(`Delete ${source.label}?`)) return;
-                  try { await feedAction({ action: "remove", source_id: source.source_id }); renderFeeds(); }
-                  catch (error) { toast(error.message || "Source deletion failed.", "error"); }
+                  if (!confirm("Delete " + source.label + "?")) return;
+                  try {
+                    await feedAction({ action: "remove", source_id: source.source_id });
+                    renderFeeds();
+                  } catch (error) {
+                    toast(error.message || "Source deletion failed.", "error");
+                  }
                 }),
               );
               card.appendChild(actions);
@@ -1994,7 +2137,10 @@
       }
       renderShell(page, "feeds");
     } catch (error) {
-      renderShell(pageError("Feed Center could not load", error.message || "Try again.", () => { state.feeds = null; renderFeeds(); }), "feeds");
+      renderShell(pageError("Feed Center could not load", error.message || "Try again.", () => {
+        state.feeds = null;
+        renderFeeds();
+      }), "feeds");
     }
   }
 
