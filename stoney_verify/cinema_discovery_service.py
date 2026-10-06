@@ -335,6 +335,11 @@ async def record_feed_discoveries(
                 for item in list(extra.get("languages") or [])[:12]
                 if str(item or "").strip()
             ],
+            "subtitle_languages": [
+                " ".join(str(item or "").split()).lower()[:24]
+                for item in list(extra.get("subtitle_languages") or [])[:12]
+                if str(item or "").strip()
+            ],
         }
         source_reported = extra.get("source_reported")
         if isinstance(source_reported, Mapping):
@@ -364,6 +369,7 @@ async def record_feed_discoveries(
                     {
                         "genres": list(details.genres)[:12],
                         "studios": list(details.studios)[:16],
+                        "franchises": list(details.franchises)[:8],
                         "people": [
                             str(row.get("name") or "")[:100]
                             for row in list(details.cast)[:20]
