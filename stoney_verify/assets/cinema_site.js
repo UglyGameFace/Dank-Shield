@@ -1376,18 +1376,10 @@
       });
       stateEl.appendChild(play);
 
-      card.tabIndex = 0;
-      card.setAttribute("role", "button");
-      card.setAttribute("aria-label", `Play E${ep.episode_number} ${ep.title} in Dank Cinema`);
+      card.classList.add("episode-playable");
       card.addEventListener("click", (event) => {
         if (event.target.closest("button, select, option")) return;
         playOnSite(episodeItem);
-      });
-      card.addEventListener("keydown", (event) => {
-        if ((event.key === "Enter" || event.key === " ") && event.target === card) {
-          event.preventDefault();
-          playOnSite(episodeItem);
-        }
       });
       const libraryActions = node("div", "episode-library-actions");
       libraryActions.append(
