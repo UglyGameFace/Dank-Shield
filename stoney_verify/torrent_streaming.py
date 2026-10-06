@@ -1443,6 +1443,94 @@ class TorrentMediaManager:
                 )
         return max(0.0, session.smoothed_download_rate or live)
 
+    def record_stream_timing(
+        self,
+        session: TorrentStreamSession,
+        consumer_key: str,
+        *,
+        event: str,
+        start: int = 0,
+        end: int = 0,
+        elapsed_ms: float = 0.0,
+        ready: Optional[bool] = None,
+    ) -> None:
+        """Record numeric startup timings for one signed stream consumer.
+
+        This is diagnostic state only. It never changes buffering, priorities,
+        admission, or playback decisions.
+        """
+
+        key = str(consumer_key or "").strip()[:96]
+        if not key:
+            return
+        now = time.monotonic()
+        state = session.consumer_playback.setdefault(
+            key,
+            {
+                "last_request_at": 0.0,
+                "last_request_bytes": 0,
+                "last_request_end": -1,
+                "smoothed_consume_rate": 0.0,
+                "last_access": now,
+            },
+        )
+        state["last_access"] = now
+        name = str(event or "").strip().lower()
+        from_start_ms = max(0.0, (now - float(session.created_at)) * 1000.0)
+
+        if name == "request":
+            state["request_count"] = int(state.get("request_count", 0) or 0) + 1
+            state["last_range_start"] = max(0, int(start))
+            state["last_range_end"] = max(int(start), int(end))
+            state["last_request_from_start_ms"] = from_start_ms
+            if "first_request_from_start_ms" not in state:
+                state["first_request_from_start_ms"] = from_start_ms
+                state["first_range_start"] = max(0, int(start))
+                state["first_range_end"] = max(int(start), int(end))
+        elif name == "wait":
+            state["last_wait_ms"] = max(0.0, float(elapsed_ms))
+            state["last_wait_ready"] = 1 if ready else 0
+            if "first_wait_ms" not in state:
+                state["first_wait_ms"] = max(0.0, float(elapsed_ms))
+                state["first_wait_ready"] = 1 if ready else 0
+        elif name == "headers":
+            if "first_headers_from_start_ms" not in state:
+                state["first_headers_from_start_ms"] = from_start_ms
+        elif name == "first_byte":
+            if "first_byte_from_start_ms" not in state:
+                state["first_byte_from_start_ms"] = from_start_ms
+
+    def consumer_startup_status(
+        self,
+        session: TorrentStreamSession,
+        consumer_key: str,
+    ) -> dict[str, Any]:
+        key = str(consumer_key or "").strip()[:96]
+        state = session.consumer_playback.get(key) if key else None
+        if not isinstance(state, dict):
+            return {}
+
+        def _ms(name: str) -> int:
+            try:
+                return max(0, int(round(float(state.get(name, 0.0) or 0.0))))
+            except Exception:
+                return 0
+
+        return {
+            "request_count": max(0, int(state.get("request_count", 0) or 0)),
+            "first_request_ms": _ms("first_request_from_start_ms"),
+            "first_range_start": max(0, int(state.get("first_range_start", 0) or 0)),
+            "first_range_end": max(0, int(state.get("first_range_end", 0) or 0)),
+            "first_wait_ms": _ms("first_wait_ms"),
+            "first_wait_ready": bool(int(state.get("first_wait_ready", 0) or 0)),
+            "first_headers_ms": _ms("first_headers_from_start_ms"),
+            "first_byte_ms": _ms("first_byte_from_start_ms"),
+            "last_range_start": max(0, int(state.get("last_range_start", 0) or 0)),
+            "last_range_end": max(0, int(state.get("last_range_end", 0) or 0)),
+            "last_wait_ms": _ms("last_wait_ms"),
+            "last_wait_ready": bool(int(state.get("last_wait_ready", 0) or 0)),
+        }
+
     def prepare_playback_request(
         self,
         session: TorrentStreamSession,
