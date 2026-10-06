@@ -1207,6 +1207,8 @@ def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
     assert "_bounded_partial_response_end(" in routes
     assert "requested_end" in routes
     assert "startup_wait_end" in routes
+    assert "initial_wait_end = first_end if partial else startup_wait_end" in routes
+    assert "manager.contiguous_available_end(" in routes
     assert "get_torrent_manager().ensure_cleanup_task()" in routes
     assert "find_magnet(" in router
     assert "is_torrent_filename(" in router
