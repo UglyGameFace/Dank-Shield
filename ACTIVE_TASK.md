@@ -1743,7 +1743,15 @@ Production baseline:
 `main @ 3e86f4ffd701fc1801bc492331393c23d84b8bd3` (PR #456 merged)
 
 Active branch:
-`feat/cinema-library-intelligence`
+`rebuild/cinema-library-intelligence-clean`
+
+Active PR:
+`#459 — Build bot-native Cinema Library intelligence`
+
+Isolation note:
+- PR #458 was closed after a separate standalone website-playback task was interleaved onto its branch.
+- The full mixed state is preserved at `backup/cinema-library-standalone-interleaved-20261006`.
+- PR #459 contains only the Library intelligence task.
 
 Single active task:
 Build a bot-native Cinema Library intelligence layer. This is intentionally scoped to activity that happens inside Dank Cinema/Dank Shield; no cross-platform scrobbling or external Trakt-style account synchronization.
