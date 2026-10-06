@@ -43,6 +43,9 @@ _RULE_TYPES = {
     "filter",
     "collection",
     "routing",
+    "person",
+    "genre",
+    "studio",
     "private_source",
 }
 _SCOPES = {"user", "guild"}
@@ -270,9 +273,15 @@ def _rule_write_payload(
     filters = _normalize_filters(payload.get("filters"))
     actions = _normalize_actions(payload.get("actions"))
 
-    if rule_type in {"follow", "saved_search", "collection", "routing"} and not (
-        query or tmdb_id
-    ):
+    if rule_type in {
+        "follow",
+        "saved_search",
+        "collection",
+        "routing",
+        "person",
+        "genre",
+        "studio",
+    } and not (query or tmdb_id):
         raise CinemaFeedRuleError("This Feed Rule needs a title, search, or TMDB identity.")
 
     if rule_type == "private_source":
@@ -565,6 +574,11 @@ def _result_text(group: Mapping[str, Any]) -> str:
         str(group.get("title") or ""),
         str(group.get("release_title") or ""),
         " ".join(str(item.get("release_title") or "") for item in releases[:12]),
+        " ".join(str(item) for item in group.get("genres") or []),
+        " ".join(str(item) for item in group.get("studios") or []),
+        " ".join(str(item) for item in group.get("people") or []),
+        " ".join(str(item) for item in group.get("directors") or []),
+        " ".join(str(item) for item in group.get("creators") or []),
     ]
     return " ".join(bits).casefold()
 
@@ -1063,6 +1077,11 @@ async def list_private_discoveries(
                 "leechers": max(0, _safe_int(metadata.get("leechers"))),
                 "peers": max(0, _safe_int(metadata.get("peers"))),
                 "file_size": max(0, _safe_int(metadata.get("file_size"))),
+                "genres": list(metadata.get("genres") or [])[:12],
+                "studios": list(metadata.get("studios") or [])[:16],
+                "people": list(metadata.get("people") or [])[:20],
+                "directors": list(metadata.get("directors") or [])[:8],
+                "creators": list(metadata.get("creators") or [])[:8],
             }
         )
     return output
