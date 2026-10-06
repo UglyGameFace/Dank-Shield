@@ -1557,9 +1557,13 @@ class TorrentMediaManager:
         elif name == "wait":
             state["last_wait_ms"] = max(0.0, float(elapsed_ms))
             state["last_wait_ready"] = 1 if ready else 0
+            state["last_wait_start"] = max(0, int(start))
+            state["last_wait_end"] = max(int(start), int(end))
             if "first_wait_ms" not in state:
                 state["first_wait_ms"] = max(0.0, float(elapsed_ms))
                 state["first_wait_ready"] = 1 if ready else 0
+                state["first_wait_start"] = max(0, int(start))
+                state["first_wait_end"] = max(int(start), int(end))
         elif name == "headers":
             if "first_headers_from_start_ms" not in state:
                 state["first_headers_from_start_ms"] = from_start_ms
@@ -1611,12 +1615,16 @@ class TorrentMediaManager:
             "first_range_end": max(0, int(state.get("first_range_end", 0) or 0)),
             "first_wait_ms": _ms("first_wait_ms"),
             "first_wait_ready": bool(int(state.get("first_wait_ready", 0) or 0)),
+            "first_wait_start": max(0, int(state.get("first_wait_start", 0) or 0)),
+            "first_wait_end": max(0, int(state.get("first_wait_end", 0) or 0)),
             "first_headers_ms": _ms("first_headers_from_start_ms"),
             "first_byte_ms": _ms("first_byte_from_start_ms"),
             "last_range_start": max(0, int(state.get("last_range_start", 0) or 0)),
             "last_range_end": max(0, int(state.get("last_range_end", 0) or 0)),
             "last_wait_ms": _ms("last_wait_ms"),
             "last_wait_ready": bool(int(state.get("last_wait_ready", 0) or 0)),
+            "last_wait_start": max(0, int(state.get("last_wait_start", 0) or 0)),
+            "last_wait_end": max(0, int(state.get("last_wait_end", 0) or 0)),
         }
 
     def prepare_playback_request(
