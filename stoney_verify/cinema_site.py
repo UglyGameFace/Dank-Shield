@@ -2434,6 +2434,133 @@ async def cinema_feeds_api(request: web.Request) -> web.Response:
     )
 
 
+async def cinema_feed_queue_api(request: web.Request) -> web.Response:
+    """Add one Feed Center suggestion to the current host-owned Cinema queue."""
+
+    guild_id, user_id = await _site_identity(request)
+    manager = get_movie_night_manager()
+    rooms = [
+        room
+        for room in manager.active_rooms_for_guild(guild_id)
+        if not room.ended and int(room.host_id) == int(user_id)
+    ]
+    if not rooms:
+        raise web.HTTPConflict(
+            text="Start or host a Cinema session before adding a feed match to Up Next."
+        )
+    room = max(rooms, key=lambda item: float(item.created_at))
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, Mapping):
+        payload = {}
+
+    media_type = str(payload.get("media_type") or "").strip().lower()
+    try:
+        tmdb_id = int(payload.get("tmdb_id") or 0)
+        season_number = int(payload.get("season_number") or 0)
+        episode_number = int(payload.get("episode_number") or 0)
+    except (TypeError, ValueError) as exc:
+        raise web.HTTPBadRequest(text="Invalid feed queue identity.") from exc
+
+    if tmdb_id <= 0 or media_type not in {"movie", "tv"}:
+        raise web.HTTPBadRequest(
+            text="This feed result needs a canonical Cinema identity before it can be queued."
+        )
+
+    try:
+        _raw, cinema_preferences = await load_movie_night_preferences(
+            int(guild_id),
+            refresh=False,
+        )
+        adult_enabled = bool(cinema_preferences.adult_content_enabled)
+    except Exception:
+        adult_enabled = False
+
+    if media_type == "movie":
+        details = await get_details("movie", tmdb_id)
+        if bool(details.media.adult) and not adult_enabled:
+            raise web.HTTPForbidden(
+                text="Adult-content Cinema playback is disabled for this server."
+            )
+        metadata, query, outcome = await search_exact_movie_sources(
+            int(guild_id),
+            media=details.media,
+        )
+    else:
+        if episode_number <= 0:
+            raise web.HTTPBadRequest(
+                text="TV feed queue suggestions need an exact season and episode."
+            )
+        details = await get_details("tv", tmdb_id)
+        if bool(details.media.adult) and not adult_enabled:
+            raise web.HTTPForbidden(
+                text="Adult-content Cinema playback is disabled for this server."
+            )
+        episodes = await get_season(tmdb_id, season_number)
+        episode = next(
+            (
+                item
+                for item in episodes
+                if int(item.episode_number) == int(episode_number)
+            ),
+            None,
+        )
+        if episode is None:
+            raise web.HTTPNotFound(text="That feed episode is no longer in the Cinema catalog.")
+        metadata, query, outcome = await search_exact_episode_sources(
+            int(guild_id),
+            series=details.media,
+            episode=episode,
+        )
+
+    if not tuple(outcome.variants or ()):
+        raise web.HTTPConflict(
+            text="No playable source currently matches this feed suggestion."
+        )
+
+    latest = manager.get(room.room_id)
+    if (
+        latest is None
+        or latest.ended
+        or int(latest.host_id) != int(user_id)
+    ):
+        raise web.HTTPConflict(
+            text="Your Cinema session changed while that feed match was being prepared."
+        )
+
+    manager.join_room(latest.room_id, user_id=int(user_id))
+    materialize_search_results(
+        latest,
+        outcome,
+        proposer_id=int(user_id),
+        query=query,
+        catalog_metadata=metadata,
+    )
+    candidate = find_catalog_candidate(latest, metadata)
+    if candidate is None:
+        raise web.HTTPConflict(
+            text="Cinema could not attach that feed match to the queue."
+        )
+    if str(candidate.candidate_id) == str(latest.current_candidate_id or ""):
+        raise web.HTTPConflict(text="That title is already playing.")
+
+    manager.queue_winner(
+        latest.room_id,
+        candidate_id=candidate.candidate_id,
+    )
+    return web.json_response(
+        {
+            "ok": True,
+            "room_id": str(latest.room_id),
+            "title": str(candidate.title or ""),
+            "queue_count": len(latest.queue),
+        }
+    )
+
+
 async def cinema_feed_rules_api(request: web.Request) -> web.Response:
     guild_id, user_id = await _site_identity(request)
     can_manage = _can_manage_cinema(guild_id, user_id)
@@ -2720,6 +2847,10 @@ def register_cinema_site_routes(app: web.Application) -> None:
     app.router.add_post("/cinema/{guild_id}/api/profile", cinema_profile_api)
     app.router.add_get("/cinema/{guild_id}/api/feeds", cinema_feeds_api)
     app.router.add_post("/cinema/{guild_id}/api/feeds", cinema_feeds_api)
+    app.router.add_post(
+        "/cinema/{guild_id}/api/feed-queue",
+        cinema_feed_queue_api,
+    )
     app.router.add_get(
         "/cinema/{guild_id}/api/feed-rules",
         cinema_feed_rules_api,
@@ -2739,6 +2870,7 @@ def register_cinema_site_routes(app: web.Application) -> None:
 
 
 __all__ = [
+    "cinema_feed_queue_api",
     "cinema_feed_rules_api",
     "cinema_feeds_api",
     "cinema_home_api",
