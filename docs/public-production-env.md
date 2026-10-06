@@ -253,11 +253,31 @@ DANK_TORRENT_BUFFER_WAIT_SECONDS=20
 DANK_TORRENT_METADATA_WAIT_SECONDS=30
 DANK_TORRENT_IDLE_TTL_SECONDS=1800
 
-DANK_TORRENT_CONNECTION_LIMIT=80
-DANK_TORRENT_DOWNLOAD_RATE_BYTES=16777216
+DANK_TORRENT_CONNECTION_LIMIT=200
+DANK_TORRENT_CONNECTION_SPEED=80
+DANK_TORRENT_CONNECT_BOOST=80
+DANK_TORRENT_PEER_CONNECT_TIMEOUT_SECONDS=8
+DANK_TORRENT_DOWNLOAD_RATE_BYTES=67108864
 DANK_TORRENT_UPLOAD_RATE_BYTES=524288
 DANK_TORRENT_LISTEN_INTERFACES=0.0.0.0:6881,[::]:6881
+DANK_TORRENT_TIME_CRITICAL_BASE_DEADLINE_MS=500
+DANK_TORRENT_TIME_CRITICAL_STEP_MS=350
 ```
+
+### Startup / swarm behavior
+
+Provider/index seed counts are **reported availability**, not the number of peers already connected to Dank Cinema. The Watch player switches to live libtorrent seed/peer telemetry after connections form.
+
+The production defaults above favor fast startup without removing the existing RAM/disk/session guards:
+
+- up to 200 peer connections process-wide;
+- up to 80 new connection attempts per second;
+- an 80-connection boost when a newly started torrent receives peer candidates;
+- an 8-second peer connect timeout so dead endpoints stop occupying startup attempts;
+- a 64 MiB/s process download ceiling instead of the older 16 MiB/s ceiling;
+- requested playback pieces use libtorrent time-critical deadlines in addition to normal piece priorities.
+
+Environment variables already set on Discloud override these defaults. An existing deployment that still pins the old 80-connection / 16 MiB/s values must be updated explicitly before the faster settings take effect.
 
 ### Admission behavior
 
