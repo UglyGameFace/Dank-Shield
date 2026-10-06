@@ -446,6 +446,11 @@
     }
     if (Number(item.play_count || 0) > 1) parts.push(`Watched ${Number(item.play_count)}×`);
     if (item.session_mode) parts.push(item.session_mode === "watch_party" ? "Watch Party" : "Private Session");
+    const watchedAt = item.completed_at || item.last_seen_at || "";
+    if (watchedAt) {
+      const watchedDate = new Date(watchedAt);
+      if (!Number.isNaN(watchedDate.getTime())) parts.push(watchedDate.toLocaleDateString());
+    }
     if (item.source_label) parts.push(String(item.source_label));
     return parts.join(" • ");
   }
