@@ -14,7 +14,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional, Sequence
 
-from .cinema_catalog import CinemaMedia, search_catalog
+from .cinema_catalog import CinemaDetails, CinemaMedia, get_details, search_catalog
 from .cinema_library_service import (
     create_notification,
     get_cinema_user,
@@ -951,6 +951,12 @@ async def record_private_discoveries(
         title = _clean(getattr(variant, "title", ""), 240)
         async with semaphore:
             media = await _resolve_media(title, category)
+            details: CinemaDetails | None = None
+            if media is not None:
+                try:
+                    details = await get_details(media.media_type, media.tmdb_id)
+                except Exception:
+                    details = None
         raw_metadata = (
             dict(getattr(variant, "metadata", {}) or {})
             if isinstance(getattr(variant, "metadata", {}), Mapping)
@@ -988,6 +994,21 @@ async def record_private_discoveries(
                     "rating": media.rating,
                 }
             )
+            if details is not None:
+                metadata.update(
+                    {
+                        "genres": list(details.genres)[:12],
+                        "studios": list(details.studios)[:16],
+                        "people": [
+                            str(row.get("name") or "")[:100]
+                            for row in list(details.cast)[:20]
+                            if isinstance(row, Mapping)
+                            and str(row.get("name") or "").strip()
+                        ],
+                        "directors": list(details.directors)[:8],
+                        "creators": list(details.creators)[:8],
+                    }
+                )
         return {
             "user_id": uid,
             "guild_id": gid,
@@ -1296,7 +1317,11 @@ async def process_feed_notifications(
                 uid,
                 guild_id=gid,
                 kind="feed_match",
-                title=f"New feed match: {str(group.get('title') or 'Cinema release')}{episode}",
+                title=(
+                    f"New episode available: {str(group.get('title') or 'Cinema release')}{episode}"
+                    if group.get("new_episode")
+                    else f"New feed match: {str(group.get('title') or 'Cinema release')}"
+                ),
                 body=(
                     f"Matched {', '.join(sorted(reasons))[:180]}"
                     f"{f' • {quality}' if quality else ''}{upgrade}"
