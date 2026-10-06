@@ -1692,6 +1692,7 @@ async def cinema_home_api(request: web.Request) -> web.Response:
         adult_enabled=adult_enabled,
     )
     active_rooms = _active_rooms_payload(guild_id, user_id)
+    watch_party_picks = _watch_party_picks(guild_id, user_id)
     group_user_ids = _active_group_user_ids(guild_id, user_id)
     try:
         intelligence = await home_intelligence(
@@ -1754,6 +1755,11 @@ async def cinema_home_api(request: web.Request) -> web.Response:
         "watch_again",
         "Watch Again",
         [_media_payload(row) for row in library.get("watch_again") or []],
+    )
+    add(
+        "watch_party_picks",
+        "Watch Party Picks",
+        watch_party_picks,
     )
     add(
         "group_recommendations",
