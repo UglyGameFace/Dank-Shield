@@ -304,8 +304,10 @@ class MovieNightManager:
     ) -> MovieNightRoom:
         current = time.monotonic() if now is None else float(now)
         normalized_mode = str(mode or "watch_party").strip().casefold()
-        if normalized_mode not in {"watch_party", "private"}:
-            raise ValueError("Movie Night room mode must be watch_party or private.")
+        if normalized_mode not in {"watch_party", "private", "standalone"}:
+            raise ValueError(
+                "Movie Night room mode must be watch_party, private, or standalone."
+            )
         existing = self.active_room_for_channel(guild_id, channel_id)
         if existing is not None:
             raise RuntimeError("A Movie Night room is already active in this channel.")
@@ -380,9 +382,12 @@ class MovieNightManager:
 
     @staticmethod
     def user_can_access(room: MovieNightRoom, user_id: int) -> bool:
-        if str(getattr(room, "mode", "watch_party") or "watch_party") != "private":
-            return True
+        mode = str(getattr(room, "mode", "watch_party") or "watch_party")
         uid = int(user_id)
+        if mode == "standalone":
+            return uid == int(room.host_id)
+        if mode != "private":
+            return True
         if uid == int(room.host_id):
             return True
         return uid in set(getattr(room, "private_allowed_viewers", set()) or set())
