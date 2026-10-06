@@ -10,6 +10,8 @@ from typing import Any
 import discord
 import pytest
 
+import stoney_verify.command_runtime as command_runtime
+from stoney_verify import torrent_media_server
 from stoney_verify.command_runtime import (
     DankAutoShardedBot,
     DankBot,
@@ -131,6 +133,52 @@ def test_native_bot_constructor_owns_tree_and_shard_choice(monkeypatch: pytest.M
     # startup. This constructor test never starts/connects the client, so calling
     # close() here would test an invalid discord.py lifecycle rather than Dank
     # Shield ownership.
+
+
+
+def test_setup_hook_binds_cinema_site_before_discord_command_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    async def fake_start_media_server() -> bool:
+        events.append("media")
+        return True
+
+    async def fake_clear_stale_guild_command_copies(*args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args, kwargs
+        events.append("cleanup")
+        return {"status": "ok", "cleared": [], "failed": []}
+
+    monkeypatch.setattr(
+        torrent_media_server,
+        "start_torrent_media_server",
+        fake_start_media_server,
+    )
+    monkeypatch.setattr(
+        command_runtime,
+        "clear_stale_guild_command_copies",
+        fake_clear_stale_guild_command_copies,
+    )
+    monkeypatch.setattr(
+        command_runtime,
+        "public_command_scope_enabled",
+        lambda: False,
+    )
+
+    async def scenario() -> None:
+        bot = DankBot(
+            command_prefix="!",
+            intents=discord.Intents.none(),
+            help_command=None,
+            tree_cls=DankCommandTree,
+        )
+        await bot.setup_hook()
+        await bot.close()
+
+    asyncio.run(scenario())
+
+    assert events == ["media", "cleanup"]
 
 
 def test_public_surface_validation_is_menu_first_and_fail_closed() -> None:
