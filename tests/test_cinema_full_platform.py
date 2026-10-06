@@ -809,7 +809,7 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'initialUrl.searchParams.delete("sig")' in script
     assert 'history.replaceState(' in script
     assert 'return `${path}${AUTH_QUERY ? join + AUTH_QUERY.slice(1) : ""}`;' in script
-    assert 'src="/cinema/assets/site.js?v=10"' in source
+    assert 'src="/cinema/assets/site.js?v=11"' in source
     assert '"/cinema/{guild_id}/api/auth-debug"' in source
     assert "def _cinema_auth_debug_payload(" in source
     assert "signed-session-v8-snowflake-safe" in source
@@ -1034,8 +1034,8 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert 'b.append(uiIcon(iconName), node("span", "bottom-nav-label", label))' in script
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
-    assert 'href="/cinema/assets/site.css?v=6"' in source
-    assert 'src="/cinema/assets/site.js?v=10"' in source
+    assert 'href="/cinema/assets/site.css?v=7"' in source
+    assert 'src="/cinema/assets/site.js?v=11"' in source
 
 
 def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop() -> None:
@@ -1050,7 +1050,7 @@ def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop
         'content="width=device-width,initial-scale=1,minimum-scale=1,'
         'viewport-fit=cover,interactive-widget=resizes-content">'
     ) in source
-    assert 'href="/cinema/assets/site.css?v=6"' in source
+    assert 'href="/cinema/assets/site.css?v=7"' in source
 
     assert "--content:min(1560px,calc(100vw - 48px))" in styles
     assert "@media(min-width:1800px)" in styles
@@ -1502,7 +1502,7 @@ def test_full_site_feed_center_uses_real_search_pagination_and_source_capabiliti
     assert "function feedResultCard(result)" in script
     assert '"Latest Feed Results"' in script
     assert 'saved feed result' in script
-    assert 'matching “${state.feedQuery}”.' in script
+    assert 'matching “" + state.feedQuery + "”.' in script
     assert '"No feed results yet. Refresh an enabled RSS or structured source below' in script
     assert '"Search in Cinema"' in script
     assert '"View Details"' in script
