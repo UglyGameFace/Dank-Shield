@@ -7,6 +7,7 @@ status, permissions, refresh behavior, categorization, and CAS persistence never
 fork into two implementations.
 """
 
+import asyncio
 import time
 from typing import Any, Mapping
 
