@@ -2026,7 +2026,33 @@ async def cinema_details_api(request: web.Request) -> web.Response:
 
     details_task = asyncio.create_task(get_details(media_type, tmdb_id))
     library_task = asyncio.create_task(list_user_media(user_id))
-    details, rows = await asyncio.gather(details_task, library_task)
+    details_result, library_result = await asyncio.gather(
+        details_task,
+        library_task,
+        return_exceptions=True,
+    )
+    if isinstance(details_result, Exception):
+        print(
+            "⚠️ cinema_site details unavailable "
+            f"phase=catalog guild={int(_guild_id)} user={int(user_id)} "
+            f"media={media_type}:{tmdb_id} error={type(details_result).__name__}"
+        )
+        raise web.HTTPServiceUnavailable(
+            text="Cinema title metadata is temporarily unavailable. Try again."
+        )
+    details = details_result
+
+    library_available = not isinstance(library_result, Exception)
+    if library_available:
+        rows = list(library_result or [])
+    else:
+        print(
+            "⚠️ cinema_site details degraded "
+            f"phase=library guild={int(_guild_id)} user={int(user_id)} "
+            f"media={media_type}:{tmdb_id} error={type(library_result).__name__}"
+        )
+        rows = []
+
     adult_enabled = await _guild_adult_content_enabled(_guild_id)
     if bool(details.media.adult) and not adult_enabled:
         raise web.HTTPNotFound(
@@ -2170,6 +2196,12 @@ async def cinema_details_api(request: web.Request) -> web.Response:
         {
             "details": details.to_payload(),
             "library": matching[0] if matching else None,
+            "library_available": bool(library_available),
+            "library_notice": (
+                ""
+                if library_available
+                else "Your Cinema library is temporarily unavailable. Playback and title details still work."
+            ),
             "episode_progress": episode_progress,
             "continue_episode": continue_episode,
             "sources": source_rows,
@@ -2189,7 +2221,33 @@ async def cinema_season_api(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(text="Invalid season.")
     episodes_task = asyncio.create_task(get_season(series_id, season_number))
     media_task = asyncio.create_task(list_user_media(user_id))
-    episodes, rows = await asyncio.gather(episodes_task, media_task)
+    episodes_result, media_result = await asyncio.gather(
+        episodes_task,
+        media_task,
+        return_exceptions=True,
+    )
+    if isinstance(episodes_result, Exception):
+        print(
+            "⚠️ cinema_site season unavailable "
+            f"phase=catalog guild={int(_guild_id)} user={int(user_id)} "
+            f"series={series_id} season={season_number} "
+            f"error={type(episodes_result).__name__}"
+        )
+        raise web.HTTPServiceUnavailable(
+            text="Cinema episode metadata is temporarily unavailable. Try again."
+        )
+    episodes = episodes_result
+    library_available = not isinstance(media_result, Exception)
+    if library_available:
+        rows = list(media_result or [])
+    else:
+        print(
+            "⚠️ cinema_site season degraded "
+            f"phase=library guild={int(_guild_id)} user={int(user_id)} "
+            f"series={series_id} season={season_number} "
+            f"error={type(media_result).__name__}"
+        )
+        rows = []
 
     progress = {
         (
@@ -2215,7 +2273,12 @@ async def cinema_season_api(request: web.Request) -> web.Response:
             (episode.season_number, episode.episode_number)
         )
         output.append(payload)
-    return web.json_response({"episodes": output})
+    return web.json_response(
+        {
+            "episodes": output,
+            "library_available": bool(library_available),
+        }
+    )
 
 
 async def cinema_play_api(request: web.Request) -> web.Response:
@@ -3075,7 +3138,7 @@ def _site_html(guild_id: int, user_id: int) -> str:
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=14" defer></script>
+  <script src="/cinema/assets/site.js?v=15" defer></script>
 </body>
 </html>"""
 
