@@ -318,7 +318,7 @@ def prepare_example_search_url(value: Any) -> str:
         if _looks_like_static_feed_url(clean):
             return clean
         raise ValueError(
-            "Dank Shield could not identify how that provider searches. "
+            "Dank Shield could not find the movie-search part of that URL. "
             "Use a title parameter such as q=, query=, query_term=, search=, term=, "
             "keyword=, title=, or s=; use an IMDb/TMDB parameter; include a supported "
             "placeholder such as {query}, {imdb_id}, {imdb_numeric}, or {tmdb_id}; "
