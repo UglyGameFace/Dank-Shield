@@ -42,7 +42,7 @@ This remains the single active engineering task.
 
 ## Status
 
-**Production canary failed the intended outcome. Measurement instrumentation is now implemented on this branch; no startup tuning has been changed yet. Exact-head CI and a measurement canary are next.**
+**Measurement instrumentation is implemented. PR #464 exact-head CI exposed one obsolete string-based layout regression assertion; runtime/unit behavior otherwise passed 2911 tests. The assertion is corrected and fresh exact-head CI is running. No startup tuning has been changed yet.**
 
 Known production evidence:
 - PR #463 merged successfully.
@@ -87,6 +87,13 @@ The branch now records, per signed stream consumer:
 These values are displayed under **Advanced Stream Details** as **Server startup** and **Browser startup**. The browser first Range offset is always shown, including `0 B`, so tail-first/container-probe behavior is visible instead of inferred.
 
 Instrumentation is diagnostic only. It does not change buffer size, range semantics, torrent priorities, peer limits, autoplay policy, or compatibility-audio behavior.
+
+First PR #464 CI result:
+- 2911 passed / 1 failed;
+- the only failure was `test_player_layout_recovers_from_mobile_desktop_mode_resizes`;
+- the test still expected the old one-line media-event listener string, while the implementation now uses a block listener so it can both call `stabilizePlayerLayout()` and record startup timing;
+- the layout call remains present, so this was a stale structural assertion rather than a runtime regression;
+- the test now asserts the block listener, layout stabilization, and startup-event marker together.
 
 ## Validation / Definition of Done
 
