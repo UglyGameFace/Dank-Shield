@@ -823,8 +823,12 @@
       if (hero) page.appendChild(hero);
 
       if (Array.isArray(home.active_sessions)) {
+        const heroRoomId = String(home.hero?.secondary?.room_id || "");
         const liveItems = home.active_sessions
-          .filter((room) => String(room?.mode || "") === "watch_party")
+          .filter((room) => (
+            String(room?.mode || "") === "watch_party" &&
+            String(room?.room_id || "") !== heroRoomId
+          ))
           .map((room) => ({
             ...room,
             media_type: room.media_type || "movie",
