@@ -1435,10 +1435,12 @@ async def search_movie_sources(
     *,
     catalog_metadata: Optional[Mapping[str, Any]] = None,
 ) -> MediaSourceSearchOutcome:
-    lookup_context = await _enrich_provider_lookup_context(
-        query,
-        catalog_metadata,
-    )
+    lookup_context: Optional[Mapping[str, Any]] = None
+    if isinstance(catalog_metadata, Mapping) and catalog_metadata:
+        lookup_context = await _enrich_provider_lookup_context(
+            query,
+            catalog_metadata,
+        )
     builtin_result, custom = await asyncio.gather(
         _search_builtin_internet_archive(query),
         search_custom_media_sources(
