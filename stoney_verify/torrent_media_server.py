@@ -18,6 +18,7 @@ from stoney_verify.cinema_site import (
     register_cinema_site_routes,
 )
 from stoney_verify.torrent_streaming import get_torrent_manager
+from stoney_verify.cinema_feed_service import start_cinema_feed_refresh_worker
 
 _MEDIA_RUNNER: Optional[web.AppRunner] = None
 _MEDIA_SITE: Optional[web.TCPSite] = None
@@ -152,6 +153,7 @@ async def start_torrent_media_server() -> bool:
 
     _MEDIA_RUNNER = runner
     _MEDIA_SITE = site
+    start_cinema_feed_refresh_worker()
 
     print(
         f"🎞️ Torrent media server started on {host}:{port} "
