@@ -1,5 +1,96 @@
 # Dank Shield Active Task
 
+## Current checkpoint — PR #458
+
+### Active task / outcome
+
+**DANK-CINEMA-LIBRARY-INTELLIGENCE — bot-native Cinema Library intelligence with correct standalone website playback**
+
+PR: **#458 — Build bot-native Cinema Library intelligence**  
+Branch: `feat/cinema-library-intelligence`  
+Base: `main@3e86f4ffd701fc1801bc492331393c23d84b8bd3`
+
+Outcome:
+Complete the current Cinema Library intelligence slice without creating a second playback engine, and close the directly-related full-site regression reported on Samsung Browser: Continue Watching must allow another episode to be selected, and **Open Dank Cinema** must play movies/episodes directly on the website as a third mode that is separate from **Watch Party** and **Private Session**.
+
+### Scope
+
+- Preserve one `MovieNightRoom`, torrent runtime, provider resolver, and Watch player.
+- Keep Watch Party and Private Session behavior compatible.
+- Treat Open Dank Cinema as a distinct host-only **standalone** website mode.
+- Allow direct movie and exact-episode playback from full-site Details/Continue Watching without requiring a Discord-created room.
+- Keep Discord server membership as the authorization boundary for the site and signed Watch routes.
+- Persist Library intelligence/watch activity with standalone mode represented truthfully.
+- Validate Python/unit behavior, JavaScript/UI contracts, SQL migration replay/security, exact-head CI, cleanup, and live Discloud/mobile behavior before any completion claim.
+
+### Status
+
+**Implementation for the reported regression is on the PR branch. Exact-head CI and live canary are still pending, so no completion/merge-ready claim is valid yet.**
+
+### Findings / root cause
+
+1. `cinema_site.js` deliberately gated all website Play buttons behind `data.host_session?.is_host`; otherwise it rendered **Open Discord to Play**.
+2. Season episode cards were visually rendered but only received a Play control when a Discord-hosted room existed, making other episodes effectively inert from Continue Watching.
+3. `cinema_play_api` rejected requests without an existing `room_id` owned by the user, so the server enforced the same Discord-room dependency as the UI.
+4. Open Dank Cinema had no distinct playback/session representation. Reusing Private Session would misstate access/analytics; reusing Watch Party would incorrectly introduce collaboration semantics.
+5. Signed Watch URLs checked room access but did not recheck the canonical guild-membership boundary after the link was issued.
+6. Library watch-session storage allowed only `private` and `watch_party`, so a true third website mode required an additive schema update rather than silently misclassifying activity.
+
+### Execution path
+
+Standalone:
+`Open Dank Cinema -> signed /cinema guild identity -> Details/episode selection -> POST /cinema/.../api/play -> exact TMDB/provider resolution -> host-only standalone MovieNightRoom -> existing cinema_playback_service -> existing TorrentMediaManager -> signed /movie/{room}/watch`.
+
+Collaborative:
+`Discord Watch Party / Private Session -> existing MovieNightRoom -> same cinema_playback_service/TorrentMediaManager -> signed Watch player`.
+
+Membership:
+`Cinema site identity / signed Watch route -> canonical Discord guild membership verifier -> room access`.
+
+### Changes
+
+- Added `standalone` as a valid `MovieNightRoom` mode with host-only access.
+- Website Play without a supplied room now reuses/creates one per-user standalone room only after a real playable source is found; synthetic negative channel scope prevents collisions with real Discord channels.
+- Existing explicit room playback remains host-authorized for backward compatibility, but the full-site UI no longer borrows/mutates a Watch Party or Private Session.
+- Removed **Open Discord to Play** as the website fallback; movies and exact TV episodes start on-site.
+- Added direct Play/Resume controls for every episode and made non-control taps on an episode card start that episode.
+- Standalone Watch UI now identifies itself as Dank Cinema/Standalone instead of falsely calling itself a Watch Party or Private Session; collaborative-only controls are hidden.
+- Signed Watch access now reuses the canonical membership verifier and denies definitive member/bot removal while treating transient Discord REST failure as unavailable rather than proof of absence.
+- Library activity accepts/counts `standalone` sessions.
+- Added additive migration `20261006051500_dank_cinema_standalone_playback.sql` and extended Cinema SQL CI to replay/exercise it.
+- Added regressions for direct website room creation, host-only standalone access, member revocation, standalone Watch state, and direct/tappable episode playback.
+- Bumped full-site asset versions so Samsung Browser does not keep the old host-gated JS/CSS after deployment.
+
+### Validation / results
+
+Current exact-head validation is running through PR #458 workflows. The latest inspected head preserves the direct-play/standalone changes plus concurrent Library-intelligence work; no user work was discarded.
+
+### Cleanup / conflicts
+
+- No second player, torrent runtime, provider stack, or duplicated membership verifier was added.
+- Standalone rooms use the existing room/playback lifecycle and are excluded from **Live Watch Parties** / Watch Party Picks.
+- A concurrent commit that enriched canonical Theater metadata landed after this work began; it was preserved and later writes were rebased implicitly by re-fetching current file blobs before modification.
+- Existing Watch Party/Private Session explicit-room API behavior remains available for compatibility.
+
+### Blockers / risks
+
+- Exact-head workflows must finish and any evidence-backed failures must be repaired.
+- Live Discloud/Samsung Browser validation is still required for: Continue Watching -> another episode, movie Play/Resume, standalone return-to-Theater, server-member removal, and Watch Party/Private Session regression checks.
+- Provider/swarm availability remains external and can still prevent a title from starting when no exact playable release exists.
+
+### Backlog
+
+No unrelated Cinema redesign or other Dank Shield issue was started. Any unrelated work remains outside this active task.
+
+### Next step
+
+Finish PR #458 exact-head CI, repair only failures tied to this active task, inspect the final diff for conflicts/accidental changes, then deploy/canary the exact green head before declaring the regression resolved.
+
+---
+
+## Historical task record below
+
+
 ## Active task / outcome
 
 **DANK-SHIELD-430 — Complete Dank Cinema as a full premium streaming platform**
