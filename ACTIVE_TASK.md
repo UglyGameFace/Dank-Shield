@@ -2,105 +2,75 @@
 
 ## Active task / outcome
 
-**DANK-CINEMA-BACKGROUND-RECONNECT — make returning tabs actually recover playback instead of only saying “Reconnecting”**
+**DANK-CINEMA-HOME-RESUME — make the Home hero Resume button actually resume the exact saved movie/episode**
 
 Production baseline:
-`main@beaef77c3564913f135aa2e7814c4f156d752b83` (PR #465 merged; first-byte startup fix in production).
+`main@38ad43110e1c1b122332a82ba2b03c0262b97b02` (PR #466 merged).
 
 Active branch:
-`fix/cinema-background-reconnect`
+`fix/cinema-home-resume`
 
 Outcome:
-When a user leaves the Dank Cinema Watch/Theater tab in the background and later returns, the page must immediately re-establish canonical session state and media playback when the room still exists. A “Reconnecting…” message must correspond to a real bounded reconnect loop, not merely failed polling text.
-
-## Product/browser scope
-
-Dank Cinema remains cross-browser. This task applies to:
-- Chromium desktop/mobile;
-- Samsung Internet;
-- Firefox-family browsers where supported;
-- Safari/WebKit;
-- mobile, tablet, and desktop layouts.
-
-The fix uses standard page visibility, pageshow, online/offline, fetch, and media APIs. No browser-specific architecture is introduced.
+When Cinema Home promotes a partially watched title in the hero, pressing **Resume** must start the canonical standalone playback for that exact saved movie or TV episode and let the Theater restore saved progress. It must not silently route back to Home or require the user to reopen Details first.
 
 ## Status
 
-**PR #466 exact-head CI exposed one stale terminal-state test assertion after the reconnect functions gained explicit boolean/null return values. Runtime/unit behavior otherwise passed 2912 tests. The assertion is corrected and fresh exact-head CI is running.**
+**Root cause is confirmed and fixed on the branch. Focused regressions are added; exact-head CI and production canary remain.**
 
-## Exact findings
+## Exact root cause
 
-1. The old UI text `Sync connection lost. Reconnecting…` appeared after three failed `/state` polls.
-2. That text did **not** itself start a dedicated session reconnect loop.
-3. The actual media stream retry path `scheduleStreamRetry()` was only triggered by the HTML video element's `error` event.
-4. The normal state poll ran every 2 seconds and heartbeat every 3 seconds, but mobile/desktop browsers may suspend those timers while a tab is backgrounded.
-5. The old `pageshow` / visible-tab handler only called `recoverPlayerFromViewportChange()`; it did not heartbeat, fetch canonical room state, or force a stale media connection to reattach.
-6. Therefore returning from a suspended tab could leave stale Watch state and a dead media pipeline even though the UI claimed it was reconnecting.
-7. The server viewer TTL is 35 seconds. The default empty-room TTL is `DANK_MOVIE_NIGHT_EMPTY_ROOM_TTL_SECONDS=1800`, exactly 30 minutes.
-8. A backgrounded tab may stop heartbeats, so a room with no other active viewers becomes eligible for cleanup at about the same 30-minute point described in the production report.
-9. The screenshot alone cannot prove whether that specific room had already crossed cleanup, because the old client collapsed retryable fetch failures into the same reconnect message. The 30-minute cleanup boundary is nevertheless an exact current configuration fact.
-10. Signed Watch/media URLs use longer validity windows than 30 minutes, so room cleanup can happen before the link itself expires.
+1. The Home backend labeled the hero action **Resume**, but encoded it as:
+   `{"kind":"details","media_type":<saved media type>,"tmdb_id":<saved tmdb id>}`.
+2. For the production reproduction, the saved item was **The Office S01E02**, whose library media type is `episode`.
+3. The client therefore attempted to navigate to `#details/episode/<episode tmdb id>`.
+4. The router intentionally accepts Details only for `movie` and `tv`:
+   `if (view === "details" && ["movie", "tv"].includes(parts[1]) ...)`.
+5. The invalid `details/episode/... ` route immediately fell through to `go("home")`.
+6. Because the user was already on Home, this appeared exactly as reported: pressing **Resume did nothing**.
+7. The existing `playOnSite()` path already supports `movie` and exact `episode` playback and is the correct canonical path. Episode playback requires `series_id`, season, episode number, and episode TMDB id; progress records already preserve that series identity in metadata.
 
-## Reconnect fix
+## Fix
 
-- Added a dedicated session reconnect loop with bounded exponential backoff.
-- `pageshow`, visibility restore, and the browser `online` event now trigger immediate session recovery.
-- Recovery starts with a real heartbeat request, which refreshes viewer/host presence and returns canonical room state.
-- Successful recovery clears reconnect state and reapplies canonical room playback.
-- After a longer background suspension, an unchanged signed media URL is force-reattached only after fresh server state succeeds, then canonical playback state is applied again.
-- Hidden documents no longer run the normal 2-second poll / 3-second heartbeat loops pointlessly.
-- A keepalive heartbeat is attempted when the page becomes hidden.
-- `jsonFetch` now retains HTTP status on errors.
-- HTTP 404/401/403 are treated as terminal session/access states instead of being mislabeled as endlessly retryable network loss.
-- Retryable failures actually schedule the reconnect loop.
-- The existing media-error retry path remains separate and intact.
+- Home Resume actions are now **direct-play actions**, not mislabeled Details actions.
+- Movie Resume carries:
+  - `media_type=movie`
+  - exact movie `tmdb_id`.
+- Episode Resume carries:
+  - `media_type=episode`
+  - exact episode `tmdb_id`
+  - canonical `series_id`
+  - season number
+  - episode number.
+- The client hero handles `action.kind === "play"` by calling the existing `playOnSite(action, resumeButton)` path.
+- No duplicate playback API or room path was added.
+- Legacy/malformed episode progress that lacks a canonical `series_id` no longer emits a knowingly invalid Resume action.
+- Cinema JS asset version is bumped from v16 to v17 so browsers do not keep the broken hero handler cached.
 
-## Important timeout policy
+## Validation added
 
-This code does **not** silently change the server's 1800-second empty-room timeout.
+Focused regressions verify:
+- movie hero Resume becomes a direct-play action;
+- exact TV episode Resume preserves series/season/episode/TMDB identity;
+- malformed episode rows do not build an invalid `details/episode/... ` action;
+- the client hero routes play actions through `playOnSite()`;
+- the updated JS asset version is served.
 
-That means:
-- if the room still exists, wake recovery now has a real path to reconnect;
-- if the room was already retired after the configured idle timeout, the page must report that terminal state rather than lie that it is reconnecting forever;
-- if product policy requires a user to return after ~30 minutes and keep the same room alive, production must use an idle TTL greater than 1800 seconds or a later architectural resume/recreate flow.
+## Scope / compatibility
 
-## First PR #466 CI result
+Dank Cinema remains cross-browser. This fix uses the same existing website API and normal button/navigation code on Chromium, Samsung Internet, Firefox-family browsers, Safari/WebKit, mobile, tablet, and desktop.
 
-- Dank Shield CI failed with **1 failed / 2912 passed**.
-- The only failure was `test_web_player_has_terminal_state_before_missing_room_fallback`.
-- The test still required the old exact string `if(terminated) return;`.
-- The reconnect implementation now deliberately returns typed results: `poll()` uses `if(terminated) return false;` and `heartbeat()` uses `if(terminated) return null;`.
-- Terminal guards are still present and stronger than before; the stale string assertion has been updated to verify both explicit return contracts.
-- This failure is unrelated to Discloud runtime environment variables.
+No source-selection, torrent startup, reconnect, audio, feed-artwork, or unrelated Cinema behavior is changed here.
 
-## Validation / Definition of Done
+## Backlog / preserved work
 
-The task is not complete until:
-- exact-head CI passes;
-- diff review confirms no first-byte/startup changes are accidentally duplicated on this reconnect-only branch;
-- a foreground disconnect/recovery canary succeeds;
-- a background/return canary succeeds while the room is still inside its configured idle TTL;
-- terminal expired-room behavior is truthful;
-- existing Watch Party / Private Session / standalone playback behavior remains intact;
-- cross-browser event handling remains feature-neutral.
-
-## Backlog
-
-- Audio-track selector: blank dropdown because browser `video.audioTracks` is not a reliable cross-browser authority.
-- Home Resume: Continue Watching hero Resume can do nothing.
-- Transient Cloudflare/origin 502 if it recurs independently.
+- Audio-track selector blank dropdown.
 - From Your Feeds canonical TMDB artwork enrichment.
-- Product decision: desired no-viewer idle lifetime beyond the current 1800-second default, or automatic room recreation after expiry.
-
-## Cleanup / conflicts
-
-- PR #465 is merged and green; its first-byte startup fix is the production baseline.
-- This branch was recreated cleanly from merged `main` after the earlier working branch diverged.
-- Only reconnect lifecycle code, reconnect regressions, and this task record belong here.
+- Transient Cloudflare/origin 502 if it recurs independently.
+- Any remaining startup-speed work continues from the already merged first-byte/startup work; this Resume task does not rewrite it.
 
 ## Next step
 
-Open a focused draft PR from this clean reconnect branch, run exact-head CI, repair only evidence-backed failures, then canary a background/return within the configured room lifetime. Keep the 30-minute server-expiry policy explicit rather than hiding it behind retry text.
+Open a focused draft PR, run exact-head CI, repair only evidence-backed failures, then production-canary the exact Home **Resume** reproduction for a partially watched TV episode and a movie.
 
 ---
 

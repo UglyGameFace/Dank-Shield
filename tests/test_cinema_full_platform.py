@@ -59,6 +59,85 @@ def _series() -> CinemaMedia:
     )
 
 
+def test_cinema_home_movie_resume_hero_starts_direct_playback() -> None:
+    hero = cinema_site._hero_from_sections(
+        [],
+        [
+            {
+                "media_type": "movie",
+                "tmdb_id": 123,
+                "title": "Example Movie",
+                "progress_seconds": 321.0,
+                "metadata": {"backdrop_url": "backdrop", "poster_url": "poster"},
+            }
+        ],
+        [],
+    )
+
+    assert hero is not None
+    assert hero["kind"] == "resume"
+    assert hero["action"] == {
+        "kind": "play",
+        "media_type": "movie",
+        "tmdb_id": 123,
+        "label": "Resume",
+    }
+
+
+def test_cinema_home_episode_resume_hero_keeps_exact_episode_identity() -> None:
+    hero = cinema_site._hero_from_sections(
+        [],
+        [
+            {
+                "media_type": "episode",
+                "tmdb_id": 9002,
+                "season_number": 1,
+                "episode_number": 2,
+                "title": "Diversity Day",
+                "progress_seconds": 420.0,
+                "metadata": {
+                    "series_id": 2316,
+                    "series_title": "The Office",
+                    "backdrop_url": "backdrop",
+                },
+            }
+        ],
+        [],
+    )
+
+    assert hero is not None
+    assert hero["kind"] == "resume"
+    assert hero["action"] == {
+        "kind": "play",
+        "media_type": "episode",
+        "tmdb_id": 9002,
+        "series_id": 2316,
+        "season_number": 1,
+        "episode_number": 2,
+        "label": "Resume",
+    }
+
+
+def test_cinema_home_episode_resume_never_builds_invalid_episode_details_route() -> None:
+    hero = cinema_site._hero_from_sections(
+        [],
+        [
+            {
+                "media_type": "episode",
+                "tmdb_id": 9002,
+                "season_number": 1,
+                "episode_number": 2,
+                "title": "Diversity Day",
+                "metadata": {},
+            }
+        ],
+        [],
+    )
+
+    assert hero is not None
+    assert hero["action"] == {}
+
+
 def test_movie_identity_rejects_explicit_game_and_software_categories() -> None:
     metadata = {
         "media_type": "movie",
@@ -1250,7 +1329,7 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'initialUrl.searchParams.delete("sig")' in script
     assert 'history.replaceState(' in script
     assert 'return `${path}${AUTH_QUERY ? join + AUTH_QUERY.slice(1) : ""}`;' in script
-    assert 'src="/cinema/assets/site.js?v=16"' in source
+    assert 'src="/cinema/assets/site.js?v=17"' in source
     assert '"/cinema/{guild_id}/api/auth-debug"' in source
     assert "def _cinema_auth_debug_payload(" in source
     assert "signed-session-v8-snowflake-safe" in source
@@ -1398,6 +1477,8 @@ def test_full_site_episode_playback_is_direct_and_not_discord_room_scoped() -> N
     assert 'payload.season_number = Number' in script
     assert 'payload.episode_number = Number' in script
     assert "playOnSite(episodeItem" in script
+    assert 'action.kind === "play"' in script
+    assert 'resume.addEventListener("click", () => playOnSite(action, resume))' in script
     assert 'card.classList.add("episode-playable")' in script
     assert 'event.target.closest("button, select, option")' in script
     assert 'if (sourceChoice) payload.source_choice = String(sourceChoice)' in script
@@ -1496,7 +1577,7 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
     assert 'href="/cinema/assets/site.css?v=10"' in source
-    assert 'src="/cinema/assets/site.js?v=16"' in source
+    assert 'src="/cinema/assets/site.js?v=17"' in source
 
 
 def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop() -> None:
