@@ -1219,14 +1219,17 @@ async def _search_builtin_internet_archive(
 async def probe_custom_media_source(
     source: CustomMediaSource,
     *,
-    query: str = "batman",
+    query: str = "breaking bad",
 ) -> MediaSourceProbeOutcome:
     probe_context = {
         "query": query,
-        "imdb_id": "tt0096895",
-        "imdb_numeric": "96895",
-        "tmdb_id": "268",
-        "series_tmdb_id": "1399",
+        "imdb_id": "tt0903747",
+        "imdb_numeric": "903747",
+        "tmdb_id": "1396",
+        "series_tmdb_id": "1396",
+        "tvdb_id": "81189",
+        "year": "2008",
+        "media_type": "tv",
         "season": "1",
         "episode": "1",
         "season_episode": "S01E01",
