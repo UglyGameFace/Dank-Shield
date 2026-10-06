@@ -643,12 +643,32 @@ def _rule_matches(group: Mapping[str, Any], rule: Mapping[str, Any]) -> bool:
     media_type = str(rule.get("media_type") or "")
     if media_type and str(group.get("media_type") or "") != media_type:
         return False
+
     tmdb_id = int(rule.get("tmdb_id") or 0)
-    if tmdb_id and int(group.get("tmdb_id") or 0) != tmdb_id:
-        return False
-    query = str(rule.get("query") or "").strip().casefold()
-    if query and query not in _result_text(group):
-        return False
+    if tmdb_id:
+        if int(group.get("tmdb_id") or 0) != tmdb_id:
+            return False
+        # Canonical identity is stronger than display-title text.
+        query = ""
+    else:
+        query = str(rule.get("query") or "").strip().casefold()
+
+    if query:
+        rule_type = str(rule.get("rule_type") or "")
+        if rule_type == "person":
+            haystack = " ".join(
+                str(item)
+                for key in ("people", "directors", "creators")
+                for item in group.get(key) or []
+            ).casefold()
+        elif rule_type == "genre":
+            haystack = " ".join(str(item) for item in group.get("genres") or []).casefold()
+        elif rule_type == "studio":
+            haystack = " ".join(str(item) for item in group.get("studios") or []).casefold()
+        else:
+            haystack = _result_text(group)
+        if query not in haystack:
+            return False
     return _matches_filters(group, rule.get("filters") or {})
 
 
@@ -1157,6 +1177,24 @@ async def refresh_private_source(
         category=category,
         variants=variants,
     )
+    if recorded:
+        try:
+            private_results = [
+                row
+                for row in await list_private_discoveries(
+                    int(guild_id),
+                    int(user_id),
+                    limit=60,
+                )
+                if str(row.get("source_id") or "") == source_id
+            ]
+            await process_feed_notifications(
+                int(guild_id),
+                private_results,
+                target_user_id=int(user_id),
+            )
+        except Exception:
+            pass
     return {
         "rule": rule,
         "result_count": len(recorded),
@@ -1167,6 +1205,8 @@ async def refresh_private_source(
 async def process_feed_notifications(
     guild_id: int,
     discoveries: Sequence[Mapping[str, Any]],
+    *,
+    target_user_id: int = 0,
 ) -> int:
     """Create bounded Cinema inbox alerts for watchlist/rule matches.
 
@@ -1192,6 +1232,12 @@ async def process_feed_notifications(
 
     rule_rows = rows(await execute(f"read notification Feed Rules {gid}", read_rules))
     rules = [_normalize_rule(row) for row in rule_rows]
+    target_uid = max(0, int(target_user_id or 0))
+    if target_uid:
+        rules = [
+            rule for rule in rules
+            if int(rule.get("owner_user_id") or 0) == target_uid
+        ]
     eligible_users = {
         int(rule.get("owner_user_id") or 0)
         for rule in rules
@@ -1244,6 +1290,8 @@ async def process_feed_notifications(
             watched_rows = []
         for row in watched_rows:
             uid = int(row.get("user_id") or 0)
+            if target_uid and uid != target_uid:
+                continue
             if uid <= 0 or uid not in eligible_users:
                 continue
             matched.setdefault(uid, []).append((dict(group), "Watchlist", "instant"))
