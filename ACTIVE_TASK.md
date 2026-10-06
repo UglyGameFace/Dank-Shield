@@ -2,151 +2,133 @@
 
 ## Active task / outcome
 
-**DANK-CINEMA-SOURCE-SELECTION-CANARY — finish production canary: Details reliability and source consistency**
+**DANK-CINEMA-FAST-START-CANARY — minimize healthy-swarm startup latency without weakening playback safety**
 
 Production baseline:
-`main@fe27764cb55fca83bbea828b328bf5dc009e0cf4` (PR #461 merged).
+`main@fd4fc7ba7e6650d33cb8f56890fd71abdb4fa1fd` (PR #462 merged).
 
 Active branch:
-`fix/cinema-details-500`
+`fix/cinema-faster-startup`
 
 Outcome:
-Finish the same direct-play/source-selection canary by eliminating two production blockers discovered on Samsung Browser:
-
-1. authenticated title Details/Season requests can collapse into an opaque generic 500 when optional Cinema Library storage fails;
-2. the Details page can show playable source cards, then **Play Here** can immediately say no playable source matches because Play performs a second independent provider search.
+When a valid Cinema release has a healthy swarm, Dank Cinema should connect to useful peers quickly, prioritize the exact startup bytes the browser needs, and avoid imposing an unnecessary process download bottleneck. Provider-reported seed counts must also be labeled truthfully so users do not mistake index metadata for already-connected peers.
 
 ## Scope
 
-This remains one implementation task because both defects block the same production path:
-`Title Details -> source selection -> Play Here`.
+This remains the single active production-playback task.
 
-- Keep Discord auth/membership behavior unchanged.
-- Keep PR #461 automatic/manual source UX unchanged.
-- Treat TMDB title/episode metadata as required for Details/Season rendering.
-- Treat per-user Library/progress storage as optional for browsing and playback.
-- Reuse the exact source result shown on Details for the immediate Play request instead of racing a second provider lookup.
-- Keep raw magnet/.torrent references server-side.
-- Preserve automatic ranking and manual exact-release override.
-- Preserve Private Session / Watch Party / standalone separation.
-- Bound any source snapshot cache for production scale.
-- Exact-head CI and Samsung Browser canary are required before completion.
+- Preserve the canonical torrent runtime, MovieNightRoom model, signed byte-range stream, adaptive buffering, and all RAM/disk/session admission guards.
+- Preserve Automatic/manual source selection and current browser-audio safety ranking.
+- Improve initial peer fan-out for newly started torrents.
+- Use libtorrent's streaming-specific time-critical piece mechanism for requested playback bytes.
+- Do not let MP4 tail-probe work compete with the startup range as time-critical.
+- Raise the old conservative process download ceiling enough that a healthy swarm is not artificially limited by Dank Cinema.
+- Keep settings configurable for operators and document the production values.
+- Clearly distinguish provider-reported seed counts from live connected swarm telemetry.
+- Exact-head CI, diff cleanup, and a Samsung Browser healthy-swarm canary are required before completion.
 
 ## Status
 
-**Implementation is in draft PR #462; the first exact-head CI run exposed three regression failures, and the source-snapshot semantics/tests have been corrected. Fresh exact-head validation is active.**
+**Implementation is in draft PR #463. Exact-head CI on implementation head `13b8183bb1a1213cf0751850c4abe155d7d13b68` passed all required workflow families. This record-only update is the final branch change before rechecking exact-head status and moving to the production canary.**
 
 ## Findings / root cause
 
-1. The screenshot auth diagnostics are healthy: signed/session/identity valid, bot guild present, member not revoked. Missing guild proof in the earlier screenshot was not causal because the signed/session path already authenticated the request.
-2. The generic Details error came from an unguarded `asyncio.gather(get_details(...), list_user_media(...))`. Required TMDB metadata and optional Library storage failures were collapsed into the same default aiohttp 500.
-3. The later **No playable source...** error exposed a second structural flaw. Details and Play did not share one source snapshot:
-   - Details searched providers and rendered source cards;
-   - Play immediately searched providers again;
-   - a flaky/rate-limited provider or changed result set could therefore make a source visible and then unavailable seconds later.
-4. This mismatch existed even for **Automatic** mode and was worse for manual selection because the browser intentionally never receives raw source refs.
-5. Details also used its own generic source lookup/filter path instead of the exact playback helper, creating needless duplication between what the user sees and what playback accepts.
-6. The Resident Evil canary exposed a second correctness problem in the old title matcher: releases such as **Resident Evil (GOG)** and **Resident Evil Requiem voices38** could pass title-token matching even when the provider explicitly classified them as Games/Applications. Those are not movie releases and must never be offered as Cinema playback.
+1. A source card showing, for example, 100+ seeds does **not** mean Dank Cinema already has 100 seed connections. That number is provider/index metadata collected before the torrent session exists. The Watch player already switches to live libtorrent `num_seeds/num_peers` after peers connect, but the Details card simply said “seeds,” which made the distinction invisible.
+2. The production torrent session was configured with a process-wide connection limit of only **80**, while libtorrent itself supports a much larger normal peer pool. New torrents also relied on default connection-attempt pacing instead of an explicit fast-start policy.
+3. The old process download cap was **16 MiB/s**. That is plenty for many movies once buffered, but it can unnecessarily cap how quickly a healthy swarm builds the first playback buffer.
+4. Requested and readahead pieces were correctly given high normal priorities, but Dank Cinema did not use libtorrent's dedicated **time-critical piece deadlines**. Normal priority influences the picker; time-critical deadlines activate the streaming scheduler that attempts to source urgent blocks from peers with the shortest estimated queues.
+5. The startup buffer itself is already bounded and sensible: the player waits for the requested first chunk plus a small startup window rather than downloading the whole file. The missing optimization was getting those pieces from the swarm faster, not blindly shrinking the buffer and inviting stalls.
+6. DHT remains enabled. LSD/UPnP/NAT-PMP remain disabled because they do not materially improve a cloud-hosted public torrent client and broadening network behavior without evidence would be cargo-cult tuning.
 
 ## Execution path
 
-Details:
-`identity -> required TMDB details + optional Library read -> exact movie source search -> exact catalog filter -> short-lived server-side source snapshot -> source cards`.
+`Play Here / selected source -> canonical variant -> start_room_variant -> TorrentMediaManager.start_magnet/start_torrent_bytes -> libtorrent peer discovery -> selected-file bootstrap priority -> browser Range request -> time-critical startup piece deadlines -> bounded startup buffer -> progressive 206 stream`.
 
-Immediate Play:
-`Play Here / Play Selected Source -> same guild+user+movie snapshot -> automatic ranking or opaque manual source match -> materialize room variant -> playback`.
-
-Cache miss/expired:
-`Play -> fresh exact source search -> refresh snapshot -> normal ranking/manual matching`.
-
-TV Season:
-`identity -> required TMDB season metadata + optional Library progress -> episodes`.
+Automatic source choice remains:
+`preferred provider (when configured) -> canonical variant ranking -> nonzero swarm -> browser audio safety -> reported seeds/ratio -> quality efficiency -> size`.
 
 ## Changes
 
-### Details / Library degradation
-- Changed Details and Season dependency joins to `return_exceptions=True`.
-- Required catalog failures now produce a classified 503 with phase-specific server logging.
-- Library failures degrade to empty progress/library state instead of a generic 500.
-- Details response exposes `library_available` plus a safe notice.
-- Season response exposes `library_available`.
-- Site keeps Play/Resume, Trailer, source selection, cast, recommendations, and episode browsing available during Library degradation.
-- Watchlist/Favorite/List/Watched/Rating controls are hidden while storage is unavailable rather than pretending writes can succeed.
-- Episode Library controls follow the same rule.
-- Site JS cache version bumped to v15.
+### Peer startup
+- Raised default process-wide `DANK_TORRENT_CONNECTION_LIMIT` from 80 to **200**.
+- Added `DANK_TORRENT_CONNECTION_SPEED=80` so new peer attempts can fan out faster.
+- Added `DANK_TORRENT_CONNECT_BOOST=80` so newly started torrents can immediately try more peer candidates after discovery.
+- Added `DANK_TORRENT_PEER_CONNECT_TIMEOUT_SECONDS=8` so dead/unresponsive endpoints stop occupying startup attempts as long as the previous 15-second-style behavior.
+- Raised the configurable process download ceiling from 16 MiB/s to **64 MiB/s**. Existing RAM/disk/session admission limits remain unchanged.
+- Kept upload capped at 512 KiB/s.
 
-### Source consistency
-- Details now uses the same `search_exact_movie_sources()` helper as playback instead of a duplicate generic search/filter path.
-- The exact source outcome shown on Details is cached server-side for 90 seconds under exact guild+user+media+TMDB identity.
-- Immediate automatic or manual Play reuses that snapshot, so it does not issue a second provider search seconds after rendering the source cards.
-- Raw source refs remain server-side; the browser still receives only opaque `source_choice` ids.
-- If the snapshot expires or is missing, Play falls back to a fresh exact search.
-- Snapshot storage is bounded to 1024 entries and expired entries are pruned before insertion.
-- Empty exact outcomes now log a safe count of provider/search errors and return a clearer refresh instruction.
-- Exact movie matching now rejects provider results explicitly categorized as Games, Applications/Software, Audio/Music, Books/eBooks, or Pictures/Images, including TPB-style numeric Audio/Application/Game buckets.
-- Video/movie categories and unknown custom taxonomies remain eligible so legitimate providers are not rejected merely for using their own category names.
+### Streaming-piece urgency
+- Added `DANK_TORRENT_TIME_CRITICAL_BASE_DEADLINE_MS=500`.
+- Added `DANK_TORRENT_TIME_CRITICAL_STEP_MS=350`.
+- Requested playback pieces now receive libtorrent `set_piece_deadline()` deadlines in addition to priority 7.
+- Readahead remains priority 6.
+- The MP4/MOV tail metadata probe remains prioritized but is explicitly **not** time-critical, so it cannot compete with head/startup bytes.
+- Deadline support gracefully falls back to the existing priority behavior if an alternate binding lacks the API.
+
+### Truthful telemetry
+- Details source cards now say **reported seeds**.
+- The Watch player remains authoritative for actual connected/live seed, peer, download-rate, and buffer telemetry.
+
+### Deployment/docs
+- Updated `.env.example`, public production env docs, and the torrent runbook with the new connection/rate/deadline settings.
+- Documentation explicitly warns that existing Discloud environment variables override code defaults. A production deployment still pinning the old 80 / 16 MiB/s values must be updated there for the new tuning to take effect.
+- Cinema site JS asset version bumped from v15 to v16 for the seed-label change.
 
 ## Validation / results
 
-Confirmed by code inspection:
-- branch is based on current production main after PR #461;
-- no auth contract changes;
-- no provider resolver, torrent runtime, room manager, database schema, or Watch player duplication;
-- Details and Play now share the same exact source outcome;
-- browser JavaScript still contains no raw `source_ref` handling;
-- source snapshot is short-lived, user/guild/title scoped, and bounded;
-- changed files are limited to Cinema site backend/client, focused tests, and this task record.
+Added focused regressions for:
+- fast-start libtorrent defaults;
+- time-critical deadlines on requested playback pieces;
+- readahead remaining ordinary priority;
+- tail probe not receiving competing time-critical deadlines;
+- truthful “reported seeds” source-card copy;
+- updated site asset version.
 
-Regression coverage added for:
-- Details rendering through Library storage outage;
-- catalog failure returning classified 503 instead of generic 500;
-- TV Season rendering through Library storage outage;
-- client Library-control gating;
-- Details-to-Play exact source snapshot reuse without a second provider search;
-- rejection of explicit game/software torrents that merely share the movie title, while valid video/unknown-category releases still pass.
+Confirmed by inspection:
+- no second torrent downloader, provider resolver, stream server, or buffer implementation was added;
+- adaptive buffering and byte-range correctness remain authoritative;
+- existing memory, disk, per-guild, soft/hard session, and lease guards remain unchanged;
+- no sequential-download mode was added;
+- source selection rules remain unchanged;
+- settings remain operator-overridable.
 
-First PR #462 exact-head result:
-- 2904 passed / 3 failed;
-- two failures were caused by a stale source snapshot leaking between repeated plays/tests for the same guild+user+movie key;
-- one failure was an obsolete structural assertion that still expected the removed duplicate `filter_outcome_for_catalog()` call in `cinema_site.py`.
-
-Corrections:
-- empty provider outcomes are no longer cached, so a transient empty Details result cannot poison Play for 90 seconds;
-- a valid Details source snapshot is consumed once by Play instead of acting as a long-lived source cache;
-- focused tests now clear shared source state where appropriate and assert the snapshot is consumed;
-- the TV Details structural test now requires the authoritative `search_exact_movie_sources()` helper and explicitly rejects the duplicate site-level filter.
+Validated on implementation head `13b8183bb1a1213cf0751850c4abe155d7d13b68`:
+- Dank Shield CI: success;
+- Dank Design Regression CI: success;
+- Dank Cinema SQL: success;
+- Application Command Size Diagnostics: success;
+- Profile Runtime Diagnostics: success;
+- Ticket Owner Emergency Override: success;
+- PR remained mergeable;
+- final diff review found no conflict markers, debug leftovers, or secret-bearing changes.
 
 Pending:
-- exact-head PR #462 CI and mergeability/diff inspection;
-- Samsung Browser canary:
-  1. open a movie Details page and confirm no generic 500;
-  2. confirm source cards render;
-  3. press **Play Here** immediately and confirm it starts without re-search failure;
-  4. return, choose a manual source, and confirm exact selected source starts;
-  5. verify Library outage degrades controls without blocking playback;
-  6. confirm Private Session / Watch Party remain unaffected.
+- exact-head recheck after this task-record-only commit;
+- production env verification/update for the newly documented swarm values;
+- Samsung Browser healthy-swarm canary comparing provider-reported availability against actual live connected peers/download rate and time-to-first-play.
 
 ## Cleanup / conflicts
 
-- PR #461 is already merged and remains untouched.
-- This branch starts from that merged production state.
-- No unrelated Dank Shield feature work is included.
-- The previously observed Cloudflare 502 remains backlog unless it blocks this exact canary again.
+- PR #462 is merged and untouched.
+- This branch starts from its production merge commit.
+- No feed-art/TMDB enrichment work is included; that remains backlogged.
+- No unrelated Dank Shield cleanup is included.
 
 ## Blockers / risks
 
-- A source snapshot can still expire after 90 seconds; that intentionally falls back to a fresh exact search.
-- Provider availability remains external after the snapshot window.
-- Process restart clears the snapshot cache, which safely falls back to a fresh provider search.
-- Completion still depends on exact-head CI and live-device evidence.
+- High reported seed counts can still correspond to few reachable/fast peers. Dank Cinema can connect aggressively, but it cannot force remote peers to upload faster.
+- A Discloud network/container ceiling below 64 MiB/s will remain the real cap regardless of application configuration.
+- Explicit old torrent env values on Discloud will override these new code defaults until changed.
+- More peer attempts increase network/socket activity, so the production canary must confirm startup improvement without destabilizing the bot process.
 
 ## Backlog
 
-- Investigate recurring Cloudflare/origin 502 separately if it recurs outside or independently blocks this source canary.
+- Canonical TMDB enrichment/artwork for **From Your Feeds**.
+- Investigate recurring Cloudflare/origin 502 separately if it reappears independently of playback.
 
 ## Next step
 
-Finish PR #462 exact-head CI, repair only evidence-backed failures, then deploy/canary the Details -> source -> Play path on Samsung Browser.
+Recheck PR #463 exact-head CI after this record-only commit, then use the merge/deploy canary to verify the effective production env values and measure the first-buffer path on Samsung Browser with a healthy source.
 
 ---
 

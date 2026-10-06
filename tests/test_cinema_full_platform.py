@@ -1235,7 +1235,7 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'initialUrl.searchParams.delete("sig")' in script
     assert 'history.replaceState(' in script
     assert 'return `${path}${AUTH_QUERY ? join + AUTH_QUERY.slice(1) : ""}`;' in script
-    assert 'src="/cinema/assets/site.js?v=15"' in source
+    assert 'src="/cinema/assets/site.js?v=16"' in source
     assert '"/cinema/{guild_id}/api/auth-debug"' in source
     assert "def _cinema_auth_debug_payload(" in source
     assert "signed-session-v8-snowflake-safe" in source
@@ -1388,6 +1388,7 @@ def test_full_site_episode_playback_is_direct_and_not_discord_room_scoped() -> N
     assert 'if (sourceChoice) payload.source_choice = String(sourceChoice)' in script
     assert '"Playback Source"' in script
     assert '"Automatic • best available"' in script
+    assert '${source.seeds} reported seeds' in script
     assert '"▶ Play Automatically"' in script
     assert '"▶ Play Selected Source"' in script
     assert 'row.dataset.sourceChoice = String(source.source_choice || "")' in script
@@ -1480,7 +1481,7 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
     assert 'href="/cinema/assets/site.css?v=10"' in source
-    assert 'src="/cinema/assets/site.js?v=15"' in source
+    assert 'src="/cinema/assets/site.js?v=16"' in source
 
 
 def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop() -> None:

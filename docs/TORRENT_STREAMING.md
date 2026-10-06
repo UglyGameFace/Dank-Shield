@@ -56,6 +56,13 @@ If the requested pieces are not available within the buffering timeout, the
 first request receives a temporary `503 buffering` response. Players can retry
 the same range.
 
+High provider-reported seed counts do not mean that many peers are already
+connected to the running libtorrent session. They are discovery-time hints.
+Dank Cinema fans out connections aggressively at torrent startup, then reports
+the live seed/peer counts and real download rate from libtorrent once the swarm
+is connected. Requested playback pieces are also marked time-critical so the
+streaming picker can favor peers most likely to deliver those blocks quickly.
+
 ## Required environment
 
 At minimum:
@@ -131,9 +138,13 @@ Current production-oriented defaults:
 - buffering wait: 20 seconds
 - metadata wait: 30 seconds
 - idle cleanup: 30 minutes
-- peer connection limit: 80
-- download cap: 16 MiB/s
+- peer connection limit: 200
+- new connection attempts: up to 80/s
+- new-torrent connect boost: 80
+- peer connect timeout: 8 seconds
+- download cap: 64 MiB/s
 - upload cap: 512 KiB/s
+- requested playback pieces: libtorrent time-critical deadlines (500 ms base, 350 ms step)
 
 ### Shared torrent reuse
 

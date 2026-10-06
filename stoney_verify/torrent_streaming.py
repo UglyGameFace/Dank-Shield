@@ -415,6 +415,18 @@ class TorrentMediaManager:
             minimum=3.0,
             maximum=90.0,
         )
+        self.time_critical_base_deadline_ms = _env_int(
+            "DANK_TORRENT_TIME_CRITICAL_BASE_DEADLINE_MS",
+            500,
+            minimum=100,
+            maximum=5000,
+        )
+        self.time_critical_step_ms = _env_int(
+            "DANK_TORRENT_TIME_CRITICAL_STEP_MS",
+            350,
+            minimum=50,
+            maximum=5000,
+        )
         self.metadata_wait_seconds = _env_float(
             "DANK_TORRENT_METADATA_WAIT_SECONDS",
             30.0,
@@ -462,14 +474,26 @@ class TorrentMediaManager:
             "enable_upnp": False,
             "enable_natpmp": False,
             "connections_limit": _env_int(
-                "DANK_TORRENT_CONNECTION_LIMIT", 80, minimum=10, maximum=300
+                "DANK_TORRENT_CONNECTION_LIMIT", 200, minimum=20, maximum=300
+            ),
+            # New Cinema torrents should fan out to useful peers quickly instead
+            # of spending their first several seconds discovering the swarm one
+            # connection tick at a time.
+            "connection_speed": _env_int(
+                "DANK_TORRENT_CONNECTION_SPEED", 80, minimum=10, maximum=200
+            ),
+            "torrent_connect_boost": _env_int(
+                "DANK_TORRENT_CONNECT_BOOST", 80, minimum=0, maximum=255
+            ),
+            "peer_connect_timeout": _env_int(
+                "DANK_TORRENT_PEER_CONNECT_TIMEOUT_SECONDS", 8, minimum=3, maximum=30
             ),
             "active_downloads": self.max_sessions,
             "active_seeds": 0,
             "active_limit": self.max_sessions,
             "download_rate_limit": _env_int(
                 "DANK_TORRENT_DOWNLOAD_RATE_BYTES",
-                16 * 1024 * 1024,
+                64 * 1024 * 1024,
                 minimum=128 * 1024,
                 maximum=64 * 1024 * 1024,
             ),
@@ -1216,6 +1240,7 @@ class TorrentMediaManager:
                 max(0, session.file_size - self.tail_probe_bytes),
                 session.file_size - 1,
                 readahead=False,
+                time_critical=False,
             )
 
     async def select_file(
@@ -1346,6 +1371,7 @@ class TorrentMediaManager:
         *,
         readahead: bool = True,
         readahead_bytes: Optional[int] = None,
+        time_critical: bool = True,
     ) -> None:
         start = max(0, min(int(start), session.file_size - 1))
         end = max(start, min(int(end), session.file_size - 1))
@@ -1377,6 +1403,30 @@ class TorrentMediaManager:
                 session.handle.prioritize_pieces(updates)
             except RuntimeError as exc:
                 self._raise_unavailable_handle(exc)
+
+        # Priority 7 tells the ordinary picker what matters. Deadlines switch
+        # libtorrent into its dedicated time-critical streaming path, which
+        # actively assigns urgent blocks to peers with the shortest estimated
+        # download queues instead of merely waiting for rarest-first slots.
+        if time_critical:
+            set_deadline = getattr(session.handle, "set_piece_deadline", None)
+            if callable(set_deadline):
+                for offset, piece in enumerate(range(first, last + 1)):
+                    if not (session.first_piece <= piece <= session.last_piece):
+                        continue
+                    deadline_ms = min(
+                        30_000,
+                        int(self.time_critical_base_deadline_ms)
+                        + int(offset) * int(self.time_critical_step_ms),
+                    )
+                    try:
+                        set_deadline(piece, deadline_ms)
+                    except RuntimeError as exc:
+                        self._raise_unavailable_handle(exc)
+                    except Exception:
+                        # Older/alternate Python bindings may not expose the
+                        # deadline API even though piece priorities still work.
+                        break
         session.last_access = time.monotonic()
 
     def _download_rate(self, session: TorrentStreamSession) -> float:
