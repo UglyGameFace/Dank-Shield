@@ -21,6 +21,9 @@ from .cinema_storage import (
 USER_TABLE = "dank_cinema_users"
 MEDIA_TABLE = "dank_cinema_user_media"
 NOTIFICATION_TABLE = "dank_cinema_notifications"
+SESSION_TABLE = "dank_cinema_watch_sessions"
+LIST_TABLE = "dank_cinema_lists"
+LIST_ITEM_TABLE = "dank_cinema_list_items"
 
 DEFAULT_PREFERENCES: dict[str, Any] = {
     "autoplay_next": True,
@@ -42,6 +45,8 @@ _CACHE_TTL = 20.0
 _USER_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
 _MEDIA_CACHE: dict[int, tuple[float, list[dict[str, Any]]]] = {}
 _LOCKS: dict[int, asyncio.Lock] = {}
+_SESSION_WRITE_INTERVAL = 30.0
+_SESSION_WRITE_CACHE: dict[tuple[int, str], tuple[float, float, bool]] = {}
 
 
 class InvalidCinemaState(ValueError):
@@ -309,6 +314,579 @@ async def get_media_state(
         ):
             return dict(row)
     return None
+
+
+async def _read_media_row(
+    *,
+    user_id: int,
+    media_type: str,
+    tmdb_id: int,
+    season_number: int = 0,
+    episode_number: int = 0,
+) -> Optional[dict[str, Any]]:
+    key = _media_key_payload(
+        user_id=user_id,
+        media_type=media_type,
+        tmdb_id=tmdb_id,
+        season_number=season_number,
+        episode_number=episode_number,
+    )
+
+    def read(client: Any):
+        return (
+            client.table(MEDIA_TABLE)
+            .select("*")
+            .eq("user_id", key["user_id"])
+            .eq("media_type", key["media_type"])
+            .eq("tmdb_id", key["tmdb_id"])
+            .eq("season_number", key["season_number"])
+            .eq("episode_number", key["episode_number"])
+            .limit(1)
+            .execute()
+        )
+
+    found = _rows(await _execute(
+        f"read Cinema media state {key['user_id']}:{key['media_type']}:{key['tmdb_id']}",
+        read,
+    ))
+    return dict(found[0]) if found else None
+
+
+async def _write_media_patch(
+    user_id: int,
+    *,
+    media_type: str,
+    tmdb_id: int,
+    season_number: int = 0,
+    episode_number: int = 0,
+    patch: Mapping[str, Any],
+) -> dict[str, Any]:
+    key = _media_key_payload(
+        user_id=user_id,
+        media_type=media_type,
+        tmdb_id=tmdb_id,
+        season_number=season_number,
+        episode_number=episode_number,
+    )
+    payload = {**key, **dict(patch), "updated_at": _now()}
+
+    def write(client: Any):
+        try:
+            return (
+                client.table(MEDIA_TABLE)
+                .upsert(
+                    payload,
+                    on_conflict=(
+                        "user_id,media_type,tmdb_id,season_number,episode_number"
+                    ),
+                )
+                .execute()
+            )
+        except TypeError:
+            return client.table(MEDIA_TABLE).upsert(payload).execute()
+
+    response = await _execute(f"write Cinema media patch {user_id}", write)
+    invalidate_cinema_user_cache(int(user_id))
+    stored = _rows(response)
+    return dict(stored[0]) if stored else payload
+
+
+async def set_favorite(
+    user_id: int,
+    *,
+    media_type: str,
+    tmdb_id: int,
+    title: str,
+    metadata: Optional[Mapping[str, Any]] = None,
+    season_number: int = 0,
+    episode_number: int = 0,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    return await _write_media_patch(
+        int(user_id),
+        media_type=media_type,
+        tmdb_id=tmdb_id,
+        season_number=season_number,
+        episode_number=episode_number,
+        patch={
+            "title": " ".join(str(title or "").split())[:180],
+            "metadata": dict(metadata or {}),
+            "favorite": bool(enabled),
+            "favorite_at": _now() if enabled else None,
+        },
+    )
+
+
+async def set_rating(
+    user_id: int,
+    *,
+    media_type: str,
+    tmdb_id: int,
+    title: str,
+    rating: Optional[int],
+    metadata: Optional[Mapping[str, Any]] = None,
+    season_number: int = 0,
+    episode_number: int = 0,
+) -> dict[str, Any]:
+    numeric: Optional[int]
+    if rating is None or int(rating or 0) <= 0:
+        numeric = None
+    else:
+        numeric = int(rating)
+        if numeric < 1 or numeric > 10:
+            raise InvalidCinemaState("Cinema ratings must be between 1 and 10.")
+    return await _write_media_patch(
+        int(user_id),
+        media_type=media_type,
+        tmdb_id=tmdb_id,
+        season_number=season_number,
+        episode_number=episode_number,
+        patch={
+            "title": " ".join(str(title or "").split())[:180],
+            "metadata": dict(metadata or {}),
+            "rating": numeric,
+            "rated_at": _now() if numeric is not None else None,
+        },
+    )
+
+
+async def mark_watched(
+    user_id: int,
+    *,
+    media_type: str,
+    tmdb_id: int,
+    title: str,
+    metadata: Optional[Mapping[str, Any]] = None,
+    season_number: int = 0,
+    episode_number: int = 0,
+    watched: bool = True,
+) -> dict[str, Any]:
+    key = _media_key_payload(
+        user_id=user_id,
+        media_type=media_type,
+        tmdb_id=tmdb_id,
+        season_number=season_number,
+        episode_number=episode_number,
+    )
+    existing = await _read_media_row(**key)
+    now = _now()
+    patch: dict[str, Any] = {
+        "title": " ".join(str(title or "").split())[:180],
+        "metadata": dict(metadata or (existing or {}).get("metadata") or {}),
+        "progress_seconds": 0.0,
+        "completed": bool(watched),
+        "last_watched_at": now if watched else (existing or {}).get("last_watched_at"),
+    }
+    if watched:
+        already_completed = bool((existing or {}).get("completed"))
+        previous_count = max(0, int((existing or {}).get("play_count") or 0))
+        patch.update(
+            {
+                "play_count": previous_count if already_completed else previous_count + 1,
+                "first_watched_at": (
+                    (existing or {}).get("first_watched_at") or now
+                ),
+                "last_completed_at": (
+                    (existing or {}).get("last_completed_at")
+                    if already_completed
+                    else now
+                ),
+            }
+        )
+    return await _write_media_patch(
+        int(user_id),
+        media_type=key["media_type"],
+        tmdb_id=key["tmdb_id"],
+        season_number=key["season_number"],
+        episode_number=key["episode_number"],
+        patch=patch,
+    )
+
+
+def _session_key(value: Any) -> str:
+    return " ".join(str(value or "").split())[:180]
+
+
+async def record_watch_session(
+    user_id: int,
+    *,
+    media_type: str,
+    tmdb_id: int,
+    title: str,
+    progress_seconds: float,
+    duration_seconds: float,
+    completed: bool,
+    season_number: int = 0,
+    episode_number: int = 0,
+    metadata: Optional[Mapping[str, Any]] = None,
+    context: Optional[Mapping[str, Any]] = None,
+) -> None:
+    ctx = dict(context or {})
+    session_key = _session_key(ctx.get("session_key"))
+    if not session_key:
+        return
+    uid = int(user_id)
+    progress = max(0.0, float(progress_seconds or 0.0))
+    duration = max(0.0, float(duration_seconds or 0.0))
+    cache_key = (uid, session_key)
+    previous_cache = _SESSION_WRITE_CACHE.get(cache_key)
+    now_mono = time.monotonic()
+    if previous_cache is not None:
+        last_write, last_progress, last_completed = previous_cache
+        if (
+            not completed
+            and not last_completed
+            and now_mono - last_write < _SESSION_WRITE_INTERVAL
+            and abs(progress - last_progress) < 60.0
+        ):
+            return
+
+    key = _media_key_payload(
+        user_id=uid,
+        media_type=media_type,
+        tmdb_id=tmdb_id,
+        season_number=season_number,
+        episode_number=episode_number,
+    )
+
+    def read(client: Any):
+        return (
+            client.table(SESSION_TABLE)
+            .select("*")
+            .eq("user_id", uid)
+            .eq("session_key", session_key)
+            .limit(1)
+            .execute()
+        )
+
+    found = _rows(await _execute(f"read Cinema watch session {uid}", read))
+    existing = dict(found[0]) if found else {}
+    now = _now()
+    payload = {
+        "user_id": uid,
+        "session_key": session_key,
+        "guild_id": int(ctx.get("guild_id") or 0) or None,
+        "room_id": _session_key(ctx.get("room_id"))[:120],
+        "session_mode": (
+            str(ctx.get("session_mode") or "private")
+            if str(ctx.get("session_mode") or "private") in {"private", "watch_party"}
+            else "private"
+        ),
+        "candidate_id": _session_key(ctx.get("candidate_id"))[:120],
+        "media_type": key["media_type"],
+        "tmdb_id": key["tmdb_id"],
+        "series_id": int((metadata or {}).get("series_id") or 0) or None,
+        "season_number": key["season_number"],
+        "episode_number": key["episode_number"],
+        "title": " ".join(str(title or "").split())[:180],
+        "metadata": dict(metadata or {}),
+        "is_host": bool(ctx.get("is_host", False)),
+        "max_progress_seconds": max(
+            progress,
+            float(existing.get("max_progress_seconds") or 0.0),
+        ),
+        "duration_seconds": max(
+            duration,
+            float(existing.get("duration_seconds") or 0.0),
+        ),
+        "completed": bool(existing.get("completed")) or bool(completed),
+        "started_at": existing.get("started_at") or now,
+        "last_seen_at": now,
+        "completed_at": (
+            existing.get("completed_at")
+            or (now if completed else None)
+        ),
+    }
+
+    def write(client: Any):
+        try:
+            return (
+                client.table(SESSION_TABLE)
+                .upsert(payload, on_conflict="user_id,session_key")
+                .execute()
+            )
+        except TypeError:
+            return client.table(SESSION_TABLE).upsert(payload).execute()
+
+    await _execute(f"write Cinema watch session {uid}", write)
+    _SESSION_WRITE_CACHE[cache_key] = (now_mono, progress, bool(payload["completed"]))
+
+
+async def list_watch_sessions(
+    user_id: int,
+    *,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    uid = int(user_id)
+
+    def read(client: Any):
+        return (
+            client.table(SESSION_TABLE)
+            .select("*")
+            .eq("user_id", uid)
+            .order("last_seen_at", desc=True)
+            .limit(max(1, min(int(limit), 1000)))
+            .execute()
+        )
+
+    return _rows(await _execute(f"read Cinema watch sessions {uid}", read))
+
+
+async def list_custom_lists(user_id: int) -> list[dict[str, Any]]:
+    uid = int(user_id)
+
+    def read_lists(client: Any):
+        return (
+            client.table(LIST_TABLE)
+            .select("*")
+            .eq("user_id", uid)
+            .order("position")
+            .order("created_at")
+            .limit(100)
+            .execute()
+        )
+
+    def read_items(client: Any):
+        return (
+            client.table(LIST_ITEM_TABLE)
+            .select("*")
+            .eq("user_id", uid)
+            .order("position")
+            .order("added_at")
+            .limit(1000)
+            .execute()
+        )
+
+    list_response, item_response = await asyncio.gather(
+        _execute(f"read Cinema lists {uid}", read_lists),
+        _execute(f"read Cinema list items {uid}", read_items),
+    )
+    list_rows = [dict(row) for row in _rows(list_response)]
+    items_by_list: dict[str, list[dict[str, Any]]] = {}
+    for raw in _rows(item_response):
+        row = dict(raw)
+        items_by_list.setdefault(str(row.get("list_id") or ""), []).append(row)
+    for row in list_rows:
+        row["items"] = items_by_list.get(str(row.get("id") or ""), [])
+    return list_rows
+
+
+async def save_custom_list(
+    user_id: int,
+    *,
+    name: str,
+    description: str = "",
+    list_id: str = "",
+    position: int = 0,
+) -> dict[str, Any]:
+    uid = int(user_id)
+    clean_name = " ".join(str(name or "").split())[:80]
+    if not clean_name:
+        raise InvalidCinemaState("Cinema list name is required.")
+    clean_id = str(list_id or "").strip()
+    payload = {
+        "user_id": uid,
+        "name": clean_name,
+        "description": " ".join(str(description or "").split())[:300],
+        "position": max(0, int(position or 0)),
+        "updated_at": _now(),
+    }
+
+    if clean_id:
+        def update(client: Any):
+            return (
+                client.table(LIST_TABLE)
+                .update(payload)
+                .eq("id", clean_id)
+                .eq("user_id", uid)
+                .execute()
+            )
+        response = await _execute(f"update Cinema list {uid}", update)
+        rows = _rows(response)
+        if not rows:
+            raise InvalidCinemaState("Cinema list not found.")
+        return dict(rows[0])
+
+    payload["created_at"] = _now()
+
+    def insert(client: Any):
+        return client.table(LIST_TABLE).insert(payload).execute()
+
+    rows = _rows(await _execute(f"create Cinema list {uid}", insert))
+    return dict(rows[0]) if rows else payload
+
+
+async def delete_custom_list(user_id: int, list_id: str) -> None:
+    uid = int(user_id)
+    clean_id = str(list_id or "").strip()
+    if not clean_id:
+        raise InvalidCinemaState("Cinema list id is required.")
+
+    def remove(client: Any):
+        return (
+            client.table(LIST_TABLE)
+            .delete()
+            .eq("id", clean_id)
+            .eq("user_id", uid)
+            .execute()
+        )
+
+    await _execute(f"delete Cinema list {uid}", remove)
+
+
+async def set_custom_list_item(
+    user_id: int,
+    *,
+    list_id: str,
+    media_type: str,
+    tmdb_id: int,
+    title: str,
+    metadata: Optional[Mapping[str, Any]] = None,
+    season_number: int = 0,
+    episode_number: int = 0,
+    enabled: bool = True,
+    position: int = 0,
+) -> Optional[dict[str, Any]]:
+    uid = int(user_id)
+    clean_id = str(list_id or "").strip()
+    if not clean_id:
+        raise InvalidCinemaState("Choose a Cinema list.")
+
+    def verify(client: Any):
+        return (
+            client.table(LIST_TABLE)
+            .select("id")
+            .eq("id", clean_id)
+            .eq("user_id", uid)
+            .limit(1)
+            .execute()
+        )
+
+    if not _rows(await _execute(f"verify Cinema list {uid}", verify)):
+        raise InvalidCinemaState("Cinema list not found.")
+
+    key = _media_key_payload(
+        user_id=uid,
+        media_type=media_type,
+        tmdb_id=tmdb_id,
+        season_number=season_number,
+        episode_number=episode_number,
+    )
+    if not enabled:
+        def remove(client: Any):
+            return (
+                client.table(LIST_ITEM_TABLE)
+                .delete()
+                .eq("list_id", clean_id)
+                .eq("user_id", uid)
+                .eq("media_type", key["media_type"])
+                .eq("tmdb_id", key["tmdb_id"])
+                .eq("season_number", key["season_number"])
+                .eq("episode_number", key["episode_number"])
+                .execute()
+            )
+        await _execute(f"remove Cinema list item {uid}", remove)
+        return None
+
+    payload = {
+        "list_id": clean_id,
+        "user_id": uid,
+        "media_type": key["media_type"],
+        "tmdb_id": key["tmdb_id"],
+        "season_number": key["season_number"],
+        "episode_number": key["episode_number"],
+        "title": " ".join(str(title or "").split())[:180],
+        "metadata": dict(metadata or {}),
+        "position": max(0, int(position or 0)),
+        "added_at": _now(),
+    }
+
+    def write(client: Any):
+        try:
+            return (
+                client.table(LIST_ITEM_TABLE)
+                .upsert(
+                    payload,
+                    on_conflict=(
+                        "list_id,media_type,tmdb_id,season_number,episode_number"
+                    ),
+                )
+                .execute()
+            )
+        except TypeError:
+            return client.table(LIST_ITEM_TABLE).upsert(payload).execute()
+
+    rows = _rows(await _execute(f"write Cinema list item {uid}", write))
+    return dict(rows[0]) if rows else payload
+
+
+async def library_stats(user_id: int) -> dict[str, Any]:
+    uid = int(user_id)
+    media_rows, sessions = await asyncio.gather(
+        list_user_media(uid),
+        list_watch_sessions(uid, limit=1000),
+    )
+    completed_movies = [
+        row for row in media_rows
+        if str(row.get("media_type") or "") == "movie"
+        and int(row.get("play_count") or 0) > 0
+    ]
+    completed_episodes = [
+        row for row in media_rows
+        if str(row.get("media_type") or "") == "episode"
+        and int(row.get("play_count") or 0) > 0
+    ]
+    play_count = sum(max(0, int(row.get("play_count") or 0)) for row in media_rows)
+    distinct_completed = len(completed_movies) + len(completed_episodes)
+    rewatches = max(0, play_count - distinct_completed)
+    watched_seconds = 0.0
+    for row in sessions:
+        progress = max(0.0, float(row.get("max_progress_seconds") or 0.0))
+        duration = max(0.0, float(row.get("duration_seconds") or 0.0))
+        watched_seconds += min(progress, duration) if duration > 0 else progress
+
+    ratings = [
+        int(row.get("rating") or 0)
+        for row in media_rows
+        if int(row.get("rating") or 0) > 0
+    ]
+    genre_scores: dict[str, int] = {}
+    for row in media_rows:
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), Mapping) else {}
+        weight = max(
+            1,
+            int(row.get("play_count") or 0)
+            + (2 if bool(row.get("favorite")) else 0)
+            + (1 if int(row.get("rating") or 0) >= 8 else 0),
+        )
+        for genre in list(metadata.get("genres") or [])[:12]:
+            clean = " ".join(str(genre or "").split())[:60]
+            if clean:
+                genre_scores[clean] = genre_scores.get(clean, 0) + weight
+
+    return {
+        "movies_watched": len(completed_movies),
+        "episodes_watched": len(completed_episodes),
+        "total_completions": play_count,
+        "rewatches": rewatches,
+        "watch_hours": round(watched_seconds / 3600.0, 1),
+        "favorites": sum(1 for row in media_rows if bool(row.get("favorite"))),
+        "ratings": len(ratings),
+        "average_rating": round(sum(ratings) / len(ratings), 1) if ratings else 0.0,
+        "watch_party_sessions": sum(
+            1 for row in sessions if str(row.get("session_mode") or "") == "watch_party"
+        ),
+        "private_sessions": sum(
+            1 for row in sessions if str(row.get("session_mode") or "") == "private"
+        ),
+        "top_genres": [
+            {"name": name, "score": score}
+            for name, score in sorted(
+                genre_scores.items(),
+                key=lambda item: (-item[1], item[0].casefold()),
+            )[:8]
+        ],
+    }
 
 
 async def set_watchlist(
