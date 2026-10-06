@@ -116,6 +116,11 @@ def _result_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         "peers": int(metadata.get("peers") or 0),
         "file_size": int(metadata.get("file_size") or 0),
         "languages": list(metadata.get("languages") or [])[:12],
+        "genres": list(metadata.get("genres") or [])[:12],
+        "studios": list(metadata.get("studios") or [])[:16],
+        "people": list(metadata.get("people") or [])[:20],
+        "directors": list(metadata.get("directors") or [])[:8],
+        "creators": list(metadata.get("creators") or [])[:8],
     }
 
 
