@@ -252,6 +252,15 @@ _PROVIDER_TEMPLATE_FIELDS = {
 _IMDB_ID_RE = re.compile(r"^tt(\d{5,12})$", re.IGNORECASE)
 
 
+def _imdb_numeric(value: str) -> str:
+    """Convert a canonical tt-prefixed IMDb id to the numeric API form."""
+
+    match = _IMDB_ID_RE.fullmatch(str(value or "").strip().lower())
+    if not match:
+        return ""
+    return str(int(match.group(1)))
+
+
 def _provider_lookup_context(
     query: str,
     catalog_metadata: Optional[Mapping[str, Any]] = None,
@@ -285,10 +294,10 @@ def _provider_lookup_context(
         or metadata.get("imdb")
         or ""
     ).strip().lower()
-    imdb_match = _IMDB_ID_RE.fullmatch(imdb_id)
-    if imdb_match:
+    imdb_numeric = _imdb_numeric(imdb_id)
+    if imdb_numeric:
         context["imdb_id"] = imdb_id
-        context["imdb_numeric"] = imdb_match.group(1)
+        context["imdb_numeric"] = imdb_numeric
 
     season_raw = metadata.get("season_number")
     episode_raw = metadata.get("episode_number")
@@ -335,10 +344,10 @@ async def _enrich_provider_lookup_context(
         return context
 
     imdb_id = str(external_ids.get("imdb_id") or "").strip().lower()
-    imdb_match = _IMDB_ID_RE.fullmatch(imdb_id)
-    if imdb_match:
+    imdb_numeric = _imdb_numeric(imdb_id)
+    if imdb_numeric:
         context["imdb_id"] = imdb_id
-        context["imdb_numeric"] = imdb_match.group(1)
+        context["imdb_numeric"] = imdb_numeric
     tvdb_id = _safe_int(external_ids.get("tvdb_id"))
     if tvdb_id > 0:
         context["tvdb_id"] = str(tvdb_id)
@@ -1340,6 +1349,8 @@ async def search_custom_media_sources(
 
     async def run(source: CustomMediaSource):
         async with semaphore:
+            if lookup_context is None:
+                return await _search_one(source, query)
             return await _search_one(
                 source,
                 query,
