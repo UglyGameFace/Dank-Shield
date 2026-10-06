@@ -6,6 +6,7 @@ on:
       - "supabase/migrations/20261004123000_dank_cinema_library.sql"
       - "supabase/migrations/20261006031500_dank_cinema_feed_personalization.sql"
       - "supabase/migrations/20261006050000_dank_cinema_library_intelligence.sql"
+      - "supabase/migrations/20261006051500_dank_cinema_standalone_playback.sql"
       - "stoney_verify/cinema_library_intelligence.py"
       - "stoney_verify/cinema_library_service.py"
       - "stoney_verify/cinema_storage.py"
@@ -20,6 +21,7 @@ on:
       - "supabase/migrations/20261004123000_dank_cinema_library.sql"
       - "supabase/migrations/20261006031500_dank_cinema_feed_personalization.sql"
       - "supabase/migrations/20261006050000_dank_cinema_library_intelligence.sql"
+      - "supabase/migrations/20261006051500_dank_cinema_standalone_playback.sql"
       - "stoney_verify/cinema_library_intelligence.py"
       - "stoney_verify/cinema_library_service.py"
       - "stoney_verify/cinema_storage.py"
@@ -61,6 +63,7 @@ jobs:
       BASE_MIGRATION: supabase/migrations/20261004123000_dank_cinema_library.sql
       FEED_MIGRATION: supabase/migrations/20261006031500_dank_cinema_feed_personalization.sql
       INTELLIGENCE_MIGRATION: supabase/migrations/20261006050000_dank_cinema_library_intelligence.sql
+      STANDALONE_MIGRATION: supabase/migrations/20261006051500_dank_cinema_standalone_playback.sql
 
     steps:
       - name: Check out repository
@@ -92,6 +95,7 @@ jobs:
             psql -v ON_ERROR_STOP=1 -f "$BASE_MIGRATION"
             psql -v ON_ERROR_STOP=1 -f "$FEED_MIGRATION"
             psql -v ON_ERROR_STOP=1 -f "$INTELLIGENCE_MIGRATION"
+            psql -v ON_ERROR_STOP=1 -f "$STANDALONE_MIGRATION"
           done
 
       - name: Verify Cinema schema and permissions
@@ -277,6 +281,16 @@ jobs:
             now() - interval '45 minutes', now(), now()
           );
 
+          insert into public.dank_cinema_watch_sessions(
+            user_id, session_key, guild_id, room_id, session_mode,
+            candidate_id, media_type, tmdb_id, title,
+            max_progress_seconds, duration_seconds, completed
+          ) values (
+            42, 'site-room:movie-123', 100, 'site-room', 'standalone',
+            'site-candidate', 'movie', 123, 'Example Movie',
+            120, 7200, false
+          );
+
           insert into public.dank_cinema_lists(
             id, user_id, name, description, position
           ) values (
@@ -362,6 +376,16 @@ jobs:
                  and completed = true
             ) then
               raise exception 'Cinema watch session did not persist';
+            end if;
+
+            if not exists (
+              select 1 from public.dank_cinema_watch_sessions
+               where user_id = 42
+                 and session_key = 'site-room:movie-123'
+                 and session_mode = 'standalone'
+                 and completed = false
+            ) then
+              raise exception 'Standalone Cinema watch session did not persist';
             end if;
 
             if not exists (
