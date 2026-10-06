@@ -42,7 +42,7 @@ This remains the single active engineering task.
 
 ## Status
 
-**Production instrumentation identified the dominant delay exactly: the first browser Range arrived quickly, but the server then spent the full 20.1s buffer timeout waiting for the entire initial startup corridor before sending any media bytes. A focused first-byte fix is implemented on this branch and exact-head CI is next.**
+**Production instrumentation identified the dominant first-byte delay exactly, and the first-byte fix is implemented. A later background-tab canary also exposed a directly blocking playback-lifecycle defect: the UI could say “Reconnecting…” without running a dedicated wake reconnect, while the server's default empty-room TTL is exactly 1800 seconds. Wake recovery is now implemented on this same playback branch; exact-head CI is next.**
 
 Known production evidence:
 - PR #463 merged successfully.
@@ -72,6 +72,11 @@ This evidence rules out the simplistic explanation that the delay is merely "not
 7. `wait_range` is all-or-nothing across that corridor. One late torrent piece anywhere in the corridor can hold every byte until `DANK_TORRENT_BUFFER_WAIT_SECONDS` expires. The measured 20.1s wait matches the configured 20s timeout, so this is no longer a hypothesis.
 8. The safe structural fix is to keep prioritizing/readahead for the wider startup corridor, but for HTTP Range clients wait only for the first 1 MiB response chunk. After that chunk is ready, advertise only the already-complete contiguous prefix in the 206 response. This preserves the earlier short-body/protocol safety work while allowing the browser to receive first byte immediately instead of waiting for the whole corridor.
 9. Non-Range 200 behavior is intentionally unchanged by this fix.
+10. The production Watch page's old “Sync connection lost. Reconnecting…” message was not proof of an active media/session reconnect. It appeared after three failed `/state` polls.
+11. The actual stream reload retry path was only scheduled by the HTML video element's `error` event. Poll failures, `pageshow`, and a tab becoming visible did not trigger a dedicated session reconnect.
+12. Browser background tabs can suspend the 2-second state poll and 3-second heartbeat timers. The old visibility-resume path only repaired layout; it did not immediately heartbeat, fetch fresh state, or reattach the media stream.
+13. Server presence is also time-bounded: viewers become inactive after 35 seconds, and the default empty-room TTL is `DANK_MOVIE_NIGHT_EMPTY_ROOM_TTL_SECONDS=1800` (30 minutes). Therefore a tab left backgrounded for about 30 minutes is exactly at the server cleanup boundary. The screenshot alone cannot prove whether that specific room had already been retired, but the current defaults make that outcome possible by design.
+14. Signed Watch/media URLs use longer validity windows, so the 30-minute room cleanup can occur before the signed link itself expires.
 
 ## Measurement implementation
 
@@ -108,6 +113,18 @@ PR #464 was then merged and its exact-head required workflow families passed. Th
 - For non-Range requests, the previous startup wait behavior remains unchanged.
 - Startup diagnostics now record the exact first wait byte span so the next canary can prove whether the 20s gate disappeared rather than merely "feeling faster."
 
+## Background / network reconnect fix
+
+- Added a real session reconnect loop with bounded backoff instead of relying on the text label plus ordinary polling.
+- Returning through `pageshow`, visibility restore, or the browser `online` event now performs an immediate heartbeat/state recovery.
+- The recovery heartbeat refreshes canonical viewer/host presence before applying fresh state.
+- After a longer background suspension, the same signed stream is force-reattached only after fresh server state succeeds, then canonical playback state is applied again.
+- Background intervals no longer keep firing pointlessly while the document is hidden; a keepalive heartbeat is attempted when the page is hidden.
+- `jsonFetch` now preserves HTTP status on failures so terminal 404/401/403 states stop pretending to be retryable connection loss.
+- Retryable failures schedule a real reconnect; terminal session/access failures stop the loop and show the correct state.
+- This remains cross-browser and uses standard page visibility/pageshow/online events.
+- The server's 1800-second empty-room TTL is **not** silently changed by this code. Production must set a larger `DANK_MOVIE_NIGHT_EMPTY_ROOM_TTL_SECONDS` if the product requirement is to preserve abandoned/backgrounded rooms beyond 30 minutes.
+
 ## Validation / Definition of Done
 
 The task is not complete until:
@@ -138,7 +155,7 @@ These are real issues but **not active** because no FORCE SWITCH was given:
 
 ## Next step
 
-Open a focused draft PR for the first-byte fix, run exact-head CI, then deploy and repeat the same healthy-swarm canary. Success requires the first server wait to show roughly one first-chunk span rather than the prior multi-megabyte corridor, first byte to arrive well before the 20s timeout, and browser media events to begin promptly.
+Open a focused draft PR for the measured first-byte + wake-recovery playback fix, run exact-head CI, then deploy and repeat two canaries: (1) healthy-swarm startup, where the first wait must cover only the first response chunk and first byte must arrive well before the prior 20s gate; and (2) background/return recovery, where a surviving room must heartbeat, refresh state, and reattach playback instead of remaining on a cosmetic “Reconnecting…” label. Keep the 30-minute room-expiry policy explicit rather than hiding it behind reconnect UI.
 
 ---
 
