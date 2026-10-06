@@ -1674,3 +1674,39 @@ Acceptance after deploy:
 - source card must report a truthful playable-result count;
 - when playable feed entries exist, Latest Feed Results must populate;
 - if count is zero, the card must explicitly say the reachable feed returned no playable magnet/.torrent items, which moves the next investigation to feed payload compatibility rather than pretending discovery succeeded.
+
+## Feed Center usability follow-up — search, pagination, and poster enrichment
+
+Production observation after #455:
+- Feed Center now ingests and displays EzTV RSS results correctly;
+- result list has no Feed Center search UI;
+- result list has no pagination and grows as one continuous page;
+- TMDB-matched titles such as CIA/FBI show posters, while unresolved releases such as `Collision 2026 S01E21 ...` render without artwork and fall back to Search in Cinema.
+
+Evidence:
+- `search_discoveries()` already exists and general Cinema search already uses feed discoveries, but Feed Center never exposed it;
+- Feed Center API previously loaded a bounded recent batch only, with no page/offset/count contract;
+- `Collision (2026)` is a real TV title with TMDB identity 331033, so at least some blank Collision cards are enrichment misses rather than unavailable artwork;
+- episode-style release names with a year were searched as e.g. `collision 2026`; the resolver did not force TV for Custom-category `SxxExx` releases or retry a year-stripped title.
+
+Active branch:
+`fix/cinema-feed-search-pagination-enrichment`
+
+Correction contract:
+- database-backed Feed Center pagination uses PostgREST exact count plus range/offset, default 8 results per page and max 24;
+- search covers both canonical discovery title and `metadata.release_title`, so `FBI`, `Collision`, or `S01E21` can match;
+- `/api/feeds` accepts `q`, `page`, and `page_size` and returns a pagination object with total/pages/previous/next;
+- Feed Center renders a search field, Search/Clear controls, total result count, and Previous/Page/Next controls;
+- episode-looking releases (`SxxExx` or `NxM`) force TV matching even when source category is Custom;
+- episode discovery tries a year-stripped query first (e.g. `collision`) and then the original cleaned query (`collision 2026`);
+- unresolved persisted discoveries receive a bounded TMDB enrichment retry (max 4 per page, 30-minute cooldown), and successful poster/title/TMDB matches are persisted;
+- genuinely unresolved cards receive an intentional branded placeholder instead of an empty image hole;
+- cache-bust Cinema JS to v10 and CSS to v6.
+
+Acceptance:
+- Feed Center search can find by canonical title and release token;
+- eight-result pages expose truthful total and navigation;
+- page navigation queries storage instead of client-slicing a fixed recent batch;
+- Collision-style episode releases can resolve as TV and gain TMDB poster/details when metadata exists;
+- existing general Cinema search, source refresh, playback refs, and source management remain unchanged;
+- exact-head CI and companion workflows green before merge.
