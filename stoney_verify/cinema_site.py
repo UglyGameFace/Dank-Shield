@@ -34,13 +34,23 @@ from .cinema_catalog import (
 )
 from .cinema_library_service import (
     CinemaStorageUnavailable,
+    delete_custom_list,
     get_cinema_user,
     library_snapshot,
     list_notifications,
     list_user_media,
     mark_notification_read,
+    mark_watched,
+    save_custom_list,
+    set_custom_list_item,
+    set_favorite,
+    set_rating,
     set_watchlist,
     update_cinema_preferences,
+)
+from .cinema_library_intelligence import (
+    home_intelligence,
+    library_intelligence_snapshot,
 )
 from .cinema_site_auth import (
     CINEMA_GUILDS_COOKIE,
@@ -1295,6 +1305,8 @@ def _filter_library_snapshot_for_policy(
         "continue_watching",
         "recently_watched",
         "watch_again",
+        "favorites",
+        "rated",
         "series_progress",
     ):
         rows = output.get(key)
@@ -1319,8 +1331,15 @@ def _media_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         "duration_seconds": float(row.get("duration_seconds") or 0.0),
         "completed": bool(row.get("completed")),
         "watchlisted": bool(row.get("watchlisted")),
+        "favorite": bool(row.get("favorite")),
+        "rating": int(row.get("rating") or 0),
+        "play_count": max(0, int(row.get("play_count") or 0)),
+        "first_watched_at": str(row.get("first_watched_at") or ""),
         "last_watched_at": str(row.get("last_watched_at") or ""),
+        "last_completed_at": str(row.get("last_completed_at") or ""),
         "watchlisted_at": str(row.get("watchlisted_at") or ""),
+        "favorite_at": str(row.get("favorite_at") or ""),
+        "rated_at": str(row.get("rated_at") or ""),
         "adult": bool(metadata.get("adult", False)),
         "metadata": dict(metadata),
     }
@@ -1407,6 +1426,20 @@ def _active_rooms_payload(guild_id: int, user_id: int) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def _active_group_user_ids(guild_id: int, user_id: int) -> list[int]:
+    manager = get_movie_night_manager()
+    uid = int(user_id)
+    for room in manager.active_rooms_for_guild(int(guild_id)):
+        if str(getattr(room, "mode", "watch_party") or "watch_party") != "watch_party":
+            continue
+        active = {int(value) for value in manager.active_viewers(room)}
+        active.add(int(room.host_id))
+        if uid not in active or len(active) < 2:
+            continue
+        return sorted(active)[:20]
+    return []
 
 
 def _watch_party_picks(guild_id: int, user_id: int, *, limit: int = 14) -> list[dict[str, Any]]:
