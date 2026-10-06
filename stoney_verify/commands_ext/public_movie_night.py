@@ -1971,7 +1971,7 @@ class CustomSourceModal(discord.ui.Modal):
             placeholder=(
                 "https://myrss.org/eztv"
                 if is_feed
-                else "https://api.example.com/search?q={query}"
+                else "https://api.example.com/search?q={query} or ?imdb_id={imdb_id}"
             ),
             default=str(source.endpoint_url if source is not None else "")[:1000] or None,
             min_length=8,
@@ -2082,7 +2082,7 @@ class CustomSourceModal(discord.ui.Modal):
             )
             if probe.playable_results == 0:
                 notice = (
-                    "⚠️ Search provider responded with structured data and was saved, but the Batman "
+                    "⚠️ Search provider responded with structured data and was saved, but the "
                     "provider probe found no matching playable release."
                 )
 
