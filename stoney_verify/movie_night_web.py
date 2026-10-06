@@ -307,6 +307,19 @@ def _request_identity(request: web.Request) -> tuple[str, Optional[int]]:
     return room_id, uid
 
 
+async def _watch_membership_state(guild_id: int, user_id: int) -> str:
+    """Reuse Cinema's canonical Discord membership verifier without duplicating it."""
+
+    try:
+        from .cinema_site import _site_member_state
+    except Exception:
+        return "unavailable"
+    try:
+        return await _site_member_state(int(guild_id), int(user_id))
+    except Exception:
+        return "unavailable"
+
+
 async def _room_and_user(
     request: web.Request,
 ) -> tuple[MovieNightRoom, int]:
@@ -318,7 +331,16 @@ async def _room_and_user(
     if room is None:
         raise web.HTTPNotFound(text="Dank Cinema session not found.")
     if not manager.user_can_access(room, uid):
-        raise web.HTTPForbidden(text="This is a private Dank Cinema viewing session.")
+        raise web.HTTPForbidden(text="You do not have access to this Dank Cinema session.")
+
+    membership_state = await _watch_membership_state(room.guild_id, uid)
+    if membership_state in {"absent", "bot_absent"}:
+        raise web.HTTPForbidden(
+            text="Dank Cinema requires active membership in a Discord server where Dank Shield is installed."
+        )
+    # A Discord REST outage is not proof that membership disappeared. Canonical
+    # member-remove events still revoke access immediately, while an unavailable
+    # recheck keeps an already-signed active session from being torn down.
     return room, uid
 
 
@@ -783,7 +805,12 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     torrent_manager = get_torrent_manager()
     room_mode = str(getattr(room, "mode", "watch_party") or "watch_party")
     private_mode = room_mode == "private"
-    session_fallback_title = "Private Session" if private_mode else "Watch Party"
+    standalone_mode = room_mode == "standalone"
+    session_fallback_title = (
+        "Dank Cinema"
+        if standalone_mode
+        else ("Private Session" if private_mode else "Watch Party")
+    )
     session = await torrent_manager.get(room.stream_token) if room.stream_token else None
     if session is not None and not torrent_manager.session_usable(session):
         await torrent_manager.discard_unusable_session(room.stream_token)
@@ -951,6 +978,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "room_id": room.room_id,
         "mode": room_mode,
         "private": private_mode,
+        "standalone": standalone_mode,
         "title": str(title or session_fallback_title),
         "movie": movie_metadata,
         "queue": queue_items,
@@ -1471,8 +1499,9 @@ async def movie_night_progress(request: web.Request) -> web.Response:
                 "guild_id": int(room.guild_id),
                 "room_id": str(room.room_id),
                 "session_mode": (
-                    "watch_party"
-                    if str(getattr(room, "mode", "watch_party") or "watch_party") == "watch_party"
+                    str(getattr(room, "mode", "watch_party") or "watch_party")
+                    if str(getattr(room, "mode", "watch_party") or "watch_party")
+                    in {"watch_party", "private", "standalone"}
                     else "private"
                 ),
                 "candidate_id": str(getattr(candidate, "candidate_id", "") or ""),
