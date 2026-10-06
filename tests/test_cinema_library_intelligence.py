@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from stoney_verify import (
+    cinema_feed_personalization,
     cinema_library_intelligence,
     cinema_library_service,
     cinema_site,
@@ -315,6 +316,78 @@ def test_group_recommendations_only_expose_aggregate_fit(monkeypatch) -> None:
     assert result[0]["reason"] == "Fits 2 of 2 viewers"
     assert "user_id" not in result[0]
     assert "user_ids" not in result[0]
+
+
+def test_my_feed_uses_favorites_ratings_and_viewing_history_without_alert_spam(monkeypatch) -> None:
+    async def fake_rules(_guild_id, _user_id, **_kwargs):
+        return []
+
+    async def fake_library(_user_id):
+        return {
+            "watchlist": [],
+            "favorites": [
+                {
+                    "media_type": "tv",
+                    "tmdb_id": 77,
+                }
+            ],
+            "rated": [
+                {
+                    "media_type": "movie",
+                    "tmdb_id": 123,
+                    "rating": 9,
+                }
+            ],
+            "recently_watched": [
+                {
+                    "media_type": "episode",
+                    "tmdb_id": 9001,
+                    "metadata": {"series_id": 77},
+                }
+            ],
+        }
+
+    async def fake_profile(_user_id):
+        return {"preferences": {"feed_playable_only": True}}
+
+    monkeypatch.setattr(cinema_feed_personalization, "list_feed_rules", fake_rules)
+    monkeypatch.setattr(cinema_feed_personalization, "library_snapshot", fake_library)
+    monkeypatch.setattr(cinema_feed_personalization, "get_cinema_user", fake_profile)
+
+    results = [
+        {
+            "title": "Example Show",
+            "media_type": "tv",
+            "tmdb_id": 77,
+            "source_id": "feed-tv",
+            "release_title": "Example.Show.S01E02.1080p.WEB.x265-GROUP.mkv",
+            "playable": True,
+        },
+        {
+            "title": "Example Movie",
+            "media_type": "movie",
+            "tmdb_id": 123,
+            "source_id": "feed-movie",
+            "release_title": "Example.Movie.2026.1080p.WEB.x265-GROUP.mkv",
+            "playable": True,
+        },
+    ]
+
+    snapshot = asyncio.run(
+        cinema_feed_personalization.build_personalized_feed(
+            100,
+            42,
+            results,
+        )
+    )
+
+    reasons = {
+        item["tmdb_id"]: set(item.get("match_reasons") or [])
+        for item in snapshot["my_feed"]
+    }
+    assert {"Favorite", "From your viewing history"} <= reasons[77]
+    assert "Highly rated" in reasons[123]
+    assert snapshot["queue_suggestion_count"] == 2
 
 
 def test_library_intelligence_schema_is_service_role_only_and_idempotent() -> None:
