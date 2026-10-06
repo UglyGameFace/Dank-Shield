@@ -698,7 +698,7 @@ def _cinema_entry_html(
   <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=5">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=6">
 </head>
 <body>
   <div class="app-shell">
@@ -2369,11 +2369,23 @@ async def cinema_feeds_api(request: web.Request) -> web.Response:
     can_manage = _can_manage_cinema(guild_id, user_id)
 
     if request.method == "GET":
+        query = " ".join(str(request.query.get("q") or "").split())[:120]
+        try:
+            page = max(1, int(request.query.get("page") or 1))
+        except Exception:
+            page = 1
+        try:
+            page_size = max(1, min(int(request.query.get("page_size") or 8), 24))
+        except Exception:
+            page_size = 8
         return web.json_response(
             await cinema_feed_state(
                 guild_id,
                 can_manage=can_manage,
                 refresh=False,
+                query=query,
+                page=page,
+                page_size=page_size,
             )
         )
 
@@ -2406,6 +2418,9 @@ async def cinema_feeds_api(request: web.Request) -> web.Response:
             guild_id,
             can_manage=True,
             refresh=False,
+            query="",
+            page=1,
+            page_size=8,
         )
     )
 
@@ -2479,7 +2494,7 @@ def _site_html(guild_id: int, user_id: int) -> str:
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=9" defer></script>
+  <script src="/cinema/assets/site.js?v=10" defer></script>
 </body>
 </html>"""
 
