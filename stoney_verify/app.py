@@ -137,7 +137,7 @@ except Exception:
 # API SERVERS
 # ============================================================
 from .api_new.server import start_api
-from .torrent_media_server import start_torrent_media_server
+from .torrent_media_server import media_server_ready, start_torrent_media_server
 
 try:
     from .bot_actions_api import start_bot_actions_server
@@ -994,6 +994,15 @@ async def _start_torrent_media_server_once() -> None:
     global _STARTED_TORRENT_MEDIA_SERVER
 
     if _STARTED_TORRENT_MEDIA_SERVER:
+        return
+
+    # setup_hook starts the public listener before Discord gateway readiness so
+    # Discloud's TYPE=site proxy always has an origin. Keep this on_ready path as
+    # an idempotent fallback if the early attempt failed.
+    if media_server_ready():
+        _STARTED_TORRENT_MEDIA_SERVER = True
+        claim_startup_flag("torrent_media_server")
+        print("🎞️ Torrent media server already ready from pre-gateway setup")
         return
 
     if not claim_startup_flag("torrent_media_server"):
