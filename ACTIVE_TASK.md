@@ -42,7 +42,7 @@ This remains the single active engineering task.
 
 ## Status
 
-**Production canary failed the intended outcome: playback still felt slow despite a strong live swarm. Investigation must continue from the measured startup path.**
+**Production canary failed the intended outcome. Measurement instrumentation is now implemented on this branch; no startup tuning has been changed yet. Exact-head CI and a measurement canary are next.**
 
 Known production evidence:
 - PR #463 merged successfully.
@@ -67,6 +67,26 @@ This evidence rules out the simplistic explanation that the delay is merely "not
    - origin/Cloudflare interruption;
    - or another server/player handoff delay.
 4. The production screenshot provides enough live-swarm evidence that further connection-limit guessing would be unjustified.
+5. The current first HTTP media request can wait for a bounded startup corridor before sending its first 206 body. The exact wait is adaptive and depends on the actual requested Range, current consume/download-rate estimate, bootstrap bytes, and contiguous piece availability. We are instrumenting those values rather than assuming this wait is the bottleneck.
+6. Torrent magnet startup can also spend time waiting for metadata before the signed Watch stream exists. That stage was previously invisible in the UI.
+7. Browser readiness is a separate stage from server first-byte readiness. A server can deliver bytes quickly while the browser is still waiting for container metadata, codec readiness, user play activation, or the first decoded frame.
+
+## Measurement implementation
+
+The branch now records, per signed stream consumer:
+
+- torrent metadata-ready time from actual torrent startup;
+- torrent session-ready time;
+- first browser Range request time and exact byte offset;
+- first range wait duration and whether it became ready;
+- first response-header time;
+- first response-byte time;
+- browser `loadedmetadata`, `canplay`, `playing`, and first-frame timing;
+- explicit **Play → playing** latency when the user starts playback.
+
+These values are displayed under **Advanced Stream Details** as **Server startup** and **Browser startup**. The browser first Range offset is always shown, including `0 B`, so tail-first/container-probe behavior is visible instead of inferred.
+
+Instrumentation is diagnostic only. It does not change buffer size, range semantics, torrent priorities, peer limits, autoplay policy, or compatibility-audio behavior.
 
 ## Validation / Definition of Done
 
@@ -98,7 +118,7 @@ These are real issues but **not active** because no FORCE SWITCH was given:
 
 ## Next step
 
-Instrument and trace the full startup path on this branch so the next change is based on measured elapsed time between torrent start, first requested range, range availability, first response bytes, media readiness, and actual play start. Do not guess from seed count alone.
+Open a focused draft PR, run exact-head CI, then deploy the instrumentation and capture one healthy-swarm startup from **Advanced Stream Details**. Use those measured stage timings to choose the next code change. Do not alter buffer or player behavior until that evidence identifies the dominant delay.
 
 ---
 
