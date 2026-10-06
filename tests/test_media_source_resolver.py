@@ -335,7 +335,7 @@ def test_aggregate_search_keeps_builtin_results_without_custom_sources(monkeypat
     ):
         assert guild_id == 123
         assert query == "Public Domain Movie"
-        assert lookup_context == {"query": "Public Domain Movie"}
+        assert lookup_context is None
         return resolver.MediaSourceSearchOutcome(
             variants=(),
             errors=("No structured custom sources are enabled.",),
