@@ -897,6 +897,11 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     )
     try:
         torrent_status = torrent_manager.status(session) if session is not None else {}
+        startup_status = (
+            torrent_manager.consumer_startup_status(session, consumer_key)
+            if session is not None and consumer_key
+            else {}
+        )
     except TorrentSessionUnavailableError:
         if room.stream_token:
             await torrent_manager.discard_unusable_session(room.stream_token)
@@ -904,6 +909,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         stream_url = ""
         consumer_key = ""
         torrent_status = {}
+        startup_status = {}
     swarm = _swarm_display(torrent_status, variant)
     sync_ready = bool(
         int(user_id) == int(room.host_id)
@@ -1029,6 +1035,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
             "leechers": swarm["leechers"],
             "swarm_source": swarm["source"],
             "buffer": torrent_status.get("buffer", {}),
+            "startup": startup_status,
         },
         "open_vote": _open_vote(room),
         "ended": bool(room.ended),
