@@ -5,10 +5,10 @@
 **DANK-CINEMA-FAST-START-FOLLOWUP — diagnose and remove remaining startup latency on healthy live swarms**
 
 Production baseline:
-`main@deeeb00fb61468efafef49f2e59d9e50854f2de7` (PR #463 merged).
+`main@a1dae0819eec00f077220e57f8f6a27ad1b8a19e` (PR #464 merged; startup instrumentation in production).
 
 Active branch:
-`fix/cinema-playback-startup-followup`
+`fix/cinema-first-byte-startup`
 
 Outcome:
 When Dank Cinema has a genuinely healthy **live** swarm, playback should reach the first rendered frame as quickly as the browser/container/network path allows. The previous fast-start changes improved connection fan-out and time-critical piece scheduling, but the production canary still showed unacceptable startup latency even with roughly **152 connected seeds / 193 peers at ~3.9 MiB/s**. That means the active task is **not complete**.
@@ -42,7 +42,7 @@ This remains the single active engineering task.
 
 ## Status
 
-**Measurement instrumentation is implemented. PR #464 exact-head CI exposed one obsolete string-based layout regression assertion; runtime/unit behavior otherwise passed 2911 tests. The assertion is corrected and fresh exact-head CI is running. No startup tuning has been changed yet.**
+**Production instrumentation identified the dominant delay exactly: the first browser Range arrived quickly, but the server then spent the full 20.1s buffer timeout waiting for the entire initial startup corridor before sending any media bytes. A focused first-byte fix is implemented on this branch and exact-head CI is next.**
 
 Known production evidence:
 - PR #463 merged successfully.
@@ -67,9 +67,11 @@ This evidence rules out the simplistic explanation that the delay is merely "not
    - origin/Cloudflare interruption;
    - or another server/player handoff delay.
 4. The production screenshot provides enough live-swarm evidence that further connection-limit guessing would be unjustified.
-5. The current first HTTP media request can wait for a bounded startup corridor before sending its first 206 body. The exact wait is adaptive and depends on the actual requested Range, current consume/download-rate estimate, bootstrap bytes, and contiguous piece availability. We are instrumenting those values rather than assuming this wait is the bottleneck.
-6. Torrent magnet startup can also spend time waiting for metadata before the signed Watch stream exists. That stage was previously invisible in the UI.
-7. Browser readiness is a separate stage from server first-byte readiness. A server can deliver bytes quickly while the browser is still waiting for container metadata, codec readiness, user play activation, or the first decoded frame.
+5. Production trace from PR #464 measured: source 3ms, torrent start 4ms, Watch ready 2.02s, torrent metadata/session ready 2.02s, first browser Range at 2.79s from byte 0, then **20.1s inside the first server wait**. Browser startup still showed "waiting for media events" because the server had not sent the first media response yet.
+6. The first HTTP Range path waits on `start..startup_wait_end`. With the current 1 MiB first chunk and 8 MiB bootstrap allowance, that can gate first byte on roughly 5-9 MiB of contiguous startup data, even though the browser only needs the first response chunk to begin parsing.
+7. `wait_range` is all-or-nothing across that corridor. One late torrent piece anywhere in the corridor can hold every byte until `DANK_TORRENT_BUFFER_WAIT_SECONDS` expires. The measured 20.1s wait matches the configured 20s timeout, so this is no longer a hypothesis.
+8. The safe structural fix is to keep prioritizing/readahead for the wider startup corridor, but for HTTP Range clients wait only for the first 1 MiB response chunk. After that chunk is ready, advertise only the already-complete contiguous prefix in the 206 response. This preserves the earlier short-body/protocol safety work while allowing the browser to receive first byte immediately instead of waiting for the whole corridor.
+9. Non-Range 200 behavior is intentionally unchanged by this fix.
 
 ## Measurement implementation
 
@@ -94,6 +96,17 @@ First PR #464 CI result:
 - the test still expected the old one-line media-event listener string, while the implementation now uses a block listener so it can both call `stabilizePlayerLayout()` and record startup timing;
 - the layout call remains present, so this was a stale structural assertion rather than a runtime regression;
 - the test now asserts the block listener, layout stabilization, and startup-event marker together.
+
+PR #464 was then merged and its exact-head required workflow families passed. The first production trace supplied the evidence above.
+
+## First-byte fix
+
+- Added `TorrentMediaManager.contiguous_available_end()` to find the largest already-complete prefix from the requested byte without crossing a missing torrent piece.
+- For HTTP Range requests, the initial blocking wait now covers only the first 1 MiB response chunk, not the full adaptive startup corridor.
+- The wider adaptive corridor is still prioritized as readahead, so throughput protection is preserved.
+- Once the first chunk is ready, the 206 response advertises only the contiguous bytes already complete up to the former startup limit. The browser can immediately parse those bytes and request the remainder.
+- For non-Range requests, the previous startup wait behavior remains unchanged.
+- Startup diagnostics now record the exact first wait byte span so the next canary can prove whether the 20s gate disappeared rather than merely "feeling faster."
 
 ## Validation / Definition of Done
 
@@ -125,7 +138,7 @@ These are real issues but **not active** because no FORCE SWITCH was given:
 
 ## Next step
 
-Open a focused draft PR, run exact-head CI, then deploy the instrumentation and capture one healthy-swarm startup from **Advanced Stream Details**. Use those measured stage timings to choose the next code change. Do not alter buffer or player behavior until that evidence identifies the dominant delay.
+Open a focused draft PR for the first-byte fix, run exact-head CI, then deploy and repeat the same healthy-swarm canary. Success requires the first server wait to show roughly one first-chunk span rather than the prior multi-megabyte corridor, first byte to arrive well before the 20s timeout, and browser media events to begin promptly.
 
 ---
 
