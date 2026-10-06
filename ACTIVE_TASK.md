@@ -2,121 +2,103 @@
 
 ## Active task / outcome
 
-**DANK-CINEMA-STANDALONE-PLAYBACK — restore direct website playback and episode selection**
+**DANK-CINEMA-SOURCE-SELECTION-CANARY — make website source choice obvious without sacrificing one-tap playback**
 
-Current production/main baseline:
-`main@86af2c5dd799b8dd35d0c960ff8470918e6a09e1` (PR #459 Library intelligence merged).
+Production baseline:
+`main@72d01609b4970f00f4c62b930f2005bc3387d54e` (PR #460 merged).
 
-PR:
-**#460 — Restore direct standalone Dank Cinema website playback**
-
-Working rebuild branch:
-`rebuild/pr460-standalone-current-main`
+Active branch:
+`fix/cinema-site-source-selection`
 
 Outcome:
-Make **Open Dank Cinema** a real website-only playback mode, separate from Discord **Private Session** and **Watch Party**, while preserving the current Library-intelligence mainline and existing MovieNightRoom, provider resolver, torrent runtime, signed Watch player, and Discord membership authority.
+Keep **Play Here** simple by automatically choosing the best available release, while making the visible **Playback Source** cards real manual overrides. A user who does not care about torrent details should press Play once; a user who does care can tap a source and play that exact release without exposing magnet or .torrent URLs to the browser.
 
 ## Scope
 
-This remains the single active task:
+This is the single active task and a direct continuation of the PR #460 production canary.
 
-- movies and exact TV episodes start directly from the full Cinema site;
-- episode cards are tappable/clickable and retain explicit Play/Resume controls;
-- Continue Watching resumes on-site without first creating a Discord room;
-- Open Dank Cinema creates/reuses a host-only `standalone` MovieNightRoom and never mutates a Private Session or Watch Party;
-- Private Session and Watch Party remain separate;
-- standalone Watch access still requires active membership in a guild where Dank Shield is installed;
-- the newly merged Library-intelligence persistence accepts and reports `standalone` watch sessions;
-- exact-head CI, SQL migration validation, diff cleanup, and Discloud/Samsung + desktop canary are required before completion.
+- **Play Here** defaults to automatic best-source selection.
+- Automatic selection continues to use the existing saved preferred provider plus canonical room ranking for browser-audio risk, swarm health, and quality.
+- Movie source cards on the website are selectable manual overrides instead of read-only decoration.
+- Manual selection must start the exact selected release, not merely its provider.
+- The browser receives only an opaque source-choice id; raw magnet/.torrent references remain server-side.
+- A local **Play Automatically / Play Selected Source** button sits beside the source list so mobile users do not have to scroll back to the hero.
+- Direct website playback, Private Session, and Watch Party boundaries from PR #460 remain unchanged.
+- Focused regressions, exact-head CI, diff cleanup, and Samsung Browser canary are required.
 
 ## Status
 
-**Implementation has been rebuilt cleanly on current main; exact-head PR #460 CI is the next validation gate.**
-
-The old PR #460 head diverged after PR #459 merged into main. That conflict prevented new pull-request workflows from being created for the subsequent test-only commits because GitHub could no longer synthesize the PR merge ref.
+**Implementation is on a clean current-main branch; PR and exact-head validation are next.**
 
 ## Findings / root cause
 
-1. The original website playback regression was structural: `/cinema/{guild}/api/play` required an already-existing host-owned Discord Cinema room.
-2. Full-site Details and episode cards were gated by `hostSession?.is_host`, and the fallback action was **Open Discord to Play**.
-3. Episode cards themselves were not playback targets.
-4. Signed Watch URLs checked room access but did not reuse the canonical Cinema guild-membership verifier.
-5. PR #460's first exact-head run failed three tests: one test omitted `DANK_MEDIA_PUBLIC_BASE_URL`, and two tests still asserted the old two-mode Watch JavaScript strings.
-6. While those test failures were being corrected, PR #459 merged Library intelligence to main. PR #460 became 39 commits behind with overlapping Cinema files, so the correct solution is a clean replay on current main, not stacking conflict patches.
-7. Current main persists Watch history with a database constraint limited to `private` and `watch_party`; standalone playback therefore also requires the additive `standalone` storage compatibility migration and service support.
+1. PR #460 correctly restored direct website playback, but the Details page rendered **Available Cinema Sources** as non-interactive cards.
+2. Pressing **Play Here** already selected a release server-side through `select_preferred_variant()` and the room's `ranked_variants()`, so users who wanted the simplest path were already supposed to get an automatic choice.
+3. The UI did not explain that behavior, and it offered no way to override the automatic choice despite visibly presenting multiple torrent releases. Humans, quite reasonably for once, interpreted visible source cards as controls.
+4. Exposing raw magnet or .torrent URLs to make those cards selectable would weaken the existing browser/server boundary. The correct implementation is an opaque choice id that is re-resolved against the fresh exact-title provider result during `/api/play`.
+5. PR #460 has already merged. The source-selector follow-up is therefore replayed from production `main@72d0160...` instead of extending the merged PR branch.
 
 ## Execution path
 
-Direct website playback:
-`signed Cinema site identity -> /cinema/{guild}/api/play -> exact TMDB movie/episode source search -> host-only standalone MovieNightRoom -> cinema_playback_service -> TorrentMediaManager -> signed Watch URL`.
+Automatic:
+`Play Here -> /cinema/{guild}/api/play -> exact source search -> room ranked_variants -> saved preferred provider when available -> best canonical release -> start_room_variant`.
 
-Discord sessions:
-`/movie -> Private Session or Watch Party -> existing MovieNightRoom -> same playback/runtime authority`.
-
-Membership:
-`site/Watch request -> canonical Cinema Discord membership verifier -> deny definitive absent/bot_absent; transient Discord REST failure does not falsely revoke an already signed session`.
-
-Persistence:
-`Watch progress -> cinema_library_service -> dank_cinema_watch_sessions(session_mode=standalone)`.
+Manual:
+`tap source card -> browser stores opaque source_choice -> Play Selected Source -> /api/play -> fresh exact source search -> opaque id matched to one current source_ref server-side -> exact room variant -> start_room_variant`.
 
 ## Changes
 
-- Replayed the standalone room mode and host-only access rules on current main.
-- Replayed direct website movie/episode playback without replacing current Library code.
-- Preserved all current Library Details actions, favorites, ratings, lists, history, and recommendation behavior.
-- Made TV episode cards direct-play targets while keeping their Library action buttons independent.
-- Removed the runtime **Open Discord to Play** fallback.
-- Kept the Home live-session rail limited to actual Watch Parties.
-- Added standalone-specific Watch labels and removed Private/Watch Party-only controls from standalone mode.
-- Reused the canonical guild-membership verifier on Watch-page requests.
-- Preserved `standalone` in Watch progress activity context and Library session analytics.
-- Added an additive Supabase migration allowing `private`, `watch_party`, or `standalone` watch-session modes.
-- Extended Cinema SQL CI to apply the new migration twice and persist/verify a representative standalone session.
-- Bumped the current Library site's assets from CSS v8 / JS v12 to CSS v9 / JS v13.
-- Added/updated focused regressions for direct site playback, episode tapping, Watch UI modes, membership revocation, Library session stats, and schema persistence.
+- Added a stable opaque `source_choice` id derived server-side from each source reference.
+- Added `source_choice` to movie Details source payloads without returning `source_ref`.
+- Added optional `source_choice` handling to direct website playback.
+- Manual source choice bypasses automatic preference only when that exact source still exists in the fresh exact-title result; stale choices fail with a refresh message rather than silently switching releases.
+- Automatic playback behavior remains unchanged when no override is supplied.
+- Renamed the UI section to **Playback Source** and added explicit explanatory copy.
+- Added a selected **Automatic** option by default.
+- Made individual source cards accessible toggle buttons with visible selected state.
+- Added inline **Play Automatically / Play Selected Source** control for mobile ergonomics.
+- Bumped Cinema site cache assets to CSS v10 / JS v14.
+- Added regression coverage proving a low-ranked manual source overrides the automatic high-ranked source and proving raw source references are not returned.
 
 ## Validation / results
 
-Confirmed:
-- clean rebuild branch is based on current `main@86af2c5...`;
-- compare against main is ahead-only and 0 behind;
-- runtime site JavaScript contains no `Open Discord to Play`, `playInTheater`, or `hostSession?.is_host`;
-- current Cinema HTML references CSS v9 and JS v13;
-- Library-intelligence files remain present and are extended rather than overwritten;
-- SQL workflow includes the standalone migration in path filters, replay order, row exercise, and verification.
-
-Earlier failed PR #460 run:
-- 3 failed, 2886 passed;
-- failure 1: direct-play regression test expected a signed Watch URL without setting the required public media base URL;
-- failures 2–3: legacy assertions expected two-mode Watch JavaScript after standalone became a third mode.
+Confirmed by inspection:
+- branch starts from current production main after PR #460;
+- source-selection changes are limited to Cinema site backend/client/CSS, focused tests, and this task record;
+- browser JavaScript contains no `source_ref` handling;
+- manual choice is revalidated against the fresh exact source search before playback;
+- no second provider resolver, torrent runtime, room manager, or player was introduced.
 
 Pending:
-- exact-head canonical CI and Cinema SQL on the clean current-main rebuild;
-- final mergeability/diff inspection;
-- Discloud Samsung Browser + desktop canary for direct movie play, Continue Watching resume, season switch, episode tap, Private/Watch Party isolation, progress persistence, and guild-membership revocation.
+- focused/exact-head CI on this new PR;
+- mergeability and final diff review;
+- Discloud Samsung Browser canary:
+  1. press **Play Here** without touching sources and confirm automatic playback;
+  2. return to Details, select a lower-ranked source, confirm selected styling;
+  3. use **Play Selected Source** and confirm that exact release starts;
+  4. switch back to **Automatic** and confirm normal ranking resumes;
+  5. confirm Private Session / Watch Party remain unaffected.
 
 ## Cleanup / conflicts
 
-- No second torrent runtime, provider stack, Watch player, or room manager was added.
-- Current Library intelligence remains authoritative and intact.
-- The standalone schema change is additive and narrowly required because current main now persists session mode.
-- The obsolete divergent PR #460 commit history must not be merged as-is; the head will be replaced with the clean current-main replay.
-- No unrelated Dank Shield feature work is included.
+- The already-merged PR #460 branch is not being reopened or rewritten.
+- No Library intelligence or schema behavior is changed by this follow-up.
+- Raw torrent references remain server-side.
+- No unrelated feature cleanup is included.
 
 ## Blockers / risks
 
-- Provider/source availability remains external and may truthfully leave a title without a playable release.
-- MovieNightRoom remains process-memory authority across restarts, which is pre-existing architecture.
-- Production must apply the new additive standalone migration before standalone progress rows can persist.
-- Completion still depends on exact-head CI and live canary evidence.
+- A source can disappear between Details load and Play; the endpoint intentionally rejects that stale manual choice and asks for refresh.
+- Provider/source availability remains external.
+- The screenshot also showed a Cloudflare 502 diagnostic overlay. That is recorded separately and is not being mixed into source-selector implementation unless it blocks the playback canary.
 
 ## Backlog
 
-Unrelated Dank Shield work remains outside this task.
+- Investigate the observed Cloudflare 502/origin diagnostic separately if it recurs outside the selector canary or prevents playback.
 
 ## Next step
 
-Verify PR #460 exact-head checks on the clean current-main rebuild, repair only evidence-backed failures, then run the Discloud device canary.
+Open a focused PR from this branch, run exact-head CI, repair only evidence-backed failures, then deploy/canary the automatic and manual source paths on Samsung Browser.
 
 ---
 
