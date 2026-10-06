@@ -34,13 +34,24 @@ from .cinema_catalog import (
 )
 from .cinema_library_service import (
     CinemaStorageUnavailable,
+    InvalidCinemaState,
+    delete_custom_list,
     get_cinema_user,
     library_snapshot,
     list_notifications,
     list_user_media,
     mark_notification_read,
+    mark_watched,
+    save_custom_list,
+    set_custom_list_item,
+    set_favorite,
+    set_rating,
     set_watchlist,
     update_cinema_preferences,
+)
+from .cinema_library_intelligence import (
+    home_intelligence,
+    library_intelligence_snapshot,
 )
 from .cinema_site_auth import (
     CINEMA_GUILDS_COOKIE,
@@ -705,7 +716,7 @@ def _cinema_entry_html(
   <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=7">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=8">
 </head>
 <body>
   <div class="app-shell">
@@ -1295,6 +1306,8 @@ def _filter_library_snapshot_for_policy(
         "continue_watching",
         "recently_watched",
         "watch_again",
+        "favorites",
+        "rated",
         "series_progress",
     ):
         rows = output.get(key)
@@ -1319,8 +1332,15 @@ def _media_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         "duration_seconds": float(row.get("duration_seconds") or 0.0),
         "completed": bool(row.get("completed")),
         "watchlisted": bool(row.get("watchlisted")),
+        "favorite": bool(row.get("favorite")),
+        "user_rating": int(row.get("rating") or 0),
+        "play_count": max(0, int(row.get("play_count") or 0)),
+        "first_watched_at": str(row.get("first_watched_at") or ""),
         "last_watched_at": str(row.get("last_watched_at") or ""),
+        "last_completed_at": str(row.get("last_completed_at") or ""),
         "watchlisted_at": str(row.get("watchlisted_at") or ""),
+        "favorite_at": str(row.get("favorite_at") or ""),
+        "rated_at": str(row.get("rated_at") or ""),
         "adult": bool(metadata.get("adult", False)),
         "metadata": dict(metadata),
     }
@@ -1407,6 +1427,20 @@ def _active_rooms_payload(guild_id: int, user_id: int) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def _active_group_user_ids(guild_id: int, user_id: int) -> list[int]:
+    manager = get_movie_night_manager()
+    uid = int(user_id)
+    for room in manager.active_rooms_for_guild(int(guild_id)):
+        if str(getattr(room, "mode", "watch_party") or "watch_party") != "watch_party":
+            continue
+        active = {int(value) for value in manager.active_viewers(room)}
+        active.add(int(room.host_id))
+        if uid not in active or len(active) < 2:
+            continue
+        return sorted(active)[:20]
+    return []
 
 
 def _watch_party_picks(guild_id: int, user_id: int, *, limit: int = 14) -> list[dict[str, Any]]:
@@ -1657,14 +1691,23 @@ async def cinema_home_api(request: web.Request) -> web.Response:
         library,
         adult_enabled=adult_enabled,
     )
-    recent = list(library.get("recently_watched") or [])
-    try:
-        recommended = await recommendations_for_history(recent, limit=20)
-    except Exception:
-        recommended = ()
-    new_episodes = await _next_episode_rows(library)
     active_rooms = _active_rooms_payload(guild_id, user_id)
     watch_party_picks = _watch_party_picks(guild_id, user_id)
+    group_user_ids = _active_group_user_ids(guild_id, user_id)
+    try:
+        intelligence = await home_intelligence(
+            guild_id,
+            user_id,
+            include_adult=adult_enabled,
+            group_user_ids=group_user_ids,
+        )
+    except Exception:
+        intelligence = {
+            "because_you_watched": [],
+            "recommended": [],
+            "upcoming": [],
+            "group_recommendations": [],
+        }
 
     sections: list[dict[str, Any]] = []
 
@@ -1678,7 +1721,11 @@ async def cinema_home_api(request: web.Request) -> web.Response:
         "Continue Watching",
         [_media_payload(row) for row in library.get("continue_watching") or []],
     )
-    add("new_episodes", "New Episodes", new_episodes)
+    add(
+        "upcoming",
+        "Upcoming & Available From Your Shows",
+        intelligence.get("upcoming") or [],
+    )
     add(
         "trending",
         "Trending",
@@ -1714,11 +1761,21 @@ async def cinema_home_api(request: web.Request) -> web.Response:
         "Watch Party Picks",
         watch_party_picks,
     )
+    add(
+        "group_recommendations",
+        "Good for the Room",
+        intelligence.get("group_recommendations") or [],
+    )
     add("feeds", "From Your Feeds", feeds)
+    add(
+        "because_you_watched",
+        "Because You Watched",
+        intelligence.get("because_you_watched") or [],
+    )
     add(
         "recommended",
         "Recommended For You",
-        [item.to_payload() for item in recommended],
+        intelligence.get("recommended") or [],
     )
     add(
         "recently_watched",
@@ -2292,17 +2349,139 @@ async def cinema_play_api(request: web.Request) -> web.Response:
     )
 
 
-async def cinema_library_api(request: web.Request) -> web.Response:
-    _guild_id, user_id = await _site_identity(request)
-    if request.method == "GET":
-        snapshot = await library_snapshot(user_id)
-        adult_enabled = await _guild_adult_content_enabled(_guild_id)
-        return web.json_response(
-            _filter_library_snapshot_for_policy(
-                snapshot,
-                adult_enabled=adult_enabled,
+async def _canonical_library_target(
+    payload: Mapping[str, Any],
+    *,
+    adult_enabled: bool,
+) -> dict[str, Any]:
+    media_type = str(payload.get("media_type") or "").strip().lower()
+    if media_type in {"movie", "tv"}:
+        try:
+            tmdb_id = int(payload.get("tmdb_id") or 0)
+        except Exception:
+            tmdb_id = 0
+        if tmdb_id <= 0:
+            raise InvalidCinemaState("Choose a canonical Cinema title.")
+        try:
+            details = await get_details(media_type, tmdb_id)
+        except Exception as exc:
+            raise web.HTTPServiceUnavailable(
+                text="Cinema metadata is temporarily unavailable."
+            ) from exc
+        if bool(details.media.adult) and not adult_enabled:
+            raise web.HTTPForbidden(
+                text="Adult-content Cinema titles are disabled for this server."
             )
+        return {
+            "media_type": media_type,
+            "tmdb_id": int(details.media.tmdb_id),
+            "season_number": 0,
+            "episode_number": 0,
+            "title": str(details.media.title),
+            "metadata": {
+                "poster_url": str(details.media.poster_url or ""),
+                "backdrop_url": str(details.media.backdrop_url or ""),
+                "year": int(details.media.year or 0),
+                "media_type": media_type,
+                "adult": bool(details.media.adult),
+                "genres": list(details.genres)[:12],
+                "studios": list(details.studios)[:16],
+                "franchises": list(details.franchises)[:8],
+            },
+        }
+
+    if media_type == "episode":
+        try:
+            series_id = int(
+                payload.get("series_id")
+                or (
+                    payload.get("metadata", {}).get("series_id")
+                    if isinstance(payload.get("metadata"), Mapping)
+                    else 0
+                )
+                or 0
+            )
+            season_number = max(0, int(payload.get("season_number") or 0))
+            episode_number = max(0, int(payload.get("episode_number") or 0))
+        except Exception:
+            series_id = 0
+            season_number = 0
+            episode_number = 0
+        if series_id <= 0 or episode_number <= 0:
+            raise InvalidCinemaState("Choose a canonical Cinema episode.")
+        try:
+            details, episodes = await asyncio.gather(
+                get_details("tv", series_id),
+                get_season(series_id, season_number),
+            )
+        except Exception as exc:
+            raise web.HTTPServiceUnavailable(
+                text="Cinema episode metadata is temporarily unavailable."
+            ) from exc
+        if bool(details.media.adult) and not adult_enabled:
+            raise web.HTTPForbidden(
+                text="Adult-content Cinema titles are disabled for this server."
+            )
+        episode = next(
+            (
+                item
+                for item in episodes
+                if int(item.episode_number) == episode_number
+            ),
+            None,
         )
+        if episode is None:
+            raise InvalidCinemaState("That Cinema episode could not be resolved.")
+        return {
+            "media_type": "episode",
+            "tmdb_id": int(episode.tmdb_id),
+            "season_number": int(episode.season_number),
+            "episode_number": int(episode.episode_number),
+            "title": (
+                f"{details.media.title} • "
+                f"S{int(episode.season_number):02d}E{int(episode.episode_number):02d} "
+                f"{episode.title}"
+            )[:180],
+            "metadata": {
+                "series_id": int(series_id),
+                "series_title": str(details.media.title)[:180],
+                "episode_title": str(episode.title)[:180],
+                "poster_url": str(details.media.poster_url or ""),
+                "series_poster_url": str(details.media.poster_url or ""),
+                "backdrop_url": str(
+                    episode.still_url
+                    or details.media.backdrop_url
+                    or ""
+                ),
+                "still_url": str(episode.still_url or ""),
+                "year": int(details.media.year or 0),
+                "media_type": "episode",
+                "adult": bool(details.media.adult),
+                "genres": list(details.genres)[:12],
+                "studios": list(details.studios)[:16],
+                "franchises": list(details.franchises)[:8],
+            },
+        }
+
+    raise InvalidCinemaState("Unsupported Cinema Library media type.")
+
+
+async def cinema_library_api(request: web.Request) -> web.Response:
+    guild_id, user_id = await _site_identity(request)
+    adult_enabled = await _guild_adult_content_enabled(guild_id)
+
+    if request.method == "GET":
+        try:
+            snapshot = await library_intelligence_snapshot(
+                guild_id,
+                user_id,
+                include_adult=adult_enabled,
+            )
+        except CinemaStorageUnavailable as exc:
+            raise web.HTTPServiceUnavailable(
+                text="Dank Cinema library storage is unavailable."
+            ) from exc
+        return web.json_response(snapshot)
 
     try:
         payload = await request.json()
@@ -2312,40 +2491,119 @@ async def cinema_library_api(request: web.Request) -> web.Response:
         payload = {}
     action = str(payload.get("action") or "").strip().lower()
 
-    if action == "watchlist":
-        media_type = str(payload.get("media_type") or "").strip().lower()
-        tmdb_id = int(payload.get("tmdb_id") or 0)
-        if media_type not in {"movie", "tv"} or tmdb_id <= 0:
-            raise web.HTTPBadRequest(text="Watchlist requires a canonical movie or TV title.")
-        try:
-            details = await get_details(media_type, tmdb_id)
-        except Exception as exc:
-            raise web.HTTPServiceUnavailable(
-                text="Cinema metadata is temporarily unavailable."
-            ) from exc
-        adult_enabled = await _guild_adult_content_enabled(_guild_id)
-        if bool(details.media.adult) and not adult_enabled:
-            raise web.HTTPForbidden(
-                text="Adult-content Cinema titles are disabled for this server."
+    try:
+        if action == "save_list":
+            try:
+                list_position = max(0, int(payload.get("position") or 0))
+            except Exception as exc:
+                raise InvalidCinemaState("Cinema list position is invalid.") from exc
+            row = await save_custom_list(
+                user_id,
+                name=str(payload.get("name") or ""),
+                description=str(payload.get("description") or ""),
+                list_id=str(payload.get("list_id") or ""),
+                position=list_position,
             )
-        row = await set_watchlist(
-            user_id,
-            media_type=media_type,
-            tmdb_id=tmdb_id,
-            title=str(details.media.title),
-            metadata={
-                "poster_url": str(details.media.poster_url or ""),
-                "backdrop_url": str(details.media.backdrop_url or ""),
-                "year": int(details.media.year or 0),
-                "media_type": media_type,
-                "adult": bool(details.media.adult),
-            },
-            enabled=bool(payload.get("enabled", True)),
+            return web.json_response({"ok": True, "list": row})
+
+        if action == "delete_list":
+            await delete_custom_list(
+                user_id,
+                str(payload.get("list_id") or ""),
+            )
+            return web.json_response({"ok": True, "deleted": True})
+
+        target = await _canonical_library_target(
+            payload,
+            adult_enabled=adult_enabled,
         )
-        return web.json_response({"ok": True, "item": row})
 
-    raise web.HTTPBadRequest(text="Unsupported Cinema library action.")
+        if action == "watchlist":
+            if target["media_type"] not in {"movie", "tv"}:
+                raise InvalidCinemaState(
+                    "Add the TV series, not an episode, to Watchlist."
+                )
+            row = await set_watchlist(
+                user_id,
+                media_type=str(target["media_type"]),
+                tmdb_id=int(target["tmdb_id"]),
+                title=str(target["title"]),
+                metadata=target["metadata"],
+                enabled=bool(payload.get("enabled", True)),
+            )
+        elif action == "favorite":
+            row = await set_favorite(
+                user_id,
+                media_type=str(target["media_type"]),
+                tmdb_id=int(target["tmdb_id"]),
+                season_number=int(target["season_number"]),
+                episode_number=int(target["episode_number"]),
+                title=str(target["title"]),
+                metadata=target["metadata"],
+                enabled=bool(payload.get("enabled", True)),
+            )
+        elif action == "rating":
+            raw_rating = payload.get("rating")
+            rating = None
+            if raw_rating not in (None, "", 0, "0"):
+                try:
+                    rating = int(raw_rating)
+                except Exception as exc:
+                    raise InvalidCinemaState(
+                        "Cinema ratings must be between 1 and 10."
+                    ) from exc
+            row = await set_rating(
+                user_id,
+                media_type=str(target["media_type"]),
+                tmdb_id=int(target["tmdb_id"]),
+                season_number=int(target["season_number"]),
+                episode_number=int(target["episode_number"]),
+                title=str(target["title"]),
+                metadata=target["metadata"],
+                rating=rating,
+            )
+        elif action == "watched":
+            if target["media_type"] == "tv":
+                raise InvalidCinemaState(
+                    "Mark specific TV episodes watched instead of the whole series."
+                )
+            row = await mark_watched(
+                user_id,
+                media_type=str(target["media_type"]),
+                tmdb_id=int(target["tmdb_id"]),
+                season_number=int(target["season_number"]),
+                episode_number=int(target["episode_number"]),
+                title=str(target["title"]),
+                metadata=target["metadata"],
+                watched=bool(payload.get("watched", True)),
+            )
+        elif action == "list_item":
+            try:
+                item_position = max(0, int(payload.get("position") or 0))
+            except Exception as exc:
+                raise InvalidCinemaState("Cinema list item position is invalid.") from exc
+            row = await set_custom_list_item(
+                user_id,
+                list_id=str(payload.get("list_id") or ""),
+                media_type=str(target["media_type"]),
+                tmdb_id=int(target["tmdb_id"]),
+                season_number=int(target["season_number"]),
+                episode_number=int(target["episode_number"]),
+                title=str(target["title"]),
+                metadata=target["metadata"],
+                enabled=bool(payload.get("enabled", True)),
+                position=item_position,
+            )
+        else:
+            raise InvalidCinemaState("Unsupported Cinema library action.")
+    except InvalidCinemaState as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    except CinemaStorageUnavailable as exc:
+        raise web.HTTPServiceUnavailable(
+            text="Dank Cinema library storage is unavailable."
+        ) from exc
 
+    return web.json_response({"ok": True, "item": row})
 
 async def cinema_profile_api(request: web.Request) -> web.Response:
     guild_id, user_id = await _site_identity(request)
@@ -2710,12 +2968,12 @@ def _site_html(guild_id: int, user_id: int) -> str:
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=7">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=8">
 </head>
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=11" defer></script>
+  <script src="/cinema/assets/site.js?v=12" defer></script>
 </body>
 </html>"""
 

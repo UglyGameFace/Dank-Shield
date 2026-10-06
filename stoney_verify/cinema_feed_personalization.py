@@ -726,10 +726,44 @@ async def build_personalized_feed(
         if isinstance(row, Mapping)
     ]
     groups = group_feed_results(combined)
+    def library_key(row: Mapping[str, Any]) -> tuple[str, int] | None:
+        kind = str(row.get("media_type") or "").strip().lower()
+        tmdb_id = int(row.get("tmdb_id") or 0)
+        metadata = (
+            row.get("metadata")
+            if isinstance(row.get("metadata"), Mapping)
+            else {}
+        )
+        if kind == "episode":
+            series_id = int(metadata.get("series_id") or 0)
+            return ("tv", series_id) if series_id > 0 else None
+        if kind in {"movie", "tv"} and tmdb_id > 0:
+            return kind, tmdb_id
+        return None
+
     watchlist_keys = {
-        (str(row.get("media_type") or ""), int(row.get("tmdb_id") or 0))
+        key
         for row in library.get("watchlist") or []
-        if int(row.get("tmdb_id") or 0) > 0
+        for key in [library_key(row)]
+        if key is not None
+    }
+    favorite_keys = {
+        key
+        for row in library.get("favorites") or []
+        for key in [library_key(row)]
+        if key is not None
+    }
+    history_keys = {
+        key
+        for row in library.get("recently_watched") or []
+        for key in [library_key(row)]
+        if key is not None
+    }
+    high_rating_keys = {
+        key
+        for row in library.get("rated") or []
+        for key in [library_key(row)]
+        if key is not None and int(row.get("rating") or 0) >= 8
     }
     user_rules = [
         rule for rule in rules
@@ -769,6 +803,12 @@ async def build_personalized_feed(
         )
         if key in watchlist_keys:
             reasons.append("Watchlist")
+        if key in favorite_keys:
+            reasons.append("Favorite")
+        if key in high_rating_keys:
+            reasons.append("Highly rated")
+        if key in history_keys:
+            reasons.append("From your viewing history")
 
         matched_user_rules = [
             rule for rule in user_rules if _rule_matches(group, rule)
@@ -784,6 +824,8 @@ async def build_personalized_feed(
                 prefs.get("feed_queue_suggestions", True)
                 and (
                     key in watchlist_keys
+                    or key in favorite_keys
+                    or key in high_rating_keys
                     or any(
                     bool((rule.get("actions") or {}).get("queue_suggest"))
                     or rule.get("rule_type") == "follow"
@@ -792,6 +834,9 @@ async def build_personalized_feed(
                 )
             )
             group["watchlist_match"] = key in watchlist_keys
+            group["favorite_match"] = key in favorite_keys
+            group["history_match"] = key in history_keys
+            group["high_rating_match"] = key in high_rating_keys
             group["followed_match"] = any(
                 rule.get("rule_type") == "follow" for rule in matched_user_rules
             )

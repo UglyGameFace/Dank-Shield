@@ -3,7 +3,7 @@
   "use strict";
 
   /** @typedef {{guildId:string,userId:string}} CinemaBoot */
-  /** @typedef {{media_type?:string,tmdb_id?:number,title?:string,poster_url?:string,backdrop_url?:string,overview?:string,year?:number,rating?:number,progress_ratio?:number,progress_seconds?:number,duration_seconds?:number,completed?:boolean,watchlisted?:boolean,season_number?:number,episode_number?:number,metadata?:Record<string,any>,result_kind?:string,series_id?:number,still_url?:string,series_title?:string,source_label?:string,playable?:boolean}} MediaItem */
+  /** @typedef {{media_type?:string,tmdb_id?:number,title?:string,poster_url?:string,backdrop_url?:string,overview?:string,year?:number,rating?:number,user_rating?:number,progress_ratio?:number,progress_seconds?:number,duration_seconds?:number,completed?:boolean,watchlisted?:boolean,favorite?:boolean,play_count?:number,season_number?:number,episode_number?:number,metadata?:Record<string,any>,result_kind?:string,series_id?:number,still_url?:string,series_title?:string,source_label?:string,playable?:boolean,available_now?:boolean,availability_label?:string,session_mode?:string,reason?:string}} MediaItem */
 
   /** @type {CinemaBoot} */
   const BOOT = window.__DANK_CINEMA_BOOT__ || { guildId: "", userId: "" };
@@ -438,13 +438,210 @@
     const parts = [];
     if (item.year) parts.push(String(item.year));
     if (Number(item.rating || 0) > 0) parts.push(`★ ${Number(item.rating).toFixed(1)}`);
+    if (Number(item.user_rating || 0) > 0) parts.push(`Your ${Number(item.user_rating)}/10`);
     if (item.media_type === "episode") {
       parts.push(`S${Number(item.season_number || 0)} E${Number(item.episode_number || 0)}`);
     } else if (item.media_type) {
       parts.push(item.media_type === "tv" ? "Series" : "Movie");
     }
+    if (Number(item.play_count || 0) > 1) parts.push(`Watched ${Number(item.play_count)}×`);
+    if (item.session_mode) parts.push(item.session_mode === "watch_party" ? "Watch Party" : "Private Session");
+    const watchedAt = item.completed_at || item.last_seen_at || "";
+    if (watchedAt) {
+      const watchedDate = new Date(watchedAt);
+      if (!Number.isNaN(watchedDate.getTime())) parts.push(watchedDate.toLocaleDateString());
+    }
     if (item.source_label) parts.push(String(item.source_label));
     return parts.join(" • ");
+  }
+
+  function canonicalLibraryPayload(item) {
+    const kind = itemKind(item);
+    const payload = {
+      media_type: kind,
+      tmdb_id: Number(item?.tmdb_id || item?.metadata?.tmdb_id || item?.metadata?.catalog_id || 0),
+      season_number: Number(item?.season_number || 0),
+      episode_number: Number(item?.episode_number || 0),
+    };
+    if (kind === "episode") {
+      payload.series_id = Number(item?.series_id || item?.metadata?.series_id || 0);
+    }
+    return payload;
+  }
+
+  function invalidateLibraryViews() {
+    state.library = null;
+    state.home = null;
+    state.details.clear();
+    state.seasons.clear();
+  }
+
+  async function libraryAction(payload, successMessage = "") {
+    const result = await api("/library", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    invalidateLibraryViews();
+    if (successMessage) toast(successMessage);
+    return result;
+  }
+
+  async function toggleFavorite(item, desired) {
+    try {
+      await libraryAction({
+        action: "favorite",
+        ...canonicalLibraryPayload(item),
+        enabled: desired,
+      }, desired ? "Added to Favorites." : "Removed from Favorites.");
+      renderRoute();
+    } catch (error) {
+      toast(error.message || "Favorite update failed.", "error");
+    }
+  }
+
+  async function setUserRating(item, rating) {
+    try {
+      await libraryAction({
+        action: "rating",
+        ...canonicalLibraryPayload(item),
+        rating: Number(rating || 0),
+      }, Number(rating || 0) > 0 ? `Rated ${Number(rating)}/10.` : "Rating cleared.");
+      renderRoute();
+    } catch (error) {
+      toast(error.message || "Rating update failed.", "error");
+    }
+  }
+
+  async function setWatchedState(item, watched) {
+    const kind = itemKind(item);
+    if (!["movie", "episode"].includes(kind)) {
+      toast("Mark specific TV episodes watched rather than the whole series.", "error");
+      return;
+    }
+    try {
+      await libraryAction({
+        action: "watched",
+        ...canonicalLibraryPayload(item),
+        watched: Boolean(watched),
+      }, watched ? "Marked watched." : "Marked unwatched.");
+      renderRoute();
+    } catch (error) {
+      toast(error.message || "Watched state update failed.", "error");
+    }
+  }
+
+  function listContainsItem(list, item) {
+    const target = canonicalLibraryPayload(item);
+    return (list?.items || []).some((row) => {
+      const candidate = canonicalLibraryPayload(row);
+      return candidate.media_type === target.media_type
+        && Number(candidate.tmdb_id || 0) === Number(target.tmdb_id || 0)
+        && Number(candidate.season_number || 0) === Number(target.season_number || 0)
+        && Number(candidate.episode_number || 0) === Number(target.episode_number || 0)
+        && Number(candidate.series_id || 0) === Number(target.series_id || 0);
+    });
+  }
+
+  async function openListPicker(item) {
+    let library;
+    try {
+      library = await ensureLibrary();
+    } catch (error) {
+      toast(error.message || "Cinema lists could not load.", "error");
+      return;
+    }
+    const backdrop = node("div", "modal-backdrop");
+    const modal = node("section", "modal library-list-modal");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    const head = node("div", "modal-head");
+    head.append(
+      node("h2", "", "Add to List"),
+      button("×", "modal-close", () => backdrop.remove()),
+    );
+    modal.append(
+      head,
+      node("p", "section-sub", itemTitle(item)),
+    );
+
+    const lists = Array.isArray(library.lists) ? library.lists : [];
+    const listHost = node("div", "library-list-picker");
+    if (!lists.length) {
+      listHost.appendChild(node("div", "state-card", "Create your first custom Cinema list below."));
+    } else {
+      lists.forEach((list) => {
+        const hasItem = listContainsItem(list, item);
+        const row = node("div", "library-list-choice");
+        const copy = node("div");
+        copy.append(
+          node("div", "feed-title", list.name || "Untitled List"),
+          node("div", "feed-meta", `${(list.items || []).length} item${(list.items || []).length === 1 ? "" : "s"}`),
+        );
+        const control = button(hasItem ? "Remove" : "Add", hasItem ? "btn secondary" : "btn primary", async () => {
+          control.disabled = true;
+          try {
+            const positions = (list.items || []).map((row) => Number(row.list_position || 0));
+            await libraryAction({
+              action: "list_item",
+              list_id: list.id,
+              ...canonicalLibraryPayload(item),
+              enabled: !hasItem,
+              position: hasItem ? 0 : (positions.length ? Math.max(...positions) + 10 : 10),
+            }, hasItem ? "Removed from list." : "Added to list.");
+            backdrop.remove();
+          } catch (error) {
+            toast(error.message || "Cinema list update failed.", "error");
+            control.disabled = false;
+          }
+        });
+        row.append(copy, control);
+        listHost.appendChild(row);
+      });
+    }
+    modal.appendChild(listHost);
+
+    const create = node("div", "library-list-create");
+    const input = node("input");
+    input.type = "text";
+    input.maxLength = 80;
+    input.placeholder = "New list name";
+    const createButton = button("Create List", "btn secondary", async () => {
+      const name = input.value.trim();
+      if (!name) {
+        toast("Enter a list name.", "error");
+        return;
+      }
+      createButton.disabled = true;
+      try {
+        const response = await libraryAction({
+          action: "save_list",
+          name,
+          description: "",
+        });
+        const listId = String(response?.list?.id || "");
+        if (listId) {
+          await libraryAction({
+            action: "list_item",
+            list_id: listId,
+            ...canonicalLibraryPayload(item),
+            enabled: true,
+            position: 10,
+          }, `Created ${name} and added the title.`);
+        }
+        backdrop.remove();
+      } catch (error) {
+        toast(error.message || "Cinema list could not be created.", "error");
+        createButton.disabled = false;
+      }
+    });
+    create.append(input, createButton);
+    modal.appendChild(create);
+    backdrop.appendChild(modal);
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) backdrop.remove();
+    });
+    document.body.appendChild(backdrop);
+    setTimeout(() => input.focus(), 30);
   }
 
   async function toggleWatchlist(item, desired) {
@@ -497,8 +694,13 @@
     }
     if (kind === "episode") {
       art.appendChild(node("span", "card-badge", `S${item.season_number || 0} E${item.episode_number || 0}`));
-    } else if (item.playable) {
-      art.appendChild(node("span", "card-badge", "Playable"));
+    } else if (item.available_now || item.playable) {
+      art.appendChild(node("span", "card-badge", item.available_now ? "Available" : "Playable"));
+    }
+    if (item.availability_label && !item.available_now) {
+      art.appendChild(node("span", "card-badge card-badge-right", String(item.availability_label)));
+    } else if (item.favorite) {
+      art.appendChild(node("span", "card-badge card-badge-right", "Favorite"));
     }
     const ratio = Number(item.progress_ratio || 0);
     if (ratio > 0 && ratio < 1) {
@@ -514,6 +716,7 @@
       node("div", "card-title", itemTitle(item)),
       node("div", "card-meta", metadataLine(item)),
     );
+    if (item.reason) copy.appendChild(node("div", "card-reason", String(item.reason)));
     card.append(art, copy);
 
     const target = detailsTarget(item);
@@ -536,15 +739,24 @@
       card.addEventListener("click", () => go(`search?q=${encodeURIComponent(itemTitle(item))}`));
     }
 
-    if (["movie", "tv"].includes(kind) && Number(item.tmdb_id || 0) > 0) {
+    if (["movie", "tv", "episode"].includes(kind) && Number(item.tmdb_id || 0) > 0) {
       const hover = node("div", "card-hover");
-      const add = button(item.watchlisted ? icon.check : icon.add, `mini-action ${item.watchlisted ? "active" : ""}`);
-      add.setAttribute("aria-label", item.watchlisted ? "Remove from Watchlist" : "Add to Watchlist");
-      add.addEventListener("click", (event) => {
+      if (["movie", "tv"].includes(kind)) {
+        const add = button(item.watchlisted ? icon.check : icon.add, `mini-action ${item.watchlisted ? "active" : ""}`);
+        add.setAttribute("aria-label", item.watchlisted ? "Remove from Watchlist" : "Add to Watchlist");
+        add.addEventListener("click", (event) => {
+          event.stopPropagation();
+          toggleWatchlist(item, !item.watchlisted);
+        });
+        hover.appendChild(add);
+      }
+      const favorite = button("♥", `mini-action ${item.favorite ? "active" : ""}`);
+      favorite.setAttribute("aria-label", item.favorite ? "Remove from Favorites" : "Add to Favorites");
+      favorite.addEventListener("click", (event) => {
         event.stopPropagation();
-        toggleWatchlist(item, !item.watchlisted);
+        toggleFavorite(item, !item.favorite);
       });
-      hover.appendChild(add);
+      hover.appendChild(favorite);
       card.appendChild(hover);
     }
     return card;
@@ -729,37 +941,269 @@
     return state.library;
   }
 
+  function openListEditor(list = null) {
+    const backdrop = node("div", "modal-backdrop");
+    const modal = node("section", "modal library-list-modal");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    const head = node("div", "modal-head");
+    head.append(
+      node("h2", "", list ? "Edit Cinema List" : "New Cinema List"),
+      button("×", "modal-close", () => backdrop.remove()),
+    );
+    const form = node("div", "form-grid");
+    const nameField = node("div", "field");
+    nameField.appendChild(node("label", "", "List name"));
+    const name = node("input");
+    name.maxLength = 80;
+    name.value = String(list?.name || "");
+    name.placeholder = "Example: Horror Night";
+    nameField.appendChild(name);
+    const descriptionField = node("div", "field");
+    descriptionField.appendChild(node("label", "", "Description"));
+    const description = node("input");
+    description.maxLength = 300;
+    description.value = String(list?.description || "");
+    description.placeholder = "Optional";
+    descriptionField.appendChild(description);
+    form.append(nameField, descriptionField);
+
+    const actions = node("div", "hero-actions");
+    const save = button(list ? "Save List" : "Create List", "btn primary", async () => {
+      const cleanName = name.value.trim();
+      if (!cleanName) {
+        toast("Enter a list name.", "error");
+        return;
+      }
+      save.disabled = true;
+      try {
+        await libraryAction({
+          action: "save_list",
+          list_id: String(list?.id || ""),
+          name: cleanName,
+          description: description.value.trim(),
+          position: Number(list?.position || 0),
+        }, list ? "Cinema list updated." : "Cinema list created.");
+        backdrop.remove();
+        renderLibrary("lists");
+      } catch (error) {
+        toast(error.message || "Cinema list could not be saved.", "error");
+        save.disabled = false;
+      }
+    });
+    actions.appendChild(save);
+    if (list) {
+      actions.appendChild(button("Delete List", "btn danger", async () => {
+        if (!confirm(`Delete ${list.name || "this Cinema list"}?`)) return;
+        try {
+          await libraryAction({
+            action: "delete_list",
+            list_id: String(list.id || ""),
+          }, "Cinema list deleted.");
+          backdrop.remove();
+          renderLibrary("lists");
+        } catch (error) {
+          toast(error.message || "Cinema list could not be deleted.", "error");
+        }
+      }));
+    }
+    modal.append(head, form, actions);
+    backdrop.appendChild(modal);
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) backdrop.remove();
+    });
+    document.body.appendChild(backdrop);
+    setTimeout(() => name.focus(), 30);
+  }
+
+  async function mutateListItem(list, item, { enabled = true, position = 0 } = {}) {
+    return api("/library", {
+      method: "POST",
+      body: JSON.stringify({
+        action: "list_item",
+        list_id: String(list.id || ""),
+        ...canonicalLibraryPayload(item),
+        enabled,
+        position: Math.max(0, Number(position || 0)),
+      }),
+    });
+  }
+
+  async function moveListItem(list, index, delta) {
+    const items = Array.isArray(list.items) ? list.items : [];
+    const targetIndex = index + delta;
+    if (index < 0 || targetIndex < 0 || targetIndex >= items.length) return;
+    const current = items[index];
+    const target = items[targetIndex];
+    try {
+      await mutateListItem(list, current, { enabled: true, position: targetIndex * 10 });
+      await mutateListItem(list, target, { enabled: true, position: index * 10 });
+      invalidateLibraryViews();
+      toast("List order updated.");
+      renderLibrary("lists");
+    } catch (error) {
+      toast(error.message || "List order could not be updated.", "error");
+    }
+  }
+
+  function renderCustomLists(host, library) {
+    const lists = Array.isArray(library.lists) ? library.lists : [];
+    const top = node("div", "section-head");
+    const text = node("div");
+    text.append(
+      node("h2", "section-title", "Custom Lists"),
+      node("p", "section-sub", "Your own ordered Cinema collections."),
+    );
+    top.append(text, button("+ New List", "btn primary", () => openListEditor()));
+    host.appendChild(top);
+
+    if (!lists.length) {
+      host.appendChild(node("div", "state-card", "No custom lists yet. Create one for movie night ideas, favorites by mood, or whatever taxonomy your brain has invented."));
+      return;
+    }
+
+    lists.forEach((list) => {
+      const section = node("section", "panel library-list-section");
+      const head = node("div", "section-head");
+      const copy = node("div");
+      copy.append(
+        node("h3", "", list.name || "Untitled List"),
+        node("p", "section-sub", list.description || `${(list.items || []).length} saved item${(list.items || []).length === 1 ? "" : "s"}`),
+      );
+      head.append(copy, button("Edit", "btn secondary", () => openListEditor(list)));
+      section.appendChild(head);
+
+      const items = Array.isArray(list.items) ? list.items : [];
+      if (!items.length) {
+        section.appendChild(node("div", "state-card", "This list is empty. Add titles from Details."));
+      } else {
+        const listGrid = node("div", "library-list-items");
+        items.forEach((item, index) => {
+          const wrap = node("div", "library-list-item");
+          wrap.appendChild(mediaCard(item));
+          const actions = node("div", "library-list-item-actions");
+          const up = button("↑", "btn ghost", () => moveListItem(list, index, -1));
+          up.setAttribute("aria-label", "Move up");
+          up.disabled = index === 0;
+          const down = button("↓", "btn ghost", () => moveListItem(list, index, 1));
+          down.setAttribute("aria-label", "Move down");
+          down.disabled = index === items.length - 1;
+          const remove = button("Remove", "btn danger", async () => {
+            try {
+              await mutateListItem(list, item, { enabled: false });
+              invalidateLibraryViews();
+              toast("Removed from list.");
+              renderLibrary("lists");
+            } catch (error) {
+              toast(error.message || "List item could not be removed.", "error");
+            }
+          });
+          actions.append(up, down, remove);
+          wrap.appendChild(actions);
+          listGrid.appendChild(wrap);
+        });
+        section.appendChild(listGrid);
+      }
+      host.appendChild(section);
+    });
+  }
+
+  function renderLibraryStats(host, stats) {
+    const values = [
+      ["Movies watched", Number(stats?.movies_watched || 0)],
+      ["Episodes watched", Number(stats?.episodes_watched || 0)],
+      ["Hours watched", Number(stats?.watch_hours || 0).toFixed(1)],
+      ["Rewatches", Number(stats?.rewatches || 0)],
+      ["Favorites", Number(stats?.favorites || 0)],
+      ["Ratings", Number(stats?.ratings || 0)],
+      ["Average rating", Number(stats?.average_rating || 0) > 0 ? Number(stats.average_rating).toFixed(1) + "/10" : "—"],
+      ["Watch Parties", Number(stats?.watch_party_sessions || 0)],
+      ["Private sessions", Number(stats?.private_sessions || 0)],
+    ];
+    const grid = node("div", "library-stats-grid");
+    values.forEach(([label, value]) => {
+      const card = node("article", "library-stat-card");
+      card.append(
+        node("div", "library-stat-value", value),
+        node("div", "library-stat-label", label),
+      );
+      grid.appendChild(card);
+    });
+    host.appendChild(grid);
+
+    const genres = Array.isArray(stats?.top_genres) ? stats.top_genres : [];
+    if (genres.length) {
+      const section = node("section", "panel section");
+      section.appendChild(node("h2", "", "Your Top Genres"));
+      const chips = node("div", "library-genre-chips");
+      genres.forEach((genre) => {
+        chips.appendChild(node("span", "meta-chip", `${genre.name} • ${Number(genre.score || 0)}`));
+      });
+      section.appendChild(chips);
+      host.appendChild(section);
+    }
+  }
+
   async function renderLibrary(tab = "continue") {
     const page = node("main", "page");
     const title = node("h1", "", "My Stuff");
-    const sub = node("p", "section-sub", "Your real Watchlist, progress, and viewing history across devices.");
+    const sub = node("p", "section-sub", "Everything Dank Cinema remembers about what you watch, love, rate, save, and want to see next.");
     const tabs = node("div", "library-tabs");
-    const content = node("div");
+    const content = node("div", "library-content");
     page.append(title, sub, tabs, content);
     renderShell(page, "library");
     try {
       const library = await ensureLibrary();
       const options = [
-        ["continue", "Continue Watching", library.continue_watching || []],
+        ["continue", "Continue", library.continue_watching || []],
         ["watchlist", "Watchlist", library.watchlist || []],
-        ["history", "Recently Watched", library.recently_watched || []],
+        ["favorites", "Favorites", library.favorites || []],
+        ["upcoming", "Upcoming", library.upcoming || []],
+        ["history", "History", library.history_sessions || []],
         ["again", "Watch Again", library.watch_again || []],
+        ["rated", "Ratings", library.rated || []],
+        ["lists", "Lists", library.lists || []],
+        ["stats", "Stats", library.stats || {}],
       ];
       const selected = options.find((row) => row[0] === tab) || options[0];
       options.forEach(([key, label]) => {
         tabs.appendChild(button(label, `tab-btn ${selected[0] === key ? "active" : ""}`, () => renderLibrary(key)));
       });
-      const rows = selected[2];
+
+      if (selected[0] === "lists") {
+        renderCustomLists(content, library);
+        return;
+      }
+      if (selected[0] === "stats") {
+        renderLibraryStats(content, library.stats || {});
+        return;
+      }
+
+      const rows = Array.isArray(selected[2]) ? selected[2] : [];
       if (!rows.length) {
-        content.appendChild(node("div", "state-card", selected[0] === "watchlist"
-          ? "Your Watchlist is empty. Add movies or shows from Search or Details."
-          : selected[0] === "continue"
-            ? "Nothing is waiting to be resumed."
-            : "No viewing history is available yet."));
+        const messages = {
+          watchlist: "Your Watchlist is empty. Add movies or shows from Search or Details.",
+          favorites: "Nothing is favorited yet.",
+          continue: "Nothing is waiting to be resumed.",
+          upcoming: "No upcoming or newly available episodes are tied to your shows yet.",
+          history: "No Theater viewing sessions are available yet.",
+          again: "Nothing is ready for a rewatch yet.",
+          rated: "You have not rated anything yet.",
+        };
+        content.appendChild(node("div", "state-card", messages[selected[0]] || "Nothing is here yet."));
       } else {
         const grid = node("div", "result-grid");
         rows.forEach((item) => grid.appendChild(mediaCard(item)));
         content.appendChild(grid);
+      }
+
+      if (selected[0] === "continue" && Array.isArray(library.because_you_watched) && library.because_you_watched.length) {
+        const rail = mediaRail("Because You Watched", library.because_you_watched, "library-because");
+        if (rail) content.appendChild(rail);
+      }
+      if (selected[0] === "watchlist" && Array.isArray(library.recommended) && library.recommended.length) {
+        const rail = mediaRail("Recommended For You", library.recommended, "library-recommended");
+        if (rail) content.appendChild(rail);
       }
     } catch (error) {
       content.appendChild(node("div", "state-card", error.message || "Library could not load."));
@@ -845,6 +1289,28 @@
     }
   }
 
+  function ratingControl(item, currentRating = 0, compact = false) {
+    const select = node("select", compact ? "rating-select compact" : "rating-select");
+    const none = node("option");
+    none.value = "0";
+    none.textContent = currentRating ? "Clear rating" : "Rate 1–10";
+    select.appendChild(none);
+    for (let value = 1; value <= 10; value += 1) {
+      const option = node("option");
+      option.value = String(value);
+      option.textContent = `${value}/10`;
+      if (Number(currentRating || 0) === value) option.selected = true;
+      select.appendChild(option);
+    }
+    select.addEventListener("click", (event) => event.stopPropagation());
+    select.addEventListener("change", async (event) => {
+      event.stopPropagation();
+      select.disabled = true;
+      await setUserRating(item, Number(select.value || 0));
+    });
+    return select;
+  }
+
   async function loadSeason(seriesId, seasonNumber, host, hostSession = null, focusEpisode = 0) {
     const key = `${seriesId}:${seasonNumber}`;
     let data = state.seasons.get(key);
@@ -884,8 +1350,17 @@
       const meta = [ep.runtime ? `${ep.runtime}m` : "", ep.air_date || "", ep.rating ? `★ ${Number(ep.rating).toFixed(1)}` : ""].filter(Boolean).join(" • ");
       if (meta) copy.appendChild(node("div", "episode-meta", meta));
       const progress = ep.progress || {};
+      const episodeItem = {
+        ...ep,
+        media_type: "episode",
+        series_id: Number(seriesId),
+        favorite: Boolean(progress.favorite),
+        user_rating: Number(progress.user_rating || 0),
+        completed: Boolean(progress.completed),
+        play_count: Number(progress.play_count || 0),
+      };
       const label = progress.completed
-        ? "Watched"
+        ? (Number(progress.play_count || 0) > 1 ? `Watched ${Number(progress.play_count)}×` : "Watched")
         : Number(progress.progress_seconds || 0) > 0
           ? `Resume at ${formatSeconds(progress.progress_seconds)}`
           : "";
@@ -896,13 +1371,26 @@
           ? "▶ Resume in Theater"
           : "▶ Play in Theater";
         const play = button(playLabel, "btn secondary episode-play");
-        play.addEventListener("click", () => playInTheater({
-          ...ep,
-          media_type: "episode",
-          series_id: Number(seriesId),
-        }, hostSession, play));
+        play.addEventListener("click", () => playInTheater(episodeItem, hostSession, play));
         stateEl.appendChild(play);
       }
+      const libraryActions = node("div", "episode-library-actions");
+      libraryActions.append(
+        button(progress.completed ? "Unwatch" : "Watched", "btn ghost", (event) => {
+          event.stopPropagation();
+          setWatchedState(episodeItem, !Boolean(progress.completed));
+        }),
+        button(progress.favorite ? "♥" : "♡", `btn ghost ${progress.favorite ? "active" : ""}`, (event) => {
+          event.stopPropagation();
+          toggleFavorite(episodeItem, !Boolean(progress.favorite));
+        }),
+        button("+ List", "btn ghost", (event) => {
+          event.stopPropagation();
+          openListPicker(episodeItem);
+        }),
+        ratingControl(episodeItem, Number(progress.user_rating || 0), true),
+      );
+      stateEl.appendChild(libraryActions);
       card.append(still, copy, stateEl);
       list.appendChild(card);
     });
@@ -979,6 +1467,27 @@
       }
       const inWatchlist = Boolean(data.library?.watchlisted);
       actions.appendChild(button(inWatchlist ? "✓ In Watchlist" : "+ Watchlist", "btn secondary", () => setWatchlistFromDetails(data, !inWatchlist)));
+      const detailsItem = {
+        ...d,
+        favorite: Boolean(data.library?.favorite),
+        user_rating: Number(data.library?.user_rating || 0),
+        completed: Boolean(data.library?.completed),
+        play_count: Number(data.library?.play_count || 0),
+      };
+      actions.appendChild(button(
+        data.library?.favorite ? "♥ Favorite" : "♡ Favorite",
+        `btn secondary ${data.library?.favorite ? "active" : ""}`,
+        () => toggleFavorite(detailsItem, !Boolean(data.library?.favorite)),
+      ));
+      actions.appendChild(button("+ List", "btn secondary", () => openListPicker(detailsItem)));
+      if (d.media_type === "movie") {
+        actions.appendChild(button(
+          data.library?.completed ? "Mark Unwatched" : "Mark Watched",
+          "btn secondary",
+          () => setWatchedState(detailsItem, !Boolean(data.library?.completed)),
+        ));
+      }
+      actions.appendChild(ratingControl(detailsItem, Number(data.library?.user_rating || 0)));
       if (d.trailer_url) actions.appendChild(button("Trailer", "btn secondary", () => openExternal(d.trailer_url)));
       if (!data.active_session?.watch_url && !data.host_session?.is_host && data.discord?.discord_url) {
         actions.appendChild(button("Open Discord to Play", "btn discord", () => openExternal(data.discord.discord_url)));
@@ -1042,7 +1551,14 @@
       side.appendChild(node("h3", "", d.media_type === "tv" ? "Series Details" : "Movie Details"));
       if ((d.directors || []).length) side.appendChild(node("p", "section-sub", `Director: ${d.directors.join(", ")}`));
       if ((d.creators || []).length) side.appendChild(node("p", "section-sub", `Created by: ${d.creators.join(", ")}`));
-      side.appendChild(node("p", "section-sub", data.library?.completed ? "Watched" : Number(data.library?.progress_seconds || 0) > 0 ? `Progress: ${formatSeconds(data.library.progress_seconds)}` : "No saved playback progress yet."));
+      side.appendChild(node("p", "section-sub", data.library?.completed
+        ? (Number(data.library?.play_count || 0) > 1 ? `Watched ${Number(data.library.play_count)}×` : "Watched")
+        : Number(data.library?.progress_seconds || 0) > 0
+          ? `Progress: ${formatSeconds(data.library.progress_seconds)}`
+          : "No saved playback progress yet."));
+      if (Number(data.library?.user_rating || 0) > 0) {
+        side.appendChild(node("p", "section-sub", `Your rating: ${Number(data.library.user_rating)}/10`));
+      }
 
       const sources = Array.isArray(data.sources) ? data.sources : [];
       const sourceTitle = node("h3", "", "Available Cinema Sources");

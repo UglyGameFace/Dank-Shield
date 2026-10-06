@@ -5,11 +5,14 @@ on:
     paths:
       - "supabase/migrations/20261004123000_dank_cinema_library.sql"
       - "supabase/migrations/20261006031500_dank_cinema_feed_personalization.sql"
+      - "supabase/migrations/20261006050000_dank_cinema_library_intelligence.sql"
+      - "stoney_verify/cinema_library_intelligence.py"
       - "stoney_verify/cinema_library_service.py"
       - "stoney_verify/cinema_storage.py"
       - "stoney_verify/cinema_site.py"
       - "stoney_verify/movie_night_web.py"
       - "tests/test_cinema_full_platform.py"
+      - "tests/test_cinema_library_intelligence.py"
       - ".github/workflows/cinema-platform-sql.yml"
   push:
     branches:
@@ -17,11 +20,14 @@ on:
     paths:
       - "supabase/migrations/20261004123000_dank_cinema_library.sql"
       - "supabase/migrations/20261006031500_dank_cinema_feed_personalization.sql"
+      - "supabase/migrations/20261006050000_dank_cinema_library_intelligence.sql"
+      - "stoney_verify/cinema_library_intelligence.py"
       - "stoney_verify/cinema_library_service.py"
       - "stoney_verify/cinema_storage.py"
       - "stoney_verify/cinema_site.py"
       - "stoney_verify/movie_night_web.py"
       - "tests/test_cinema_full_platform.py"
+      - "tests/test_cinema_library_intelligence.py"
       - ".github/workflows/cinema-platform-sql.yml"
 
 permissions:
@@ -56,6 +62,7 @@ jobs:
       PGDATABASE: dank_cinema
       BASE_MIGRATION: supabase/migrations/20261004123000_dank_cinema_library.sql
       FEED_MIGRATION: supabase/migrations/20261006031500_dank_cinema_feed_personalization.sql
+      INTELLIGENCE_MIGRATION: supabase/migrations/20261006050000_dank_cinema_library_intelligence.sql
 
     steps:
       - name: Check out repository
@@ -86,6 +93,7 @@ jobs:
             echo "Applying Dank Cinema migrations, pass ${pass}"
             psql -v ON_ERROR_STOP=1 -f "$BASE_MIGRATION"
             psql -v ON_ERROR_STOP=1 -f "$FEED_MIGRATION"
+            psql -v ON_ERROR_STOP=1 -f "$INTELLIGENCE_MIGRATION"
           done
 
       - name: Verify Cinema schema and permissions
@@ -103,7 +111,10 @@ jobs:
               'dank_cinema_notifications',
               'dank_cinema_feed_rules',
               'dank_cinema_user_feed_discoveries',
-              'dank_cinema_feed_source_health'
+              'dank_cinema_feed_source_health',
+              'dank_cinema_watch_sessions',
+              'dank_cinema_lists',
+              'dank_cinema_list_items'
             ] loop
               if to_regclass('public.' || required_table) is null then
                 raise exception 'missing Cinema table: %', required_table;
@@ -141,6 +152,40 @@ jobs:
                 raise exception 'service_role is missing Cinema table privileges: %', required_table;
               end if;
             end loop;
+
+            if not exists (
+              select 1
+                from information_schema.columns
+               where table_schema = 'public'
+                 and table_name = 'dank_cinema_user_media'
+                 and column_name = 'favorite'
+            ) or not exists (
+              select 1
+                from information_schema.columns
+               where table_schema = 'public'
+                 and table_name = 'dank_cinema_user_media'
+                 and column_name = 'rating'
+            ) or not exists (
+              select 1
+                from information_schema.columns
+               where table_schema = 'public'
+                 and table_name = 'dank_cinema_user_media'
+                 and column_name = 'play_count'
+            ) or not exists (
+              select 1
+                from information_schema.columns
+               where table_schema = 'public'
+                 and table_name = 'dank_cinema_user_media'
+                 and column_name = 'first_watched_at'
+            ) or not exists (
+              select 1
+                from information_schema.columns
+               where table_schema = 'public'
+                 and table_name = 'dank_cinema_user_media'
+                 and column_name = 'last_completed_at'
+            ) then
+              raise exception 'Cinema Library intelligence columns are incomplete';
+            end if;
           end;
           $audit$;
           SQL
@@ -207,6 +252,49 @@ jobs:
             100, 'feed-1', 4, 4, 28, 7, now(), now()
           );
 
+          update public.dank_cinema_user_media
+             set favorite = true,
+                 favorite_at = now(),
+                 rating = 9,
+                 rated_at = now(),
+                 play_count = 2,
+                 first_watched_at = now() - interval '14 days',
+                 last_completed_at = now()
+           where user_id = 42
+             and media_type = 'episode'
+             and tmdb_id = 9001;
+
+          insert into public.dank_cinema_watch_sessions(
+            user_id, session_key, guild_id, room_id, session_mode,
+            candidate_id, media_type, tmdb_id, series_id,
+            season_number, episode_number, title, metadata,
+            max_progress_seconds, duration_seconds, completed,
+            started_at, last_seen_at, completed_at
+          ) values (
+            42, 'room-1:candidate-1', 100, 'room-1', 'watch_party',
+            'candidate-1', 'episode', 9001, 77,
+            3, 7, 'Example Show S03E07',
+            '{"series_title":"Example Show"}'::jsonb,
+            2700, 2700, true,
+            now() - interval '45 minutes', now(), now()
+          );
+
+          insert into public.dank_cinema_lists(
+            id, user_id, name, description, position
+          ) values (
+            '11111111-1111-1111-1111-111111111111'::uuid,
+            42, 'Movie Night', 'Stuff to watch together', 10
+          );
+
+          insert into public.dank_cinema_list_items(
+            list_id, user_id, media_type, tmdb_id,
+            season_number, episode_number, title, metadata, position
+          ) values (
+            '11111111-1111-1111-1111-111111111111'::uuid,
+            42, 'movie', 123, 0, 0, 'Example Movie',
+            '{"poster_url":"https://image.tmdb.org/example.jpg"}'::jsonb, 10
+          );
+
           do $audit$
           begin
             if not exists (
@@ -255,6 +343,40 @@ jobs:
             ) then
               raise exception 'Cinema source health did not persist';
             end if;
+
+            if not exists (
+              select 1 from public.dank_cinema_user_media
+               where user_id = 42
+                 and media_type = 'episode'
+                 and tmdb_id = 9001
+                 and favorite = true
+                 and rating = 9
+                 and play_count = 2
+            ) then
+              raise exception 'Cinema Library intelligence state did not persist';
+            end if;
+
+            if not exists (
+              select 1 from public.dank_cinema_watch_sessions
+               where user_id = 42
+                 and session_key = 'room-1:candidate-1'
+                 and session_mode = 'watch_party'
+                 and completed = true
+            ) then
+              raise exception 'Cinema watch session did not persist';
+            end if;
+
+            if not exists (
+              select 1
+                from public.dank_cinema_lists l
+                join public.dank_cinema_list_items i on i.list_id = l.id
+               where l.user_id = 42
+                 and l.name = 'Movie Night'
+                 and i.tmdb_id = 123
+                 and i.position = 10
+            ) then
+              raise exception 'Cinema custom list contract did not persist';
+            end if;
           end;
           $audit$;
 
@@ -294,12 +416,35 @@ jobs:
             exit 1
           fi
 
+
+          if psql -v ON_ERROR_STOP=1 <<'SQL'
+          set role service_role;
+          update public.dank_cinema_user_media
+             set rating = 11
+           where user_id = 42 and tmdb_id = 9001;
+          SQL
+          then
+            echo "invalid Cinema personal rating unexpectedly passed" >&2
+            exit 1
+          fi
+
+          if psql -v ON_ERROR_STOP=1 <<'SQL'
+          set role service_role;
+          insert into public.dank_cinema_watch_sessions(
+            user_id, session_key, session_mode, media_type, tmdb_id
+          ) values (42, 'bad-mode', 'public', 'movie', 123);
+          SQL
+          then
+            echo "invalid Cinema watch session mode unexpectedly passed" >&2
+            exit 1
+          fi
+
       - name: Verify client roles cannot read Cinema tables
         shell: bash
         run: |
           set -euo pipefail
           for role in anon authenticated; do
-            for table in               dank_cinema_users               dank_cinema_user_media               dank_cinema_feed_discoveries               dank_cinema_notifications               dank_cinema_feed_rules               dank_cinema_user_feed_discoveries               dank_cinema_feed_source_health; do
+            for table in               dank_cinema_users               dank_cinema_user_media               dank_cinema_feed_discoveries               dank_cinema_notifications               dank_cinema_feed_rules               dank_cinema_user_feed_discoveries               dank_cinema_feed_source_health               dank_cinema_watch_sessions               dank_cinema_lists               dank_cinema_list_items; do
               if psql -v ON_ERROR_STOP=1 <<SQL
           set role ${role};
           select * from public.${table} limit 1;

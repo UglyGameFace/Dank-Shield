@@ -9,7 +9,7 @@ torrent lifecycle, room authority, and canonical media identity cannot diverge.
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
-from .cinema_catalog import CinemaEpisode, CinemaMedia
+from .cinema_catalog import CinemaEpisode, CinemaMedia, get_details
 from .cinema_library_service import CinemaStorageUnavailable, get_cinema_user
 from .cinema_media_identity import (
     catalog_metadata,
@@ -196,6 +196,17 @@ async def search_exact_movie_sources(
     if str(media.media_type or "").strip().lower() != "movie":
         raise ValueError("Exact movie source search requires a movie catalog item.")
     metadata = catalog_metadata(media)
+    try:
+        details = await get_details("movie", int(media.tmdb_id))
+        metadata.update(
+            {
+                "genres": list(details.genres)[:12],
+                "studios": list(details.studios)[:16],
+                "franchises": list(details.franchises)[:8],
+            }
+        )
+    except Exception:
+        pass
     query = _clean(media.title)
     outcome = await search_movie_sources(
         int(guild_id),
@@ -220,6 +231,17 @@ async def search_exact_episode_sources(
     """Search configured providers for one exact canonical TV episode."""
 
     metadata = episode_catalog_metadata(series=series, episode=episode)
+    try:
+        details = await get_details("tv", int(series.tmdb_id))
+        metadata.update(
+            {
+                "genres": list(details.genres)[:12],
+                "studios": list(details.studios)[:16],
+                "franchises": list(details.franchises)[:8],
+            }
+        )
+    except Exception:
+        pass
     query = episode_search_query(
         series.title,
         episode.season_number,

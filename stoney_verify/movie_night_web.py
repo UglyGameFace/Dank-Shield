@@ -1464,6 +1464,20 @@ async def movie_night_progress(request: web.Request) -> web.Response:
                 if "completed" in payload
                 else None
             ),
+            activity_context={
+                "session_key": (
+                    f"{room.room_id}:{str(getattr(candidate, 'candidate_id', '') or tmdb_id)}"
+                ),
+                "guild_id": int(room.guild_id),
+                "room_id": str(room.room_id),
+                "session_mode": (
+                    "watch_party"
+                    if str(getattr(room, "mode", "watch_party") or "watch_party") == "watch_party"
+                    else "private"
+                ),
+                "candidate_id": str(getattr(candidate, "candidate_id", "") or ""),
+                "is_host": int(uid) == int(room.host_id),
+            },
         )
     except CinemaStorageUnavailable as exc:
         raise web.HTTPServiceUnavailable(

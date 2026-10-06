@@ -1,5 +1,110 @@
 # Dank Shield Active Task
 
+## Current checkpoint — PR #459
+
+### Active task / outcome
+
+**DANK-CINEMA-LIBRARY-INTELLIGENCE — build bot-native Cinema Library intelligence**
+
+PR: **#459 — Build bot-native Cinema Library intelligence**
+Branch: `rebuild/cinema-library-intelligence-clean`
+Base: `main@3e86f4ffd701fc1801bc492331393c23d84b8bd3`
+
+Outcome:
+Finish the durable, bot-native Dank Cinema Library layer without changing ownership of playback, progress, provider resolution, MovieNightRoom, Watch Party, Private Session, or the Theater player.
+
+### Scope
+
+- durable watch-session history and rewatch counts;
+- favorites and personal 1–10 ratings;
+- ordered custom personal lists;
+- manual watched/unwatched state;
+- richer My Stuff: Continue, Watchlist, Favorites, Upcoming, History, Watch Again, Ratings, Lists, Stats;
+- Because You Watched / Recommended For You;
+- TMDB next/upcoming episode intelligence;
+- Feed Center availability overlays;
+- Library taste signals flowing into My Feed;
+- aggregate group recommendations without exposing private user Library rows;
+- service-role-only storage/migration security;
+- regression tests, SQL replay, exact-head CI, cleanup/conflict inspection, and production canary when deployment access is available.
+
+### Status
+
+**Implementation is on clean replacement PR #459. Exact-head validation is active.**
+
+PR #458 was closed as superseded after an unrelated standalone website-playback change became interleaved with the Library branch. The mixed state was preserved at `backup/cinema-library-standalone-interleaved-20261006`; no work was discarded. PR #459 is the clean Library-only continuation and is currently mergeable.
+
+### Findings / root cause
+
+1. Existing Library state covered basic progress/watchlist behavior but did not provide a durable watch-session history sufficient for rewatch/session analytics.
+2. Favorites, ratings, custom lists, richer stats, and recommendation/taste signals needed one canonical Library owner rather than parallel UI-only state.
+3. TV continuation needed TMDB-backed next/upcoming episode intelligence while keeping Theater as playback/progress authority.
+4. Feed personalization needed Library-derived taste/availability signals without exposing private raw Library rows or source refs.
+5. Library persistence remains service-role-only; client roles must not gain direct table access.
+
+### Execution path
+
+User state:
+`signed Cinema identity -> cinema_library_service -> service-role Supabase`.
+
+Intelligence:
+`Library rows + watch-session history -> cinema_library_intelligence -> My Stuff / Home / Feed personalization`.
+
+Media identity:
+`TMDB canonical identity -> Library intelligence / Feed overlays`.
+
+Playback remains:
+`Cinema UI / Discord -> cinema_playback_service -> MovieNightRoom -> TorrentMediaManager -> Watch`.
+
+### Changes
+
+- Added durable Cinema Library intelligence storage and migration for watch sessions, list ownership/items, favorites, ratings, completion/rewatch metadata, and supporting indexes/constraints.
+- Extended the Library service with canonical favorites, ratings, watched/unwatched, custom lists, history/stats, and session activity.
+- Added `cinema_library_intelligence.py` for recommendation, continuation, history, upcoming-episode, group-aggregation, and availability/taste surfaces.
+- Extended My Stuff/Home/Feed Center to consume the Library intelligence contract without moving playback authority out of Theater.
+- Enriched canonical Theater metadata so Library taste/history can retain genres/studios/franchises when available.
+- Added focused Library intelligence regressions and expanded Cinema SQL migration smoke coverage.
+- Kept raw magnets/torrent/source refs out of Library payloads.
+
+### Validation / results
+
+At the time of this checkpoint on the clean PR head:
+- Dank Cinema SQL: **success**;
+- Schema Authority SQL: **success**;
+- Dank Design Regression CI: **success**;
+- Application Command Size Diagnostics: **success**;
+- Ticket Owner Emergency Override: **success**;
+- Profile Runtime Diagnostics: **success**;
+- canonical Dank Shield CI: **in progress**.
+
+No merge/completion claim is valid until the exact current head finishes all required CI and the remaining production canary requirement is either completed or explicitly documented as blocked.
+
+### Cleanup / conflicts
+
+- PR #459 contains only the Library-intelligence slice; standalone website playback is not mixed into this branch.
+- One MovieNightRoom, torrent runtime, provider resolver, Watch progress authority, and Library service remain.
+- The superseded mixed branch is preserved rather than force-rewritten or discarded.
+- No unrelated Dank Shield cleanup is authorized under this task.
+
+### Blockers / risks
+
+- Exact-head canonical Dank Shield CI is still running.
+- Production Discloud/Samsung/browser canary cannot be claimed from repository CI alone.
+- Supabase migration must exist in production before the new durable Library rows can be used there.
+
+### Backlog
+
+**Backlogged from the current user report, not investigated further on PR #459:** full-site Dank Cinema playback should work directly on the website instead of forcing Discord, **Open Dank Cinema** should be a distinct mode from Watch Party/Private Session while retaining active-server-membership authorization, and Continue Watching TV details must allow selecting other episodes. The preserved mixed branch contains exploratory implementation work, but none of it is part of this active Library PR.
+
+### Next step
+
+Finish exact-head PR #459 validation, repair only Library-task failures, inspect the final diff/branch relationship, then perform or explicitly record the production canary blocker. Do not start the backlogged standalone-playback task unless the active Library task reaches its true Definition of Done or the user explicitly issues the required force-switch instruction.
+
+---
+
+## Historical task record below
+
+
 ## Active task / outcome
 
 **DANK-SHIELD-430 — Complete Dank Cinema as a full premium streaming platform**
@@ -1735,3 +1840,52 @@ Acceptance:
 - Collision-style episode releases can resolve as TV and gain TMDB poster/details when metadata exists;
 - existing general Cinema search, source refresh, playback refs, and source management remain unchanged;
 - exact-head CI and companion workflows green before merge.
+
+
+## ACTIVE — Cinema Library Intelligence / bot-native Trakt-style experience
+
+Production baseline:
+`main @ 3e86f4ffd701fc1801bc492331393c23d84b8bd3` (PR #456 merged)
+
+Active branch:
+`rebuild/cinema-library-intelligence-clean`
+
+Active PR:
+`#459 — Build bot-native Cinema Library intelligence`
+
+Isolation note:
+- PR #458 was closed after a separate standalone website-playback task was interleaved onto its branch.
+- The full mixed state is preserved at `backup/cinema-library-standalone-interleaved-20261006`.
+- PR #459 contains only the Library intelligence task.
+
+Single active task:
+Build a bot-native Cinema Library intelligence layer. This is intentionally scoped to activity that happens inside Dank Cinema/Dank Shield; no cross-platform scrobbling or external Trakt-style account synchronization.
+
+Ownership contract:
+- Cinema Library owns durable user state: watch history, progress, watched/unwatched, watchlist, favorites, ratings, custom lists, rewatch counts, stats, and recommendation signals.
+- Dank Theater remains the only playback/progress authority and writes Library activity through one service path.
+- TMDB remains canonical identity/metadata and supplies seasons, episode dates, genres, cast, studios, franchises, and recommendation candidates.
+- Feed Center remains availability/release intelligence and overlays whether a Library/recommendation/upcoming item currently has playable discoveries.
+- My Feed continues to own feed-driven notifications; Library may supply watchlist/history/rating/favorite signals to personalize those matches.
+- Notifications remain inside the existing Cinema inbox; no unsolicited DM behavior is introduced.
+
+Implementation goals:
+- durable first-watch / last-watch / completion / rewatch tracking without writing a history row on every heartbeat;
+- favorites and 1–10 ratings on canonical movie/TV items;
+- custom personal lists with ordered items;
+- manual mark watched / unwatched while preserving canonical progress behavior;
+- richer My Stuff views: Continue Watching, Watchlist, Favorites, History, Watch Again, Lists, Stats;
+- Because You Watched and Recommended For You rails derived from Dank Cinema activity only;
+- upcoming / next-episode intelligence from TMDB for followed/watchlisted/in-progress TV;
+- Feed availability overlay for watchlist, recommendations, and upcoming episodes;
+- new-episode availability stays feed-driven, not air-date-driven;
+- watch-party/private-session context recorded in watch events for stats;
+- group recommendation support must be derived from active room participants without exposing one user's private Library to another user;
+- mobile-first UI remains usable on Samsung Browser while desktop/tablet/ultrawide remain first-class.
+
+Definition of Done:
+- migration is idempotent and service-role-only;
+- existing progress/watchlist contracts remain backward compatible;
+- exact-head CI + Cinema SQL + companion workflows green;
+- no raw playback/source refs added to Library payloads;
+- existing Feed Center and Theater ownership boundaries remain intact.
