@@ -433,15 +433,20 @@ def test_cinema_details_keeps_title_playable_when_library_storage_is_unavailable
     async def adult_enabled(_guild_id):
         return False
 
-    async def no_sources(_guild_id, _query, *, catalog_metadata=None):
-        _ = catalog_metadata
-        return MediaSourceSearchOutcome(variants=())
+    async def no_sources(_guild_id, *, media):
+        assert media.tmdb_id == 123
+        return (
+            cinema_playback_service.catalog_metadata(media),
+            "Example Movie",
+            MediaSourceSearchOutcome(variants=()),
+        )
 
+    cinema_site._SOURCE_SNAPSHOT_CACHE.clear()
     monkeypatch.setattr(cinema_site, "_site_identity", site_identity)
     monkeypatch.setattr(cinema_site, "get_details", get_details)
     monkeypatch.setattr(cinema_site, "list_user_media", list_media)
     monkeypatch.setattr(cinema_site, "_guild_adult_content_enabled", adult_enabled)
-    monkeypatch.setattr(cinema_site, "search_movie_sources", no_sources)
+    monkeypatch.setattr(cinema_site, "search_exact_movie_sources", no_sources)
     monkeypatch.setattr(cinema_site, "get_movie_night_manager", lambda: MovieNightManager())
 
     request = SimpleNamespace(match_info={"media_type": "movie", "tmdb_id": "123"})
@@ -453,6 +458,7 @@ def test_cinema_details_keeps_title_playable_when_library_storage_is_unavailable
     assert payload["library"] is None
     assert payload["library_available"] is False
     assert "Playback and title details still work" in payload["library_notice"]
+    assert cinema_site._SOURCE_SNAPSHOT_CACHE == {}
 
 
 def test_cinema_details_catalog_failure_is_specific_503_not_default_500(monkeypatch) -> None:
@@ -542,6 +548,7 @@ def test_cinema_site_play_rejects_nonhost_explicit_room(monkeypatch) -> None:
 
 
 def test_cinema_site_play_without_room_creates_host_only_standalone_room(monkeypatch) -> None:
+    cinema_site._SOURCE_SNAPSHOT_CACHE.clear()
     monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
     monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
     manager = MovieNightManager()
@@ -716,9 +723,11 @@ def test_cinema_details_source_snapshot_is_reused_by_immediate_play(monkeypatch)
     assert play_payload["source"]["source_id"] == "provider"
     assert play_payload["source"]["selection_mode"] == "automatic"
     assert search_calls == 1
+    assert cinema_site._SOURCE_SNAPSHOT_CACHE == {}
 
 
 def test_cinema_site_manual_source_choice_overrides_auto_rank(monkeypatch) -> None:
+    cinema_site._SOURCE_SNAPSHOT_CACHE.clear()
     monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
     monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
     manager = MovieNightManager()
@@ -1401,7 +1410,8 @@ def test_tv_details_do_not_claim_series_title_is_a_playable_source() -> None:
     source = __import__("pathlib").Path(cinema_site.__file__).read_text(encoding="utf-8")
 
     assert 'if media_type == "movie":' in source
-    assert "filter_outcome_for_catalog(" in source
+    assert "search_exact_movie_sources(" in source
+    assert "filter_outcome_for_catalog(" not in source
     assert "variant.swarm_health" not in source
     assert '"watch_party_picks",' in source
     assert 'catalog.get("top_movies"' not in source
