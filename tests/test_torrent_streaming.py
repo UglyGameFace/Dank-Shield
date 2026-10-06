@@ -178,6 +178,92 @@ def test_media_health_reports_standalone_cinema_oauth_readiness(monkeypatch) -> 
     assert payload["cinema_oauth_redirect_uri"].endswith("/cinema/auth/callback")
 
 
+def test_stream_startup_timing_is_per_consumer_and_first_stage_stable(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    handle = _FakeHandle()
+    now = __import__("time").monotonic()
+    session = TorrentStreamSession(
+        token="startup-timing",
+        secret="secret",
+        owner_id=2,
+        guild_id=1,
+        source_kind="magnet",
+        source_identity="btih:startup-timing",
+        save_root=tmp_path,
+        handle=handle,
+        info=object(),
+        file_index=0,
+        file_path="movie.mp4",
+        file_name="movie.mp4",
+        file_size=20 * 1024 * 1024,
+        file_offset=0,
+        piece_length=1024 * 1024,
+        first_piece=0,
+        last_piece=19,
+        created_at=now - 0.250,
+        last_access=now,
+    )
+
+    manager.record_stream_timing(
+        session,
+        "movie:2:client-a",
+        event="request",
+        start=0,
+        end=1024 * 1024 - 1,
+    )
+    manager.record_stream_timing(
+        session,
+        "movie:2:client-a",
+        event="wait",
+        elapsed_ms=321.4,
+        ready=True,
+    )
+    manager.record_stream_timing(
+        session,
+        "movie:2:client-a",
+        event="headers",
+    )
+    manager.record_stream_timing(
+        session,
+        "movie:2:client-a",
+        event="first_byte",
+    )
+
+    first = manager.consumer_startup_status(session, "movie:2:client-a")
+    assert first["request_count"] == 1
+    assert first["first_request_ms"] >= 200
+    assert first["first_range_start"] == 0
+    assert first["first_range_end"] == 1024 * 1024 - 1
+    assert first["first_wait_ms"] == 321
+    assert first["first_wait_ready"] is True
+    assert first["first_headers_ms"] >= first["first_request_ms"]
+    assert first["first_byte_ms"] >= first["first_headers_ms"]
+
+    manager.record_stream_timing(
+        session,
+        "movie:2:client-a",
+        event="request",
+        start=8 * 1024 * 1024,
+        end=9 * 1024 * 1024 - 1,
+    )
+    manager.record_stream_timing(
+        session,
+        "movie:2:client-a",
+        event="wait",
+        elapsed_ms=75,
+        ready=False,
+    )
+
+    second = manager.consumer_startup_status(session, "movie:2:client-a")
+    assert second["request_count"] == 2
+    assert second["first_range_start"] == 0
+    assert second["first_wait_ms"] == 321
+    assert second["last_range_start"] == 8 * 1024 * 1024
+    assert second["last_wait_ms"] == 75
+    assert second["last_wait_ready"] is False
+    assert manager.consumer_startup_status(session, "movie:3:client-b") == {}
+
+
 def test_torrent_session_uses_fast_start_peer_settings_by_default(monkeypatch, tmp_path: Path) -> None:
     for name in (
         "DANK_TORRENT_CONNECTION_LIMIT",
