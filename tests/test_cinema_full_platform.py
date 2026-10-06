@@ -552,6 +552,11 @@ def test_cinema_site_play_without_room_creates_host_only_standalone_room(monkeyp
     monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
     monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
     manager = MovieNightManager()
+    fake_session = SimpleNamespace(
+        startup_started_at=0.0,
+        created_at=0.0,
+        launch_timing={},
+    )
     movie = CinemaMedia(
         media_type="movie",
         tmdb_id=123,
@@ -598,7 +603,10 @@ def test_cinema_site_play_without_room_creates_host_only_standalone_room(monkeyp
         assert actor_id == 42
         assert candidate_id
         assert variant_id
-        return SimpleNamespace(room=room)
+        now = __import__("time").monotonic()
+        fake_session.startup_started_at = now
+        fake_session.created_at = now
+        return SimpleNamespace(room=room, session=fake_session)
 
     monkeypatch.setattr(cinema_site, "_site_identity", site_identity)
     monkeypatch.setattr(cinema_site, "get_movie_night_manager", lambda: manager)
@@ -626,6 +634,13 @@ def test_cinema_site_play_without_room_creates_host_only_standalone_room(monkeyp
     assert not manager.user_can_access(room, 99)
     assert payload["mode"] == "standalone"
     assert "/movie/" in payload["watch_url"]
+    assert set(fake_session.launch_timing) == {
+        "site_source_ms",
+        "site_torrent_start_ms",
+        "site_session_ready_ms",
+        "site_response_ready_ms",
+    }
+    assert fake_session.launch_timing["site_response_ready_ms"] >= fake_session.launch_timing["site_source_ms"]
 
 
 def test_cinema_details_source_snapshot_is_reused_by_immediate_play(monkeypatch) -> None:
