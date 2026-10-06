@@ -946,6 +946,7 @@ async def record_progress(
     episode_number: int = 0,
     metadata: Optional[Mapping[str, Any]] = None,
     completed: Optional[bool] = None,
+    activity_context: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     key = _media_key_payload(
         user_id=user_id,
@@ -963,16 +964,35 @@ async def record_progress(
         if completed is not None
         else bool(duration > 0 and progress >= max(30.0, duration * 0.92))
     )
-    payload = {
+    now = _now()
+    payload: dict[str, Any] = {
         **key,
         "title": " ".join(str(title or "").split())[:180],
         "metadata": dict(metadata or {}),
         "progress_seconds": 0.0 if resolved_completed else progress,
         "duration_seconds": duration,
         "completed": resolved_completed,
-        "last_watched_at": _now(),
-        "updated_at": _now(),
+        "last_watched_at": now,
+        "updated_at": now,
     }
+
+    if resolved_completed:
+        existing = await _read_media_row(**key)
+        already_completed = bool((existing or {}).get("completed"))
+        previous_count = max(0, int((existing or {}).get("play_count") or 0))
+        payload.update(
+            {
+                "play_count": previous_count if already_completed else previous_count + 1,
+                "first_watched_at": (
+                    (existing or {}).get("first_watched_at") or now
+                ),
+                "last_completed_at": (
+                    (existing or {}).get("last_completed_at")
+                    if already_completed
+                    else now
+                ),
+            }
+        )
 
     def write(client: Any):
         try:
@@ -991,8 +1011,27 @@ async def record_progress(
 
     await _execute(f"write Cinema progress {user_id}", write)
     invalidate_cinema_user_cache(int(user_id))
-    return payload
 
+    if activity_context:
+        try:
+            await record_watch_session(
+                int(user_id),
+                media_type=key["media_type"],
+                tmdb_id=key["tmdb_id"],
+                title=str(payload["title"]),
+                progress_seconds=progress,
+                duration_seconds=duration,
+                completed=resolved_completed,
+                season_number=key["season_number"],
+                episode_number=key["episode_number"],
+                metadata=payload["metadata"],
+                context=activity_context,
+            )
+        except Exception:
+            # Session analytics are secondary to durable resume/progress state.
+            pass
+
+    return payload
 
 def _sort_iso(rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
     return sorted(
@@ -1023,6 +1062,14 @@ async def library_snapshot(user_id: int) -> dict[str, Any]:
         [row for row in watched if bool(row.get("completed"))],
         "last_watched_at",
     )[:30]
+    favorites = _sort_iso(
+        [row for row in rows if bool(row.get("favorite"))],
+        "favorite_at",
+    )[:60]
+    rated = _sort_iso(
+        [row for row in rows if int(row.get("rating") or 0) > 0],
+        "rated_at",
+    )[:60]
 
     latest_episode_by_series: dict[int, dict[str, Any]] = {}
     for row in recently_watched:
@@ -1038,6 +1085,8 @@ async def library_snapshot(user_id: int) -> dict[str, Any]:
         "continue_watching": continue_watching,
         "recently_watched": recently_watched,
         "watch_again": watch_again,
+        "favorites": favorites,
+        "rated": rated,
         "series_progress": list(latest_episode_by_series.values()),
     }
 
@@ -1158,15 +1207,25 @@ __all__ = [
     "DEFAULT_PREFERENCES",
     "InvalidCinemaState",
     "create_notification",
+    "delete_custom_list",
     "get_cinema_user",
     "get_media_state",
     "invalidate_cinema_user_cache",
     "library_snapshot",
+    "library_stats",
+    "list_custom_lists",
     "list_notifications",
     "list_user_media",
+    "list_watch_sessions",
     "mark_notification_read",
+    "mark_watched",
     "notify_watch_party_invite",
     "record_progress",
+    "record_watch_session",
+    "save_custom_list",
+    "set_custom_list_item",
+    "set_favorite",
+    "set_rating",
     "set_watchlist",
     "update_cinema_preferences",
 ]
