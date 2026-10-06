@@ -1670,13 +1670,13 @@
     if (artUrl) {
       const image = node("img");
       configureArtwork(image, artUrl, "poster");
-      image.alt = `${itemTitle(result)} poster`;
+      image.alt = itemTitle(result) + " poster";
       image.loading = "lazy";
       image.decoding = "async";
       art.appendChild(image);
     } else {
       const placeholder = node("div", "feed-result-placeholder");
-      const initials = itemTitle(result)
+      const resultInitials = itemTitle(result)
         .split(/\s+/)
         .filter(Boolean)
         .slice(0, 2)
@@ -1684,35 +1684,65 @@
         .join("");
       placeholder.append(
         uiIcon("feeds"),
-        node("span", "feed-result-placeholder-text", initials || "DC"),
+        node("span", "feed-result-placeholder-text", resultInitials || "DC"),
       );
       art.appendChild(placeholder);
     }
 
     const copy = node("div", "feed-result-copy");
+    const best = result.best_release && typeof result.best_release === "object"
+      ? result.best_release
+      : result;
     const sourceLine = [
-      result.source_label || "",
-      categoryLabel(result.category || ""),
+      Number(result.source_count || 0) > 1
+        ? Number(result.source_count) + " sources"
+        : best.source_label || result.source_label || "",
+      categoryLabel(best.category || result.category || ""),
     ].filter(Boolean).join(" • ");
     if (sourceLine) copy.appendChild(node("div", "feed-category", sourceLine));
     copy.appendChild(node("div", "feed-result-title", itemTitle(result)));
 
+    const badges = node("div", "feed-badges");
+    if (result.new_episode) {
+      const season = Number(result.season_number || 0);
+      const episode = Number(result.episode_number || 0);
+      badges.appendChild(node("span", "feed-badge", "New S" + String(season).padStart(2, "0") + "E" + String(episode).padStart(2, "0")));
+    }
+    if (result.watchlist_match) badges.appendChild(node("span", "feed-badge", "Watchlist"));
+    if (result.followed_match) badges.appendChild(node("span", "feed-badge", "Following"));
+    if (result.upgrade_available) badges.appendChild(node("span", "feed-badge", "Quality upgrade"));
+    if (result.queue_suggested) badges.appendChild(node("span", "feed-badge", "Queue suggestion"));
+    if (result.private) badges.appendChild(node("span", "feed-badge", "Private"));
+    if (badges.childNodes.length) copy.appendChild(badges);
+
+    const reasons = Array.isArray(result.match_reasons) ? result.match_reasons.filter(Boolean) : [];
+    if (reasons.length) {
+      copy.appendChild(node("div", "feed-meta", "Matched: " + reasons.slice(0, 4).join(" • ")));
+    }
+
     const meta = [];
     if (result.year) meta.push(String(result.year));
-    if (Number(result.rating || 0) > 0) meta.push(`★ ${Number(result.rating).toFixed(1)}`);
-    if (Number(result.seeds || 0) > 0) meta.push(`${Number(result.seeds)} seeds`);
-    const size = formatFeedBytes(result.file_size);
+    if (Number(result.rating || 0) > 0) meta.push("★ " + Number(result.rating).toFixed(1));
+    if (best.resolution) meta.push(String(best.resolution).toUpperCase());
+    if (best.codec) meta.push(String(best.codec));
+    if (Number(best.seeds || result.seeds || 0) > 0) meta.push(Number(best.seeds || result.seeds) + " seeds");
+    const size = formatFeedBytes(best.file_size || result.file_size);
     if (size) meta.push(size);
-    if (result.first_seen_at) {
-      const seen = new Date(result.first_seen_at);
-      if (!Number.isNaN(seen.getTime())) meta.push(`Found ${seen.toLocaleDateString()}`);
+    if (Number(result.release_count || 0) > 1) meta.push(Number(result.release_count) + " releases");
+    const foundAt = best.first_seen_at || result.first_seen_at;
+    if (foundAt) {
+      const seen = new Date(foundAt);
+      if (!Number.isNaN(seen.getTime())) meta.push("Found " + seen.toLocaleDateString());
     }
     if (meta.length) copy.appendChild(node("div", "feed-meta", meta.join(" • ")));
 
-    const releaseTitle = String(result.release_title || "");
+    const releaseTitle = String(best.release_title || result.release_title || "");
     if (releaseTitle && releaseTitle !== itemTitle(result)) {
       copy.appendChild(node("div", "feed-result-release", releaseTitle));
     }
+
+    const comparison = feedReleaseComparison(result);
+    if (comparison) copy.appendChild(comparison);
 
     const actions = node("div", "feed-result-actions");
     const target = detailsTarget(result);
@@ -1720,14 +1750,26 @@
       actions.appendChild(button("View Details", "btn primary", () => go(target)));
     } else {
       actions.appendChild(button("Search in Cinema", "btn secondary", () => {
-        go(`search?q=${encodeURIComponent(itemTitle(result))}`);
+        go("search?q=" + encodeURIComponent(itemTitle(result)));
+      }));
+    }
+    const follow = button(
+      isFollowingFeedResult(result) ? "Following" : "Follow",
+      "btn secondary",
+      () => followFeedResult(result),
+    );
+    follow.disabled = isFollowingFeedResult(result);
+    actions.appendChild(follow);
+    if (result.queue_suggested) {
+      actions.appendChild(button("Queue Suggestion", "btn ghost", () => {
+        if (target) go(target);
+        else go("search?q=" + encodeURIComponent(itemTitle(result)));
       }));
     }
     copy.appendChild(actions);
     card.append(art, copy);
     return card;
   }
-
 
   async function renderFeeds() {
     const page = node("main", "page");
