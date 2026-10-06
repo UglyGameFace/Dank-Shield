@@ -29,7 +29,7 @@ from .media_source_registry import (
     set_custom_source_enabled,
 )
 from .media_source_resolver import preview_custom_media_source
-from .cinema_discovery_service import list_recent_discoveries, record_feed_discoveries
+from .cinema_discovery_service import enrich_discovery_rows, page_discoveries, record_feed_discoveries
 from .cinema_storage import CinemaStorageUnavailable
 
 CATEGORIES = (
@@ -190,51 +190,73 @@ async def feed_state(
     *,
     can_manage: bool,
     refresh: bool = False,
+    query: str = "",
+    page: int = 1,
+    page_size: int = 8,
 ) -> dict[str, Any]:
     _raw, registry = await load_media_source_registry(
         int(guild_id), refresh=bool(refresh)
     )
-    recent_results: list[dict[str, Any]] = []
     results_warning = ""
+    clean_query = " ".join(str(query or "").split())[:120]
+    current_page = max(1, int(page))
+    current_page_size = max(1, min(int(page_size), 24))
+    page_data: dict[str, Any] = {
+        "rows": [],
+        "query": clean_query,
+        "page": current_page,
+        "page_size": current_page_size,
+        "total": 0,
+        "total_pages": 1,
+        "has_previous": current_page > 1,
+        "has_next": False,
+    }
     try:
-        recent_results = [
-            _result_payload(row)
-            for row in await list_recent_discoveries(
-                int(guild_id),
-                limit=36,
-            )
-        ]
+        page_data = await page_discoveries(
+            int(guild_id),
+            query=clean_query,
+            page=current_page,
+            page_size=current_page_size,
+        )
+        enriched_rows = await enrich_discovery_rows(
+            int(guild_id),
+            page_data.get("rows") or [],
+            max_items=4,
+        )
+        page_data["rows"] = enriched_rows
     except CinemaStorageUnavailable:
         results_warning = "Saved feed results are temporarily unavailable."
     except Exception:
         results_warning = "Saved feed results could not be loaded."
 
-    runtime_results: list[dict[str, Any]] = []
-    for source in registry.sources:
-        if not (can_manage or source.enabled):
-            continue
-        runtime = _RUNTIME_STATE.get((int(guild_id), str(source.source_id)), {})
-        rows = runtime.get("results")
-        if isinstance(rows, list):
-            runtime_results.extend(
-                dict(row)
-                for row in rows[:8]
-                if isinstance(row, Mapping)
-            )
+    merged_results = [
+        _result_payload(row)
+        for row in page_data.get("rows") or []
+        if isinstance(row, Mapping)
+    ]
 
-    merged_results: list[dict[str, Any]] = []
-    seen_results: set[tuple[str, str]] = set()
-    for row in [*runtime_results, *recent_results]:
-        key = (
-            str(row.get("source_id") or ""),
-            str(row.get("release_title") or row.get("title") or "").casefold(),
-        )
-        if not key[1] or key in seen_results:
-            continue
-        seen_results.add(key)
-        merged_results.append(row)
-        if len(merged_results) >= 36:
-            break
+    if results_warning and int(page_data.get("page") or 1) == 1:
+        runtime_results: list[dict[str, Any]] = []
+        for source in registry.sources:
+            if not (can_manage or source.enabled):
+                continue
+            runtime = _RUNTIME_STATE.get((int(guild_id), str(source.source_id)), {})
+            rows = runtime.get("results")
+            if isinstance(rows, list):
+                runtime_results.extend(
+                    dict(row)
+                    for row in rows[:8]
+                    if isinstance(row, Mapping)
+                )
+        if clean_query:
+            needle = clean_query.casefold()
+            runtime_results = [
+                row
+                for row in runtime_results
+                if needle in str(row.get("title") or "").casefold()
+                or needle in str(row.get("release_title") or "").casefold()
+            ]
+        merged_results = runtime_results[:current_page_size]
 
     return {
         "revision": int(registry.revision),
@@ -250,6 +272,15 @@ async def feed_state(
         ],
         "results": merged_results,
         "results_warning": results_warning,
+        "pagination": {
+            "query": str(page_data.get("query") or clean_query),
+            "page": int(page_data.get("page") or current_page),
+            "page_size": int(page_data.get("page_size") or current_page_size),
+            "total": int(page_data.get("total") or 0),
+            "total_pages": int(page_data.get("total_pages") or 1),
+            "has_previous": bool(page_data.get("has_previous")),
+            "has_next": bool(page_data.get("has_next")),
+        },
         "categories": list(CATEGORIES),
     }
 
