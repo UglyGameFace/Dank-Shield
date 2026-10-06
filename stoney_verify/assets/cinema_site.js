@@ -41,6 +41,7 @@
     searchTimer: null,
     feedQuery: "",
     feedPage: 1,
+    feedMode: "latest",
     feedSearchTimer: null,
     details: new Map(),
     seasons: new Map(),
@@ -1135,19 +1136,26 @@
       form.append(
         selectField("Visual quality", "visual_quality", [["auto","Auto"],["high","High"],["standard","Standard"],["lite","Lite"]]),
         selectField("Playback speed", "playback_speed", [["0.5","0.5×"],["0.75","0.75×"],["1","1×"],["1.25","1.25×"],["1.5","1.5×"],["1.75","1.75×"],["2","2×"]]),
+        selectField("Feed alerts", "feed_notification_mode", [["instant","Instant Cinema inbox"],["daily","Daily digest"],["off","Off"]]),
       );
 
       for (const [label, key, placeholder] of [
         ["Preferred source", "preferred_source", "Optional source name"],
         ["Default audio language", "default_audio_language", "Example: English"],
         ["Default subtitle language", "default_subtitle_language", "Example: English"],
+        ["Feed minimum seeds", "feed_min_seeds", "0"],
+        ["Preferred feed resolutions", "feed_preferred_resolutions", "2160p, 1080p"],
+        ["Preferred feed codecs", "feed_preferred_codecs", "x265, av1"],
+        ["Preferred feed languages", "feed_preferred_languages", "English"],
       ]) {
         const field = node("div", "field");
         field.appendChild(node("label", "", label));
         const input = node("input");
         input.dataset.pref = key;
         input.placeholder = placeholder;
-        input.value = String(prefs[key] || "");
+        input.value = Array.isArray(prefs[key])
+          ? prefs[key].join(", ")
+          : String(prefs[key] ?? "");
         field.appendChild(input);
         form.appendChild(field);
       }
@@ -1160,6 +1168,22 @@
       check.dataset.pref = "autoplay_next";
       autoplay.appendChild(check);
 
+      const feedPlayable = node("div", "switch-row");
+      feedPlayable.appendChild(node("div", "", "Only show playable feed matches"));
+      const feedPlayableCheck = node("input");
+      feedPlayableCheck.type = "checkbox";
+      feedPlayableCheck.checked = prefs.feed_playable_only !== false;
+      feedPlayableCheck.dataset.pref = "feed_playable_only";
+      feedPlayable.appendChild(feedPlayableCheck);
+
+      const queueSuggestions = node("div", "switch-row");
+      queueSuggestions.appendChild(node("div", "", "Suggest feed matches for the Theater queue"));
+      const queueCheck = node("input");
+      queueCheck.type = "checkbox";
+      queueCheck.checked = prefs.feed_queue_suggestions !== false;
+      queueCheck.dataset.pref = "feed_queue_suggestions";
+      queueSuggestions.appendChild(queueCheck);
+
       const save = button("Save Cinema Preferences", "btn primary", async () => {
         const payload = {};
         settings.querySelectorAll("[data-pref]").forEach((field) => {
@@ -1167,6 +1191,15 @@
           else payload[field.dataset.pref] = field.value;
         });
         if ("playback_speed" in payload) payload.playback_speed = Number(payload.playback_speed);
+        if ("feed_min_seeds" in payload) payload.feed_min_seeds = Math.max(0, Number(payload.feed_min_seeds || 0));
+        for (const key of ["feed_preferred_resolutions", "feed_preferred_codecs", "feed_preferred_languages"]) {
+          if (typeof payload[key] === "string") {
+            payload[key] = payload[key]
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean);
+          }
+        }
         try {
           const response = await api("/profile", { method: "POST", body: JSON.stringify(payload) });
           state.profile = { ...data, preferences: response.preferences };
@@ -1176,7 +1209,7 @@
           toast(error.message || "Preferences could not be saved.", "error");
         }
       });
-      settings.append(form, autoplay, save);
+      settings.append(form, autoplay, feedPlayable, queueSuggestions, save);
       layout.append(profileCard, settings);
       page.textContent = "";
       page.appendChild(layout);
