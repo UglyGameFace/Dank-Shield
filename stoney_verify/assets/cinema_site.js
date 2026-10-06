@@ -1445,9 +1445,15 @@
             status.append(node("span", "status-dot"), node("span", "", sourceHealthLabel(source)));
             card.appendChild(status);
             if (source.last_refresh_at) {
-              card.appendChild(node("div", "feed-meta", `Last refresh: ${new Date(source.last_refresh_at * 1000).toLocaleString()}`));
+              const count = Number(source.last_refresh_result_count || 0);
+              card.appendChild(node(
+                "div",
+                "feed-meta",
+                `Last refresh: ${new Date(source.last_refresh_at * 1000).toLocaleString()} • ${count} playable result${count === 1 ? "" : "s"}`,
+              ));
             }
             if (source.last_refresh_error) card.appendChild(node("div", "feed-meta", source.last_refresh_error));
+            if (source.discovery_warning) card.appendChild(node("div", "feed-meta", source.discovery_warning));
             if (Array.isArray(source.newly_discovered) && source.newly_discovered.length) {
               const discovered = node("div", "feed-meta", `Newly discovered: ${source.newly_discovered.slice(0, 4).join(" • ")}`);
               card.appendChild(discovered);
@@ -1457,8 +1463,12 @@
               if (source.provider_type !== "external") {
                 actions.appendChild(button("Refresh", "btn secondary", async () => {
                   try {
-                    await feedAction({ action: "refresh", source_id: source.source_id });
-                    toast("Source refreshed.");
+                    const refreshed = await feedAction({ action: "refresh", source_id: source.source_id });
+                    const updated = Array.isArray(refreshed.sources)
+                      ? refreshed.sources.find((item) => item.source_id === source.source_id)
+                      : null;
+                    const count = Number(updated?.last_refresh_result_count || 0);
+                    toast(`Source refreshed: ${count} playable result${count === 1 ? "" : "s"}.`);
                     renderFeeds();
                   } catch (error) {
                     toast(error.message || "Refresh failed.", "error");
