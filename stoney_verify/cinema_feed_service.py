@@ -41,6 +41,7 @@ from .cinema_feed_personalization import (
     build_personalized_feed,
     ensure_source_health,
     group_feed_results,
+    list_due_private_source_targets,
     list_due_source_targets,
     list_private_discoveries,
     list_source_health,
@@ -123,6 +124,26 @@ async def _cinema_feed_refresh_loop() -> None:
             except Exception:
                 # Per-source health records/errors are already bounded and
                 # fail-soft; one provider must never kill the worker.
+                continue
+            await asyncio.sleep(0.75)
+
+        try:
+            private_targets = await list_due_private_source_targets(
+                refresh_seconds=interval,
+                limit=max(1, _auto_refresh_batch() // 2),
+            )
+        except Exception:
+            private_targets = []
+        for guild_id, owner_user_id, rule_id in private_targets:
+            try:
+                await refresh_private_source(
+                    int(guild_id),
+                    int(owner_user_id),
+                    str(rule_id),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
                 continue
             await asyncio.sleep(0.75)
 
