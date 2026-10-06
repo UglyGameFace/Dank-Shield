@@ -1317,6 +1317,45 @@ class TorrentMediaManager:
         except Exception:
             return False
 
+    def contiguous_available_end(
+        self,
+        session: TorrentStreamSession,
+        start: int,
+        limit: int,
+    ) -> int:
+        """Return the largest contiguous byte end already complete from start.
+
+        The result is constrained to one media file and never crosses the first
+        missing torrent piece. Returning start - 1 means even the first required
+        piece is not complete yet.
+        """
+
+        if session.file_size <= 0 or session.piece_length <= 0:
+            return max(-1, int(start) - 1)
+
+        start = max(0, min(int(start), session.file_size - 1))
+        limit = max(start, min(int(limit), session.file_size - 1))
+        global_start = session.file_offset + start
+        global_limit = session.file_offset + limit
+        first = global_start // session.piece_length
+        last = global_limit // session.piece_length
+
+        contiguous_global_end = global_start - 1
+        try:
+            for piece in range(first, last + 1):
+                if not bool(session.handle.have_piece(piece)):
+                    break
+                piece_end = (piece + 1) * session.piece_length - 1
+                contiguous_global_end = min(global_limit, piece_end)
+                if contiguous_global_end >= global_limit:
+                    break
+        except Exception:
+            return max(-1, start - 1)
+
+        if contiguous_global_end < global_start:
+            return max(-1, start - 1)
+        return max(start, min(limit, contiguous_global_end - session.file_offset))
+
     def _metadata_probe_ready(self, session: TorrentStreamSession) -> bool:
         if session.file_size <= 0:
             return False
