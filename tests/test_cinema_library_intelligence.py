@@ -187,6 +187,11 @@ def test_library_stats_use_session_history_without_double_querying() -> None:
             "max_progress_seconds": 1800,
             "duration_seconds": 2700,
         },
+        {
+            "session_mode": "standalone",
+            "max_progress_seconds": 0,
+            "duration_seconds": 0,
+        },
     ]
 
     stats = asyncio.run(
@@ -206,7 +211,30 @@ def test_library_stats_use_session_history_without_double_querying() -> None:
     assert stats["average_rating"] == 8.5
     assert stats["watch_party_sessions"] == 1
     assert stats["private_sessions"] == 1
+    assert stats["standalone_sessions"] == 1
     assert stats["top_genres"][0]["name"] in {"Crime", "Drama"}
+
+
+def test_library_intelligence_preserves_standalone_session_mode() -> None:
+    payload = cinema_library_intelligence._session_payload(
+        {
+            "id": "session-1",
+            "media_type": "movie",
+            "tmdb_id": 123,
+            "title": "Example Movie",
+            "guild_id": 100,
+            "room_id": "site-room",
+            "session_mode": "standalone",
+            "is_host": True,
+            "max_progress_seconds": 120,
+            "duration_seconds": 7200,
+            "metadata": {},
+        }
+    )
+
+    assert payload["session_mode"] == "standalone"
+    assert payload["room_id"] == "site-room"
+    assert payload["is_host"] is True
 
 
 def test_upcoming_episode_uses_feed_to_distinguish_available_from_aired(monkeypatch) -> None:

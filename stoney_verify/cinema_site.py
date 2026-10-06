@@ -716,7 +716,7 @@ def _cinema_entry_html(
   <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=8">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=9">
 </head>
 <body>
   <div class="app-shell">
@@ -1384,6 +1384,28 @@ def _discovery_payload(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _standalone_room_for_user(manager: Any, guild_id: int, user_id: int) -> Any:
+    """Return this member's host-only website room, if one is still active."""
+
+    uid = int(user_id)
+    matches = [
+        room
+        for room in manager.active_rooms_for_guild(int(guild_id))
+        if str(getattr(room, "mode", "watch_party") or "watch_party") == "standalone"
+        and int(getattr(room, "host_id", 0) or 0) == uid
+        and manager.user_can_access(room, uid)
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda room: float(getattr(room, "created_at", 0.0) or 0.0))
+
+
+def _standalone_channel_id(user_id: int) -> int:
+    """Synthetic per-member room scope that cannot collide with Discord channel ids."""
+
+    return -abs(int(user_id))
+
+
 def _active_rooms_payload(guild_id: int, user_id: int) -> list[dict[str, Any]]:
     manager = get_movie_night_manager()
     rows: list[dict[str, Any]] = []
@@ -1491,6 +1513,8 @@ def _watch_party_picks(guild_id: int, user_id: int, *, limit: int = 14) -> list[
         )
 
     for room in manager.active_rooms_for_guild(int(guild_id)):
+        if str(getattr(room, "mode", "watch_party") or "watch_party") != "watch_party":
+            continue
         if not manager.user_can_access(room, int(user_id)):
             continue
         current = (
@@ -2192,26 +2216,36 @@ async def cinema_play_api(request: web.Request) -> web.Response:
     if not isinstance(payload, Mapping):
         payload = {}
 
-    room_id = str(payload.get("room_id") or "").strip()
+    requested_room_id = str(payload.get("room_id") or "").strip()
     media_type = str(payload.get("media_type") or "").strip().lower()
     manager = get_movie_night_manager()
-    room = manager.get(room_id)
-    if (
-        not room_id
-        or room is None
-        or room.ended
-        or int(room.guild_id) != int(guild_id)
-        or int(room.host_id) != int(user_id)
-        or not manager.user_can_access(room, int(user_id))
-    ):
-        raise web.HTTPForbidden(
-            text="A current Cinema room that you host is required to start playback from the website."
-        )
+
+    room = None
+    if requested_room_id:
+        room = manager.get(requested_room_id)
+        if (
+            room is None
+            or room.ended
+            or int(room.guild_id) != int(guild_id)
+            or int(room.host_id) != int(user_id)
+            or not manager.user_can_access(room, int(user_id))
+        ):
+            raise web.HTTPForbidden(
+                text="Only the current Cinema host can replace playback in that room."
+            )
+    else:
+        # Open Dank Cinema is its own host-only website mode. It deliberately
+        # does not borrow or mutate a Discord Watch Party / Private Session.
+        room = _standalone_room_for_user(manager, guild_id, user_id)
 
     baseline = (
-        str(room.stream_token or ""),
-        str(room.current_candidate_id or ""),
-        str(room.current_variant_id or ""),
+        (
+            str(room.stream_token or ""),
+            str(room.current_candidate_id or ""),
+            str(room.current_variant_id or ""),
+        )
+        if room is not None
+        else None
     )
 
     if media_type == "movie":
@@ -2282,31 +2316,60 @@ async def cinema_play_api(request: web.Request) -> web.Response:
             text="No playable source currently matches this exact Cinema title."
         )
 
-    latest = manager.get(room_id)
-    if (
-        latest is None
-        or latest.ended
-        or int(latest.host_id) != int(user_id)
-        or (
-            str(latest.stream_token or ""),
-            str(latest.current_candidate_id or ""),
-            str(latest.current_variant_id or ""),
+    if room is None:
+        # Create the website-only room only after a real playable source exists.
+        # That avoids leaving dead sessions behind for failed searches.
+        try:
+            room = manager.create_room(
+                guild_id=int(guild_id),
+                channel_id=_standalone_channel_id(user_id),
+                host_id=int(user_id),
+                stream_token="",
+                mode="standalone",
+            )
+        except RuntimeError:
+            # A second browser tab may have created the same per-member room
+            # while provider search was running. Reuse that canonical room.
+            room = _standalone_room_for_user(manager, guild_id, user_id)
+            if room is None:
+                raise web.HTTPConflict(
+                    text="Dank Cinema changed while playback was starting. Retry from the current page."
+                )
+        baseline = (
+            str(room.stream_token or ""),
+            str(room.current_candidate_id or ""),
+            str(room.current_variant_id or ""),
         )
-        != baseline
-    ):
-        raise web.HTTPConflict(
-            text="Cinema changed while sources were loading. Retry from the current session."
-        )
+    else:
+        latest = manager.get(room.room_id)
+        if (
+            latest is None
+            or latest.ended
+            or int(latest.guild_id) != int(guild_id)
+            or int(latest.host_id) != int(user_id)
+            or not manager.user_can_access(latest, int(user_id))
+            or (
+                str(latest.stream_token or ""),
+                str(latest.current_candidate_id or ""),
+                str(latest.current_variant_id or ""),
+            )
+            != baseline
+        ):
+            raise web.HTTPConflict(
+                text="Cinema changed while sources were loading. Retry from the current session."
+            )
+        room = latest
 
+    room_id = room.room_id
     manager.join_room(room_id, user_id=int(user_id))
     materialize_search_results(
-        latest,
+        room,
         outcome,
         proposer_id=int(user_id),
         query=query,
         catalog_metadata=metadata,
     )
-    candidate = find_catalog_candidate(latest, metadata)
+    candidate = find_catalog_candidate(room, metadata)
     if candidate is None:
         raise web.HTTPConflict(text="Cinema could not attach that title to the current room.")
 
@@ -2339,6 +2402,7 @@ async def cinema_play_api(request: web.Request) -> web.Response:
         {
             "ok": True,
             "room_id": playback.room.room_id,
+            "mode": str(getattr(playback.room, "mode", "standalone") or "standalone"),
             "watch_url": movie_night_watch_url(playback.room.room_id, int(user_id)),
             "media": metadata,
             "source": {
@@ -2968,12 +3032,12 @@ def _site_html(guild_id: int, user_id: int) -> str:
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=8">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=9">
 </head>
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=12" defer></script>
+  <script src="/cinema/assets/site.js?v=13" defer></script>
 </body>
 </html>"""
 

@@ -596,7 +596,8 @@ async def record_watch_session(
         "room_id": _session_key(ctx.get("room_id"))[:120],
         "session_mode": (
             str(ctx.get("session_mode") or "private")
-            if str(ctx.get("session_mode") or "private") in {"private", "watch_party"}
+            if str(ctx.get("session_mode") or "private")
+            in {"private", "watch_party", "standalone"}
             else "private"
         ),
         "candidate_id": _session_key(ctx.get("candidate_id"))[:120],
@@ -931,6 +932,9 @@ async def library_stats(
         ),
         "private_sessions": sum(
             1 for row in sessions if str(row.get("session_mode") or "") == "private"
+        ),
+        "standalone_sessions": sum(
+            1 for row in sessions if str(row.get("session_mode") or "") == "standalone"
         ),
         "top_genres": [
             {"name": name, "score": score}

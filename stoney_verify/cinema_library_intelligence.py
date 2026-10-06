@@ -144,7 +144,7 @@ def _session_payload(
         "room_id": _clean(row.get("room_id"), 120),
         "session_mode": (
             str(row.get("session_mode") or "private")
-            if str(row.get("session_mode") or "private") in {"private", "watch_party"}
+            if str(row.get("session_mode") or "private") in {"private", "watch_party", "standalone"}
             else "private"
         ),
         "is_host": bool(row.get("is_host")),
