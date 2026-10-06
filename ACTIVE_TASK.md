@@ -6,8 +6,8 @@
 
 **DANK-CINEMA-LIBRARY-INTELLIGENCE — build bot-native Cinema Library intelligence**
 
-PR: **#459 — Build bot-native Cinema Library intelligence**  
-Branch: `rebuild/cinema-library-intelligence-clean`  
+PR: **#459 — Build bot-native Cinema Library intelligence**
+Branch: `rebuild/cinema-library-intelligence-clean`
 Base: `main@3e86f4ffd701fc1801bc492331393c23d84b8bd3`
 
 Outcome:
