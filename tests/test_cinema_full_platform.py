@@ -475,6 +475,100 @@ def test_cinema_site_play_without_room_creates_host_only_standalone_room(monkeyp
     assert "/movie/" in payload["watch_url"]
 
 
+def test_cinema_site_manual_source_choice_overrides_auto_rank(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+    manager = MovieNightManager()
+    movie = CinemaMedia(
+        media_type="movie",
+        tmdb_id=123,
+        title="Example Movie",
+        year=2026,
+    )
+    details = CinemaDetails(media=movie)
+    metadata = cinema_playback_service.catalog_metadata(movie)
+    automatic_ref = "magnet:?xt=urn:btih:" + "a" * 40
+    manual_ref = "magnet:?xt=urn:btih:" + "b" * 40
+    outcome = MediaSourceSearchOutcome(
+        variants=(
+            ResolvedMediaVariant(
+                title="Example.Movie.2026.1080p.WEB",
+                source_id="automatic",
+                source_label="Automatic Provider",
+                source_ref=automatic_ref,
+                file_size=2000,
+                seeds=100,
+                leechers=1,
+                peers=101,
+                metadata={},
+            ),
+            ResolvedMediaVariant(
+                title="Example.Movie.2026.720p.WEB",
+                source_id="manual",
+                source_label="Manual Provider",
+                source_ref=manual_ref,
+                file_size=1000,
+                seeds=4,
+                leechers=2,
+                peers=6,
+                metadata={},
+            ),
+        )
+    )
+
+    async def site_identity(_request):
+        return (100, 42)
+
+    async def get_details(_kind, _tmdb_id):
+        return details
+
+    async def adult_enabled(_guild_id):
+        return False
+
+    async def exact_sources(_guild_id, *, media):
+        assert media.tmdb_id == 123
+        return metadata, "Example Movie", outcome
+
+    async def should_not_auto_select(_user_id, _rows):
+        raise AssertionError("manual source choice unexpectedly fell back to automatic selection")
+
+    async def start_variant(room_id, *, actor_id, candidate_id, variant_id):
+        room = manager.get(room_id)
+        assert room is not None
+        assert actor_id == 42
+        candidate = room.candidates[candidate_id]
+        chosen = candidate.variants[variant_id]
+        assert chosen.source_ref == manual_ref
+        return SimpleNamespace(room=room)
+
+    monkeypatch.setattr(cinema_site, "_site_identity", site_identity)
+    monkeypatch.setattr(cinema_site, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(cinema_playback_service, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(cinema_site, "get_details", get_details)
+    monkeypatch.setattr(cinema_site, "_guild_adult_content_enabled", adult_enabled)
+    monkeypatch.setattr(cinema_site, "search_exact_movie_sources", exact_sources)
+    monkeypatch.setattr(cinema_site, "select_preferred_variant", should_not_auto_select)
+    monkeypatch.setattr(cinema_site, "start_room_variant", start_variant)
+
+    choice = cinema_site._source_choice_id(manual_ref)
+
+    class Request:
+        async def json(self):
+            return {
+                "media_type": "movie",
+                "tmdb_id": 123,
+                "source_choice": choice,
+            }
+
+    response = asyncio.run(cinema_site.cinema_play_api(Request()))
+    payload = __import__("json").loads(response.text)
+
+    assert payload["source"]["source_id"] == "manual"
+    assert payload["source"]["selection_mode"] == "manual"
+    assert manual_ref not in response.text
+    assert automatic_ref not in response.text
+
+
 def test_cinema_identity_cookie_can_reopen_exact_guild_after_membership_recheck(monkeypatch) -> None:
     monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
     identity = cinema_site_auth.cinema_identity_value(42, ttl_seconds=3600)
@@ -889,7 +983,7 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'initialUrl.searchParams.delete("sig")' in script
     assert 'history.replaceState(' in script
     assert 'return `${path}${AUTH_QUERY ? join + AUTH_QUERY.slice(1) : ""}`;' in script
-    assert 'src="/cinema/assets/site.js?v=13"' in source
+    assert 'src="/cinema/assets/site.js?v=14"' in source
     assert '"/cinema/{guild_id}/api/auth-debug"' in source
     assert "def _cinema_auth_debug_payload(" in source
     assert "signed-session-v8-snowflake-safe" in source
@@ -1039,12 +1133,18 @@ def test_full_site_episode_playback_is_direct_and_not_discord_room_scoped() -> N
     assert "playOnSite(episodeItem" in script
     assert 'card.classList.add("episode-playable")' in script
     assert 'event.target.closest("button, select, option")' in script
+    assert 'if (sourceChoice) payload.source_choice = String(sourceChoice)' in script
+    assert '"Playback Source"' in script
+    assert '"Automatic • best available"' in script
+    assert 'row.dataset.sourceChoice = String(source.source_choice || "")' in script
+    assert 'row.setAttribute("aria-pressed", "false")' in script
     assert '"▶ Resume"' in script
     assert '"▶ Play"' in script
     assert "Open Discord to Play" not in script
     assert "hostSession?.is_host" not in script
     assert ".episode-play" in styles
     assert ".episode-card.episode-playable" in styles
+    assert ".source-choice.selected" in styles
 
 
 def test_tv_details_do_not_claim_series_title_is_a_playable_source() -> None:
@@ -1119,8 +1219,8 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert 'b.append(uiIcon(iconName), node("span", "bottom-nav-label", label))' in script
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
-    assert 'href="/cinema/assets/site.css?v=9"' in source
-    assert 'src="/cinema/assets/site.js?v=13"' in source
+    assert 'href="/cinema/assets/site.css?v=10"' in source
+    assert 'src="/cinema/assets/site.js?v=14"' in source
 
 
 def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop() -> None:
@@ -1135,7 +1235,7 @@ def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop
         'content="width=device-width,initial-scale=1,minimum-scale=1,'
         'viewport-fit=cover,interactive-widget=resizes-content">'
     ) in source
-    assert 'href="/cinema/assets/site.css?v=9"' in source
+    assert 'href="/cinema/assets/site.css?v=10"' in source
 
     assert "--content:min(1560px,calc(100vw - 48px))" in styles
     assert "@media(min-width:1800px)" in styles
