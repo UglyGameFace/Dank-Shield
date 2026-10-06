@@ -1264,6 +1264,7 @@
       person: "Actor / creator",
       genre: "Genre",
       studio: "Studio",
+      franchise: "Franchise",
       private_source: "Private source",
     }[String(value || "")] || "Feed Rule";
   }
@@ -1339,6 +1340,7 @@
       ["person", "Actor / creator"],
       ["genre", "Genre"],
       ["studio", "Studio"],
+      ["franchise", "Franchise"],
       ["private_source", "Private RSS / JSON source"],
     ]);
     const scopeField = selectField("Visibility", "scope", scopeValue, [
@@ -1357,6 +1359,8 @@
       ]),
       textField("TMDB ID", "tmdb_id", initial.tmdb_id || "", "number"),
       textField("Minimum seeds", "min_seeds", filters.min_seeds || 0, "number"),
+      textField("Minimum file size (GB)", "min_size_gb", Number(filters.min_size_bytes || 0) / 1073741824 || 0, "number"),
+      textField("Maximum file size (GB)", "max_size_gb", Number(filters.max_size_bytes || 0) / 1073741824 || 0, "number"),
       textField("Preferred resolutions", "resolutions", (filters.resolutions || []).join(", ")),
       textField("Preferred codecs", "codecs", (filters.codecs || []).join(", ")),
       textField("Preferred languages", "languages", (filters.languages || []).join(", ")),
@@ -1368,6 +1372,8 @@
         ["off", "Off"],
       ]),
       checkField("Only playable matches", "playable_only", filters.playable_only !== false),
+      checkField("Require HDR", "hdr_only", Boolean(filters.hdr_only)),
+      checkField("Require subtitles", "subtitles_only", Boolean(filters.subtitles_only)),
       checkField("Suggest matches for Theater queue", "queue_suggest", Boolean(actions.queue_suggest)),
     );
 
@@ -1420,10 +1426,14 @@
           filters: {
             playable_only: fields.playable_only.checked,
             min_seeds: Math.max(0, Number(fields.min_seeds.value || 0)),
+            min_size_bytes: Math.max(0, Number(fields.min_size_gb.value || 0)) * 1073741824,
+            max_size_bytes: Math.max(0, Number(fields.max_size_gb.value || 0)) * 1073741824,
             resolutions: list(fields.resolutions.value),
             codecs: list(fields.codecs.value),
             languages: list(fields.languages.value),
             excluded_terms: list(fields.excluded_terms.value),
+            hdr_only: fields.hdr_only.checked,
+            subtitles_only: fields.subtitles_only.checked,
             endpoint_url: fields.endpoint_url.value,
             provider_type: fields.provider_type.value,
             category: fields.category.value,
@@ -1446,7 +1456,7 @@
 
     modal.append(
       head,
-      node("p", "section-sub", "Use one rule for titles, actors, creators, genres, studios, saved searches, filters, collections, routing, alerts, or a private feed."),
+      node("p", "section-sub", "Use one rule for titles, franchises, actors, creators, genres, studios, saved searches, filters, collections, routing, alerts, or a private feed."),
       form,
       save,
     );
@@ -1474,6 +1484,10 @@
     if (Number(filters.min_seeds || 0) > 0) details.push("≥ " + Number(filters.min_seeds) + " seeds");
     if (Array.isArray(filters.resolutions) && filters.resolutions.length) details.push(filters.resolutions.join(", "));
     if (Array.isArray(filters.codecs) && filters.codecs.length) details.push(filters.codecs.join(", "));
+    if (filters.hdr_only) details.push("HDR");
+    if (filters.subtitles_only) details.push("Subtitles");
+    if (Number(filters.min_size_bytes || 0) > 0) details.push("≥ " + formatFeedBytes(filters.min_size_bytes));
+    if (Number(filters.max_size_bytes || 0) > 0) details.push("≤ " + formatFeedBytes(filters.max_size_bytes));
     if (details.length) card.appendChild(node("div", "feed-meta", details.join(" • ")));
     const actionsMeta = rule.actions || {};
     const actionBits = [];
@@ -1570,6 +1584,9 @@
           release.codec || "",
           Array.isArray(release.hdr_tags) && release.hdr_tags.length ? release.hdr_tags.join("/") : "",
           Number(release.seeds || 0) > 0 ? Number(release.seeds) + " seeds" : "",
+          Array.isArray(release.subtitle_languages) && release.subtitle_languages.length
+            ? "Subs: " + release.subtitle_languages.join("/")
+            : (release.has_subtitles ? "Subtitles" : ""),
           formatFeedBytes(release.file_size),
         ].filter(Boolean).join(" • ")),
       );
