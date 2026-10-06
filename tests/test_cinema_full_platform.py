@@ -571,6 +571,103 @@ def test_cinema_site_play_without_room_creates_host_only_standalone_room(monkeyp
     assert "/movie/" in payload["watch_url"]
 
 
+def test_cinema_details_source_snapshot_is_reused_by_immediate_play(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+    cinema_site._SOURCE_SNAPSHOT_CACHE.clear()
+
+    manager = MovieNightManager()
+    movie = CinemaMedia(
+        media_type="movie",
+        tmdb_id=123,
+        title="Example Movie",
+        year=2026,
+    )
+    details = CinemaDetails(media=movie)
+    metadata = cinema_playback_service.catalog_metadata(movie)
+    source_ref = "magnet:?xt=urn:btih:" + "c" * 40
+    outcome = MediaSourceSearchOutcome(
+        variants=(
+            ResolvedMediaVariant(
+                title="Example.Movie.2026.1080p.WEB",
+                source_id="provider",
+                source_label="Provider",
+                source_ref=source_ref,
+                file_size=2000,
+                seeds=30,
+                leechers=2,
+                peers=32,
+                metadata={},
+            ),
+        )
+    )
+    search_calls = 0
+
+    async def site_identity(_request):
+        return (100, 42)
+
+    async def get_details(_kind, _tmdb_id):
+        return details
+
+    async def list_media(_user_id):
+        return []
+
+    async def adult_enabled(_guild_id):
+        return False
+
+    async def exact_sources(_guild_id, *, media):
+        nonlocal search_calls
+        search_calls += 1
+        if search_calls > 1:
+            raise AssertionError("Play unexpectedly repeated the provider search after Details.")
+        assert media.tmdb_id == 123
+        return metadata, "Example Movie", outcome
+
+    async def preferred(_user_id, rows):
+        return list(rows)[0]
+
+    async def start_variant(room_id, *, actor_id, candidate_id, variant_id):
+        room = manager.get(room_id)
+        assert room is not None
+        chosen = room.candidates[candidate_id].variants[variant_id]
+        assert chosen.source_ref == source_ref
+        return SimpleNamespace(room=room)
+
+    monkeypatch.setattr(cinema_site, "_site_identity", site_identity)
+    monkeypatch.setattr(cinema_site, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(cinema_playback_service, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(cinema_site, "get_details", get_details)
+    monkeypatch.setattr(cinema_site, "list_user_media", list_media)
+    monkeypatch.setattr(cinema_site, "_guild_adult_content_enabled", adult_enabled)
+    monkeypatch.setattr(cinema_site, "search_exact_movie_sources", exact_sources)
+    monkeypatch.setattr(cinema_site, "select_preferred_variant", preferred)
+    monkeypatch.setattr(cinema_site, "start_room_variant", start_variant)
+
+    details_request = SimpleNamespace(
+        match_info={"media_type": "movie", "tmdb_id": "123"},
+    )
+    details_response = asyncio.run(cinema_site.cinema_details_api(details_request))
+    details_payload = __import__("json").loads(details_response.text)
+
+    assert details_response.status == 200
+    assert len(details_payload["sources"]) == 1
+    assert details_payload["sources"][0]["source_choice"]
+    assert source_ref not in details_response.text
+    assert search_calls == 1
+
+    class PlayRequest:
+        async def json(self):
+            return {"media_type": "movie", "tmdb_id": 123}
+
+    play_response = asyncio.run(cinema_site.cinema_play_api(PlayRequest()))
+    play_payload = __import__("json").loads(play_response.text)
+
+    assert play_response.status == 200
+    assert play_payload["source"]["source_id"] == "provider"
+    assert play_payload["source"]["selection_mode"] == "automatic"
+    assert search_calls == 1
+
+
 def test_cinema_site_manual_source_choice_overrides_auto_rank(monkeypatch) -> None:
     monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
     monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
