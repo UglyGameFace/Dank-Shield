@@ -217,7 +217,7 @@ def test_movie_night_player_contains_sync_heartbeat_and_host_controls() -> None:
     assert "Tap to Sync" in html
     assert "syncButton.hidden=!!s.is_host" in html
     assert "Buffering the group for smoother playback" in html
-    assert 'const joiningLabel=s.private?"Private Session":"Watch Party"' in html
+    assert 'const joiningLabel=standaloneSession(s)?"Dank Cinema":(s.private?"Private Session":"Watch Party")' in html
     assert '"Joining "+joiningLabel+"… buffering around "' in html
     assert "Playback will stay put while the buffer catches up." in html
     assert 's.sync_status==="joining"' in html
@@ -478,10 +478,15 @@ def test_private_watch_room_allows_invited_identity_and_rejects_uninvited(monkey
         "_request_identity",
         lambda request: (room.room_id, 20),
     )
+
+    async def member_present(_guild_id, _user_id):
+        return "present"
+
+    monkeypatch.setattr(movie_night_web, "_watch_membership_state", member_present)
     try:
         asyncio.run(movie_night_web._room_and_user(SimpleNamespace()))
     except web.HTTPForbidden as exc:
-        assert "private" in exc.text.lower()
+        assert "do not have access" in exc.text.lower()
     else:
         raise AssertionError("uninvited user unexpectedly accessed a private Watch room")
 
@@ -491,6 +496,35 @@ def test_private_watch_room_allows_invited_identity_and_rejects_uninvited(monkey
     )
     assert resolved_room is room
     assert resolved_uid == 20
+
+
+def test_watch_room_revokes_definitively_absent_server_member(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=-10,
+        host_id=10,
+        stream_token="",
+        mode="standalone",
+    )
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(
+        movie_night_web,
+        "_request_identity",
+        lambda request: (room.room_id, 10),
+    )
+
+    async def member_absent(_guild_id, _user_id):
+        return "absent"
+
+    monkeypatch.setattr(movie_night_web, "_watch_membership_state", member_absent)
+
+    try:
+        asyncio.run(movie_night_web._room_and_user(SimpleNamespace()))
+    except web.HTTPForbidden as exc:
+        assert "active membership" in exc.text.lower()
+    else:
+        raise AssertionError("A removed server member unexpectedly kept Watch access.")
 
 
 def test_movie_night_state_exposes_private_room_mode(monkeypatch) -> None:
@@ -526,12 +560,50 @@ def test_movie_night_state_exposes_private_room_mode(monkeypatch) -> None:
     assert "Dank Cinema Private Session" in html
     assert "Hosted by You" in html
     assert "End this Private Session and release its media?" in html
-    assert 'privateMode?"Private Room":"Watch Party"' in html
+    assert 'standaloneMode?"standalone":(privateMode?"private":"watch-party")' in html
     assert 's.is_host?"Hosted by You"' in html
-    assert 'privateMode?"End Private Session":"End Movie Night"' in html
-    assert 'privateMode?"Private Session":"Watch Party"' in html
+    assert ':(privateMode?"End Private Session":"End Movie Night")' in html
+    assert ':(privateMode?"Private Session":"Watch Party")' in html
     assert 'pauseLabel.textContent=Number(s.viewer_count||0)>1?"Pause Private Room":"Pause"' in html
     assert 'pauseLabel.textContent="Pause for Everyone"' in html
+
+
+def test_movie_night_state_exposes_standalone_website_mode(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=1,
+        channel_id=-10,
+        host_id=10,
+        stream_token="",
+        mode="standalone",
+    )
+
+    class _TorrentManager:
+        async def get(self, token: str):
+            _ = token
+            return None
+
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(movie_night_web, "get_torrent_manager", lambda: _TorrentManager())
+
+    payload = asyncio.run(movie_night_web._state_payload(room, 10))
+
+    assert payload["mode"] == "standalone"
+    assert payload["standalone"] is True
+    assert payload["private"] is False
+    assert payload["title"] == "Dank Cinema"
+    assert manager.user_can_access(room, 10)
+    assert not manager.user_can_access(room, 11)
+
+    html = movie_night_web._watch_html(
+        room.room_id,
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+    assert 'String(s?.mode||"")==="standalone"' in html
+    assert '"🍿 Dank Cinema"' in html
+    assert '"End Playback"' in html
+    assert "End this standalone Cinema playback and release its media?" in html
 
 
 def test_watch_state_flips_host_authority_without_new_room(monkeypatch) -> None:
@@ -716,6 +788,11 @@ def test_movie_night_watch_csp_allows_only_tmdb_remote_images(monkeypatch) -> No
         "_request_identity",
         lambda request: (room.room_id, 10),
     )
+
+    async def member_present(_guild_id, _user_id):
+        return "present"
+
+    monkeypatch.setattr(movie_night_web, "_watch_membership_state", member_present)
 
     request = SimpleNamespace(
         match_info={"room_id": room.room_id},
@@ -1216,7 +1293,7 @@ def test_private_watch_page_has_real_invite_to_watch_party_flow() -> None:
     assert '"/movie/"+BOOT.roomId+"/invite-options?q="' in html
     assert '"/movie/"+BOOT.roomId+"/promote"' in html
     assert "turn this Private Session into a Watch Party" in html
-    assert 'inviteWatchParty.hidden=!(s.is_host && privateMode)' in html
+    assert 'inviteWatchParty.hidden=standaloneMode || !(s.is_host && privateMode)' in html
     assert "privateTapSkip" in html
 
 
