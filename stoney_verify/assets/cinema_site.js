@@ -1571,6 +1571,16 @@
       if (release.release_group) {
         left.appendChild(node("div", "feed-meta", "Group: " + release.release_group));
       }
+      const history = [];
+      if (release.first_seen_at) {
+        const firstSeen = new Date(release.first_seen_at);
+        if (!Number.isNaN(firstSeen.getTime())) history.push("First seen " + firstSeen.toLocaleString());
+      }
+      if (release.last_seen_at && release.last_seen_at !== release.first_seen_at) {
+        const lastSeen = new Date(release.last_seen_at);
+        if (!Number.isNaN(lastSeen.getTime())) history.push("Last seen " + lastSeen.toLocaleString());
+      }
+      if (history.length) left.appendChild(node("div", "feed-meta", history.join(" • ")));
       row.appendChild(left);
       list.appendChild(row);
     });
@@ -1767,9 +1777,25 @@
     follow.disabled = isFollowingFeedResult(result);
     actions.appendChild(follow);
     if (result.queue_suggested) {
-      actions.appendChild(button("Queue Suggestion", "btn ghost", () => {
-        if (target) go(target);
-        else go("search?q=" + encodeURIComponent(itemTitle(result)));
+      actions.appendChild(button("Add to Queue", "btn ghost", async (event) => {
+        const control = event.currentTarget;
+        if (control instanceof HTMLButtonElement) control.disabled = true;
+        try {
+          const response = await api("/feed-queue", {
+            method: "POST",
+            body: JSON.stringify({
+              media_type: String(result.media_type || ""),
+              tmdb_id: Number(result.tmdb_id || 0),
+              season_number: Number(result.season_number || 0),
+              episode_number: Number(result.episode_number || 0),
+            }),
+          });
+          toast("Added " + String(response.title || itemTitle(result)) + " to Up Next.");
+        } catch (error) {
+          toast(error.message || "Feed suggestion could not be queued.", "error");
+        } finally {
+          if (control instanceof HTMLButtonElement) control.disabled = false;
+        }
       }));
     }
     copy.appendChild(actions);
