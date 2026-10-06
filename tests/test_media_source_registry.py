@@ -196,6 +196,34 @@ def test_example_search_url_auto_detects_common_query_parameters() -> None:
     ) == "https://feeds.example.com/releases?format=rss&token=public"
 
 
+def test_eztvx_api_is_auto_normalized_to_imdb_identity_lookup() -> None:
+    assert prepare_example_search_url(
+        "https://eztvx.to/api/get-torrents?limit=100&page=1"
+    ) == (
+        "https://eztvx.to/api/get-torrents?"
+        "limit=100&page=1&imdb_id={imdb_numeric}"
+    )
+
+    assert prepare_example_search_url(
+        "https://eztv.re/api/get-torrents?imdb_id=903747&limit=50&page=1"
+    ) == (
+        "https://eztv.re/api/get-torrents?"
+        "imdb_id={imdb_numeric}&limit=50&page=1"
+    )
+
+
+def test_search_provider_template_detects_common_identity_parameters() -> None:
+    assert prepare_example_search_url(
+        "https://api.example.com/releases?imdb_id=tt0903747&season=3&episode=9"
+    ) == (
+        "https://api.example.com/releases?"
+        "imdb_id={imdb_id}&season={season}&episode={episode}"
+    )
+    assert prepare_example_search_url(
+        "https://api.example.com/releases?tmdb_id=1396"
+    ) == "https://api.example.com/releases?tmdb_id={tmdb_id}"
+
+
 def test_explicit_rss_feed_keeps_clean_url_and_is_structured() -> None:
     assert prepare_feed_url("https://myrss.org/eztv") == "https://myrss.org/eztv"
 
