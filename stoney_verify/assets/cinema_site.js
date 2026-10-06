@@ -580,7 +580,7 @@
         const control = button(hasItem ? "Remove" : "Add", hasItem ? "btn secondary" : "btn primary", async () => {
           control.disabled = true;
           try {
-            const positions = (list.items || []).map((row) => Number(row.position || 0));
+            const positions = (list.items || []).map((row) => Number(row.list_position || 0));
             await libraryAction({
               action: "list_item",
               list_id: list.id,
