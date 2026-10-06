@@ -3473,8 +3473,8 @@ function renderStartupDiagnostics(server={{}}) {{
       bits.push("wait "+fmtDiagnosticMs(server.first_wait_ms));
     if(Number(server.first_byte_ms||0)>0)
       bits.push("first byte "+fmtDiagnosticMs(server.first_byte_ms));
-    if(Number(server.first_range_start||0)>0)
-      bits.push("range @ "+fmtDiagnosticBytes(server.first_range_start));
+    if(Number(server.request_count||0)>0)
+      bits.push("range @ "+fmtDiagnosticBytes(server.first_range_start||0));
     serverEl.textContent=bits.length?bits.join(" • "):"waiting for first Range";
   }}
   if(browserEl) {{
