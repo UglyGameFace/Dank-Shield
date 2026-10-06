@@ -75,6 +75,7 @@ def test_feed_rule_matches_canonical_people_genre_and_studio_metadata() -> None:
                 "genres": ["Crime", "Drama"],
                 "people": ["Bryan Cranston"],
                 "studios": ["A24"],
+                "franchises": ["Example Universe"],
             }
         ]
     )
@@ -85,6 +86,7 @@ def test_feed_rule_matches_canonical_people_genre_and_studio_metadata() -> None:
         ("person", "Bryan Cranston"),
         ("genre", "Crime"),
         ("studio", "A24"),
+        ("franchise", "Example Universe"),
     ):
         assert _rule_matches(
             result,
@@ -97,6 +99,56 @@ def test_feed_rule_matches_canonical_people_genre_and_studio_metadata() -> None:
                 "filters": {"playable_only": True},
             },
         )
+
+
+def test_advanced_feed_filters_require_hdr_subtitles_and_size_bounds() -> None:
+    result = group_feed_results(
+        [
+            {
+                "title": "Example Movie",
+                "media_type": "movie",
+                "tmdb_id": 123,
+                "source_id": "feed-1",
+                "release_title": "Example.Movie.2026.2160p.HDR.WEB.x265.MULTI-SUB-GROUP.mkv",
+                "subtitle_languages": ["English", "Spanish"],
+                "file_size": 6 * 1024 * 1024 * 1024,
+                "seeds": 33,
+                "playable": True,
+            }
+        ]
+    )[0]
+
+    matching = {
+        "enabled": True,
+        "rule_type": "filter",
+        "query": "",
+        "media_type": None,
+        "tmdb_id": None,
+        "filters": {
+            "playable_only": True,
+            "hdr_only": True,
+            "subtitles_only": True,
+            "min_seeds": 10,
+            "min_size_bytes": 4 * 1024 * 1024 * 1024,
+            "max_size_bytes": 8 * 1024 * 1024 * 1024,
+            "resolutions": ["2160p"],
+            "codecs": ["x265"],
+            "languages": [],
+            "excluded_terms": [],
+            "source_ids": [],
+            "categories": [],
+        },
+    }
+    assert _rule_matches(result, matching)
+
+    too_large = {
+        **matching,
+        "filters": {
+            **matching["filters"],
+            "max_size_bytes": 5 * 1024 * 1024 * 1024,
+        },
+    }
+    assert not _rule_matches(result, too_large)
 
 
 def test_source_trust_is_derived_from_real_refresh_history() -> None:
@@ -133,6 +185,9 @@ def test_feed_center_client_exposes_personalization_without_source_refs() -> Non
         '"Actor / creator"',
         '"Genre"',
         '"Studio"',
+        '"Franchise"',
+        '"Require HDR"',
+        '"Require subtitles"',
         '"Quality upgrade"',
         '"Open My Feed"',
         '"+ New Feed Rule"',
@@ -163,3 +218,24 @@ def test_feed_personalization_schema_is_service_role_only() -> None:
         assert f"alter table public.{table} enable row level security" in migration
         assert f"revoke all on table public.{table} from anon, authenticated" in migration
         assert f"grant all on table public.{table} to service_role" in migration
+
+    assert "'franchise'" in migration
+
+
+def test_feed_auto_refresh_worker_is_bounded_and_started_with_media_server() -> None:
+    root = Path(cinema_site.__file__).resolve().parents[1]
+    service = (
+        Path(cinema_site.__file__).resolve().parent / "cinema_feed_service.py"
+    ).read_text(encoding="utf-8")
+    server = (
+        Path(cinema_site.__file__).resolve().parent / "torrent_media_server.py"
+    ).read_text(encoding="utf-8")
+    env = (root / ".env.example").read_text(encoding="utf-8")
+
+    assert 'DANK_CINEMA_FEED_REFRESH_SECONDS", "900"' in service
+    assert 'DANK_CINEMA_FEED_REFRESH_BATCH", "24"' in service
+    assert "max(300, min(raw, 86400))" in service
+    assert "await asyncio.sleep(0.75)" in service
+    assert "start_cinema_feed_refresh_worker()" in server
+    assert "DANK_CINEMA_FEED_REFRESH_SECONDS=900" in env
+    assert "DANK_CINEMA_FEED_REFRESH_BATCH=24" in env
