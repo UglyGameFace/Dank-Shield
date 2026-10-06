@@ -1700,6 +1700,20 @@ Current status:
 - branch is 0 behind main and mergeable;
 - PR #457 (EZTV/provider identity routing) is suspended until #456 reaches its Definition of Done.
 
+Expanded RSS / Feed Center contract:
+- Latest Feed Results groups duplicate releases by canonical title/episode and compares source, quality, codec, seeds, size, release group, and first/last-seen history;
+- My Feed combines personal Feed Rules, watchlist matches, private-feed discoveries, quality upgrades, new episodes, and queue suggestions;
+- personal Feed Rules support followed titles, actors/creators, genres, studios, saved searches, filters, collections, routing, and alert modes;
+- guild-scoped Collection/Route rules require Manage Server; personal rules remain owner-only;
+- user-private RSS/Atom and structured JSON sources reuse the existing safe source validator/resolver and persist only to service-role-only private discovery storage;
+- private discoveries never enter the guild-wide discovery table;
+- user preferences persist playable-only behavior, minimum seeds, preferred resolutions/codecs/languages, feed alert mode, and queue-suggestion preference;
+- new-episode/feed-match alerts use the existing Cinema inbox with dedupe and instant/daily/off behavior rather than unsolicited DMs;
+- source trust is derived from durable refresh success/failure and playable-result history;
+- Add to Queue uses the canonical MovieNightRoom queue and exact source resolver, and only succeeds for the current signed-in host of an active room;
+- raw magnet/torrent/source refs remain excluded from Feed Center and personalization payloads;
+- a new service-role-only migration owns Feed Rules, private discoveries, and durable source health; Cinema SQL CI replays and audits both Cinema migrations.
+
 Correction contract:
 - database-backed Feed Center pagination uses PostgREST exact count plus range/offset, default 8 results per page and max 24;
 - search covers both canonical discovery title and `metadata.release_title`, so `FBI`, `Collision`, or `S01E21` can match;
