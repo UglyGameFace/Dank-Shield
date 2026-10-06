@@ -1388,6 +1388,7 @@ def test_full_site_episode_playback_is_direct_and_not_discord_room_scoped() -> N
     assert 'if (sourceChoice) payload.source_choice = String(sourceChoice)' in script
     assert '"Playback Source"' in script
     assert '"Automatic • best available"' in script
+    assert '${source.seeds} reported seeds' in script
     assert '"▶ Play Automatically"' in script
     assert '"▶ Play Selected Source"' in script
     assert 'row.dataset.sourceChoice = String(source.source_choice || "")' in script
