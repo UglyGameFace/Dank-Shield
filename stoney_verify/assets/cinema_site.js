@@ -1402,6 +1402,11 @@
         node(
           "p",
           "section-sub",
+          "Actual items discovered from your enabled RSS and structured sources.",
+        ),
+        node(
+          "div",
+          "feed-meta",
           cleanFeedQuery
             ? `${totalResults} saved result${totalResults === 1 ? "" : "s"} matching “${state.feedQuery}”.`
             : `${totalResults} saved feed result${totalResults === 1 ? "" : "s"} across your enabled sources.`,
