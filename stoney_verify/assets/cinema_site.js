@@ -1255,12 +1255,13 @@
     return episodes[0] || null;
   }
 
-  async function playOnSite(item, control = null) {
+  async function playOnSite(item, control = null, sourceChoice = "") {
     const mediaType = itemKind(item);
     const payload = {
       media_type: mediaType,
       tmdb_id: Number(item?.tmdb_id || 0),
     };
+    if (sourceChoice) payload.source_choice = String(sourceChoice);
     if (mediaType === "episode") {
       payload.series_id = Number(item?.series_id || item?.metadata?.series_id || 0);
       payload.season_number = Number(item?.season_number || 0);
@@ -1412,6 +1413,7 @@
         state.details.set(cacheKey, data);
       }
       const d = data.details;
+      let selectedSourceChoice = "";
       page.textContent = "";
 
       const hero = node("section", "details-hero");
@@ -1465,7 +1467,7 @@
           resume ? "▶ Resume Here" : "▶ Play Here",
           data.active_session?.watch_url ? "btn secondary" : "btn primary",
         );
-        play.addEventListener("click", () => playOnSite(d, play));
+        play.addEventListener("click", () => playOnSite(d, play, selectedSourceChoice));
         actions.appendChild(play);
       } else if (d.media_type === "tv" && data.continue_episode && !standaloneActive) {
         const ep = data.continue_episode;
@@ -1571,7 +1573,7 @@
       }
 
       const sources = Array.isArray(data.sources) ? data.sources : [];
-      const sourceTitle = node("h3", "", "Available Cinema Sources");
+      const sourceTitle = node("h3", "", "Playback Source");
       sourceTitle.style.marginTop = "18px";
       side.appendChild(sourceTitle);
       if (!sources.length) {
@@ -1579,19 +1581,55 @@
           ? "Choose an episode to search connected playback sources for that exact SxxExx release."
           : "No connected playback source currently matches this title. Discord can still accept a host-supplied magnet or .torrent."));
       } else {
+        side.appendChild(node(
+          "p",
+          "section-sub source-help",
+          "Automatic picks the healthiest compatible release when you press Play. Tap a source only when you want to override it.",
+        ));
+        const sourceRows = [];
+        const sourceStatus = node("div", "source-selection-status", "Automatic • best available");
+        const setSourceChoice = (choice, source = null) => {
+          selectedSourceChoice = String(choice || "");
+          sourceRows.forEach((row) => {
+            const active = String(row.dataset.sourceChoice || "") === selectedSourceChoice;
+            row.classList.toggle("selected", active);
+            row.setAttribute("aria-pressed", active ? "true" : "false");
+          });
+          sourceStatus.textContent = source
+            ? `Manual • ${source.source_label || "Cinema source"}${source.health ? ` • ${source.health}` : ""}`
+            : "Automatic • best available";
+        };
+
+        const automatic = node("button", "source-card source-choice selected");
+        automatic.type = "button";
+        automatic.dataset.sourceChoice = "";
+        automatic.setAttribute("aria-pressed", "true");
+        automatic.append(
+          node("span", "feed-title", "Automatic"),
+          node("span", "feed-meta", "Recommended • uses saved preference, browser compatibility, swarm health, and quality"),
+        );
+        automatic.addEventListener("click", () => setSourceChoice(""));
+        sourceRows.push(automatic);
+        side.appendChild(automatic);
+
         sources.slice(0, 6).forEach((source) => {
-          const row = node("div", "source-card");
-          row.style.marginTop = "8px";
+          const row = node("button", "source-card source-choice");
+          row.type = "button";
+          row.dataset.sourceChoice = String(source.source_choice || "");
+          row.setAttribute("aria-pressed", "false");
           row.append(
-            node("div", "feed-title", source.source_label || "Cinema source"),
-            node("div", "feed-meta", [
+            node("span", "feed-title", source.source_label || "Cinema source"),
+            node("span", "feed-meta", [
               source.health ? `Health: ${source.health}` : "",
               Number(source.seeds || 0) ? `${source.seeds} seeds` : "",
               source.title || "",
             ].filter(Boolean).join(" • ")),
           );
+          row.addEventListener("click", () => setSourceChoice(source.source_choice, source));
+          sourceRows.push(row);
           side.appendChild(row);
         });
+        side.appendChild(sourceStatus);
       }
       detailsGrid.append(main, side);
       page.appendChild(detailsGrid);
