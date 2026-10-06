@@ -941,37 +941,269 @@
     return state.library;
   }
 
+  function openListEditor(list = null) {
+    const backdrop = node("div", "modal-backdrop");
+    const modal = node("section", "modal library-list-modal");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    const head = node("div", "modal-head");
+    head.append(
+      node("h2", "", list ? "Edit Cinema List" : "New Cinema List"),
+      button("×", "modal-close", () => backdrop.remove()),
+    );
+    const form = node("div", "form-grid");
+    const nameField = node("div", "field");
+    nameField.appendChild(node("label", "", "List name"));
+    const name = node("input");
+    name.maxLength = 80;
+    name.value = String(list?.name || "");
+    name.placeholder = "Example: Horror Night";
+    nameField.appendChild(name);
+    const descriptionField = node("div", "field");
+    descriptionField.appendChild(node("label", "", "Description"));
+    const description = node("input");
+    description.maxLength = 300;
+    description.value = String(list?.description || "");
+    description.placeholder = "Optional";
+    descriptionField.appendChild(description);
+    form.append(nameField, descriptionField);
+
+    const actions = node("div", "hero-actions");
+    const save = button(list ? "Save List" : "Create List", "btn primary", async () => {
+      const cleanName = name.value.trim();
+      if (!cleanName) {
+        toast("Enter a list name.", "error");
+        return;
+      }
+      save.disabled = true;
+      try {
+        await libraryAction({
+          action: "save_list",
+          list_id: String(list?.id || ""),
+          name: cleanName,
+          description: description.value.trim(),
+          position: Number(list?.position || 0),
+        }, list ? "Cinema list updated." : "Cinema list created.");
+        backdrop.remove();
+        renderLibrary("lists");
+      } catch (error) {
+        toast(error.message || "Cinema list could not be saved.", "error");
+        save.disabled = false;
+      }
+    });
+    actions.appendChild(save);
+    if (list) {
+      actions.appendChild(button("Delete List", "btn danger", async () => {
+        if (!confirm(`Delete ${list.name || "this Cinema list"}?`)) return;
+        try {
+          await libraryAction({
+            action: "delete_list",
+            list_id: String(list.id || ""),
+          }, "Cinema list deleted.");
+          backdrop.remove();
+          renderLibrary("lists");
+        } catch (error) {
+          toast(error.message || "Cinema list could not be deleted.", "error");
+        }
+      }));
+    }
+    modal.append(head, form, actions);
+    backdrop.appendChild(modal);
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) backdrop.remove();
+    });
+    document.body.appendChild(backdrop);
+    setTimeout(() => name.focus(), 30);
+  }
+
+  async function mutateListItem(list, item, { enabled = true, position = 0 } = {}) {
+    return api("/library", {
+      method: "POST",
+      body: JSON.stringify({
+        action: "list_item",
+        list_id: String(list.id || ""),
+        ...canonicalLibraryPayload(item),
+        enabled,
+        position: Math.max(0, Number(position || 0)),
+      }),
+    });
+  }
+
+  async function moveListItem(list, index, delta) {
+    const items = Array.isArray(list.items) ? list.items : [];
+    const targetIndex = index + delta;
+    if (index < 0 || targetIndex < 0 || targetIndex >= items.length) return;
+    const current = items[index];
+    const target = items[targetIndex];
+    try {
+      await mutateListItem(list, current, { enabled: true, position: targetIndex * 10 });
+      await mutateListItem(list, target, { enabled: true, position: index * 10 });
+      invalidateLibraryViews();
+      toast("List order updated.");
+      renderLibrary("lists");
+    } catch (error) {
+      toast(error.message || "List order could not be updated.", "error");
+    }
+  }
+
+  function renderCustomLists(host, library) {
+    const lists = Array.isArray(library.lists) ? library.lists : [];
+    const top = node("div", "section-head");
+    const text = node("div");
+    text.append(
+      node("h2", "section-title", "Custom Lists"),
+      node("p", "section-sub", "Your own ordered Cinema collections."),
+    );
+    top.append(text, button("+ New List", "btn primary", () => openListEditor()));
+    host.appendChild(top);
+
+    if (!lists.length) {
+      host.appendChild(node("div", "state-card", "No custom lists yet. Create one for movie night ideas, favorites by mood, or whatever taxonomy your brain has invented."));
+      return;
+    }
+
+    lists.forEach((list) => {
+      const section = node("section", "panel library-list-section");
+      const head = node("div", "section-head");
+      const copy = node("div");
+      copy.append(
+        node("h3", "", list.name || "Untitled List"),
+        node("p", "section-sub", list.description || `${(list.items || []).length} saved item${(list.items || []).length === 1 ? "" : "s"}`),
+      );
+      head.append(copy, button("Edit", "btn secondary", () => openListEditor(list)));
+      section.appendChild(head);
+
+      const items = Array.isArray(list.items) ? list.items : [];
+      if (!items.length) {
+        section.appendChild(node("div", "state-card", "This list is empty. Add titles from Details."));
+      } else {
+        const listGrid = node("div", "library-list-items");
+        items.forEach((item, index) => {
+          const wrap = node("div", "library-list-item");
+          wrap.appendChild(mediaCard(item));
+          const actions = node("div", "library-list-item-actions");
+          const up = button("↑", "btn ghost", () => moveListItem(list, index, -1));
+          up.setAttribute("aria-label", "Move up");
+          up.disabled = index === 0;
+          const down = button("↓", "btn ghost", () => moveListItem(list, index, 1));
+          down.setAttribute("aria-label", "Move down");
+          down.disabled = index === items.length - 1;
+          const remove = button("Remove", "btn danger", async () => {
+            try {
+              await mutateListItem(list, item, { enabled: false });
+              invalidateLibraryViews();
+              toast("Removed from list.");
+              renderLibrary("lists");
+            } catch (error) {
+              toast(error.message || "List item could not be removed.", "error");
+            }
+          });
+          actions.append(up, down, remove);
+          wrap.appendChild(actions);
+          listGrid.appendChild(wrap);
+        });
+        section.appendChild(listGrid);
+      }
+      host.appendChild(section);
+    });
+  }
+
+  function renderLibraryStats(host, stats) {
+    const values = [
+      ["Movies watched", Number(stats?.movies_watched || 0)],
+      ["Episodes watched", Number(stats?.episodes_watched || 0)],
+      ["Hours watched", Number(stats?.watch_hours || 0).toFixed(1)],
+      ["Rewatches", Number(stats?.rewatches || 0)],
+      ["Favorites", Number(stats?.favorites || 0)],
+      ["Ratings", Number(stats?.ratings || 0)],
+      ["Average rating", Number(stats?.average_rating || 0) > 0 ? Number(stats.average_rating).toFixed(1) + "/10" : "—"],
+      ["Watch Parties", Number(stats?.watch_party_sessions || 0)],
+      ["Private sessions", Number(stats?.private_sessions || 0)],
+    ];
+    const grid = node("div", "library-stats-grid");
+    values.forEach(([label, value]) => {
+      const card = node("article", "library-stat-card");
+      card.append(
+        node("div", "library-stat-value", value),
+        node("div", "library-stat-label", label),
+      );
+      grid.appendChild(card);
+    });
+    host.appendChild(grid);
+
+    const genres = Array.isArray(stats?.top_genres) ? stats.top_genres : [];
+    if (genres.length) {
+      const section = node("section", "panel section");
+      section.appendChild(node("h2", "", "Your Top Genres"));
+      const chips = node("div", "library-genre-chips");
+      genres.forEach((genre) => {
+        chips.appendChild(node("span", "meta-chip", `${genre.name} • ${Number(genre.score || 0)}`));
+      });
+      section.appendChild(chips);
+      host.appendChild(section);
+    }
+  }
+
   async function renderLibrary(tab = "continue") {
     const page = node("main", "page");
     const title = node("h1", "", "My Stuff");
-    const sub = node("p", "section-sub", "Your real Watchlist, progress, and viewing history across devices.");
+    const sub = node("p", "section-sub", "Everything Dank Cinema remembers about what you watch, love, rate, save, and want to see next.");
     const tabs = node("div", "library-tabs");
-    const content = node("div");
+    const content = node("div", "library-content");
     page.append(title, sub, tabs, content);
     renderShell(page, "library");
     try {
       const library = await ensureLibrary();
       const options = [
-        ["continue", "Continue Watching", library.continue_watching || []],
+        ["continue", "Continue", library.continue_watching || []],
         ["watchlist", "Watchlist", library.watchlist || []],
-        ["history", "Recently Watched", library.recently_watched || []],
+        ["favorites", "Favorites", library.favorites || []],
+        ["upcoming", "Upcoming", library.upcoming || []],
+        ["history", "History", library.history_sessions || []],
         ["again", "Watch Again", library.watch_again || []],
+        ["rated", "Ratings", library.rated || []],
+        ["lists", "Lists", library.lists || []],
+        ["stats", "Stats", library.stats || {}],
       ];
       const selected = options.find((row) => row[0] === tab) || options[0];
       options.forEach(([key, label]) => {
         tabs.appendChild(button(label, `tab-btn ${selected[0] === key ? "active" : ""}`, () => renderLibrary(key)));
       });
-      const rows = selected[2];
+
+      if (selected[0] === "lists") {
+        renderCustomLists(content, library);
+        return;
+      }
+      if (selected[0] === "stats") {
+        renderLibraryStats(content, library.stats || {});
+        return;
+      }
+
+      const rows = Array.isArray(selected[2]) ? selected[2] : [];
       if (!rows.length) {
-        content.appendChild(node("div", "state-card", selected[0] === "watchlist"
-          ? "Your Watchlist is empty. Add movies or shows from Search or Details."
-          : selected[0] === "continue"
-            ? "Nothing is waiting to be resumed."
-            : "No viewing history is available yet."));
+        const messages = {
+          watchlist: "Your Watchlist is empty. Add movies or shows from Search or Details.",
+          favorites: "Nothing is favorited yet.",
+          continue: "Nothing is waiting to be resumed.",
+          upcoming: "No upcoming or newly available episodes are tied to your shows yet.",
+          history: "No Theater viewing sessions are available yet.",
+          again: "Nothing is ready for a rewatch yet.",
+          rated: "You have not rated anything yet.",
+        };
+        content.appendChild(node("div", "state-card", messages[selected[0]] || "Nothing is here yet."));
       } else {
         const grid = node("div", "result-grid");
         rows.forEach((item) => grid.appendChild(mediaCard(item)));
         content.appendChild(grid);
+      }
+
+      if (selected[0] === "continue" && Array.isArray(library.because_you_watched) && library.because_you_watched.length) {
+        const rail = mediaRail("Because You Watched", library.because_you_watched, "library-because");
+        if (rail) content.appendChild(rail);
+      }
+      if (selected[0] === "watchlist" && Array.isArray(library.recommended) && library.recommended.length) {
+        const rail = mediaRail("Recommended For You", library.recommended, "library-recommended");
+        if (rail) content.appendChild(rail);
       }
     } catch (error) {
       content.appendChild(node("div", "state-card", error.message || "Library could not load."));
