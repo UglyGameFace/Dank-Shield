@@ -2030,7 +2030,7 @@ class CustomSourceModal(discord.ui.Modal):
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True, thinking=True)
 
-        probe = await probe_custom_media_source(candidate, query="batman")
+        probe = await probe_custom_media_source(candidate, query="breaking bad")
         if not probe.reachable:
             kind = "RSS feed" if is_feed else "search provider"
             return await _replace(
@@ -2066,24 +2066,24 @@ class CustomSourceModal(discord.ui.Modal):
 
         if is_feed:
             notice = (
-                f"✅ RSS feed tested and saved • {probe.playable_results} Batman-matching playable "
+                f"✅ RSS feed tested and saved • {probe.playable_results} probe-matching playable "
                 "result(s) in the current feed."
             )
             if probe.playable_results == 0:
                 notice = (
                     "✅ RSS feed responded with valid structured data and was saved. The current feed "
-                    "does not contain a Batman-matching playable release, which is normal for a rolling "
+                    "does not contain a probe-matching playable release, which is normal for a rolling "
                     "feed. Movie searches will filter the feed locally."
                 )
         else:
             notice = (
                 f"✅ Search provider tested and saved • {probe.playable_results} playable result(s) "
-                "in the Batman probe."
+                "in the provider probe."
             )
             if probe.playable_results == 0:
                 notice = (
                     "⚠️ Search provider responded with structured data and was saved, but the Batman "
-                    "probe found no matching playable release."
+                    "provider probe found no matching playable release."
                 )
 
         await _replace(
