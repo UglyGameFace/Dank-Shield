@@ -22,7 +22,7 @@ from .cinema_catalog import (
 from .cinema_discovery_service import list_recent_discoveries
 from .cinema_feed_personalization import group_feed_results
 from .cinema_library_service import (
-    library_snapshot,
+    library_snapshot_from_rows,
     library_stats,
     list_custom_lists,
     list_user_media,
@@ -268,10 +268,23 @@ async def recommendation_rows(
     *,
     include_adult: bool,
     limit: int = 20,
+    media_rows: Optional[list[dict[str, Any]]] = None,
+    availability_groups: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
-    rows_task = asyncio.create_task(list_user_media(int(user_id)))
-    availability_task = asyncio.create_task(_availability_groups(int(guild_id)))
-    rows, groups = await asyncio.gather(rows_task, availability_task)
+    if media_rows is None and availability_groups is None:
+        rows, groups = await asyncio.gather(
+            list_user_media(int(user_id)),
+            _availability_groups(int(guild_id)),
+        )
+    elif media_rows is None:
+        rows = await list_user_media(int(user_id))
+        groups = list(availability_groups or [])
+    elif availability_groups is None:
+        rows = list(media_rows)
+        groups = await _availability_groups(int(guild_id))
+    else:
+        rows = list(media_rows)
+        groups = list(availability_groups)
     seeds = _seed_rows(rows, limit=5)
     if not seeds:
         return {
@@ -452,10 +465,23 @@ async def upcoming_episode_rows(
     *,
     include_adult: bool,
     limit: int = 16,
+    media_rows: Optional[list[dict[str, Any]]] = None,
+    availability_groups: Optional[list[dict[str, Any]]] = None,
 ) -> list[dict[str, Any]]:
-    rows_task = asyncio.create_task(list_user_media(int(user_id)))
-    availability_task = asyncio.create_task(_availability_groups(int(guild_id)))
-    rows, groups = await asyncio.gather(rows_task, availability_task)
+    if media_rows is None and availability_groups is None:
+        rows, groups = await asyncio.gather(
+            list_user_media(int(user_id)),
+            _availability_groups(int(guild_id)),
+        )
+    elif media_rows is None:
+        rows = await list_user_media(int(user_id))
+        groups = list(availability_groups or [])
+    elif availability_groups is None:
+        rows = list(media_rows)
+        groups = await _availability_groups(int(guild_id))
+    else:
+        rows = list(media_rows)
+        groups = list(availability_groups)
     title_index, episode_index = _availability_index(groups)
     latest_by_series = _latest_episode_rows_by_series(rows)
 
@@ -541,16 +567,32 @@ async def library_intelligence_snapshot(
     *,
     include_adult: bool,
 ) -> dict[str, Any]:
-    library_task = asyncio.create_task(library_snapshot(int(user_id)))
+    media_task = asyncio.create_task(list_user_media(int(user_id)))
     lists_task = asyncio.create_task(list_custom_lists(int(user_id)))
-    stats_task = asyncio.create_task(library_stats(int(user_id)))
-    sessions_task = asyncio.create_task(list_watch_sessions(int(user_id), limit=120))
+    sessions_task = asyncio.create_task(list_watch_sessions(int(user_id), limit=1000))
+    availability_task = asyncio.create_task(_availability_groups(int(guild_id)))
+    media_rows, lists, sessions, availability_groups = await asyncio.gather(
+        media_task,
+        lists_task,
+        sessions_task,
+        availability_task,
+    )
+    library = library_snapshot_from_rows(media_rows)
+    stats_task = asyncio.create_task(
+        library_stats(
+            int(user_id),
+            media_rows=media_rows,
+            sessions=sessions,
+        )
+    )
     recommendations_task = asyncio.create_task(
         recommendation_rows(
             int(guild_id),
             int(user_id),
             include_adult=include_adult,
             limit=24,
+            media_rows=media_rows,
+            availability_groups=availability_groups,
         )
     )
     upcoming_task = asyncio.create_task(
@@ -559,13 +601,12 @@ async def library_intelligence_snapshot(
             int(user_id),
             include_adult=include_adult,
             limit=16,
+            media_rows=media_rows,
+            availability_groups=availability_groups,
         )
     )
-    library, lists, stats, sessions, recommendations, upcoming = await asyncio.gather(
-        library_task,
-        lists_task,
+    stats, recommendations, upcoming = await asyncio.gather(
         stats_task,
-        sessions_task,
         recommendations_task,
         upcoming_task,
     )
