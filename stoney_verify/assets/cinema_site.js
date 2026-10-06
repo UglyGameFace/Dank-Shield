@@ -1320,6 +1320,7 @@
     host.textContent = "";
     const list = node("div", "episode-list");
     const episodes = Array.isArray(data.episodes) ? data.episodes : [];
+    const libraryAvailable = data.library_available !== false;
     if (!episodes.length) {
       host.appendChild(node("div", "state-card", "No real episode metadata is available for this season."));
       return;
@@ -1378,23 +1379,25 @@
         if (event.target.closest("button, select, option")) return;
         playOnSite(episodeItem);
       });
-      const libraryActions = node("div", "episode-library-actions");
-      libraryActions.append(
-        button(progress.completed ? "Unwatch" : "Watched", "btn ghost", (event) => {
-          event.stopPropagation();
-          setWatchedState(episodeItem, !Boolean(progress.completed));
-        }),
-        button(progress.favorite ? "♥" : "♡", `btn ghost ${progress.favorite ? "active" : ""}`, (event) => {
-          event.stopPropagation();
-          toggleFavorite(episodeItem, !Boolean(progress.favorite));
-        }),
-        button("+ List", "btn ghost", (event) => {
-          event.stopPropagation();
-          openListPicker(episodeItem);
-        }),
-        ratingControl(episodeItem, Number(progress.user_rating || 0), true),
-      );
-      stateEl.appendChild(libraryActions);
+      if (libraryAvailable) {
+        const libraryActions = node("div", "episode-library-actions");
+        libraryActions.append(
+          button(progress.completed ? "Unwatch" : "Watched", "btn ghost", (event) => {
+            event.stopPropagation();
+            setWatchedState(episodeItem, !Boolean(progress.completed));
+          }),
+          button(progress.favorite ? "♥" : "♡", `btn ghost ${progress.favorite ? "active" : ""}`, (event) => {
+            event.stopPropagation();
+            toggleFavorite(episodeItem, !Boolean(progress.favorite));
+          }),
+          button("+ List", "btn ghost", (event) => {
+            event.stopPropagation();
+            openListPicker(episodeItem);
+          }),
+          ratingControl(episodeItem, Number(progress.user_rating || 0), true),
+        );
+        stateEl.appendChild(libraryActions);
+      }
       card.append(still, copy, stateEl);
       list.appendChild(card);
     });
@@ -1450,6 +1453,14 @@
       ].filter(Boolean).forEach((value) => meta.appendChild(node("span", "meta-chip", value)));
       copy.appendChild(meta);
       if (d.overview) copy.appendChild(node("div", "details-overview", d.overview));
+      const libraryAvailable = data.library_available !== false;
+      if (!libraryAvailable) {
+        copy.appendChild(node(
+          "div",
+          "state-card library-degraded",
+          data.library_notice || "Your Cinema library is temporarily unavailable. Playback still works.",
+        ));
+      }
       const actions = node("div", "hero-actions");
       const activeMode = String(data.active_session?.mode || "");
       const standaloneActive = activeMode === "standalone";
@@ -1481,29 +1492,31 @@
         play.addEventListener("click", () => playOnSite(ep, play));
         actions.appendChild(play);
       }
-      const inWatchlist = Boolean(data.library?.watchlisted);
-      actions.appendChild(button(inWatchlist ? "✓ In Watchlist" : "+ Watchlist", "btn secondary", () => setWatchlistFromDetails(data, !inWatchlist)));
-      const detailsItem = {
-        ...d,
-        favorite: Boolean(data.library?.favorite),
-        user_rating: Number(data.library?.user_rating || 0),
-        completed: Boolean(data.library?.completed),
-        play_count: Number(data.library?.play_count || 0),
-      };
-      actions.appendChild(button(
-        data.library?.favorite ? "♥ Favorite" : "♡ Favorite",
-        `btn secondary ${data.library?.favorite ? "active" : ""}`,
-        () => toggleFavorite(detailsItem, !Boolean(data.library?.favorite)),
-      ));
-      actions.appendChild(button("+ List", "btn secondary", () => openListPicker(detailsItem)));
-      if (d.media_type === "movie") {
+      if (libraryAvailable) {
+        const inWatchlist = Boolean(data.library?.watchlisted);
+        actions.appendChild(button(inWatchlist ? "✓ In Watchlist" : "+ Watchlist", "btn secondary", () => setWatchlistFromDetails(data, !inWatchlist)));
+        const detailsItem = {
+          ...d,
+          favorite: Boolean(data.library?.favorite),
+          user_rating: Number(data.library?.user_rating || 0),
+          completed: Boolean(data.library?.completed),
+          play_count: Number(data.library?.play_count || 0),
+        };
         actions.appendChild(button(
-          data.library?.completed ? "Mark Unwatched" : "Mark Watched",
-          "btn secondary",
-          () => setWatchedState(detailsItem, !Boolean(data.library?.completed)),
+          data.library?.favorite ? "♥ Favorite" : "♡ Favorite",
+          `btn secondary ${data.library?.favorite ? "active" : ""}`,
+          () => toggleFavorite(detailsItem, !Boolean(data.library?.favorite)),
         ));
+        actions.appendChild(button("+ List", "btn secondary", () => openListPicker(detailsItem)));
+        if (d.media_type === "movie") {
+          actions.appendChild(button(
+            data.library?.completed ? "Mark Unwatched" : "Mark Watched",
+            "btn secondary",
+            () => setWatchedState(detailsItem, !Boolean(data.library?.completed)),
+          ));
+        }
+        actions.appendChild(ratingControl(detailsItem, Number(data.library?.user_rating || 0)));
       }
-      actions.appendChild(ratingControl(detailsItem, Number(data.library?.user_rating || 0)));
       if (d.trailer_url) actions.appendChild(button("Trailer", "btn secondary", () => openExternal(d.trailer_url)));
       copy.appendChild(actions);
       content.append(poster, copy);
