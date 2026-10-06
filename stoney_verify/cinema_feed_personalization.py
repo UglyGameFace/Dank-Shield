@@ -46,6 +46,7 @@ _RULE_TYPES = {
     "person",
     "genre",
     "studio",
+    "franchise",
     "private_source",
 }
 _SCOPES = {"user", "guild"}
@@ -136,6 +137,7 @@ def _normalize_filters(value: Any) -> dict[str, Any]:
         "source_ids": source_ids,
         "categories": categories,
         "hdr_only": bool(raw.get("hdr_only", False)),
+        "subtitles_only": bool(raw.get("subtitles_only", False)),
     }
     # Private source configuration is kept service-role-only inside the rule.
     endpoint = _clean(raw.get("endpoint_url"), 1000)
@@ -281,6 +283,7 @@ def _rule_write_payload(
         "person",
         "genre",
         "studio",
+        "franchise",
     } and not (query or tmdb_id):
         raise CinemaFeedRuleError("This Feed Rule needs a title, search, or TMDB identity.")
 
@@ -445,6 +448,19 @@ def _release_details(row: Mapping[str, Any]) -> dict[str, Any]:
         limit=12,
         item_limit=24,
     )
+    subtitle_languages = _string_list(
+        metadata.get("subtitle_languages")
+        or metadata.get("subtitles")
+        or [],
+        limit=12,
+        item_limit=24,
+    )
+    release_has_subtitle_tag = bool(
+        re.search(
+            r"(?i)(?:^|[ ._\-])(?:sub|subs|subbed|subtitle|subtitles|multi[-_. ]?sub)(?:$|[ ._\-])",
+            release_title,
+        )
+    )
     return {
         "release_title": release_title,
         "season": _safe_int(parsed.get("season")) or None,
@@ -456,6 +472,8 @@ def _release_details(row: Mapping[str, Any]) -> dict[str, Any]:
         "audio_tags": audio_tags,
         "hdr_tags": hdr_tags,
         "languages": [item.casefold() for item in languages],
+        "subtitle_languages": [item.casefold() for item in subtitle_languages],
+        "has_subtitles": bool(subtitle_languages) or release_has_subtitle_tag,
         "release_group": _clean(parsed.get("release_group"), 80),
         "seeds": max(0, _safe_int(row.get("seeds") or metadata.get("seeds"))),
         "leechers": max(0, _safe_int(row.get("leechers") or metadata.get("leechers"))),
@@ -576,6 +594,7 @@ def _result_text(group: Mapping[str, Any]) -> str:
         " ".join(str(item.get("release_title") or "") for item in releases[:12]),
         " ".join(str(item) for item in group.get("genres") or []),
         " ".join(str(item) for item in group.get("studios") or []),
+        " ".join(str(item) for item in group.get("franchises") or []),
         " ".join(str(item) for item in group.get("people") or []),
         " ".join(str(item) for item in group.get("directors") or []),
         " ".join(str(item) for item in group.get("creators") or []),
@@ -621,6 +640,8 @@ def _matches_filters(group: Mapping[str, Any], filters: Mapping[str, Any]) -> bo
             return False
         if bool(filters.get("hdr_only")) and not list(release.get("hdr_tags") or []):
             return False
+        if bool(filters.get("subtitles_only")) and not bool(release.get("has_subtitles")):
+            return False
         if int(release.get("seeds") or 0) < int(filters.get("min_seeds") or 0):
             return False
         if int(release.get("peers") or 0) < int(filters.get("min_peers") or 0):
@@ -665,6 +686,8 @@ def _rule_matches(group: Mapping[str, Any], rule: Mapping[str, Any]) -> bool:
             haystack = " ".join(str(item) for item in group.get("genres") or []).casefold()
         elif rule_type == "studio":
             haystack = " ".join(str(item) for item in group.get("studios") or []).casefold()
+        elif rule_type == "franchise":
+            haystack = " ".join(str(item) for item in group.get("franchises") or []).casefold()
         else:
             haystack = _result_text(group)
         if query not in haystack:
@@ -1061,6 +1084,22 @@ async def record_private_discoveries(
             else {}
         )
         parsed = parse_release_name(title)
+        source_reported = (
+            dict(raw_metadata.get("source_reported") or {})
+            if isinstance(raw_metadata.get("source_reported"), Mapping)
+            else {}
+        )
+        subtitle_languages: list[str] = []
+        for key in ("subtitle_language", "subtitle_languages"):
+            value = source_reported.get(key)
+            if isinstance(value, str):
+                subtitle_languages.extend(
+                    item.strip()
+                    for item in value.replace(",", " ").split()
+                    if item.strip()
+                )
+            elif isinstance(value, (list, tuple, set)):
+                subtitle_languages.extend(str(item) for item in value)
         metadata: dict[str, Any] = {
             "source_label": _clean(source_label, 80),
             "category": _clean(category, 40),
@@ -1070,10 +1109,11 @@ async def record_private_discoveries(
             "peers": max(0, _safe_int(getattr(variant, "peers", 0))),
             "file_size": max(0, _safe_int(getattr(variant, "file_size", 0))),
             "release_name": parsed,
-            "source_reported": (
-                dict(raw_metadata.get("source_reported") or {})
-                if isinstance(raw_metadata.get("source_reported"), Mapping)
-                else {}
+            "source_reported": source_reported,
+            "subtitle_languages": _string_list(
+                subtitle_languages,
+                limit=12,
+                item_limit=24,
             ),
         }
         display_title = title
@@ -1097,6 +1137,7 @@ async def record_private_discoveries(
                     {
                         "genres": list(details.genres)[:12],
                         "studios": list(details.studios)[:16],
+                        "franchises": list(details.franchises)[:8],
                         "people": [
                             str(row.get("name") or "")[:100]
                             for row in list(details.cast)[:20]
@@ -1198,6 +1239,8 @@ async def list_private_discoveries(
                 "file_size": max(0, _safe_int(metadata.get("file_size"))),
                 "genres": list(metadata.get("genres") or [])[:12],
                 "studios": list(metadata.get("studios") or [])[:16],
+                "franchises": list(metadata.get("franchises") or [])[:8],
+                "subtitle_languages": list(metadata.get("subtitle_languages") or [])[:12],
                 "people": list(metadata.get("people") or [])[:20],
                 "directors": list(metadata.get("directors") or [])[:8],
                 "creators": list(metadata.get("creators") or [])[:8],
