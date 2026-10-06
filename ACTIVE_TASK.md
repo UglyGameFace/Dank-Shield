@@ -26,7 +26,7 @@ The fix uses standard page visibility, pageshow, online/offline, fetch, and medi
 
 ## Status
 
-**Production evidence confirmed the old reconnect path was incomplete. A clean reconnect-only branch is now based on merged PR #465, with wake recovery implemented and focused regression coverage added. Exact-head CI is next.**
+**PR #466 exact-head CI exposed one stale terminal-state test assertion after the reconnect functions gained explicit boolean/null return values. Runtime/unit behavior otherwise passed 2912 tests. The assertion is corrected and fresh exact-head CI is running.**
 
 ## Exact findings
 
@@ -63,6 +63,15 @@ That means:
 - if the room still exists, wake recovery now has a real path to reconnect;
 - if the room was already retired after the configured idle timeout, the page must report that terminal state rather than lie that it is reconnecting forever;
 - if product policy requires a user to return after ~30 minutes and keep the same room alive, production must use an idle TTL greater than 1800 seconds or a later architectural resume/recreate flow.
+
+## First PR #466 CI result
+
+- Dank Shield CI failed with **1 failed / 2912 passed**.
+- The only failure was `test_web_player_has_terminal_state_before_missing_room_fallback`.
+- The test still required the old exact string `if(terminated) return;`.
+- The reconnect implementation now deliberately returns typed results: `poll()` uses `if(terminated) return false;` and `heartbeat()` uses `if(terminated) return null;`.
+- Terminal guards are still present and stronger than before; the stale string assertion has been updated to verify both explicit return contracts.
+- This failure is unrelated to Discloud runtime environment variables.
 
 ## Validation / Definition of Done
 
