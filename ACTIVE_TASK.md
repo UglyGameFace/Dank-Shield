@@ -34,7 +34,7 @@ This remains one implementation task because both defects block the same product
 
 ## Status
 
-**Implementation is in draft PR #462; exact-head validation is active.**
+**Implementation is in draft PR #462; the first exact-head CI run exposed three regression failures, and the source-snapshot semantics/tests have been corrected. Fresh exact-head validation is active.**
 
 ## Findings / root cause
 
@@ -104,6 +104,17 @@ Regression coverage added for:
 - client Library-control gating;
 - Details-to-Play exact source snapshot reuse without a second provider search;
 - rejection of explicit game/software torrents that merely share the movie title, while valid video/unknown-category releases still pass.
+
+First PR #462 exact-head result:
+- 2904 passed / 3 failed;
+- two failures were caused by a stale source snapshot leaking between repeated plays/tests for the same guild+user+movie key;
+- one failure was an obsolete structural assertion that still expected the removed duplicate `filter_outcome_for_catalog()` call in `cinema_site.py`.
+
+Corrections:
+- empty provider outcomes are no longer cached, so a transient empty Details result cannot poison Play for 90 seconds;
+- a valid Details source snapshot is consumed once by Play instead of acting as a long-lived source cache;
+- focused tests now clear shared source state where appropriate and assert the snapshot is consumed;
+- the TV Details structural test now requires the authoritative `search_exact_movie_sources()` helper and explicitly rejects the duplicate site-level filter.
 
 Pending:
 - exact-head PR #462 CI and mergeability/diff inspection;
