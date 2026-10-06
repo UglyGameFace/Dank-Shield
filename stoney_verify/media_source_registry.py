@@ -189,6 +189,7 @@ _PROVIDER_TEMPLATE_TOKENS = (
     "{series_tmdb_id}",
     "{tvdb_id}",
     "{year}",
+    "{media_type}",
     "{season}",
     "{episode}",
     "{season_episode}",
