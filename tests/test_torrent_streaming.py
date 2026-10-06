@@ -217,6 +217,8 @@ def test_stream_startup_timing_is_per_consumer_and_first_stage_stable(monkeypatc
         session,
         "movie:2:client-a",
         event="wait",
+        start=0,
+        end=1024 * 1024 - 1,
         elapsed_ms=321.4,
         ready=True,
     )
@@ -240,6 +242,8 @@ def test_stream_startup_timing_is_per_consumer_and_first_stage_stable(monkeypatc
     assert first["first_range_end"] == 1024 * 1024 - 1
     assert first["first_wait_ms"] == 321
     assert first["first_wait_ready"] is True
+    assert first["first_wait_start"] == 0
+    assert first["first_wait_end"] == 1024 * 1024 - 1
     assert first["first_headers_ms"] >= first["first_request_ms"]
     assert first["first_byte_ms"] >= first["first_headers_ms"]
 
@@ -254,6 +258,8 @@ def test_stream_startup_timing_is_per_consumer_and_first_stage_stable(monkeypatc
         session,
         "movie:2:client-a",
         event="wait",
+        start=8 * 1024 * 1024,
+        end=9 * 1024 * 1024 - 1,
         elapsed_ms=75,
         ready=False,
     )
@@ -265,6 +271,8 @@ def test_stream_startup_timing_is_per_consumer_and_first_stage_stable(monkeypatc
     assert second["last_range_start"] == 8 * 1024 * 1024
     assert second["last_wait_ms"] == 75
     assert second["last_wait_ready"] is False
+    assert second["last_wait_start"] == 8 * 1024 * 1024
+    assert second["last_wait_end"] == 9 * 1024 * 1024 - 1
 
     other = manager.consumer_startup_status(session, "movie:3:client-b")
     assert other["metadata_ms"] == 300
@@ -808,6 +816,53 @@ def test_stall_history_increases_adaptive_buffer_margin(monkeypatch, tmp_path: P
     assert buffered.target_bytes >= normal.target_bytes
 
 
+def test_contiguous_available_end_stops_before_first_missing_piece(monkeypatch, tmp_path: Path) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    handle = _FakeHandle()
+    handle.available.update({2, 3, 5})
+    session = TorrentStreamSession(
+        token="contiguous",
+        secret="secret",
+        owner_id=2,
+        guild_id=1,
+        source_kind="magnet",
+        source_identity="btih:contiguous",
+        save_root=tmp_path,
+        handle=handle,
+        info=object(),
+        file_index=0,
+        file_path="movie.mp4",
+        file_name="movie.mp4",
+        file_size=6 * 1024 * 1024,
+        file_offset=2 * 1024 * 1024,
+        piece_length=1024 * 1024,
+        first_piece=2,
+        last_piece=7,
+        created_at=0.0,
+        last_access=0.0,
+    )
+
+    assert manager.contiguous_available_end(
+        session,
+        0,
+        5 * 1024 * 1024 - 1,
+    ) == 2 * 1024 * 1024 - 1
+
+    handle.available.add(4)
+    assert manager.contiguous_available_end(
+        session,
+        0,
+        5 * 1024 * 1024 - 1,
+    ) == 4 * 1024 * 1024 - 1
+
+    handle.available.discard(2)
+    assert manager.contiguous_available_end(
+        session,
+        0,
+        5 * 1024 * 1024 - 1,
+    ) == -1
+
+
 def test_wait_range_requires_all_requested_pieces(monkeypatch, tmp_path: Path) -> None:
     manager = _manager(monkeypatch, tmp_path)
     handle = _FakeHandle()
@@ -1152,6 +1207,8 @@ def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
     assert "_bounded_partial_response_end(" in routes
     assert "requested_end" in routes
     assert "startup_wait_end" in routes
+    assert "initial_wait_end = first_end if partial else startup_wait_end" in routes
+    assert "manager.contiguous_available_end(" in routes
     assert "get_torrent_manager().ensure_cleanup_task()" in routes
     assert "find_magnet(" in router
     assert "is_torrent_filename(" in router

@@ -1317,6 +1317,45 @@ class TorrentMediaManager:
         except Exception:
             return False
 
+    def contiguous_available_end(
+        self,
+        session: TorrentStreamSession,
+        start: int,
+        limit: int,
+    ) -> int:
+        """Return the largest contiguous byte end already complete from start.
+
+        The result is constrained to one media file and never crosses the first
+        missing torrent piece. Returning start - 1 means even the first required
+        piece is not complete yet.
+        """
+
+        if session.file_size <= 0 or session.piece_length <= 0:
+            return max(-1, int(start) - 1)
+
+        start = max(0, min(int(start), session.file_size - 1))
+        limit = max(start, min(int(limit), session.file_size - 1))
+        global_start = session.file_offset + start
+        global_limit = session.file_offset + limit
+        first = global_start // session.piece_length
+        last = global_limit // session.piece_length
+
+        contiguous_global_end = global_start - 1
+        try:
+            for piece in range(first, last + 1):
+                if not bool(session.handle.have_piece(piece)):
+                    break
+                piece_end = (piece + 1) * session.piece_length - 1
+                contiguous_global_end = min(global_limit, piece_end)
+                if contiguous_global_end >= global_limit:
+                    break
+        except Exception:
+            return max(-1, start - 1)
+
+        if contiguous_global_end < global_start:
+            return max(-1, start - 1)
+        return max(start, min(limit, contiguous_global_end - session.file_offset))
+
     def _metadata_probe_ready(self, session: TorrentStreamSession) -> bool:
         if session.file_size <= 0:
             return False
@@ -1518,9 +1557,13 @@ class TorrentMediaManager:
         elif name == "wait":
             state["last_wait_ms"] = max(0.0, float(elapsed_ms))
             state["last_wait_ready"] = 1 if ready else 0
+            state["last_wait_start"] = max(0, int(start))
+            state["last_wait_end"] = max(int(start), int(end))
             if "first_wait_ms" not in state:
                 state["first_wait_ms"] = max(0.0, float(elapsed_ms))
                 state["first_wait_ready"] = 1 if ready else 0
+                state["first_wait_start"] = max(0, int(start))
+                state["first_wait_end"] = max(int(start), int(end))
         elif name == "headers":
             if "first_headers_from_start_ms" not in state:
                 state["first_headers_from_start_ms"] = from_start_ms
@@ -1572,12 +1615,16 @@ class TorrentMediaManager:
             "first_range_end": max(0, int(state.get("first_range_end", 0) or 0)),
             "first_wait_ms": _ms("first_wait_ms"),
             "first_wait_ready": bool(int(state.get("first_wait_ready", 0) or 0)),
+            "first_wait_start": max(0, int(state.get("first_wait_start", 0) or 0)),
+            "first_wait_end": max(0, int(state.get("first_wait_end", 0) or 0)),
             "first_headers_ms": _ms("first_headers_from_start_ms"),
             "first_byte_ms": _ms("first_byte_from_start_ms"),
             "last_range_start": max(0, int(state.get("last_range_start", 0) or 0)),
             "last_range_end": max(0, int(state.get("last_range_end", 0) or 0)),
             "last_wait_ms": _ms("last_wait_ms"),
             "last_wait_ready": bool(int(state.get("last_wait_ready", 0) or 0)),
+            "last_wait_start": max(0, int(state.get("last_wait_start", 0) or 0)),
+            "last_wait_end": max(0, int(state.get("last_wait_end", 0) or 0)),
         }
 
     def prepare_playback_request(
