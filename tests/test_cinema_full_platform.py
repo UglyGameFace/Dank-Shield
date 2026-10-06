@@ -1036,13 +1036,14 @@ def test_full_site_episode_playback_is_direct_and_not_discord_room_scoped() -> N
     assert 'payload.season_number = Number' in script
     assert 'payload.episode_number = Number' in script
     assert "playOnSite(episodeItem" in script
-    assert 'card.setAttribute("role", "button")' in script
+    assert 'card.classList.add("episode-playable")' in script
+    assert 'event.target.closest("button, select, option")' in script
     assert '"▶ Resume"' in script
     assert '"▶ Play"' in script
     assert "Open Discord to Play" not in script
     assert "hostSession?.is_host" not in script
     assert ".episode-play" in styles
-    assert '.episode-card[role="button"]' in styles
+    assert ".episode-card.episode-playable" in styles
 
 
 def test_tv_details_do_not_claim_series_title_is_a_playable_source() -> None:
