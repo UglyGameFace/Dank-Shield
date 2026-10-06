@@ -683,12 +683,45 @@ async def recommendations_for_history(
     return tuple(output)
 
 
+async def get_external_ids(media_type: str, tmdb_id: int) -> dict[str, str]:
+    """Return normalized external IDs for one canonical TMDB title.
+
+    Provider discovery uses this only as identity metadata. Playback remains
+    owned by the existing Cinema source/torrent pipeline.
+    """
+
+    kind = str(media_type or "").strip().lower()
+    if kind not in {"movie", "tv"}:
+        raise ValueError("Unsupported Cinema media type.")
+    numeric_id = int(tmdb_id)
+    if numeric_id <= 0:
+        raise ValueError("Invalid TMDB id.")
+
+    payload = await _request(
+        f"/{kind}/{numeric_id}/external_ids",
+        cache_ttl=3600.0,
+    )
+    if not isinstance(payload, Mapping):
+        return {}
+
+    result: dict[str, str] = {}
+    imdb_id = str(payload.get("imdb_id") or "").strip().lower()
+    if re.fullmatch(r"tt\d{5,12}", imdb_id):
+        result["imdb_id"] = imdb_id
+
+    tvdb_id = _safe_int(payload.get("tvdb_id"))
+    if tvdb_id > 0:
+        result["tvdb_id"] = str(tvdb_id)
+    return result
+
+
 __all__ = [
     "CinemaDetails",
     "CinemaEpisode",
     "CinemaMedia",
     "catalog_home",
     "get_details",
+    "get_external_ids",
     "get_next_episode",
     "get_season",
     "recommendations_for_history",

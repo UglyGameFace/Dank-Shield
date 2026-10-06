@@ -236,33 +236,184 @@ def _looks_like_static_feed_endpoint(endpoint: str) -> bool:
     }
 
 
-def _search_url(endpoint: str, query: str, *, static_feed: bool = False) -> str:
+_PROVIDER_TEMPLATE_FIELDS = {
+    "{query}": "query",
+    "{imdb_id}": "imdb_id",
+    "{imdb_numeric}": "imdb_numeric",
+    "{tmdb_id}": "tmdb_id",
+    "{series_tmdb_id}": "series_tmdb_id",
+    "{tvdb_id}": "tvdb_id",
+    "{year}": "year",
+    "{media_type}": "media_type",
+    "{season}": "season",
+    "{episode}": "episode",
+    "{season_episode}": "season_episode",
+}
+_IMDB_ID_RE = re.compile(r"^tt(\d{5,12})$", re.IGNORECASE)
+
+
+def _imdb_numeric(value: str) -> str:
+    """Convert a canonical tt-prefixed IMDb id to the numeric API form."""
+
+    match = _IMDB_ID_RE.fullmatch(str(value or "").strip().lower())
+    if not match:
+        return ""
+    return str(int(match.group(1)))
+
+
+def _provider_lookup_context(
+    query: str,
+    catalog_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, str]:
     clean_query = " ".join(str(query or "").split())[:180]
-    if not clean_query:
-        if static_feed or _looks_like_static_feed_endpoint(endpoint):
-            return endpoint
-        raise ValueError("Movie search query is empty.")
+    metadata = catalog_metadata if isinstance(catalog_metadata, Mapping) else {}
+
+    context: dict[str, str] = {"query": clean_query}
+    media_type = str(metadata.get("media_type") or "").strip().casefold()
+    if media_type:
+        context["media_type"] = media_type
+    year = _safe_int(metadata.get("year"))
+    if year > 0:
+        context["year"] = str(year)
+
+    tmdb_id = _safe_int(metadata.get("tmdb_id"))
+    series_tmdb_id = _safe_int(metadata.get("series_id"))
+    if tmdb_id > 0:
+        context["tmdb_id"] = str(tmdb_id)
+    if series_tmdb_id > 0:
+        context["series_tmdb_id"] = str(series_tmdb_id)
+    elif media_type == "tv" and tmdb_id > 0:
+        context["series_tmdb_id"] = str(tmdb_id)
+
+    tvdb_id = _safe_int(metadata.get("tvdb_id") or metadata.get("tvdb"))
+    if tvdb_id > 0:
+        context["tvdb_id"] = str(tvdb_id)
+
+    imdb_id = str(
+        metadata.get("imdb_id")
+        or metadata.get("imdb")
+        or ""
+    ).strip().lower()
+    imdb_numeric = _imdb_numeric(imdb_id)
+    if imdb_numeric:
+        context["imdb_id"] = imdb_id
+        context["imdb_numeric"] = imdb_numeric
+
+    season_raw = metadata.get("season_number")
+    episode_raw = metadata.get("episode_number")
+    has_season = season_raw is not None and str(season_raw).strip() != ""
+    has_episode = episode_raw is not None and str(episode_raw).strip() != ""
+    season = _safe_int(season_raw)
+    episode = _safe_int(episode_raw)
+    if has_season:
+        context["season"] = str(season)
+    if has_episode and episode > 0:
+        context["episode"] = str(episode)
+    if has_season and has_episode and episode > 0:
+        context["season_episode"] = f"S{season:02d}E{episode:02d}"
+    return context
+
+
+async def _enrich_provider_lookup_context(
+    query: str,
+    catalog_metadata: Optional[Mapping[str, Any]] = None,
+) -> dict[str, str]:
+    context = _provider_lookup_context(query, catalog_metadata)
+    if not isinstance(catalog_metadata, Mapping):
+        return context
+
+    media_type = str(catalog_metadata.get("media_type") or "").strip().casefold()
+    if media_type == "episode":
+        lookup_type = "tv"
+        lookup_id = _safe_int(catalog_metadata.get("series_id"))
+    elif media_type in {"movie", "tv"}:
+        lookup_type = media_type
+        lookup_id = _safe_int(catalog_metadata.get("tmdb_id"))
+    else:
+        return context
+    if lookup_id <= 0:
+        return context
+
+    try:
+        from stoney_verify.cinema_catalog import get_external_ids
+
+        external_ids = await get_external_ids(lookup_type, lookup_id)
+    except Exception:
+        # Identifier-only providers can report their own missing-identity error,
+        # while ordinary title-query providers continue working normally.
+        return context
+
+    imdb_id = str(external_ids.get("imdb_id") or "").strip().lower()
+    imdb_numeric = _imdb_numeric(imdb_id)
+    if imdb_numeric:
+        context["imdb_id"] = imdb_id
+        context["imdb_numeric"] = imdb_numeric
+    tvdb_id = _safe_int(external_ids.get("tvdb_id"))
+    if tvdb_id > 0:
+        context["tvdb_id"] = str(tvdb_id)
+    return context
+
+
+def _search_url(
+    endpoint: str,
+    query: str,
+    *,
+    lookup_context: Optional[Mapping[str, Any]] = None,
+    static_feed: bool = False,
+) -> str:
+    clean_query = " ".join(str(query or "").split())[:180]
+    if static_feed or _looks_like_static_feed_endpoint(endpoint):
+        return endpoint
+
+    context = {
+        str(key): " ".join(str(value or "").split())[:180]
+        for key, value in dict(lookup_context or {}).items()
+        if str(value or "").strip()
+    }
+    context["query"] = clean_query
 
     parsed = urlsplit(endpoint)
-    if "{query}" in endpoint:
+    template_tokens = [
+        token for token in _PROVIDER_TEMPLATE_FIELDS
+        if token in endpoint
+    ]
+    if template_tokens:
         path = str(parsed.path or "")
-        query = str(parsed.query or "")
-        if "{query}" in path:
-            path = path.replace("{query}", quote(clean_query, safe=""))
-        if "{query}" in query:
-            query = query.replace("{query}", quote_plus(clean_query))
+        request_query = str(parsed.query or "")
+        for token in template_tokens:
+            field = _PROVIDER_TEMPLATE_FIELDS[token]
+            value = str(context.get(field) or "").strip()
+            if not value:
+                friendly = {
+                    "imdb_id": "IMDb identity",
+                    "imdb_numeric": "IMDb identity",
+                    "tmdb_id": "TMDB identity",
+                    "series_tmdb_id": "series TMDB identity",
+                    "tvdb_id": "TVDB identity",
+                    "year": "release year",
+                    "media_type": "media type",
+                    "season": "season number",
+                    "episode": "episode number",
+                    "season_episode": "season/episode identity",
+                    "query": "title query",
+                }.get(field, field)
+                raise ValueError(f"source requires {friendly} for this search")
+            if token in path:
+                path = path.replace(token, quote(value, safe=""))
+            if token in request_query:
+                request_query = request_query.replace(token, quote_plus(value))
         return urlunsplit(
             (
                 parsed.scheme,
                 parsed.netloc,
                 path,
-                query,
+                request_query,
                 "",
             )
         )
 
-    if static_feed or _looks_like_static_feed_endpoint(endpoint):
-        return endpoint
+    if not clean_query:
+        raise ValueError("Movie search query is empty.")
 
     pairs = list(parse_qsl(parsed.query, keep_blank_values=True))
     pairs.append(("q", clean_query))
@@ -366,6 +517,12 @@ _SOURCE_METADATA_KEYS = (
     "imdb_id",
     "imdbId",
     "imdbid",
+    "season",
+    "season_number",
+    "seasonNumber",
+    "episode",
+    "episode_number",
+    "episodeNumber",
 )
 
 
@@ -953,6 +1110,8 @@ async def _read_json_limited(response: aiohttp.ClientResponse) -> Any:
 async def _search_one(
     source: CustomMediaSource,
     query: str,
+    *,
+    lookup_context: Optional[Mapping[str, Any]] = None,
 ) -> tuple[list[ResolvedMediaVariant], str]:
     resolver = PublicOnlyResolver()
     connector = aiohttp.TCPConnector(
@@ -970,6 +1129,7 @@ async def _search_one(
         _search_url(
             source.endpoint_url,
             query,
+            lookup_context=lookup_context,
             static_feed=source.provider_type == PROVIDER_TYPE_FEED,
         )
     )
@@ -1068,9 +1228,26 @@ async def _search_builtin_internet_archive(
 async def probe_custom_media_source(
     source: CustomMediaSource,
     *,
-    query: str = "batman",
+    query: str = "breaking bad",
 ) -> MediaSourceProbeOutcome:
-    variants, error = await _search_one(source, query)
+    probe_context = {
+        "query": query,
+        "imdb_id": "tt0903747",
+        "imdb_numeric": "903747",
+        "tmdb_id": "1396",
+        "series_tmdb_id": "1396",
+        "tvdb_id": "81189",
+        "year": "2008",
+        "media_type": "tv",
+        "season": "1",
+        "episode": "1",
+        "season_episode": "S01E01",
+    }
+    variants, error = await _search_one(
+        source,
+        query,
+        lookup_context=probe_context,
+    )
     if error:
         return MediaSourceProbeOutcome(reachable=False, error=error)
     return MediaSourceProbeOutcome(
@@ -1160,6 +1337,8 @@ async def fetch_torrent_metadata(
 async def search_custom_media_sources(
     guild_id: int,
     query: str,
+    *,
+    lookup_context: Optional[Mapping[str, Any]] = None,
 ) -> MediaSourceSearchOutcome:
     _raw, registry = await load_media_source_registry(int(guild_id), refresh=True)
     sources = enabled_structured_sources(registry)
@@ -1170,7 +1349,13 @@ async def search_custom_media_sources(
 
     async def run(source: CustomMediaSource):
         async with semaphore:
-            return await _search_one(source, query)
+            if lookup_context is None:
+                return await _search_one(source, query)
+            return await _search_one(
+                source,
+                query,
+                lookup_context=lookup_context,
+            )
 
     results = await asyncio.gather(*(run(source) for source in sources))
 
@@ -1247,10 +1432,22 @@ def _merge_media_outcomes(
 async def search_movie_sources(
     guild_id: int,
     query: str,
+    *,
+    catalog_metadata: Optional[Mapping[str, Any]] = None,
 ) -> MediaSourceSearchOutcome:
+    lookup_context: Optional[Mapping[str, Any]] = None
+    if isinstance(catalog_metadata, Mapping) and catalog_metadata:
+        lookup_context = await _enrich_provider_lookup_context(
+            query,
+            catalog_metadata,
+        )
     builtin_result, custom = await asyncio.gather(
         _search_builtin_internet_archive(query),
-        search_custom_media_sources(int(guild_id), query),
+        search_custom_media_sources(
+            int(guild_id),
+            query,
+            lookup_context=lookup_context,
+        ),
     )
     builtin_rows, builtin_error = builtin_result
     builtin = MediaSourceSearchOutcome(

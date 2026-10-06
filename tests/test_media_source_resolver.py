@@ -41,6 +41,121 @@ def test_search_url_supports_placeholder_and_query_parameter_modes() -> None:
     assert "q=Alien" in url
 
 
+def test_search_url_renders_identity_and_episode_templates() -> None:
+    endpoint = (
+        "https://eztvx.to/api/get-torrents?"
+        "limit=100&page=1&imdb_id={imdb_numeric}"
+    )
+    assert resolver._search_url(
+        endpoint,
+        "Breaking Bad S03E09",
+        lookup_context={
+            "imdb_id": "tt0903747",
+            "imdb_numeric": "903747",
+            "tmdb_id": "1396",
+            "series_tmdb_id": "1396",
+            "season": "3",
+            "episode": "9",
+            "season_episode": "S03E09",
+        },
+    ) == (
+        "https://eztvx.to/api/get-torrents?"
+        "limit=100&page=1&imdb_id=903747"
+    )
+
+    assert resolver._search_url(
+        "https://api.example.com/show/{series_tmdb_id}/"
+        "{season_episode}?episode={episode}",
+        "Breaking Bad S03E09",
+        lookup_context={
+            "series_tmdb_id": "1396",
+            "season_episode": "S03E09",
+            "episode": "9",
+        },
+    ) == "https://api.example.com/show/1396/S03E09?episode=9"
+
+
+def test_search_url_reports_missing_required_identity() -> None:
+    try:
+        resolver._search_url(
+            "https://api.example.com/releases?imdb={imdb_id}",
+            "Breaking Bad",
+            lookup_context={"query": "Breaking Bad"},
+        )
+    except ValueError as exc:
+        assert "requires imdb identity" in str(exc).lower()
+    else:
+        raise AssertionError("identity-only provider ran without required identity")
+
+
+def test_episode_lookup_context_keeps_series_and_episode_identity() -> None:
+    context = resolver._provider_lookup_context(
+        "Breaking Bad S03E09",
+        {
+            "media_type": "episode",
+            "tmdb_id": 62128,
+            "series_id": 1396,
+            "season_number": 3,
+            "episode_number": 9,
+            "imdb_id": "tt0903747",
+        },
+    )
+    assert context["tmdb_id"] == "62128"
+    assert context["series_tmdb_id"] == "1396"
+    assert context["imdb_numeric"] == "903747"
+    assert context["season"] == "3"
+    assert context["episode"] == "9"
+    assert context["season_episode"] == "S03E09"
+
+
+def test_external_identity_enrichment_uses_series_identity_for_episode(monkeypatch) -> None:
+    calls = []
+
+    async def fake_external_ids(media_type: str, tmdb_id: int):
+        calls.append((media_type, tmdb_id))
+        return {"imdb_id": "tt0903747", "tvdb_id": "81189"}
+
+    from stoney_verify import cinema_catalog
+
+    monkeypatch.setattr(cinema_catalog, "get_external_ids", fake_external_ids)
+    context = asyncio.run(
+        resolver._enrich_provider_lookup_context(
+            "Breaking Bad S03E09",
+            {
+                "media_type": "episode",
+                "tmdb_id": 62128,
+                "series_id": 1396,
+                "season_number": 3,
+                "episode_number": 9,
+                "year": 2008,
+            },
+        )
+    )
+
+    assert calls == [("tv", 1396)]
+    assert context["imdb_id"] == "tt0903747"
+    assert context["imdb_numeric"] == "903747"
+    assert context["tvdb_id"] == "81189"
+    assert context["series_tmdb_id"] == "1396"
+    assert context["season_episode"] == "S03E09"
+
+
+def test_provider_lookup_context_supports_season_zero_specials() -> None:
+    context = resolver._provider_lookup_context(
+        "Example Series S00E01",
+        {
+            "media_type": "episode",
+            "tmdb_id": 999,
+            "series_id": 123,
+            "season_number": 0,
+            "episode_number": 1,
+        },
+    )
+    assert context["season"] == "0"
+    assert context["episode"] == "1"
+    assert context["season_episode"] == "S00E01"
+
+
 def test_explicit_static_feed_does_not_get_search_query_appended() -> None:
     endpoint = "https://myrss.org/eztv"
     assert resolver._search_url(
@@ -212,9 +327,15 @@ def test_aggregate_search_keeps_builtin_results_without_custom_sources(monkeypat
         assert query == "Public Domain Movie"
         return [builtin], ""
 
-    async def fake_custom(guild_id: int, query: str):
+    async def fake_custom(
+        guild_id: int,
+        query: str,
+        *,
+        lookup_context=None,
+    ):
         assert guild_id == 123
         assert query == "Public Domain Movie"
+        assert lookup_context is None
         return resolver.MediaSourceSearchOutcome(
             variants=(),
             errors=("No structured custom sources are enabled.",),
@@ -242,6 +363,41 @@ def test_extract_items_accepts_common_torrent_api_containers() -> None:
         {"data": {"torrents": [row]}},
     ):
         assert resolver._extract_items(payload) == [row]
+
+
+def test_eztvx_torrent_payload_becomes_playable_tv_variant() -> None:
+    payload = {
+        "torrents_count": 1,
+        "limit": 100,
+        "page": 1,
+        "torrents": [
+            {
+                "filename": "Breaking.Bad.S03E09.1080p.WEB.x265-GROUP.mkv",
+                "title": "Breaking Bad S03E09 1080p WEB x265-GROUP",
+                "imdb_id": "0903747",
+                "season": "3",
+                "episode": "9",
+                "size_bytes": "1900000000",
+                "seeds": "75",
+                "peers": "14",
+                "magnet_url": "magnet:?xt=urn:btih:EZTVXTESTHASH",
+                "torrent_url": "https://eztvx.to/ep/123/example.torrent",
+            }
+        ],
+    }
+    items = resolver._expand_provider_items(resolver._extract_items(payload))
+    assert len(items) == 1
+    variant = resolver._variant_from_item(_source(), items[0])
+    assert variant is not None
+    assert variant.title == "Breaking Bad S03E09 1080p WEB x265-GROUP"
+    assert variant.source_ref == "magnet:?xt=urn:btih:EZTVXTESTHASH"
+    assert variant.file_size == 1_900_000_000
+    assert variant.seeds == 75
+    assert variant.peers == 75
+    reported = variant.metadata["source_reported"]
+    assert reported["imdb_id"] == "0903747"
+    assert reported["season"] == "3"
+    assert reported["episode"] == "9"
 
 
 def test_generic_torrent_api_aliases_become_playable_variant() -> None:
