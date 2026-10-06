@@ -125,8 +125,13 @@ def _media_state_payload(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _session_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+def _session_payload(
+    row: Mapping[str, Any],
+    *,
+    current_state: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
     metadata = _metadata(row)
+    current = dict(current_state or {})
     return {
         "id": str(row.get("id") or ""),
         "media_type": str(row.get("media_type") or ""),
@@ -146,6 +151,10 @@ def _session_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         "max_progress_seconds": max(0.0, _safe_float(row.get("max_progress_seconds"))),
         "duration_seconds": max(0.0, _safe_float(row.get("duration_seconds"))),
         "completed": bool(row.get("completed")),
+        "favorite": bool(current.get("favorite")),
+        "user_rating": _safe_int(current.get("rating")),
+        "play_count": max(0, _safe_int(current.get("play_count"))),
+        "watchlisted": bool(current.get("watchlisted")),
         "started_at": str(row.get("started_at") or ""),
         "last_seen_at": str(row.get("last_seen_at") or ""),
         "completed_at": str(row.get("completed_at") or ""),
@@ -570,6 +579,7 @@ def _list_payload(
     row: Mapping[str, Any],
     *,
     include_adult: bool,
+    media_state_index: Optional[Mapping[tuple[str, int, int, int], Mapping[str, Any]]] = None,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     for raw in list(row.get("items") or []):
@@ -578,7 +588,30 @@ def _list_payload(
         metadata = _metadata(raw)
         if not include_adult and bool(metadata.get("adult", False)):
             continue
-        items.append(_media_state_payload(raw))
+        key = (
+            str(raw.get("media_type") or ""),
+            _safe_int(raw.get("tmdb_id")),
+            _safe_int(raw.get("season_number")),
+            _safe_int(raw.get("episode_number")),
+        )
+        current = (
+            dict(media_state_index.get(key) or {})
+            if media_state_index is not None
+            else {}
+        )
+        merged = dict(raw)
+        for field in (
+            "favorite",
+            "rating",
+            "play_count",
+            "watchlisted",
+            "completed",
+            "last_watched_at",
+            "last_completed_at",
+        ):
+            if field in current:
+                merged[field] = current.get(field)
+        items.append(_media_state_payload(merged))
     return {
         "id": str(row.get("id") or ""),
         "name": _clean(row.get("name"), 80),
@@ -607,6 +640,15 @@ async def library_intelligence_snapshot(
         availability_task,
     )
     library = library_snapshot_from_rows(media_rows)
+    media_state_index = {
+        (
+            str(row.get("media_type") or ""),
+            _safe_int(row.get("tmdb_id")),
+            _safe_int(row.get("season_number")),
+            _safe_int(row.get("episode_number")),
+        ): row
+        for row in media_rows
+    }
     stats_task = asyncio.create_task(
         library_stats(
             int(user_id),
@@ -672,12 +714,26 @@ async def library_intelligence_snapshot(
             if include_adult or not bool(_metadata(row).get("adult", False))
         ],
         "history_sessions": [
-            _session_payload(row)
+            _session_payload(
+                row,
+                current_state=media_state_index.get(
+                    (
+                        str(row.get("media_type") or ""),
+                        _safe_int(row.get("tmdb_id")),
+                        _safe_int(row.get("season_number")),
+                        _safe_int(row.get("episode_number")),
+                    )
+                ),
+            )
             for row in sessions
             if include_adult or not bool(_metadata(row).get("adult", False))
         ],
         "lists": [
-            _list_payload(row, include_adult=include_adult)
+            _list_payload(
+                row,
+                include_adult=include_adult,
+                media_state_index=media_state_index,
+            )
             for row in lists
             if isinstance(row, Mapping)
         ],
