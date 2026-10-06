@@ -2175,19 +2175,40 @@
           const action = notification.action && typeof notification.action === "object"
             ? notification.action
             : {};
+          async function markReadBestEffort() {
+            if (notification.read_at) return;
+            try {
+              await api("/notifications", {
+                method: "POST",
+                body: JSON.stringify({ notification_id: notification.id }),
+              });
+            } catch (_) {
+              // Navigation remains useful even if the inbox write is transiently unavailable.
+            }
+          }
+
           if (action.kind === "room" && action.watch_url) {
             item.appendChild(button("Join Theater", "btn primary", async () => {
-              if (!notification.read_at) {
-                try {
-                  await api("/notifications", {
-                    method: "POST",
-                    body: JSON.stringify({ notification_id: notification.id }),
-                  });
-                } catch (_) {
-                  // A transient inbox write must not block a still-valid room invite.
-                }
-              }
+              await markReadBestEffort();
               location.href = action.watch_url;
+            }));
+          } else if (action.kind === "feeds") {
+            item.appendChild(button("Open My Feed", "btn primary", async () => {
+              await markReadBestEffort();
+              state.feedMode = "my";
+              go("feeds");
+            }));
+          } else if (action.kind === "feed_result") {
+            const mediaType = String(action.media_type || "");
+            const tmdbId = Number(action.tmdb_id || 0);
+            item.appendChild(button("View Match", "btn primary", async () => {
+              await markReadBestEffort();
+              if (["movie", "tv"].includes(mediaType) && tmdbId > 0) {
+                go("details/" + mediaType + "/" + tmdbId);
+              } else {
+                state.feedMode = "my";
+                go("feeds");
+              }
             }));
           }
           if (!notification.read_at) {
