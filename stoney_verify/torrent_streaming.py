@@ -1499,7 +1499,11 @@ class TorrentMediaManager:
         )
         state["last_access"] = now
         name = str(event or "").strip().lower()
-        from_start_ms = max(0.0, (now - float(session.created_at)) * 1000.0)
+        startup_origin = float(
+            getattr(session, "startup_started_at", 0.0)
+            or session.created_at
+        )
+        from_start_ms = max(0.0, (now - startup_origin) * 1000.0)
 
         if name == "request":
             state["request_count"] = int(state.get("request_count", 0) or 0) + 1
