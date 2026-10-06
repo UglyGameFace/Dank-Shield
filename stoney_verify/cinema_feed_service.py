@@ -29,7 +29,20 @@ from .media_source_registry import (
     set_custom_source_enabled,
 )
 from .media_source_resolver import preview_custom_media_source
-from .cinema_discovery_service import enrich_discovery_rows, page_discoveries, record_feed_discoveries
+from .cinema_discovery_service import (
+    enrich_discovery_rows,
+    list_recent_discoveries,
+    page_discoveries,
+    record_feed_discoveries,
+)
+from .cinema_feed_personalization import (
+    build_personalized_feed,
+    group_feed_results,
+    list_private_discoveries,
+    list_source_health,
+    process_feed_notifications,
+    record_source_health,
+)
 from .cinema_storage import CinemaStorageUnavailable
 
 CATEGORIES = (
@@ -97,6 +110,12 @@ def _result_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         "playable": bool(row.get("playable", True)),
         "first_seen_at": str(row.get("first_seen_at") or ""),
         "last_seen_at": str(row.get("last_seen_at") or ""),
+        "discovery_key": str(row.get("discovery_key") or "")[:80],
+        "seeds": int(metadata.get("seeds") or 0),
+        "leechers": int(metadata.get("leechers") or 0),
+        "peers": int(metadata.get("peers") or 0),
+        "file_size": int(metadata.get("file_size") or 0),
+        "languages": list(metadata.get("languages") or [])[:12],
     }
 
 
@@ -140,7 +159,13 @@ def _runtime_result_payload(
     }
 
 
-def _payload(source: Any, *, guild_id: int, include_endpoint: bool) -> dict[str, Any]:
+def _payload(
+    source: Any,
+    *,
+    guild_id: int,
+    include_endpoint: bool,
+    trust: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     runtime = _RUNTIME_STATE.get((int(guild_id), str(source.source_id)), {})
     provider_type = str(source.provider_type or PROVIDER_TYPE_JSON)
     category = str(
@@ -180,6 +205,16 @@ def _payload(source: Any, *, guild_id: int, include_endpoint: bool) -> dict[str,
         "newly_discovered": list(runtime.get("titles") or [])[:8],
         "last_refresh_result_count": int(runtime.get("result_count") or 0),
     }
+    if isinstance(trust, Mapping):
+        payload["trust"] = dict(trust)
+    else:
+        payload["trust"] = {
+            "trust_score": None,
+            "trust_label": "Unrated",
+            "refresh_count": 0,
+            "success_rate": None,
+            "total_results": 0,
+        }
     if include_endpoint:
         payload["endpoint_url"] = str(source.endpoint_url)
     return payload
@@ -189,6 +224,7 @@ async def feed_state(
     guild_id: int,
     *,
     can_manage: bool,
+    user_id: int = 0,
     refresh: bool = False,
     query: str = "",
     page: int = 1,
@@ -258,6 +294,47 @@ async def feed_state(
             ]
         merged_results = runtime_results[:current_page_size]
 
+    health_map: dict[str, dict[str, Any]] = {}
+    try:
+        health_map = await list_source_health(int(guild_id))
+    except Exception:
+        health_map = {}
+
+    personalization: dict[str, Any] = {
+        "rules": [],
+        "my_feed": [],
+        "collections": [],
+        "grouped_results": group_feed_results(merged_results),
+        "watchlist_match_count": 0,
+        "queue_suggestion_count": 0,
+    }
+    private_results: list[dict[str, Any]] = []
+    if int(user_id or 0) > 0:
+        try:
+            recent_rows, private_results = await asyncio.gather(
+                list_recent_discoveries(int(guild_id), limit=100),
+                list_private_discoveries(
+                    int(guild_id),
+                    int(user_id),
+                    limit=100,
+                ),
+            )
+            recent_payloads = [
+                _result_payload(row)
+                for row in recent_rows
+                if isinstance(row, Mapping)
+            ]
+            personalization = await build_personalized_feed(
+                int(guild_id),
+                int(user_id),
+                recent_payloads,
+                private_results=private_results,
+            )
+        except CinemaStorageUnavailable:
+            pass
+        except Exception:
+            pass
+
     return {
         "revision": int(registry.revision),
         "can_manage": bool(can_manage),
@@ -266,11 +343,23 @@ async def feed_state(
                 source,
                 guild_id=int(guild_id),
                 include_endpoint=bool(can_manage),
+                trust=health_map.get(str(source.source_id)),
             )
             for source in registry.sources
             if can_manage or source.enabled
         ],
         "results": merged_results,
+        "grouped_results": group_feed_results(merged_results),
+        "my_feed": list(personalization.get("my_feed") or []),
+        "feed_rules": list(personalization.get("rules") or []),
+        "collections": list(personalization.get("collections") or []),
+        "private_results": private_results,
+        "watchlist_match_count": int(
+            personalization.get("watchlist_match_count") or 0
+        ),
+        "queue_suggestion_count": int(
+            personalization.get("queue_suggestion_count") or 0
+        ),
         "results_warning": results_warning,
         "pagination": {
             "query": str(page_data.get("query") or clean_query),
@@ -282,6 +371,18 @@ async def feed_state(
             "has_next": bool(page_data.get("has_next")),
         },
         "categories": list(CATEGORIES),
+        "capabilities": {
+            "grouped_releases": True,
+            "my_feed": True,
+            "saved_searches": True,
+            "followed_titles": True,
+            "watchlist_matching": True,
+            "quality_upgrades": True,
+            "private_sources": True,
+            "server_collections": True,
+            "source_trust": True,
+            "feed_notifications": True,
+        },
     }
 
 
@@ -338,12 +439,53 @@ async def refresh_feed(
         )
     if titles:
         try:
+            release_metadata: dict[str, dict[str, Any]] = {}
+            for variant in outcome.variants[:24]:
+                title_key = str(getattr(variant, "title", "") or "").casefold()
+                raw_metadata = (
+                    dict(getattr(variant, "metadata", {}) or {})
+                    if isinstance(getattr(variant, "metadata", {}), Mapping)
+                    else {}
+                )
+                source_reported = (
+                    dict(raw_metadata.get("source_reported") or {})
+                    if isinstance(raw_metadata.get("source_reported"), Mapping)
+                    else {}
+                )
+                languages = []
+                for key in (
+                    "language",
+                    "languages",
+                    "audio_language",
+                    "audio_languages",
+                    "subtitle_language",
+                    "subtitle_languages",
+                ):
+                    value = source_reported.get(key)
+                    if isinstance(value, str):
+                        languages.extend(
+                            item.strip()
+                            for item in value.replace(",", " ").split()
+                            if item.strip()
+                        )
+                    elif isinstance(value, (list, tuple, set)):
+                        languages.extend(str(item) for item in value)
+                release_metadata[title_key] = {
+                    "seeds": int(getattr(variant, "seeds", 0) or 0),
+                    "leechers": int(getattr(variant, "leechers", 0) or 0),
+                    "peers": int(getattr(variant, "peers", 0) or 0),
+                    "file_size": int(getattr(variant, "file_size", 0) or 0),
+                    "languages": languages[:12],
+                    "source_reported": source_reported,
+                }
+
             recorded = await record_feed_discoveries(
                 int(guild_id),
                 source_id=str(source.source_id),
                 source_label=str(source.label),
                 category=category,
                 titles=titles,
+                release_metadata=release_metadata,
             )
             if recorded:
                 canonical_by_release = {
@@ -375,6 +517,26 @@ async def refresh_feed(
                 "Source refreshed, but new-title metadata could not be indexed."
             )
 
+    try:
+        trust = await record_source_health(
+            int(guild_id),
+            str(source.source_id),
+            ok=not bool(error),
+            result_count=len(runtime_results),
+            error=error,
+        )
+    except Exception:
+        trust = {}
+
+    if runtime_results:
+        try:
+            await process_feed_notifications(
+                int(guild_id),
+                runtime_results,
+            )
+        except Exception:
+            pass
+
     _RUNTIME_STATE[(int(guild_id), source.source_id)] = {
         "refreshed_at": int(time.time()),
         "ok": not bool(error),
@@ -384,6 +546,7 @@ async def refresh_feed(
         "results": runtime_results,
         "result_count": len(runtime_results),
         "refresh_query": refresh_query,
+        "trust": trust,
     }
 
 
