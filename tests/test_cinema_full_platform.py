@@ -23,6 +23,7 @@ from stoney_verify.cinema_media_identity import (
     release_matches_catalog,
 )
 from stoney_verify import cinema_playback_service
+from stoney_verify.cinema_storage import CinemaStorageUnavailable
 from stoney_verify.media_source_resolver import (
     MediaSourceSearchOutcome,
     ResolvedMediaVariant,
@@ -359,6 +360,101 @@ def test_watch_party_picks_only_use_real_accessible_room_media(monkeypatch) -> N
     assert rows[0]["season_number"] == 3
     assert rows[0]["episode_number"] == 7
     assert rows[0]["watch_party_active"] is True
+
+
+def test_cinema_details_keeps_title_playable_when_library_storage_is_unavailable(monkeypatch) -> None:
+    movie = CinemaMedia(
+        media_type="movie",
+        tmdb_id=123,
+        title="Example Movie",
+        year=2026,
+    )
+    details = CinemaDetails(media=movie)
+
+    async def site_identity(_request):
+        return (100, 42)
+
+    async def get_details(_kind, _tmdb_id):
+        return details
+
+    async def list_media(_user_id):
+        raise CinemaStorageUnavailable("test storage outage")
+
+    async def adult_enabled(_guild_id):
+        return False
+
+    async def no_sources(_guild_id, _query, *, catalog_metadata=None):
+        _ = catalog_metadata
+        return MediaSourceSearchOutcome(variants=())
+
+    monkeypatch.setattr(cinema_site, "_site_identity", site_identity)
+    monkeypatch.setattr(cinema_site, "get_details", get_details)
+    monkeypatch.setattr(cinema_site, "list_user_media", list_media)
+    monkeypatch.setattr(cinema_site, "_guild_adult_content_enabled", adult_enabled)
+    monkeypatch.setattr(cinema_site, "search_movie_sources", no_sources)
+    monkeypatch.setattr(cinema_site, "get_movie_night_manager", lambda: MovieNightManager())
+
+    request = SimpleNamespace(match_info={"media_type": "movie", "tmdb_id": "123"})
+    response = asyncio.run(cinema_site.cinema_details_api(request))
+    payload = __import__("json").loads(response.text)
+
+    assert response.status == 200
+    assert payload["details"]["title"] == "Example Movie"
+    assert payload["library"] is None
+    assert payload["library_available"] is False
+    assert "Playback and title details still work" in payload["library_notice"]
+
+
+def test_cinema_details_catalog_failure_is_specific_503_not_default_500(monkeypatch) -> None:
+    async def site_identity(_request):
+        return (100, 42)
+
+    async def broken_details(_kind, _tmdb_id):
+        raise RuntimeError("tmdb unavailable")
+
+    async def list_media(_user_id):
+        return []
+
+    monkeypatch.setattr(cinema_site, "_site_identity", site_identity)
+    monkeypatch.setattr(cinema_site, "get_details", broken_details)
+    monkeypatch.setattr(cinema_site, "list_user_media", list_media)
+
+    request = SimpleNamespace(match_info={"media_type": "movie", "tmdb_id": "123"})
+    try:
+        asyncio.run(cinema_site.cinema_details_api(request))
+    except Exception as exc:
+        from aiohttp import web
+
+        assert isinstance(exc, web.HTTPServiceUnavailable)
+        assert exc.status == 503
+        assert "title metadata is temporarily unavailable" in exc.text
+    else:
+        raise AssertionError("Catalog failure unexpectedly escaped as a successful details response.")
+
+
+def test_cinema_season_keeps_episode_list_when_library_storage_is_unavailable(monkeypatch) -> None:
+    async def site_identity(_request):
+        return (100, 42)
+
+    async def get_season(_series_id, _season_number):
+        return (_episode(),)
+
+    async def list_media(_user_id):
+        raise CinemaStorageUnavailable("test storage outage")
+
+    monkeypatch.setattr(cinema_site, "_site_identity", site_identity)
+    monkeypatch.setattr(cinema_site, "get_season", get_season)
+    monkeypatch.setattr(cinema_site, "list_user_media", list_media)
+
+    request = SimpleNamespace(match_info={"series_id": "77", "season_number": "3"})
+    response = asyncio.run(cinema_site.cinema_season_api(request))
+    payload = __import__("json").loads(response.text)
+
+    assert response.status == 200
+    assert payload["library_available"] is False
+    assert len(payload["episodes"]) == 1
+    assert payload["episodes"][0]["episode_number"] == 7
+    assert payload["episodes"][0]["progress"] is None
 
 
 def test_cinema_site_play_rejects_nonhost_explicit_room(monkeypatch) -> None:
@@ -983,7 +1079,7 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'initialUrl.searchParams.delete("sig")' in script
     assert 'history.replaceState(' in script
     assert 'return `${path}${AUTH_QUERY ? join + AUTH_QUERY.slice(1) : ""}`;' in script
-    assert 'src="/cinema/assets/site.js?v=14"' in source
+    assert 'src="/cinema/assets/site.js?v=15"' in source
     assert '"/cinema/{guild_id}/api/auth-debug"' in source
     assert "def _cinema_auth_debug_payload(" in source
     assert "signed-session-v8-snowflake-safe" in source
@@ -1149,6 +1245,9 @@ def test_full_site_episode_playback_is_direct_and_not_discord_room_scoped() -> N
     assert ".episode-card.episode-playable" in styles
     assert ".source-choice.selected" in styles
     assert ".source-play-action" in styles
+    assert 'const libraryAvailable = data.library_available !== false' in script
+    assert '"state-card library-degraded"' in script
+    assert "if (libraryAvailable) {" in script
 
 
 def test_tv_details_do_not_claim_series_title_is_a_playable_source() -> None:
@@ -1224,7 +1323,7 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
     assert 'href="/cinema/assets/site.css?v=10"' in source
-    assert 'src="/cinema/assets/site.js?v=14"' in source
+    assert 'src="/cinema/assets/site.js?v=15"' in source
 
 
 def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop() -> None:
