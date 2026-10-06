@@ -1346,6 +1346,77 @@ def test_feed_state_returns_real_paged_discoveries(monkeypatch) -> None:
     assert result["poster_url"].endswith("example.jpg")
 
 
+def test_feed_discovery_page_uses_exact_count_range_and_release_title_search(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeQuery:
+        def select(self, columns: str, *, count: str | None = None):
+            calls["select"] = (columns, count)
+            return self
+
+        def eq(self, column: str, value: object):
+            calls["eq"] = (column, value)
+            return self
+
+        def or_(self, filters: str):
+            calls["or"] = filters
+            return self
+
+        def order(self, column: str, *, desc: bool = False):
+            calls["order"] = (column, desc)
+            return self
+
+        def range(self, start: int, end: int):
+            calls["range"] = (start, end)
+            return self
+
+        def execute(self):
+            return SimpleNamespace(
+                data=[
+                    {
+                        "guild_id": 123,
+                        "source_id": "eztv",
+                        "discovery_key": "row",
+                        "title": "Collision",
+                        "metadata": {
+                            "release_title": "Collision 2026 S01E21 1080p"
+                        },
+                    }
+                ],
+                count=17,
+            )
+
+    class FakeClient:
+        def table(self, name: str):
+            calls["table"] = name
+            return FakeQuery()
+
+    async def fake_execute(_label: str, operation):
+        return operation(FakeClient())
+
+    monkeypatch.setattr(cinema_discovery_service, "execute", fake_execute)
+
+    page = asyncio.run(
+        cinema_discovery_service.page_discoveries(
+            123,
+            query="S01E21",
+            page=2,
+            page_size=8,
+        )
+    )
+
+    assert calls["select"] == ("*", "exact")
+    assert calls["eq"] == ("guild_id", 123)
+    assert calls["range"] == (8, 15)
+    assert "title.ilike.%S01E21%" in str(calls["or"])
+    assert "metadata->>release_title.ilike.%S01E21%" in str(calls["or"])
+    assert page["total"] == 17
+    assert page["page"] == 2
+    assert page["total_pages"] == 3
+    assert page["has_previous"] is True
+    assert page["has_next"] is True
+
+
 def test_episode_release_enrichment_retries_without_year_and_forces_tv(monkeypatch) -> None:
     queries: list[str] = []
 
