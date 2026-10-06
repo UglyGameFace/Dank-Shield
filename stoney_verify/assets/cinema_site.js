@@ -1483,7 +1483,8 @@
     if (actionBits.length) card.appendChild(node("div", "feed-meta", actionBits.join(" • ")));
 
     const actions = node("div", "feed-result-actions");
-    if (rule.rule_type === "private_source") {
+    const canEditRule = rule.scope !== "guild" || Boolean(state.feeds?.can_manage);
+    if (rule.rule_type === "private_source" && canEditRule) {
       actions.appendChild(button("Refresh Private Feed", "btn secondary", async () => {
         try {
           const result = await feedRuleAction({ action: "refresh_private", id: rule.id });
@@ -1494,19 +1495,23 @@
         }
       }));
     }
-    actions.append(
-      button("Edit", "btn secondary", () => openFeedRuleEditor(rule)),
-      button("Delete", "btn danger", async () => {
-        if (!confirm("Delete " + (rule.name || "this Feed Rule") + "?")) return;
-        try {
-          await feedRuleAction({ action: "delete", id: rule.id });
-          toast("Feed Rule deleted.");
-          renderFeeds();
-        } catch (error) {
-          toast(error.message || "Feed Rule deletion failed.", "error");
-        }
-      }),
-    );
+    if (canEditRule) {
+      actions.append(
+        button("Edit", "btn secondary", () => openFeedRuleEditor(rule)),
+        button("Delete", "btn danger", async () => {
+          if (!confirm("Delete " + (rule.name || "this Feed Rule") + "?")) return;
+          try {
+            await feedRuleAction({ action: "delete", id: rule.id });
+            toast("Feed Rule deleted.");
+            renderFeeds();
+          } catch (error) {
+            toast(error.message || "Feed Rule deletion failed.", "error");
+          }
+        }),
+      );
+    } else {
+      actions.appendChild(node("span", "feed-meta", "Server curated"));
+    }
     card.appendChild(actions);
     return card;
   }
