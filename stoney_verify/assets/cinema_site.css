@@ -297,8 +297,27 @@ img{max-width:100%}
   border:1px solid rgba(255,255,255,.06)
 }
 .feed-result-art img{width:100%;height:100%;object-fit:cover;display:block}
-.feed-result-placeholder{width:100%;height:100%;display:grid;place-items:center;color:#7f9087}
+.feed-result-placeholder{
+  width:100%;height:100%;display:grid;place-items:center;align-content:center;gap:7px;
+  color:#7f9087;background:
+    radial-gradient(circle at 50% 25%,rgba(167,255,100,.1),transparent 46%),
+    linear-gradient(145deg,#10201a,#09120f)
+}
 .feed-result-placeholder .ui-icon{width:28px;height:28px}
+.feed-result-placeholder-text{font-size:1rem;font-weight:950;letter-spacing:.08em;color:#a7b6ae}
+.feed-search-bar{
+  display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;
+  margin:14px 0 16px
+}
+.feed-search-bar .search-input{height:48px}
+.feed-search-bar .btn{min-height:48px}
+.feed-pager{
+  display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;
+  margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.07)
+}
+.feed-pager .btn{min-width:104px}
+.feed-pager .btn:disabled{opacity:.42;cursor:not-allowed;transform:none}
+.feed-page-status{text-align:center;color:#aebbb5;font-size:.76rem;font-weight:850}
 .feed-result-copy{min-width:0;display:flex;flex-direction:column}
 .feed-result-title{margin-top:5px;font-weight:900;line-height:1.18;overflow-wrap:anywhere}
 .feed-result-release{
@@ -459,6 +478,11 @@ html[data-quality="standard"] .hero-grain{opacity:.035}
   .feed-result-grid{grid-template-columns:1fr}
   .feed-result-card{grid-template-columns:78px minmax(0,1fr)}
   .feed-result-art{width:78px}
+  .feed-search-bar{grid-template-columns:minmax(0,1fr) auto}
+  .feed-search-bar .btn.secondary{grid-column:1/-1}
+  .feed-pager{grid-template-columns:1fr 1fr}
+  .feed-page-status{grid-column:1/-1;grid-row:1}
+  .feed-pager .btn{min-width:0}
   .notification{grid-template-columns:1fr}
   .modal-backdrop{padding:10px;align-items:end}
   .modal{border-radius:20px 20px 10px 10px;max-height:82vh}
