@@ -281,7 +281,11 @@ async def recommendation_rows(
         groups = list(availability_groups or [])
     elif availability_groups is None:
         rows = list(media_rows)
-        groups = await _availability_groups(int(guild_id))
+        groups = (
+        list(availability_groups)
+        if availability_groups is not None
+        else await _availability_groups(int(guild_id))
+    )
     else:
         rows = list(media_rows)
         groups = list(availability_groups)
@@ -661,6 +665,7 @@ async def group_recommendations(
     *,
     include_adult: bool,
     limit: int = 14,
+    availability_groups: Optional[list[dict[str, Any]]] = None,
 ) -> list[dict[str, Any]]:
     users = list(dict.fromkeys(int(uid) for uid in user_ids if int(uid) > 0))[:20]
     if len(users) < 2:
@@ -749,8 +754,66 @@ async def group_recommendations(
     return output
 
 
+async def home_intelligence(
+    guild_id: int,
+    user_id: int,
+    *,
+    include_adult: bool,
+    group_user_ids: Sequence[int] = (),
+) -> dict[str, Any]:
+    media_rows, availability_groups = await asyncio.gather(
+        list_user_media(int(user_id)),
+        _availability_groups(int(guild_id)),
+    )
+    recommendations_task = asyncio.create_task(
+        recommendation_rows(
+            int(guild_id),
+            int(user_id),
+            include_adult=include_adult,
+            limit=24,
+            media_rows=media_rows,
+            availability_groups=availability_groups,
+        )
+    )
+    upcoming_task = asyncio.create_task(
+        upcoming_episode_rows(
+            int(guild_id),
+            int(user_id),
+            include_adult=include_adult,
+            limit=16,
+            media_rows=media_rows,
+            availability_groups=availability_groups,
+        )
+    )
+    if group_user_ids:
+        group_task = asyncio.create_task(
+            group_recommendations(
+                int(guild_id),
+                group_user_ids,
+                include_adult=include_adult,
+                limit=14,
+                availability_groups=availability_groups,
+            )
+        )
+    else:
+        group_task = None
+
+    recommendations, upcoming = await asyncio.gather(
+        recommendations_task,
+        upcoming_task,
+    )
+    group_rows = await group_task if group_task is not None else []
+    return {
+        "because_you_watched": recommendations["because_you_watched"],
+        "recommended": recommendations["recommended"],
+        "upcoming": upcoming,
+        "group_recommendations": group_rows,
+    }
+
+
 __all__ = [
     "group_recommendations",
+    "home_intelligence",
     "library_intelligence_snapshot",
     "recommendation_rows",
     "upcoming_episode_rows",
