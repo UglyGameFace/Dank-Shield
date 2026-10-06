@@ -806,6 +806,14 @@
     const action = hero.action || {};
     if (action.kind === "watch_url" && action.url) {
       actions.appendChild(button(action.label || "Watch", "btn primary", () => { location.href = action.url; }));
+    } else if (
+      action.kind === "play"
+      && ["movie", "episode"].includes(String(action.media_type || ""))
+      && Number(action.tmdb_id || 0) > 0
+    ) {
+      const resume = button(action.label || "Resume", "btn primary");
+      resume.addEventListener("click", () => playOnSite(action, resume));
+      actions.appendChild(resume);
     } else if (action.kind === "details" && action.media_type && action.tmdb_id) {
       actions.appendChild(button(action.label || "More Info", "btn primary", () => go(`details/${action.media_type}/${action.tmdb_id}`)));
     }
