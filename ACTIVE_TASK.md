@@ -2,143 +2,105 @@
 
 ## Active task / outcome
 
-**DANK-CINEMA-FAST-START-FOLLOWUP — diagnose and remove remaining startup latency on healthy live swarms**
+**DANK-CINEMA-BACKGROUND-RECONNECT — make returning tabs actually recover playback instead of only saying “Reconnecting”**
 
 Production baseline:
-`main@a1dae0819eec00f077220e57f8f6a27ad1b8a19e` (PR #464 merged; startup instrumentation in production).
+`main@beaef77c3564913f135aa2e7814c4f156d752b83` (PR #465 merged; first-byte startup fix in production).
 
 Active branch:
-`fix/cinema-first-byte-startup`
+`fix/cinema-background-reconnect`
 
 Outcome:
-When Dank Cinema has a genuinely healthy **live** swarm, playback should reach the first rendered frame as quickly as the browser/container/network path allows. The previous fast-start changes improved connection fan-out and time-critical piece scheduling, but the production canary still showed unacceptable startup latency even with roughly **152 connected seeds / 193 peers at ~3.9 MiB/s**. That means the active task is **not complete**.
+When a user leaves the Dank Cinema Watch/Theater tab in the background and later returns, the page must immediately re-establish canonical session state and media playback when the room still exists. A “Reconnecting…” message must correspond to a real bounded reconnect loop, not merely failed polling text.
 
 ## Product/browser scope
 
-Dank Cinema is a **cross-browser product**, not a Samsung-only product.
-
-Required compatibility/validation includes:
-- Chromium-based desktop browsers;
-- Chrome/Chromium on Android;
+Dank Cinema remains cross-browser. This task applies to:
+- Chromium desktop/mobile;
 - Samsung Internet;
-- Firefox-family browsers where supported by the media stack;
-- Safari/WebKit on supported Apple devices;
-- tablet/mobile/desktop layouts and playback behavior.
+- Firefox-family browsers where supported;
+- Safari/WebKit;
+- mobile, tablet, and desktop layouts.
 
-Samsung Internet is one real-device canary because it is currently available for production testing. It is **not** the implementation target and must never be used as justification for browser-specific architecture unless a proven browser defect requires an isolated compatibility path.
-
-## Scope
-
-This remains the single active engineering task.
-
-- Measure the real startup path instead of assuming seed count alone determines startup.
-- Trace `Play -> Watch state -> video src -> browser Range request -> torrent wait_for_range -> first 206 bytes -> media metadata readiness -> play()`.
-- Determine where time is spent when live connected peers and throughput are already healthy.
-- Inspect startup range size, bootstrap bytes, adaptive buffer target, browser media-probe/range behavior, MP4/MKV metadata placement, audio-compat sidecar interaction, and any duplicated waits.
-- Preserve current peer fan-out, time-critical piece deadlines, source selection, signed streaming, admission controls, and session safety unless evidence shows they are causal.
-- Do not lower buffers blindly if that merely trades startup delay for immediate rebuffering.
-- Add instrumentation/regressions sufficient to distinguish swarm acquisition latency from server buffering, container/media probing, browser readiness, and player-start latency.
-- Validate behavior across the supported browser classes above, not only Samsung Internet.
+The fix uses standard page visibility, pageshow, online/offline, fetch, and media APIs. No browser-specific architecture is introduced.
 
 ## Status
 
-**Production instrumentation identified the dominant delay exactly: the first browser Range arrived quickly, but the server then spent the full 20.1s buffer timeout waiting for the entire initial startup corridor before sending any media bytes. A focused first-byte fix is implemented on this branch and exact-head CI is next.**
+**PR #466 exact-head CI exposed one stale terminal-state test assertion after the reconnect functions gained explicit boolean/null return values. Runtime/unit behavior otherwise passed 2912 tests. The assertion is corrected and fresh exact-head CI is running.**
 
-Known production evidence:
-- PR #463 merged successfully.
-- Fast-start env values were added to production.
-- Theater reported live swarm telemetry rather than only provider metadata.
-- Canary screenshot showed approximately `152 connected seeds / 193 peers` and `3.9 MiB/s`.
-- Despite that, first playback still did not feel fast enough.
+## Exact findings
 
-This evidence rules out the simplistic explanation that the delay is merely "not enough seeds." The next fix must be based on measured stage timing.
+1. The old UI text `Sync connection lost. Reconnecting…` appeared after three failed `/state` polls.
+2. That text did **not** itself start a dedicated session reconnect loop.
+3. The actual media stream retry path `scheduleStreamRetry()` was only triggered by the HTML video element's `error` event.
+4. The normal state poll ran every 2 seconds and heartbeat every 3 seconds, but mobile/desktop browsers may suspend those timers while a tab is backgrounded.
+5. The old `pageshow` / visible-tab handler only called `recoverPlayerFromViewportChange()`; it did not heartbeat, fetch canonical room state, or force a stale media connection to reattach.
+6. Therefore returning from a suspended tab could leave stale Watch state and a dead media pipeline even though the UI claimed it was reconnecting.
+7. The server viewer TTL is 35 seconds. The default empty-room TTL is `DANK_MOVIE_NIGHT_EMPTY_ROOM_TTL_SECONDS=1800`, exactly 30 minutes.
+8. A backgrounded tab may stop heartbeats, so a room with no other active viewers becomes eligible for cleanup at about the same 30-minute point described in the production report.
+9. The screenshot alone cannot prove whether that specific room had already crossed cleanup, because the old client collapsed retryable fetch failures into the same reconnect message. The 30-minute cleanup boundary is nevertheless an exact current configuration fact.
+10. Signed Watch/media URLs use longer validity windows than 30 minutes, so room cleanup can happen before the link itself expires.
 
-## Findings so far
+## Reconnect fix
 
-1. Provider-reported seed counts and live connected peers are distinct; Theater now exposes the live swarm.
-2. The torrent runtime now has aggressive peer fan-out and time-critical requested-piece deadlines.
-3. A healthy live swarm can still coexist with poor startup if the bottleneck is:
-   - waiting for too much initial byte range;
-   - repeated/overlapping buffer waits;
-   - container metadata not yet available where the browser expects it;
-   - browser issuing a different initial Range than our bootstrap assumption;
-   - media-element readiness/play gating;
-   - compatibility-audio startup;
-   - origin/Cloudflare interruption;
-   - or another server/player handoff delay.
-4. The production screenshot provides enough live-swarm evidence that further connection-limit guessing would be unjustified.
-5. Production trace from PR #464 measured: source 3ms, torrent start 4ms, Watch ready 2.02s, torrent metadata/session ready 2.02s, first browser Range at 2.79s from byte 0, then **20.1s inside the first server wait**. Browser startup still showed "waiting for media events" because the server had not sent the first media response yet.
-6. The first HTTP Range path waits on `start..startup_wait_end`. With the current 1 MiB first chunk and 8 MiB bootstrap allowance, that can gate first byte on roughly 5-9 MiB of contiguous startup data, even though the browser only needs the first response chunk to begin parsing.
-7. `wait_range` is all-or-nothing across that corridor. One late torrent piece anywhere in the corridor can hold every byte until `DANK_TORRENT_BUFFER_WAIT_SECONDS` expires. The measured 20.1s wait matches the configured 20s timeout, so this is no longer a hypothesis.
-8. The safe structural fix is to keep prioritizing/readahead for the wider startup corridor, but for HTTP Range clients wait only for the first 1 MiB response chunk. After that chunk is ready, advertise only the already-complete contiguous prefix in the 206 response. This preserves the earlier short-body/protocol safety work while allowing the browser to receive first byte immediately instead of waiting for the whole corridor.
-9. Non-Range 200 behavior is intentionally unchanged by this fix.
+- Added a dedicated session reconnect loop with bounded exponential backoff.
+- `pageshow`, visibility restore, and the browser `online` event now trigger immediate session recovery.
+- Recovery starts with a real heartbeat request, which refreshes viewer/host presence and returns canonical room state.
+- Successful recovery clears reconnect state and reapplies canonical room playback.
+- After a longer background suspension, an unchanged signed media URL is force-reattached only after fresh server state succeeds, then canonical playback state is applied again.
+- Hidden documents no longer run the normal 2-second poll / 3-second heartbeat loops pointlessly.
+- A keepalive heartbeat is attempted when the page becomes hidden.
+- `jsonFetch` now retains HTTP status on errors.
+- HTTP 404/401/403 are treated as terminal session/access states instead of being mislabeled as endlessly retryable network loss.
+- Retryable failures actually schedule the reconnect loop.
+- The existing media-error retry path remains separate and intact.
 
-## Measurement implementation
+## Important timeout policy
 
-The branch now records, per signed stream consumer:
+This code does **not** silently change the server's 1800-second empty-room timeout.
 
-- torrent metadata-ready time from actual torrent startup;
-- torrent session-ready time;
-- first browser Range request time and exact byte offset;
-- first range wait duration and whether it became ready;
-- first response-header time;
-- first response-byte time;
-- browser `loadedmetadata`, `canplay`, `playing`, and first-frame timing;
-- explicit **Play → playing** latency when the user starts playback.
+That means:
+- if the room still exists, wake recovery now has a real path to reconnect;
+- if the room was already retired after the configured idle timeout, the page must report that terminal state rather than lie that it is reconnecting forever;
+- if product policy requires a user to return after ~30 minutes and keep the same room alive, production must use an idle TTL greater than 1800 seconds or a later architectural resume/recreate flow.
 
-These values are displayed under **Advanced Stream Details** as **Server startup** and **Browser startup**. The browser first Range offset is always shown, including `0 B`, so tail-first/container-probe behavior is visible instead of inferred.
+## First PR #466 CI result
 
-Instrumentation is diagnostic only. It does not change buffer size, range semantics, torrent priorities, peer limits, autoplay policy, or compatibility-audio behavior.
-
-First PR #464 CI result:
-- 2911 passed / 1 failed;
-- the only failure was `test_player_layout_recovers_from_mobile_desktop_mode_resizes`;
-- the test still expected the old one-line media-event listener string, while the implementation now uses a block listener so it can both call `stabilizePlayerLayout()` and record startup timing;
-- the layout call remains present, so this was a stale structural assertion rather than a runtime regression;
-- the test now asserts the block listener, layout stabilization, and startup-event marker together.
-
-PR #464 was then merged and its exact-head required workflow families passed. The first production trace supplied the evidence above.
-
-## First-byte fix
-
-- Added `TorrentMediaManager.contiguous_available_end()` to find the largest already-complete prefix from the requested byte without crossing a missing torrent piece.
-- For HTTP Range requests, the initial blocking wait now covers only the first 1 MiB response chunk, not the full adaptive startup corridor.
-- The wider adaptive corridor is still prioritized as readahead, so throughput protection is preserved.
-- Once the first chunk is ready, the 206 response advertises only the contiguous bytes already complete up to the former startup limit. The browser can immediately parse those bytes and request the remainder.
-- For non-Range requests, the previous startup wait behavior remains unchanged.
-- Startup diagnostics now record the exact first wait byte span so the next canary can prove whether the 20s gate disappeared rather than merely "feeling faster."
+- Dank Shield CI failed with **1 failed / 2912 passed**.
+- The only failure was `test_web_player_has_terminal_state_before_missing_room_fallback`.
+- The test still required the old exact string `if(terminated) return;`.
+- The reconnect implementation now deliberately returns typed results: `poll()` uses `if(terminated) return false;` and `heartbeat()` uses `if(terminated) return null;`.
+- Terminal guards are still present and stronger than before; the stale string assertion has been updated to verify both explicit return contracts.
+- This failure is unrelated to Discloud runtime environment variables.
 
 ## Validation / Definition of Done
 
 The task is not complete until:
-- stage timing identifies the dominant startup delay;
-- the smallest structural fix is implemented;
-- focused and relevant regressions pass;
 - exact-head CI passes;
-- no duplicate waits/fallbacks/temporary instrumentation remain;
-- startup is canaried with at least one healthy source;
-- browser behavior is reviewed across the supported browser classes, with real-device/browser evidence where available;
-- remaining browser-specific limitations are stated explicitly.
+- diff review confirms no first-byte/startup changes are accidentally duplicated on this reconnect-only branch;
+- a foreground disconnect/recovery canary succeeds;
+- a background/return canary succeeds while the room is still inside its configured idle TTL;
+- terminal expired-room behavior is truthful;
+- existing Watch Party / Private Session / standalone playback behavior remains intact;
+- cross-browser event handling remains feature-neutral.
 
 ## Backlog
 
-These are real issues but **not active** because no FORCE SWITCH was given:
-
-- **Audio-track selector:** clicking Audio Track currently opens a tiny blank dropdown. Investigation already found the UI depends on `video.audioTracks`, which is not a reliable cross-browser source of selectable tracks; server-verified ffprobe/PyAV audio metadata should likely become authoritative. Do not implement until the active startup-latency task is complete or explicitly force-switched.
-- **Home Resume:** Continue Watching hero Resume can do nothing.
-- **Transient Cloudflare/origin 502:** one retry succeeded; investigate separately if it recurs enough to block playback.
-- **From Your Feeds artwork:** canonical TMDB enrichment/poster identity for feed releases.
+- Audio-track selector: blank dropdown because browser `video.audioTracks` is not a reliable cross-browser authority.
+- Home Resume: Continue Watching hero Resume can do nothing.
+- Transient Cloudflare/origin 502 if it recurs independently.
+- From Your Feeds canonical TMDB artwork enrichment.
+- Product decision: desired no-viewer idle lifetime beyond the current 1800-second default, or automatic room recreation after expiry.
 
 ## Cleanup / conflicts
 
-- The prematurely created `fix/cinema-audio-track-selector` branch contains no code changes and is identical to production main.
-- No audio-selector implementation has been started.
-- PR #463 is merged and remains the authoritative fast-start baseline.
-- No unrelated cleanup is included.
+- PR #465 is merged and green; its first-byte startup fix is the production baseline.
+- This branch was recreated cleanly from merged `main` after the earlier working branch diverged.
+- Only reconnect lifecycle code, reconnect regressions, and this task record belong here.
 
 ## Next step
 
-Open a focused draft PR for the first-byte fix, run exact-head CI, then deploy and repeat the same healthy-swarm canary. Success requires the first server wait to show roughly one first-chunk span rather than the prior multi-megabyte corridor, first byte to arrive well before the 20s timeout, and browser media events to begin promptly.
+Open a focused draft PR from this clean reconnect branch, run exact-head CI, repair only evidence-backed failures, then canary a background/return within the configured room lifetime. Keep the 30-minute server-expiry policy explicit rather than hiding it behind retry text.
 
 ---
 

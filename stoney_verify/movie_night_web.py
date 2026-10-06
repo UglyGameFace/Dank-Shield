@@ -3157,6 +3157,10 @@ let lastJoinRetargetAt=0;
 let lastHardSyncSeekAt=0;
 let streamRetryTimer=null;
 let streamRetryAttempt=0;
+let sessionReconnectTimer=null;
+let sessionReconnectAttempt=0;
+let sessionReconnectInFlight=false;
+let pageHiddenAt=0;
 let stateFetchFailures=0;
 let attachedStreamUrl="";
 let startupTrace={{
@@ -3193,6 +3197,7 @@ const HARD_DRIFT_SECONDS=5.0;
 const HARD_SEEK_COOLDOWN_MS=8000;
 const JOIN_RETARGET_SECONDS=12.0;
 const JOIN_RETARGET_COOLDOWN_MS=10000;
+const BACKGROUND_MEDIA_REFRESH_MS=30000;
 
 function makeClientSessionId() {{
   try {{
@@ -3280,9 +3285,24 @@ if(typeof ResizeObserver==="function") {{
 window.addEventListener("resize",stabilizePlayerLayout,{{passive:true}});
 window.addEventListener("orientationchange",recoverPlayerFromViewportChange,{{passive:true}});
 window.visualViewport?.addEventListener("resize",stabilizePlayerLayout,{{passive:true}});
-window.addEventListener("pageshow",()=>recoverPlayerFromViewportChange());
+function handlePageWake() {{
+  recoverPlayerFromViewportChange();
+  const hiddenFor=pageHiddenAt>0?Math.max(0,Date.now()-pageHiddenAt):0;
+  pageHiddenAt=0;
+  void recoverSessionConnection(hiddenFor>=BACKGROUND_MEDIA_REFRESH_MS);
+}}
+window.addEventListener("pageshow",()=>handlePageWake());
+window.addEventListener("online",()=>handlePageWake());
+window.addEventListener("offline",()=>{{
+  if(!terminated) notice.textContent="Network connection lost. Waiting to reconnect…";
+}});
+window.addEventListener("pagehide",()=>{{pageHiddenAt=Date.now();}});
 document.addEventListener("visibilitychange",()=>{{
-  if(!document.hidden) recoverPlayerFromViewportChange();
+  if(document.hidden) {{
+    pageHiddenAt=Date.now();
+    return;
+  }}
+  handlePageWake();
 }});
 stabilizePlayerLayout();
 
@@ -3389,7 +3409,12 @@ async function jsonFetch(path, options={{}}) {{
     headers:{{"Content-Type":"application/json"}},
     ...options
   }});
-  if(!response.ok) throw new Error(await response.text());
+  if(!response.ok) {{
+    const body=await response.text();
+    const error=new Error(body||("HTTP "+String(response.status)));
+    error.status=Number(response.status||0);
+    throw error;
+  }}
   return response.json();
 }}
 function bufferedEnd() {{
@@ -4484,38 +4509,132 @@ async function applyState(s) {{
     notice.textContent="Vote open: "+s.open_vote.action+" • "+s.open_vote.yes+"/"+s.open_vote.required_yes+" yes. Open /movie in Discord to vote.";
   }}
 }}
+function cancelSessionReconnect() {{
+  if(sessionReconnectTimer!==null) {{
+    clearTimeout(sessionReconnectTimer);
+    sessionReconnectTimer=null;
+  }}
+}}
+function endSessionFromConnectionError(err) {{
+  const status=Number(err?.status||0);
+  const message=String(err?.message||err||"");
+  if(status===404 || message.includes("Dank Cinema session not found")) {{
+    terminated=true;
+    cancelSessionReconnect();
+    cancelStreamRetry();
+    video.pause();
+    notice.textContent=lastState?.private?"Private Session has ended.":"Cinema session has ended.";
+    return true;
+  }}
+  if(status===401) {{
+    terminated=true;
+    cancelSessionReconnect();
+    cancelStreamRetry();
+    video.pause();
+    notice.textContent="This Cinema watch link expired. Reopen the title from Dank Cinema.";
+    return true;
+  }}
+  if(status===403) {{
+    terminated=true;
+    cancelSessionReconnect();
+    cancelStreamRetry();
+    video.pause();
+    notice.textContent="Cinema access is no longer available for this session.";
+    return true;
+  }}
+  return false;
+}}
+function markSessionReconnectNeeded() {{
+  stateFetchFailures+=1;
+  if(stateFetchFailures>=3) {{
+    notice.textContent="Sync connection lost. Reconnecting…";
+    const sync=document.getElementById("sessionSync");
+    if(sync) sync.textContent="Reconnecting";
+    const role=document.getElementById("role");
+    if(role && !lastState?.is_host) role.textContent="Reconnecting";
+  }}
+}}
+function scheduleSessionReconnect() {{
+  if(
+    terminated ||
+    sessionReconnectTimer!==null ||
+    sessionReconnectInFlight ||
+    document.hidden ||
+    navigator.onLine===false
+  ) return;
+  const step=Math.min(sessionReconnectAttempt,5);
+  const delay=Math.min(15000,1000*Math.pow(1.8,step));
+  sessionReconnectAttempt+=1;
+  sessionReconnectTimer=setTimeout(()=>{{
+    sessionReconnectTimer=null;
+    void recoverSessionConnection(false);
+  }},delay);
+}}
+async function recoverSessionConnection(forceMediaReload=false) {{
+  if(
+    terminated ||
+    sessionReconnectInFlight ||
+    document.hidden ||
+    navigator.onLine===false
+  ) return false;
+  sessionReconnectInFlight=true;
+  try {{
+    const fresh=await heartbeat(false,true,false);
+    if(!fresh) throw new Error("Cinema heartbeat returned no session state.");
+    stateFetchFailures=0;
+    sessionReconnectAttempt=0;
+    cancelSessionReconnect();
+    const sameStream=!!(
+      forceMediaReload &&
+      fresh.stream_url &&
+      attachedStreamUrl===String(fresh.stream_url)
+    );
+    await applyState(fresh);
+    if(sameStream && !terminated) {{
+      attachStream(String(fresh.stream_url),true);
+      await applyState(fresh);
+    }}
+    if(
+      notice.textContent.startsWith("Sync connection lost") ||
+      notice.textContent.startsWith("Network connection lost")
+    ) notice.textContent="";
+    return true;
+  }} catch(err) {{
+    if(endSessionFromConnectionError(err)) return false;
+    markSessionReconnectNeeded();
+    scheduleSessionReconnect();
+    return false;
+  }} finally {{
+    sessionReconnectInFlight=false;
+  }}
+}}
 async function poll() {{
-  if(terminated) return;
+  if(terminated) return false;
   try {{
     const state=await jsonFetch("/movie/"+BOOT.roomId+"/state");
     stateFetchFailures=0;
-    if(notice.textContent.startsWith("Sync connection lost"))
-      notice.textContent="";
+    sessionReconnectAttempt=0;
+    cancelSessionReconnect();
+    if(
+      notice.textContent.startsWith("Sync connection lost") ||
+      notice.textContent.startsWith("Network connection lost")
+    ) notice.textContent="";
     await applyState(state);
+    return true;
   }}
   catch(err) {{
-    const message=String(err.message||err);
-    if(message.includes("Dank Cinema session not found")) {{
-      terminated=true;
-      video.pause();
-      notice.textContent=lastState?.private?"Private Session has ended.":"Cinema session has ended.";
-      return;
-    }}
-    stateFetchFailures+=1;
-    if(stateFetchFailures>=3) {{
-      notice.textContent="Sync connection lost. Reconnecting…";
-      const sync=document.getElementById("sessionSync");
-      if(sync) sync.textContent="Reconnecting";
-      const role=document.getElementById("role");
-      if(role && !lastState?.is_host) role.textContent="Reconnecting";
-    }}
+    if(endSessionFromConnectionError(err)) return false;
+    markSessionReconnectNeeded();
+    scheduleSessionReconnect();
+    return false;
   }}
 }}
-async function heartbeat(forceSync=false) {{
+async function heartbeat(forceSync=false, throwErrors=false, keepalive=false) {{
   if(terminated) return null;
   try {{
     return await jsonFetch("/movie/"+BOOT.roomId+"/heartbeat", {{
       method:"POST",
+      keepalive:!!keepalive,
       body:JSON.stringify({{
         position_seconds:video.currentTime||0,
         duration_seconds:Number.isFinite(video.duration)?video.duration:0,
@@ -4525,7 +4644,8 @@ async function heartbeat(forceSync=false) {{
         sync_requested:!!(syncRequested||forceSync)
       }})
     }});
-  }} catch(_) {{
+  }} catch(err) {{
+    if(throwErrors) throw err;
     return null;
   }}
 }}
@@ -5856,12 +5976,15 @@ video.addEventListener("ended",async()=>{{
 }});
 window.addEventListener("pagehide",()=>persistWatchProgress(true));
 document.addEventListener("visibilitychange",()=>{{
-  if(document.hidden) persistWatchProgress(true);
+  if(document.hidden) {{
+    persistWatchProgress(true);
+    void heartbeat(false,false,true);
+  }}
 }});
 loadCinemaPreferences();
 heartbeat(false).then(state=>{{ if(state) applyState(state); else poll(); }});
-setInterval(poll,2000);
-setInterval(()=>heartbeat(false),3000);
+setInterval(()=>{{ if(!document.hidden) void poll(); }},2000);
+setInterval(()=>{{ if(!document.hidden) void heartbeat(false); }},3000);
 </script>
 </body>
 </html>"""
