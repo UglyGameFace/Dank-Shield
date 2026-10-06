@@ -69,6 +69,13 @@ from .cinema_feed_service import (
     feed_state as cinema_feed_state,
     mutate_feed as mutate_cinema_feed,
 )
+from .cinema_feed_personalization import (
+    CinemaFeedRuleError,
+    delete_feed_rule,
+    list_feed_rules,
+    refresh_private_source,
+    save_feed_rule,
+)
 from .media_source_registry import enabled_structured_sources, load_media_source_registry
 from .media_source_resolver import (
     preview_custom_media_source,
@@ -2382,6 +2389,7 @@ async def cinema_feeds_api(request: web.Request) -> web.Response:
             await cinema_feed_state(
                 guild_id,
                 can_manage=can_manage,
+                user_id=user_id,
                 refresh=False,
                 query=query,
                 page=page,
@@ -2417,11 +2425,96 @@ async def cinema_feeds_api(request: web.Request) -> web.Response:
         await cinema_feed_state(
             guild_id,
             can_manage=True,
+            user_id=user_id,
             refresh=False,
             query="",
             page=1,
             page_size=8,
         )
+    )
+
+
+async def cinema_feed_rules_api(request: web.Request) -> web.Response:
+    guild_id, user_id = await _site_identity(request)
+    can_manage = _can_manage_cinema(guild_id, user_id)
+
+    if request.method == "GET":
+        try:
+            rules = await list_feed_rules(
+                guild_id,
+                user_id,
+                include_disabled=True,
+            )
+        except CinemaStorageUnavailable as exc:
+            raise web.HTTPServiceUnavailable(
+                text="Cinema Feed Rules storage is unavailable."
+            ) from exc
+        return web.json_response(
+            {
+                "rules": rules,
+                "can_manage": bool(can_manage),
+            }
+        )
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, Mapping):
+        payload = {}
+
+    action = str(payload.get("action") or "save").strip().lower()
+    try:
+        if action == "save":
+            saved = await save_feed_rule(
+                guild_id,
+                user_id,
+                payload,
+                can_manage=can_manage,
+            )
+            result = {"saved": saved}
+        elif action == "delete":
+            await delete_feed_rule(
+                guild_id,
+                user_id,
+                str(payload.get("id") or ""),
+                can_manage=can_manage,
+            )
+            result = {"deleted": True}
+        elif action == "refresh_private":
+            result = await refresh_private_source(
+                guild_id,
+                user_id,
+                str(payload.get("id") or ""),
+            )
+        else:
+            raise CinemaFeedRuleError("Unsupported Feed Rule action.")
+    except PermissionError as exc:
+        raise web.HTTPForbidden(text=str(exc))
+    except LookupError as exc:
+        raise web.HTTPNotFound(text=str(exc))
+    except CinemaFeedRuleError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+    except CinemaStorageUnavailable as exc:
+        raise web.HTTPServiceUnavailable(
+            text="Cinema Feed Rules storage is unavailable."
+        ) from exc
+
+    state = await cinema_feed_state(
+        guild_id,
+        can_manage=can_manage,
+        user_id=user_id,
+        refresh=False,
+        query="",
+        page=1,
+        page_size=8,
+    )
+    return web.json_response(
+        {
+            "ok": True,
+            **result,
+            "feed_state": state,
+        }
     )
 
 
@@ -2628,6 +2721,14 @@ def register_cinema_site_routes(app: web.Application) -> None:
     app.router.add_get("/cinema/{guild_id}/api/feeds", cinema_feeds_api)
     app.router.add_post("/cinema/{guild_id}/api/feeds", cinema_feeds_api)
     app.router.add_get(
+        "/cinema/{guild_id}/api/feed-rules",
+        cinema_feed_rules_api,
+    )
+    app.router.add_post(
+        "/cinema/{guild_id}/api/feed-rules",
+        cinema_feed_rules_api,
+    )
+    app.router.add_get(
         "/cinema/{guild_id}/api/notifications",
         cinema_notifications_api,
     )
@@ -2638,6 +2739,7 @@ def register_cinema_site_routes(app: web.Application) -> None:
 
 
 __all__ = [
+    "cinema_feed_rules_api",
     "cinema_feeds_api",
     "cinema_home_api",
     "cinema_library_api",
