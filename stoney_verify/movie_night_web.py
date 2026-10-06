@@ -3475,8 +3475,16 @@ function renderStartupDiagnostics(server={{}}) {{
       bits.push("session "+fmtDiagnosticMs(server.session_ready_ms));
     if(Number(server.first_request_ms||0)>0)
       bits.push("request "+fmtDiagnosticMs(server.first_request_ms));
-    if(Number(server.first_wait_ms||0)>0)
-      bits.push("wait "+fmtDiagnosticMs(server.first_wait_ms));
+    if(Number(server.first_wait_ms||0)>0) {{
+      const waitBytes=Math.max(
+        0,
+        Number(server.first_wait_end||0)-Number(server.first_wait_start||0)+1
+      );
+      bits.push(
+        "wait "+fmtDiagnosticMs(server.first_wait_ms)+
+        (waitBytes>0?" for "+fmtDiagnosticBytes(waitBytes):"")
+      );
+    }}
     if(Number(server.first_byte_ms||0)>0)
       bits.push("first byte "+fmtDiagnosticMs(server.first_byte_ms));
     if(Number(server.request_count||0)>0)
