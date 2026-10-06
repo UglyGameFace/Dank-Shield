@@ -193,6 +193,8 @@ def _result_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         "languages": list(metadata.get("languages") or [])[:12],
         "genres": list(metadata.get("genres") or [])[:12],
         "studios": list(metadata.get("studios") or [])[:16],
+        "franchises": list(metadata.get("franchises") or [])[:8],
+        "subtitle_languages": list(metadata.get("subtitle_languages") or [])[:12],
         "people": list(metadata.get("people") or [])[:20],
         "directors": list(metadata.get("directors") or [])[:8],
         "creators": list(metadata.get("creators") or [])[:8],
@@ -542,6 +544,7 @@ async def refresh_feed(
                     else {}
                 )
                 languages = []
+                subtitle_languages = []
                 for key in (
                     "language",
                     "languages",
@@ -551,20 +554,25 @@ async def refresh_feed(
                     "subtitle_languages",
                 ):
                     value = source_reported.get(key)
+                    values = []
                     if isinstance(value, str):
-                        languages.extend(
+                        values = [
                             item.strip()
                             for item in value.replace(",", " ").split()
                             if item.strip()
-                        )
+                        ]
                     elif isinstance(value, (list, tuple, set)):
-                        languages.extend(str(item) for item in value)
+                        values = [str(item) for item in value]
+                    languages.extend(values)
+                    if key in {"subtitle_language", "subtitle_languages"}:
+                        subtitle_languages.extend(values)
                 release_metadata[title_key] = {
                     "seeds": int(getattr(variant, "seeds", 0) or 0),
                     "leechers": int(getattr(variant, "leechers", 0) or 0),
                     "peers": int(getattr(variant, "peers", 0) or 0),
                     "file_size": int(getattr(variant, "file_size", 0) or 0),
                     "languages": languages[:12],
+                    "subtitle_languages": subtitle_languages[:12],
                     "source_reported": source_reported,
                 }
 
