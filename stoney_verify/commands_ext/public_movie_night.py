@@ -2843,11 +2843,17 @@ async def _execute_search_vote(
                 catalog_metadata["watch"] = watch_metadata
                 vote.payload["catalog"] = dict(catalog_metadata)
         else:
-            outcome = await search_movie_sources(
-                int(room.guild_id),
-                query,
-                catalog_metadata=catalog_metadata,
-            )
+            if catalog_metadata:
+                outcome = await search_movie_sources(
+                    int(room.guild_id),
+                    query,
+                    catalog_metadata=catalog_metadata,
+                )
+            else:
+                outcome = await search_movie_sources(
+                    int(room.guild_id),
+                    query,
+                )
     except Exception as exc:
         manager.set_vote_execution_error(
             room.room_id,
