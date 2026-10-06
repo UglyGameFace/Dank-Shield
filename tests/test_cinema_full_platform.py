@@ -808,7 +808,7 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'initialUrl.searchParams.delete("sig")' in script
     assert 'history.replaceState(' in script
     assert 'return `${path}${AUTH_QUERY ? join + AUTH_QUERY.slice(1) : ""}`;' in script
-    assert 'src="/cinema/assets/site.js?v=7"' in source
+    assert 'src="/cinema/assets/site.js?v=8"' in source
     assert '"/cinema/{guild_id}/api/auth-debug"' in source
     assert "def _cinema_auth_debug_payload(" in source
     assert "signed-session-v8-snowflake-safe" in source
@@ -1033,8 +1033,8 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert 'b.append(uiIcon(iconName), node("span", "bottom-nav-label", label))' in script
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
-    assert 'href="/cinema/assets/site.css?v=4"' in source
-    assert 'src="/cinema/assets/site.js?v=7"' in source
+    assert 'href="/cinema/assets/site.css?v=5"' in source
+    assert 'src="/cinema/assets/site.js?v=8"' in source
 
 
 def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop() -> None:
@@ -1049,7 +1049,7 @@ def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop
         'content="width=device-width,initial-scale=1,minimum-scale=1,'
         'viewport-fit=cover,interactive-widget=resizes-content">'
     ) in source
-    assert 'href="/cinema/assets/site.css?v=4"' in source
+    assert 'href="/cinema/assets/site.css?v=5"' in source
 
     assert "--content:min(1560px,calc(100vw - 48px))" in styles
     assert "@media(min-width:1800px)" in styles
@@ -1067,6 +1067,8 @@ def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop
     assert "overflow-wrap:anywhere" in styles
     assert "grid-template-columns:repeat(5,minmax(0,1fr))" in styles
     assert "min-height:54px" in styles
+    assert ".feed-result-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}" in styles
+    assert ".feed-result-card{" in styles
     assert "-webkit-text-size-adjust:100%" in styles
     assert "text-size-adjust:100%" in styles
 
@@ -1204,6 +1206,90 @@ def test_feed_center_structured_health_reflects_real_refresh_state(monkeypatch) 
     assert payload["endpoint_url"] == "https://example.org/api"
 
 
+def test_feed_state_returns_real_recent_discoveries(monkeypatch) -> None:
+    async def fake_registry(_guild_id: int, *, refresh: bool = False):
+        return {}, SimpleNamespace(revision=7, sources=[])
+
+    async def fake_recent(_guild_id: int, *, limit: int = 30):
+        assert limit == 36
+        return [
+            {
+                "guild_id": 123,
+                "source_id": "eztv",
+                "discovery_key": "abc",
+                "title": "Example Show",
+                "media_type": "tv",
+                "tmdb_id": 42,
+                "metadata": {
+                    "source_label": "EzTV",
+                    "category": "tv",
+                    "release_title": "Example.Show.S03E09.1080p",
+                    "poster_url": "https://image.tmdb.org/t/p/w500/example.jpg",
+                    "year": 2026,
+                    "rating": 8.1,
+                },
+                "playable": True,
+                "first_seen_at": "2026-10-05T21:30:00+00:00",
+                "last_seen_at": "2026-10-05T21:35:00+00:00",
+            }
+        ]
+
+    monkeypatch.setattr(cinema_feed_service, "load_media_source_registry", fake_registry)
+    monkeypatch.setattr(cinema_feed_service, "list_recent_discoveries", fake_recent)
+
+    data = asyncio.run(
+        cinema_feed_service.feed_state(
+            123,
+            can_manage=True,
+            refresh=False,
+        )
+    )
+
+    assert data["revision"] == 7
+    assert data["results_warning"] == ""
+    assert len(data["results"]) == 1
+    result = data["results"][0]
+    assert result["result_kind"] == "feed_discovery"
+    assert result["source_id"] == "eztv"
+    assert result["source_label"] == "EzTV"
+    assert result["category"] == "tv"
+    assert result["title"] == "Example Show"
+    assert result["release_title"] == "Example.Show.S03E09.1080p"
+    assert result["media_type"] == "tv"
+    assert result["tmdb_id"] == 42
+    assert result["poster_url"].endswith("example.jpg")
+    assert result["playable"] is True
+
+
+def test_runtime_feed_result_preserves_real_variant_stats() -> None:
+    variant = ResolvedMediaVariant(
+        title="Example Movie 2026 1080p",
+        source_id="rss-a",
+        source_label="RSS A",
+        source_ref="magnet:?xt=urn:btih:" + ("a" * 40),
+        file_size=4 * 1024 * 1024 * 1024,
+        seeds=22,
+        leechers=4,
+        peers=26,
+        metadata={"release_name": {"year": 2026}},
+    )
+
+    result = cinema_feed_service._runtime_result_payload(
+        variant,
+        category="movies",
+    )
+
+    assert result["title"] == "Example Movie 2026 1080p"
+    assert result["source_label"] == "RSS A"
+    assert result["category"] == "movies"
+    assert result["year"] == 2026
+    assert result["seeds"] == 22
+    assert result["leechers"] == 4
+    assert result["peers"] == 26
+    assert result["file_size"] == 4 * 1024 * 1024 * 1024
+    assert "source_ref" not in result
+
+
 def test_full_site_feed_center_does_not_fake_external_refresh_or_search() -> None:
     from pathlib import Path
 
@@ -1213,6 +1299,12 @@ def test_full_site_feed_center_does_not_fake_external_refresh_or_search() -> Non
     assert 'reference: "Reference link"' in script
     assert 'source.search_capable ? "Search" : ""' in script
     assert 'source.provider_type !== "external"' in script
+    assert "function feedResultCard(result)" in script
+    assert '"Latest Feed Results"' in script
+    assert '"Actual items discovered from your enabled RSS and structured sources."' in script
+    assert '"No feed results yet. Refresh an enabled RSS or structured source below' in script
+    assert '"Search in Cinema"' in script
+    assert '"View Details"' in script
     assert 'feedAction({ action: "refresh", source_id: source.source_id })' in script
     assert 'query: "movie"' not in script
     assert "Supports:" in script

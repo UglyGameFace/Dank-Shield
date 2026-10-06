@@ -1592,3 +1592,42 @@ Acceptance:
 - tablet layout remains balanced;
 - desktop and ultrawide retain intentional multi-column spacing and do not inherit phone stacking;
 - exact-head CI and companion workflows green before merge.
+
+## Feed Center results — source manager was not exposing discoveries
+
+Production observation after responsive layout #453:
+- Feed Center renders configured source cards, health, Refresh/Edit/Disable/Delete controls;
+- the page does not render actual entries discovered by those feeds;
+- EzTV can show Online/last refresh while the user has no visible result list.
+
+Repository evidence:
+- `refresh_feed()` already resolves real structured/RSS entries and records them through `record_feed_discoveries()`;
+- discoveries are already persisted in `dank_cinema_feed_discoveries` with title, source, category, TMDB identity when resolved, poster/backdrop metadata, first_seen_at, and last_seen_at;
+- `list_recent_discoveries()` already exists;
+- `/api/feeds` previously returned only source definitions plus source-local `newly_discovered` title strings;
+- `renderFeeds()` rendered only source-management cards.
+
+Active branch:
+`fix/cinema-feed-results`
+
+Correction contract:
+- `/api/feeds` returns up to 36 real recent discovery rows under `results`;
+- merge freshly refreshed in-memory results ahead of durable results so Refresh updates the page immediately;
+- durable results survive restarts through the existing discovery table;
+- canonical TMDB-matched results expose title/media type/TMDB ID/poster/backdrop/year/rating/overview;
+- unresolved releases still expose real release title/source/category and real seed/file-size stats when available in the current runtime;
+- raw playable refs/magnets/torrent URLs are NOT returned in the Feed Center result payload;
+- Feed Center renders `Latest Feed Results` above `Sources`;
+- TMDB-matched result opens in-app Cinema Details;
+- unresolved result routes to in-app Cinema Search instead of an external browser;
+- empty state explicitly instructs the user to Refresh an enabled RSS/structured source;
+- CSS uses compact responsive result cards: 3 columns desktop, 2 tablet, 1 phone;
+- cache-bust site JS to v8 and CSS to v5.
+
+Acceptance:
+- refreshed EzTV/RSS/structured source visibly produces result cards in Feed Center;
+- previously persisted feed discoveries appear after restart/redeploy;
+- result cards show source/category and canonical poster/details when TMDB matching succeeds;
+- unresolved releases stay usable through in-app Search;
+- source management remains below the results section;
+- exact-head CI and companion workflows green before merge.

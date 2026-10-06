@@ -29,7 +29,7 @@ from .media_source_registry import (
     set_custom_source_enabled,
 )
 from .media_source_resolver import preview_custom_media_source
-from .cinema_discovery_service import record_feed_discoveries
+from .cinema_discovery_service import list_recent_discoveries, record_feed_discoveries
 from .cinema_storage import CinemaStorageUnavailable
 
 CATEGORIES = (
@@ -60,6 +60,84 @@ def _default_refresh_query(category: str) -> str:
         MEDIA_CATEGORY_DOCUMENTARIES: "documentary",
         MEDIA_CATEGORY_CUSTOM: "movie",
     }.get(clean, "movie")
+
+
+def _result_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = (
+        dict(row.get("metadata") or {})
+        if isinstance(row.get("metadata"), Mapping)
+        else {}
+    )
+    return {
+        "result_kind": "feed_discovery",
+        "source_id": str(row.get("source_id") or "")[:100],
+        "source_label": str(
+            row.get("source_label")
+            or metadata.get("source_label")
+            or "Cinema source"
+        )[:80],
+        "category": str(
+            row.get("category")
+            or metadata.get("category")
+            or MEDIA_CATEGORY_CUSTOM
+        )[:40],
+        "title": str(row.get("title") or metadata.get("release_title") or "Untitled")[:180],
+        "release_title": str(metadata.get("release_title") or row.get("title") or "")[:240],
+        "media_type": (
+            str(row.get("media_type") or "")[:16]
+            if row.get("media_type")
+            else None
+        ),
+        "tmdb_id": int(row.get("tmdb_id") or 0) or None,
+        "poster_url": str(metadata.get("poster_url") or ""),
+        "backdrop_url": str(metadata.get("backdrop_url") or ""),
+        "year": int(metadata.get("year") or 0),
+        "rating": float(metadata.get("rating") or 0.0),
+        "overview": str(metadata.get("overview") or "")[:900],
+        "playable": bool(row.get("playable", True)),
+        "first_seen_at": str(row.get("first_seen_at") or ""),
+        "last_seen_at": str(row.get("last_seen_at") or ""),
+    }
+
+
+def _runtime_result_payload(
+    variant: Any,
+    *,
+    category: str,
+) -> dict[str, Any]:
+    metadata = dict(getattr(variant, "metadata", {}) or {})
+    source_reported = (
+        dict(metadata.get("source_reported") or {})
+        if isinstance(metadata.get("source_reported"), Mapping)
+        else {}
+    )
+    release = (
+        dict(metadata.get("release_name") or {})
+        if isinstance(metadata.get("release_name"), Mapping)
+        else {}
+    )
+    return {
+        "result_kind": "feed_discovery",
+        "source_id": str(getattr(variant, "source_id", "") or "")[:100],
+        "source_label": str(getattr(variant, "source_label", "") or "Cinema source")[:80],
+        "category": str(category or MEDIA_CATEGORY_CUSTOM)[:40],
+        "title": str(getattr(variant, "title", "") or "Untitled")[:180],
+        "release_title": str(getattr(variant, "title", "") or "")[:240],
+        "media_type": None,
+        "tmdb_id": None,
+        "poster_url": "",
+        "backdrop_url": "",
+        "year": int(release.get("year") or source_reported.get("year") or 0),
+        "rating": 0.0,
+        "overview": "",
+        "playable": True,
+        "first_seen_at": "",
+        "last_seen_at": "",
+        "seeds": int(getattr(variant, "seeds", 0) or 0),
+        "leechers": int(getattr(variant, "leechers", 0) or 0),
+        "peers": int(getattr(variant, "peers", 0) or 0),
+        "file_size": int(getattr(variant, "file_size", 0) or 0),
+    }
 
 
 def _payload(source: Any, *, guild_id: int, include_endpoint: bool) -> dict[str, Any]:
@@ -115,6 +193,48 @@ async def feed_state(
     _raw, registry = await load_media_source_registry(
         int(guild_id), refresh=bool(refresh)
     )
+    recent_results: list[dict[str, Any]] = []
+    results_warning = ""
+    try:
+        recent_results = [
+            _result_payload(row)
+            for row in await list_recent_discoveries(
+                int(guild_id),
+                limit=36,
+            )
+        ]
+    except CinemaStorageUnavailable:
+        results_warning = "Saved feed results are temporarily unavailable."
+    except Exception:
+        results_warning = "Saved feed results could not be loaded."
+
+    runtime_results: list[dict[str, Any]] = []
+    for source in registry.sources:
+        if not (can_manage or source.enabled):
+            continue
+        runtime = _RUNTIME_STATE.get((int(guild_id), str(source.source_id)), {})
+        rows = runtime.get("results")
+        if isinstance(rows, list):
+            runtime_results.extend(
+                dict(row)
+                for row in rows[:8]
+                if isinstance(row, Mapping)
+            )
+
+    merged_results: list[dict[str, Any]] = []
+    seen_results: set[tuple[str, str]] = set()
+    for row in [*runtime_results, *recent_results]:
+        key = (
+            str(row.get("source_id") or ""),
+            str(row.get("release_title") or row.get("title") or "").casefold(),
+        )
+        if not key[1] or key in seen_results:
+            continue
+        seen_results.add(key)
+        merged_results.append(row)
+        if len(merged_results) >= 36:
+            break
+
     return {
         "revision": int(registry.revision),
         "can_manage": bool(can_manage),
@@ -127,6 +247,8 @@ async def feed_state(
             for source in registry.sources
             if can_manage or source.enabled
         ],
+        "results": merged_results,
+        "results_warning": results_warning,
         "categories": list(CATEGORIES),
     }
 
@@ -157,16 +279,47 @@ async def refresh_feed(
     )
     error = str(outcome.errors[0]) if outcome.errors else ""
     titles = [str(item.title)[:180] for item in outcome.variants[:8]]
+    category = str(
+        getattr(source, "category", MEDIA_CATEGORY_CUSTOM) or MEDIA_CATEGORY_CUSTOM
+    )
+    runtime_results = [
+        _runtime_result_payload(
+            variant,
+            category=category,
+        )
+        for variant in outcome.variants[:8]
+    ]
     discovery_warning = ""
     if titles:
         try:
-            await record_feed_discoveries(
+            recorded = await record_feed_discoveries(
                 int(guild_id),
                 source_id=str(source.source_id),
                 source_label=str(source.label),
-                category=str(getattr(source, "category", MEDIA_CATEGORY_CUSTOM) or MEDIA_CATEGORY_CUSTOM),
+                category=category,
                 titles=titles,
             )
+            if recorded:
+                canonical_by_release = {
+                    str(
+                        (
+                            dict(item.get("metadata") or {})
+                            if isinstance(item.get("metadata"), Mapping)
+                            else {}
+                        ).get("release_title")
+                        or item.get("title")
+                        or ""
+                    ).casefold(): _result_payload(item)
+                    for item in recorded
+                    if isinstance(item, Mapping)
+                }
+                runtime_results = [
+                    canonical_by_release.get(
+                        str(row.get("release_title") or row.get("title") or "").casefold(),
+                        row,
+                    )
+                    for row in runtime_results
+                ]
         except CinemaStorageUnavailable:
             discovery_warning = (
                 "Source refreshed, but Recently Added storage is temporarily unavailable."
@@ -182,6 +335,7 @@ async def refresh_feed(
         "error": error,
         "discovery_warning": discovery_warning,
         "titles": titles,
+        "results": runtime_results,
     }
 
 
