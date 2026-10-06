@@ -103,6 +103,7 @@ def _media_state_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         "watchlisted_at": str(row.get("watchlisted_at") or ""),
         "favorite_at": str(row.get("favorite_at") or ""),
         "rated_at": str(row.get("rated_at") or ""),
+        "list_position": max(0, _safe_int(row.get("position"))),
         "metadata": {
             key: metadata.get(key)
             for key in (
