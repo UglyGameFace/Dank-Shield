@@ -1587,6 +1587,7 @@
           "Automatic picks the healthiest compatible release when you press Play. Tap a source only when you want to override it.",
         ));
         const sourceRows = [];
+        let sourcePlay = null;
         const sourceStatus = node("div", "source-selection-status", "Automatic • best available");
         const setSourceChoice = (choice, source = null) => {
           selectedSourceChoice = String(choice || "");
@@ -1598,6 +1599,9 @@
           sourceStatus.textContent = source
             ? `Manual • ${source.source_label || "Cinema source"}${source.health ? ` • ${source.health}` : ""}`
             : "Automatic • best available";
+          if (sourcePlay) {
+            sourcePlay.textContent = source ? "▶ Play Selected Source" : "▶ Play Automatically";
+          }
         };
 
         const automatic = node("button", "source-card source-choice selected");
@@ -1629,7 +1633,9 @@
           sourceRows.push(row);
           side.appendChild(row);
         });
-        side.appendChild(sourceStatus);
+        sourcePlay = button("▶ Play Automatically", "btn primary source-play-action");
+        sourcePlay.addEventListener("click", () => playOnSite(d, sourcePlay, selectedSourceChoice));
+        side.append(sourceStatus, sourcePlay);
       }
       detailsGrid.append(main, side);
       page.appendChild(detailsGrid);
