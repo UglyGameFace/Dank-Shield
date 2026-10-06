@@ -370,6 +370,9 @@ async def page_discoveries(
 ) -> dict[str, Any]:
     gid = int(guild_id)
     clean_query = " ".join(str(query or "").split())[:120]
+    filter_query = " ".join(
+        re.sub(r"[^A-Za-z0-9 _.'-]+", " ", clean_query).split()
+    )[:120]
     size = max(1, min(int(page_size), 24))
     current_page = max(1, int(page))
     offset = (current_page - 1) * size
@@ -380,8 +383,15 @@ async def page_discoveries(
             .select("*", count="exact")
             .eq("guild_id", gid)
         )
-        if clean_query:
-            request = request.ilike("title", f"%{clean_query}%")
+        if filter_query:
+            request = request.or_(
+                ",".join(
+                    (
+                        f"title.ilike.%{filter_query}%",
+                        f"metadata->>release_title.ilike.%{filter_query}%",
+                    )
+                )
+            )
         return (
             request
             .order("first_seen_at", desc=True)
