@@ -34,7 +34,7 @@ This remains one implementation task because both defects block the same product
 
 ## Status
 
-**Implementation is on a clean branch from current production main; PR/CI validation is next.**
+**Implementation is in draft PR #462; exact-head validation is active.**
 
 ## Findings / root cause
 
@@ -46,6 +46,7 @@ This remains one implementation task because both defects block the same product
    - a flaky/rate-limited provider or changed result set could therefore make a source visible and then unavailable seconds later.
 4. This mismatch existed even for **Automatic** mode and was worse for manual selection because the browser intentionally never receives raw source refs.
 5. Details also used its own generic source lookup/filter path instead of the exact playback helper, creating needless duplication between what the user sees and what playback accepts.
+6. The Resident Evil canary exposed a second correctness problem in the old title matcher: releases such as **Resident Evil (GOG)** and **Resident Evil Requiem voices38** could pass title-token matching even when the provider explicitly classified them as Games/Applications. Those are not movie releases and must never be offered as Cinema playback.
 
 ## Execution path
 
@@ -82,6 +83,8 @@ TV Season:
 - If the snapshot expires or is missing, Play falls back to a fresh exact search.
 - Snapshot storage is bounded to 1024 entries and expired entries are pruned before insertion.
 - Empty exact outcomes now log a safe count of provider/search errors and return a clearer refresh instruction.
+- Exact movie matching now rejects provider results explicitly categorized as Games, Applications/Software, Audio/Music, Books/eBooks, or Pictures/Images, including TPB-style numeric Audio/Application/Game buckets.
+- Video/movie categories and unknown custom taxonomies remain eligible so legitimate providers are not rejected merely for using their own category names.
 
 ## Validation / results
 
@@ -99,11 +102,11 @@ Regression coverage added for:
 - catalog failure returning classified 503 instead of generic 500;
 - TV Season rendering through Library storage outage;
 - client Library-control gating;
-- Details-to-Play exact source snapshot reuse without a second provider search.
+- Details-to-Play exact source snapshot reuse without a second provider search;
+- rejection of explicit game/software torrents that merely share the movie title, while valid video/unknown-category releases still pass.
 
 Pending:
-- open focused PR;
-- exact-head CI and mergeability/diff inspection;
+- exact-head PR #462 CI and mergeability/diff inspection;
 - Samsung Browser canary:
   1. open a movie Details page and confirm no generic 500;
   2. confirm source cards render;
@@ -132,7 +135,7 @@ Pending:
 
 ## Next step
 
-Open a focused PR from this branch, run exact-head CI, repair only evidence-backed failures, then deploy/canary the Details -> source -> Play path on Samsung Browser.
+Finish PR #462 exact-head CI, repair only evidence-backed failures, then deploy/canary the Details -> source -> Play path on Samsung Browser.
 
 ---
 
