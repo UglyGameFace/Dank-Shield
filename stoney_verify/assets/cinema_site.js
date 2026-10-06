@@ -1289,6 +1289,28 @@
     }
   }
 
+  function ratingControl(item, currentRating = 0, compact = false) {
+    const select = node("select", compact ? "rating-select compact" : "rating-select");
+    const none = node("option");
+    none.value = "0";
+    none.textContent = currentRating ? "Clear rating" : "Rate 1–10";
+    select.appendChild(none);
+    for (let value = 1; value <= 10; value += 1) {
+      const option = node("option");
+      option.value = String(value);
+      option.textContent = `${value}/10`;
+      if (Number(currentRating || 0) === value) option.selected = true;
+      select.appendChild(option);
+    }
+    select.addEventListener("click", (event) => event.stopPropagation());
+    select.addEventListener("change", async (event) => {
+      event.stopPropagation();
+      select.disabled = true;
+      await setUserRating(item, Number(select.value || 0));
+    });
+    return select;
+  }
+
   async function loadSeason(seriesId, seasonNumber, host, hostSession = null, focusEpisode = 0) {
     const key = `${seriesId}:${seasonNumber}`;
     let data = state.seasons.get(key);
@@ -1328,8 +1350,17 @@
       const meta = [ep.runtime ? `${ep.runtime}m` : "", ep.air_date || "", ep.rating ? `★ ${Number(ep.rating).toFixed(1)}` : ""].filter(Boolean).join(" • ");
       if (meta) copy.appendChild(node("div", "episode-meta", meta));
       const progress = ep.progress || {};
+      const episodeItem = {
+        ...ep,
+        media_type: "episode",
+        series_id: Number(seriesId),
+        favorite: Boolean(progress.favorite),
+        user_rating: Number(progress.user_rating || 0),
+        completed: Boolean(progress.completed),
+        play_count: Number(progress.play_count || 0),
+      };
       const label = progress.completed
-        ? "Watched"
+        ? (Number(progress.play_count || 0) > 1 ? `Watched ${Number(progress.play_count)}×` : "Watched")
         : Number(progress.progress_seconds || 0) > 0
           ? `Resume at ${formatSeconds(progress.progress_seconds)}`
           : "";
@@ -1340,13 +1371,26 @@
           ? "▶ Resume in Theater"
           : "▶ Play in Theater";
         const play = button(playLabel, "btn secondary episode-play");
-        play.addEventListener("click", () => playInTheater({
-          ...ep,
-          media_type: "episode",
-          series_id: Number(seriesId),
-        }, hostSession, play));
+        play.addEventListener("click", () => playInTheater(episodeItem, hostSession, play));
         stateEl.appendChild(play);
       }
+      const libraryActions = node("div", "episode-library-actions");
+      libraryActions.append(
+        button(progress.completed ? "Unwatch" : "Watched", "btn ghost", (event) => {
+          event.stopPropagation();
+          setWatchedState(episodeItem, !Boolean(progress.completed));
+        }),
+        button(progress.favorite ? "♥" : "♡", `btn ghost ${progress.favorite ? "active" : ""}`, (event) => {
+          event.stopPropagation();
+          toggleFavorite(episodeItem, !Boolean(progress.favorite));
+        }),
+        button("+ List", "btn ghost", (event) => {
+          event.stopPropagation();
+          openListPicker(episodeItem);
+        }),
+        ratingControl(episodeItem, Number(progress.user_rating || 0), true),
+      );
+      stateEl.appendChild(libraryActions);
       card.append(still, copy, stateEl);
       list.appendChild(card);
     });
@@ -1423,6 +1467,27 @@
       }
       const inWatchlist = Boolean(data.library?.watchlisted);
       actions.appendChild(button(inWatchlist ? "✓ In Watchlist" : "+ Watchlist", "btn secondary", () => setWatchlistFromDetails(data, !inWatchlist)));
+      const detailsItem = {
+        ...d,
+        favorite: Boolean(data.library?.favorite),
+        user_rating: Number(data.library?.user_rating || 0),
+        completed: Boolean(data.library?.completed),
+        play_count: Number(data.library?.play_count || 0),
+      };
+      actions.appendChild(button(
+        data.library?.favorite ? "♥ Favorite" : "♡ Favorite",
+        `btn secondary ${data.library?.favorite ? "active" : ""}`,
+        () => toggleFavorite(detailsItem, !Boolean(data.library?.favorite)),
+      ));
+      actions.appendChild(button("+ List", "btn secondary", () => openListPicker(detailsItem)));
+      if (d.media_type === "movie") {
+        actions.appendChild(button(
+          data.library?.completed ? "Mark Unwatched" : "Mark Watched",
+          "btn secondary",
+          () => setWatchedState(detailsItem, !Boolean(data.library?.completed)),
+        ));
+      }
+      actions.appendChild(ratingControl(detailsItem, Number(data.library?.user_rating || 0)));
       if (d.trailer_url) actions.appendChild(button("Trailer", "btn secondary", () => openExternal(d.trailer_url)));
       if (!data.active_session?.watch_url && !data.host_session?.is_host && data.discord?.discord_url) {
         actions.appendChild(button("Open Discord to Play", "btn discord", () => openExternal(data.discord.discord_url)));
@@ -1486,7 +1551,14 @@
       side.appendChild(node("h3", "", d.media_type === "tv" ? "Series Details" : "Movie Details"));
       if ((d.directors || []).length) side.appendChild(node("p", "section-sub", `Director: ${d.directors.join(", ")}`));
       if ((d.creators || []).length) side.appendChild(node("p", "section-sub", `Created by: ${d.creators.join(", ")}`));
-      side.appendChild(node("p", "section-sub", data.library?.completed ? "Watched" : Number(data.library?.progress_seconds || 0) > 0 ? `Progress: ${formatSeconds(data.library.progress_seconds)}` : "No saved playback progress yet."));
+      side.appendChild(node("p", "section-sub", data.library?.completed
+        ? (Number(data.library?.play_count || 0) > 1 ? `Watched ${Number(data.library.play_count)}×` : "Watched")
+        : Number(data.library?.progress_seconds || 0) > 0
+          ? `Progress: ${formatSeconds(data.library.progress_seconds)}`
+          : "No saved playback progress yet."));
+      if (Number(data.library?.user_rating || 0) > 0) {
+        side.appendChild(node("p", "section-sub", `Your rating: ${Number(data.library.user_rating)}/10`));
+      }
 
       const sources = Array.isArray(data.sources) ? data.sources : [];
       const sourceTitle = node("h3", "", "Available Cinema Sources");
