@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+import time
 from typing import Any, Mapping, Sequence
 
 from .cinema_catalog import CinemaMedia, search_catalog
@@ -157,6 +158,120 @@ async def _resolve_media(title: str, category: str) -> CinemaMedia | None:
 def _discovery_key(title: str) -> str:
     normalized = " ".join(_tokens(title))[:500]
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]
+
+
+async def enrich_discovery_rows(
+    guild_id: int,
+    discovery_rows: Sequence[Mapping[str, Any]],
+    *,
+    max_items: int = 4,
+    retry_seconds: int = 1800,
+) -> list[dict[str, Any]]:
+    gid = int(guild_id)
+    now_epoch = int(time.time())
+    output = [dict(row) for row in discovery_rows if isinstance(row, Mapping)]
+    candidates: list[tuple[int, dict[str, Any], str, str]] = []
+
+    for index, row in enumerate(output):
+        if int(row.get("tmdb_id") or 0) > 0:
+            continue
+        metadata = (
+            dict(row.get("metadata") or {})
+            if isinstance(row.get("metadata"), Mapping)
+            else {}
+        )
+        attempted_at = int(metadata.get("enrichment_attempted_at") or 0)
+        if attempted_at and now_epoch - attempted_at < max(60, int(retry_seconds)):
+            continue
+        release_title = str(
+            metadata.get("release_title")
+            or row.get("title")
+            or ""
+        ).strip()
+        if not release_title:
+            continue
+        category = str(metadata.get("category") or "custom")
+        candidates.append((index, row, release_title, category))
+        if len(candidates) >= max(1, min(int(max_items), 8)):
+            break
+
+    if not candidates:
+        return output
+
+    semaphore = asyncio.Semaphore(2)
+
+    async def resolve(
+        index: int,
+        row: dict[str, Any],
+        release_title: str,
+        category: str,
+    ) -> tuple[int, dict[str, Any], CinemaMedia | None]:
+        async with semaphore:
+            return index, row, await _resolve_media(release_title, category)
+
+    resolved = await asyncio.gather(
+        *(resolve(*candidate) for candidate in candidates)
+    )
+    updates: list[dict[str, Any]] = []
+
+    for index, row, media in resolved:
+        metadata = (
+            dict(row.get("metadata") or {})
+            if isinstance(row.get("metadata"), Mapping)
+            else {}
+        )
+        metadata["enrichment_attempted_at"] = now_epoch
+        updated = dict(row)
+        updated["metadata"] = metadata
+        if media is not None:
+            updated["title"] = media.title[:180]
+            updated["media_type"] = media.media_type
+            updated["tmdb_id"] = int(media.tmdb_id)
+            metadata.update(
+                {
+                    "poster_url": media.poster_url,
+                    "backdrop_url": media.backdrop_url,
+                    "year": media.year,
+                    "overview": media.overview,
+                    "rating": media.rating,
+                }
+            )
+        output[index] = updated
+        updates.append(
+            {
+                "guild_id": gid,
+                "source_id": str(updated.get("source_id") or "")[:100],
+                "discovery_key": str(updated.get("discovery_key") or "")[:32],
+                "title": str(updated.get("title") or "")[:180],
+                "media_type": updated.get("media_type"),
+                "tmdb_id": int(updated.get("tmdb_id") or 0) or None,
+                "metadata": metadata,
+                "playable": bool(updated.get("playable", True)),
+                "last_seen_at": str(updated.get("last_seen_at") or utc_now()),
+            }
+        )
+
+    if updates:
+        def write(client: Any):
+            try:
+                return (
+                    client.table(TABLE)
+                    .upsert(
+                        updates,
+                        on_conflict="guild_id,source_id,discovery_key",
+                        ignore_duplicates=False,
+                    )
+                    .execute()
+                )
+            except TypeError:
+                return client.table(TABLE).upsert(updates).execute()
+
+        try:
+            await execute(f"enrich Cinema feed discoveries {gid}", write)
+        except Exception:
+            pass
+
+    return output
 
 
 async def record_feed_discoveries(
@@ -343,6 +458,7 @@ async def search_discoveries(
 
 
 __all__ = [
+    "enrich_discovery_rows",
     "list_recent_discoveries",
     "page_discoveries",
     "record_feed_discoveries",
