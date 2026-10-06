@@ -2987,6 +2987,8 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
       <div class="stat"><b>Torrent</b><span id="progress">0%</span></div>
       <div class="stat"><b id="swarmLabel">Swarm</b><span id="peers">0 / 0</span></div>
       <div class="stat"><b>Buffer target</b><span id="buffer">—</span></div>
+      <div class="stat"><b>Server startup</b><span id="serverStartup">—</span></div>
+      <div class="stat"><b>Browser startup</b><span id="browserStartup">—</span></div>
     </div>
     <div class="quality-control">
       <label for="qualityMode">Visual quality</label>
@@ -3157,6 +3159,12 @@ let streamRetryTimer=null;
 let streamRetryAttempt=0;
 let stateFetchFailures=0;
 let attachedStreamUrl="";
+let startupTrace={{
+  attachedAt:0,
+  playRequestedAt:0,
+  events:{{}},
+  firstFrameRequested:false
+}};
 let hostSheetDismissed=true;
 let previousHostState=null;
 let controlsHideTimer=null;
@@ -3413,6 +3421,68 @@ function fmtClock(seconds) {{
   const m=Math.floor((total%3600)/60);
   const s=String(total%60).padStart(2,"0");
   return h?String(h)+":"+String(m).padStart(2,"0")+":"+s:String(m)+":"+s;
+}}
+function fmtDiagnosticBytes(value) {{
+  let n=Math.max(0,Number(value)||0);
+  const units=["B","KiB","MiB","GiB"];
+  let i=0;
+  while(n>=1024&&i<units.length-1){{n/=1024;i++;}}
+  return (i? n.toFixed(n>=10?0:1):Math.round(n))+" "+units[i];
+}}
+function resetStartupTrace() {{
+  startupTrace={{
+    attachedAt:performance.now(),
+    playRequestedAt:0,
+    events:{{}},
+    firstFrameRequested:false
+  }};
+  renderStartupDiagnostics(lastState?.torrent?.startup||{{}});
+}}
+function markStartupEvent(name) {{
+  if(!startupTrace.attachedAt) return;
+  const key=String(name||"");
+  if(!key || startupTrace.events[key]!==undefined) return;
+  startupTrace.events[key]=Math.max(0,performance.now()-startupTrace.attachedAt);
+  if(key==="playing" && startupTrace.playRequestedAt>0)
+    startupTrace.events.play_to_playing=Math.max(0,performance.now()-startupTrace.playRequestedAt);
+  renderStartupDiagnostics(lastState?.torrent?.startup||{{}});
+}}
+function markPlayRequested() {{
+  if(!startupTrace.attachedAt) return;
+  startupTrace.playRequestedAt=performance.now();
+  delete startupTrace.events.play_to_playing;
+  renderStartupDiagnostics(lastState?.torrent?.startup||{{}});
+}}
+function fmtDiagnosticMs(value) {{
+  const n=Math.max(0,Number(value)||0);
+  if(!n) return "—";
+  return n>=1000?(n/1000).toFixed(n>=10000?1:2)+"s":Math.round(n)+"ms";
+}}
+function renderStartupDiagnostics(server={{}}) {{
+  const serverEl=document.getElementById("serverStartup");
+  const browserEl=document.getElementById("browserStartup");
+  if(serverEl) {{
+    const bits=[];
+    if(Number(server.first_request_ms||0)>0)
+      bits.push("request "+fmtDiagnosticMs(server.first_request_ms));
+    if(Number(server.first_wait_ms||0)>0)
+      bits.push("wait "+fmtDiagnosticMs(server.first_wait_ms));
+    if(Number(server.first_byte_ms||0)>0)
+      bits.push("first byte "+fmtDiagnosticMs(server.first_byte_ms));
+    if(Number(server.first_range_start||0)>0)
+      bits.push("range @ "+fmtDiagnosticBytes(server.first_range_start));
+    serverEl.textContent=bits.length?bits.join(" • "):"waiting for first Range";
+  }}
+  if(browserEl) {{
+    const e=startupTrace.events||{{}};
+    const bits=[];
+    if(e.loadedmetadata!==undefined) bits.push("metadata "+fmtDiagnosticMs(e.loadedmetadata));
+    if(e.canplay!==undefined) bits.push("can play "+fmtDiagnosticMs(e.canplay));
+    if(e.play_to_playing!==undefined) bits.push("Play→playing "+fmtDiagnosticMs(e.play_to_playing));
+    else if(e.playing!==undefined) bits.push("playing "+fmtDiagnosticMs(e.playing));
+    if(e.first_frame!==undefined) bits.push("frame "+fmtDiagnosticMs(e.first_frame));
+    browserEl.textContent=bits.length?bits.join(" • "):"waiting for media events";
+  }}
 }}
 function refreshNativePlayerCapabilities() {{
   const pip=document.getElementById("pip");
@@ -3994,6 +4064,7 @@ function attachStream(url, force=false) {{
   if(!clean) return;
   if(!force && attachedStreamUrl===clean && video.getAttribute("src")) return;
   attachedStreamUrl=clean;
+  resetStartupTrace();
   resetPlaybackRate();
   video.src=clean;
   video.load();
@@ -4237,6 +4308,7 @@ async function applyState(s) {{
   }}
   const b=t.buffer||{{}};
   document.getElementById("buffer").textContent=b.target_seconds?Number(b.target_seconds).toFixed(0)+"s":"adaptive";
+  renderStartupDiagnostics(t.startup||{{}});
 
   document.getElementById("play").disabled=!s.is_host;
   document.getElementById("pause").disabled=!s.is_host;
@@ -4631,6 +4703,7 @@ document.getElementById("play").onclick=()=>hostAction("resume");
 document.getElementById("pause").onclick=()=>hostAction("pause");
 async function togglePlayerPlayback() {{
   if(!lastState?.stream_url) return;
+  if(video.paused) markPlayRequested();
   showPlayerControls(true);
 
   if(lastState.is_host) {{
@@ -4813,9 +4886,27 @@ video.addEventListener("enterpictureinpicture",refreshNativePlayerCapabilities);
 video.addEventListener("leavepictureinpicture",refreshNativePlayerCapabilities);
 video.addEventListener("loadedmetadata",refreshNativePlayerCapabilities);
 video.addEventListener("contextmenu",event=>event.preventDefault());
-for(const eventName of ["loadedmetadata","loadeddata","canplay","playing","emptied"]) {{
-  video.addEventListener(eventName,()=>stabilizePlayerLayout());
+for(const eventName of ["loadstart","loadedmetadata","loadeddata","canplay","playing","waiting","stalled","emptied","error"]) {{
+  video.addEventListener(eventName,()=>{{
+    stabilizePlayerLayout();
+    markStartupEvent(eventName);
+    if(eventName==="playing" && !startupTrace.firstFrameRequested) {{
+      startupTrace.firstFrameRequested=true;
+      if(typeof video.requestVideoFrameCallback==="function") {{
+        try {{
+          video.requestVideoFrameCallback(()=>markStartupEvent("first_frame"));
+        }} catch(_) {{}}
+      }}
+    }}
+  }});
 }}
+video.addEventListener("timeupdate",()=>{{
+  if(
+    startupTrace.events.playing!==undefined &&
+    startupTrace.events.first_frame===undefined &&
+    Number(video.currentTime||0)>0
+  ) markStartupEvent("first_frame");
+}});
 async function enterTheaterFullscreen() {{
   const target=document.getElementById("videoStage");
   try {{
