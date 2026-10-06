@@ -135,11 +135,13 @@ def test_feed_center_client_exposes_personalization_without_source_refs() -> Non
         '"Studio"',
         '"Quality upgrade"',
         '"Open My Feed"',
-        '"New Feed Rule"',
+        '"+ New Feed Rule"',
     ):
         assert expected in script
 
     assert 'api("/feed-rules"' in script
+    assert 'api("/feed-queue"' in script
+    assert '"Add to Queue"' in script
     assert '"Actual items discovered from your enabled RSS and structured sources."' in script
     assert "magnet:?" not in script
 
