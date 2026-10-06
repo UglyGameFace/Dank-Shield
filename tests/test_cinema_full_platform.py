@@ -1033,8 +1033,42 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert 'b.append(uiIcon(iconName), node("span", "bottom-nav-label", label))' in script
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
-    assert 'href="/cinema/assets/site.css?v=3"' in source
+    assert 'href="/cinema/assets/site.css?v=4"' in source
     assert 'src="/cinema/assets/site.js?v=7"' in source
+
+
+def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop() -> None:
+    from pathlib import Path
+
+    root = Path(cinema_site.__file__).resolve().parent
+    styles = (root / "assets" / "cinema_site.css").read_text(encoding="utf-8")
+    source = Path(cinema_site.__file__).read_text(encoding="utf-8")
+
+    assert (
+        '<meta name="viewport" '
+        'content="width=device-width,initial-scale=1,minimum-scale=1,'
+        'viewport-fit=cover,interactive-widget=resizes-content">'
+    ) in source
+    assert 'href="/cinema/assets/site.css?v=4"' in source
+
+    assert "--content:min(1560px,calc(100vw - 48px))" in styles
+    assert "@media(min-width:1800px)" in styles
+    assert "@media(max-width:1199px)" in styles
+    assert "@media(max-width:820px)" in styles
+    assert "@media(max-width:620px)" in styles
+    assert "@media(max-width:390px)" in styles
+
+    assert "grid-template-columns:minmax(0,1fr) auto" in styles
+    assert ".details-grid{grid-template-columns:minmax(0,1fr)}" in styles
+    assert ".details-hero{min-height:0;border-radius:19px}" in styles
+    assert ".details-bg{height:280px}" in styles
+    assert "padding:188px 18px 20px" in styles
+    assert ".feed-title,.feed-meta,.section-sub,.details-overview,.notification-body" in styles
+    assert "overflow-wrap:anywhere" in styles
+    assert "grid-template-columns:repeat(5,minmax(0,1fr))" in styles
+    assert "min-height:54px" in styles
+    assert "-webkit-text-size-adjust:100%" in styles
+    assert "text-size-adjust:100%" in styles
 
 
 def test_full_site_auto_quality_and_source_search_controls_are_real() -> None:
