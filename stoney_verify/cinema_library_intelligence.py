@@ -95,7 +95,7 @@ def _media_state_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         "completed": bool(row.get("completed")),
         "watchlisted": bool(row.get("watchlisted")),
         "favorite": bool(row.get("favorite")),
-        "rating": _safe_int(row.get("rating")),
+        "user_rating": _safe_int(row.get("rating")),
         "play_count": max(0, _safe_int(row.get("play_count"))),
         "first_watched_at": str(row.get("first_watched_at") or ""),
         "last_watched_at": str(row.get("last_watched_at") or ""),
@@ -565,6 +565,30 @@ async def upcoming_episode_rows(
     return output[: max(1, min(int(limit), 30))]
 
 
+def _list_payload(
+    row: Mapping[str, Any],
+    *,
+    include_adult: bool,
+) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    for raw in list(row.get("items") or []):
+        if not isinstance(raw, Mapping):
+            continue
+        metadata = _metadata(raw)
+        if not include_adult and bool(metadata.get("adult", False)):
+            continue
+        items.append(_media_state_payload(raw))
+    return {
+        "id": str(row.get("id") or ""),
+        "name": _clean(row.get("name"), 80),
+        "description": _clean(row.get("description"), 300),
+        "position": max(0, _safe_int(row.get("position"))),
+        "created_at": str(row.get("created_at") or ""),
+        "updated_at": str(row.get("updated_at") or ""),
+        "items": items,
+    }
+
+
 async def library_intelligence_snapshot(
     guild_id: int,
     user_id: int,
@@ -651,7 +675,11 @@ async def library_intelligence_snapshot(
             for row in sessions
             if include_adult or not bool(_metadata(row).get("adult", False))
         ],
-        "lists": lists,
+        "lists": [
+            _list_payload(row, include_adult=include_adult)
+            for row in lists
+            if isinstance(row, Mapping)
+        ],
         "stats": stats,
         "because_you_watched": recommendations["because_you_watched"],
         "recommended": recommendations["recommended"],
