@@ -109,7 +109,6 @@ from .cinema_playback_service import (
     start_room_variant,
 )
 from .movie_night import get_movie_night_manager
-from .torrent_streaming import get_torrent_manager
 from .movie_night_preferences import load_movie_night_preferences
 from .movie_night_web import movie_night_watch_url
 
@@ -2609,10 +2608,7 @@ async def cinema_play_api(request: web.Request) -> web.Response:
         ) from exc
 
     response_ready_at = time.monotonic()
-    try:
-        torrent_session = await get_torrent_manager().get(playback.room.stream_token)
-    except Exception:
-        torrent_session = None
+    torrent_session = getattr(playback, "session", None)
     if torrent_session is not None:
         torrent_started_at = float(
             getattr(torrent_session, "startup_started_at", 0.0)
