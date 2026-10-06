@@ -391,11 +391,14 @@ async def delete_feed_rule(
 
 
 def _release_details(row: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = (
+        dict(row.get("metadata") or {})
+        if isinstance(row.get("metadata"), Mapping)
+        else {}
+    )
     release_title = _clean(
         row.get("release_title")
-        or (row.get("metadata") or {}).get("release_title")
-        if isinstance(row.get("metadata"), Mapping)
-        else row.get("release_title")
+        or metadata.get("release_title")
         or row.get("title"),
         300,
     )
@@ -426,11 +429,6 @@ def _release_details(row: Mapping[str, Any]) -> dict[str, Any]:
     else:
         codec = video_tags[0] if video_tags else ""
 
-    metadata = (
-        dict(row.get("metadata") or {})
-        if isinstance(row.get("metadata"), Mapping)
-        else {}
-    )
     languages = _string_list(
         metadata.get("languages")
         or metadata.get("language_tags")
@@ -695,6 +693,8 @@ async def build_personalized_feed(
     for raw_group in groups:
         group = dict(raw_group)
         reasons: list[str] = []
+        if bool(group.get("private")):
+            reasons.append("Private feed")
         key = (
             str(group.get("media_type") or ""),
             int(group.get("tmdb_id") or 0),
@@ -713,11 +713,14 @@ async def build_personalized_feed(
         if reasons and _matches_filters(group, default_filters):
             group["match_reasons"] = reasons
             group["queue_suggested"] = bool(
-                key in watchlist_keys
-                or any(
+                prefs.get("feed_queue_suggestions", True)
+                and (
+                    key in watchlist_keys
+                    or any(
                     bool((rule.get("actions") or {}).get("queue_suggest"))
                     or rule.get("rule_type") == "follow"
                     for rule in matched_user_rules
+                    )
                 )
             )
             group["watchlist_match"] = key in watchlist_keys
@@ -1217,20 +1220,29 @@ async def process_feed_notifications(
         if preferred_mode == "off":
             continue
 
-        # De-duplicate same title matched by multiple rules.
-        unique: dict[str, tuple[dict[str, Any], set[str]]] = {}
-        for group, reason, _rule_mode in matches:
+        # De-duplicate same title matched by multiple rules while retaining
+        # their requested notification modes.
+        unique: dict[str, tuple[dict[str, Any], set[str], set[str]]] = {}
+        for group, reason, rule_mode in matches:
             key = str(group.get("group_key") or "")
             if not key:
                 continue
-            current = unique.setdefault(key, (group, set()))
+            current = unique.setdefault(key, (group, set(), set()))
             current[1].add(reason)
+            current[2].add(str(rule_mode or "instant"))
 
-        if preferred_mode == "daily":
+        effective_mode = preferred_mode
+        if preferred_mode == "instant" and unique and all(
+            modes and modes <= {"daily"}
+            for _group, _reasons, modes in unique.values()
+        ):
+            effective_mode = "daily"
+
+        if effective_mode == "daily":
             sample = next(iter(unique.values()), None)
             if sample is None:
                 continue
-            group, reasons = sample
+            group, reasons, _modes = sample
             count = len(unique)
             await create_notification(
                 uid,
@@ -1247,7 +1259,7 @@ async def process_feed_notifications(
             created += 1
             continue
 
-        for key, (group, reasons) in list(unique.items())[:12]:
+        for key, (group, reasons, _modes) in list(unique.items())[:12]:
             best = (
                 dict(group.get("best_release") or {})
                 if isinstance(group.get("best_release"), Mapping)
