@@ -453,6 +453,25 @@ class _DankCommandOwnerMixin:
 
     async def setup_hook(self) -> None:
         await super().setup_hook()  # type: ignore[misc]
+
+        # Discloud TYPE=site health depends on the public listener binding promptly.
+        # Start Cinema on the client's live event loop before gateway readiness so
+        # a slow/blocked Discord ready lifecycle cannot leave port 8080 unbound.
+        # The on_ready owner remains as an idempotent fallback for reconnects.
+        try:
+            from .torrent_media_server import start_torrent_media_server
+
+            media_started = await start_torrent_media_server()
+            if media_started:
+                print("🎞️ Torrent media server ready before Discord gateway readiness")
+            else:
+                print("ℹ️ Torrent media server disabled during pre-gateway setup")
+        except Exception as exc:
+            print(
+                "❌ Torrent media server pre-gateway startup failed; "
+                f"on_ready will retry: {type(exc).__name__}: {exc}"
+            )
+
         public_scope = public_command_scope_enabled()
 
         # Command registration has completed before bot.run() reaches setup_hook.
