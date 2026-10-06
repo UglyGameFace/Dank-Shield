@@ -442,14 +442,16 @@ def _release_details(row: Mapping[str, Any]) -> dict[str, Any]:
         codec = video_tags[0] if video_tags else ""
 
     languages = _string_list(
-        metadata.get("languages")
+        row.get("languages")
+        or metadata.get("languages")
         or metadata.get("language_tags")
         or [],
         limit=12,
         item_limit=24,
     )
     subtitle_languages = _string_list(
-        metadata.get("subtitle_languages")
+        row.get("subtitle_languages")
+        or metadata.get("subtitle_languages")
         or metadata.get("subtitles")
         or [],
         limit=12,
