@@ -46,7 +46,10 @@ _USER_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
 _MEDIA_CACHE: dict[int, tuple[float, list[dict[str, Any]]]] = {}
 _LOCKS: dict[int, asyncio.Lock] = {}
 _SESSION_WRITE_INTERVAL = 30.0
-_SESSION_WRITE_CACHE: dict[tuple[int, str], tuple[float, float, bool]] = {}
+_SESSION_WRITE_CACHE: dict[
+    tuple[int, str],
+    tuple[float, float, bool, float, str, Optional[str]],
+] = {}
 
 
 class InvalidCinemaState(ValueError):
@@ -540,10 +543,9 @@ async def record_watch_session(
     previous_cache = _SESSION_WRITE_CACHE.get(cache_key)
     now_mono = time.monotonic()
     if previous_cache is not None:
-        last_write, last_progress, last_completed = previous_cache
+        last_write, last_progress, _last_completed, _duration, _started_at, _completed_at = previous_cache
         if (
             not completed
-            and not last_completed
             and now_mono - last_write < _SESSION_WRITE_INTERVAL
             and abs(progress - last_progress) < 60.0
         ):
@@ -557,18 +559,35 @@ async def record_watch_session(
         episode_number=episode_number,
     )
 
-    def read(client: Any):
-        return (
-            client.table(SESSION_TABLE)
-            .select("*")
-            .eq("user_id", uid)
-            .eq("session_key", session_key)
-            .limit(1)
-            .execute()
-        )
+    if previous_cache is None:
+        def read(client: Any):
+            return (
+                client.table(SESSION_TABLE)
+                .select("*")
+                .eq("user_id", uid)
+                .eq("session_key", session_key)
+                .limit(1)
+                .execute()
+            )
 
-    found = _rows(await _execute(f"read Cinema watch session {uid}", read))
-    existing = dict(found[0]) if found else {}
+        found = _rows(await _execute(f"read Cinema watch session {uid}", read))
+        existing = dict(found[0]) if found else {}
+    else:
+        (
+            _last_write,
+            cached_progress,
+            cached_completed,
+            cached_duration,
+            cached_started_at,
+            cached_completed_at,
+        ) = previous_cache
+        existing = {
+            "max_progress_seconds": cached_progress,
+            "completed": cached_completed,
+            "duration_seconds": cached_duration,
+            "started_at": cached_started_at,
+            "completed_at": cached_completed_at,
+        }
     now = _now()
     payload = {
         "user_id": uid,
@@ -617,7 +636,21 @@ async def record_watch_session(
             return client.table(SESSION_TABLE).upsert(payload).execute()
 
     await _execute(f"write Cinema watch session {uid}", write)
-    _SESSION_WRITE_CACHE[cache_key] = (now_mono, progress, bool(payload["completed"]))
+    _SESSION_WRITE_CACHE[cache_key] = (
+        now_mono,
+        float(payload["max_progress_seconds"]),
+        bool(payload["completed"]),
+        float(payload["duration_seconds"]),
+        str(payload["started_at"] or now),
+        str(payload["completed_at"]) if payload.get("completed_at") else None,
+    )
+    if len(_SESSION_WRITE_CACHE) > 2048:
+        oldest = sorted(
+            _SESSION_WRITE_CACHE.items(),
+            key=lambda item: item[1][0],
+        )[:256]
+        for stale_key, _value in oldest:
+            _SESSION_WRITE_CACHE.pop(stale_key, None)
 
 
 async def list_watch_sessions(
