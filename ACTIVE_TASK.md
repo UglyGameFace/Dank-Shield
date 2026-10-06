@@ -29,7 +29,7 @@ This remains the single active production-playback task.
 
 ## Status
 
-**Implementation is on a clean branch from current production main. Focused tests, documentation, and cache-bust changes are committed; PR/exact-head CI are next.**
+**Implementation is in draft PR #463. Exact-head CI on implementation head `13b8183bb1a1213cf0751850c4abe155d7d13b68` passed all required workflow families. This record-only update is the final branch change before rechecking exact-head status and moving to the production canary.**
 
 ## Findings / root cause
 
@@ -92,9 +92,18 @@ Confirmed by inspection:
 - source selection rules remain unchanged;
 - settings remain operator-overridable.
 
+Validated on implementation head `13b8183bb1a1213cf0751850c4abe155d7d13b68`:
+- Dank Shield CI: success;
+- Dank Design Regression CI: success;
+- Dank Cinema SQL: success;
+- Application Command Size Diagnostics: success;
+- Profile Runtime Diagnostics: success;
+- Ticket Owner Emergency Override: success;
+- PR remained mergeable;
+- final diff review found no conflict markers, debug leftovers, or secret-bearing changes.
+
 Pending:
-- focused/exact-head CI;
-- mergeability/final diff review;
+- exact-head recheck after this task-record-only commit;
 - production env verification/update for the newly documented swarm values;
 - Samsung Browser healthy-swarm canary comparing provider-reported availability against actual live connected peers/download rate and time-to-first-play.
 
@@ -119,7 +128,7 @@ Pending:
 
 ## Next step
 
-Open a focused draft PR, run exact-head CI, repair only evidence-backed failures, then update the production torrent env values and measure the first-buffer path on Samsung Browser with a healthy source.
+Recheck PR #463 exact-head CI after this record-only commit, then use the merge/deploy canary to verify the effective production env values and measure the first-buffer path on Samsung Browser with a healthy source.
 
 ---
 
