@@ -39,6 +39,9 @@
     activeView: "",
     searchController: null,
     searchTimer: null,
+    feedQuery: "",
+    feedPage: 1,
+    feedSearchTimer: null,
     details: new Map(),
     seasons: new Map(),
   };
@@ -1313,7 +1316,16 @@
       art.appendChild(image);
     } else {
       const placeholder = node("div", "feed-result-placeholder");
-      placeholder.appendChild(uiIcon("feeds"));
+      const initials = itemTitle(result)
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part[0]?.toUpperCase() || "")
+        .join("");
+      placeholder.append(
+        uiIcon("feeds"),
+        node("span", "feed-result-placeholder-text", initials || "DC"),
+      );
       art.appendChild(placeholder);
     }
 
@@ -1361,8 +1373,17 @@
     const page = node("main", "page");
     renderShell(skeletonPage(), "feeds");
     try {
-      const data = state.feeds || await api("/feeds");
+      const params = new URLSearchParams({
+        page: String(Math.max(1, Number(state.feedPage || 1))),
+        page_size: "8",
+      });
+      const cleanFeedQuery = String(state.feedQuery || "").trim();
+      if (cleanFeedQuery) params.set("q", cleanFeedQuery);
+      const data = await api(`/feeds?${params.toString()}`);
       state.feeds = data;
+      const pagination = data.pagination || {};
+      state.feedQuery = String(pagination.query || cleanFeedQuery);
+      state.feedPage = Math.max(1, Number(pagination.page || 1));
       page.textContent = "";
       const head = node("div", "section-head");
       const title = node("div");
@@ -1373,14 +1394,59 @@
 
       const results = Array.isArray(data.results) ? data.results : [];
       const resultSection = node("section", "section feed-results-section");
-      const resultHead = node("div", "section-head");
+      const resultHead = node("div", "section-head feed-results-head");
       const resultTitle = node("div");
+      const totalResults = Math.max(0, Number(pagination.total || 0));
       resultTitle.append(
         node("h2", "section-title", "Latest Feed Results"),
-        node("p", "section-sub", "Actual items discovered from your enabled RSS and structured sources."),
+        node(
+          "p",
+          "section-sub",
+          cleanFeedQuery
+            ? `${totalResults} saved result${totalResults === 1 ? "" : "s"} matching “${state.feedQuery}”.`
+            : `${totalResults} saved feed result${totalResults === 1 ? "" : "s"} across your enabled sources.`,
+        ),
       );
       resultHead.appendChild(resultTitle);
       resultSection.appendChild(resultHead);
+
+      const searchBar = node("div", "feed-search-bar");
+      const searchInput = node("input", "search-input");
+      searchInput.type = "search";
+      searchInput.placeholder = "Search feed results…";
+      searchInput.value = state.feedQuery;
+      searchInput.autocomplete = "off";
+      searchInput.setAttribute("aria-label", "Search feed results");
+      const searchButton = button("Search", "btn primary", () => {
+        state.feedQuery = searchInput.value.trim();
+        state.feedPage = 1;
+        renderFeeds();
+      });
+      searchInput.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        state.feedQuery = searchInput.value.trim();
+        state.feedPage = 1;
+        renderFeeds();
+      });
+      searchInput.addEventListener("input", () => {
+        if (state.feedSearchTimer) clearTimeout(state.feedSearchTimer);
+        state.feedSearchTimer = setTimeout(() => {
+          if (searchInput.value.trim() === state.feedQuery) return;
+          state.feedQuery = searchInput.value.trim();
+          state.feedPage = 1;
+          renderFeeds();
+        }, 450);
+      });
+      searchBar.append(searchInput, searchButton);
+      if (state.feedQuery) {
+        searchBar.appendChild(button("Clear", "btn secondary", () => {
+          state.feedQuery = "";
+          state.feedPage = 1;
+          renderFeeds();
+        }));
+      }
+      resultSection.appendChild(searchBar);
 
       if (data.results_warning) {
         resultSection.appendChild(node("div", "state-card", data.results_warning));
@@ -1395,6 +1461,30 @@
         const resultGrid = node("div", "feed-result-grid");
         results.forEach((result) => resultGrid.appendChild(feedResultCard(result)));
         resultSection.appendChild(resultGrid);
+      }
+
+      const totalPages = Math.max(1, Number(pagination.total_pages || 1));
+      if (totalResults > 0 || state.feedQuery) {
+        const pager = node("div", "feed-pager");
+        const previous = button("Previous", "btn secondary", () => {
+          if (!pagination.has_previous) return;
+          state.feedPage = Math.max(1, Number(state.feedPage || 1) - 1);
+          renderFeeds();
+        });
+        previous.disabled = !pagination.has_previous;
+        const status = node(
+          "div",
+          "feed-page-status",
+          `Page ${Math.max(1, Number(pagination.page || 1))} of ${totalPages}`,
+        );
+        const next = button("Next", "btn secondary", () => {
+          if (!pagination.has_next) return;
+          state.feedPage = Math.max(1, Number(state.feedPage || 1) + 1);
+          renderFeeds();
+        });
+        next.disabled = !pagination.has_next;
+        pager.append(previous, status, next);
+        resultSection.appendChild(pager);
       }
       page.appendChild(resultSection);
 
