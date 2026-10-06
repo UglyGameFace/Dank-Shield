@@ -328,6 +328,17 @@ def test_movie_night_refresh_keeps_same_client_session_and_backoff_retry() -> No
     assert "function scheduleStreamRetry()" in html
     assert "streamRetryTimer!==null" in html
     assert "Math.min(15000,2500*Math.pow(1.6,step))" in html
+    assert "function scheduleSessionReconnect()" in html
+    assert "function recoverSessionConnection(forceMediaReload=false)" in html
+    assert "sessionReconnectInFlight" in html
+    assert "await heartbeat(false,true,false)" in html
+    assert "attachStream(String(fresh.stream_url),true)" in html
+    assert 'window.addEventListener("online",()=>handlePageWake())' in html
+    assert 'window.addEventListener("pageshow",()=>handlePageWake())' in html
+    assert "BACKGROUND_MEDIA_REFRESH_MS=30000" in html
+    assert "if(!document.hidden) void poll()" in html
+    assert "if(!document.hidden) void heartbeat(false)" in html
+    assert "void heartbeat(false,false,true)" in html
     assert 'video.addEventListener("waiting"' in html
     assert 'video.addEventListener("stalled"' in html
     assert 'setTimeout(()=>{{ video.src=lastState.stream_url; video.load(); }},2500);' not in html
@@ -1440,6 +1451,8 @@ def test_player_layout_recovers_from_mobile_desktop_mode_resizes() -> None:
     assert 'window.addEventListener("resize",stabilizePlayerLayout' in html
     assert 'window.visualViewport?.addEventListener("resize",stabilizePlayerLayout' in html
     assert 'window.addEventListener("orientationchange",recoverPlayerFromViewportChange' in html
+    assert "function handlePageWake()" in html
+    assert "void recoverSessionConnection(hiddenFor>=BACKGROUND_MEDIA_REFRESH_MS)" in html
     assert 'video.addEventListener(eventName,()=>{' in html
     assert "stabilizePlayerLayout();" in html
     assert "markStartupEvent(eventName);" in html
