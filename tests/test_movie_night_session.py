@@ -99,7 +99,8 @@ def test_web_player_has_terminal_state_before_missing_room_fallback() -> None:
     assert 'if(s.ended) {' in source
     assert 'terminated=true;' in source
     assert 'Dank Cinema session not found' in source
-    assert 'if(terminated) return;' in source
+    assert 'if(terminated) return false;' in source
+    assert 'if(terminated) return null;' in source
 
 
 def test_inactive_room_cleanup_releases_media_and_keeps_fresh_room(monkeypatch) -> None:
