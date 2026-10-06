@@ -12,6 +12,7 @@ on:
       - "stoney_verify/cinema_site.py"
       - "stoney_verify/movie_night_web.py"
       - "tests/test_cinema_full_platform.py"
+      - "tests/test_cinema_library_intelligence.py"
       - ".github/workflows/cinema-platform-sql.yml"
   push:
     branches:
@@ -26,6 +27,7 @@ on:
       - "stoney_verify/cinema_site.py"
       - "stoney_verify/movie_night_web.py"
       - "tests/test_cinema_full_platform.py"
+      - "tests/test_cinema_library_intelligence.py"
       - ".github/workflows/cinema-platform-sql.yml"
 
 permissions:
