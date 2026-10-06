@@ -11,7 +11,7 @@ notification matching.
 import asyncio
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional, Sequence
 
 from .cinema_catalog import CinemaDetails, CinemaMedia, get_details, search_catalog
@@ -845,6 +845,84 @@ def source_trust_payload(row: Optional[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+async def ensure_source_health(guild_id: int, source_id: str) -> None:
+    gid = int(guild_id)
+    sid = _clean(source_id, 100)
+    if not sid:
+        return
+
+    def read(client: Any):
+        return (
+            client.table(HEALTH_TABLE)
+            .select("guild_id,source_id")
+            .eq("guild_id", gid)
+            .eq("source_id", sid)
+            .limit(1)
+            .execute()
+        )
+
+    if rows(await execute(f"read Cinema source enrollment {gid}:{sid}", read)):
+        return
+
+    payload = {
+        "guild_id": gid,
+        "source_id": sid,
+        "refresh_count": 0,
+        "success_count": 0,
+        "failure_count": 0,
+        "total_results": 0,
+        "last_result_count": 0,
+        "last_error": "",
+        "updated_at": utc_now(),
+    }
+
+    def insert(client: Any):
+        return client.table(HEALTH_TABLE).insert(payload).execute()
+
+    try:
+        await execute(f"enroll Cinema source health {gid}:{sid}", insert)
+    except Exception:
+        # Another request/worker may have enrolled it first.
+        pass
+
+
+async def list_due_source_targets(
+    *,
+    refresh_seconds: int,
+    limit: int = 24,
+) -> list[tuple[int, str]]:
+    safe_seconds = max(300, min(int(refresh_seconds), 86400))
+    safe_limit = max(1, min(int(limit), 100))
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(seconds=safe_seconds)
+    ).isoformat()
+
+    def read(client: Any):
+        return (
+            client.table(HEALTH_TABLE)
+            .select("guild_id,source_id,last_refreshed_at")
+            .or_(f"last_refreshed_at.is.null,last_refreshed_at.lt.{cutoff}")
+            .order("last_refreshed_at")
+            .limit(safe_limit * 2)
+            .execute()
+        )
+
+    found = rows(await execute("read due Cinema feed refresh targets", read))
+    targets: list[tuple[int, str]] = []
+    seen: set[tuple[int, str]] = set()
+    for row in found:
+        gid = _safe_int(row.get("guild_id"))
+        sid = _clean(row.get("source_id"), 100)
+        key = (gid, sid)
+        if gid <= 0 or not sid or sid.startswith("private-") or key in seen:
+            continue
+        seen.add(key)
+        targets.append(key)
+        if len(targets) >= safe_limit:
+            break
+    return targets
+
+
 async def list_source_health(guild_id: int) -> dict[str, dict[str, Any]]:
     gid = int(guild_id)
 
@@ -1400,8 +1478,10 @@ __all__ = [
     "CinemaFeedRuleError",
     "build_personalized_feed",
     "delete_feed_rule",
+    "ensure_source_health",
     "group_feed_results",
     "list_feed_rules",
+    "list_due_source_targets",
     "list_private_discoveries",
     "list_source_health",
     "process_feed_notifications",
