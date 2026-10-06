@@ -2582,12 +2582,12 @@ def _site_html(guild_id: int, user_id: int) -> str:
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=3">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=4">
 </head>
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=10" defer></script>
+  <script src="/cinema/assets/site.js?v=11" defer></script>
 </body>
 </html>"""
 
