@@ -8,6 +8,7 @@ fork into two implementations.
 """
 
 import asyncio
+import os
 import time
 from typing import Any, Mapping
 
@@ -38,7 +39,9 @@ from .cinema_discovery_service import (
 )
 from .cinema_feed_personalization import (
     build_personalized_feed,
+    ensure_source_health,
     group_feed_results,
+    list_due_source_targets,
     list_private_discoveries,
     list_source_health,
     process_feed_notifications,
@@ -59,10 +62,81 @@ _PROVIDER_TYPES = {
     PROVIDER_TYPE_EXTERNAL,
 }
 _RUNTIME_STATE: dict[tuple[int, str], dict[str, Any]] = {}
+_AUTO_REFRESH_TASK: asyncio.Task[None] | None = None
 
 
 class CinemaFeedConflict(RuntimeError):
     pass
+
+
+def _auto_refresh_seconds() -> int:
+    try:
+        raw = int(os.getenv("DANK_CINEMA_FEED_REFRESH_SECONDS", "900"))
+    except Exception:
+        raw = 900
+    return max(300, min(raw, 86400))
+
+
+def _auto_refresh_batch() -> int:
+    try:
+        raw = int(os.getenv("DANK_CINEMA_FEED_REFRESH_BATCH", "24"))
+    except Exception:
+        raw = 24
+    return max(1, min(raw, 100))
+
+
+async def _cinema_feed_refresh_loop() -> None:
+    await asyncio.sleep(45.0)
+    while True:
+        interval = _auto_refresh_seconds()
+        try:
+            targets = await list_due_source_targets(
+                refresh_seconds=interval,
+                limit=_auto_refresh_batch(),
+            )
+        except Exception:
+            targets = []
+
+        for guild_id, source_id in targets:
+            try:
+                _raw, registry = await load_media_source_registry(
+                    int(guild_id),
+                    refresh=True,
+                )
+                source = next(
+                    (
+                        item
+                        for item in registry.sources
+                        if str(item.source_id) == str(source_id)
+                    ),
+                    None,
+                )
+                if (
+                    source is None
+                    or not bool(source.enabled)
+                    or source.provider_type not in {PROVIDER_TYPE_FEED, PROVIDER_TYPE_JSON}
+                ):
+                    continue
+                await refresh_feed(int(guild_id), str(source_id))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Per-source health records/errors are already bounded and
+                # fail-soft; one provider must never kill the worker.
+                continue
+            await asyncio.sleep(0.75)
+
+        await asyncio.sleep(max(60.0, min(300.0, interval / 3.0)))
+
+
+def start_cinema_feed_refresh_worker() -> None:
+    global _AUTO_REFRESH_TASK
+    if _AUTO_REFRESH_TASK is not None and not _AUTO_REFRESH_TASK.done():
+        return
+    _AUTO_REFRESH_TASK = asyncio.create_task(
+        _cinema_feed_refresh_loop(),
+        name="dank-cinema-feed-refresh",
+    )
 
 
 def _default_refresh_query(category: str) -> str:
@@ -299,6 +373,15 @@ async def feed_state(
                 or needle in str(row.get("release_title") or "").casefold()
             ]
         merged_results = runtime_results[:current_page_size]
+
+    enrollment_tasks = [
+        ensure_source_health(int(guild_id), str(source.source_id))
+        for source in registry.sources
+        if bool(source.enabled)
+        and source.provider_type in {PROVIDER_TYPE_FEED, PROVIDER_TYPE_JSON}
+    ]
+    if enrollment_tasks:
+        await asyncio.gather(*enrollment_tasks, return_exceptions=True)
 
     health_map: dict[str, dict[str, Any]] = {}
     try:
@@ -661,6 +744,7 @@ def runtime_state() -> dict[tuple[int, str], dict[str, Any]]:
 __all__ = [
     "CATEGORIES",
     "CinemaFeedConflict",
+    "start_cinema_feed_refresh_worker",
     "_default_refresh_query",
     "feed_state",
     "mutate_feed",
