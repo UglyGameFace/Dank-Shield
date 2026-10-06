@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "supabase/migrations/20261004123000_dank_cinema_library.sql"
+      - "supabase/migrations/20261006031500_dank_cinema_feed_personalization.sql"
       - "stoney_verify/cinema_library_service.py"
       - "stoney_verify/cinema_storage.py"
       - "stoney_verify/cinema_site.py"
@@ -15,6 +16,7 @@ on:
       - main
     paths:
       - "supabase/migrations/20261004123000_dank_cinema_library.sql"
+      - "supabase/migrations/20261006031500_dank_cinema_feed_personalization.sql"
       - "stoney_verify/cinema_library_service.py"
       - "stoney_verify/cinema_storage.py"
       - "stoney_verify/cinema_site.py"
@@ -52,7 +54,8 @@ jobs:
       PGUSER: postgres
       PGPASSWORD: postgres
       PGDATABASE: dank_cinema
-      MIGRATION: supabase/migrations/20261004123000_dank_cinema_library.sql
+      BASE_MIGRATION: supabase/migrations/20261004123000_dank_cinema_library.sql
+      FEED_MIGRATION: supabase/migrations/20261006031500_dank_cinema_feed_personalization.sql
 
     steps:
       - name: Check out repository
@@ -80,8 +83,9 @@ jobs:
         run: |
           set -euo pipefail
           for pass in 1 2; do
-            echo "Applying Dank Cinema migration, pass ${pass}"
-            psql -v ON_ERROR_STOP=1 -f "$MIGRATION"
+            echo "Applying Dank Cinema migrations, pass ${pass}"
+            psql -v ON_ERROR_STOP=1 -f "$BASE_MIGRATION"
+            psql -v ON_ERROR_STOP=1 -f "$FEED_MIGRATION"
           done
 
       - name: Verify Cinema schema and permissions
@@ -96,7 +100,10 @@ jobs:
               'dank_cinema_users',
               'dank_cinema_user_media',
               'dank_cinema_feed_discoveries',
-              'dank_cinema_notifications'
+              'dank_cinema_notifications',
+              'dank_cinema_feed_rules',
+              'dank_cinema_user_feed_discoveries',
+              'dank_cinema_feed_source_health'
             ] loop
               if to_regclass('public.' || required_table) is null then
                 raise exception 'missing Cinema table: %', required_table;
@@ -174,6 +181,32 @@ jobs:
             'invite:room-1'
           );
 
+          insert into public.dank_cinema_feed_rules(
+            guild_id, owner_user_id, scope, rule_type, name, query,
+            media_type, tmdb_id, filters, actions, created_by
+          ) values (
+            100, 42, 'user', 'follow', 'Example Show', 'Example Show',
+            'tv', 77, '{"min_seeds":5}'::jsonb,
+            '{"notify":"instant","queue_suggest":true}'::jsonb, 42
+          );
+
+          insert into public.dank_cinema_user_feed_discoveries(
+            user_id, guild_id, source_id, discovery_key, title,
+            media_type, tmdb_id, metadata, playable
+          ) values (
+            42, 100, 'private-1', 'episode:77:s03e08', 'Example Show',
+            'tv', 77,
+            '{"release_title":"Example.Show.S03E08.1080p.WEB.x265"}'::jsonb,
+            true
+          );
+
+          insert into public.dank_cinema_feed_source_health(
+            guild_id, source_id, refresh_count, success_count, total_results,
+            last_result_count, last_refreshed_at, last_success_at
+          ) values (
+            100, 'feed-1', 4, 4, 28, 7, now(), now()
+          );
+
           do $audit$
           begin
             if not exists (
@@ -193,6 +226,34 @@ jobs:
                where user_id = 42 and dedupe_key = 'invite:room-1'
             ) then
               raise exception 'Cinema notification row did not persist';
+            end if;
+
+            if not exists (
+              select 1 from public.dank_cinema_feed_rules
+               where guild_id = 100
+                 and owner_user_id = 42
+                 and rule_type = 'follow'
+                 and tmdb_id = 77
+            ) then
+              raise exception 'Cinema feed rule did not persist';
+            end if;
+
+            if not exists (
+              select 1 from public.dank_cinema_user_feed_discoveries
+               where user_id = 42
+                 and guild_id = 100
+                 and source_id = 'private-1'
+            ) then
+              raise exception 'private Cinema feed discovery did not persist';
+            end if;
+
+            if not exists (
+              select 1 from public.dank_cinema_feed_source_health
+               where guild_id = 100
+                 and source_id = 'feed-1'
+                 and success_count = 4
+            ) then
+              raise exception 'Cinema source health did not persist';
             end if;
           end;
           $audit$;
@@ -238,12 +299,14 @@ jobs:
         run: |
           set -euo pipefail
           for role in anon authenticated; do
-            if psql -v ON_ERROR_STOP=1 <<SQL
+            for table in               dank_cinema_users               dank_cinema_user_media               dank_cinema_feed_discoveries               dank_cinema_notifications               dank_cinema_feed_rules               dank_cinema_user_feed_discoveries               dank_cinema_feed_source_health; do
+              if psql -v ON_ERROR_STOP=1 <<SQL
           set role ${role};
-          select * from public.dank_cinema_users limit 1;
+          select * from public.${table} limit 1;
           SQL
-            then
-              echo "${role} unexpectedly read service-only Cinema data" >&2
-              exit 1
-            fi
+              then
+                echo "${role} unexpectedly read service-only Cinema data from ${table}" >&2
+                exit 1
+              fi
+            done
           done
