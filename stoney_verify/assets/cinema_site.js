@@ -2,11 +2,11 @@
 (() => {
   "use strict";
 
-  /** @typedef {{guildId:number,userId:number}} CinemaBoot */
+  /** @typedef {{guildId:string,userId:string}} CinemaBoot */
   /** @typedef {{media_type?:string,tmdb_id?:number,title?:string,poster_url?:string,backdrop_url?:string,overview?:string,year?:number,rating?:number,progress_ratio?:number,progress_seconds?:number,duration_seconds?:number,completed?:boolean,watchlisted?:boolean,season_number?:number,episode_number?:number,metadata?:Record<string,any>,result_kind?:string,series_id?:number,still_url?:string,series_title?:string,source_label?:string,playable?:boolean}} MediaItem */
 
   /** @type {CinemaBoot} */
-  const BOOT = window.__DANK_CINEMA_BOOT__ || { guildId: 0, userId: 0 };
+  const BOOT = window.__DANK_CINEMA_BOOT__ || { guildId: "", userId: "" };
   const initialUrl = new URL(window.location.href);
   const signedAuth = new URLSearchParams();
   for (const key of ["uid", "exp", "sig"]) {
@@ -26,7 +26,7 @@
       initialUrl.pathname + (cleanSearch ? `?${cleanSearch}` : "") + initialUrl.hash,
     );
   }
-  const API_BASE = `/cinema/${BOOT.guildId}/api`;
+  const API_BASE = `/cinema/${String(BOOT.guildId)}/api`;
   const app = document.getElementById("app");
   if (!app) return;
 

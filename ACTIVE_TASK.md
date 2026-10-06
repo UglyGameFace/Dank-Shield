@@ -1507,3 +1507,48 @@ Acceptance:
 - `/cinema` must be offered only through the server-installed app;
 - stale/personal `/cinema` invocation must show the explicit server-install requirement instead of opening the site;
 - a guild-installed `/cinema home` interaction must generate Open Dank Cinema and the web runtime must resolve that guild through Discord REST.
+
+## Evidence-backed root cause — Discord snowflake rounded by JavaScript Number
+
+Production logs on 2026-10-05 exposed the exact guild-ID corruption:
+- real Discord guild from the `/cinema home` signed link and recovery logs: `1514374173517152418`;
+- Cinema API/auth logs requested guild: `1514374173517152500`;
+- the web runtime then received Discord REST `NotFound`, making `botGuildRest=absent` truthful for the wrong rounded guild ID.
+
+Root cause in current main:
+- `_site_html()` serialized `guildId` and `userId` as JSON numbers via `int(...)`;
+- `cinema_site.js` declared `CinemaBoot` as `{guildId:number,userId:number}`;
+- Discord snowflakes exceed JavaScript's IEEE-754 safe integer range;
+- parsing the boot payload as JavaScript Number rounded the last digits;
+- `API_BASE = /cinema/${BOOT.guildId}/api` therefore called every SPA API under the wrong guild route.
+
+Why this explains every diagnostic:
+- signed query becomes invalid because the signature was issued for the exact guild ID, not the rounded one;
+- exact-guild session cookie is missing because its cookie Path is scoped to the exact guild route;
+- guild proof is invalid because the API request uses the wrong guild;
+- Discord REST returns NotFound because the rounded guild ID does not exist;
+- identity cookie remains valid because it is user-only and not guild-route scoped;
+- cookieHeader remains yes because cookies in general still reached aiohttp.
+
+Active correction branch:
+`fix/cinema-snowflake-string-ids`
+
+Correction contract:
+- serialize Discord `guildId` and `userId` as decimal strings in the Cinema boot payload;
+- declare both fields as strings in the client;
+- build `API_BASE` from the exact string with no Number/parseInt conversion;
+- leave ordinary numeric values such as TMDB IDs, seasons, ratings, durations, and hardware counts unchanged;
+- client audit confirms the only other Discord-shaped client identifier is `room_id`, already handled with `String(...)`;
+- bump Cinema JS asset to `site.js?v=7`;
+- unify health and in-page diagnostics at `signed-session-v8-snowflake-safe`.
+
+Regression:
+- use exact production-sized IDs `1514374173517152418` and `629459300854661120`;
+- assert `_site_html()` emits quoted string values and never numeric snowflake literals;
+- assert client typedef/default/API base keep the IDs as strings;
+- assert no `guildId:number` or `userId:number` remains.
+
+Acceptance after deploy:
+- `/health` reports `signed-session-v8-snowflake-safe`;
+- a fresh `/cinema home` link for guild `1514374173517152418` must cause API/log routes to use that exact same ID, never `1514374173517152500`;
+- Home/Search/My Stuff/Feeds/Profile must no longer fail from the rounded-guild membership error.

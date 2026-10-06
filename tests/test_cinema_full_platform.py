@@ -808,10 +808,10 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'initialUrl.searchParams.delete("sig")' in script
     assert 'history.replaceState(' in script
     assert 'return `${path}${AUTH_QUERY ? join + AUTH_QUERY.slice(1) : ""}`;' in script
-    assert 'src="/cinema/assets/site.js?v=6"' in source
+    assert 'src="/cinema/assets/site.js?v=7"' in source
     assert '"/cinema/{guild_id}/api/auth-debug"' in source
     assert "def _cinema_auth_debug_payload(" in source
-    assert "signed-session-v6-guild-rest" in source
+    assert "signed-session-v8-snowflake-safe" in source
     assert "async function authDiagnostics()" in script
     assert 'API_BASE + "/auth-debug"' in script
     assert "function authDiagnosticText(data)" in script
@@ -851,7 +851,7 @@ def test_cinema_auth_debug_reports_request_auth_state_without_secret_values(monk
     payload = cinema_site._cinema_auth_debug_payload(request)
 
     assert payload == {
-        "contract": "signed-session-v6-guild-rest",
+        "contract": "signed-session-v8-snowflake-safe",
         "route_guild_valid": True,
         "signed_query": "valid",
         "signed_query_complete": True,
@@ -993,6 +993,28 @@ def test_full_site_uses_single_composed_brand_and_responsive_tmdb_art() -> None:
     assert 'kind === "profile"' in script
 
 
+def test_cinema_boot_preserves_discord_snowflakes_as_strings() -> None:
+    from pathlib import Path
+
+    guild_id = 1514374173517152418
+    user_id = 629459300854661120
+
+    html = cinema_site._site_html(guild_id, user_id)
+    script = (
+        Path(cinema_site.__file__).resolve().parent / "assets" / "cinema_site.js"
+    ).read_text(encoding="utf-8")
+
+    assert f'"guildId":"{guild_id}"' in html
+    assert f'"userId":"{user_id}"' in html
+    assert f'"guildId":{guild_id}' not in html
+    assert f'"userId":{user_id}' not in html
+    assert "/** @typedef {{guildId:string,userId:string}} CinemaBoot */" in script
+    assert 'const BOOT = window.__DANK_CINEMA_BOOT__ || { guildId: "", userId: "" };' in script
+    assert 'const API_BASE = `/cinema/${String(BOOT.guildId)}/api`;' in script
+    assert "guildId:number" not in script
+    assert "userId:number" not in script
+
+
 def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     from pathlib import Path
 
@@ -1012,7 +1034,7 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
     assert 'href="/cinema/assets/site.css?v=3"' in source
-    assert 'src="/cinema/assets/site.js?v=6"' in source
+    assert 'src="/cinema/assets/site.js?v=7"' in source
 
 
 def test_full_site_auto_quality_and_source_search_controls_are_real() -> None:
