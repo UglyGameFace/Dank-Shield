@@ -47,6 +47,7 @@ from .cinema_feed_personalization import (
     list_source_health,
     process_feed_notifications,
     record_source_health,
+    refresh_private_source,
 )
 from .cinema_storage import CinemaStorageUnavailable
 
