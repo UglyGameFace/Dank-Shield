@@ -820,12 +820,24 @@ async def set_custom_list_item(
     return dict(rows[0]) if rows else payload
 
 
-async def library_stats(user_id: int) -> dict[str, Any]:
+async def library_stats(
+    user_id: int,
+    *,
+    media_rows: Optional[list[dict[str, Any]]] = None,
+    sessions: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
     uid = int(user_id)
-    media_rows, sessions = await asyncio.gather(
-        list_user_media(uid),
-        list_watch_sessions(uid, limit=1000),
-    )
+    if media_rows is None and sessions is None:
+        media_rows, sessions = await asyncio.gather(
+            list_user_media(uid),
+            list_watch_sessions(uid, limit=1000),
+        )
+    elif media_rows is None:
+        media_rows = await list_user_media(uid)
+    elif sessions is None:
+        sessions = await list_watch_sessions(uid, limit=1000)
+    media_rows = list(media_rows or [])
+    sessions = list(sessions or [])
     completed_movies = [
         row for row in media_rows
         if str(row.get("media_type") or "") == "movie"
@@ -1041,8 +1053,9 @@ def _sort_iso(rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
     )
 
 
-async def library_snapshot(user_id: int) -> dict[str, Any]:
-    rows = await list_user_media(int(user_id))
+def library_snapshot_from_rows(
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
     watched = [row for row in rows if row.get("last_watched_at")]
     watchlist = _sort_iso(
         [row for row in rows if bool(row.get("watchlisted"))],
@@ -1089,6 +1102,11 @@ async def library_snapshot(user_id: int) -> dict[str, Any]:
         "rated": rated,
         "series_progress": list(latest_episode_by_series.values()),
     }
+
+
+async def library_snapshot(user_id: int) -> dict[str, Any]:
+    rows = await list_user_media(int(user_id))
+    return library_snapshot_from_rows(rows)
 
 
 async def create_notification(
@@ -1212,6 +1230,7 @@ __all__ = [
     "get_media_state",
     "invalidate_cinema_user_cache",
     "library_snapshot",
+    "library_snapshot_from_rows",
     "library_stats",
     "list_custom_lists",
     "list_notifications",
