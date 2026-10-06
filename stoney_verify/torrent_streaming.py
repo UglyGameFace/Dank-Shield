@@ -264,6 +264,7 @@ class TorrentStreamSession:
     last_access: float
     startup_started_at: float = 0.0
     metadata_ready_at: float = 0.0
+    launch_timing: dict[str, int] = field(default_factory=dict)
     candidates: tuple[TorrentFileCandidate, ...] = ()
     smoothed_download_rate: float = 0.0
     smoothed_consume_rate: float = 0.0
@@ -1535,7 +1536,7 @@ class TorrentMediaManager:
         key = str(consumer_key or "").strip()[:96]
         state = session.consumer_playback.get(key) if key else None
         if not isinstance(state, dict):
-            return {}
+            state = {}
 
         def _ms(name: str) -> int:
             try:
@@ -1557,7 +1558,12 @@ class TorrentMediaManager:
             else 0
         )
 
+        launch = dict(getattr(session, "launch_timing", {}) or {})
         return {
+            "site_source_ms": max(0, int(launch.get("site_source_ms", 0) or 0)),
+            "site_torrent_start_ms": max(0, int(launch.get("site_torrent_start_ms", 0) or 0)),
+            "site_session_ready_ms": max(0, int(launch.get("site_session_ready_ms", 0) or 0)),
+            "site_response_ready_ms": max(0, int(launch.get("site_response_ready_ms", 0) or 0)),
             "metadata_ms": metadata_ms,
             "session_ready_ms": finalize_ms,
             "request_count": max(0, int(state.get("request_count", 0) or 0)),
