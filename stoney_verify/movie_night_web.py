@@ -2978,7 +2978,7 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
     <summary>Advanced Stream Details</summary>
     <div class="grid">
       <div class="stat"><b>Torrent</b><span id="progress">0%</span></div>
-      <div class="stat"><b>Seeds / Leechers</b><span id="peers">0 / 0</span></div>
+      <div class="stat"><b id="swarmLabel">Swarm</b><span id="peers">0 / 0</span></div>
       <div class="stat"><b>Buffer target</b><span id="buffer">—</span></div>
     </div>
     <div class="quality-control">
@@ -4216,8 +4216,18 @@ async function applyState(s) {{
   const t=s.torrent||{{}};
   document.getElementById("progress").textContent=((t.progress||0)*100).toFixed(1)+"% • "+fmtRate(t.download_rate||0);
   const swarmSource=String(t.swarm_source||"");
-  document.getElementById("peers").textContent=
-    String(t.seeds||0)+" / "+String(t.leechers||0)+(swarmSource?" • "+swarmSource:"");
+  const swarmLabel=document.getElementById("swarmLabel");
+  const swarmValue=document.getElementById("peers");
+  if(swarmSource==="live") {{
+    swarmLabel.textContent="Connected seeds / peers";
+    swarmValue.textContent=String(t.seeds||0)+" / "+String(t.peers||0);
+  }} else if(swarmSource==="provider") {{
+    swarmLabel.textContent="Reported seeds / leechers";
+    swarmValue.textContent=String(t.seeds||0)+" / "+String(t.leechers||0);
+  }} else {{
+    swarmLabel.textContent="Swarm";
+    swarmValue.textContent="0 / 0";
+  }}
   const b=t.buffer||{{}};
   document.getElementById("buffer").textContent=b.target_seconds?Number(b.target_seconds).toFixed(0)+"s":"adaptive";
 
