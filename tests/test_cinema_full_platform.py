@@ -361,7 +361,7 @@ def test_watch_party_picks_only_use_real_accessible_room_media(monkeypatch) -> N
     assert rows[0]["watch_party_active"] is True
 
 
-def test_cinema_site_play_requires_existing_host_room(monkeypatch) -> None:
+def test_cinema_site_play_rejects_nonhost_explicit_room(monkeypatch) -> None:
     manager = MovieNightManager()
     room = manager.create_room(
         guild_id=100,
@@ -390,9 +390,89 @@ def test_cinema_site_play_requires_existing_host_room(monkeypatch) -> None:
         from aiohttp import web
 
         assert isinstance(exc, web.HTTPForbidden)
-        assert "room that you host" in exc.text
+        assert "current Cinema host" in exc.text
     else:
         raise AssertionError("A non-host site identity must not replace Cinema media.")
+
+
+def test_cinema_site_play_without_room_creates_host_only_standalone_room(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "cinema-test-secret")
+    manager = MovieNightManager()
+    movie = CinemaMedia(
+        media_type="movie",
+        tmdb_id=123,
+        title="Example Movie",
+        year=2026,
+    )
+    details = CinemaDetails(media=movie)
+    metadata = cinema_playback_service.catalog_metadata(movie)
+    outcome = MediaSourceSearchOutcome(
+        variants=(
+            ResolvedMediaVariant(
+                title="Example.Movie.2026.1080p",
+                source_id="provider",
+                source_label="Provider",
+                source_ref="magnet:?xt=urn:btih:" + "7" * 40,
+                file_size=1000,
+                seeds=20,
+                leechers=2,
+                peers=22,
+                metadata={},
+            ),
+        )
+    )
+
+    async def site_identity(_request):
+        return (100, 42)
+
+    async def get_details(_kind, _tmdb_id):
+        return details
+
+    async def adult_enabled(_guild_id):
+        return False
+
+    async def exact_sources(_guild_id, *, media):
+        assert media.tmdb_id == 123
+        return metadata, "Example Movie", outcome
+
+    async def preferred(_user_id, rows):
+        return list(rows)[0]
+
+    async def start_variant(room_id, *, actor_id, candidate_id, variant_id):
+        room = manager.get(room_id)
+        assert room is not None
+        assert actor_id == 42
+        assert candidate_id
+        assert variant_id
+        return SimpleNamespace(room=room)
+
+    monkeypatch.setattr(cinema_site, "_site_identity", site_identity)
+    monkeypatch.setattr(cinema_site, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(cinema_playback_service, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(cinema_site, "get_details", get_details)
+    monkeypatch.setattr(cinema_site, "_guild_adult_content_enabled", adult_enabled)
+    monkeypatch.setattr(cinema_site, "search_exact_movie_sources", exact_sources)
+    monkeypatch.setattr(cinema_site, "select_preferred_variant", preferred)
+    monkeypatch.setattr(cinema_site, "start_room_variant", start_variant)
+
+    class Request:
+        async def json(self):
+            return {"media_type": "movie", "tmdb_id": 123}
+
+    response = asyncio.run(cinema_site.cinema_play_api(Request()))
+    payload = __import__("json").loads(response.text)
+    room = manager.get(payload["room_id"])
+
+    assert room is not None
+    assert room.mode == "standalone"
+    assert room.guild_id == 100
+    assert room.channel_id == -42
+    assert room.host_id == 42
+    assert manager.user_can_access(room, 42)
+    assert not manager.user_can_access(room, 99)
+    assert payload["mode"] == "standalone"
+    assert "/movie/" in payload["watch_url"]
 
 
 def test_cinema_identity_cookie_can_reopen_exact_guild_after_membership_recheck(monkeypatch) -> None:
@@ -809,7 +889,7 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'initialUrl.searchParams.delete("sig")' in script
     assert 'history.replaceState(' in script
     assert 'return `${path}${AUTH_QUERY ? join + AUTH_QUERY.slice(1) : ""}`;' in script
-    assert 'src="/cinema/assets/site.js?v=12"' in source
+    assert 'src="/cinema/assets/site.js?v=13"' in source
     assert '"/cinema/{guild_id}/api/auth-debug"' in source
     assert "def _cinema_auth_debug_payload(" in source
     assert "signed-session-v8-snowflake-safe" in source
@@ -944,7 +1024,7 @@ def test_cinema_oauth_rejects_wrong_redirect_shape(monkeypatch) -> None:
     assert status["redirect_uri"] == ""
 
 
-def test_full_site_episode_playback_is_real_and_host_scoped() -> None:
+def test_full_site_episode_playback_is_direct_and_not_discord_room_scoped() -> None:
     from pathlib import Path
 
     root = Path(cinema_site.__file__).resolve().parent
@@ -956,10 +1036,15 @@ def test_full_site_episode_playback_is_real_and_host_scoped() -> None:
     assert 'payload.series_id = Number' in script
     assert 'payload.season_number = Number' in script
     assert 'payload.episode_number = Number' in script
-    assert 'hostSession?.is_host' in script
-    assert '"▶ Resume in Theater"' in script
-    assert '"▶ Play in Theater"' in script
+    assert "playOnSite(episodeItem" in script
+    assert 'card.classList.add("episode-playable")' in script
+    assert 'event.target.closest("button, select, option")' in script
+    assert '"▶ Resume"' in script
+    assert '"▶ Play"' in script
+    assert "Open Discord to Play" not in script
+    assert "hostSession?.is_host" not in script
     assert ".episode-play" in styles
+    assert ".episode-card.episode-playable" in styles
 
 
 def test_tv_details_do_not_claim_series_title_is_a_playable_source() -> None:
@@ -1034,8 +1119,8 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert 'b.append(uiIcon(iconName), node("span", "bottom-nav-label", label))' in script
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
-    assert 'href="/cinema/assets/site.css?v=8"' in source
-    assert 'src="/cinema/assets/site.js?v=12"' in source
+    assert 'href="/cinema/assets/site.css?v=9"' in source
+    assert 'src="/cinema/assets/site.js?v=13"' in source
 
 
 def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop() -> None:
@@ -1050,7 +1135,7 @@ def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop
         'content="width=device-width,initial-scale=1,minimum-scale=1,'
         'viewport-fit=cover,interactive-widget=resizes-content">'
     ) in source
-    assert 'href="/cinema/assets/site.css?v=8"' in source
+    assert 'href="/cinema/assets/site.css?v=9"' in source
 
     assert "--content:min(1560px,calc(100vw - 48px))" in styles
     assert "@media(min-width:1800px)" in styles
