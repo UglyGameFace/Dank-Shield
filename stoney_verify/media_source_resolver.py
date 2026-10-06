@@ -249,7 +249,7 @@ _PROVIDER_TEMPLATE_FIELDS = {
     "{episode}": "episode",
     "{season_episode}": "season_episode",
 }
-_IMDB_ID_RE = re.compile(r"^tt(\\d{5,12})$", re.IGNORECASE)
+_IMDB_ID_RE = re.compile(r"^tt(\d{5,12})$", re.IGNORECASE)
 
 
 def _provider_lookup_context(
@@ -275,6 +275,10 @@ def _provider_lookup_context(
         context["series_tmdb_id"] = str(series_tmdb_id)
     elif media_type == "tv" and tmdb_id > 0:
         context["series_tmdb_id"] = str(tmdb_id)
+
+    tvdb_id = _safe_int(metadata.get("tvdb_id") or metadata.get("tvdb"))
+    if tvdb_id > 0:
+        context["tvdb_id"] = str(tvdb_id)
 
     imdb_id = str(
         metadata.get("imdb_id")
@@ -306,7 +310,7 @@ async def _enrich_provider_lookup_context(
     catalog_metadata: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, str]:
     context = _provider_lookup_context(query, catalog_metadata)
-    if "imdb_id" in context or not isinstance(catalog_metadata, Mapping):
+    if not isinstance(catalog_metadata, Mapping):
         return context
 
     media_type = str(catalog_metadata.get("media_type") or "").strip().casefold()
