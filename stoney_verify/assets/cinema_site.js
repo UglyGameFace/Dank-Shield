@@ -1638,7 +1638,7 @@
             node("span", "feed-title", source.source_label || "Cinema source"),
             node("span", "feed-meta", [
               source.health ? `Health: ${source.health}` : "",
-              Number(source.seeds || 0) ? `${source.seeds} seeds` : "",
+              Number(source.seeds || 0) ? `${source.seeds} reported seeds` : "",
               source.title || "",
             ].filter(Boolean).join(" • ")),
           );
