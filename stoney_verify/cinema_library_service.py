@@ -493,6 +493,14 @@ async def mark_watched(
                 ),
             }
         )
+    else:
+        patch.update(
+            {
+                "play_count": 0,
+                "first_watched_at": None,
+                "last_completed_at": None,
+            }
+        )
     return await _write_media_patch(
         int(user_id),
         media_type=key["media_type"],
