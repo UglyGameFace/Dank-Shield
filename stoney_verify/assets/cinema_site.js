@@ -1261,6 +1261,9 @@
       filter: "Filter",
       collection: "Collection",
       routing: "Routing rule",
+      person: "Actor / creator",
+      genre: "Genre",
+      studio: "Studio",
       private_source: "Private source",
     }[String(value || "")] || "Feed Rule";
   }
@@ -1333,6 +1336,9 @@
       ["filter", "Personal filter"],
       ["collection", "Curated collection"],
       ["routing", "Routing rule"],
+      ["person", "Actor / creator"],
+      ["genre", "Genre"],
+      ["studio", "Studio"],
       ["private_source", "Private RSS / JSON source"],
     ]);
     const scopeField = selectField("Visibility", "scope", scopeValue, [
@@ -1440,7 +1446,7 @@
 
     modal.append(
       head,
-      node("p", "section-sub", "Use one rule for follows, saved searches, filters, collections, routing, alerts, or a private feed."),
+      node("p", "section-sub", "Use one rule for titles, actors, creators, genres, studios, saved searches, filters, collections, routing, alerts, or a private feed."),
       form,
       save,
     );
