@@ -265,7 +265,12 @@ def test_stream_startup_timing_is_per_consumer_and_first_stage_stable(monkeypatc
     assert second["last_range_start"] == 8 * 1024 * 1024
     assert second["last_wait_ms"] == 75
     assert second["last_wait_ready"] is False
-    assert manager.consumer_startup_status(session, "movie:3:client-b") == {}
+
+    other = manager.consumer_startup_status(session, "movie:3:client-b")
+    assert other["metadata_ms"] == 300
+    assert other["session_ready_ms"] == 350
+    assert other["request_count"] == 0
+    assert other["first_request_ms"] == 0
 
 
 def test_torrent_session_uses_fast_start_peer_settings_by_default(monkeypatch, tmp_path: Path) -> None:
