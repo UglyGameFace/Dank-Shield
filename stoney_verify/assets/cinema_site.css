@@ -333,6 +333,7 @@ img{max-width:100%}
 .source-choice .feed-title,.source-choice .feed-meta{display:block}
 .source-selection-status{margin-top:9px;font-size:.72rem;color:var(--muted)}
 .source-help{margin-bottom:3px}
+.source-play-action{width:100%;margin-top:10px}
 .feed-mode-tabs{
   display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding:4px 0 2px;margin:12px 0 4px;
   -webkit-overflow-scrolling:touch;overscroll-behavior-inline:contain
