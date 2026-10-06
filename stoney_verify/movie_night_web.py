@@ -3463,6 +3463,12 @@ function renderStartupDiagnostics(server={{}}) {{
   const browserEl=document.getElementById("browserStartup");
   if(serverEl) {{
     const bits=[];
+    if(Number(server.site_source_ms||0)>0)
+      bits.push("source "+fmtDiagnosticMs(server.site_source_ms));
+    if(Number(server.site_torrent_start_ms||0)>0)
+      bits.push("torrent "+fmtDiagnosticMs(server.site_torrent_start_ms));
+    if(Number(server.site_response_ready_ms||0)>0)
+      bits.push("Watch ready "+fmtDiagnosticMs(server.site_response_ready_ms));
     if(Number(server.metadata_ms||0)>0)
       bits.push("metadata "+fmtDiagnosticMs(server.metadata_ms));
     if(Number(server.session_ready_ms||0)>0)
