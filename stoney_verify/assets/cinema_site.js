@@ -1286,6 +1286,77 @@
     setTimeout(() => fields.label.focus(), 30);
   }
 
+  function formatFeedBytes(value) {
+    const bytes = Number(value || 0);
+    if (!Number.isFinite(bytes) || bytes <= 0) return "";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let amount = bytes;
+    let unit = 0;
+    while (amount >= 1024 && unit < units.length - 1) {
+      amount /= 1024;
+      unit += 1;
+    }
+    const digits = unit >= 3 ? 1 : unit >= 2 ? 0 : 0;
+    return `${amount.toFixed(digits)} ${units[unit]}`;
+  }
+
+  function feedResultCard(result) {
+    const card = node("article", "feed-result-card");
+    const art = node("div", "feed-result-art");
+    const artUrl = itemArt(result);
+    if (artUrl) {
+      const image = node("img");
+      configureArtwork(image, artUrl, "poster");
+      image.alt = `${itemTitle(result)} poster`;
+      image.loading = "lazy";
+      image.decoding = "async";
+      art.appendChild(image);
+    } else {
+      const placeholder = node("div", "feed-result-placeholder");
+      placeholder.appendChild(uiIcon("feeds"));
+      art.appendChild(placeholder);
+    }
+
+    const copy = node("div", "feed-result-copy");
+    const sourceLine = [
+      result.source_label || "",
+      categoryLabel(result.category || ""),
+    ].filter(Boolean).join(" • ");
+    if (sourceLine) copy.appendChild(node("div", "feed-category", sourceLine));
+    copy.appendChild(node("div", "feed-result-title", itemTitle(result)));
+
+    const meta = [];
+    if (result.year) meta.push(String(result.year));
+    if (Number(result.rating || 0) > 0) meta.push(`★ ${Number(result.rating).toFixed(1)}`);
+    if (Number(result.seeds || 0) > 0) meta.push(`${Number(result.seeds)} seeds`);
+    const size = formatFeedBytes(result.file_size);
+    if (size) meta.push(size);
+    if (result.first_seen_at) {
+      const seen = new Date(result.first_seen_at);
+      if (!Number.isNaN(seen.getTime())) meta.push(`Found ${seen.toLocaleDateString()}`);
+    }
+    if (meta.length) copy.appendChild(node("div", "feed-meta", meta.join(" • ")));
+
+    const releaseTitle = String(result.release_title || "");
+    if (releaseTitle && releaseTitle !== itemTitle(result)) {
+      copy.appendChild(node("div", "feed-result-release", releaseTitle));
+    }
+
+    const actions = node("div", "feed-result-actions");
+    const target = detailsTarget(result);
+    if (target) {
+      actions.appendChild(button("View Details", "btn primary", () => go(target)));
+    } else {
+      actions.appendChild(button("Search in Cinema", "btn secondary", () => {
+        go(`search?q=${encodeURIComponent(itemTitle(result))}`);
+      }));
+    }
+    copy.appendChild(actions);
+    card.append(art, copy);
+    return card;
+  }
+
+
   async function renderFeeds() {
     const page = node("main", "page");
     renderShell(skeletonPage(), "feeds");
@@ -1299,6 +1370,42 @@
       head.appendChild(title);
       if (data.can_manage) head.appendChild(button("+ Add Source", "btn primary", () => openFeedEditor()));
       page.appendChild(head);
+
+      const results = Array.isArray(data.results) ? data.results : [];
+      const resultSection = node("section", "section feed-results-section");
+      const resultHead = node("div", "section-head");
+      const resultTitle = node("div");
+      resultTitle.append(
+        node("h2", "section-title", "Latest Feed Results"),
+        node("p", "section-sub", "Actual items discovered from your enabled RSS and structured sources."),
+      );
+      resultHead.appendChild(resultTitle);
+      resultSection.appendChild(resultHead);
+
+      if (data.results_warning) {
+        resultSection.appendChild(node("div", "state-card", data.results_warning));
+      }
+      if (!results.length) {
+        resultSection.appendChild(node(
+          "div",
+          "state-card",
+          "No feed results yet. Refresh an enabled RSS or structured source below and its discovered titles will appear here.",
+        ));
+      } else {
+        const resultGrid = node("div", "feed-result-grid");
+        results.forEach((result) => resultGrid.appendChild(feedResultCard(result)));
+        resultSection.appendChild(resultGrid);
+      }
+      page.appendChild(resultSection);
+
+      const sourceHead = node("div", "section-head section");
+      const sourceTitle = node("div");
+      sourceTitle.append(
+        node("h2", "section-title", "Sources"),
+        node("p", "section-sub", "Manage where Feed Center discovers movies and shows."),
+      );
+      sourceHead.appendChild(sourceTitle);
+      page.appendChild(sourceHead);
 
       const sources = Array.isArray(data.sources) ? data.sources : [];
       if (!sources.length) {
