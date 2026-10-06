@@ -105,6 +105,7 @@ class CinemaDetails:
     runtime: int = 0
     genres: tuple[str, ...] = ()
     studios: tuple[str, ...] = ()
+    franchises: tuple[str, ...] = ()
     status: str = ""
     cast: tuple[dict[str, Any], ...] = ()
     directors: tuple[str, ...] = ()
@@ -120,6 +121,7 @@ class CinemaDetails:
             "runtime": self.runtime,
             "genres": list(self.genres),
             "studios": list(self.studios),
+            "franchises": list(self.franchises),
             "status": self.status,
             "cast": [dict(row) for row in self.cast],
             "directors": list(self.directors),
@@ -508,6 +510,13 @@ async def get_details(media_type: str, tmdb_id: int) -> CinemaDetails:
         for row in list(payload.get("production_companies") or [])[:16]
         if isinstance(row, Mapping) and _clean_text(row.get("name"), 100)
     )
+    collection = payload.get("belongs_to_collection")
+    franchises = (
+        (_clean_text(collection.get("name"), 120),)
+        if isinstance(collection, Mapping)
+        and _clean_text(collection.get("name"), 120)
+        else ()
+    )
 
     seasons: list[dict[str, Any]] = []
     if kind == "tv":
@@ -541,6 +550,7 @@ async def get_details(media_type: str, tmdb_id: int) -> CinemaDetails:
         runtime=runtime,
         genres=genres,
         studios=studios,
+        franchises=franchises,
         status=_clean_text(payload.get("status"), 80),
         cast=cast,
         directors=directors,
