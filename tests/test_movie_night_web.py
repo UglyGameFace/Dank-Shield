@@ -365,8 +365,11 @@ def test_movie_night_player_labels_seed_leech_source() -> None:
         456,
         "uid=456&exp=9999999999&sig=test",
     )
-    assert "Seeds / Leechers" in html
+    assert 'id="swarmLabel"' in html
+    assert '"Connected seeds / peers"' in html
+    assert '"Reported seeds / leechers"' in html
     assert "t.swarm_source" in html
+    assert "t.peers" in html
     assert "t.leechers" in html
 
 
