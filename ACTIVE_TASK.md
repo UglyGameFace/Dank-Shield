@@ -1631,3 +1631,46 @@ Acceptance:
 - unresolved releases stay usable through in-app Search;
 - source management remains below the results section;
 - exact-head CI and companion workflows green before merge.
+
+## Evidence-backed Feed Center defect — static RSS refresh was filtering for `movie`
+
+Production evidence:
+- Feed Center results UI is deployed and visible;
+- EzTV reports Online and a fresh timestamp but `Latest Feed Results` remains empty.
+
+Code-path proof:
+- EzTV is configured as a static RSS/Atom source;
+- `refresh_feed()` defaulted Custom-category refreshes to the literal query `movie`;
+- `_search_url(..., static_feed=True)` fetched the static feed URL itself;
+- `_read_structured_items_limited()` passed the same `movie` query into `_extract_feed_items()`;
+- `_extract_feed_items()` rejected every RSS item whose title did not match `movie`;
+- zero matches returned `variants=()` with no error, so Feed Center marked the source Online while recording zero discoveries.
+
+External documentation check:
+- EZTV documents `https://myrss.org/eztv` as an RSS feed intended for clients to automatically download all published items;
+- the resolver already supports EZTV-style magnet URI and `.torrent` references.
+
+Active branch:
+`fix/cinema-feed-refresh-unfiltered-rss`
+
+Correction contract:
+- static RSS/Atom Feed Center refresh with no explicit query fetches the endpoint unchanged and ingests all playable entries;
+- blank query means no title filter for RSS/Atom extraction, while a real explicit query still filters titles;
+- structured JSON search sources keep their category-based default query behavior (`movie`, `tv`, `anime`, `documentary`);
+- source search during movie/details discovery remains query-filtered and unchanged;
+- Feed Center source cards expose exact playable-result count for the most recent refresh;
+- if a feed is reachable but contains zero playable magnet/.torrent entries, show that explicit warning instead of only `Online`;
+- cache-bust Cinema JS to `site.js?v=9`.
+
+Regression:
+- static feed URL accepts blank refresh query;
+- a two-entry RSS fixture with titles that do not contain `movie` returns both entries for blank refresh and zero for explicit `movie` filter;
+- Feed Center RSS refresh passes an empty query;
+- JSON Movies refresh still passes `movie`;
+- UI renders result count and discovery warning.
+
+Acceptance after deploy:
+- Refresh EzTV;
+- source card must report a truthful playable-result count;
+- when playable feed entries exist, Latest Feed Results must populate;
+- if count is zero, the card must explicitly say the reachable feed returned no playable magnet/.torrent items, which moves the next investigation to feed payload compatibility rather than pretending discovery succeeded.

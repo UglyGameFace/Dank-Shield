@@ -178,6 +178,7 @@ def _payload(source: Any, *, guild_id: int, include_endpoint: bool) -> dict[str,
         "last_refresh_error": str(runtime.get("error") or "")[:240],
         "discovery_warning": str(runtime.get("discovery_warning") or "")[:240],
         "newly_discovered": list(runtime.get("titles") or [])[:8],
+        "last_refresh_result_count": int(runtime.get("result_count") or 0),
     }
     if include_endpoint:
         payload["endpoint_url"] = str(source.endpoint_url)
@@ -269,9 +270,18 @@ async def refresh_feed(
     if not source.enabled:
         raise ValueError("Enable this source before refreshing it.")
 
-    refresh_query = " ".join(
-        str(query or _default_refresh_query(getattr(source, "category", MEDIA_CATEGORY_CUSTOM))).split()
-    )[:180]
+    provider_type = str(getattr(source, "provider_type", "") or "")
+    if provider_type == PROVIDER_TYPE_FEED:
+        refresh_query = " ".join(str(query or "").split())[:180]
+    else:
+        refresh_query = " ".join(
+            str(
+                query
+                or _default_refresh_query(
+                    getattr(source, "category", MEDIA_CATEGORY_CUSTOM)
+                )
+            ).split()
+        )[:180]
     outcome = await preview_custom_media_source(
         source,
         query=refresh_query,
@@ -290,6 +300,11 @@ async def refresh_feed(
         for variant in outcome.variants[:8]
     ]
     discovery_warning = ""
+    if provider_type == PROVIDER_TYPE_FEED and not titles and not error:
+        discovery_warning = (
+            "Feed is reachable, but it returned no playable magnet or .torrent "
+            "items during this refresh."
+        )
     if titles:
         try:
             recorded = await record_feed_discoveries(
@@ -336,6 +351,8 @@ async def refresh_feed(
         "discovery_warning": discovery_warning,
         "titles": titles,
         "results": runtime_results,
+        "result_count": len(runtime_results),
+        "refresh_query": refresh_query,
     }
 
 

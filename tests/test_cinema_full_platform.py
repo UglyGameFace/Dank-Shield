@@ -808,7 +808,7 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'initialUrl.searchParams.delete("sig")' in script
     assert 'history.replaceState(' in script
     assert 'return `${path}${AUTH_QUERY ? join + AUTH_QUERY.slice(1) : ""}`;' in script
-    assert 'src="/cinema/assets/site.js?v=8"' in source
+    assert 'src="/cinema/assets/site.js?v=9"' in source
     assert '"/cinema/{guild_id}/api/auth-debug"' in source
     assert "def _cinema_auth_debug_payload(" in source
     assert "signed-session-v8-snowflake-safe" in source
@@ -1034,7 +1034,7 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
     assert 'href="/cinema/assets/site.css?v=5"' in source
-    assert 'src="/cinema/assets/site.js?v=8"' in source
+    assert 'src="/cinema/assets/site.js?v=9"' in source
 
 
 def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop() -> None:
@@ -1206,6 +1206,68 @@ def test_feed_center_structured_health_reflects_real_refresh_state(monkeypatch) 
     assert payload["endpoint_url"] == "https://example.org/api"
 
 
+def test_rss_refresh_does_not_force_movie_query(monkeypatch) -> None:
+    source = SimpleNamespace(
+        source_id="eztv",
+        label="EzTV",
+        provider_type="feed",
+        category="custom",
+        enabled=True,
+    )
+    registry = SimpleNamespace(revision=1, sources=(source,))
+    captured: list[str] = []
+
+    async def fake_registry(_guild_id: int, *, refresh: bool = False):
+        assert refresh is True
+        return {}, registry
+
+    async def fake_preview(_source, *, query: str, limit: int):
+        captured.append(query)
+        assert limit == 8
+        return MediaSourceSearchOutcome(variants=(), errors=())
+
+    monkeypatch.setattr(cinema_feed_service, "load_media_source_registry", fake_registry)
+    monkeypatch.setattr(cinema_feed_service, "preview_custom_media_source", fake_preview)
+    cinema_feed_service._RUNTIME_STATE.clear()
+
+    asyncio.run(cinema_feed_service.refresh_feed(123, source_id="eztv"))
+
+    assert captured == [""]
+    runtime = cinema_feed_service._RUNTIME_STATE[(123, "eztv")]
+    assert runtime["ok"] is True
+    assert runtime["result_count"] == 0
+    assert runtime["refresh_query"] == ""
+    assert "no playable magnet or .torrent items" in runtime["discovery_warning"]
+
+
+def test_structured_search_refresh_keeps_category_default_query(monkeypatch) -> None:
+    source = SimpleNamespace(
+        source_id="json-a",
+        label="JSON A",
+        provider_type="json",
+        category="movies",
+        enabled=True,
+    )
+    registry = SimpleNamespace(revision=1, sources=(source,))
+    captured: list[str] = []
+
+    async def fake_registry(_guild_id: int, *, refresh: bool = False):
+        assert refresh is True
+        return {}, registry
+
+    async def fake_preview(_source, *, query: str, limit: int):
+        captured.append(query)
+        return MediaSourceSearchOutcome(variants=(), errors=())
+
+    monkeypatch.setattr(cinema_feed_service, "load_media_source_registry", fake_registry)
+    monkeypatch.setattr(cinema_feed_service, "preview_custom_media_source", fake_preview)
+    cinema_feed_service._RUNTIME_STATE.clear()
+
+    asyncio.run(cinema_feed_service.refresh_feed(123, source_id="json-a"))
+
+    assert captured == ["movie"]
+
+
 def test_feed_state_returns_real_recent_discoveries(monkeypatch) -> None:
     async def fake_registry(_guild_id: int, *, refresh: bool = False):
         return {}, SimpleNamespace(revision=7, sources=[])
@@ -1305,6 +1367,9 @@ def test_full_site_feed_center_does_not_fake_external_refresh_or_search() -> Non
     assert '"No feed results yet. Refresh an enabled RSS or structured source below' in script
     assert '"Search in Cinema"' in script
     assert '"View Details"' in script
+    assert "last_refresh_result_count" in script
+    assert "playable result" in script
+    assert "source.discovery_warning" in script
     assert 'feedAction({ action: "refresh", source_id: source.source_id })' in script
     assert 'query: "movie"' not in script
     assert "Supports:" in script

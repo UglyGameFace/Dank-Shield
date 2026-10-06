@@ -239,6 +239,8 @@ def _looks_like_static_feed_endpoint(endpoint: str) -> bool:
 def _search_url(endpoint: str, query: str, *, static_feed: bool = False) -> str:
     clean_query = " ".join(str(query or "").split())[:180]
     if not clean_query:
+        if static_feed or _looks_like_static_feed_endpoint(endpoint):
+            return endpoint
         raise ValueError("Movie search query is empty.")
 
     parsed = urlsplit(endpoint)
@@ -858,8 +860,10 @@ def _feed_entry_to_item(entry: ET.Element) -> Mapping[str, Any]:
 def _feed_query_matches(title: Any, query: str) -> bool:
     clean_title = " ".join(str(title or "").casefold().split())
     clean_query = " ".join(str(query or "").casefold().split())
-    if not clean_title or not clean_query:
+    if not clean_title:
         return False
+    if not clean_query:
+        return True
     if clean_query in clean_title:
         return True
     terms = re.findall(r"[a-z0-9]+", clean_query)

@@ -56,6 +56,36 @@ def test_explicit_static_feed_does_not_get_search_query_appended() -> None:
     assert "q=Alien" in legacy
 
 
+def test_static_feed_refresh_allows_empty_query_and_keeps_all_playable_entries() -> None:
+    endpoint = "https://myrss.org/eztv"
+    assert resolver._search_url(endpoint, "", static_feed=True) == endpoint
+
+    payload = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0">
+      <channel>
+        <item>
+          <title>Example.Show.S03E09.1080p.WEB.x265-GROUP</title>
+          <magnetURI>magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA</magnetURI>
+        </item>
+        <item>
+          <title>Another.Series.S01E02.720p.HDTV.x264-GROUP</title>
+          <magnetURI>magnet:?xt=urn:btih:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB</magnetURI>
+        </item>
+      </channel>
+    </rss>
+    """
+
+    unfiltered = resolver._extract_feed_items(payload, "")
+    assert [row["title"] for row in unfiltered] == [
+        "Example.Show.S03E09.1080p.WEB.x265-GROUP",
+        "Another.Series.S01E02.720p.HDTV.x264-GROUP",
+    ]
+
+    # This is the production bug being prevented: the old Feed Center refresh
+    # forced the literal word "movie" into every static RSS title filter.
+    assert resolver._extract_feed_items(payload, "movie") == []
+
+
 def test_source_result_keeps_swarm_health_and_unverified_source_metadata() -> None:
     variant = resolver._variant_from_item(
         _source(),
