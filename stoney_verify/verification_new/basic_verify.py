@@ -1104,6 +1104,12 @@ async def _reconcile_one_basic_verify_panel(
     # dead-panel failure this reconciler is meant to eliminate.
     try:
         me_id = current_application_id
+        await _reserve_basic_verify_recovery_request(
+            label=(
+                "basic verify disabled legacy history "
+                f"guild={int(guild.id)} channel={int(channel.id)}"
+            )
+        )
         async for msg in channel.history(limit=80):
             if not msg.embeds or not is_basic_verify_panel_embed(msg.embeds[0]):
                 continue
