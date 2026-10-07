@@ -74,6 +74,7 @@ def test_process_health_bot_attachment_is_explicit_and_idempotent(monkeypatch) -
     assert health.attach_process_health(bot) is False
     assert [name for _listener, name in listeners] == [
         "on_ready",
+        "on_connect",
         "on_disconnect",
         "on_resumed",
     ]
@@ -94,6 +95,7 @@ def test_process_health_exposes_gateway_and_event_loop_stall_diagnostics() -> No
     )
 
     assert "EVENT_LOOP_LAG" in source
+    assert "GATEWAY_CONNECTED" in source
     assert "GATEWAY_DISCONNECT" in source
     assert "GATEWAY_RESUMED" in source
     assert 'name="process_health_loop_lag"' in source
