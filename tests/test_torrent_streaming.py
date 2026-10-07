@@ -162,20 +162,75 @@ def test_media_health_reports_standalone_cinema_oauth_readiness(monkeypatch) -> 
         },
     )
 
-    class Manager:
-        public_base_url = "https://cinema.example"
-        stream_secret = "secret"
-
-    monkeypatch.setattr(torrent_media_server, "get_torrent_manager", lambda: Manager())
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "secret")
+    monkeypatch.setattr(
+        torrent_streaming,
+        "get_torrent_manager",
+        lambda: (_ for _ in ()).throw(AssertionError("health initialized libtorrent")),
+    )
     response = asyncio.run(torrent_media_server._health(SimpleNamespace()))
     payload = __import__("json").loads(response.text)
 
+    assert payload["public_base_url_configured"] is True
+    assert payload["stream_signing_configured"] is True
     assert payload["cinema_ffmpeg_audio_ready"] is True
     assert payload["cinema_standalone_login_configured"] is True
     assert payload["cinema_oauth_client_id_ready"] is True
     assert payload["cinema_oauth_client_secret_ready"] is True
     assert payload["cinema_oauth_redirect_ready"] is True
     assert payload["cinema_oauth_redirect_uri"].endswith("/cinema/auth/callback")
+
+
+def test_cinema_listener_starts_before_discord_without_constructing_libtorrent(monkeypatch) -> None:
+    events: list[str] = []
+    monkeypatch.setenv("DANK_MEDIA_SERVER_ENABLED", "true")
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "secret")
+    monkeypatch.setattr(torrent_media_server, "_MEDIA_RUNNER", None)
+    monkeypatch.setattr(torrent_media_server, "_MEDIA_SITE", None)
+    monkeypatch.setattr(torrent_media_server, "cinema_oauth_ready", lambda: True)
+    monkeypatch.setattr(
+        torrent_streaming,
+        "get_torrent_manager",
+        lambda: (_ for _ in ()).throw(AssertionError("startup initialized libtorrent")),
+    )
+
+    class Runner:
+        def __init__(self, app, *, access_log=None):
+            self.app = app
+            assert access_log is None
+
+        async def setup(self) -> None:
+            events.append("runner")
+
+    class Site:
+        def __init__(self, runner, *, host, port):
+            assert isinstance(runner, Runner)
+            assert host == "0.0.0.0"
+            assert port == 8080
+
+        async def start(self) -> None:
+            events.append("site")
+
+    monkeypatch.setattr(torrent_media_server.web, "AppRunner", Runner)
+    monkeypatch.setattr(torrent_media_server.web, "TCPSite", Site)
+    monkeypatch.setattr(
+        torrent_media_server,
+        "start_cinema_feed_refresh_worker",
+        lambda: events.append("feed"),
+    )
+
+    async def scenario() -> None:
+        assert await torrent_media_server.start_torrent_media_server() is True
+        response = await torrent_media_server._health(SimpleNamespace())
+        payload = __import__("json").loads(response.text)
+        assert payload["ok"] is True
+        assert payload["public_base_url_configured"] is True
+        assert payload["stream_signing_configured"] is True
+
+    asyncio.run(scenario())
+    assert events == ["runner", "site", "feed"]
 
 
 def test_stream_startup_timing_is_per_consumer_and_first_stage_stable(monkeypatch, tmp_path: Path) -> None:
