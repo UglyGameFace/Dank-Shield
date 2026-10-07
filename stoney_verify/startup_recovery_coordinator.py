@@ -26,10 +26,22 @@ def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
 
 _MAX_CONCURRENT = _env_int(
     "DANK_STARTUP_RECOVERY_MAX_CONCURRENT",
-    2,
+    1,
     minimum=1,
     maximum=16,
 )
+
+# Keep Discord-facing recovery dormant long enough for the Gateway, slash
+# commands, persistent components, website, and health checks to prove stable.
+# Recovery is catch-up work, not a prerequisite for serving live interactions.
+_PROCESS_STARTED_AT = time.monotonic()
+_STARTUP_RECOVERY_QUIET_SECONDS = _env_int(
+    "DANK_STARTUP_RECOVERY_QUIET_SECONDS",
+    120,
+    minimum=30,
+    maximum=600,
+)
+_QUIET_WAIT_LOGGED = False
 
 
 @dataclass
@@ -44,6 +56,32 @@ _GUILD_SLOTS: dict[int, _GuildSlot] = {}
 _CURRENT: dict[int, str] = {}
 _GLOBAL_RUNNING = 0
 _GLOBAL_WAITING = 0
+
+
+def startup_recovery_quiet_remaining_seconds() -> float:
+    elapsed = max(0.0, time.monotonic() - _PROCESS_STARTED_AT)
+    return max(0.0, float(_STARTUP_RECOVERY_QUIET_SECONDS) - elapsed)
+
+
+async def wait_for_startup_recovery_quiet_period() -> None:
+    global _QUIET_WAIT_LOGGED
+
+    remaining = startup_recovery_quiet_remaining_seconds()
+    if remaining <= 0:
+        return
+
+    if not _QUIET_WAIT_LOGGED:
+        _QUIET_WAIT_LOGGED = True
+        try:
+            print(
+                "🧯 startup_recovery quiet window active "
+                f"remaining={remaining:.1f}s "
+                f"configured={_STARTUP_RECOVERY_QUIET_SECONDS}s"
+            )
+        except Exception:
+            pass
+
+    await asyncio.sleep(remaining)
 
 
 def _ensure_loop_state() -> asyncio.Semaphore:
@@ -67,6 +105,8 @@ def _ensure_loop_state() -> asyncio.Semaphore:
 def startup_recovery_snapshot() -> dict[str, object]:
     return {
         "max_concurrent": _MAX_CONCURRENT,
+        "quiet_seconds": _STARTUP_RECOVERY_QUIET_SECONDS,
+        "quiet_remaining_seconds": round(startup_recovery_quiet_remaining_seconds(), 3),
         "running": max(0, int(_GLOBAL_RUNNING)),
         "waiting": max(0, int(_GLOBAL_WAITING)),
         "guild_slots": len(_GUILD_SLOTS),
@@ -80,6 +120,8 @@ async def startup_recovery_slot(guild_id: int, label: str) -> AsyncIterator[None
 
     global _GLOBAL_RUNNING
     global _GLOBAL_WAITING
+
+    await wait_for_startup_recovery_quiet_period()
 
     semaphore = _ensure_loop_state()
     gid = int(guild_id)
@@ -145,4 +187,9 @@ async def startup_recovery_slot(guild_id: int, label: str) -> AsyncIterator[None
                 _GUILD_SLOTS.pop(gid, None)
 
 
-__all__ = ["startup_recovery_slot", "startup_recovery_snapshot"]
+__all__ = [
+    "startup_recovery_quiet_remaining_seconds",
+    "startup_recovery_slot",
+    "startup_recovery_snapshot",
+    "wait_for_startup_recovery_quiet_period",
+]
