@@ -431,6 +431,16 @@ def attach_process_health(bot: Any) -> bool:
         except Exception as e:
             _log(f"on_ready health attach failed: {e!r}")
 
+    async def _process_health_on_connect() -> None:
+        try:
+            latency = float(getattr(bot, "latency", 0.0) or 0.0)
+        except Exception:
+            latency = 0.0
+        _log(
+            f"GATEWAY_CONNECTED uptime={time.time() - _BOOT_TS:.1f}s "
+            f"latency={latency:.3f}s {_memory_snapshot()}"
+        )
+
     async def _process_health_on_disconnect() -> None:
         try:
             latency = float(getattr(bot, "latency", 0.0) or 0.0)
@@ -457,10 +467,11 @@ def attach_process_health(bot: Any) -> bool:
             _READY_LISTENER_ATTACHED = True
             _log("on_ready heartbeat listener attached")
         if not _GATEWAY_LISTENERS_ATTACHED:
+            bot.add_listener(_process_health_on_connect, "on_connect")
             bot.add_listener(_process_health_on_disconnect, "on_disconnect")
             bot.add_listener(_process_health_on_resumed, "on_resumed")
             _GATEWAY_LISTENERS_ATTACHED = True
-            _log("gateway disconnect/resume listeners attached")
+            _log("gateway connect/disconnect/resume listeners attached")
         return True
     except Exception as e:
         _log(f"failed attaching process health listeners: {e!r}")
