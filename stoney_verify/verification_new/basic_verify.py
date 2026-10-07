@@ -38,7 +38,6 @@ _BASIC_VERIFY_INTERACTION_CLAIM_MAX = 4096
 _RUNTIME_VIEW_REGISTERED = False
 _RUNTIME_FALLBACK_LISTENER_REGISTERED = False
 _RUNTIME_REGISTRATION_ERROR: str = ""
-_BASIC_VERIFY_FALLBACK_GRACE_SECONDS = 0.15
 _BASIC_VERIFY_PANEL_MESSAGE_ID_KEY = "basic_verify_panel_message_id"
 _BASIC_VERIFY_PANEL_APPLICATION_ID_KEY = "basic_verify_panel_application_id"
 _BASIC_VERIFY_PANEL_COMPONENT_ID_KEY = "basic_verify_panel_component_id"
@@ -360,9 +359,12 @@ class BasicVerifyButton(discord.ui.Button):
         super().__init__(label="Verify", emoji="✅", style=discord.ButtonStyle.success, custom_id=BASIC_VERIFY_CUSTOM_ID)
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-        # One canonical interaction handler owns acknowledgement + role mutation.
-        # The persistent view and emergency fallback both delegate here instead
-        # of maintaining competing copies of the Verify workflow.
+        # The raw on_interaction listener is the canonical live owner because it
+        # sees component ingress directly and can acknowledge immediately. Keep
+        # the persistent View as a restart-safe backup only when listener
+        # registration is unavailable.
+        if _RUNTIME_FALLBACK_LISTENER_REGISTERED:
+            return
         await maybe_handle_basic_verify_interaction(interaction)
 
 
@@ -375,15 +377,12 @@ class BasicVerifyView(discord.ui.View):
 async def _basic_verify_fallback_listener(
     interaction: discord.Interaction,
 ) -> None:
-    """Recover Basic Verify clicks missed by persistent-view dispatch.
+    """Own Basic Verify component ingress and acknowledge without a grace delay.
 
-    discord.py dispatches component views before the public on_interaction
-    event. When the persistent view is registered, give its callback a short
-    grace window to acknowledge first. Only an interaction that is still
-    unanswered after that window is allowed to enter the canonical handler.
-
-    When persistent-view registration failed entirely, there is nothing to wait
-    for and the listener handles the click immediately.
+    The persistent View remains registered so old panels survive restarts, but
+    when this listener is available it is the single live dispatcher. This
+    avoids making a user wait behind a View/listener race before the required
+    Discord interaction acknowledgement.
     """
     try:
         if interaction.type is not discord.InteractionType.component:
@@ -398,35 +397,32 @@ async def _basic_verify_fallback_listener(
         if custom_id != BASIC_VERIFY_CUSTOM_ID:
             return
 
-        if interaction.response.is_done():
-            return
-
-        if _RUNTIME_VIEW_REGISTERED:
-            await asyncio.sleep(_BASIC_VERIFY_FALLBACK_GRACE_SECONDS)
-            if interaction.response.is_done():
-                return
-
         try:
             print(
-                "⚠️ basic_verify delayed fallback claimed click "
+                "➡️ basic_verify interaction ingress "
                 f"interaction={getattr(interaction, 'id', 0)} "
                 f"guild={getattr(getattr(interaction, 'guild', None), 'id', 0)} "
-                f"user={getattr(getattr(interaction, 'user', None), 'id', 0)}"
+                f"user={getattr(getattr(interaction, 'user', None), 'id', 0)} "
+                f"response_done={interaction.response.is_done()}"
             )
         except Exception:
             pass
+
+        if interaction.response.is_done():
+            return
 
         await maybe_handle_basic_verify_interaction(interaction)
     except Exception as exc:
         try:
             print(
-                "❌ basic_verify: fallback interaction handler failed "
+                "❌ basic_verify: interaction listener failed "
                 f"guild={getattr(getattr(interaction, 'guild', None), 'id', 0)} "
                 f"user={getattr(getattr(interaction, 'user', None), 'id', 0)} "
                 f"error={type(exc).__name__}: {exc}"
             )
         except Exception:
             pass
+
 
 def basic_verify_runtime_status() -> dict[str, Any]:
     return {
@@ -449,16 +445,12 @@ def install_basic_verify_runtime(
     *,
     strict: bool = False,
 ) -> bool:
-    """Install the restart-safe Basic Verify view plus delayed safety listener.
+    """Install the restart-safe Basic Verify view plus immediate interaction owner.
 
-    The persistent view is the primary owner. The global on_interaction
-    listener never races it immediately: discord.py emits the interaction event
-    after scheduling component-view dispatch, so the listener waits briefly and
-    only claims a still-unanswered Basic Verify click.
-
-    Both routes delegate to the same canonical handler and the handler
-    acknowledges before database or role work, so there is still only one role
-    mutation path.
+    The on_interaction listener is the canonical live owner so a Verify click is
+    acknowledged as soon as component ingress is observed. The persistent View
+    remains registered as a restart-safe backup if listener registration ever
+    fails.
     """
     global _RUNTIME_VIEW_REGISTERED
     global _RUNTIME_FALLBACK_LISTENER_REGISTERED
@@ -538,7 +530,7 @@ def install_basic_verify_runtime(
     if _RUNTIME_VIEW_REGISTERED and _RUNTIME_FALLBACK_LISTENER_REGISTERED:
         print(
             "✅ basic_verify runtime ready "
-            "owner=persistent_view delayed_fallback=True "
+            "owner=on_interaction immediate_ack=True persistent_view_backup=True "
             f"panel_reconciler={_RUNTIME_READY_RECONCILER_REGISTERED}"
         )
     elif ready:
@@ -1366,10 +1358,12 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
             )
         except Exception:
             pass
+        # Acknowledge before any context checks, database reads, or role work.
+        # Discord gives component interactions only a short response window.
+        if not await _ack(interaction):
+            return True
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             await _reply(interaction, "This only works inside the server.", ok=False)
-            return True
-        if not await _ack(interaction):
             return True
         ok, message = await apply_basic_verification(interaction.user)
         await _reply(interaction, message, ok=ok)
