@@ -122,7 +122,7 @@ async def start_torrent_media_server() -> bool:
             "health remains available but media/watch access stays fail-closed "
             "until DANK_TORRENT_STREAM_SECRET is configured."
         )
-    if not media_public_base_url:
+    if not media_public_base_url():
         print(
             "⚠️ Torrent media server starting without DANK_MEDIA_PUBLIC_BASE_URL; "
             "Site health remains available but no playback URL can be issued yet."
