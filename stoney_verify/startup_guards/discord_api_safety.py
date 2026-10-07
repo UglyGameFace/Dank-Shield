@@ -23,6 +23,10 @@ from typing import Any, AsyncIterator, DefaultDict, Optional
 
 import discord
 
+from stoney_verify.startup_recovery_coordinator import (
+    wait_for_startup_recovery_quiet_period,
+)
+
 _PATCHED = False
 _ORIGINAL_GUILD_AUDIT_LOGS = None
 _AUDIT_LOCKS: DefaultDict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -184,6 +188,11 @@ async def reserve_recovery_discord_rest_requests(
     """
 
     global _RECOVERY_REST_WAITERS
+
+    # Recovery traffic is optional catch-up work. Keep it completely silent
+    # during the cold-start quiet window so live Discord interactions and the
+    # site health endpoint establish themselves before any historical REST work.
+    await wait_for_startup_recovery_quiet_period()
 
     budget = _recovery_rest_budget_per_30s()
     requested = max(1, min(int(weight or 1), budget))

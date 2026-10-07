@@ -2,7 +2,21 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from stoney_verify.startup_guards import discord_api_safety
+
+
+@pytest.fixture(autouse=True)
+def _skip_cold_start_quiet_period(monkeypatch):
+    async def _noop() -> None:
+        return None
+
+    monkeypatch.setattr(
+        discord_api_safety,
+        "wait_for_startup_recovery_quiet_period",
+        _noop,
+    )
 
 
 def _reset_recovery_budget_state() -> None:
