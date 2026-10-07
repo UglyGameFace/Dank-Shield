@@ -1266,7 +1266,9 @@ def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
     assert "startup_wait_end" in routes
     assert "initial_wait_end = first_end if partial else startup_wait_end" in routes
     assert "manager.contiguous_available_end(" in routes
-    assert "get_torrent_manager().ensure_cleanup_task()" in routes
+    assert "get_torrent_manager().ensure_cleanup_task()" not in routes
+    torrent_runtime = (root / "stoney_verify/torrent_streaming.py").read_text(encoding="utf-8")
+    assert "_MANAGER.ensure_cleanup_task()" in torrent_runtime
     assert "find_magnet(" in router
     assert "is_torrent_filename(" in router
     assert "manager.start_magnet(" in router
@@ -1277,6 +1279,51 @@ def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
     assert "media_server_ready()" in router
     assert "lease_key=lease_key" in router
     assert "await manager.release_lease(" in router
+
+
+def test_public_route_registration_does_not_construct_torrent_manager(monkeypatch) -> None:
+    from stoney_verify.api_new import torrent_stream_routes as routes_module
+
+    class Router:
+        def __init__(self) -> None:
+            self.paths: list[str] = []
+
+        def add_get(self, path: str, handler, **kwargs) -> None:
+            _ = handler, kwargs
+            self.paths.append(path)
+
+        def add_options(self, path: str, handler, **kwargs) -> None:
+            _ = handler, kwargs
+            self.paths.append(path)
+
+    app = SimpleNamespace(router=Router())
+    monkeypatch.setattr(
+        routes_module,
+        "get_torrent_manager",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("route registration constructed libtorrent")
+        ),
+    )
+
+    routes_module.register_torrent_public_routes(app)
+
+    assert "/media/torrent/stream/{token}/{filename}" in app.router.paths
+    assert "/media/torrent/audio/{token}/{filename}" in app.router.paths
+
+
+def test_torrent_manager_cleanup_starts_on_real_manager_acquisition(monkeypatch) -> None:
+    class Manager:
+        def __init__(self) -> None:
+            self.cleanup_calls = 0
+
+        def ensure_cleanup_task(self) -> None:
+            self.cleanup_calls += 1
+
+    manager = Manager()
+    monkeypatch.setattr(torrent_streaming, "_MANAGER", manager)
+
+    assert torrent_streaming.get_torrent_manager() is manager
+    assert manager.cleanup_calls == 1
 
 
 def _shared_session(tmp_path: Path, *, token: str = "shared") -> TorrentStreamSession:
