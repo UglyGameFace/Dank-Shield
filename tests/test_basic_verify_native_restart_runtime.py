@@ -218,11 +218,11 @@ def test_emergency_fallback_only_delegates_unacknowledged_basic_verify(
     asyncio.run(scenario())
 
 
-def test_delayed_fallback_gives_persistent_callback_first_chance(
+def test_listener_is_canonical_owner_when_persistent_view_is_registered(
     monkeypatch,
 ) -> None:
     async def scenario() -> None:
-        calls: list[str] = []
+        calls: list[object] = []
 
         class Response:
             def __init__(self) -> None:
@@ -241,9 +241,8 @@ def test_delayed_fallback_gives_persistent_callback_first_chance(
             user=SimpleNamespace(id=88),
         )
 
-        async def fake_handler(_interaction) -> bool:
-            calls.append("handler")
-            await asyncio.sleep(0.01)
+        async def fake_handler(received) -> bool:
+            calls.append(received)
             response.done = True
             return True
 
@@ -252,27 +251,22 @@ def test_delayed_fallback_gives_persistent_callback_first_chance(
             "maybe_handle_basic_verify_interaction",
             fake_handler,
         )
-        monkeypatch.setattr(
-            runtime,
-            "_BASIC_VERIFY_FALLBACK_GRACE_SECONDS",
-            0.05,
-        )
         runtime._RUNTIME_VIEW_REGISTERED = True
+        runtime._RUNTIME_FALLBACK_LISTENER_REGISTERED = True
 
         button = runtime.BasicVerifyButton()
-        persistent_task = asyncio.create_task(button.callback(interaction))
-        fallback_task = asyncio.create_task(
-            runtime._basic_verify_fallback_listener(interaction)
-        )
-        await asyncio.gather(persistent_task, fallback_task)
+        await button.callback(interaction)
+        assert calls == []
 
-        assert calls == ["handler"]
+        await runtime._basic_verify_fallback_listener(interaction)
+
+        assert calls == [interaction]
         assert response.is_done() is True
 
     asyncio.run(scenario())
 
 
-def test_delayed_fallback_claims_click_when_persistent_dispatch_misses(
+def test_listener_claims_basic_verify_without_grace_delay(
     monkeypatch,
 ) -> None:
     async def scenario() -> None:
@@ -305,12 +299,8 @@ def test_delayed_fallback_claims_click_when_persistent_dispatch_misses(
             "maybe_handle_basic_verify_interaction",
             fake_handler,
         )
-        monkeypatch.setattr(
-            runtime,
-            "_BASIC_VERIFY_FALLBACK_GRACE_SECONDS",
-            0,
-        )
         runtime._RUNTIME_VIEW_REGISTERED = True
+        runtime._RUNTIME_FALLBACK_LISTENER_REGISTERED = True
 
         await runtime._basic_verify_fallback_listener(interaction)
 
