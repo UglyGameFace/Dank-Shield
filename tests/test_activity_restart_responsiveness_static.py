@@ -13,6 +13,8 @@ COMMAND = Path(
     "stoney_verify/commands_ext/public_members_group.py"
 ).read_text(encoding="utf-8")
 
+ENV_EXAMPLE = Path(".env.example").read_text(encoding="utf-8")
+
 
 def _on_ready_block() -> str:
     start = TRACKER.index("async def _on_ready(")
@@ -37,6 +39,17 @@ def test_reconciliation_runs_in_bounded_background_task():
     assert "reconcile_timeout_seconds()" in TRACKER
     assert "_STARTUP_RECONCILE_LOCK" in TRACKER
     assert "_STARTUP_TASKS" in TRACKER
+
+
+def test_activity_recovery_starts_after_discloud_initial_rest_window():
+    start = RECONCILE.index("def reconcile_start_delay_seconds()")
+    end = RECONCILE.index("def reconcile_timeout_seconds()", start)
+    block = RECONCILE[start:end]
+
+    assert '"DANK_ACTIVITY_RECONCILE_START_DELAY_SECONDS"' in block
+    assert "75" in block
+    assert "minimum=30" in block
+    assert "DANK_ACTIVITY_RECONCILE_START_DELAY_SECONDS=75" in ENV_EXAMPLE
 
 
 def test_timeout_resets_fail_closed():
