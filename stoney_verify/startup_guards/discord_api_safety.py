@@ -113,13 +113,16 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _recovery_rest_budget_per_30s() -> int:
-    # Keep substantial headroom below Discloud's observed 300/30s process cap
-    # for live Discord traffic that is intentionally outside startup recovery.
+    # Discloud's host-wide ceiling is stricter than discord.py's per-route
+    # buckets. Recovery is optional background work; preserve most of the
+    # observed 300/30s allowance for live interactions, moderation, command
+    # responses, and unrelated runtime traffic. Clamp overrides as well so an
+    # old deployment value cannot silently restore the unsafe 100+/30s burst.
     return max(
-        30,
+        20,
         min(
-            200,
-            _env_int("DANK_RECOVERY_DISCORD_REST_BUDGET_PER_30S", 100),
+            60,
+            _env_int("DANK_RECOVERY_DISCORD_REST_BUDGET_PER_30S", 40),
         ),
     )
 

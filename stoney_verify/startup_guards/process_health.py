@@ -26,7 +26,9 @@ _BOOT_TS = time.time()
 _BOOT_STATE_PATH = Path(os.getenv("DANK_PROCESS_BOOT_STATE", "/tmp/dank_process_boot_state.txt"))
 _HEALTH_INTERVAL_SECONDS = int(os.getenv("DANK_PROCESS_HEALTH_INTERVAL_SECONDS", "120") or "120")
 _HEALTH_TASK_STARTED = False
+_LOOP_LAG_TASK_STARTED = False
 _READY_LISTENER_ATTACHED = False
+_GATEWAY_LISTENERS_ATTACHED = False
 _PREVIOUS_EXCEPTHOOK = sys.excepthook
 _INSTALLED = False
 _EXTERNAL_WATCHDOG_LAST_OK_AT = 0.0
@@ -336,6 +338,31 @@ def _atexit() -> None:
         pass
 
 
+async def _loop_lag_watchdog() -> None:
+    """Log event-loop stalls without performing network I/O."""
+
+    interval = 1.0
+    threshold = 2.5
+    last = time.monotonic()
+    last_log = 0.0
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            now = time.monotonic()
+            delay = max(0.0, now - last - interval)
+            last = now
+            if delay >= threshold and (now - last_log) >= 5.0:
+                last_log = now
+                _log(
+                    f"EVENT_LOOP_LAG delay={delay:.2f}s "
+                    f"uptime={time.time() - _BOOT_TS:.1f}s {_memory_snapshot()}"
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log(f"loop lag watchdog error: {exc!r}")
+
+
 async def _health_loop() -> None:
     interval = max(30, int(_HEALTH_INTERVAL_SECONDS or 120))
     while True:
@@ -359,26 +386,35 @@ async def _health_loop() -> None:
 
 def start_health_loop() -> None:
     global _HEALTH_TASK_STARTED
-    if _HEALTH_TASK_STARTED:
+    global _LOOP_LAG_TASK_STARTED
+    if _HEALTH_TASK_STARTED and _LOOP_LAG_TASK_STARTED:
         return
-    _HEALTH_TASK_STARTED = True
     try:
         loop = asyncio.get_running_loop()
         install_loop_exception_handler(loop)
-        loop.create_task(_health_loop(), name="process_health_loop")
-        _log("heartbeat loop started")
+        if not _HEALTH_TASK_STARTED:
+            _HEALTH_TASK_STARTED = True
+            loop.create_task(_health_loop(), name="process_health_loop")
+            _log("heartbeat loop started")
+        if not _LOOP_LAG_TASK_STARTED:
+            _LOOP_LAG_TASK_STARTED = True
+            loop.create_task(_loop_lag_watchdog(), name="process_health_loop_lag")
+            _log("event-loop lag watchdog started")
     except RuntimeError:
         _HEALTH_TASK_STARTED = False
+        _LOOP_LAG_TASK_STARTED = False
     except Exception as e:
         _HEALTH_TASK_STARTED = False
-        _log(f"failed starting heartbeat loop: {e!r}")
+        _LOOP_LAG_TASK_STARTED = False
+        _log(f"failed starting health loops: {e!r}")
 
 
 def attach_process_health(bot: Any) -> bool:
-    """Attach the health on-ready listener to the explicit bot owner once."""
+    """Attach health and Gateway lifecycle listeners to the explicit bot owner."""
 
     global _READY_LISTENER_ATTACHED
-    if _READY_LISTENER_ATTACHED:
+    global _GATEWAY_LISTENERS_ATTACHED
+    if _READY_LISTENER_ATTACHED and _GATEWAY_LISTENERS_ATTACHED:
         return False
     if bot is None:
         return False
@@ -395,13 +431,39 @@ def attach_process_health(bot: Any) -> bool:
         except Exception as e:
             _log(f"on_ready health attach failed: {e!r}")
 
+    async def _process_health_on_disconnect() -> None:
+        try:
+            latency = float(getattr(bot, "latency", 0.0) or 0.0)
+        except Exception:
+            latency = 0.0
+        _log(
+            f"GATEWAY_DISCONNECT uptime={time.time() - _BOOT_TS:.1f}s "
+            f"latency={latency:.3f}s {_memory_snapshot()}"
+        )
+
+    async def _process_health_on_resumed() -> None:
+        try:
+            latency = float(getattr(bot, "latency", 0.0) or 0.0)
+        except Exception:
+            latency = 0.0
+        _log(
+            f"GATEWAY_RESUMED uptime={time.time() - _BOOT_TS:.1f}s "
+            f"latency={latency:.3f}s {_memory_snapshot()}"
+        )
+
     try:
-        bot.add_listener(_process_health_on_ready, "on_ready")
-        _READY_LISTENER_ATTACHED = True
-        _log("on_ready heartbeat listener attached")
+        if not _READY_LISTENER_ATTACHED:
+            bot.add_listener(_process_health_on_ready, "on_ready")
+            _READY_LISTENER_ATTACHED = True
+            _log("on_ready heartbeat listener attached")
+        if not _GATEWAY_LISTENERS_ATTACHED:
+            bot.add_listener(_process_health_on_disconnect, "on_disconnect")
+            bot.add_listener(_process_health_on_resumed, "on_resumed")
+            _GATEWAY_LISTENERS_ATTACHED = True
+            _log("gateway disconnect/resume listeners attached")
         return True
     except Exception as e:
-        _log(f"failed attaching on_ready heartbeat listener: {e!r}")
+        _log(f"failed attaching process health listeners: {e!r}")
         return False
 
 

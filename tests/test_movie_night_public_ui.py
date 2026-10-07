@@ -2057,3 +2057,11 @@ def test_watch_party_invite_picker_promotes_room_and_sends_signed_link(monkeypat
     assert room.mode == "watch_party"
     assert sent
     assert f"https://watch.example/{room.room_id}?uid=20" in sent[0]
+
+
+
+def test_cinema_home_command_has_command_boundary_tracing() -> None:
+    source = inspect.getsource(movie_ui.open_cinema_home_command)
+    assert "cinema_home ingress" in source
+    assert "cinema_home render_start" in source
+    assert "cinema_home response_returned" in source
