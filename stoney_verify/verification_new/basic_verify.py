@@ -32,6 +32,9 @@ from stoney_verify.setup_engine.verification_modes import (
 )
 
 _BASIC_VERIFY_LOCKS: dict[str, asyncio.Lock] = {}
+_BASIC_VERIFY_INTERACTION_CLAIMS: dict[int, float] = {}
+_BASIC_VERIFY_INTERACTION_CLAIM_TTL_SECONDS = 15 * 60.0
+_BASIC_VERIFY_INTERACTION_CLAIM_MAX = 4096
 _RUNTIME_VIEW_REGISTERED = False
 _RUNTIME_FALLBACK_LISTENER_REGISTERED = False
 _RUNTIME_REGISTRATION_ERROR: str = ""
@@ -76,6 +79,48 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(text)
     except Exception:
         return int(default)
+
+
+def _claim_basic_verify_interaction(interaction: Any) -> bool:
+    """Atomically let exactly one dispatcher own one Discord interaction ID.
+
+    Basic Verify intentionally has both a persistent View callback and an
+    emergency on_interaction fallback. Under event-loop or network delay, both
+    routes can observe response.is_done() == False before either defer finishes.
+    Claiming synchronously by Discord interaction ID prevents the second route
+    from issuing a duplicate acknowledgement (Discord 40060) or repeating role
+    work while preserving the fallback when the persistent callback never runs.
+    """
+
+    interaction_id = _safe_int(getattr(interaction, "id", 0), 0)
+    if interaction_id <= 0:
+        # Test doubles or malformed events without a real Discord interaction ID
+        # cannot be safely cross-dispatch deduplicated.
+        return True
+
+    try:
+        now = float(asyncio.get_running_loop().time())
+    except Exception:
+        now = 0.0
+
+    if interaction_id in _BASIC_VERIFY_INTERACTION_CLAIMS:
+        return False
+
+    if now > 0:
+        expired_before = now - _BASIC_VERIFY_INTERACTION_CLAIM_TTL_SECONDS
+        for claimed_id, claimed_at in list(_BASIC_VERIFY_INTERACTION_CLAIMS.items()):
+            if claimed_at > 0 and claimed_at < expired_before:
+                _BASIC_VERIFY_INTERACTION_CLAIMS.pop(claimed_id, None)
+
+    while len(_BASIC_VERIFY_INTERACTION_CLAIMS) >= _BASIC_VERIFY_INTERACTION_CLAIM_MAX:
+        try:
+            oldest_id = next(iter(_BASIC_VERIFY_INTERACTION_CLAIMS))
+        except StopIteration:
+            break
+        _BASIC_VERIFY_INTERACTION_CLAIMS.pop(oldest_id, None)
+
+    _BASIC_VERIFY_INTERACTION_CLAIMS[interaction_id] = now
+    return True
 
 
 def _cfg_value(cfg: Any, key: str, default: Any = None) -> Any:
@@ -1300,6 +1345,17 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
         custom_id = str(data.get("custom_id") or "")
         if custom_id != BASIC_VERIFY_CUSTOM_ID:
             return False
+        if not _claim_basic_verify_interaction(interaction):
+            try:
+                print(
+                    "ℹ️ basic_verify duplicate dispatcher ignored "
+                    f"interaction={getattr(interaction, 'id', 0)} "
+                    f"guild={getattr(getattr(interaction, 'guild', None), 'id', 0)} "
+                    f"user={getattr(getattr(interaction, 'user', None), 'id', 0)}"
+                )
+            except Exception:
+                pass
+            return True
         try:
             print(
                 "✅ basic_verify click "
