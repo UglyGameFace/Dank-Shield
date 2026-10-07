@@ -29,6 +29,7 @@ _HEALTH_TASK_STARTED = False
 _LOOP_LAG_TASK_STARTED = False
 _READY_LISTENER_ATTACHED = False
 _GATEWAY_LISTENERS_ATTACHED = False
+_INTERACTION_TRACE_LISTENERS_ATTACHED = False
 _PREVIOUS_EXCEPTHOOK = sys.excepthook
 _INSTALLED = False
 _EXTERNAL_WATCHDOG_LAST_OK_AT = 0.0
@@ -414,7 +415,12 @@ def attach_process_health(bot: Any) -> bool:
 
     global _READY_LISTENER_ATTACHED
     global _GATEWAY_LISTENERS_ATTACHED
-    if _READY_LISTENER_ATTACHED and _GATEWAY_LISTENERS_ATTACHED:
+    global _INTERACTION_TRACE_LISTENERS_ATTACHED
+    if (
+        _READY_LISTENER_ATTACHED
+        and _GATEWAY_LISTENERS_ATTACHED
+        and _INTERACTION_TRACE_LISTENERS_ATTACHED
+    ):
         return False
     if bot is None:
         return False
@@ -461,6 +467,37 @@ def attach_process_health(bot: Any) -> bool:
             f"latency={latency:.3f}s {_memory_snapshot()}"
         )
 
+    async def _process_health_on_socket_event_type(event_type: str) -> None:
+        try:
+            if str(event_type or "").upper() == "INTERACTION_CREATE":
+                _log(
+                    f"RAW_INTERACTION_CREATE uptime={time.time() - _BOOT_TS:.1f}s "
+                    f"{_memory_snapshot()}"
+                )
+        except Exception as exc:
+            _log(f"raw interaction trace failed: {exc!r}")
+
+    async def _process_health_on_interaction(interaction: Any) -> None:
+        try:
+            data = getattr(interaction, "data", None)
+            payload = data if isinstance(data, dict) else {}
+            interaction_type = getattr(getattr(interaction, "type", None), "name", None)
+            if not interaction_type:
+                interaction_type = str(getattr(interaction, "type", "unknown"))
+            command_name = str(payload.get("name") or "")
+            custom_id = str(payload.get("custom_id") or "")
+            _log(
+                "INTERACTION_INGRESS "
+                f"type={interaction_type} "
+                f"id={getattr(interaction, 'id', 0)} "
+                f"application_id={getattr(interaction, 'application_id', 0)} "
+                f"guild={getattr(interaction, 'guild_id', 0)} "
+                f"user={getattr(getattr(interaction, 'user', None), 'id', 0)} "
+                f"command={command_name!r} custom_id={custom_id!r}"
+            )
+        except Exception as exc:
+            _log(f"parsed interaction trace failed: {exc!r}")
+
     try:
         if not _READY_LISTENER_ATTACHED:
             bot.add_listener(_process_health_on_ready, "on_ready")
@@ -472,6 +509,17 @@ def attach_process_health(bot: Any) -> bool:
             bot.add_listener(_process_health_on_resumed, "on_resumed")
             _GATEWAY_LISTENERS_ATTACHED = True
             _log("gateway connect/disconnect/resume listeners attached")
+        if not _INTERACTION_TRACE_LISTENERS_ATTACHED:
+            bot.add_listener(
+                _process_health_on_socket_event_type,
+                "on_socket_event_type",
+            )
+            bot.add_listener(
+                _process_health_on_interaction,
+                "on_interaction",
+            )
+            _INTERACTION_TRACE_LISTENERS_ATTACHED = True
+            _log("raw/parsed interaction trace listeners attached")
         return True
     except Exception as e:
         _log(f"failed attaching process health listeners: {e!r}")
