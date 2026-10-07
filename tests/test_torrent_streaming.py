@@ -185,6 +185,8 @@ def test_media_health_reports_standalone_cinema_oauth_readiness(monkeypatch) -> 
 def test_cinema_listener_starts_before_discord_without_constructing_libtorrent(monkeypatch) -> None:
     events: list[str] = []
     monkeypatch.setenv("DANK_MEDIA_SERVER_ENABLED", "true")
+    monkeypatch.setenv("DANK_MEDIA_BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("DANK_MEDIA_PORT", "8080")
     monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
     monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "secret")
     monkeypatch.setattr(torrent_media_server, "_MEDIA_RUNNER", None)
