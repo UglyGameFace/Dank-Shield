@@ -12,6 +12,7 @@ import pytest
 
 import stoney_verify.command_runtime as command_runtime
 from stoney_verify import torrent_media_server
+from stoney_verify.startup_guards import process_health
 from stoney_verify.command_runtime import (
     DankAutoShardedBot,
     DankBot,
