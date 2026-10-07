@@ -38,7 +38,6 @@ _BASIC_VERIFY_INTERACTION_CLAIM_MAX = 4096
 _RUNTIME_VIEW_REGISTERED = False
 _RUNTIME_FALLBACK_LISTENER_REGISTERED = False
 _RUNTIME_REGISTRATION_ERROR: str = ""
-_BASIC_VERIFY_FALLBACK_GRACE_SECONDS = 0.15
 _BASIC_VERIFY_PANEL_MESSAGE_ID_KEY = "basic_verify_panel_message_id"
 _BASIC_VERIFY_PANEL_APPLICATION_ID_KEY = "basic_verify_panel_application_id"
 _BASIC_VERIFY_PANEL_COMPONENT_ID_KEY = "basic_verify_panel_component_id"
@@ -446,16 +445,12 @@ def install_basic_verify_runtime(
     *,
     strict: bool = False,
 ) -> bool:
-    """Install the restart-safe Basic Verify view plus delayed safety listener.
+    """Install the restart-safe Basic Verify view plus immediate interaction owner.
 
-    The persistent view is the primary owner. The global on_interaction
-    listener never races it immediately: discord.py emits the interaction event
-    after scheduling component-view dispatch, so the listener waits briefly and
-    only claims a still-unanswered Basic Verify click.
-
-    Both routes delegate to the same canonical handler and the handler
-    acknowledges before database or role work, so there is still only one role
-    mutation path.
+    The on_interaction listener is the canonical live owner so a Verify click is
+    acknowledged as soon as component ingress is observed. The persistent View
+    remains registered as a restart-safe backup if listener registration ever
+    fails.
     """
     global _RUNTIME_VIEW_REGISTERED
     global _RUNTIME_FALLBACK_LISTENER_REGISTERED
