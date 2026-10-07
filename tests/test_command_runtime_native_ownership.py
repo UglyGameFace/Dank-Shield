@@ -117,6 +117,7 @@ def test_native_bot_constructor_owns_tree_and_shard_choice(monkeypatch: pytest.M
     )
     assert isinstance(bot, DankBot)
     assert type(bot.tree) is DankCommandTree
+    assert bot._connection._chunk_guilds is False
     asyncio.run(bot.close())
 
     monkeypatch.setenv("DISCORD_AUTO_SHARD", "true")
@@ -129,6 +130,7 @@ def test_native_bot_constructor_owns_tree_and_shard_choice(monkeypatch: pytest.M
     assert isinstance(sharded, DankAutoShardedBot)
     assert type(sharded.tree) is DankCommandTree
     assert int(sharded.shard_count or 0) == 2
+    assert sharded._connection._chunk_guilds is False
     # AutoShardedBot.close() assumes the internal shard queue was created by
     # startup. This constructor test never starts/connects the client, so calling
     # close() here would test an invalid discord.py lifecycle rather than Dank
@@ -165,6 +167,11 @@ def test_setup_hook_binds_cinema_site_before_discord_command_cleanup(
         "public_command_scope_enabled",
         lambda: False,
     )
+    monkeypatch.setattr(
+        process_health,
+        "start_health_loop",
+        lambda: events.append("health"),
+    )
 
     async def scenario() -> None:
         bot = DankBot(
@@ -178,7 +185,7 @@ def test_setup_hook_binds_cinema_site_before_discord_command_cleanup(
 
     asyncio.run(scenario())
 
-    assert events == ["media", "cleanup"]
+    assert events == ["health", "media", "cleanup"]
 
 
 def test_public_surface_validation_is_menu_first_and_fail_closed() -> None:
