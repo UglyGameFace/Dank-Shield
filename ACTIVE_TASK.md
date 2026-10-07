@@ -2,31 +2,32 @@
 
 ## CURRENT ACTIVE TASK — DANK-SHIELD-GLOBAL-INTERACTION-OUTAGE
 
-**Outcome:** Restore Dank Shield Discord slash commands and component responsiveness across all guilds, without treating Cinema features as separate active tasks.
+**Outcome:** Restore Dank Shield process stability and Discord responsiveness across all guilds. Cinema feature work remains inactive until the shared production process is stable.
 
-**Status:** Investigation and narrowly scoped startup-isolation implementation; full production root cause **not yet confirmed** and production acceptance **not yet passed**.
+**Status:** Current evidence points to a post-ready Discloud aggregate Discord REST shutdown during restart recovery. A focused timing mitigation is in validation; production acceptance is not yet passed.
 
-**Production evidence and findings:**
-- An October 6 Discloud rebuild failed before Discord login with `RuntimeError: DISCORD_TOKEN is missing.` because deployment-local `.env` did not persist. A later restart successfully logged in and reached `on_ready`, so the missing-token crash is **not a sufficient explanation** for later failures.
-- Fresh `/dank home` and the bot's buttons reportedly fail. This is a process/Gateway/command-delivery-level incident, not just a stale ephemeral component.
-- PR #469 proved a competing Basic Verify acknowledgement path could produce Discord 40060; PR #470 narrowed Basic Verify ownership. Those fixes do not prove that the shared command process is responsive.
-- PR #468 moved the existing Cinema website bind into Discord `setup_hook`, before Gateway readiness. At that point `start_torrent_media_server()` called `get_torrent_manager()`, synchronously creating a native libtorrent session on the event loop even though the binding and health routes require no torrent session. The health route independently did the same on every request.
-- PR #463 increased torrent connection and download defaults; PR #456 added a periodic feed worker. Neither is proven to cause the command outage, but shared-runtime load remains a validation target.
+**Current production evidence:**
+- The Oct 7 01:53 boot loads the Discord token and Supabase, binds the site, connects Gateway shard 0, registers commands/views, and reaches healthy on_ready at about 176 MB RSS.
+- Departed-member recovery completes across all nine guilds.
+- The latest exported runtime log then stops at the first `activity_restart_reconcile` slot acquisition at 01:54:09. The log was downloaded roughly twelve minutes later, so the absence of the normal process-health heartbeat after that boundary is consistent with a hard host termination.
+- The repository has a prior confirmed Discloud incident (Sep 21, fix commit `6e6f2bc728027518906b05fa878b4eb41b40f986`) where startup Discord REST recovery caused `App shutdown - Rate limit exceeded: 301/300 req/30s`.
+- Current activity-history recovery still defaults to starting only 20 seconds after on_ready, inside the same 30-second provider window as panel/member/invite/startup REST work.
+- PRs #471/#472 removed eager libtorrent initialization from bare site startup. Production still went offline afterward, so Cinema/libtorrent startup was a real defect but not the complete outage cause.
+- One earlier rebuild also lacked `DISCORD_TOKEN`/Supabase environment values; later boots load them correctly, so that separate deployment-env failure is not sufficient to explain the current post-ready crash loop.
 
-**Execution path:** `main.py -> stoney_verify.app -> DankBot.setup_hook -> torrent_media_server.start_torrent_media_server -> web listener -> Gateway -> /dank home callback -> ephemeral CompactDankHomeView`. The shared component observer is passive; non-Verify Home callbacks belong to the native discord.py ViewStore.
+**Active branch:** `fix/defer-activity-recovery-outside-discloud-startup-window-20261007`
 
-**Changes on `fix/shield-cinema-pre-gateway-nonblocking-20261006`:**
-- Early media bind and the `/health` handler now consult canonical environment configuration instead of constructing the libtorrent manager.
-- The real torrent manager continues to initialize when actual streaming/playback requires it. No second process, compatibility shim, callback fallback, or protocol change is introduced.
-- Tests exercise listener startup, health responses, and fail if the torrent manager is constructed on those paths.
+**Focused change:**
+- Keep Gateway, slash commands, components, live activity listeners, moderation, and the website immediately available.
+- Move restart-gap Discord history reconstruction from the 20-second default to 75 seconds after on_ready, outside Discloud's initial 30-second aggregate REST window.
+- Keep the existing bounded/single-flight recovery budget and fail-closed activity semantics.
+- Document the production value in `.env.example` and regress the startup delay contract.
 
-**Validation / cleanup:** Code review and focused tests/CI required; production Discloud redeploy and same-SHA Discord `/dank home`, Home selection/modal, persistent verification/tickets, and Cinema health checks remain mandatory. No claim of full outage recovery before those canaries. Ensure deployment variables retain `DISCORD_TOKEN` across rebuilds. Review the final diff and preserve other branches and unrelated user work.
+**Validation gate:** Exact-head CI must be green before merge. After deployment, production must stay online beyond the previous 20–30 second crash boundary, emit process-health heartbeats, then run activity recovery without a Discloud crash. Only after that should fresh `/dank home` and persistent panels be canaried.
 
-**Blockers / risks:** There is no current live Discloud process log or click-level event trace available from the connected GitHub repository. A successful `on_ready` log alone does not prove later Gateway responsiveness or command acknowledgement. Live runtime/host validation is currently inaccessible.
+**Do not:** rotate the Discord token again, restore the removed custom domain, add duplicate interaction callbacks, or resume unrelated Cinema feature work while this incident is active.
 
-**Backlog (inactive):** Cinema audio dropdown, startup-speed tuning, UI/feed artwork, source-provider improvements, and other unrelated Cinema work.
-
-**Next step:** Run exact-head CI for the startup-isolation patch, inspect workflow failures, and deploy only after green tests. Check the live bot's startup and fresh `/dank home` click against the same SHA. If still failing, inspect Gateway ingress/loop latency and restart history; do not add speculative button handlers.
+**Next step:** Open the focused PR, run exact-head CI, merge only if green, then inspect the same-SHA Discloud boot through the 75-second recovery boundary.
 
 ---
 
