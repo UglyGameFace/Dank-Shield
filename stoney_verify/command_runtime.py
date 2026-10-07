@@ -339,6 +339,21 @@ def _should_clear_public_guild_copy(guild: Optional[discord.abc.Snowflake]) -> b
 class DankCommandTree(app_commands.CommandTree):
     """Command tree whose policy applies only to the shared Dank Shield bot."""
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        try:
+            data = getattr(interaction, "data", None)
+            payload = data if isinstance(data, dict) else {}
+            print(
+                "🧭 command_runtime tree_interaction_check "
+                f"id={getattr(interaction, 'id', 0)} "
+                f"application_id={getattr(interaction, 'application_id', 0)} "
+                f"guild={getattr(interaction, 'guild_id', 0)} "
+                f"command={str(payload.get('name') or '')!r}"
+            )
+        except Exception:
+            pass
+        return await super().interaction_check(interaction)
+
     async def sync(self, *, guild: Optional[discord.abc.Snowflake] = None):  # type: ignore[override]
         public_scope = public_command_scope_enabled()
 
