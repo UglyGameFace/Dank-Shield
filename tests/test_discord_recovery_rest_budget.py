@@ -79,7 +79,8 @@ def test_recovery_budget_waits_instead_of_bursting_past_window(monkeypatch) -> N
 
 def test_default_recovery_budget_keeps_large_headroom_below_discloud_limit(monkeypatch) -> None:
     monkeypatch.delenv("DANK_RECOVERY_DISCORD_REST_BUDGET_PER_30S", raising=False)
-    assert discord_api_safety._recovery_rest_budget_per_30s() == 100
+    assert discord_api_safety._recovery_rest_budget_per_30s() == 40
+    assert discord_api_safety._recovery_rest_budget_per_30s() <= 60
     assert discord_api_safety._recovery_rest_budget_per_30s() < 300
 
 
