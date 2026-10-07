@@ -1,5 +1,37 @@
 # Dank Shield Active Task
 
+## CURRENT ACTIVE TASK — DANK-SHIELD-GLOBAL-INTERACTION-OUTAGE
+
+**Outcome:** Restore Dank Shield Discord slash commands and component responsiveness across all guilds, without treating Cinema features as separate active tasks.
+
+**Status:** Investigation and narrowly scoped startup-isolation implementation; full production root cause **not yet confirmed** and production acceptance **not yet passed**.
+
+**Production evidence and findings:**
+- An October 6 Discloud rebuild failed before Discord login with `RuntimeError: DISCORD_TOKEN is missing.` because deployment-local `.env` did not persist. A later restart successfully logged in and reached `on_ready`, so the missing-token crash is **not a sufficient explanation** for later failures.
+- Fresh `/dank home` and the bot's buttons reportedly fail. This is a process/Gateway/command-delivery-level incident, not just a stale ephemeral component.
+- PR #469 proved a competing Basic Verify acknowledgement path could produce Discord 40060; PR #470 narrowed Basic Verify ownership. Those fixes do not prove that the shared command process is responsive.
+- PR #468 moved the existing Cinema website bind into Discord `setup_hook`, before Gateway readiness. At that point `start_torrent_media_server()` called `get_torrent_manager()`, synchronously creating a native libtorrent session on the event loop even though the binding and health routes require no torrent session. The health route independently did the same on every request.
+- PR #463 increased torrent connection and download defaults; PR #456 added a periodic feed worker. Neither is proven to cause the command outage, but shared-runtime load remains a validation target.
+
+**Execution path:** `main.py -> stoney_verify.app -> DankBot.setup_hook -> torrent_media_server.start_torrent_media_server -> web listener -> Gateway -> /dank home callback -> ephemeral CompactDankHomeView`. The shared component observer is passive; non-Verify Home callbacks belong to the native discord.py ViewStore.
+
+**Changes on `fix/shield-cinema-pre-gateway-nonblocking-20261006`:**
+- Early media bind and the `/health` handler now consult canonical environment configuration instead of constructing the libtorrent manager.
+- The real torrent manager continues to initialize when actual streaming/playback requires it. No second process, compatibility shim, callback fallback, or protocol change is introduced.
+- Tests exercise listener startup, health responses, and fail if the torrent manager is constructed on those paths.
+
+**Validation / cleanup:** Code review and focused tests/CI required; production Discloud redeploy and same-SHA Discord `/dank home`, Home selection/modal, persistent verification/tickets, and Cinema health checks remain mandatory. No claim of full outage recovery before those canaries. Ensure deployment variables retain `DISCORD_TOKEN` across rebuilds. Review the final diff and preserve other branches and unrelated user work.
+
+**Blockers / risks:** There is no current live Discloud process log or click-level event trace available from the connected GitHub repository. A successful `on_ready` log alone does not prove later Gateway responsiveness or command acknowledgement. Live runtime/host validation is currently inaccessible.
+
+**Backlog (inactive):** Cinema audio dropdown, startup-speed tuning, UI/feed artwork, source-provider improvements, and other unrelated Cinema work.
+
+**Next step:** Run exact-head CI for the startup-isolation patch, inspect workflow failures, and deploy only after green tests. Check the live bot's startup and fresh `/dank home` click against the same SHA. If still failing, inspect Gateway ingress/loop latency and restart history; do not add speculative button handlers.
+
+---
+
+## Historical task notes (retained)
+
 ## Active task / outcome
 
 **DANK-CINEMA-CUSTOM-DOMAIN-ORIGIN — keep the Discloud Site origin reachable before Discord ready**
