@@ -68,6 +68,7 @@ def test_process_health_bot_attachment_is_explicit_and_idempotent(monkeypatch) -
 
     monkeypatch.setattr(health, "_READY_LISTENER_ATTACHED", False)
     monkeypatch.setattr(health, "_GATEWAY_LISTENERS_ATTACHED", False)
+    monkeypatch.setattr(health, "_INTERACTION_TRACE_LISTENERS_ATTACHED", False)
 
     bot = FakeBot()
     assert health.attach_process_health(bot) is True
@@ -77,6 +78,8 @@ def test_process_health_bot_attachment_is_explicit_and_idempotent(monkeypatch) -
         "on_connect",
         "on_disconnect",
         "on_resumed",
+        "on_socket_event_type",
+        "on_interaction",
     ]
 
 
@@ -98,4 +101,6 @@ def test_process_health_exposes_gateway_and_event_loop_stall_diagnostics() -> No
     assert "GATEWAY_CONNECTED" in source
     assert "GATEWAY_DISCONNECT" in source
     assert "GATEWAY_RESUMED" in source
+    assert "RAW_INTERACTION_CREATE" in source
+    assert "INTERACTION_INGRESS" in source
     assert 'name="process_health_loop_lag"' in source
