@@ -42,6 +42,7 @@ def _reset_runtime_state() -> None:
     runtime._RUNTIME_READY_RECONCILE_STARTED = False
     runtime._BOUND_PANEL_MESSAGE_IDS.clear()
     runtime._BASIC_VERIFY_LOCKS.clear()
+    runtime._BASIC_VERIFY_INTERACTION_CLAIMS.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -150,6 +151,23 @@ def test_strict_runtime_fails_closed_when_no_interaction_route_can_register(
     assert status["ready"] is False
     assert "view registration failed" in status["error"]
     assert "listener registration failed" in status["error"]
+
+
+def test_basic_verify_interaction_claim_dedupes_parallel_dispatch_objects() -> None:
+    async def scenario() -> None:
+        # discord.py can expose the same Discord interaction through the View
+        # callback and on_interaction listener while each route still observes
+        # an unfinished response. The numeric interaction ID is the shared
+        # authority, even if the Python objects are distinct.
+        first = SimpleNamespace(id=987654321)
+        duplicate = SimpleNamespace(id=987654321)
+        next_click = SimpleNamespace(id=987654322)
+
+        assert runtime._claim_basic_verify_interaction(first) is True
+        assert runtime._claim_basic_verify_interaction(duplicate) is False
+        assert runtime._claim_basic_verify_interaction(next_click) is True
+
+    asyncio.run(scenario())
 
 
 def test_emergency_fallback_only_delegates_unacknowledged_basic_verify(
