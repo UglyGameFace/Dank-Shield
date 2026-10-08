@@ -453,6 +453,40 @@ class _DankCommandOwnerMixin:
 
     async def setup_hook(self) -> None:
         await super().setup_hook()  # type: ignore[misc]
+
+        # Start process/event-loop health on the live asyncio loop before Gateway
+        # readiness. on_ready is exactly what can be delayed by Discord guild/member
+        # preparation, so waiting until on_ready to start the lag watchdog leaves
+        # the most important failure window invisible.
+        try:
+            from .startup_guards.process_health import start_health_loop
+
+            start_health_loop()
+            print("🫀 process_health pre-ready watchdog active")
+        except Exception as exc:
+            print(
+                "⚠️ process_health pre-ready watchdog failed "
+                f"error={type(exc).__name__}: {exc}"
+            )
+
+        # Discloud TYPE=site health depends on the public listener binding promptly.
+        # Start Cinema on the client's live event loop before gateway readiness so
+        # a slow/blocked Discord ready lifecycle cannot leave port 8080 unbound.
+        # The on_ready owner remains as an idempotent fallback for reconnects.
+        try:
+            from .torrent_media_server import start_torrent_media_server
+
+            media_started = await start_torrent_media_server()
+            if media_started:
+                print("🎞️ Torrent media server ready before Discord gateway readiness")
+            else:
+                print("ℹ️ Torrent media server disabled during pre-gateway setup")
+        except Exception as exc:
+            print(
+                "❌ Torrent media server pre-gateway startup failed; "
+                f"on_ready will retry: {type(exc).__name__}: {exc}"
+            )
+
         public_scope = public_command_scope_enabled()
 
         # Command registration has completed before bot.run() reaches setup_hook.
@@ -495,6 +529,10 @@ def create_discord_bot(
         "intents": intents,
         "help_command": help_command,
         "tree_cls": DankCommandTree,
+        # Dank Shield owns explicit, bounded member recovery after ready. Letting
+        # discord.py implicitly chunk every guild first delays on_ready and can
+        # wedge the bot in the connected-but-not-ready state seen in production.
+        "chunk_guilds_at_startup": False,
     }
     shard_count = configured_shard_count() if use_auto_shard else None
     if shard_count is not None:
@@ -506,7 +544,8 @@ def create_discord_bot(
             "🧭 command_runtime bot created "
             f"class={instance.__class__.__name__} tree={instance.tree.__class__.__name__} "
             f"auto_shard={use_auto_shard} "
-            f"configured_shard_count={shard_count or 'auto'}"
+            f"configured_shard_count={shard_count or 'auto'} "
+            "chunk_guilds_at_startup=False"
         )
     except Exception:
         pass

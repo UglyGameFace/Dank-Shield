@@ -28,6 +28,7 @@ _FINGERPRINT_PATHS: tuple[str, ...] = (
     "main.py",
     "stoney_verify/app.py",
     "stoney_verify/interaction_guard.py",
+    "stoney_verify/verification_new/basic_verify.py",
     "stoney_verify/commands_ext/public_owner_authority.py",
     "stoney_verify/commands_ext/public_self_roles_group.py",
 )

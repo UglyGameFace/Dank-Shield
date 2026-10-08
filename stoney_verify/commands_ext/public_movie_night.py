@@ -5277,9 +5277,28 @@ async def _require_cinema_guild_install(interaction: discord.Interaction) -> boo
 
 
 async def open_cinema_home_command(interaction: discord.Interaction) -> None:
+    started = asyncio.get_running_loop().time()
+    print(
+        "🎞️ cinema_home ingress "
+        f"interaction={getattr(interaction, 'id', 0)} "
+        f"guild={getattr(interaction, 'guild_id', 0)} "
+        f"user={getattr(getattr(interaction, 'user', None), 'id', 0)}"
+    )
     if not await _require_cinema_guild_install(interaction):
+        print(
+            "🎞️ cinema_home rejected "
+            f"elapsed_ms={int((asyncio.get_running_loop().time() - started) * 1000)}"
+        )
         return
+    print(
+        "🎞️ cinema_home render_start "
+        f"elapsed_ms={int((asyncio.get_running_loop().time() - started) * 1000)}"
+    )
     await open_movie_night(interaction, replace_message=False)
+    print(
+        "🎞️ cinema_home response_returned "
+        f"elapsed_ms={int((asyncio.get_running_loop().time() - started) * 1000)}"
+    )
 
 
 async def start_cinema_watch_party_command(interaction: discord.Interaction) -> None:

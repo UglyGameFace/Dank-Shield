@@ -92,6 +92,11 @@ def test_activity_and_invite_recovery_share_bounded_coordinator_without_parallel
 
     assert "DANK_STARTUP_RECOVERY_MAX_CONCURRENT" in COORDINATOR
     assert "_MAX_CONCURRENT" in COORDINATOR
+    assert "DANK_STARTUP_RECOVERY_QUIET_SECONDS" in COORDINATOR
+    assert "wait_for_startup_recovery_quiet_period" in COORDINATOR
+    assert "await wait_for_startup_recovery_quiet_period()" in COORDINATOR
+    assert "DANK_STARTUP_RECOVERY_MAX_CONCURRENT=1" in ENV_EXAMPLE
+    assert "DANK_STARTUP_RECOVERY_QUIET_SECONDS=120" in ENV_EXAMPLE
     assert "_GUILD_SLOTS" in COORDINATOR
     assert "_GUILD_SLOTS.pop(gid, None)" in COORDINATOR
 
@@ -110,7 +115,8 @@ def test_bulk_discord_recovery_paths_share_process_wide_rest_budget() -> None:
 
     assert "DANK_RECOVERY_DISCORD_REST_BUDGET_PER_30S" in DISCORD_API_SAFETY
     assert "_RECOVERY_REST_WINDOW_SECONDS = 30.0" in DISCORD_API_SAFETY
-    assert "DANK_RECOVERY_DISCORD_REST_BUDGET_PER_30S=100" in ENV_EXAMPLE
+    assert "await wait_for_startup_recovery_quiet_period()" in DISCORD_API_SAFETY
+    assert "DANK_RECOVERY_DISCORD_REST_BUDGET_PER_30S=40" in ENV_EXAMPLE
     assert "DANK_ACTIVITY_RECONCILE_TIMEOUT_SECONDS=180" in ENV_EXAMPLE
 
 
@@ -175,6 +181,7 @@ def test_single_message_startup_recovery_uses_shared_api_safety_owner() -> None:
     )
     assert "fetch_message_with_api_safety(" in basic_identity
     assert "recovery=True" in basic_identity
+    assert "basic verify disabled legacy history" in basic_identity
 
     footer = _block(
         LIVE_GUILD_FOOTER,

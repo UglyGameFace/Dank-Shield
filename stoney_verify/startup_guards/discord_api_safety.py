@@ -23,6 +23,10 @@ from typing import Any, AsyncIterator, DefaultDict, Optional
 
 import discord
 
+from stoney_verify.startup_recovery_coordinator import (
+    wait_for_startup_recovery_quiet_period,
+)
+
 _PATCHED = False
 _ORIGINAL_GUILD_AUDIT_LOGS = None
 _AUDIT_LOCKS: DefaultDict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -113,13 +117,16 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _recovery_rest_budget_per_30s() -> int:
-    # Keep substantial headroom below Discloud's observed 300/30s process cap
-    # for live Discord traffic that is intentionally outside startup recovery.
+    # Discloud's host-wide ceiling is stricter than discord.py's per-route
+    # buckets. Recovery is optional background work; preserve most of the
+    # observed 300/30s allowance for live interactions, moderation, command
+    # responses, and unrelated runtime traffic. Clamp overrides as well so an
+    # old deployment value cannot silently restore the unsafe 100+/30s burst.
     return max(
-        30,
+        20,
         min(
-            200,
-            _env_int("DANK_RECOVERY_DISCORD_REST_BUDGET_PER_30S", 100),
+            60,
+            _env_int("DANK_RECOVERY_DISCORD_REST_BUDGET_PER_30S", 40),
         ),
     )
 
@@ -181,6 +188,11 @@ async def reserve_recovery_discord_rest_requests(
     """
 
     global _RECOVERY_REST_WAITERS
+
+    # Recovery traffic is optional catch-up work. Keep it completely silent
+    # during the cold-start quiet window so live Discord interactions and the
+    # site health endpoint establish themselves before any historical REST work.
+    await wait_for_startup_recovery_quiet_period()
 
     budget = _recovery_rest_budget_per_30s()
     requested = max(1, min(int(weight or 1), budget))

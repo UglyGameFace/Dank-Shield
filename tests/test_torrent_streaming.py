@@ -162,20 +162,77 @@ def test_media_health_reports_standalone_cinema_oauth_readiness(monkeypatch) -> 
         },
     )
 
-    class Manager:
-        public_base_url = "https://cinema.example"
-        stream_secret = "secret"
-
-    monkeypatch.setattr(torrent_media_server, "get_torrent_manager", lambda: Manager())
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "secret")
+    monkeypatch.setattr(
+        torrent_streaming,
+        "get_torrent_manager",
+        lambda: (_ for _ in ()).throw(AssertionError("health initialized libtorrent")),
+    )
     response = asyncio.run(torrent_media_server._health(SimpleNamespace()))
     payload = __import__("json").loads(response.text)
 
+    assert payload["public_base_url_configured"] is True
+    assert payload["stream_signing_configured"] is True
     assert payload["cinema_ffmpeg_audio_ready"] is True
     assert payload["cinema_standalone_login_configured"] is True
     assert payload["cinema_oauth_client_id_ready"] is True
     assert payload["cinema_oauth_client_secret_ready"] is True
     assert payload["cinema_oauth_redirect_ready"] is True
     assert payload["cinema_oauth_redirect_uri"].endswith("/cinema/auth/callback")
+
+
+def test_cinema_listener_starts_before_discord_without_constructing_libtorrent(monkeypatch) -> None:
+    events: list[str] = []
+    monkeypatch.setenv("DANK_MEDIA_SERVER_ENABLED", "true")
+    monkeypatch.setenv("DANK_MEDIA_BIND_HOST", "0.0.0.0")
+    monkeypatch.setenv("DANK_MEDIA_PORT", "8080")
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://cinema.example")
+    monkeypatch.setenv("DANK_TORRENT_STREAM_SECRET", "secret")
+    monkeypatch.setattr(torrent_media_server, "_MEDIA_RUNNER", None)
+    monkeypatch.setattr(torrent_media_server, "_MEDIA_SITE", None)
+    monkeypatch.setattr(torrent_media_server, "cinema_oauth_ready", lambda: True)
+    monkeypatch.setattr(
+        torrent_streaming,
+        "get_torrent_manager",
+        lambda: (_ for _ in ()).throw(AssertionError("startup initialized libtorrent")),
+    )
+
+    class Runner:
+        def __init__(self, app, *, access_log=None):
+            self.app = app
+            assert access_log is None
+
+        async def setup(self) -> None:
+            events.append("runner")
+
+    class Site:
+        def __init__(self, runner, *, host, port):
+            assert isinstance(runner, Runner)
+            assert host == "0.0.0.0"
+            assert port == 8080
+
+        async def start(self) -> None:
+            events.append("site")
+
+    monkeypatch.setattr(torrent_media_server.web, "AppRunner", Runner)
+    monkeypatch.setattr(torrent_media_server.web, "TCPSite", Site)
+    monkeypatch.setattr(
+        torrent_media_server,
+        "start_cinema_feed_refresh_worker",
+        lambda: events.append("feed"),
+    )
+
+    async def scenario() -> None:
+        assert await torrent_media_server.start_torrent_media_server() is True
+        response = await torrent_media_server._health(SimpleNamespace())
+        payload = __import__("json").loads(response.text)
+        assert payload["ok"] is True
+        assert payload["public_base_url_configured"] is True
+        assert payload["stream_signing_configured"] is True
+
+    asyncio.run(scenario())
+    assert events == ["runner", "site", "feed"]
 
 
 def test_stream_startup_timing_is_per_consumer_and_first_stage_stable(monkeypatch, tmp_path: Path) -> None:
@@ -1209,7 +1266,9 @@ def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
     assert "startup_wait_end" in routes
     assert "initial_wait_end = first_end if partial else startup_wait_end" in routes
     assert "manager.contiguous_available_end(" in routes
-    assert "get_torrent_manager().ensure_cleanup_task()" in routes
+    assert "get_torrent_manager().ensure_cleanup_task()" not in routes
+    torrent_runtime = (root / "stoney_verify/torrent_streaming.py").read_text(encoding="utf-8")
+    assert "_MANAGER.ensure_cleanup_task()" in torrent_runtime
     assert "find_magnet(" in router
     assert "is_torrent_filename(" in router
     assert "manager.start_magnet(" in router
@@ -1220,6 +1279,51 @@ def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
     assert "media_server_ready()" in router
     assert "lease_key=lease_key" in router
     assert "await manager.release_lease(" in router
+
+
+def test_public_route_registration_does_not_construct_torrent_manager(monkeypatch) -> None:
+    from stoney_verify.api_new import torrent_stream_routes as routes_module
+
+    class Router:
+        def __init__(self) -> None:
+            self.paths: list[str] = []
+
+        def add_get(self, path: str, handler, **kwargs) -> None:
+            _ = handler, kwargs
+            self.paths.append(path)
+
+        def add_options(self, path: str, handler, **kwargs) -> None:
+            _ = handler, kwargs
+            self.paths.append(path)
+
+    app = SimpleNamespace(router=Router())
+    monkeypatch.setattr(
+        routes_module,
+        "get_torrent_manager",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("route registration constructed libtorrent")
+        ),
+    )
+
+    routes_module.register_torrent_public_routes(app)
+
+    assert "/media/torrent/stream/{token}/{filename}" in app.router.paths
+    assert "/media/torrent/audio/{token}/{filename}" in app.router.paths
+
+
+def test_torrent_manager_cleanup_starts_on_real_manager_acquisition(monkeypatch) -> None:
+    class Manager:
+        def __init__(self) -> None:
+            self.cleanup_calls = 0
+
+        def ensure_cleanup_task(self) -> None:
+            self.cleanup_calls += 1
+
+    manager = Manager()
+    monkeypatch.setattr(torrent_streaming, "_MANAGER", manager)
+
+    assert torrent_streaming.get_torrent_manager() is manager
+    assert manager.cleanup_calls == 1
 
 
 def _shared_session(tmp_path: Path, *, token: str = "shared") -> TorrentStreamSession:

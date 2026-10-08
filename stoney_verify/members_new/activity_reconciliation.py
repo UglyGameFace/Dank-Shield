@@ -55,10 +55,15 @@ def max_reconcile_gap_seconds() -> int:
 
 
 def reconcile_start_delay_seconds() -> int:
+    # Discloud enforces an aggregate Discord REST ceiling over a 30-second
+    # window. Startup already performs bounded panel/member/invite recovery.
+    # Keep activity-history reconstruction outside that first burst so its
+    # archived-thread/history requests cannot tip an otherwise healthy bot into
+    # the host's restart loop. Live Discord events remain active immediately.
     return _env_int(
         "DANK_ACTIVITY_RECONCILE_START_DELAY_SECONDS",
-        20,
-        minimum=5,
+        75,
+        minimum=30,
         maximum=300,
     )
 

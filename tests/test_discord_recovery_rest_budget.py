@@ -2,7 +2,21 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from stoney_verify.startup_guards import discord_api_safety
+
+
+@pytest.fixture(autouse=True)
+def _skip_cold_start_quiet_period(monkeypatch):
+    async def _noop() -> None:
+        return None
+
+    monkeypatch.setattr(
+        discord_api_safety,
+        "wait_for_startup_recovery_quiet_period",
+        _noop,
+    )
 
 
 def _reset_recovery_budget_state() -> None:
@@ -79,7 +93,8 @@ def test_recovery_budget_waits_instead_of_bursting_past_window(monkeypatch) -> N
 
 def test_default_recovery_budget_keeps_large_headroom_below_discloud_limit(monkeypatch) -> None:
     monkeypatch.delenv("DANK_RECOVERY_DISCORD_REST_BUDGET_PER_30S", raising=False)
-    assert discord_api_safety._recovery_rest_budget_per_30s() == 100
+    assert discord_api_safety._recovery_rest_budget_per_30s() == 40
+    assert discord_api_safety._recovery_rest_budget_per_30s() <= 60
     assert discord_api_safety._recovery_rest_budget_per_30s() < 300
 
 

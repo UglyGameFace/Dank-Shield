@@ -17,7 +17,6 @@ from stoney_verify.cinema_site import (
     cinema_oauth_status,
     register_cinema_site_routes,
 )
-from stoney_verify.torrent_streaming import get_torrent_manager
 from stoney_verify.cinema_feed_service import start_cinema_feed_refresh_worker
 
 _MEDIA_RUNNER: Optional[web.AppRunner] = None
@@ -59,6 +58,10 @@ def media_server_ready() -> bool:
     return _MEDIA_RUNNER is not None and _MEDIA_SITE is not None
 
 
+def _stream_signing_configured() -> bool:
+    return bool(str(os.getenv("DANK_TORRENT_STREAM_SECRET", "") or "").strip())
+
+
 def _validate_public_base_url() -> None:
     raw = media_public_base_url()
     if not raw:
@@ -76,14 +79,14 @@ def _validate_public_base_url() -> None:
 
 async def _health(request: web.Request) -> web.Response:
     _ = request
-    manager = get_torrent_manager()
+    # A health probe must not construct a libtorrent session on Discord's loop.
     oauth = cinema_oauth_status()
     return web.json_response(
         {
             "ok": True,
             "service": "dank_torrent_media",
-            "public_base_url_configured": bool(manager.public_base_url),
-            "stream_signing_configured": bool(manager.stream_secret),
+            "public_base_url_configured": bool(media_public_base_url()),
+            "stream_signing_configured": _stream_signing_configured(),
             "cinema_ffmpeg_audio_ready": bool(shutil.which("ffmpeg")),
             "cinema_auth_contract": "signed-session-v8-snowflake-safe",
             "cinema_standalone_login_configured": bool(cinema_oauth_ready()),
@@ -110,15 +113,16 @@ async def start_torrent_media_server() -> bool:
         print("ℹ️ Torrent media server disabled by DANK_MEDIA_SERVER_ENABLED=false.")
         return False
 
+    # This listener runs in Discord setup_hook. Native libtorrent startup is
+    # deliberately lazy so site binding cannot stall Gateway authentication.
     _validate_public_base_url()
-    manager = get_torrent_manager()
-    if not manager.stream_secret:
+    if not _stream_signing_configured():
         print(
             "⚠️ Torrent media server starting without stream signing; "
             "health remains available but media/watch access stays fail-closed "
             "until DANK_TORRENT_STREAM_SECRET is configured."
         )
-    if not manager.public_base_url:
+    if not media_public_base_url():
         print(
             "⚠️ Torrent media server starting without DANK_MEDIA_PUBLIC_BASE_URL; "
             "Site health remains available but no playback URL can be issued yet."

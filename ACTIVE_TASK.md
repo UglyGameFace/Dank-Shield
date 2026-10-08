@@ -1,5 +1,126 @@
 # Dank Shield Active Task
 
+## CURRENT ACTIVE TASK — DANK-SHIELD-GLOBAL-INTERACTION-OUTAGE
+
+**Outcome:** Restore Dank Shield process stability and Discord responsiveness across all guilds. Cinema feature work remains inactive until the shared production process is stable.
+
+**Status:** Current evidence points to a post-ready Discloud aggregate Discord REST shutdown during restart recovery. A focused timing mitigation is in validation; production acceptance is not yet passed.
+
+**Current production evidence:**
+- The Oct 7 01:53 boot loads the Discord token and Supabase, binds the site, connects Gateway shard 0, registers commands/views, and reaches healthy on_ready at about 176 MB RSS.
+- Departed-member recovery completes across all nine guilds.
+- The latest exported runtime log then stops at the first `activity_restart_reconcile` slot acquisition at 01:54:09. The log was downloaded roughly twelve minutes later, so the absence of the normal process-health heartbeat after that boundary is consistent with a hard host termination.
+- The repository has a prior confirmed Discloud incident (Sep 21, fix commit `6e6f2bc728027518906b05fa878b4eb41b40f986`) where startup Discord REST recovery caused `App shutdown - Rate limit exceeded: 301/300 req/30s`.
+- Current activity-history recovery still defaults to starting only 20 seconds after on_ready, inside the same 30-second provider window as panel/member/invite/startup REST work.
+- PRs #471/#472 removed eager libtorrent initialization from bare site startup. Production still went offline afterward, so Cinema/libtorrent startup was a real defect but not the complete outage cause.
+- One earlier rebuild also lacked `DISCORD_TOKEN`/Supabase environment values; later boots load them correctly, so that separate deployment-env failure is not sufficient to explain the current post-ready crash loop.
+
+**Active branch:** `fix/defer-activity-recovery-outside-discloud-startup-window-20261007`
+
+**Focused change:**
+- Keep Gateway, slash commands, components, live activity listeners, moderation, and the website immediately available.
+- Move restart-gap Discord history reconstruction from the 20-second default to 75 seconds after on_ready, outside Discloud's initial 30-second aggregate REST window.
+- Keep the existing bounded/single-flight recovery budget and fail-closed activity semantics.
+- Document the production value in `.env.example` and regress the startup delay contract.
+
+**Validation gate:** Exact-head CI must be green before merge. After deployment, production must stay online beyond the previous 20–30 second crash boundary, emit process-health heartbeats, then run activity recovery without a Discloud crash. Only after that should fresh `/dank home` and persistent panels be canaried.
+
+**Do not:** rotate the Discord token again, restore the removed custom domain, add duplicate interaction callbacks, or resume unrelated Cinema feature work while this incident is active.
+
+**Next step:** Open the focused PR, run exact-head CI, merge only if green, then inspect the same-SHA Discloud boot through the 75-second recovery boundary.
+
+---
+
+## Historical task notes (retained)
+
+## Active task / outcome
+
+**DANK-CINEMA-CUSTOM-DOMAIN-ORIGIN — keep the Discloud Site origin reachable before Discord ready**
+
+Production baseline:
+`main@7fdc3312f16dae869e1ccbe36ef2c66383b0e2c4` (PR #467 merged).
+
+Active branch:
+`fix/cinema-site-pre-gateway-bind`
+
+Outcome:
+`stoneyverify` must bind the canonical Dank Cinema public listener on `0.0.0.0:8080` during Discord's native `setup_hook`, before gateway/on_ready work can delay the process. This keeps both `stoneyverify.discloud.dev` and the verified custom domain `cinema.the420lobby.com` backed by a live origin while preserving the single shared Dank Shield/Cinema process.
+
+## Scope
+
+- Preserve the existing single `TYPE=site` deployment and canonical media/Cinema runtime.
+- Do not create a second Discord bot process or a duplicate Cinema backend.
+- Start only the existing `torrent_media_server` earlier in the same event loop.
+- Preserve the current `on_ready` path as a retry/fallback.
+- Do not change DNS, source selection, playback startup, audio, feeds, or unrelated Cinema behavior.
+
+## Status
+
+**Root cause confirmed from production logs; implementation and regression test are on the branch. Exact-head CI and Discloud canary remain.**
+
+## Findings / root cause
+
+1. Production successfully loads the Discord token and connects shard 0 to the Discord gateway.
+2. The expected `🎞️ Torrent media server started on 0.0.0.0:8080` line never appears.
+3. `stoney_verify.app.on_ready` is the only production caller of `_start_torrent_media_server_once()`.
+4. Therefore the Discloud `TYPE=site` listener is gated behind Discord `on_ready`.
+5. Discloud presents the origin as maintenance/offline while port 8080 is unbound, and the process can be recycled before the web listener ever becomes healthy.
+6. DNS for `cinema.the420lobby.com` has already verified successfully, so DNS is not the active failure.
+
+## Execution path
+
+Before:
+`main.py -> bot.run() -> Discord login/gateway -> on_ready -> start_torrent_media_server() -> 0.0.0.0:8080`
+
+After:
+`main.py -> bot.run() -> native setup_hook -> start_torrent_media_server() -> 0.0.0.0:8080 -> command cleanup/gateway -> on_ready fallback`
+
+## Changes
+
+- `stoney_verify.command_runtime._DankCommandOwnerMixin.setup_hook` now starts the existing Cinema/media listener immediately on the Discord client's live event loop, before stale command cleanup and gateway readiness.
+- Failures in the early start are logged but do not block Discord startup; the existing `on_ready` path can retry.
+- `stoney_verify.app._start_torrent_media_server_once` recognizes an already-ready pre-gateway listener and does not start a duplicate server.
+- Added a regression test asserting media bind happens before command cleanup in `setup_hook`.
+
+## Validation / results
+
+- Static execution-path inspection confirms the only prior production start occurred in `on_ready`.
+- Production logs confirm Discord gateway connection without any media-listener startup line.
+- Regression test added on branch.
+- Exact-head GitHub Actions: pending.
+- Live Discloud `/health`, custom-domain root, OAuth callback/login, and Android browser canary: pending deployment.
+
+## Cleanup / conflicts
+
+- No second HTTP server, room model, provider stack, Discord client, retry loop, compatibility shim, or duplicate deployment path was added.
+- Existing `on_ready` ownership remains only as an idempotent fallback.
+- DNS/custom-domain records are intentionally unchanged.
+
+## Blockers / risks
+
+- The branch is not complete until exact-head CI passes and Discloud proves the origin stays online.
+- If port 8080 still fails to bind, the next evidence must come from the new pre-gateway startup log rather than another DNS change.
+
+## Backlog
+
+- Blank Audio Track dropdown remains separate.
+- Remaining healthy-swarm startup-speed work remains separate.
+- Feed artwork enrichment remains separate.
+- Transient Cloudflare/origin 502 remains separate unless the same early-origin root cause reproduces it.
+
+## Next step
+
+Open a focused PR, run exact-head CI, repair only evidence-backed failures, then deploy and verify:
+1. `https://stoneyverify.discloud.dev/health`
+2. `https://cinema.the420lobby.com/health`
+3. `https://cinema.the420lobby.com`
+4. standalone Discord OAuth login and the existing Discord **Open Dank Cinema** shortcut.
+
+---
+
+## Previous active task / outcome
+
+
 ## Active task / outcome
 
 **DANK-CINEMA-HOME-RESUME — make the Home hero Resume button actually resume the exact saved movie/episode**

@@ -2203,6 +2203,10 @@ def get_torrent_manager() -> TorrentMediaManager:
     global _MANAGER
     if _MANAGER is None:
         _MANAGER = TorrentMediaManager()
+    # Cleanup belongs to the real manager lifecycle, not HTTP route
+    # registration. If the first acquisition happens outside a running loop,
+    # ensure_cleanup_task() safely no-ops and a later live acquisition retries.
+    _MANAGER.ensure_cleanup_task()
     return _MANAGER
 
 

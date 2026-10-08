@@ -533,7 +533,8 @@ async def torrent_cancel(request: web.Request) -> web.Response:
 
 
 def register_torrent_public_routes(app: web.Application) -> None:
-    get_torrent_manager().ensure_cleanup_task()
+    # Route registration runs during Discord setup_hook. Do not construct the
+    # native libtorrent session merely to bind the public HTTP listener.
     app.router.add_get(
         "/media/torrent/stream/{token}/{filename}",
         torrent_stream,
