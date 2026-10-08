@@ -1553,8 +1553,9 @@ def test_dank_cinema_player_capability_controls_are_not_placebos() -> None:
     assert 'muteControl.setAttribute("aria-pressed"' in html
     assert 'const AUDIO_STORAGE_KEY="dank-cinema-audio:"+BOOT.uid' in html
     assert "function applyUserAudioState(forceAudible=false)" in html
-    assert "async function primeAudiblePlaybackGesture()" in html
-    assert "if(shouldResume) await primeAudiblePlaybackGesture();" in html
+    assert "function primeAudiblePlaybackGesture()" in html
+    assert "primeAudiblePlaybackGesture();" in html
+    assert "hostPlayGesturePending=true;" in html
     assert "applyUserAudioState(true);\n  syncRequested=true;" in html
     assert "applyUserAudioState(false);\n      showPlayerControls(false);" in html
     assert "video.load();\n  applyUserAudioState(false);" in html
@@ -1829,3 +1830,62 @@ def test_theater_uses_human_session_connection_states() -> None:
     assert 'return "Synced"' in html
     assert 'sync.textContent="Reconnecting"' in html
     assert 'role.textContent="Reconnecting"' in html
+
+
+def test_dank_cinema_host_play_does_not_wait_for_buffering_before_resume() -> None:
+    html = movie_night_web._watch_html(
+        "room-nonblocking-host-play",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+    host = html.split("async function togglePlayerPlayback() {", 1)[1].split(
+        'document.getElementById("centerPlay").onclick', 1
+    )[0]
+    primer = html.split("function primeAudiblePlaybackGesture() {", 1)[1].split(
+        'volumeControl.addEventListener("input"', 1
+    )[0]
+
+    assert "hostPlayGesturePending=true;" in host
+    assert "primeAudiblePlaybackGesture();" in host
+    assert 'await hostAction(shouldResume?"resume":"pause")' in host
+    assert host.index("primeAudiblePlaybackGesture();") < host.index(
+        'await hostAction(shouldResume?"resume":"pause")'
+    )
+    assert "await primeAudiblePlaybackGesture()" not in host
+    assert "await video.play()" not in primer
+    assert "await compatAudio.play()" not in primer
+    assert "video.pause();" not in primer
+    assert "const attempt=video.play();" in primer
+    assert 'if(!hostPlayGesturePending && lastState.state!=="playing")' in html
+    assert '!hostPlayGesturePending && lastState.state!=="paused"' in html
+
+
+def test_dank_cinema_resume_confirms_position_not_playback() -> None:
+    html = movie_night_web._watch_html(
+        "room-saved-position",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+    assert 'const applied=await hostAction("seek",{seconds:target});' in html
+    assert 'if(applied)' in html
+    assert '"Saved position set to "+fmtClock(target)' in html
+    assert '"Resumed from "+fmtClock(target)' not in html
+
+
+def test_dank_cinema_health_depends_on_browser_readiness_not_seed_count() -> None:
+    html = movie_night_web._watch_html(
+        "room-actual-playback-readiness",
+        10,
+        "uid=10&exp=9999999999&sig=test",
+    )
+    health = html.split("function streamHealthLabel(s) {", 1)[1].split(
+        "function refreshStreamHealth() {", 1
+    )[0]
+    assert "video.readyState<3" in health
+    assert "video.error" in health
+    assert "video.seeking" in health
+    assert 'return "Preparing playable video"' in health
+    assert 'return "Video ready to play"' in health
+    assert "t.seeds" not in health
+    assert "t.download_rate" not in health
+    assert "refreshStreamHealth();" in html
