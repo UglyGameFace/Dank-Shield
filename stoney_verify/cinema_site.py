@@ -1503,7 +1503,13 @@ def _active_rooms_payload(guild_id: int, user_id: int) -> list[dict[str, Any]]:
     for room in manager.active_rooms_for_guild(int(guild_id)):
         if not manager.user_can_access(room, int(user_id)):
             continue
-        candidate = room.current_candidate
+        # MovieNightRoom stores a candidate ID, not a current_candidate object.
+        # Home must remain available even before the host selects any title.
+        candidate = (
+            room.candidates.get(str(room.current_candidate_id))
+            if room.current_candidate_id
+            else None
+        )
         metadata: Mapping[str, Any] = {}
         if candidate is not None and isinstance(candidate.metadata, Mapping):
             catalog = candidate.metadata.get("catalog")

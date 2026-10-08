@@ -3135,6 +3135,8 @@ const syncButton=document.getElementById("sync");
 let lastToken="";
 let lastStreamConsumer="";
 let remoteApply=false;
+// Keep browser gesture priming from issuing duplicate or contradictory host actions.
+let hostPlayGesturePending=false;
 let lastState=null;
 let cinemaPreferences={{}};
 let preferredAudioLanguage="";
@@ -3853,13 +3855,20 @@ function applyModeSurface(s) {{
 function streamHealthLabel(s) {{
   if(s.media_missing) return "Source unavailable";
   if(!s.stream_url) return "Waiting for source";
+  if(video.error) return "Media error";
   if(s.state==="buffering") return "Preparing stream";
-  const t=s.torrent||{{}};
-  const seeds=Number(t.seeds||0);
-  const rate=Number(t.download_rate||0);
-  if(seeds>=5 || rate>=512*1024) return "Excellent";
-  if(seeds>0 || rate>0) return "Good";
-  return "Connected";
+  if(video.seeking) return "Seeking to playback position";
+  // Peer count and total torrent completion cannot establish playable media.
+  // HAVE_FUTURE_DATA (3) proves the browser has at least a little video ahead.
+  if(video.readyState<3) return "Preparing playable video";
+  if(s.state==="playing" && !video.paused) return "Video playing";
+  if(s.state==="playing") return "Waiting for browser playback";
+  return "Video ready to play";
+}}
+function refreshStreamHealth() {{
+  const element=document.getElementById("healthText");
+  if(element && lastState)
+    element.textContent="Stream Health: "+streamHealthLabel(lastState);
 }}
 function tmdbVariant(url,size) {{
   const clean=String(url||"");
@@ -3918,7 +3927,7 @@ function humanSessionStatus(s) {{
 function renderSiteState(s) {{
   const movie=s.movie||{{}};
   applyModeSurface(s);
-  document.getElementById("healthText").textContent="Stream Health: "+streamHealthLabel(s);
+  refreshStreamHealth();
   document.getElementById("hostPresence").textContent=s.host_active?"Host Online":"Host Away";
   document.getElementById("sessionViewers").textContent=String(s.viewer_count||0);
   document.getElementById("sessionRole").textContent=s.is_host?"Host":"Viewer";
@@ -4181,8 +4190,9 @@ async function applyPendingProgressResume() {{
   progressResumeApplying=true;
   try {{
     if(!safeSeek(target)) return;
-    await hostAction("seek",{{seconds:target}});
-    notice.textContent="Resumed from "+fmtClock(target)+".";
+    const applied=await hostAction("seek",{{seconds:target}});
+    if(applied)
+      notice.textContent="Saved position set to "+fmtClock(target)+". Video may still be buffering; press Play to start.";
   }} finally {{
     setTimeout(()=>{{progressResumeApplying=false;}},300);
   }}
@@ -4770,7 +4780,11 @@ async function hostAction(action, extra={{}}) {{
       method:"POST",
       body:JSON.stringify({{action,...extra}})
     }}));
-  }} catch(err) {{ notice.textContent="Control error: "+String(err.message||err); }}
+    return true;
+  }} catch(err) {{
+    notice.textContent="Control error: "+String(err.message||err);
+    return false;
+  }}
 }}
 syncButton.onclick=async()=>{{
   if(!lastState || lastState.is_host || !lastState.stream_url) return;
@@ -4846,8 +4860,18 @@ async function togglePlayerPlayback() {{
 
   if(lastState.is_host) {{
     const shouldResume=video.paused || lastState.state!=="playing";
-    if(shouldResume) await primeAudiblePlaybackGesture();
-    await hostAction(shouldResume?"resume":"pause");
+    if(shouldResume) {{
+      // The canonical Resume must not wait for play(), which may remain pending
+      // while the browser is downloading its first playable media frames.
+      hostPlayGesturePending=true;
+      notice.textContent="Play requested. Preparing playable video at your saved position…";
+      primeAudiblePlaybackGesture();
+    }}
+    try {{
+      await hostAction(shouldResume?"resume":"pause");
+    }} finally {{
+      if(shouldResume) hostPlayGesturePending=false;
+    }}
     return;
   }}
 
@@ -4942,24 +4966,29 @@ function applyUserAudioState(forceAudible=false) {{
   }}
   syncVolumeControls();
 }}
-async function primeAudiblePlaybackGesture() {{
-  if(userMuted) {{
-    applyUserAudioState(false);
-    return;
-  }}
-  applyUserAudioState(true);
-  if(compatAudioActive() && compatAudio.getAttribute("src")) {{
+function primeAudiblePlaybackGesture() {{
+  applyUserAudioState(!userMuted);
+  // Request both outputs during the actual click. Never await play() before
+  // telling the canonical host room to resume, and never pause a primed video.
+  if(!userMuted && compatAudioActive() && compatAudio.getAttribute("src")) {{
     try {{
-      await compatAudio.play();
-      compatAudio.pause();
+      const attempt=compatAudio.play();
+      if(attempt && typeof attempt.catch==="function")
+        void attempt.catch(()=>{{
+          if(!terminated) notice.textContent="Your browser blocked compatibility audio. Tap Play again to allow sound.";
+        }});
     }} catch(_) {{}}
   }}
   if(!video.paused || !video.getAttribute("src")) return;
   try {{
-    await video.play();
-    video.pause();
+    const attempt=video.play();
+    if(attempt && typeof attempt.catch==="function")
+      void attempt.catch(err=>{{
+        if(!terminated && err?.name==="NotAllowedError")
+          notice.textContent="Browser blocked video autoplay. Tap Play again to allow playback.";
+      }});
   }} catch(_) {{
-    // The explicit Play action below still gets a chance to start the source.
+    // Browser-specific playback errors remain visible through the media events.
   }}
 }}
 volumeControl.addEventListener("input",event=>{{
@@ -5028,6 +5057,7 @@ for(const eventName of ["loadstart","loadedmetadata","loadeddata","canplay","pla
   video.addEventListener(eventName,()=>{{
     stabilizePlayerLayout();
     markStartupEvent(eventName);
+    refreshStreamHealth();
     if(eventName==="playing" && !startupTrace.firstFrameRequested) {{
       startupTrace.firstFrameRequested=true;
       if(typeof video.requestVideoFrameCallback==="function") {{
@@ -5855,7 +5885,7 @@ video.addEventListener("play",()=>{{
   if(compatAudioActive()) void syncCompatAudio(false);
   if(remoteApply) return;
   if(lastState?.is_host) {{
-    hostAction("resume");
+    if(!hostPlayGesturePending && lastState.state!=="playing") void hostAction("resume");
     return;
   }}
   if(lastState?.stream_url) {{
@@ -5874,7 +5904,7 @@ video.addEventListener("play",()=>{{
 video.addEventListener("pause",()=>{{
   showPlayerControls(true);
   if(compatAudioActive() && !compatAudio.paused) compatAudio.pause();
-  if(!remoteApply && lastState?.is_host) hostAction("pause");
+  if(!remoteApply && lastState?.is_host && !hostPlayGesturePending && lastState.state!=="paused") void hostAction("pause");
 }});
 video.addEventListener("seeked",()=>{{
   scheduleHostSeekCommit();
