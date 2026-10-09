@@ -42,7 +42,6 @@ let restarts = 0;
 let loads = 0;
 let playCalls = 0;
 let refused = false;
-let refreshes = 0;
 
 const audio = {
   paused: true,
@@ -54,9 +53,9 @@ const audio = {
   src: "/existing-audio",
   play: () => {
     playCalls++;
-    return refused
-      ? Promise.reject(Object.assign(new Error("permission"), { name:"NotAllowedError" }))
-      : Promise.resolve();
+    if (refused) return Promise.reject(Object.assign(new Error("permission"), { name:"NotAllowedError" }));
+    audio.paused = false;
+    return Promise.resolve();
   },
   pause: () => { audio.paused = true; },
   load: () => { loads++; },
@@ -78,7 +77,6 @@ const ctx = {
   compatAudioLastSyncAt: 0,
   compatAudioOffset: 0,
   userMuted: false,
-  refreshAudioPermissionControl: () => { refreshes++; },
   applyUserAudioState: () => {},
   restartCompatAudio: async () => { restarts++; return true; },
   notice,
@@ -155,7 +153,8 @@ vm.runInContext(snippets.sync, ctx);
   const priorExplicitRestart = loads;
   assert.equal(await ctx.startCompatAudioFromGesture(3, true, true), true);
   assert.equal(loads, priorExplicitRestart + 1, "Restart audio must reload AAC");
-  assert.ok(refreshes > 0);
+  assert.equal(control.hidden, false, "AAC recovery action stays visible after playback");
+  assert.equal(button.textContent, "Restart audio", "Playing audio offers a real restart action");
   process.stdout.write("AAC recovery behavior verified\n");
 })().catch(error => {
   process.stderr.write(String(error.stack || error) + "\n");
