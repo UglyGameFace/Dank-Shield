@@ -73,7 +73,10 @@ def _ffmpeg_audio_command(
         command.extend(["-ss", f"{start_seconds:.3f}"])
     command.extend(
         [
-            "-re",
+            # The Theater permits 2x playback. A 1x real-time input limiter
+            # cannot supply enough AAC for that rate or catch up after buffering.
+            "-readrate",
+            "2",
             "-i",
             input_url,
             "-map",
