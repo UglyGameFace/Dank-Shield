@@ -393,7 +393,7 @@ def test_video_risk_is_unknown_without_verified_codec_not_fake_safe() -> None:
     }
     assert unknown.browser_video_risk_key() == 1
     unknown.metadata["verified"]["video"]["bit_depth"] = "invalid"
-    assert unknown.browser_video_risk_key() == 0
+    assert unknown.browser_video_risk_key() == 1
 
 
 def test_browser_safe_audio_beats_known_risky_audio_when_both_are_seeded() -> None:
