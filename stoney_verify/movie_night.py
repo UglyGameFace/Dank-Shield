@@ -82,15 +82,23 @@ class MovieSourceVariant:
 
         widely_safe = {"aac", "mp3"}
         conditional = {"opus", "vorbis"}
-        risky = {"ac3", "eac3", "dts", "truehd", "flac"}
+        risky = {
+            "ac3", "eac3", "dca", "dts", "truehd", "mlp",
+            "flac", "pcm_s16le", "pcm_s24le", "pcm_s32le",
+        }
 
-        if codecs & widely_safe:
-            return 0
+        # The stream's first/default track and per-viewer browser codecs are
+        # not interchangeable. The transcoder requires a sidecar when ANY
+        # verified track is unsupported. A safe secondary AAC track must not
+        # make a mixed DTS/AAC release appear browser-native-safe.
+        if codecs & risky:
+            return 2
         if codecs:
-            if codecs <= risky:
-                return 2
+            if codecs <= widely_safe:
+                return 0
             if codecs & conditional:
                 return 1
+            return 1
 
         release = (
             meta.get("release_name")
