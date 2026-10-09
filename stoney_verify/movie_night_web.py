@@ -4160,7 +4160,7 @@ function applyCompatAudioState(s) {{
       try {{
         const url=new URL(s.audio_track_url,window.location.origin);
         url.searchParams.set("track",String(track));
-        selectedUrl=url.pathname+url.search;
+        selectedUrl=url.toString();
       }} catch(_) {{}}
     }}
   }}
@@ -4187,6 +4187,16 @@ function applyCompatAudioState(s) {{
   }}
 }}
 
+compatAudio.addEventListener("error",()=>{{
+  if(selectedAudioTrack.startsWith("sidecar:")) {{
+    selectedAudioTrack="original";
+    applyCompatAudioState(lastState);
+    refreshNativePlayerCapabilities();
+    notice.textContent="That audio track could not start. Reverted to the original audio.";
+  }} else if(compatAudioActive()) {{
+    notice.textContent="The AAC compatibility audio failed. Try another playable source.";
+  }}
+}});
 function attachStream(url, force=false) {{
   const clean=String(url||"");
   if(!clean) return;
