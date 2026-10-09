@@ -21,13 +21,16 @@ def _player_script() -> str:
     start = html.index("function refreshAudioPermissionControl() {")
     end = html.index("function refreshNativePlayerCapabilities()", start)
     refresh = html[start:end]
+    start = html.index("function videoClockAdvancing() {")
+    end = html.index("function scheduleCompatAudioRestart(", start)
+    clock = html[start:end]
     start = html.index("function startCompatAudioFromGesture(")
     end = html.index("function scheduleCompatAudioRestart(", start)
     gesture = html[start:end]
     start = html.index("async function syncCompatAudio(force=false) {")
     end = html.index("function applyCompatAudioState(s)", start)
     sync = html[start:end]
-    return json.dumps({"refresh": refresh, "gesture": gesture, "sync": sync})
+    return json.dumps({"refresh": refresh, "clock": clock, "gesture": gesture, "sync": sync})
 
 
 _NODE_CONTRACT = r"""
@@ -60,7 +63,7 @@ const audio = {
   pause: () => { audio.paused = true; },
   load: () => { loads++; },
 };
-const video = { paused: false, currentTime: 12, playbackRate: 1 };
+const video = { paused: false, seeking: false, readyState: 4, currentTime: 12, playbackRate: 1 };
 const notice = {textContent: ""};
 const ctx = {
   document: {getElementById: id => id === "enableAudioControl" ? control : button},
@@ -76,6 +79,7 @@ const ctx = {
   compatAudioRestartAt: 0,
   compatAudioLastSyncAt: 0,
   compatAudioOffset: 0,
+  videoClockBuffering: false,
   userMuted: false,
   applyUserAudioState: () => {},
   restartCompatAudio: async () => { restarts++; return true; },
@@ -109,6 +113,8 @@ ctx.refreshAudioPermissionControl();
 assert.equal(control.hidden, true);
 active = true;
 
+// Run both the actual production video-clock gate and the AAC sync handler.
+vm.runInContext(snippets.clock, ctx);
 // A loading stream may lag the video; polling must not keep recreating FFmpeg.
 vm.runInContext(snippets.sync, ctx);
 (async () => {
@@ -126,7 +132,8 @@ vm.runInContext(snippets.sync, ctx);
   assert.equal(restarts, 0);
   audio.readyState = 3;
   await ctx.syncCompatAudio(true);
-  assert.equal(restarts, 1);
+  assert.equal(restarts, 0, "Normal A/V drift must not recreate FFmpeg audio");
+  assert.ok(audio.playbackRate > 1, "Lagging AAC should converge smoothly");
 
   // A rejected autoplay must surface a persistent user gesture requirement.
   video.currentTime = 0;

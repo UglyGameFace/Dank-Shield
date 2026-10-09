@@ -3224,6 +3224,7 @@ let compatAudioRestartTimer=null;
 let compatAudioNeedsGesture=false;
 let compatAudioStartPending=false;
 let compatAudioStartSequence=0;
+let videoClockBuffering=false;
 const AUDIO_STORAGE_KEY="dank-cinema-audio:"+BOOT.uid;
 let userMuted=false;
 let preferredVolume=1;
@@ -4170,7 +4171,13 @@ function startCompatAudioFromGesture(seconds, keepPlaying, forceRestart=false) {
     }},
   );
 }}
-function scheduleCompatAudioRestart(seconds, shouldPlay=!video.paused) {{
+function videoClockAdvancing() {{
+  return !video.paused && !video.seeking && !videoClockBuffering && video.readyState>=3;
+}}
+function holdCompatAudioForVideo() {{
+  if(compatAudioActive() && !compatAudio.paused) compatAudio.pause();
+}}
+function scheduleCompatAudioRestart(seconds, shouldPlay=videoClockAdvancing()) {{
   if(!compatAudioUrl) return;
   if(compatAudioRestartTimer!==null) clearTimeout(compatAudioRestartTimer);
   compatAudioRestartTimer=setTimeout(()=>{{
@@ -4179,32 +4186,46 @@ function scheduleCompatAudioRestart(seconds, shouldPlay=!video.paused) {{
   }},140);
 }}
 async function syncCompatAudio(force=false) {{
-  if(!compatAudioUrl || userMuted || compatAudioNeedsGesture || compatAudioStartPending) return;
+  if(!compatAudioUrl) return;
+  // The video owns time. Native HTML media can stall while paused is false.
+  if(!videoClockAdvancing()) {{
+    holdCompatAudioForVideo();
+    return;
+  }}
+  if(userMuted || compatAudioNeedsGesture || compatAudioStartPending) return;
   const now=Date.now();
   if(!force && now-compatAudioLastSyncAt<900) return;
   compatAudioLastSyncAt=now;
-  const target=Number(video.currentTime||0);
-  const drift=Math.abs(compatAudioClock()-target);
-  // Video can advance while the AAC stream is still buffering. Reloading its
-  // source on every timeupdate aborts the pending play and restarts FFmpeg.
-  const hasSource=!!compatAudio.getAttribute("src");
-  const canCorrectDrift=compatAudio.readyState>=2 && drift>2.5;
-  if(!hasSource || canCorrectDrift) {{
-    if(now-compatAudioRestartAt>8000)
-      await restartCompatAudio(target,!video.paused);
+  if(!compatAudio.getAttribute("src")) {{
+    await restartCompatAudio(Number(video.currentTime||0),true);
     return;
   }}
-  try {{ compatAudio.playbackRate=Number(video.playbackRate||1); }} catch(_) {{}}
-  if(video.paused) {{
-    if(!compatAudio.paused) compatAudio.pause();
-  }} else if(compatAudio.paused && !userMuted) {{
+  // Start decoding on the same playback clock, but protect the async play
+  // promise from repeated polling. Without play(), preload="none" may never
+  // fetch the first AAC fragment after a seek or video buffer pause.
+  if(compatAudio.paused) {{
+    compatAudioStartPending=true;
     try {{ await compatAudio.play(); }}
-    catch(_) {{
-      compatAudioNeedsGesture=true;
-      notice.textContent="Browser could not start AAC audio automatically. Tap Enable audio in Advanced Stream Details.";
-      refreshAudioPermissionControl();
+    catch(error) {{
+      if(videoClockAdvancing() && error?.name!=="AbortError") {{
+        compatAudioNeedsGesture=true;
+        notice.textContent="Browser could not start AAC audio automatically. Tap Enable audio in Advanced Stream Details.";
+        refreshAudioPermissionControl();
+      }}
+    }} finally {{
+      compatAudioStartPending=false;
     }}
+    return;
   }}
+  // Initial FFmpeg fragments are buffering, not drift; never reload them.
+  if(compatAudio.readyState<2) return;
+  const drift=Number(video.currentTime||0)-compatAudioClock();
+  const baseRate=Number(video.playbackRate||1);
+  // Slew toward the authoritative clock without jumping the audio stream.
+  // An explicit video seek is the only timeline discontinuity that reloads it.
+  const correction=Math.abs(drift)<0.12
+    ?1:Math.max(0.88,Math.min(1.12,1+drift*0.07));
+  try {{ compatAudio.playbackRate=baseRate*correction; }} catch(_) {{}}
 }}
 function applyCompatAudioState(s) {{
   const token=String(s?.stream_token||"");
@@ -4256,6 +4277,7 @@ function attachStream(url, force=false) {{
   resetStartupTrace();
   resetPlaybackRate();
   video.src=clean;
+  videoClockBuffering=false;
   video.load();
   applyUserAudioState(false);
 }}
@@ -5158,7 +5180,11 @@ compatAudio.addEventListener("playing",()=>{{
   refreshAudioPermissionControl();
 }});
 compatAudio.addEventListener("pause",refreshAudioPermissionControl);
-video.addEventListener("playing",refreshAudioPermissionControl);
+video.addEventListener("playing",()=>{{
+  videoClockBuffering=false;
+  refreshAudioPermissionControl();
+  if(compatAudioActive()) void syncCompatAudio(true);
+}});
 video.addEventListener("pause",refreshAudioPermissionControl);
 document.getElementById("enableAudio").onclick=async()=>{{
   const button=document.getElementById("enableAudio");
@@ -6099,13 +6125,18 @@ video.addEventListener("play",()=>{{
 }});
 video.addEventListener("pause",()=>{{
   showPlayerControls(true);
-  if(compatAudioActive() && !compatAudio.paused) compatAudio.pause();
+  holdCompatAudioForVideo();
   if(!remoteApply && lastState?.is_host && !hostPlayGesturePending && lastState.state!=="paused") void hostAction("pause");
+}});
+video.addEventListener("seeking",()=>{{
+  videoClockBuffering=true;
+  holdCompatAudioForVideo();
 }});
 video.addEventListener("seeked",()=>{{
   scheduleHostSeekCommit();
+  videoClockBuffering=!(!video.paused && video.readyState>=3);
   if(compatAudioActive())
-    scheduleCompatAudioRestart(Number(video.currentTime||0),!video.paused);
+    scheduleCompatAudioRestart(Number(video.currentTime||0),videoClockAdvancing());
 }});
 video.addEventListener("loadedmetadata",()=>{{
   streamRetryAttempt=0;
@@ -6137,16 +6168,24 @@ video.addEventListener("ratechange",()=>{{
 video.addEventListener("play",updatePlayerChrome);
 video.addEventListener("pause",updatePlayerChrome);
 video.addEventListener("canplay",()=>{{
+  if(!video.paused && !video.seeking) {{
+    videoClockBuffering=false;
+    if(compatAudioActive()) void syncCompatAudio(true);
+  }}
   streamRetryAttempt=0;
   cancelStreamRetry();
   if(notice.textContent.startsWith("The source is still preparing"))
     notice.textContent="";
 }});
 video.addEventListener("waiting",()=>{{
+  videoClockBuffering=true;
+  holdCompatAudioForVideo();
   if(lastState?.stream_url && !terminated)
     notice.textContent="Preparing the stream… keeping playback stable.";
 }});
 video.addEventListener("stalled",()=>{{
+  videoClockBuffering=true;
+  holdCompatAudioForVideo();
   if(lastState?.stream_url && !terminated)
     notice.textContent="The stream paused briefly… waiting for enough data to continue smoothly.";
 }});
