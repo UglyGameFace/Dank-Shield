@@ -3059,6 +3059,7 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
       <div class="stat"><b>Server startup</b><span id="serverStartup">—</span></div>
       <div class="stat"><b>Browser startup</b><span id="browserStartup">—</span></div>
       <div class="stat"><b>Playback timing</b><span id="audioClockStatus">Waiting for video</span></div>
+      <div class="stat"><b>Browser media support</b><span id="browserMediaSupport">Checking video codec</span></div>
     </div>
     <div class="quality-control">
       <label for="qualityMode">Visual quality</label>
@@ -3988,10 +3989,58 @@ function applyModeSurface(s) {{
 
   previousHostState=!!s.is_host;
 }}
+function browserVideoCapability(s) {{
+  // This is an advisory from the ACTUAL browser. A recognized extension and
+  // reported seeds are not proof of a usable video decoder or visible frame.
+  if(!s?.video_verified) return {{
+    supported:null, label:"Codec not yet verified; attempting native playback"
+  }};
+  if(typeof video.canPlayType!=="function") return {{
+    supported:null, label:"Browser does not expose codec checks"
+  }};
+  const mime=String(s.media_content_type||"").split(";")[0].toLowerCase();
+  const codec=String(s.video_codec||"").toLowerCase();
+  const names={{
+    h264:"avc1.42E01E",avc:"avc1.42E01E",avc1:"avc1.42E01E",
+    hevc:"hvc1",h265:"hvc1",vp8:"vp8",vp9:"vp09.00.10.08",
+    av1:"av01.0.04M.08",mpeg2video:"mp2v"
+  }};
+  const codecHint=names[codec]||"";
+  const media=mime.startsWith("video/")?mime:"";
+  if(!media) return {{supported:null,label:"Unknown video container"}};
+  let decision="";
+  try {{
+    decision=String(video.canPlayType(
+      codecHint?media+'; codecs="'+codecHint+'"':media
+    )||"").toLowerCase();
+  }} catch(_) {{}}
+  const detail=(codec||"unknown codec")+" / "+media;
+  if(!decision) return {{
+    supported:false,
+    label:detail+" • browser reports no native decode; choose another release"
+  }};
+  if(!codecHint) return {{
+    supported:null, label:detail+" • browser codec status uncertain"
+  }};
+  return {{
+    supported:true,
+    label:detail+" • browser reports "+decision+"; awaiting real video frames"
+  }};
+}}
+function renderBrowserMediaSupport(s) {{
+  const element=document.getElementById("browserMediaSupport");
+  if(!element) return;
+  const result=browserVideoCapability(s||lastState);
+  element.textContent=result.label;
+}}
 function streamHealthLabel(s) {{
   if(s.media_missing) return "Source unavailable";
   if(!s.stream_url) return "Waiting for source";
   if(video.error) return "Media error";
+  if(
+    s.video_verified && browserVideoCapability(s).supported===false
+    && !startupTrace.events.first_frame
+  ) return "Browser may not support this video codec";
   if(s.state==="buffering") return "Preparing stream";
   if(video.seeking) return "Seeking to playback position";
   // Peer count and total torrent completion cannot establish playable media.
@@ -4027,6 +4076,7 @@ function renderAudioClockDiagnostics() {{
 }}
 function refreshStreamHealth() {{
   renderAudioClockDiagnostics();
+  renderBrowserMediaSupport(lastState);
   const element=document.getElementById("healthText");
   if(element && lastState)
     element.textContent="Stream Health: "+streamHealthLabel(lastState);
