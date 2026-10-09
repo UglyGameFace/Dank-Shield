@@ -1889,3 +1889,16 @@ def test_dank_cinema_health_depends_on_browser_readiness_not_seed_count() -> Non
     assert "t.seeds" not in health
     assert "t.download_rate" not in health
     assert "refreshStreamHealth();" in html
+
+
+def test_dank_cinema_startup_reports_first_http_request_mode_without_signed_urls() -> None:
+    html = movie_night_web._watch_html(
+        "room-transport-mode",
+        42,
+        "uid=42&exp=9999999999&sig=test",
+    )
+    assert "server.first_http_status" in html
+    assert '"HTTP 206 Range"' in html
+    assert '"HTTP 200 full"' in html
+    assert '"HTTP mode unknown"' in html
+    assert "server.first_range_start" in html

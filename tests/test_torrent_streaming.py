@@ -269,6 +269,7 @@ def test_stream_startup_timing_is_per_consumer_and_first_stage_stable(monkeypatc
         event="request",
         start=0,
         end=1024 * 1024 - 1,
+        http_status=206,
     )
     manager.record_stream_timing(
         session,
@@ -294,6 +295,8 @@ def test_stream_startup_timing_is_per_consumer_and_first_stage_stable(monkeypatc
     assert first["metadata_ms"] == 300
     assert first["session_ready_ms"] == 350
     assert first["request_count"] == 1
+    assert first["first_http_status"] == 206
+    assert first["last_http_status"] == 206
     assert first["first_request_ms"] >= 500
     assert first["first_range_start"] == 0
     assert first["first_range_end"] == 1024 * 1024 - 1
@@ -310,6 +313,7 @@ def test_stream_startup_timing_is_per_consumer_and_first_stage_stable(monkeypatc
         event="request",
         start=8 * 1024 * 1024,
         end=9 * 1024 * 1024 - 1,
+        http_status=200,
     )
     manager.record_stream_timing(
         session,
@@ -323,6 +327,8 @@ def test_stream_startup_timing_is_per_consumer_and_first_stage_stable(monkeypatc
 
     second = manager.consumer_startup_status(session, "movie:2:client-a")
     assert second["request_count"] == 2
+    assert second["first_http_status"] == 206
+    assert second["last_http_status"] == 200
     assert second["first_range_start"] == 0
     assert second["first_wait_ms"] == 321
     assert second["last_range_start"] == 8 * 1024 * 1024
@@ -335,6 +341,8 @@ def test_stream_startup_timing_is_per_consumer_and_first_stage_stable(monkeypatc
     assert other["metadata_ms"] == 300
     assert other["session_ready_ms"] == 350
     assert other["request_count"] == 0
+    assert other["first_http_status"] == 0
+    assert other["last_http_status"] == 0
     assert other["first_request_ms"] == 0
 
 
