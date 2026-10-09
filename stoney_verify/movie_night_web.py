@@ -3046,6 +3046,10 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
       <label for="audioTrack">Audio track</label>
       <select class="quality-select" id="audioTrack" aria-label="Audio track"></select>
     </div>
+    <div class="quality-control" id="enableAudioControl" hidden>
+      <label for="enableAudio">Audio permission</label>
+      <button class="quality-select" id="enableAudio" type="button">Enable audio</button>
+    </div>
     <div class="quality-note" id="playbackPreferenceNote">Playback speed is synchronized for everyone when you are the host. Audio selection stays local to each viewer.</div>
     <div class="quality-note" id="qualityNote">Auto balances artwork depth with device and network capability. Playback features stay identical in every mode.</div>
     <div class="keyboard-help" id="keyboardHelp">
@@ -3566,6 +3570,10 @@ function renderStartupDiagnostics(server={{}}) {{
     browserEl.textContent=bits.length?bits.join(" • "):"waiting for media events";
   }}
 }}
+function refreshAudioPermissionControl() {{
+  const control=document.getElementById("enableAudioControl");
+  control.hidden=!(compatAudioActive() && !userMuted && !video.paused && compatAudio.paused);
+}}
 function refreshNativePlayerCapabilities() {{
   const pip=document.getElementById("pip");
   pip.hidden=!Boolean(document.pictureInPictureEnabled && typeof video.requestPictureInPicture==="function");
@@ -3626,6 +3634,7 @@ function refreshNativePlayerCapabilities() {{
       audioSelect.value=hasChoice?requested:"native:"+String(Math.max(0,current));
     }}
   }}
+  refreshAudioPermissionControl();
 }}
 function updatePlayerChrome() {{
   const duration=Number.isFinite(video.duration)?video.duration:0;
@@ -4083,7 +4092,7 @@ async function restartCompatAudio(seconds, shouldPlay=false) {{
       await compatAudio.play();
       return true;
     }} catch(_) {{
-      notice.textContent="Tap Play or Sync once to allow the AAC compatibility audio.";
+      notice.textContent="Browser blocked AAC audio. Tap Enable audio in Advanced Stream Details.";
       return false;
     }}
   }}
@@ -4413,6 +4422,7 @@ async function applyState(s) {{
   lastState=s;
   applyCompatAudioState(s);
   refreshNativePlayerCapabilities();
+  refreshAudioPermissionControl();
   document.getElementById("title").textContent=s.title||(
     standaloneSession(s)?"Dank Cinema":(s.private?"Private Session":"Watch Party")
   );
@@ -5046,6 +5056,7 @@ function applyUserAudioState(forceAudible=false) {{
     }} catch(_) {{}}
   }}
   syncVolumeControls();
+  refreshAudioPermissionControl();
 }}
 function primeAudiblePlaybackGesture() {{
   applyUserAudioState(!userMuted);
@@ -5092,6 +5103,25 @@ muteControl.onclick=()=>{{
 }};
 video.addEventListener("volumechange",syncVolumeControls);
 compatAudio.addEventListener("volumechange",syncVolumeControls);
+compatAudio.addEventListener("playing",refreshAudioPermissionControl);
+compatAudio.addEventListener("pause",refreshAudioPermissionControl);
+video.addEventListener("playing",refreshAudioPermissionControl);
+video.addEventListener("pause",refreshAudioPermissionControl);
+document.getElementById("enableAudio").onclick=async()=>{{
+  const button=document.getElementById("enableAudio");
+  button.disabled=true;
+  try {{
+    const started=await startCompatAudioFromGesture(
+      Number(video.currentTime||lastState?.position_seconds||0),!video.paused
+    );
+    notice.textContent=started
+      ?"Audio enabled for this viewer."
+      :"Browser blocked compatibility audio. Tap Enable audio again.";
+  }} finally {{
+    button.disabled=false;
+    refreshAudioPermissionControl();
+  }}
+}};
 compatAudio.addEventListener("error",()=>{{
   if(!compatAudioUrl) return;
   const wasAlternate=selectedAudioTrack.startsWith("sidecar:");
