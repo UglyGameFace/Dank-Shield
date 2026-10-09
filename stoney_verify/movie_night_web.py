@@ -4122,7 +4122,7 @@ async function restartCompatAudio(seconds, shouldPlay=false) {{
   refreshAudioPermissionControl();
   return true;
 }}
-function startCompatAudioFromGesture(seconds, keepPlaying) {{
+function startCompatAudioFromGesture(seconds, keepPlaying, forceRestart=false) {{
   if(!compatAudioUrl || userMuted) return Promise.resolve(true);
   const target=Math.max(0,Number(seconds||0));
   const sequence=++compatAudioStartSequence;
@@ -4131,7 +4131,7 @@ function startCompatAudioFromGesture(seconds, keepPlaying) {{
   // Do not destroy a loaded sidecar merely to unlock it. On mobile, repeated
   // src/load() swaps interrupt the play() promise and create new transcodes.
   const drift=Math.abs(compatAudioClock()-target);
-  if(!compatAudio.getAttribute("src") || drift>2.5) {{
+  if(forceRestart || !compatAudio.getAttribute("src") || drift>2.5) {{
     compatAudioRestartAt=Date.now();
     try {{ compatAudio.pause(); }} catch(_) {{}}
     compatAudioOffset=target;
@@ -5159,8 +5159,9 @@ document.getElementById("enableAudio").onclick=async()=>{{
   const button=document.getElementById("enableAudio");
   button.disabled=true;
   try {{
+    const restart=!compatAudio.paused && !compatAudioNeedsGesture;
     const started=await startCompatAudioFromGesture(
-      Number(video.currentTime||lastState?.position_seconds||0),!video.paused
+      Number(video.currentTime||lastState?.position_seconds||0),!video.paused,restart
     );
     notice.textContent=started
       ?"AAC output started. If sound is missing, try Restart audio or check device volume."
