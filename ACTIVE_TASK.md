@@ -1,6 +1,49 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — DANK-CINEMA-PROVIDER-COMPAT-20261008
+## CURRENT ACTIVE TASK — DANK-CINEMA-EPISODE-HTML-20261009
+
+**Outcome:** Investigate and repair the reported Dr. STONE S01E01 website playback error where the browser receives HTML while expecting JSON. Preserve the canonical episode search, source ranking, torrent session/room, and cross-browser behavior.
+
+**Branch:** `fix/cinema-play-html-response-20261009` from `main@27b90e536d946636d2504df3056d546f6dbefe79`.
+
+**Status:** Scoped API-boundary fix and regression tests implemented, with live request origin still undetermined. This is not a verified playback fix until the user can start the exact episode and reach a first frame. PR checks and Discloud acceptance remain pending.
+
+### Scope, findings, and execution path
+
+- Real site path: season card click -> `playOnSite` -> shared `api("/play", POST)` -> `/cinema/{guild_id}/api/play` -> exact canonical episode metadata/provider search -> existing room/torrent start -> JSON `watch_url` -> Theater.
+- Screenshot confirms details and season metadata rendered, then an `Unexpected token '<', "<!doctype... is not valid JSON` toast when trying to play Dr. STONE S01E01.
+- The shared website helper unconditionally parsed any successful HTTP response via `response.json()`; an HTML 2xx response thus produced the raw browser syntax error. This defect is confirmed.
+- The registered aiohttp play handler returns JSON only on success, HTTP errors for missing sources/start failures. Therefore HTML 2xx is not explained by the normal canonical no-source path. Its external origin (proxy, redirect, different deployment, etc.) requires a live authenticated response trace. Do not guess.
+- Discloud production branch/SHA and authenticated browser HTTP response are not established; direct public site fetch is blocked in this environment.
+
+### Changes
+
+- `stoney_verify/assets/cinema_site.js`: check HTTP response media type and redirect before parsing, preserve plain/JSON HTTP error semantics, report status/route/type with no HTML or signed query leaks, continue parsing valid JSON and navigating to the returned Watch URL.
+- `stoney_verify/cinema_site.py`: bump JS cache key to v18; emit bounded safe logs for play handler ingress and episode lookup/torrent start exception types so a proxy-generated page can be distinguished from a request that reached the app.
+- `tests/test_cinema_api_response_contract.py`: exercise the actual JS helper under Node with synthetic successful JSON, 200 HTML, redirects, 502 HTML, 409 plain and JSON error bodies, invalid JSON, and no-body 204.
+- `tests/test_cinema_full_platform.py`: align two existing asset-version assertions.
+- No provider resolver, role/access model, server setup, session auth, room lifecycle, libtorrent, or voice/audio changes.
+
+### Validation, risks, and cleanup
+
+- In-turn direct execution of the extracted real JS helper confirms JSON success, HTML 200/502 detection, structured/plain errors, invalid JSON, and redirect path handling when the browser URL primitive is supplied.
+- GitHub Actions targeted, full suite, static/type/build, diff conflict review, and exact-head checks: pending.
+- First-frame Dr. STONE S01E01 playback, Android and desktop, and Discloud logs: **not verified**. Improving response diagnostics does not itself restart a dead/proxied origin or supply a missing valid release.
+- Only in-scope files modified on a new task branch. Keep patch and PR isolated; do not deploy automatically until checks and a controlled release path are determined.
+- After testing, compare live browser failure time to server log `cinema_site play ingress`: if absent, inspect hosting/auth/route; if present, inspect episode search, source and torrent startup logs. Capture response status, content type and redirect target without exposing signed cookies or URLs.
+
+### Suspended tasks / backlog
+
+- **Dank Shield self-verification** suspended by explicit FORCE SWITCH on Oct 9. Confirmed separate Basic Verify role mutation and ticket interception paths; GitHub PR #267 corrected mode precedence and #469/#470 corrected interaction handling. Old backup branches lacked immediate-ack behavior, newer Oct 8 Discloud-status SHA `d7e38e7` had it; actual current production SHA and guild config unconfirmed. No code edits. Resume with Discloud running SHA, failed Verify interaction logs, exact saved verification mode, role hierarchy and ticket routing evidence.
+- Previous Cinema Nyaa/provider episode-year matching: PR #485 merged as `27b90e536d946636d2504df3056d546f6dbefe79`; production acceptance of exact episode and overall catalog still pending.
+- Prior Cinema torrent readiness/low throughput, missing anime posters, audio-track control, and generic provider adapters remain separate backlog; do not combine with this response-contract incident.
+
+**Next step:** Open focused PR, check exact-head CI, inspect full diff, determine running Discloud SHA, and reproduce Dr. STONE S01E01 while reading API response status/type and matching origin log. Do not claim playback fixed from the error-message repair alone.
+
+---
+
+
+## HISTORICAL CHECKPOINT — DANK-CINEMA-PROVIDER-COMPAT-20261008
 
 **Outcome:** Validate the existing Nyaa/structured-provider pipeline without duplicate adapters and repair demonstrated episode-query incompatibility, while preserving canonical media identity and all existing playback/Discord behavior.
 
@@ -39,7 +82,7 @@
 
 ---
 
-## CURRENT ACTIVE TASK — DANK-SHIELD-GLOBAL-INTERACTION-OUTAGE
+## HISTORICAL CHECKPOINT — DANK-SHIELD-GLOBAL-INTERACTION-OUTAGE
 
 **Outcome:** Restore Dank Shield process stability and Discord responsiveness across all guilds. Cinema feature work remains inactive until the shared production process is stable.
 

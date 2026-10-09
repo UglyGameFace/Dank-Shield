@@ -2400,6 +2400,14 @@ async def cinema_play_api(request: web.Request) -> web.Response:
     requested_room_id = str(payload.get("room_id") or "").strip()
     requested_source_choice = str(payload.get("source_choice") or "").strip()[:64]
     media_type = str(payload.get("media_type") or "").strip().lower()
+    # A browser can receive an HTML response from a proxy before this handler
+    # ever runs. This low-cardinality ingress marker distinguishes that case
+    # from a source-search or torrent-start failure inside Cinema itself.
+    print(
+        "🎞️ cinema_site play ingress "
+        f"guild={int(guild_id)} user={int(user_id)} media={media_type} "
+        f"room={'existing' if requested_room_id else 'standalone'}"
+    )
     manager = get_movie_night_manager()
 
     room = None
@@ -2504,6 +2512,12 @@ async def cinema_play_api(request: web.Request) -> web.Response:
         except web.HTTPException:
             raise
         except Exception as exc:
+            print(
+                "⚠️ cinema_site episode source search failed "
+                f"guild={int(guild_id)} user={int(user_id)} series={series_id} "
+                f"season={season_number} episode={episode_number} "
+                f"error_type={type(exc).__name__}"
+            )
             raise web.HTTPServiceUnavailable(
                 text="Cinema episode source search is temporarily unavailable."
             ) from exc
@@ -2628,6 +2642,11 @@ async def cinema_play_api(request: web.Request) -> web.Response:
             variant_id=selected.variant_id,
         )
     except Exception as exc:
+        print(
+            "⚠️ cinema_site playback start failed "
+            f"guild={int(guild_id)} user={int(user_id)} media={media_type} "
+            f"error_type={type(exc).__name__}"
+        )
         raise web.HTTPBadGateway(
             text="The selected Cinema source could not be started."
         ) from exc
@@ -3303,7 +3322,7 @@ def _site_html(guild_id: int, user_id: int) -> str:
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=17" defer></script>
+  <script src="/cinema/assets/site.js?v=18" defer></script>
 </body>
 </html>"""
 
