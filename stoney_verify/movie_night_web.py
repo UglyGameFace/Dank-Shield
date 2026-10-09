@@ -5137,6 +5137,8 @@ volumeControl.addEventListener("input",event=>{{
   userMuted=next<=0;
   saveUserAudioState();
   applyUserAudioState(!userMuted);
+  if(!userMuted && compatAudioActive() && !video.paused)
+    void startCompatAudioFromGesture(Number(video.currentTime||0),true);
 }});
 muteControl.onclick=()=>{{
   const output=activeAudioElement();
@@ -5146,12 +5148,15 @@ muteControl.onclick=()=>{{
   saveUserAudioState();
   applyUserAudioState(!userMuted);
   if(!userMuted && compatAudioActive() && !video.paused)
-    void syncCompatAudio(true);
+    void startCompatAudioFromGesture(Number(video.currentTime||0),true);
   showPlayerControls(true);
 }};
 video.addEventListener("volumechange",syncVolumeControls);
 compatAudio.addEventListener("volumechange",syncVolumeControls);
-compatAudio.addEventListener("playing",refreshAudioPermissionControl);
+compatAudio.addEventListener("playing",()=>{{
+  compatAudioNeedsGesture=false;
+  refreshAudioPermissionControl();
+}});
 compatAudio.addEventListener("pause",refreshAudioPermissionControl);
 video.addEventListener("playing",refreshAudioPermissionControl);
 video.addEventListener("pause",refreshAudioPermissionControl);
