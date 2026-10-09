@@ -3063,9 +3063,25 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
       <label for="audioTrack">Audio track</label>
       <select class="quality-select" id="audioTrack" aria-label="Audio track"></select>
     </div>
+    <div class="quality-control">
+      <label for="audioLanguage">My audio language</label>
+      <select class="quality-select" id="audioLanguage" aria-label="Preferred audio language for this server">
+        <option value="">Automatic (release default)</option>
+        <option value="en">English</option>
+        <option value="pt">Português</option>
+        <option value="es">Español</option>
+        <option value="fr">Français</option>
+        <option value="de">Deutsch</option>
+        <option value="it">Italiano</option>
+        <option value="ja">日本語</option>
+        <option value="ko">한국어</option>
+        <option value="hi">हिन्दी</option>
+        <option value="zh">中文</option>
+      </select>
+    </div>
     <div class="quality-control" id="enableAudioControl" hidden>
-      <label for="enableAudio">Audio permission</label>
-      <button class="quality-select" id="enableAudio" type="button">Enable audio</button>
+      <label for="enableAudio">Audio recovery</label>
+      <button class="quality-select" id="enableAudio" type="button">Restore audio</button>
     </div>
     <div class="quality-note" id="playbackPreferenceNote">Playback speed is synchronized for everyone when you are the host. Audio selection stays local to each viewer.</div>
     <div class="quality-note" id="qualityNote">Auto balances artwork depth with device and network capability. Playback features stay identical in every mode.</div>
@@ -3192,6 +3208,7 @@ let hostPlayGesturePending=false;
 let lastState=null;
 let cinemaPreferences={{}};
 let preferredAudioLanguage="";
+let audioPreferenceLoaded=false;
 let selectedAudioTrack="original";
 let audioSelectionToken="";
 let audioMenuSignature="";
@@ -3596,9 +3613,10 @@ function refreshAudioPermissionControl() {{
   const button=document.getElementById("enableAudio");
   // The paused flag can flip during loading and FFmpeg restarts without
   // confirming audible output. Keep the real recovery action discoverable.
-  control.hidden=!(compatAudioActive() && !userMuted);
-  button.textContent=compatAudio.paused || compatAudioNeedsGesture
-    ?"Enable audio":"Restart audio";
+  // Ordinary playback and track selection start sound directly. A browser may
+  // still block autoplay, but recovery is offered only after a real failure.
+  control.hidden=!(compatAudioActive() && !userMuted && compatAudioNeedsGesture);
+  button.textContent="Restore audio";
 }}
 function refreshNativePlayerCapabilities() {{
   const pip=document.getElementById("pip");
@@ -3957,7 +3975,13 @@ function streamHealthLabel(s) {{
   // Peer count and total torrent completion cannot establish playable media.
   // HAVE_FUTURE_DATA (3) proves the browser has at least a little video ahead.
   if(video.readyState<3) return "Preparing playable video";
-  if(s.state==="playing" && !video.paused) return "Video playing";
+  if(s.state==="playing" && !video.paused) {{
+    if(
+      typeof video.requestVideoFrameCallback==="function"
+      && !startupTrace.events.first_frame
+    ) return "Waiting for first video frame";
+    return "Video playing";
+  }}
   if(s.state==="playing") return "Waiting for browser playback";
   return "Video ready to play";
 }}
@@ -4244,11 +4268,12 @@ async function syncCompatAudio(force=false) {{
     ?1:Math.max(0.88,Math.min(1.12,1+drift*0.07));
   try {{ compatAudio.playbackRate=baseRate*correction; }} catch(_) {{}}
 }}
-function applyCompatAudioState(s) {{
+function applyCompatAudioState(s, userGesture=false) {{
   const token=String(s?.stream_token||"");
   if(audioSelectionToken!==token) {{
     audioSelectionToken=token;
-    selectedAudioTrack="original";
+    selectedAudioTrack=audioPreferenceLoaded
+      ?preferredTrackForLanguage(s):"original";
     audioMenuSignature="";
   }}
   const options=Array.isArray(s?.audio_track_options)?s.audio_track_options:[];
@@ -4282,7 +4307,10 @@ function applyCompatAudioState(s) {{
     const target=changed
       ?Number(video.currentTime||s.position_seconds||0)
       :Number(s.position_seconds||0);
-    void restartCompatAudio(target,!video.paused);
+    if(userGesture && !userMuted && videoClockAdvancing())
+      void startCompatAudioFromGesture(target,true,true);
+    else
+      void restartCompatAudio(target,videoClockAdvancing());
   }}
 }}
 
