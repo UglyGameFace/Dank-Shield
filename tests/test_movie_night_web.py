@@ -546,6 +546,38 @@ def test_watch_room_revokes_definitively_absent_server_member(monkeypatch) -> No
         raise AssertionError("A removed server member unexpectedly kept Watch access.")
 
 
+def test_theater_heading_prefers_canonical_movie_over_language_release_label(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=1, channel_id=2, host_id=10, stream_token="", mode="standalone",
+    )
+    candidate = manager.nominate(
+        room.room_id,
+        user_id=10,
+        title="Portuguese 5.1",
+        metadata={"catalog": {
+            "title": "Mad Max: Fury Road",
+            "tmdb_id": 76341,
+            "media_type": "movie",
+            "year": 2015,
+        }},
+        auto_vote=False,
+    )
+    room.current_candidate_id = candidate.candidate_id
+
+    class _TorrentManager:
+        async def get(self, token):
+            return None
+
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(movie_night_web, "get_torrent_manager", lambda: _TorrentManager())
+
+    state = asyncio.run(movie_night_web._state_payload(room, 10))
+    assert state["title"] == "Mad Max: Fury Road"
+    assert state["movie"]["title"] == "Mad Max: Fury Road"
+    assert candidate.title == "Portuguese 5.1"  # preserve release identity
+
+
 def test_movie_night_state_exposes_private_room_mode(monkeypatch) -> None:
     manager = MovieNightManager()
     room = manager.create_room(
