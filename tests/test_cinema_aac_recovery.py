@@ -152,6 +152,9 @@ vm.runInContext(snippets.sync, ctx);
   assert.equal(ctx.compatAudioNeedsGesture, false);
   assert.equal(ctx.compatAudioStartPending, false);
   assert.ok(playCalls >= 2);
+  const priorExplicitRestart = loads;
+  assert.equal(await ctx.startCompatAudioFromGesture(3, true, true), true);
+  assert.equal(loads, priorExplicitRestart + 1, "Restart audio must reload AAC");
   assert.ok(refreshes > 0);
   process.stdout.write("AAC recovery behavior verified\n");
 })().catch(error => {
