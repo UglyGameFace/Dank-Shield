@@ -1049,6 +1049,27 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
             if session is not None
             else ""
         ),
+        # Safe browser-capability hints only; the signed media URL, source
+        # authority, and verified probe state remain unchanged.
+        "video_verified": bool(
+            session is not None
+            and isinstance(session.verified_metadata, Mapping)
+            and session.verified_metadata.get("available")
+            and isinstance(session.verified_metadata.get("video"), Mapping)
+            and session.verified_metadata["video"].get("codec")
+        ),
+        "video_codec": (
+            str(session.verified_metadata["video"].get("codec") or "")[:32]
+            if session is not None
+            and isinstance(session.verified_metadata, Mapping)
+            and isinstance(session.verified_metadata.get("video"), Mapping)
+            else ""
+        ),
+        "video_container": (
+            str(session.verified_metadata.get("container") or "")[:80]
+            if session is not None and isinstance(session.verified_metadata, Mapping)
+            else ""
+        ),
         "cast_supported_media": (
             media_content_type(session.file_name)
             in {"video/mp4", "video/webm", "video/mp2t", "video/mpeg"}
