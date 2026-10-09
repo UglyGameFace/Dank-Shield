@@ -392,6 +392,39 @@ def test_browser_safe_audio_beats_known_risky_audio_when_both_are_seeded() -> No
     assert ranked[0].variant_id == safe.variant_id
 
 
+def test_mixed_aac_and_dts_release_is_not_misranked_browser_safe() -> None:
+    manager, room_id = _room_with_three_viewers()
+    candidate = manager.nominate(
+        room_id, user_id=20, title="Multi-track Audio", now=105.0,
+    )
+    mixed = manager.add_variant(
+        room_id, candidate.candidate_id, user_id=20,
+        source_ref="authorized:mixed",
+        seeds=90, leechers=3, peers=93,
+        metadata={
+            "verified": {
+                "audio_tracks": [
+                    {"codec": "dts", "language": "por"},
+                    {"codec": "aac", "language": "eng"},
+                ],
+            },
+        }, now=106.0,
+    )
+    native = manager.add_variant(
+        room_id, candidate.candidate_id, user_id=30,
+        source_ref="authorized:native",
+        seeds=20, leechers=1, peers=21,
+        metadata={"verified": {
+            "audio_tracks": [{"codec": "aac", "language": "eng"}],
+        }}, now=107.0,
+    )
+    assert mixed.browser_audio_risk_key() == 2
+    assert native.browser_audio_risk_key() == 0
+    assert manager.ranked_variants(
+        room_id, candidate.candidate_id, now=108.0,
+    )[0].variant_id == native.variant_id
+
+
 def test_zero_seed_browser_safe_audio_still_loses_to_seeded_release() -> None:
     manager, room_id = _room_with_three_viewers()
     candidate = manager.nominate(
