@@ -4200,6 +4200,23 @@ async function syncCompatAudio(force=false) {{
     await restartCompatAudio(Number(video.currentTime||0),true);
     return;
   }}
+  // Start decoding on the same playback clock, but protect the async play
+  // promise from repeated polling. Without play(), preload="none" may never
+  // fetch the first AAC fragment after a seek or video buffer pause.
+  if(compatAudio.paused) {{
+    compatAudioStartPending=true;
+    try {{ await compatAudio.play(); }}
+    catch(error) {{
+      if(videoClockAdvancing() && error?.name!=="AbortError") {{
+        compatAudioNeedsGesture=true;
+        notice.textContent="Browser could not start AAC audio automatically. Tap Enable audio in Advanced Stream Details.";
+        refreshAudioPermissionControl();
+      }}
+    }} finally {{
+      compatAudioStartPending=false;
+    }}
+    return;
+  }}
   // Initial FFmpeg fragments are buffering, not drift; never reload them.
   if(compatAudio.readyState<2) return;
   const drift=Number(video.currentTime||0)-compatAudioClock();
@@ -4209,14 +4226,6 @@ async function syncCompatAudio(force=false) {{
   const correction=Math.abs(drift)<0.12
     ?1:Math.max(0.88,Math.min(1.12,1+drift*0.07));
   try {{ compatAudio.playbackRate=baseRate*correction; }} catch(_) {{}}
-  if(compatAudio.paused) {{
-    try {{ await compatAudio.play(); }}
-    catch(_) {{
-      compatAudioNeedsGesture=true;
-      notice.textContent="Browser could not start AAC audio automatically. Tap Enable audio in Advanced Stream Details.";
-      refreshAudioPermissionControl();
-    }}
-  }}
 }}
 function applyCompatAudioState(s) {{
   const token=String(s?.stream_token||"");
