@@ -80,6 +80,7 @@ def test_cinema_library_runtime_defaults_and_episode_lookup(monkeypatch) -> None
         "playback_speed": 1.0,
         "preferred_source": "",
         "default_audio_language": "",
+        "audio_language_by_guild": {},
         "default_subtitle_language": "",
         "visual_quality": "auto",
         "feed_notification_mode": "instant",
