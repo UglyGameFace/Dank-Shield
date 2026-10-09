@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 
 from stoney_verify import media_source_resolver as resolver
-from stoney_verify.media_source_registry import CustomMediaSource, MediaSourceRegistry
+from stoney_verify.media_source_registry import CustomMediaSource, MediaSourceRegistry, prepare_example_search_url
 
 
 def _source() -> CustomMediaSource:
@@ -642,6 +642,65 @@ def test_explicit_playable_ref_wins_over_info_hash_fallback() -> None:
 def test_static_xml_feed_endpoint_is_not_rewritten_with_query_parameter() -> None:
     endpoint = "https://fosstorrents.com/feed/torrents.xml"
     assert resolver._search_url(endpoint, "Blender") == endpoint
+
+
+def test_nyaa_searchable_rss_uses_existing_add_provider_pipeline() -> None:
+    endpoint = prepare_example_search_url(
+        "https://nyaa.si/?page=rss&q=Sakura%20Sample&c=1_2&f=0"
+    )
+    assert endpoint == "https://nyaa.si/?page=rss&q={query}&c=1_2&f=0"
+    assert resolver._search_url(endpoint, "Sakura Sample") == (
+        "https://nyaa.si/?page=rss&q=Sakura+Sample&c=1_2&f=0"
+    )
+
+    payload = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss xmlns:nyaa="https://nyaa.si/xmlns/nyaa" version="2.0">
+      <channel>
+        <item>
+          <title>Sakura.Sample.S01E02.1080p</title>
+          <link>https://nyaa.si/download/1234.torrent</link>
+          <guid>https://nyaa.si/view/1234</guid>
+          <nyaa:seeders>270</nyaa:seeders>
+          <nyaa:leechers>17</nyaa:leechers>
+          <nyaa:infoHash>0123456789abcdef0123456789abcdef01234567</nyaa:infoHash>
+          <nyaa:size>1.1 GiB</nyaa:size>
+          <nyaa:category>Anime - English-translated</nyaa:category>
+        </item>
+        <item>
+          <title>Unrelated.Anime.S01E01</title>
+          <link>https://nyaa.si/download/9999.torrent</link>
+        </item>
+      </channel>
+    </rss>"""
+    items = resolver._extract_feed_items(payload, "Sakura Sample")
+    assert len(items) == 1
+    source = CustomMediaSource(
+        source_id="nyaa",
+        label="Nyaa",
+        endpoint_url=endpoint,
+        provider_type="json",
+        category="anime",
+    )
+    release = resolver._variant_from_item(source, items[0])
+    assert release is not None
+    assert release.source_ref == "https://nyaa.si/download/1234.torrent"
+    assert release.file_size == 1_181_116_006
+    assert release.seeds == 270
+    assert release.leechers == 17
+    assert release.peers == 287
+    assert release.metadata["source_reported"]["category"] == (
+        "Anime - English-translated"
+    )
+
+
+def test_rss_feed_size_normalization_preserves_bytes_and_units() -> None:
+    assert resolver._feed_size_bytes("1.1 GiB") == 1_181_116_006
+    assert resolver._feed_size_bytes("950 MiB") == 996_147_200
+    assert resolver._feed_size_bytes("1.2 GB") == 1_200_000_000
+    assert resolver._feed_size_bytes("123456") == 123_456
+    assert resolver._feed_size_bytes("2 KB") == 2_000
+    assert resolver._feed_size_bytes("-3 GiB") == 0
+    assert resolver._feed_size_bytes("unknown") == 0
 
 
 def test_rss_torrent_feed_enclosure_becomes_playable_release() -> None:
