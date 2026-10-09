@@ -6269,11 +6269,13 @@ video.addEventListener("loadedmetadata",()=>{{
   refreshNativePlayerCapabilities();
   const tracks=video.audioTracks;
   if(tracks && tracks.length && preferredAudioLanguage) {{
-    const target=preferredAudioLanguage.toLowerCase();
-    for(let i=0;i<tracks.length;i++) {{
-      const label=String(tracks[i].language||tracks[i].label||"").toLowerCase();
-      if(label.includes(target)) {{
-        try {{ tracks[i].enabled=true; }} catch(_) {{}}
+    const target=normalizedAudioLanguage(preferredAudioLanguage);
+    const match=Array.from(tracks).findIndex(track=>
+      normalizedAudioLanguage(track.language||track.label)===target
+    );
+    if(target && match>=0) {{
+      for(let i=0;i<tracks.length;i++) {{
+        try {{ tracks[i].enabled=i===match; }} catch(_) {{}}
       }}
     }}
   }}
