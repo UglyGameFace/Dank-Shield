@@ -8,6 +8,7 @@ from io import BytesIO
 import hmac
 import json
 import os
+import shutil
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -855,6 +856,8 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "source": "",
     }
     audio_compat_url = ""
+    audio_track_options: list[dict[str, Any]] = []
+    audio_track_url = ""
     if session is not None:
         try:
             torrent_manager.schedule_metadata_probe(session)
@@ -886,6 +889,27 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
                     )
                 except Exception:
                     audio_compat_url = ""
+    # The browser's video.audioTracks API is not reliably exposed on Android
+    # or Chromium. Verified file streams can instead use the existing signed,
+    # per-viewer AAC route, with FFmpeg map indexes validated by the endpoint.
+    if session is not None and shutil.which("ffmpeg"):
+        verified = session.verified_metadata if isinstance(session.verified_metadata, Mapping) else {}
+        tracks = verified.get("audio_tracks") if verified.get("available") else None
+        if isinstance(tracks, list) and len(tracks) > 1:
+            for index, row in enumerate(tracks[:8]):
+                if not isinstance(row, Mapping):
+                    continue
+                language = str(row.get("language") or "").strip()[:24]
+                title = str(row.get("title") or "").strip()[:80]
+                codec = str(row.get("codec") or "").strip()[:24]
+                label = " • ".join(part for part in (language, title or codec) if part)
+                audio_track_options.append({"index": index, "label": label or f"Track {index + 1}"})
+            if len(audio_track_options) > 1:
+                audio_track_url = torrent_manager.compat_audio_url(
+                    session, ttl_seconds=21600, consumer_key=consumer_key,
+                )
+            if not audio_track_url:
+                audio_track_options = []
     cast_stream_url = (
         torrent_manager.stream_url(
             session,
@@ -908,6 +932,10 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         session = None
         stream_url = ""
         consumer_key = ""
+        audio_compat_url = ""
+        audio_compat["required"] = False
+        audio_track_options = []
+        audio_track_url = ""
         torrent_status = {}
         startup_status = {}
     swarm = _swarm_display(torrent_status, variant)
@@ -1006,6 +1034,8 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "audio_compat_required": bool(audio_compat.get("required")),
         "audio_compat_reason": str(audio_compat.get("reason") or ""),
         "audio_codecs": list(audio_compat.get("codecs") or [])[:8],
+        "audio_track_options": audio_track_options,
+        "audio_track_url": audio_track_url,
         "cast_stream_url": cast_stream_url,
         "media_content_type": (
             media_content_type(session.file_name)
@@ -2514,6 +2544,7 @@ video {{
   margin-top:12px;padding:10px;border-radius:11px;background:#0d1916;
 }}
 .quality-control label {{ color:#cbd5d0;font-size:.76rem;font-weight:800; }}
+.quality-control[hidden] {{ display:none !important; }}
 .quality-select {{
   border:1px solid rgba(255,255,255,.11);border-radius:9px;
   background:#10201b;color:#f4f7f5;padding:7px 9px;font-weight:750;
@@ -3015,6 +3046,10 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
       <label for="audioTrack">Audio track</label>
       <select class="quality-select" id="audioTrack" aria-label="Audio track"></select>
     </div>
+    <div class="quality-control" id="enableAudioControl" hidden>
+      <label for="enableAudio">Audio permission</label>
+      <button class="quality-select" id="enableAudio" type="button">Enable audio</button>
+    </div>
     <div class="quality-note" id="playbackPreferenceNote">Playback speed is synchronized for everyone when you are the host. Audio selection stays local to each viewer.</div>
     <div class="quality-note" id="qualityNote">Auto balances artwork depth with device and network capability. Playback features stay identical in every mode.</div>
     <div class="keyboard-help" id="keyboardHelp">
@@ -3140,6 +3175,9 @@ let hostPlayGesturePending=false;
 let lastState=null;
 let cinemaPreferences={{}};
 let preferredAudioLanguage="";
+let selectedAudioTrack="original";
+let audioSelectionToken="";
+let audioMenuSignature="";
 let preferredSubtitleLanguage="";
 let lastProgressPersistAt=0;
 let lastProgressMediaKey="";
@@ -3532,6 +3570,10 @@ function renderStartupDiagnostics(server={{}}) {{
     browserEl.textContent=bits.length?bits.join(" • "):"waiting for media events";
   }}
 }}
+function refreshAudioPermissionControl() {{
+  const control=document.getElementById("enableAudioControl");
+  control.hidden=!(compatAudioActive() && !userMuted && !video.paused && compatAudio.paused);
+}}
 function refreshNativePlayerCapabilities() {{
   const pip=document.getElementById("pip");
   pip.hidden=!Boolean(document.pictureInPictureEnabled && typeof video.requestPictureInPicture==="function");
@@ -3548,26 +3590,51 @@ function refreshNativePlayerCapabilities() {{
 
   const audioControl=document.getElementById("audioControl");
   const audioSelect=document.getElementById("audioTrack");
-  const audioTracks=video.audioTracks;
-  const count=audioTracks && Number(audioTracks.length||0);
-  audioControl.hidden=!(count>1);
-  if(count>1) {{
-    const previous=audioSelect.value;
+  const nativeTracks=video.audioTracks;
+  const nativeCount=nativeTracks && Number(nativeTracks.length||0);
+  const options=Array.isArray(lastState?.audio_track_options) && lastState?.audio_track_url
+    ?lastState.audio_track_options:[];
+  const useSidecar=options.length>1;
+  const useNative=!useSidecar && nativeCount>1;
+  const signature=useSidecar
+    ? "sidecar:"+String(lastState.stream_token||"")+":"+
+      options.map(row=>String(row.index)+":"+String(row.label)).join("|")
+    :useNative?"native:"+String(lastState?.stream_token||"")+":"+String(nativeCount):"none";
+  audioControl.hidden=!(useSidecar || useNative);
+  if(signature!==audioMenuSignature) {{
+    audioMenuSignature=signature;
     audioSelect.textContent="";
-    for(let i=0;i<count;i++) {{
-      const track=audioTracks[i];
-      const option=document.createElement("option");
-      option.value=String(i);
-      option.textContent=String(
-        track.label ||
-        track.language ||
-        "Audio "+String(i+1)
-      );
-      if(track.enabled) option.selected=true;
-      audioSelect.appendChild(option);
+    if(useSidecar) {{
+      const original=document.createElement("option");
+      original.value="original";
+      original.textContent="Original / default audio";
+      audioSelect.appendChild(original);
+      for(const row of options) {{
+        const option=document.createElement("option");
+        option.value="sidecar:"+String(row.index);
+        option.textContent=String(row.label||"Track "+String(Number(row.index)+1));
+        audioSelect.appendChild(option);
+      }}
+    }} else if(useNative) {{
+      for(let i=0;i<nativeCount;i++) {{
+        const track=nativeTracks[i];
+        const option=document.createElement("option");
+        option.value="native:"+String(i);
+        option.textContent=String(track.label||track.language||"Audio "+String(i+1));
+        audioSelect.appendChild(option);
+      }}
     }}
-    if(previous && Number(previous)<count) audioSelect.value=previous;
   }}
+  if(audioSelect.options.length) {{
+    const requested=selectedAudioTrack;
+    const hasChoice=Array.from(audioSelect.options).some(option=>option.value===requested);
+    if(useSidecar) audioSelect.value=hasChoice?requested:"original";
+    else if(useNative) {{
+      const current=Array.from(nativeTracks).findIndex(track=>track.enabled);
+      audioSelect.value=hasChoice?requested:"native:"+String(Math.max(0,current));
+    }}
+  }}
+  refreshAudioPermissionControl();
 }}
 function updatePlayerChrome() {{
   const duration=Number.isFinite(video.duration)?video.duration:0;
@@ -4025,7 +4092,7 @@ async function restartCompatAudio(seconds, shouldPlay=false) {{
       await compatAudio.play();
       return true;
     }} catch(_) {{
-      notice.textContent="Tap Play or Sync once to allow the AAC compatibility audio.";
+      notice.textContent="Browser blocked AAC audio. Tap Enable audio in Advanced Stream Details.";
       return false;
     }}
   }}
@@ -4092,9 +4159,28 @@ async function syncCompatAudio(force=false) {{
   }}
 }}
 function applyCompatAudioState(s) {{
-  const required=!!(s?.audio_compat_required && s?.audio_compat_url);
   const token=String(s?.stream_token||"");
-  if(!required) {{
+  if(audioSelectionToken!==token) {{
+    audioSelectionToken=token;
+    selectedAudioTrack="original";
+    audioMenuSignature="";
+  }}
+  const options=Array.isArray(s?.audio_track_options)?s.audio_track_options:[];
+  let selectedUrl="";
+  if(selectedAudioTrack.startsWith("sidecar:") && s?.audio_track_url) {{
+    const track=Number(selectedAudioTrack.slice(8));
+    if(Number.isInteger(track) && options.some(row=>Number(row.index)===track)) {{
+      try {{
+        const url=new URL(s.audio_track_url,window.location.origin);
+        url.searchParams.set("track",String(track));
+        selectedUrl=url.toString();
+      }} catch(_) {{}}
+    }}
+  }}
+  const required=!!(s?.audio_compat_required && s?.audio_compat_url);
+  const nextUrl=selectedUrl || (required?String(s.audio_compat_url):"");
+  const nextMode=token+":"+(selectedUrl?selectedAudioTrack:"original");
+  if(!nextUrl) {{
     if(compatAudioUrl) {{
       compatAudioUrl="";
       compatAudioToken="";
@@ -4103,13 +4189,13 @@ function applyCompatAudioState(s) {{
     }}
     return;
   }}
-  if(compatAudioToken!==token || !compatAudioUrl) {{
-    const tokenChanged=compatAudioToken!==token;
-    compatAudioToken=token;
-    compatAudioUrl=String(s.audio_compat_url||"");
-    const target=tokenChanged
-      ?Number(s.position_seconds||0)
-      :Number(video.currentTime||s.position_seconds||0);
+  if(compatAudioToken!==nextMode || !compatAudioUrl) {{
+    const changed=compatAudioToken!==nextMode;
+    compatAudioToken=nextMode;
+    compatAudioUrl=nextUrl;
+    const target=changed
+      ?Number(video.currentTime||s.position_seconds||0)
+      :Number(s.position_seconds||0);
     void restartCompatAudio(target,!video.paused);
   }}
 }}
@@ -4335,6 +4421,8 @@ function correctSyncedDrift(target) {{
 async function applyState(s) {{
   lastState=s;
   applyCompatAudioState(s);
+  refreshNativePlayerCapabilities();
+  refreshAudioPermissionControl();
   document.getElementById("title").textContent=s.title||(
     standaloneSession(s)?"Dank Cinema":(s.private?"Private Session":"Watch Party")
   );
@@ -4968,6 +5056,7 @@ function applyUserAudioState(forceAudible=false) {{
     }} catch(_) {{}}
   }}
   syncVolumeControls();
+  refreshAudioPermissionControl();
 }}
 function primeAudiblePlaybackGesture() {{
   applyUserAudioState(!userMuted);
@@ -5014,13 +5103,40 @@ muteControl.onclick=()=>{{
 }};
 video.addEventListener("volumechange",syncVolumeControls);
 compatAudio.addEventListener("volumechange",syncVolumeControls);
+compatAudio.addEventListener("playing",refreshAudioPermissionControl);
+compatAudio.addEventListener("pause",refreshAudioPermissionControl);
+video.addEventListener("playing",refreshAudioPermissionControl);
+video.addEventListener("pause",refreshAudioPermissionControl);
+document.getElementById("enableAudio").onclick=async()=>{{
+  const button=document.getElementById("enableAudio");
+  button.disabled=true;
+  try {{
+    const started=await startCompatAudioFromGesture(
+      Number(video.currentTime||lastState?.position_seconds||0),!video.paused
+    );
+    notice.textContent=started
+      ?"Audio enabled for this viewer."
+      :"Browser blocked compatibility audio. Tap Enable audio again.";
+  }} finally {{
+    button.disabled=false;
+    refreshAudioPermissionControl();
+  }}
+}};
 compatAudio.addEventListener("error",()=>{{
   if(!compatAudioUrl) return;
+  const wasAlternate=selectedAudioTrack.startsWith("sidecar:");
   compatAudioUrl="";
   compatAudioToken="";
   stopCompatAudio();
-  applyUserAudioState(true);
-  notice.textContent="AAC compatibility audio could not start. Trying the source audio instead.";
+  if(wasAlternate) {{
+    selectedAudioTrack="original";
+    applyCompatAudioState(lastState);
+    refreshNativePlayerCapabilities();
+    notice.textContent="That audio track failed. Reverted to original audio.";
+  }} else {{
+    applyUserAudioState(true);
+    notice.textContent="AAC compatibility audio failed. The original source may be silent on this browser.";
+  }}
 }});
 applyUserAudioState(false);
 document.getElementById("pip").onclick=async()=>{{
@@ -5362,14 +5478,26 @@ document.getElementById("playbackSpeed").addEventListener("change",async event=>
   saveCinemaPreferences({{playback_speed:rate}});
 }});
 document.getElementById("audioTrack").addEventListener("change",event=>{{
-  const tracks=video.audioTracks;
-  if(!tracks || !tracks.length) return;
-  const selected=Number(event.target.value||0);
-  for(let i=0;i<tracks.length;i++) {{
-    try {{ tracks[i].enabled=i===selected; }} catch(_) {{}}
+  const value=String(event.target.value||"original");
+  if(value==="original" || value.startsWith("sidecar:")) {{
+    const options=Array.isArray(lastState?.audio_track_options)?lastState.audio_track_options:[];
+    if(value.startsWith("sidecar:") && !options.some(row=>"sidecar:"+String(row.index)===value)) return;
+    selectedAudioTrack=value;
+    applyCompatAudioState(lastState);
+    notice.textContent=value==="original"
+      ?"Using the original audio track.":"Switching this viewer to the selected audio track…";
+    refreshNativePlayerCapabilities();
+    return;
   }}
-  const track=tracks[selected];
-  preferredAudioLanguage=String(track?.language||track?.label||"");
+  if(!value.startsWith("native:")) return;
+  const tracks=video.audioTracks;
+  const index=Number(value.slice(7));
+  if(!tracks || !Number.isInteger(index) || index<0 || index>=tracks.length) return;
+  for(let i=0;i<tracks.length;i++) {{
+    try {{ tracks[i].enabled=i===index; }} catch(_) {{}}
+  }}
+  selectedAudioTrack=value;
+  preferredAudioLanguage=String(tracks[index]?.language||tracks[index]?.label||"");
   if(preferredAudioLanguage)
     saveCinemaPreferences({{default_audio_language:preferredAudioLanguage}});
   refreshNativePlayerCapabilities();

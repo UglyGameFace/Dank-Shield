@@ -1902,3 +1902,49 @@ def test_dank_cinema_startup_reports_first_http_request_mode_without_signed_urls
     assert '"HTTP 200 full"' in html
     assert '"HTTP mode unknown"' in html
     assert "server.first_range_start" in html
+
+
+def test_dank_cinema_audio_selector_only_shows_real_browser_or_verified_stream_choices() -> None:
+    html = movie_night_web._watch_html(
+        "room-track-picker", 42, "uid=42&exp=9999999999&sig=test",
+    )
+    assert ".quality-control[hidden] { display:none !important; }" in html
+    assert 'id="audioTrack" aria-label="Audio track"></select>' in html
+    assert "const nativeTracks=video.audioTracks;" in html
+    assert "Array.isArray(lastState?.audio_track_options)" in html
+    assert "audioControl.hidden=!(useSidecar || useNative);" in html
+    assert 'original.value="original";' in html
+    assert 'option.value="sidecar:"+String(row.index);' in html
+    assert 'option.value="native:"+String(i);' in html
+    assert 'url.searchParams.set("track",String(track));' in html
+    assert 'selectedAudioTrack=value;' in html
+    assert 'applyCompatAudioState(lastState);' in html
+    assert "audioMenuSignature=signature;" in html
+    assert "refreshNativePlayerCapabilities();" in html
+
+
+def test_cinema_state_exposes_verified_audio_track_choices_only_with_signed_sidecar() -> None:
+    source = __import__("inspect").getsource(movie_night_web._state_payload)
+    assert 'verified.get("audio_tracks") if verified.get("available") else None' in source
+    assert 'if isinstance(tracks, list) and len(tracks) > 1:' in source
+    assert 'audio_track_url = torrent_manager.compat_audio_url(' in source
+    assert '"audio_track_options": audio_track_options' in source
+    assert '"audio_track_url": audio_track_url' in source
+
+
+def test_cinema_audio_permission_can_be_granted_without_host_play_pause() -> None:
+    html = movie_night_web._watch_html(
+        "room-enable-audio", 42, "uid=42&exp=9999999999&sig=test",
+    )
+    assert 'id="enableAudioControl" hidden' in html
+    assert 'id="enableAudio" type="button"' in html
+    assert "function refreshAudioPermissionControl()" in html
+    assert "control.hidden=!(compatAudioActive()" in html
+    assert 'document.getElementById("enableAudio").onclick=async()=>' in html
+    enabled = html.split('document.getElementById("enableAudio").onclick=async()=>', 1)[1].split(
+        'compatAudio.addEventListener("error"', 1
+    )[0]
+    assert "startCompatAudioFromGesture(" in enabled
+    assert 'hostAction("resume")' not in enabled
+    assert 'hostAction("pause")' not in enabled
+    assert "Tap Enable audio in Advanced Stream Details." in html

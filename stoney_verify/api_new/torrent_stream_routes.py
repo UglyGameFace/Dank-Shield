@@ -60,6 +60,7 @@ def _ffmpeg_audio_command(
     input_url: str,
     *,
     start_seconds: float = 0.0,
+    track_index: int = 0,
 ) -> list[str]:
     command = [
         ffmpeg,
@@ -76,7 +77,7 @@ def _ffmpeg_audio_command(
             "-i",
             input_url,
             "-map",
-            "0:a:0",
+            f"0:a:{max(0, min(int(track_index), 7))}",
             "-vn",
             "-sn",
             "-dn",
@@ -414,6 +415,21 @@ async def torrent_audio_compat(request: web.Request) -> web.StreamResponse:
         )
 
     start_seconds = _audio_start_seconds(str(request.query.get("start", "") or ""))
+    # Only verified existing audio streams may be requested. The legacy AAC
+    # compatibility URL (without a track parameter) continues to use track 0.
+    selected_track = 0
+    raw_track = request.query.get("track")
+    if raw_track is not None:
+        if not (str(raw_track).isascii() and str(raw_track).isdigit() and len(str(raw_track)) <= 2):
+            raise web.HTTPBadRequest(text="Invalid Cinema audio track.")
+        selected_track = int(raw_track)
+        verified = session.verified_metadata if isinstance(session.verified_metadata, dict) else {}
+        tracks = verified.get("audio_tracks") if verified.get("available") else None
+        if (
+            not isinstance(tracks, list)
+            or selected_track >= min(len(tracks), 8)
+        ):
+            raise web.HTTPBadRequest(text="That audio track is not available.")
     try:
         port = int(str(os.getenv("DANK_MEDIA_PORT", "8080") or "8080"))
     except Exception:
@@ -430,6 +446,7 @@ async def torrent_audio_compat(request: web.Request) -> web.StreamResponse:
         ffmpeg,
         input_url,
         start_seconds=start_seconds,
+        track_index=selected_track,
     )
 
     semaphore = _audio_transcode_semaphore()

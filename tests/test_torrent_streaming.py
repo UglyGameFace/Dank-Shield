@@ -1719,3 +1719,52 @@ def test_cast_cors_headers_allow_only_google_receiver_origins() -> None:
     assert _cast_cors_headers(denied) == {}
     assert _cast_cors_headers(missing) == {}
     assert "Range" in _cast_cors_headers(allowed)["Access-Control-Allow-Headers"]
+
+
+def test_ffmpeg_audio_track_mapping_is_bounded_and_still_audio_only() -> None:
+    default = _ffmpeg_audio_command("/usr/bin/ffmpeg", "http://127.0.0.1:8080/stream")
+    alternative = _ffmpeg_audio_command(
+        "/usr/bin/ffmpeg", "http://127.0.0.1:8080/stream", track_index=1,
+    )
+    assert default[default.index("-map") + 1] == "0:a:0"
+    assert alternative[alternative.index("-map") + 1] == "0:a:1"
+    assert alternative[alternative.index("-vn")] == "-vn"
+    assert alternative[alternative.index("-c:a") + 1] == "aac"
+
+
+def test_signed_audio_route_rejects_unverified_or_invalid_track(monkeypatch) -> None:
+    from aiohttp import web
+    from stoney_verify.api_new import torrent_stream_routes as routes
+
+    session = SimpleNamespace(
+        verified_metadata={
+            "available": True,
+            "audio_tracks": [{"codec": "aac"}, {"codec": "eac3"}],
+        },
+    )
+
+    class Manager:
+        async def validate_stream_access(self, token, exp, sig, cid):
+            return token == "token" and exp == "100" and sig == "signed"
+
+        async def get(self, token):
+            return session
+
+    monkeypatch.setattr(routes, "get_torrent_manager", lambda: Manager())
+    monkeypatch.setattr(routes.shutil, "which", lambda executable: "/usr/bin/ffmpeg")
+
+    async def reject(index: str, *, verified: bool = True) -> None:
+        session.verified_metadata["available"] = verified
+        request = SimpleNamespace(
+            match_info={"token": "token"},
+            query={"exp": "100", "sig": "signed", "cid": "movie:viewer", "track": index},
+        )
+        with pytest.raises(web.HTTPBadRequest):
+            await routes.torrent_audio_compat(request)
+
+    async def run() -> None:
+        for invalid in ("-1", "2", "999999999999999999999", "nope", "1.2"):
+            await reject(invalid)
+        await reject("1", verified=False)
+
+    asyncio.run(run())
