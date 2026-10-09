@@ -81,12 +81,60 @@ def test_actual_theater_can_play_type_is_used_for_video_format_advice() -> None:
     assert "Browser may not support this video codec" in html
 
 
-def test_media_state_exposes_verified_hints_not_unsafe_unverified_guesses() -> None:
-    # The hints are generated from the existing bounded metadata probe.
-    source = movie_night_web._state_payload.__code__.co_consts
-    # Structural check is deliberately focused: don't replace the existing
-    # authenticated media URL or introspect a user's live credentials.
-    assert callable(movie_night_web._state_payload)
-    assert "video_verified" in str(source)
-    assert "video_codec" in str(source)
-    assert "video_container" in str(source)
+def test_media_state_exposes_verified_hints_not_unsafe_unverified_guesses(monkeypatch) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from stoney_verify.movie_night import MovieNightManager
+
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=44, channel_id=45, host_id=46,
+        stream_token="stub-token", mode="standalone",
+    )
+    session = SimpleNamespace(
+        token="stub-token", file_name="movie.mkv",
+        release_metadata={"title": "Test"},
+        verified_metadata={
+            "available": True, "container": "matroska,webm",
+            "video": {"codec": "hevc", "width": 1920, "height": 1080},
+            "audio_tracks": [{"codec": "eac3", "language": "eng"}],
+        },
+    )
+
+    class FakeTorrentManager:
+        async def get(self, token):
+            assert token == "stub-token"
+            return session
+
+        def session_usable(self, _session):
+            return True
+
+        def stream_url(self, _session, **kwargs):
+            return "/media/torrent/stream/stub-token/movie.mkv?sig=test"
+
+        def schedule_metadata_probe(self, _session):
+            return False
+
+        def browser_audio_compatibility(self, _session):
+            return {"required": False, "codecs": ["eac3"]}
+
+        def status(self, _session):
+            return {}
+
+        def consumer_startup_status(self, _session, _key):
+            return {}
+
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(movie_night_web, "get_torrent_manager", lambda: FakeTorrentManager())
+    result = asyncio.run(movie_night_web._state_payload(room, 46))
+    assert result["video_verified"] is True
+    assert result["video_codec"] == "hevc"
+    assert result["video_container"] == "matroska,webm"
+    assert result["media_content_type"] == "video/x-matroska"
+    assert "sig=" in result["stream_url"]
+
+    session.verified_metadata = {"available": False}
+    result = asyncio.run(movie_night_web._state_payload(room, 46))
+    assert result["video_verified"] is False
+    assert result["video_codec"] == ""
