@@ -1,6 +1,47 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — DANK-SHIELD-GLOBAL-INTERACTION-OUTAGE
+## CURRENT ACTIVE TASK — CINEMA-AAC-AUDIO-STABILITY-20261009
+
+**Outcome:** Restore usable AAC compatibility audio and consistent per-viewer recovery controls without disrupting video, room synchronization, privacy, or existing source selection. Reported Carrie S01E01 video plays while audio is silent; the Enable audio control appears/disappears between adjacent browser screenshots.
+
+**Actual production branch baseline:** `aaa-cinema-pre-pregateway-bind@70356d1560e8047ddc1dc3dd9f698ee323f5c2ce`, confirmed Discloud successful commit status on Oct 9 UTC. Source differs from `main`: PR #483 added source-aware audio tracks and the Enable audio button to the production branch, not main. Do not substitute main or overwrite unrelated production work.
+
+**Implementation branch:** `fix/478-cinema-aac-audio-stability-20261009` based on that actual deployment branch.
+
+### Investigation / execution path / root causes
+
+- Movie Night `_state_payload` publishes verified audio tracks and per-viewer signed AAC compat URL. Audio sidecar runs `ffmpeg` from the signed torrent stream via `/media/torrent/audio/{token}/{filename}`. Theater `applyCompatAudioState` loads a hidden audio element while keeping canonical video clock; `startCompatAudioFromGesture` requests playback on a user click.
+- PR #483's `refreshAudioPermissionControl` tied visibility to transient `compatAudio.paused` and `video.paused`, not durable audio permission state. So the recovery row flickers during background playback transitions even while its browser-blocked message remains.
+- `syncCompatAudio` continually checked video-versus-audio drift and reloaded the AAC stream after a 750 ms gap, including while its audio `play()` was still pending for buffer or permission. That can interrupt play promises, cause repeated FFmpeg work, and prevent stable audio start. The original sidecar-error path cleared the signed URL and mode, so the next state poll could recreate a broken stream.
+- Current screenshots prove video first frame and audio warning, but do not prove the underlying FFmpeg emitted decodable AAC or actual browser permission state. Live signed browser/Discloud test remains required.
+
+### Scoped changes
+
+- Keep the AAC recovery button visibly available while that audio path is active and the viewer has not intentionally muted; label it Enable audio when paused/blocked and Restart audio otherwise.
+- Track in-flight audio starts and actual gesture recovery so polling never interrupts startup or repeatedly retries a blocked `play()`. Avoid destroying a loaded audio source on each user click. Retire outdated async completion paths via sequence identity.
+- Require the audio element to have playable data and a meaningful drift before automatic restart, paced by an existing-start timestamp.
+- If an original AAC sidecar reports `error`, preserve the signed mode and require explicit user retry instead of restarting on every state poll; preserve verified alternate-track fallback to original.
+- New `tests/test_cinema_aac_recovery.py` runs the rendered Theater's JS behavior under Node and checks the original-error path; existing Movie Night and torrent tests still apply.
+
+### Validation and remaining blockers
+
+- CI and targeted suite: pending exact-head pull-request workflow.
+- Live audible result for Carrie S01E01, another movie/episode, host and viewer, Android Samsung Browser and at least one other engine: **not verified**. Do not equate `Video playing` or an AAC `play()` Promise resolving with audible output.
+- No source search, provider registry, catalog, bot verification, Discord interactions, DNS, auth, storage, or room-mode code touched.
+- Before merge: exact-head CI, inspect regression failures, compile/static checks, cleanup and final diff. Production deployment only to the confirmed branch after checks; user must validate real sound.
+
+### Suspended tasks / backlog
+
+- **Dr. STONE episode playback HTML-vs-JSON:** PR #486 merged to `main@9a7b543abc0a5e205db46616cf12b50a8c6053fd` with all six CI families green. Discloud was not confirmed running that commit because it deploys a different branch. Live authenticated exact-episode first frame and HTTP response status/origin remain unverified. Suspended by exact FORCE SWITCH on Oct 9; do not use an unrelated branch merge to import it.
+- **Dank Shield self-verification:** investigation suspended earlier. Basic Verify immediate-ack vs advanced verification-ticket mode and the currently saved guild configuration require log-based production validation; no fixes were made.
+- Separate poster/anime metadata, feed discovery, general torrent throughput and episode provider compatibility are not part of this AAC fix.
+
+**Next step:** Run browser-behavior regression and full exact-head CI, inspect final diff, then canary production on the existing Discloud branch. If audio remains silent with controls working, collect signed AAC response status/bytes, FFmpeg output and browser media errors to diagnose the separate server/codec path without guessing.
+
+---
+
+
+## HISTORICAL CHECKPOINT — DANK-SHIELD-GLOBAL-INTERACTION-OUTAGE
 
 **Outcome:** Restore Dank Shield process stability and Discord responsiveness across all guilds. Cinema feature work remains inactive until the shared production process is stable.
 
