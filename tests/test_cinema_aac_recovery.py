@@ -192,3 +192,21 @@ def test_original_sidecar_error_awaits_user_retry_instead_of_rearming_on_poll() 
     assert 'Preserve the signed URL and mode for an explicit retry.' in handler
     assert 'Browser blocked AAC audio. Tap Enable audio' in html
     assert 'control.hidden=!(compatAudioActive() && !userMuted)' in html
+
+
+def test_volume_and_unmute_are_direct_audio_permission_gestures() -> None:
+    html = movie_night_web._watch_html(
+        "aac-unmute-gesture", 42, "uid=42&exp=9999999999&sig=test",
+    )
+    volume_start = html.index('volumeControl.addEventListener("input",event=>{')
+    mute_start = html.index('muteControl.onclick=()=>{', volume_start)
+    volume = html[volume_start:mute_start]
+    mute = html[mute_start:html.index('video.addEventListener("volumechange"', mute_start)]
+    direct_call = "startCompatAudioFromGesture(Number(video.currentTime||0),true)"
+    assert direct_call in volume
+    assert direct_call in mute
+    assert "void syncCompatAudio(true)" not in mute
+    assert 'compatAudio.addEventListener("playing",()=>{' in html
+    assert "compatAudioNeedsGesture=false;" in html.split(
+        'compatAudio.addEventListener("playing",()=>{', 1
+    )[1].split("});", 1)[0]
