@@ -932,6 +932,10 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         session = None
         stream_url = ""
         consumer_key = ""
+        audio_compat_url = ""
+        audio_compat["required"] = False
+        audio_track_options = []
+        audio_track_url = ""
         torrent_status = {}
         startup_status = {}
     swarm = _swarm_display(torrent_status, variant)
