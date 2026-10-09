@@ -65,6 +65,41 @@ class MovieSourceVariant:
     metadata: dict[str, Any] = field(default_factory=dict)
     votes: set[int] = field(default_factory=set)
 
+    def browser_video_risk_key(self) -> int:
+        """Conservative cross-browser native video risk based on verified media.
+
+        No torrent title alone proves a particular browser can decode a file.
+        Unprobed releases stay unknown; we prefer known H.264/MP4 releases
+        only when the competing releases have comparable vote/seed status.
+        0=broadly browser-compatible, 1=unknown/browser-dependent, 2=risky.
+        """
+        meta = dict(self.metadata or {})
+        verified = meta.get("verified")
+        if not isinstance(verified, Mapping):
+            return 1
+        video = verified.get("video")
+        if not isinstance(video, Mapping) or not video.get("codec"):
+            return 1
+        codec = str(video.get("codec") or "").strip().casefold()
+        container = str(verified.get("container") or "").strip().casefold()
+        filename = str(verified.get("filename") or "").strip().casefold()
+        fmt = container.split(",")[0] if container else ""
+        if filename.endswith((".mkv", ".avi", ".mpeg", ".mpg")) or fmt in {
+            "matroska", "avi", "mpeg", "mpegvideo",
+        }:
+            return 2
+        if codec in {"mpeg2video", "mpeg4", "vc1", "wmv3", "theora"}:
+            return 2
+        if codec in {"h264", "avc", "avc1"} and (
+            filename.endswith((".mp4", ".m4v"))
+            or fmt in {"mov", "mp4", "m4a", "3gp", "3g2", "mj2"}
+        ):
+            depth = int(video.get("bit_depth") or 0)
+            return 0 if depth <= 8 else 1
+        # WebM/VP8/VP9/AV1 and MP4/HEVC are browser-dependent. Neither
+        # native playback nor a video-transcoding fallback is guaranteed.
+        return 1
+
     def browser_audio_risk_key(self) -> int:
         """0=safest for browsers, 1=unknown/conditional, 2=known risky."""
 
