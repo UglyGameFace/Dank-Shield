@@ -879,7 +879,10 @@ def _feed_size_bytes(value: Any) -> int:
     Nyaa uses values such as "1.1 GiB" while Torznab commonly reports raw
     byte counts. Unrecognized units stay unknown rather than guessing a size.
     """
-    match = _FEED_SIZE_RE.fullmatch(str(value or "").strip())
+    raw = str(value or "").strip()
+    if len(raw) > 48:
+        return 0
+    match = _FEED_SIZE_RE.fullmatch(raw)
     if match is None:
         return 0
     unit = (match.group(2) or "B").casefold()
@@ -1009,7 +1012,7 @@ def _feed_entry_to_item(entry: ET.Element) -> Mapping[str, Any]:
             media_type = str(child.attrib.get("type") or "")
             set_source(candidate, media_type=media_type)
             if not item["file_size"]:
-                item["file_size"] = _safe_int(
+                item["file_size"] = _feed_size_bytes(
                     child.attrib.get("length") or child.attrib.get("size")
                 )
             continue
