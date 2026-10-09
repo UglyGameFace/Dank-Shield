@@ -2540,6 +2540,7 @@ video {{
   margin-top:12px;padding:10px;border-radius:11px;background:#0d1916;
 }}
 .quality-control label {{ color:#cbd5d0;font-size:.76rem;font-weight:800; }}
+.quality-control[hidden] {{ display:none !important; }}
 .quality-select {{
   border:1px solid rgba(255,255,255,.11);border-radius:9px;
   background:#10201b;color:#f4f7f5;padding:7px 9px;font-weight:750;
@@ -3166,6 +3167,9 @@ let hostPlayGesturePending=false;
 let lastState=null;
 let cinemaPreferences={{}};
 let preferredAudioLanguage="";
+let selectedAudioTrack="original";
+let audioSelectionToken="";
+let audioMenuSignature="";
 let preferredSubtitleLanguage="";
 let lastProgressPersistAt=0;
 let lastProgressMediaKey="";
@@ -3574,25 +3578,49 @@ function refreshNativePlayerCapabilities() {{
 
   const audioControl=document.getElementById("audioControl");
   const audioSelect=document.getElementById("audioTrack");
-  const audioTracks=video.audioTracks;
-  const count=audioTracks && Number(audioTracks.length||0);
-  audioControl.hidden=!(count>1);
-  if(count>1) {{
-    const previous=audioSelect.value;
+  const nativeTracks=video.audioTracks;
+  const nativeCount=nativeTracks && Number(nativeTracks.length||0);
+  const options=Array.isArray(lastState?.audio_track_options) && lastState?.audio_track_url
+    ?lastState.audio_track_options:[];
+  const useSidecar=options.length>1;
+  const useNative=!useSidecar && nativeCount>1;
+  const signature=useSidecar
+    ? "sidecar:"+String(lastState.stream_token||"")+":"+
+      options.map(row=>String(row.index)+":"+String(row.label)).join("|")
+    :useNative?"native:"+String(lastState?.stream_token||"")+":"+String(nativeCount):"none";
+  audioControl.hidden=!(useSidecar || useNative);
+  if(signature!==audioMenuSignature) {{
+    audioMenuSignature=signature;
     audioSelect.textContent="";
-    for(let i=0;i<count;i++) {{
-      const track=audioTracks[i];
-      const option=document.createElement("option");
-      option.value=String(i);
-      option.textContent=String(
-        track.label ||
-        track.language ||
-        "Audio "+String(i+1)
-      );
-      if(track.enabled) option.selected=true;
-      audioSelect.appendChild(option);
+    if(useSidecar) {{
+      const original=document.createElement("option");
+      original.value="original";
+      original.textContent="Original / default audio";
+      audioSelect.appendChild(original);
+      for(const row of options) {{
+        const option=document.createElement("option");
+        option.value="sidecar:"+String(row.index);
+        option.textContent=String(row.label||"Track "+String(Number(row.index)+1));
+        audioSelect.appendChild(option);
+      }}
+    }} else if(useNative) {{
+      for(let i=0;i<nativeCount;i++) {{
+        const track=nativeTracks[i];
+        const option=document.createElement("option");
+        option.value="native:"+String(i);
+        option.textContent=String(track.label||track.language||"Audio "+String(i+1));
+        audioSelect.appendChild(option);
+      }}
     }}
-    if(previous && Number(previous)<count) audioSelect.value=previous;
+  }}
+  if(audioSelect.options.length) {{
+    const requested=selectedAudioTrack;
+    const hasChoice=Array.from(audioSelect.options).some(option=>option.value===requested);
+    if(useSidecar) audioSelect.value=hasChoice?requested:"original";
+    else if(useNative) {{
+      const current=Array.from(nativeTracks).findIndex(track=>track.enabled);
+      audioSelect.value=hasChoice?requested:"native:"+String(Math.max(0,current));
+    }}
   }}
 }}
 function updatePlayerChrome() {{
@@ -4118,9 +4146,28 @@ async function syncCompatAudio(force=false) {{
   }}
 }}
 function applyCompatAudioState(s) {{
-  const required=!!(s?.audio_compat_required && s?.audio_compat_url);
   const token=String(s?.stream_token||"");
-  if(!required) {{
+  if(audioSelectionToken!==token) {{
+    audioSelectionToken=token;
+    selectedAudioTrack="original";
+    audioMenuSignature="";
+  }}
+  const options=Array.isArray(s?.audio_track_options)?s.audio_track_options:[];
+  let selectedUrl="";
+  if(selectedAudioTrack.startsWith("sidecar:") && s?.audio_track_url) {{
+    const track=Number(selectedAudioTrack.slice(8));
+    if(Number.isInteger(track) && options.some(row=>Number(row.index)===track)) {{
+      try {{
+        const url=new URL(s.audio_track_url,window.location.origin);
+        url.searchParams.set("track",String(track));
+        selectedUrl=url.pathname+url.search;
+      }} catch(_) {{}}
+    }}
+  }}
+  const required=!!(s?.audio_compat_required && s?.audio_compat_url);
+  const nextUrl=selectedUrl || (required?String(s.audio_compat_url):"");
+  const nextMode=token+":"+(selectedUrl?selectedAudioTrack:"original");
+  if(!nextUrl) {{
     if(compatAudioUrl) {{
       compatAudioUrl="";
       compatAudioToken="";
@@ -4129,13 +4176,13 @@ function applyCompatAudioState(s) {{
     }}
     return;
   }}
-  if(compatAudioToken!==token || !compatAudioUrl) {{
-    const tokenChanged=compatAudioToken!==token;
-    compatAudioToken=token;
-    compatAudioUrl=String(s.audio_compat_url||"");
-    const target=tokenChanged
-      ?Number(s.position_seconds||0)
-      :Number(video.currentTime||s.position_seconds||0);
+  if(compatAudioToken!==nextMode || !compatAudioUrl) {{
+    const changed=compatAudioToken!==nextMode;
+    compatAudioToken=nextMode;
+    compatAudioUrl=nextUrl;
+    const target=changed
+      ?Number(video.currentTime||s.position_seconds||0)
+      :Number(s.position_seconds||0);
     void restartCompatAudio(target,!video.paused);
   }}
 }}
@@ -4361,6 +4408,7 @@ function correctSyncedDrift(target) {{
 async function applyState(s) {{
   lastState=s;
   applyCompatAudioState(s);
+  refreshNativePlayerCapabilities();
   document.getElementById("title").textContent=s.title||(
     standaloneSession(s)?"Dank Cinema":(s.private?"Private Session":"Watch Party")
   );
@@ -5388,14 +5436,26 @@ document.getElementById("playbackSpeed").addEventListener("change",async event=>
   saveCinemaPreferences({{playback_speed:rate}});
 }});
 document.getElementById("audioTrack").addEventListener("change",event=>{{
-  const tracks=video.audioTracks;
-  if(!tracks || !tracks.length) return;
-  const selected=Number(event.target.value||0);
-  for(let i=0;i<tracks.length;i++) {{
-    try {{ tracks[i].enabled=i===selected; }} catch(_) {{}}
+  const value=String(event.target.value||"original");
+  if(value==="original" || value.startsWith("sidecar:")) {{
+    const options=Array.isArray(lastState?.audio_track_options)?lastState.audio_track_options:[];
+    if(value.startsWith("sidecar:") && !options.some(row=>"sidecar:"+String(row.index)===value)) return;
+    selectedAudioTrack=value;
+    applyCompatAudioState(lastState);
+    notice.textContent=value==="original"
+      ?"Using the original audio track.":"Switching this viewer to the selected audio track…";
+    refreshNativePlayerCapabilities();
+    return;
   }}
-  const track=tracks[selected];
-  preferredAudioLanguage=String(track?.language||track?.label||"");
+  if(!value.startsWith("native:")) return;
+  const tracks=video.audioTracks;
+  const index=Number(value.slice(7));
+  if(!tracks || !Number.isInteger(index) || index<0 || index>=tracks.length) return;
+  for(let i=0;i<tracks.length;i++) {{
+    try {{ tracks[i].enabled=i===index; }} catch(_) {{}}
+  }}
+  selectedAudioTrack=value;
+  preferredAudioLanguage=String(tracks[index]?.language||tracks[index]?.label||"");
   if(preferredAudioLanguage)
     saveCinemaPreferences({{default_audio_language:preferredAudioLanguage}});
   refreshNativePlayerCapabilities();
