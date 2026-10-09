@@ -1201,7 +1201,8 @@ def test_ffmpeg_audio_sidecar_transcodes_audio_only_to_fragmented_aac() -> None:
     )
 
     assert command[0] == "/usr/bin/ffmpeg"
-    assert "-re" in command
+    assert command[command.index("-readrate") + 1] == "2"
+    assert "-re" not in command
     assert "-ss" in command
     assert "91.250" in command
     assert ["-c:a", "aac"] == command[command.index("-c:a"):command.index("-c:a") + 2]
