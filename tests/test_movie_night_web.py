@@ -1475,7 +1475,7 @@ def test_dank_cinema_uses_ffmpeg_aac_sidecar_without_replacing_video_clock() -> 
     assert "function compatAudioActive()" in html
     assert "function restartCompatAudio(seconds, shouldPlay=false)" in html
     assert "function syncCompatAudio(force=false)" in html
-    assert "function startCompatAudioFromGesture(seconds, keepPlaying)" in html
+    assert "function startCompatAudioFromGesture(seconds, keepPlaying, forceRestart=false)" in html
     assert "s?.audio_compat_required && s?.audio_compat_url" in html
     assert "video.muted=true" in html
     assert "compatAudio.volume=target" in html
