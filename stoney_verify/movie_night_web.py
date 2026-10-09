@@ -903,7 +903,11 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
                 title = str(row.get("title") or "").strip()[:80]
                 codec = str(row.get("codec") or "").strip()[:24]
                 label = " • ".join(part for part in (language, title or codec) if part)
-                audio_track_options.append({"index": index, "label": label or f"Track {index + 1}"})
+                audio_track_options.append({
+                    "index": index,
+                    "label": label or f"Track {index + 1}",
+                    "language": language.lower(),
+                })
             if len(audio_track_options) > 1:
                 audio_track_url = torrent_manager.compat_audio_url(
                     session, ttl_seconds=21600, consumer_key=consumer_key,
@@ -1010,7 +1014,9 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "mode": room_mode,
         "private": private_mode,
         "standalone": standalone_mode,
-        "title": str(title or session_fallback_title),
+        # The release candidate may have a language/codec label as its title.
+        # Always prefer canonical catalog identity for the Theater heading.
+        "title": str(movie_metadata.get("title") or title or session_fallback_title),
         "movie": movie_metadata,
         "queue": queue_items,
         "release_source": source,
@@ -1708,7 +1714,7 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
 
 
 async def movie_night_preferences(request: web.Request) -> web.Response:
-    _room, uid = await _room_and_user(request)
+    room, uid = await _room_and_user(request)
     try:
         if request.method == "GET":
             row = await get_cinema_user(int(uid))
@@ -1719,16 +1725,26 @@ async def movie_night_preferences(request: web.Request) -> web.Response:
                 payload = {}
             if not isinstance(payload, dict):
                 payload = {}
-            row = await update_cinema_preferences(int(uid), payload)
+            row = await update_cinema_preferences(
+                int(uid), payload, guild_id=int(room.guild_id),
+            )
+    except InvalidCinemaState as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
     except CinemaStorageUnavailable as exc:
         raise web.HTTPServiceUnavailable(
             text="Cinema preferences are temporarily unavailable."
         ) from exc
-    return web.json_response(
-        {
-            "preferences": dict(row.get("preferences") or {}),
-        }
+    preferences = dict(row.get("preferences") or {})
+    guild_languages = preferences.get("audio_language_by_guild") or {}
+    language = (
+        str(guild_languages.get(str(int(room.guild_id))) or "")
+        if isinstance(guild_languages, dict) else ""
     )
+    return web.json_response({
+        "preferences": preferences,
+        "guild_audio_language": language,
+        "guild_id": int(room.guild_id),
+    })
 
 
 async def movie_night_queue_search(request: web.Request) -> web.Response:
