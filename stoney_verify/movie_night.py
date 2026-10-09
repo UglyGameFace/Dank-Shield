@@ -97,7 +97,7 @@ class MovieSourceVariant:
             try:
                 depth = int(video.get("bit_depth") or 0)
             except (TypeError, ValueError, OverflowError):
-                depth = 0
+                return 1
             return 0 if depth <= 8 else 1
         # WebM/VP8/VP9/AV1 and MP4/HEVC are browser-dependent. Neither
         # native playback nor a video-transcoding fallback is guaranteed.
