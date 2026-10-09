@@ -218,6 +218,7 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
         event="request",
         start=start,
         end=requested_end,
+        http_status=status_code,
     )
     try:
         plan = manager.prepare_playback_request(
