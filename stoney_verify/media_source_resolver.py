@@ -870,13 +870,13 @@ def _feed_playable_ref(value: Any, *, media_type: str = "") -> str:
     return _safe_source_ref(raw)
 
 
-_FEED_SIZE_RE = re.compile(r"^(\\d+(?:\\.\\d+)?)\\s*([KMGTPE]?i?B|bytes?)?$", re.IGNORECASE)
+_FEED_SIZE_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([KMGTPE]?i?B|bytes?)?$", re.IGNORECASE)
 
 
 def _feed_size_bytes(value: Any) -> int:
     """Normalize byte counts and human-readable sizes from RSS extensions.
 
-    Nyaa uses values such as \"1.1 GiB\" while Torznab commonly reports raw
+    Nyaa uses values such as "1.1 GiB" while Torznab commonly reports raw
     byte counts. Unrecognized units stay unknown rather than guessing a size.
     """
     match = _FEED_SIZE_RE.fullmatch(str(value or "").strip())
