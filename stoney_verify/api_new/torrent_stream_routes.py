@@ -420,7 +420,7 @@ async def torrent_audio_compat(request: web.Request) -> web.StreamResponse:
     selected_track = 0
     raw_track = request.query.get("track")
     if raw_track is not None:
-        if not str(raw_track).isascii() or not str(raw_track).isdigit():
+        if not (str(raw_track).isascii() and str(raw_track).isdigit() and len(str(raw_track)) <= 2):
             raise web.HTTPBadRequest(text="Invalid Cinema audio track.")
         selected_track = int(raw_track)
         verified = session.verified_metadata if isinstance(session.verified_metadata, dict) else {}
