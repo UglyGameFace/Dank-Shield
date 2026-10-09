@@ -2,6 +2,22 @@
 
 ## CURRENT ACTIVE TASK — CINEMA-AAC-AUDIO-STABILITY-20261009
 
+### October 9 continuation: AAC skipping / time drift after PR #487 deployment
+
+**Status:** Investigating and validating. PR #487 merged as `e4d0846a65b7e65fae776842f319ef3c6d9b8d7b` and Discloud `discloud/commit` confirmed successful Oct 9 22:03 UTC. New audio drift/skipping complaint is on that running production baseline. The previously fixed audio recovery UI is still part of the active task. No FORCE SWITCH was issued.
+
+**Branch:** `fix/478-cinema-sidecar-av-sync-20261009`, forked directly from confirmed Discloud branch `aaa-cinema-pre-pregateway-bind@e4d0846a65b7e65fae776842f319ef3c6d9b8d7b`. Production remains untouched.
+
+**Concrete code path and reproducible defect:** The HTML5 video emits `waiting` or `stalled` while `video.paused` may be false; the deployed handlers merely changed the notice text and did not pause the independent AAC sidecar. Its `currentTime` could therefore advance while video was buffering. The deployed `syncCompatAudio` then interpreted resulting drift greater than 2.5 seconds as a reason to discard the AAC source and launch a new FFmpeg transcode every eight seconds. Those source replacements can produce audible jumps. This is grounded in code, but the specific user's live media timing and FFmpeg output have not yet been inspected.
+
+**Scoped proposed behavior:** Treat video readiness, seeking, and buffering as authoritative for advancing the sidecar. Pause AAC on video `waiting`, `stalled` and `seeking`; resume only with a playable video clock. Eliminate periodic FFmpeg-source reloads for ordinary drift and use bounded audio playback-rate corrections. Preserve explicit seek re-anchor and per-viewer gesture recovery. Keep torrent provider, permissions, session signing, and audio-track routes unchanged.
+
+**No speculative throughput change:** An experimental change from FFmpeg `-re` to `-readrate 2` was immediately reverted before PR creation because no session evidence indicates faster-than-normal playback. Final branch should have no changes in the audio transcode backend.
+
+**Regression validation:** New `tests/test_cinema_av_clock_sync.py` executes actual rendered Theater handlers under Node to reproduce unpaused video stalls, prevent audio advancement, verify video recovery without source reload, test drift correction and one explicit seek re-anchor. Exact-head CI and live Android/desktop audible first-frame, stable speech sync over multiple minutes, seek and buffering, host/viewer are still required. Do not claim real playback fixed from mock tests alone.
+
+**Next:** Open scoped draft PR, run exact-head CI. Acquire live signed-session reproduction or safe browser diagnostics (video/audio clock, readyState, stalls, FFmpeg errors) before merging/deploying. If actual timing differs from the code-proven failure, revise the solution rather than layering timeouts.
+
 **Outcome:** Restore usable AAC compatibility audio and consistent per-viewer recovery controls without disrupting video, room synchronization, privacy, or existing source selection. Reported Carrie S01E01 video plays while audio is silent; the Enable audio control appears/disappears between adjacent browser screenshots.
 
 **Actual production branch baseline:** `aaa-cinema-pre-pregateway-bind@70356d1560e8047ddc1dc3dd9f698ee323f5c2ce`, confirmed Discloud successful commit status on Oct 9 UTC. Source differs from `main`: PR #483 added source-aware audio tracks and the Enable audio button to the production branch, not main. Do not substitute main or overwrite unrelated production work.
