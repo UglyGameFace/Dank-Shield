@@ -260,7 +260,37 @@ async def search_exact_episode_sources(
     except Exception:
         adult_enabled = False
     outcome = filter_adult_provider_results(outcome, enabled=adult_enabled)
-    return metadata, query, filter_outcome_for_catalog(outcome, metadata)
+    matched = filter_outcome_for_catalog(outcome, metadata)
+    if matched.variants or not series.year:
+        return metadata, query, matched
+
+    # Providers often omit the series premiere year from episode releases.
+    # Retry once without it, but retain the original canonical episode filter.
+    alternate_query = episode_search_query(
+        series.title,
+        episode.season_number,
+        episode.episode_number,
+    )
+    if alternate_query == query:
+        return metadata, query, matched
+    try:
+        alternate = await search_movie_sources(
+            int(guild_id),
+            alternate_query,
+            catalog_metadata=metadata,
+        )
+    except Exception:
+        # A failed optional lookup must not replace the original no-source
+        # outcome with an unrelated backend exception.
+        return metadata, query, matched
+    alternate = filter_adult_provider_results(alternate, enabled=adult_enabled)
+    alternate = filter_outcome_for_catalog(alternate, metadata)
+    if alternate.variants:
+        return metadata, alternate_query, alternate
+    return metadata, query, MediaSourceSearchOutcome(
+        variants=(),
+        errors=tuple((matched.errors + alternate.errors)[:20]),
+    )
 
 
 async def start_room_variant(
