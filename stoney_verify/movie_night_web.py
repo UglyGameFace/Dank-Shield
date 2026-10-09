@@ -5623,8 +5623,19 @@ async function loadCinemaPreferences() {{
   try {{
     const response=await jsonFetch("/movie/"+BOOT.roomId+"/preferences");
     cinemaPreferences=response.preferences||{{}};
-    preferredAudioLanguage=String(cinemaPreferences.default_audio_language||"");
+    preferredAudioLanguage=String(
+      response.guild_audio_language
+      ||cinemaPreferences.default_audio_language
+      ||""
+    );
+    audioPreferenceLoaded=true;
     preferredSubtitleLanguage=String(cinemaPreferences.default_subtitle_language||"");
+    syncAudioLanguageSelector();
+    if(lastState) {{
+      selectedAudioTrack=preferredTrackForLanguage(lastState);
+      applyCompatAudioState(lastState);
+      refreshNativePlayerCapabilities();
+    }}
     const quality=String(cinemaPreferences.visual_quality||"auto");
     if(["auto","high","standard","lite"].includes(quality)) {{
       qualitySelect.value=quality;
@@ -5645,13 +5656,29 @@ document.getElementById("playbackSpeed").addEventListener("change",async event=>
   await hostAction("speed",{{rate}});
   saveCinemaPreferences({{playback_speed:rate}});
 }});
+document.getElementById("audioLanguage").addEventListener("change",event=>{{
+  const chosen=String(event.target.value||"");
+  preferredAudioLanguage=chosen==="auto"?"":normalizedAudioLanguage(chosen);
+  saveCinemaPreferences({{guild_audio_language:preferredAudioLanguage||"auto"}});
+  if(!lastState) return;
+  selectedAudioTrack=preferredTrackForLanguage(lastState);
+  applyCompatAudioState(lastState,true);
+  refreshNativePlayerCapabilities();
+  if(preferredAudioLanguage && selectedAudioTrack==="original")
+    notice.textContent="This release does not offer your preferred audio language. Its original audio will be used.";
+}});
 document.getElementById("audioTrack").addEventListener("change",event=>{{
   const value=String(event.target.value||"original");
   if(value==="original" || value.startsWith("sidecar:")) {{
     const options=Array.isArray(lastState?.audio_track_options)?lastState.audio_track_options:[];
     if(value.startsWith("sidecar:") && !options.some(row=>"sidecar:"+String(row.index)===value)) return;
     selectedAudioTrack=value;
-    applyCompatAudioState(lastState);
+    const selected=options.find(row=>"sidecar:"+String(row.index)===value);
+    preferredAudioLanguage=value==="original"
+      ?"":normalizedAudioLanguage(selected?.language||selected?.label);
+    syncAudioLanguageSelector();
+    saveCinemaPreferences({{guild_audio_language:preferredAudioLanguage||"auto"}});
+    applyCompatAudioState(lastState,true);
     notice.textContent=value==="original"
       ?"Using the original audio track.":"Switching this viewer to the selected audio track…";
     refreshNativePlayerCapabilities();
@@ -5665,9 +5692,9 @@ document.getElementById("audioTrack").addEventListener("change",event=>{{
     try {{ tracks[i].enabled=i===index; }} catch(_) {{}}
   }}
   selectedAudioTrack=value;
-  preferredAudioLanguage=String(tracks[index]?.language||tracks[index]?.label||"");
-  if(preferredAudioLanguage)
-    saveCinemaPreferences({{default_audio_language:preferredAudioLanguage}});
+  preferredAudioLanguage=normalizedAudioLanguage(tracks[index]?.language||tracks[index]?.label);
+  syncAudioLanguageSelector();
+  saveCinemaPreferences({{guild_audio_language:preferredAudioLanguage||"auto"}});
   refreshNativePlayerCapabilities();
 }});
 window.addEventListener("resize",()=>{{
