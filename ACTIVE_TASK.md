@@ -1,5 +1,38 @@
 # Dank Shield Active Task
 
+## CURRENT ACTIVE TASK — DANK-CINEMA-PROVIDER-COMPAT-20261008
+
+**Outcome:** Verify the existing Add Search Provider / RSS Feed pipeline with Nyaa, and audit other anime, movie, and TV torrent provider formats for narrowly justified specialist support. Do not create a duplicate source resolver.
+
+**Active branch:** `fix/nyaa-anime-rss-size-validation-20261008` (based on `main@be65820e9bcf0ad7249a0c53b93062a6e3394b10`).
+
+**State:** One confirmed Nyaa RSS schema issue addressed on branch; targeted regression tests added, not yet green-validated against CI or Discloud runtime.
+
+### Execution path and findings
+
+- Admin Add Search Provider → `prepare_example_search_url` → guild registry → safe HTTP resolver `_search_one` → `_read_structured_items_limited` → `_extract_feed_items` for XML → `_feed_entry_to_item` → `_variant_from_item` → existing Cinema search/playback.
+- Nyaa exposes `page=rss&q={query}&c=1_2&f=0`. It must be configured as **Search Provider** to substitute user searches, not as a static RSS Feed.
+- Nyaa-style `nyaa:size` values (e.g. `1.1 GiB`) became zero because RSS numeric parsing used plain integer conversion. The shared feed parser now recognizes binary/decimal units; invalid values stay unknown. The existing Nyaa torrent link, infohash, seeders, leechers, and title extraction paths need no duplicate implementation.
+- Other anime/movie/TV provider formats under review: AniRena and Tokyo Toshokan RSS; Prowlarr/Jackett Torznab; YTS nested movie JSON; EZTV IMDb-driven TV JSON; APIBay infohash JSON; non-structured HTML-only sources. Credentialed headers/local-network indexers and incompatible response schemas require explicit support, not blind scraping or exposing secrets in URLs.
+
+### Changes / validation / cleanup
+
+- Changed only `stoney_verify/media_source_resolver.py` and `tests/test_media_source_resolver.py` for RSS size parsing and a Nyaa-style fixture.
+- Unit tests, exact-head CI, and production-origin Nyaa reachability: **pending validation**.
+- No Cinema playback/buffering/download-speed logic, token handling, provider registry compatibility, or startup logic changed.
+- Need final branch diff inspection, CI verification, and an external live feed/discloud canary before claiming complete end-to-end compatibility.
+
+### Suspended task checkpoint (do not resume without another explicit switch)
+
+**Prior active engineering task:** Fix false "Resumed playback"/ready affordance at roughly 10% torrent completion when pressing Play cannot start, and investigate unexpectedly low torrent download speed despite active/connected seeds. Root cause and runtime validation were not established in this task. Preserve whatever branch, work, and Discloud baseline supported that work; do not merge unrelated changes into this provider branch. Next upon authorized resumption: recover latest branch/PR and Discloud SHA, trace readiness and libtorrent throughput, test across browsers.
+
+### Backlog
+
+- Resume the suspended Cinema playback readiness and torrent throughput task only after the provider compatibility task meets its Definition of Done or an explicit FORCE SWITCH.
+- Provider-specific adapters identified by the API survey are tracked here as candidates, not automatically authorized changes without a concrete regression/requirement.
+
+---
+
 ## CURRENT ACTIVE TASK — DANK-SHIELD-GLOBAL-INTERACTION-OUTAGE
 
 **Outcome:** Restore Dank Shield process stability and Discord responsiveness across all guilds. Cinema feature work remains inactive until the shared production process is stable.

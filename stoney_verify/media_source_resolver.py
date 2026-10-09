@@ -7,6 +7,7 @@ import base64
 import ipaddress
 import json
 import re
+from decimal import Decimal, InvalidOperation
 import socket
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -869,6 +870,35 @@ def _feed_playable_ref(value: Any, *, media_type: str = "") -> str:
     return _safe_source_ref(raw)
 
 
+_FEED_SIZE_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([KMGTPE]?i?B|bytes?)?$", re.IGNORECASE)
+
+
+def _feed_size_bytes(value: Any) -> int:
+    """Normalize byte counts and human-readable sizes from RSS extensions.
+
+    Nyaa uses values such as "1.1 GiB" while Torznab commonly reports raw
+    byte counts. Unrecognized units stay unknown rather than guessing a size.
+    """
+    raw = str(value or "").strip()
+    if len(raw) > 48:
+        return 0
+    match = _FEED_SIZE_RE.fullmatch(raw)
+    if match is None:
+        return 0
+    unit = (match.group(2) or "B").casefold()
+    if unit in {"b", "byte", "bytes"}:
+        multiplier = 1
+    else:
+        power = "kmgtpe".find(unit[0]) + 1
+        if power <= 0:
+            return 0
+        multiplier = (1024 if "i" in unit else 1000) ** power
+    try:
+        return max(0, min(int(Decimal(match.group(1)) * multiplier), 2**63 - 1))
+    except (InvalidOperation, OverflowError, ValueError):
+        return 0
+
+
 def _feed_entry_to_item(entry: ET.Element) -> Mapping[str, Any]:
     item: dict[str, Any] = {
         "title": "",
@@ -900,7 +930,7 @@ def _feed_entry_to_item(entry: ET.Element) -> Mapping[str, Any]:
             set_source(value)
         elif name in {"size", "filesize", "contentlength", "length"}:
             if not item["file_size"]:
-                item["file_size"] = _safe_int(value)
+                item["file_size"] = _feed_size_bytes(value)
         elif name in {"seed", "seeds", "seeders"}:
             item["seeds"] = max(int(item["seeds"]), _safe_int(value))
         elif name in {"leech", "leeches", "leechers"}:
@@ -982,7 +1012,7 @@ def _feed_entry_to_item(entry: ET.Element) -> Mapping[str, Any]:
             media_type = str(child.attrib.get("type") or "")
             set_source(candidate, media_type=media_type)
             if not item["file_size"]:
-                item["file_size"] = _safe_int(
+                item["file_size"] = _feed_size_bytes(
                     child.attrib.get("length") or child.attrib.get("size")
                 )
             continue
