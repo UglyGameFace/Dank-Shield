@@ -2,34 +2,40 @@
 
 ## CURRENT ACTIVE TASK — DANK-CINEMA-PROVIDER-COMPAT-20261008
 
-**Outcome:** Verify the existing Add Search Provider / RSS Feed pipeline with Nyaa, and audit other anime, movie, and TV torrent provider formats for narrowly justified specialist support. Do not create a duplicate source resolver.
+**Outcome:** Validate the existing Nyaa/structured-provider pipeline without duplicate adapters and repair demonstrated episode-query incompatibility, while preserving canonical media identity and all existing playback/Discord behavior.
 
-**Active branch:** `fix/nyaa-anime-rss-size-validation-20261008` (based on `main@be65820e9bcf0ad7249a0c53b93062a6e3394b10`).
+**Active continuation branch:** `fix/cinema-episode-search-year-fallback-20261009` (from `main@a6aa8d4b02e0720f50a8b80fc232136b5b522960`).
 
-**State:** One confirmed Nyaa RSS schema issue addressed on branch; targeted regression tests added, not yet green-validated against CI or Discloud runtime.
+**Status:** PR #484 (Nyaa RSS size parsing) merged to main; its PR-head workflows passed. Production deployment of that size change is not verified. User screenshot confirms live Nyaa and ThePirateBay results for a Bleach movie, not universal TV episode availability. This branch adds a single episode-query fallback plus three regression tests. Exact-head CI and Discloud/browser acceptance are pending.
 
-### Execution path and findings
+### Scope / execution path / root cause
 
-- Admin Add Search Provider → `prepare_example_search_url` → guild registry → safe HTTP resolver `_search_one` → `_read_structured_items_limited` → `_extract_feed_items` for XML → `_feed_entry_to_item` → `_variant_from_item` → existing Cinema search/playback.
-- Nyaa exposes `page=rss&q={query}&c=1_2&f=0`. It must be configured as **Search Provider** to substitute user searches, not as a static RSS Feed.
-- Nyaa-style `nyaa:size` values (e.g. `1.1 GiB`) became zero because RSS numeric parsing used plain integer conversion. The shared feed parser now recognizes binary/decimal units; invalid values stay unknown. The existing Nyaa torrent link, infohash, seeders, leechers, and title extraction paths need no duplicate implementation.
-- Other anime/movie/TV provider formats under review: AniRena and Tokyo Toshokan RSS; Prowlarr/Jackett Torznab; YTS nested movie JSON; EZTV IMDb-driven TV JSON; APIBay infohash JSON; non-structured HTML-only sources. Credentialed headers/local-network indexers and incompatible response schemas require explicit support, not blind scraping or exposing secrets in URLs.
+- Existing Admin Add Search Provider → `prepare_example_search_url` → guild config registry → `search_movie_sources` → safe provider HTTP/RSS/JSON resolver → `search_exact_episode_sources` → `filter_outcome_for_catalog` → canonical room playback.
+- Nyaa RSS reports human-readable sizes (e.g. `1.1 GiB`); the shared parser now normalizes them following PR #484 without a Nyaa-only duplicate parser.
+- For TV episodes, `episode_search_query` adds the series premiere year, while `episode_release_matches` already allows correctly identified episodes whose release names omit that year. Search providers and RSS title matching can therefore return zero before the canonical matcher sees otherwise-valid candidates.
+- A year-free retry is attempted only after the year-qualified exact search yields no accepted releases, and only when a premiere year exists. The canonical series/season/episode/adult filter is retained. No change to movie search, direct playback, provider credentials, torrent speed, streaming runtime, or storage.
 
-### Changes / validation / cleanup
+### Changes / validation
 
-- Changed only `stoney_verify/media_source_resolver.py` and `tests/test_media_source_resolver.py` for RSS size parsing and a Nyaa-style fixture.
-- Unit tests, exact-head CI, and production-origin Nyaa reachability: **pending validation**.
-- No Cinema playback/buffering/download-speed logic, token handling, provider registry compatibility, or startup logic changed.
-- Need final branch diff inspection, CI verification, and an external live feed/discloud canary before claiming complete end-to-end compatibility.
+- `stoney_verify/cinema_playback_service.py`: bounded yearless episode-provider retry; do not mask an original no-source result if the optional second request raises.
+- `tests/test_cinema_full_platform.py`: coverage for recovery of yearless SxxExx, avoiding a second request on a successful first query, and rejecting a wrong episode after a broader search.
+- Current branch vs main: exactly these two runtime/test files plus this active task record. No automatic Discloud deployment.
+- Static execution path reviewed; CI tests, full suite, cross-browser live playback, network reachability and Discloud exact-head acceptance still pending.
 
-### Suspended task checkpoint (do not resume without another explicit switch)
+### Cleanup / conflicts / limitations
 
-**Prior active engineering task:** Fix false "Resumed playback"/ready affordance at roughly 10% torrent completion when pressing Play cannot start, and investigate unexpectedly low torrent download speed despite active/connected seeds. Root cause and runtime validation were not established in this task. Preserve whatever branch, work, and Discloud baseline supported that work; do not merge unrelated changes into this provider branch. Next upon authorized resumption: recover latest branch/PR and Discloud SHA, trace readiness and libtorrent throughput, test across browsers.
+- No competing source resolver, new provider type, alternative session model, database migration, startup change or auth workaround.
+- This addresses a deterministic query inconsistency; it does not prove why every title reported unavailable in production. Pending live logs could reveal additional provider failures.
+- Name/year ambiguity for identically named series, anime numbering conventions, native-script release titles, artwork gaps, and mobile size/codec ranking require separate carefully scoped work after this active task finishes.
+- Do not merge into the existing Discloud Auto Deploy branch until reviewed and tested. Do not reset configured sources.
 
-### Backlog
+### Suspended work / backlog
 
-- Resume the suspended Cinema playback readiness and torrent throughput task only after the provider compatibility task meets its Definition of Done or an explicit FORCE SWITCH.
-- Provider-specific adapters identified by the API survey are tracked here as candidates, not automatically authorized changes without a concrete regression/requirement.
+- Prior Cinema task: misleading resumed/ready state at low torrent completion and unexpectedly low actual download throughput despite seeds. Preserve its checkpoint; resume only after this task reaches its Definition of Done or authorized FORCE SWITCH.
+- Anime metadata/poster source matching (TMDB + identity-verified anime catalog), bounded cached artwork, feed placeholder handling, and mobile-aware automatic source ranking remain backlog, not mixed into this patch.
+- Other provider formats surveyed: AniRena/Tokyo Toshokan RSS; Torznab (Jackett/Prowlarr); YTS, EZTV IMDb lookup, APIBay; external/private indexers requiring auth or non-structured HTML are not assumed compatible.
+
+**Next step:** Open draft PR, run exact-head CI and inspect the final diff. After successful validation, arrange controlled promotion to the existing Discloud branch, then test an authorized exact TV episode and verify both first-frame playback and the live no-source diagnostics.
 
 ---
 

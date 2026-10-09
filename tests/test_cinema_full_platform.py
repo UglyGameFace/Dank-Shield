@@ -269,6 +269,159 @@ def test_episode_provider_filter_keeps_only_canonical_episode() -> None:
     assert filtered.errors
 
 
+def test_episode_source_search_recovers_yearless_release_without_wrong_episode(monkeypatch) -> None:
+    series = _series()
+    episode = _episode()
+    requests = []
+    good = ResolvedMediaVariant(
+        title="Example.Show.S03E07.1080p.WEB-DL",
+        source_id="sample",
+        source_label="Sample",
+        source_ref="magnet:?xt=urn:btih:" + "a" * 40,
+        file_size=2_000_000_000,
+        seeds=20,
+        leechers=2,
+        peers=22,
+        metadata={},
+    )
+    wrong_episode = ResolvedMediaVariant(
+        title="Example.Show.S03E08.1080p.WEB-DL",
+        source_id="sample",
+        source_label="Sample",
+        source_ref="magnet:?xt=urn:btih:" + "b" * 40,
+        file_size=2_000_000_000,
+        seeds=100,
+        leechers=2,
+        peers=102,
+        metadata={},
+    )
+    wrong_year = ResolvedMediaVariant(
+        title="Example.Show.2005.S03E07.1080p.WEB-DL",
+        source_id="sample",
+        source_label="Sample",
+        source_ref="magnet:?xt=urn:btih:" + "c" * 40,
+        file_size=2_000_000_000,
+        seeds=80,
+        leechers=2,
+        peers=82,
+        metadata={},
+    )
+
+    async def catalog_details(_kind, _tmdb_id):
+        return CinemaDetails(media=series)
+
+    async def preferences(_guild_id, *, refresh=False):
+        return {}, SimpleNamespace(adult_content_enabled=False)
+
+    async def search(_guild_id, query, *, catalog_metadata):
+        requests.append((query, catalog_metadata["series_id"]))
+        if len(requests) == 1:
+            return MediaSourceSearchOutcome(
+                variants=(),
+                errors=("Sample: no playable results for this search.",),
+            )
+        return MediaSourceSearchOutcome(variants=(wrong_episode, wrong_year, good))
+
+    monkeypatch.setattr(cinema_playback_service, "get_details", catalog_details)
+    monkeypatch.setattr(cinema_playback_service, "load_movie_night_preferences", preferences)
+    monkeypatch.setattr(cinema_playback_service, "search_movie_sources", search)
+
+    metadata, query, result = asyncio.run(
+        cinema_playback_service.search_exact_episode_sources(
+            123,
+            series=series,
+            episode=episode,
+        )
+    )
+    assert metadata["tmdb_id"] == episode.tmdb_id
+    assert requests == [
+        ("Example Show 2026 S03E07", series.tmdb_id),
+        ("Example Show S03E07", series.tmdb_id),
+    ]
+    assert query == "Example Show S03E07"
+    assert result.variants == (good,)
+
+
+def test_episode_source_search_skips_yearless_retry_when_primary_is_playable(monkeypatch) -> None:
+    calls = []
+    series = _series()
+    good = ResolvedMediaVariant(
+        title="Example.Show.2026.S03E07.1080p",
+        source_id="sample",
+        source_label="Sample",
+        source_ref="magnet:?xt=urn:btih:" + "d" * 40,
+        file_size=1_000_000_000,
+        seeds=5,
+        leechers=1,
+        peers=6,
+        metadata={},
+    )
+
+    async def search(_guild_id, query, *, catalog_metadata):
+        calls.append(query)
+        return MediaSourceSearchOutcome(variants=(good,))
+
+    async def preferences(_guild_id, *, refresh=False):
+        return {}, SimpleNamespace(adult_content_enabled=False)
+
+    async def catalog_details(_kind, _tmdb_id):
+        return CinemaDetails(media=series)
+
+    monkeypatch.setattr(cinema_playback_service, "get_details", catalog_details)
+    monkeypatch.setattr(cinema_playback_service, "load_movie_night_preferences", preferences)
+    monkeypatch.setattr(cinema_playback_service, "search_movie_sources", search)
+
+    _metadata, query, result = asyncio.run(
+        cinema_playback_service.search_exact_episode_sources(
+            123, series=series, episode=_episode(),
+        )
+    )
+    assert calls == ["Example Show 2026 S03E07"]
+    assert query == calls[0]
+    assert result.variants == (good,)
+
+
+def test_episode_source_search_yearless_retry_does_not_accept_wrong_episode(monkeypatch) -> None:
+    calls = []
+    series = _series()
+    wrong = ResolvedMediaVariant(
+        title="Example.Show.S03E08.1080p",
+        source_id="sample",
+        source_label="Sample",
+        source_ref="magnet:?xt=urn:btih:" + "e" * 40,
+        file_size=1_000_000_000,
+        seeds=100,
+        leechers=1,
+        peers=101,
+        metadata={},
+    )
+
+    async def search(_guild_id, query, *, catalog_metadata):
+        calls.append(query)
+        if len(calls) == 1:
+            return MediaSourceSearchOutcome(variants=())
+        return MediaSourceSearchOutcome(variants=(wrong,))
+
+    async def preferences(_guild_id, *, refresh=False):
+        return {}, SimpleNamespace(adult_content_enabled=False)
+
+    async def catalog_details(_kind, _tmdb_id):
+        return CinemaDetails(media=series)
+
+    monkeypatch.setattr(cinema_playback_service, "get_details", catalog_details)
+    monkeypatch.setattr(cinema_playback_service, "load_movie_night_preferences", preferences)
+    monkeypatch.setattr(cinema_playback_service, "search_movie_sources", search)
+
+    _metadata, _query, result = asyncio.run(
+        cinema_playback_service.search_exact_episode_sources(
+            123, series=series, episode=_episode(),
+        )
+    )
+    assert len(calls) == 2
+    assert result.variants == ()
+    assert "none matched" in " ".join(result.errors).lower()
+
+
 def test_catalog_search_ranks_exact_tv_title_before_fuzzy_variants(monkeypatch) -> None:
     async def request(_path, *, params=None, cache_ttl=0.0):
         _ = params, cache_ttl
