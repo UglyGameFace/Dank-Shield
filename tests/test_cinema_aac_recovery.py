@@ -28,7 +28,7 @@ def _player_script() -> str:
     end = html.index("function scheduleCompatAudioRestart(", start)
     gesture = html[start:end]
     start = html.index("async function syncCompatAudio(force=false) {")
-    end = html.index("function applyCompatAudioState(s)", start)
+    end = html.index("function normalizedAudioLanguage(value)", start)
     sync = html[start:end]
     return json.dumps({"refresh": refresh, "clock": clock, "gesture": gesture, "sync": sync})
 
