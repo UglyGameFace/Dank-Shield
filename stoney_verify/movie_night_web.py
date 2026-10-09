@@ -4039,7 +4039,7 @@ function streamHealthLabel(s) {{
   if(video.error) return "Media error";
   if(
     s.video_verified && browserVideoCapability(s).supported===false
-    && !startupTrace.events.first_frame
+    && startupTrace.events.first_frame===undefined
   ) return "Browser may not support this video codec";
   if(s.state==="buffering") return "Preparing stream";
   if(video.seeking) return "Seeking to playback position";
@@ -4049,7 +4049,7 @@ function streamHealthLabel(s) {{
   if(s.state==="playing" && !video.paused) {{
     if(
       typeof video.requestVideoFrameCallback==="function"
-      && !startupTrace.events.first_frame
+      && startupTrace.events.first_frame===undefined
     ) return "Waiting for first video frame";
     return "Video playing";
   }}
