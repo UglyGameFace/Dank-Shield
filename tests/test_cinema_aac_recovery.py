@@ -95,15 +95,16 @@ vm.runInContext(snippets.refresh, ctx);
 ctx.refreshAudioPermissionControl();
 
 // A transient `paused` flip is not a reason for the recovery button to vanish.
-assert.equal(control.hidden, false);
-assert.equal(button.textContent, "Enable audio");
+assert.equal(control.hidden, true, "Normal playback must not demand audio permission");
+assert.equal(button.textContent, "Restore audio");
 audio.paused = false;
 ctx.refreshAudioPermissionControl();
-assert.equal(control.hidden, false);
-assert.equal(button.textContent, "Restart audio");
+assert.equal(control.hidden, true, "Playing audio has no permission prompt");
+assert.equal(button.textContent, "Restore audio");
 ctx.compatAudioNeedsGesture = true;
 ctx.refreshAudioPermissionControl();
-assert.equal(button.textContent, "Enable audio");
+assert.equal(control.hidden, false, "Show recovery only after actual gesture failure");
+assert.equal(button.textContent, "Restore audio");
 ctx.userMuted = true;
 ctx.refreshAudioPermissionControl();
 assert.equal(control.hidden, true);
@@ -160,8 +161,8 @@ vm.runInContext(snippets.sync, ctx);
   const priorExplicitRestart = loads;
   assert.equal(await ctx.startCompatAudioFromGesture(3, true, true), true);
   assert.equal(loads, priorExplicitRestart + 1, "Restart audio must reload AAC");
-  assert.equal(control.hidden, false, "AAC recovery action stays visible after playback");
-  assert.equal(button.textContent, "Restart audio", "Playing audio offers a real restart action");
+  assert.equal(control.hidden, true, "Successful AAC playback needs no recovery prompt");
+  assert.equal(button.textContent, "Restore audio");
   process.stdout.write("AAC recovery behavior verified\n");
 })().catch(error => {
   process.stderr.write(String(error.stack || error) + "\n");
@@ -197,7 +198,7 @@ def test_original_sidecar_error_awaits_user_retry_instead_of_rearming_on_poll() 
     assert 'refreshAudioPermissionControl();' in handler
     assert 'Preserve the signed URL and mode for an explicit retry.' in handler
     assert 'Browser blocked AAC audio. Tap Enable audio' in html
-    assert 'control.hidden=!(compatAudioActive() && !userMuted)' in html
+    assert 'control.hidden=!(compatAudioActive() && !userMuted && compatAudioNeedsGesture)' in html
 
 
 def test_volume_and_unmute_are_direct_audio_permission_gestures() -> None:
