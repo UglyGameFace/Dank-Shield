@@ -3221,6 +3221,9 @@ let compatAudioOffset=0;
 let compatAudioRestartAt=0;
 let compatAudioLastSyncAt=0;
 let compatAudioRestartTimer=null;
+let compatAudioNeedsGesture=false;
+let compatAudioStartPending=false;
+let compatAudioStartSequence=0;
 const AUDIO_STORAGE_KEY="dank-cinema-audio:"+BOOT.uid;
 let userMuted=false;
 let preferredVolume=1;
@@ -3572,7 +3575,12 @@ function renderStartupDiagnostics(server={{}}) {{
 }}
 function refreshAudioPermissionControl() {{
   const control=document.getElementById("enableAudioControl");
-  control.hidden=!(compatAudioActive() && !userMuted && !video.paused && compatAudio.paused);
+  const button=document.getElementById("enableAudio");
+  // The paused flag can flip during loading and FFmpeg restarts without
+  // confirming audible output. Keep the real recovery action discoverable.
+  control.hidden=!(compatAudioActive() && !userMuted);
+  button.textContent=compatAudio.paused || compatAudioNeedsGesture
+    ?"Enable audio":"Restart audio";
 }}
 function refreshNativePlayerCapabilities() {{
   const pip=document.getElementById("pip");
@@ -4077,11 +4085,17 @@ function stopCompatAudio() {{
   compatAudio.removeAttribute("src");
   try {{ compatAudio.load(); }} catch(_) {{}}
   compatAudioOffset=0;
+  compatAudioStartSequence++;
+  compatAudioStartPending=false;
+  compatAudioNeedsGesture=false;
 }}
 async function restartCompatAudio(seconds, shouldPlay=false) {{
   if(!compatAudioUrl) return false;
   const target=Math.max(0,Number(seconds||0));
+  const sequence=++compatAudioStartSequence;
   compatAudioRestartAt=Date.now();
+  compatAudioStartPending=Boolean(shouldPlay && !userMuted);
+  compatAudioNeedsGesture=false;
   try {{ compatAudio.pause(); }} catch(_) {{}}
   compatAudioOffset=target;
   compatAudio.src=compatAudioTargetUrl(target);
@@ -4090,41 +4104,70 @@ async function restartCompatAudio(seconds, shouldPlay=false) {{
   if(shouldPlay && !userMuted) {{
     try {{
       await compatAudio.play();
+      if(sequence!==compatAudioStartSequence) return false;
+      compatAudioStartPending=false;
+      refreshAudioPermissionControl();
       return true;
-    }} catch(_) {{
-      notice.textContent="Browser blocked AAC audio. Tap Enable audio in Advanced Stream Details.";
+    }} catch(error) {{
+      if(sequence!==compatAudioStartSequence) return false;
+      compatAudioStartPending=false;
+      compatAudioNeedsGesture=true;
+      notice.textContent=error?.name==="NotAllowedError"
+        ?"Browser blocked AAC audio. Tap Enable audio in Advanced Stream Details."
+        :"AAC audio did not start. Tap Enable audio in Advanced Stream Details to retry.";
+      refreshAudioPermissionControl();
       return false;
     }}
   }}
+  refreshAudioPermissionControl();
   return true;
 }}
 function startCompatAudioFromGesture(seconds, keepPlaying) {{
   if(!compatAudioUrl || userMuted) return Promise.resolve(true);
   const target=Math.max(0,Number(seconds||0));
-  compatAudioRestartAt=Date.now();
-  try {{ compatAudio.pause(); }} catch(_) {{}}
-  compatAudioOffset=target;
-  compatAudio.src=compatAudioTargetUrl(target);
-  try {{ compatAudio.load(); }} catch(_) {{}}
+  const sequence=++compatAudioStartSequence;
+  compatAudioStartPending=true;
+  compatAudioNeedsGesture=false;
+  // Do not destroy a loaded sidecar merely to unlock it. On mobile, repeated
+  // src/load() swaps interrupt the play() promise and create new transcodes.
+  const drift=Math.abs(compatAudioClock()-target);
+  if(!compatAudio.getAttribute("src") || drift>2.5) {{
+    compatAudioRestartAt=Date.now();
+    try {{ compatAudio.pause(); }} catch(_) {{}}
+    compatAudioOffset=target;
+    compatAudio.src=compatAudioTargetUrl(target);
+    try {{ compatAudio.load(); }} catch(_) {{}}
+  }}
   applyUserAudioState(true);
 
-  // This play() must be created synchronously inside the user's Tap to Sync /
-  // Play gesture. Waiting for heartbeat or state polling first loses mobile
-  // autoplay permission on Samsung/Chromium.
+  // This play() must be issued synchronously in the user's click gesture.
   let playPromise;
   try {{
     playPromise=compatAudio.play();
-  }} catch(_) {{
+  }} catch(error) {{
+    compatAudioStartPending=false;
+    compatAudioNeedsGesture=true;
+    refreshAudioPermissionControl();
     return Promise.resolve(false);
   }}
   return Promise.resolve(playPromise).then(
     ()=>{{
+      if(sequence!==compatAudioStartSequence) return false;
+      compatAudioStartPending=false;
+      compatAudioNeedsGesture=false;
       if(!keepPlaying) {{
         try {{ compatAudio.pause(); }} catch(_) {{}}
       }}
+      refreshAudioPermissionControl();
       return true;
     }},
-    ()=>false,
+    (error)=>{{
+      if(sequence!==compatAudioStartSequence) return false;
+      compatAudioStartPending=false;
+      compatAudioNeedsGesture=true;
+      refreshAudioPermissionControl();
+      return false;
+    }},
   );
 }}
 function scheduleCompatAudioRestart(seconds, shouldPlay=!video.paused) {{
@@ -4136,18 +4179,18 @@ function scheduleCompatAudioRestart(seconds, shouldPlay=!video.paused) {{
   }},140);
 }}
 async function syncCompatAudio(force=false) {{
-  if(!compatAudioUrl) return;
+  if(!compatAudioUrl || userMuted || compatAudioNeedsGesture || compatAudioStartPending) return;
   const now=Date.now();
   if(!force && now-compatAudioLastSyncAt<900) return;
   compatAudioLastSyncAt=now;
   const target=Number(video.currentTime||0);
   const drift=Math.abs(compatAudioClock()-target);
-  if(
-    force ||
-    !compatAudio.getAttribute("src") ||
-    drift>1.35
-  ) {{
-    if(now-compatAudioRestartAt>750)
+  // Video can advance while the AAC stream is still buffering. Reloading its
+  // source on every timeupdate aborts the pending play and restarts FFmpeg.
+  const hasSource=!!compatAudio.getAttribute("src");
+  const canCorrectDrift=compatAudio.readyState>=2 && drift>2.5;
+  if(!hasSource || canCorrectDrift) {{
+    if(now-compatAudioRestartAt>8000)
       await restartCompatAudio(target,!video.paused);
     return;
   }}
@@ -4155,7 +4198,12 @@ async function syncCompatAudio(force=false) {{
   if(video.paused) {{
     if(!compatAudio.paused) compatAudio.pause();
   }} else if(compatAudio.paused && !userMuted) {{
-    try {{ await compatAudio.play(); }} catch(_) {{}}
+    try {{ await compatAudio.play(); }}
+    catch(_) {{
+      compatAudioNeedsGesture=true;
+      notice.textContent="Browser could not start AAC audio automatically. Tap Enable audio in Advanced Stream Details.";
+      refreshAudioPermissionControl();
+    }}
   }}
 }}
 function applyCompatAudioState(s) {{
@@ -5115,8 +5163,8 @@ document.getElementById("enableAudio").onclick=async()=>{{
       Number(video.currentTime||lastState?.position_seconds||0),!video.paused
     );
     notice.textContent=started
-      ?"Audio enabled for this viewer."
-      :"Browser blocked compatibility audio. Tap Enable audio again.";
+      ?"AAC output started. If sound is missing, try Restart audio or check device volume."
+      :"AAC output could not start. Tap Enable audio to retry.";
   }} finally {{
     button.disabled=false;
     refreshAudioPermissionControl();
@@ -5125,17 +5173,28 @@ document.getElementById("enableAudio").onclick=async()=>{{
 compatAudio.addEventListener("error",()=>{{
   if(!compatAudioUrl) return;
   const wasAlternate=selectedAudioTrack.startsWith("sidecar:");
-  compatAudioUrl="";
-  compatAudioToken="";
-  stopCompatAudio();
+  if(wasAlternate) {{
+    compatAudioUrl="";
+    compatAudioToken="";
+    stopCompatAudio();
+  }} else {{
+    // Preserve the signed URL and mode for an explicit retry. A state poll
+    // must not continuously recreate a broken transcode stream.
+    compatAudioStartSequence++;
+    compatAudioStartPending=false;
+    try {{ compatAudio.pause(); }} catch(_) {{}}
+    compatAudio.removeAttribute("src");
+  }}
   if(wasAlternate) {{
     selectedAudioTrack="original";
     applyCompatAudioState(lastState);
     refreshNativePlayerCapabilities();
     notice.textContent="That audio track failed. Reverted to original audio.";
   }} else {{
+    compatAudioNeedsGesture=true;
     applyUserAudioState(true);
-    notice.textContent="AAC compatibility audio failed. The original source may be silent on this browser.";
+    refreshAudioPermissionControl();
+    notice.textContent="AAC compatibility audio failed. Tap Enable audio to retry the original track.";
   }}
 }});
 applyUserAudioState(false);
