@@ -36,6 +36,7 @@ from stoney_verify.cinema_media_identity import (
 )
 from stoney_verify.cinema_library_service import (
     CinemaStorageUnavailable,
+    InvalidCinemaState,
     get_cinema_user,
     get_media_state,
     notify_watch_party_invite,
