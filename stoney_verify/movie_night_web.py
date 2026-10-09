@@ -3037,6 +3037,7 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
       <div class="stat"><b>Buffer target</b><span id="buffer">—</span></div>
       <div class="stat"><b>Server startup</b><span id="serverStartup">—</span></div>
       <div class="stat"><b>Browser startup</b><span id="browserStartup">—</span></div>
+      <div class="stat"><b>Playback timing</b><span id="audioClockStatus">Waiting for video</span></div>
     </div>
     <div class="quality-control">
       <label for="qualityMode">Visual quality</label>
@@ -3985,7 +3986,26 @@ function streamHealthLabel(s) {{
   if(s.state==="playing") return "Waiting for browser playback";
   return "Video ready to play";
 }}
+function renderAudioClockDiagnostics() {{
+  const element=document.getElementById("audioClockStatus");
+  if(!element) return;
+  const videoTime=Number(video.currentTime||0);
+  const videoState=video.seeking?"seeking":videoClockBuffering||video.readyState<3
+    ?"buffering":video.paused?"paused":"advancing";
+  if(!compatAudioActive()) {{
+    element.textContent="Video "+videoState+" • embedded audio";
+    return;
+  }}
+  const audioTime=compatAudioClock();
+  const drift=audioTime-videoTime;
+  const audioState=compatAudioNeedsGesture?"blocked":compatAudio.error?"error":
+    compatAudio.paused?"paused":compatAudio.readyState<2?"buffering":"playing";
+  element.textContent="Video "+fmtClock(videoTime)+" ("+videoState+") • AAC "+
+    fmtClock(audioTime)+" ("+audioState+") • drift "+
+    (drift>=0?"+":"")+drift.toFixed(2)+"s";
+}}
 function refreshStreamHealth() {{
+  renderAudioClockDiagnostics();
   const element=document.getElementById("healthText");
   if(element && lastState)
     element.textContent="Stream Health: "+streamHealthLabel(lastState);
@@ -6262,8 +6282,10 @@ video.addEventListener("loadedmetadata",()=>{{
 video.addEventListener("durationchange",updatePlayerChrome);
 video.addEventListener("timeupdate",()=>{{
   updatePlayerChrome();
+  renderAudioClockDiagnostics();
   if(compatAudioActive()) void syncCompatAudio(false);
 }});
+compatAudio.addEventListener("timeupdate",renderAudioClockDiagnostics);
 video.addEventListener("ratechange",()=>{{
   if(compatAudioActive()) {{
     try {{ compatAudio.playbackRate=Number(video.playbackRate||1); }} catch(_) {{}}
