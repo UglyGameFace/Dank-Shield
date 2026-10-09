@@ -4191,16 +4191,6 @@ function applyCompatAudioState(s) {{
   }}
 }}
 
-compatAudio.addEventListener("error",()=>{{
-  if(selectedAudioTrack.startsWith("sidecar:")) {{
-    selectedAudioTrack="original";
-    applyCompatAudioState(lastState);
-    refreshNativePlayerCapabilities();
-    notice.textContent="That audio track could not start. Reverted to the original audio.";
-  }} else if(compatAudioActive()) {{
-    notice.textContent="The AAC compatibility audio failed. Try another playable source.";
-  }}
-}});
 function attachStream(url, force=false) {{
   const clean=String(url||"");
   if(!clean) return;
@@ -5104,11 +5094,19 @@ video.addEventListener("volumechange",syncVolumeControls);
 compatAudio.addEventListener("volumechange",syncVolumeControls);
 compatAudio.addEventListener("error",()=>{{
   if(!compatAudioUrl) return;
+  const wasAlternate=selectedAudioTrack.startsWith("sidecar:");
   compatAudioUrl="";
   compatAudioToken="";
   stopCompatAudio();
-  applyUserAudioState(true);
-  notice.textContent="AAC compatibility audio could not start. Trying the source audio instead.";
+  if(wasAlternate) {{
+    selectedAudioTrack="original";
+    applyCompatAudioState(lastState);
+    refreshNativePlayerCapabilities();
+    notice.textContent="That audio track failed. Reverted to original audio.";
+  }} else {{
+    applyUserAudioState(true);
+    notice.textContent="AAC compatibility audio failed. The original source may be silent on this browser.";
+  }}
 }});
 applyUserAudioState(false);
 document.getElementById("pip").onclick=async()=>{{
