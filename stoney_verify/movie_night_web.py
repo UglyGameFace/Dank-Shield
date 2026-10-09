@@ -4268,6 +4268,38 @@ async function syncCompatAudio(force=false) {{
     ?1:Math.max(0.88,Math.min(1.12,1+drift*0.07));
   try {{ compatAudio.playbackRate=baseRate*correction; }} catch(_) {{}}
 }}
+function normalizedAudioLanguage(value) {{
+  const raw=String(value||"").trim().toLowerCase().split(/[\\s•,]/)[0].replace(/_/g,"-");
+  const first=raw.split("-")[0];
+  const aliases={{
+    eng:"en",english:"en",por:"pt",portuguese:"pt",spa:"es",spanish:"es",
+    fre:"fr",fra:"fr",french:"fr",ger:"de",deu:"de",german:"de",
+    ita:"it",italian:"it",jpn:"ja",japanese:"ja",kor:"ko",korean:"ko",
+    hin:"hi",hindi:"hi",chi:"zh",zho:"zh",chinese:"zh",
+  }};
+  return aliases[first] || (first.length===2?first:"");
+}}
+function preferredTrackForLanguage(s) {{
+  const language=normalizedAudioLanguage(preferredAudioLanguage);
+  if(!language) return "original";
+  const rows=Array.isArray(s?.audio_track_options)?s.audio_track_options:[];
+  const track=rows.find(row=>
+    normalizedAudioLanguage(row.language||row.label)===language
+  );
+  return track?"sidecar:"+String(track.index):"original";
+}}
+function syncAudioLanguageSelector() {{
+  const control=document.getElementById("audioLanguage");
+  if(!control) return;
+  const language=normalizedAudioLanguage(preferredAudioLanguage);
+  if(language && !Array.from(control.options).some(row=>row.value===language)) {{
+    const option=document.createElement("option");
+    option.value=language;
+    option.textContent=language.toUpperCase();
+    control.appendChild(option);
+  }}
+  control.value=language;
+}}
 function applyCompatAudioState(s, userGesture=false) {{
   const token=String(s?.stream_token||"");
   if(audioSelectionToken!==token) {{
