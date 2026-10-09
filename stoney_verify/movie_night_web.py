@@ -8,6 +8,7 @@ from io import BytesIO
 import hmac
 import json
 import os
+import shutil
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -855,6 +856,8 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "source": "",
     }
     audio_compat_url = ""
+    audio_track_options: list[dict[str, Any]] = []
+    audio_track_url = ""
     if session is not None:
         try:
             torrent_manager.schedule_metadata_probe(session)
@@ -886,6 +889,27 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
                     )
                 except Exception:
                     audio_compat_url = ""
+    # The browser's video.audioTracks API is not reliably exposed on Android
+    # or Chromium. Verified file streams can instead use the existing signed,
+    # per-viewer AAC route, with FFmpeg map indexes validated by the endpoint.
+    if session is not None and shutil.which("ffmpeg"):
+        verified = session.verified_metadata if isinstance(session.verified_metadata, Mapping) else {}
+        tracks = verified.get("audio_tracks") if verified.get("available") else None
+        if isinstance(tracks, list) and len(tracks) > 1:
+            for index, row in enumerate(tracks[:8]):
+                if not isinstance(row, Mapping):
+                    continue
+                language = str(row.get("language") or "").strip()[:24]
+                title = str(row.get("title") or "").strip()[:80]
+                codec = str(row.get("codec") or "").strip()[:24]
+                label = " • ".join(part for part in (language, title or codec) if part)
+                audio_track_options.append({"index": index, "label": label or f"Track {index + 1}"})
+            if len(audio_track_options) > 1:
+                audio_track_url = torrent_manager.compat_audio_url(
+                    session, ttl_seconds=21600, consumer_key=consumer_key,
+                )
+            if not audio_track_url:
+                audio_track_options = []
     cast_stream_url = (
         torrent_manager.stream_url(
             session,
@@ -1006,6 +1030,8 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "audio_compat_required": bool(audio_compat.get("required")),
         "audio_compat_reason": str(audio_compat.get("reason") or ""),
         "audio_codecs": list(audio_compat.get("codecs") or [])[:8],
+        "audio_track_options": audio_track_options,
+        "audio_track_url": audio_track_url,
         "cast_stream_url": cast_stream_url,
         "media_content_type": (
             media_content_type(session.file_name)
