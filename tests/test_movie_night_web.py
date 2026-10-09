@@ -1930,3 +1930,21 @@ def test_cinema_state_exposes_verified_audio_track_choices_only_with_signed_side
     assert 'audio_track_url = torrent_manager.compat_audio_url(' in source
     assert '"audio_track_options": audio_track_options' in source
     assert '"audio_track_url": audio_track_url' in source
+
+
+def test_cinema_audio_permission_can_be_granted_without_host_play_pause() -> None:
+    html = movie_night_web._watch_html(
+        "room-enable-audio", 42, "uid=42&exp=9999999999&sig=test",
+    )
+    assert 'id="enableAudioControl" hidden' in html
+    assert 'id="enableAudio" type="button"' in html
+    assert "function refreshAudioPermissionControl()" in html
+    assert "control.hidden=!(compatAudioActive()" in html
+    assert 'document.getElementById("enableAudio").onclick=async()=>' in html
+    enabled = html.split('document.getElementById("enableAudio").onclick=async()=>', 1)[1].split(
+        'compatAudio.addEventListener("error"', 1
+    )[0]
+    assert "startCompatAudioFromGesture(" in enabled
+    assert 'hostAction("resume")' not in enabled
+    assert 'hostAction("pause")' not in enabled
+    assert "Tap Enable audio in Advanced Stream Details." in html
