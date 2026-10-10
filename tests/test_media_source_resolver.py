@@ -1007,3 +1007,85 @@ def test_limited_body_enforces_selected_response_budget() -> None:
         )
     )
     assert accepted == payload
+
+def test_provider_result_cap_keeps_compatible_candidate_beyond_first_25() -> None:
+    """High-seed HEVC entries must not hide a later x264 release."""
+    items = [
+        {
+            "title": f"Example Movie 2026 1080p HEVC x265 {index}.mkv",
+            "info_hash": f"{index + 1:040x}",
+            "seeds": 100 - index,
+        }
+        for index in range(resolver._MAX_SOURCE_RESULTS)
+    ]
+    items.append(
+        {
+            "title": "Example Movie 2026 720p H264 x264.mp4",
+            "info_hash": f"{99:040x}",
+            "seeds": 3,
+        }
+    )
+
+    selected = resolver._bounded_browser_compatible_variants(_source(), items)
+
+    assert len(selected) == resolver._MAX_SOURCE_RESULTS
+    assert selected[0].title == "Example Movie 2026 720p H264 x264.mp4"
+    assert selected[0].seeds == 3
+    # A release title is not codec verification. Keep it unknown, not safe.
+    assert resolver.browser_video_risk_key(selected[0].metadata) == 1
+    assert all(
+        resolver.browser_video_risk_key(item.metadata) == 2
+        for item in selected[1:]
+    )
+
+
+def test_provider_result_lookahead_preserves_order_within_risk_tiers() -> None:
+    items = [
+        {
+            "title": f"Example Movie 2026 1080p x264 {index}.mp4",
+            "info_hash": f"{index + 1:040x}",
+            "seeds": 20 - index,
+        }
+        for index in range(3)
+    ]
+    items += [
+        {
+            "title": f"Example Movie 2026 1080p HEVC x265 {index}.mkv",
+            "info_hash": f"{index + 100:040x}",
+            "seeds": 100 - index,
+        }
+        for index in range(105)
+    ]
+    selected = resolver._bounded_browser_compatible_variants(_source(), items)
+    assert len(selected) == resolver._MAX_SOURCE_RESULTS
+    assert [item.title for item in selected[:3]] == [
+        row["title"] for row in items[:3]
+    ]
+    # The lookahead and returned page both remain bounded, even for large responses.
+    assert all(item.title != items[-1]["title"] for item in selected)
+
+
+def test_rss_search_reads_beyond_25_without_increasing_returned_source_cap() -> None:
+    entries = "".join(
+        (
+            "<item>"
+            f"<title>Example Movie 2026 1080p HEVC x265 {index}.mkv</title>"
+            f"<link>magnet:?xt=urn:btih:{index + 1:040x}</link>"
+            "</item>"
+        )
+        for index in range(28)
+    )
+    entries += (
+        "<item>"
+        "<title>Example Movie 2026 720p H264 x264.mp4</title>"
+        f"<link>magnet:?xt=urn:btih:{99:040x}</link>"
+        "</item>"
+    )
+    items = resolver._extract_feed_items(
+        f"<rss><channel>{entries}</channel></rss>".encode(),
+        "Example Movie",
+    )
+    assert len(items) == 29
+    selected = resolver._bounded_browser_compatible_variants(_source(), items)
+    assert len(selected) == resolver._MAX_SOURCE_RESULTS
+    assert selected[0].title.endswith("H264 x264.mp4")
