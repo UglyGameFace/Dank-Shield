@@ -21,6 +21,8 @@ def _reset_media_state():
     [
         ("https://x.com/user/status/123", "x"),
         ("https://www.tiktok.com/@user/video/123", "tiktok"),
+        ("https://pro.tiktok.com/t/ZPLr92WaR/", "tiktok"),
+        ("https://vm.tiktok.com/Short1/", "tiktok"),
         ("https://www.instagram.com/reel/ABC123/", "instagram"),
         ("https://youtu.be/abc123", "youtube"),
         ("https://www.reddit.com/r/test/comments/abc123/post/", "reddit"),
@@ -602,3 +604,138 @@ def test_live_provider_stream_skips_remux_classification() -> None:
     )
     assert resolved.delivery == "link"
     assert resolved.reason == "live_stream_requires_player"
+
+
+@pytest.mark.parametrize(
+    "short_url",
+    (
+        "https://pro.tiktok.com/t/ZPLr92WaR/",
+        "https://www.tiktok.com/t/ZPLr92WaR/",
+        "https://vm.tiktok.com/Short1/",
+        "https://vt.tiktok.com/Short1/",
+    ),
+)
+def test_tiktok_short_share_uses_canonical_video_for_extraction(monkeypatch, short_url: str) -> None:
+    assert media._is_tiktok_short_url(short_url)
+    extracted: list[str] = []
+    expanded: list[str] = []
+    canonical = "https://www.tiktok.com/@creator/video/7555555555555555555"
+
+    async def fake_expand(url: str) -> str:
+        expanded.append(url)
+        return canonical
+
+    def fake_extract(url: str):
+        extracted.append(url)
+        return {
+            "formats": [
+                {
+                    "url": "https://cdn.example.com/combined.mp4",
+                    "protocol": "https",
+                    "ext": "mp4",
+                    "vcodec": "h264",
+                    "acodec": "aac",
+                    "filesize": 6_000_000,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(media, "_expand_tiktok_short_url", fake_expand)
+    monkeypatch.setattr(media, "_extract_info_sync", fake_extract)
+    result = asyncio.run(media.resolve_media_url(short_url, max_bytes=25_000_000))
+
+    assert expanded == [short_url]
+    assert extracted == [canonical]
+    assert result.progressive
+    assert result.identity == "tiktok:7555555555555555555"
+    assert result.source_url == short_url
+
+
+def test_tiktok_short_redirect_uses_safe_network_and_releases_response(monkeypatch) -> None:
+    class Response:
+        def __init__(self):
+            self.released = False
+
+        def release(self):
+            self.released = True
+
+    class Session:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    received: list[str] = []
+    response = Response()
+    destination = "https://www.tiktok.com/@creator/video/7555555555555555555?utm_source=copy"
+
+    async def fake_public_get(_session, url, **kwargs):
+        received.append(url)
+        assert kwargs["max_redirects"] == 4
+        return response, destination
+
+    monkeypatch.setattr(media.aiohttp, "ClientSession", Session)
+    monkeypatch.setattr(media, "public_tcp_connector", lambda **_kwargs: object())
+    monkeypatch.setattr(media, "public_get", fake_public_get)
+
+    expanded = asyncio.run(media._expand_tiktok_short_url("https://pro.tiktok.com/t/ZPLr92WaR/"))
+    assert expanded == "https://www.tiktok.com/@creator/video/7555555555555555555"
+    assert received == ["https://pro.tiktok.com/t/ZPLr92WaR/"]
+    assert response.released
+
+
+def test_tiktok_short_redirect_rejects_unrelated_destination(monkeypatch) -> None:
+    class Response:
+        released = False
+
+        def release(self):
+            self.released = True
+
+    class Session:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    response = Response()
+
+    async def unrelated_redirect(*_args, **_kwargs):
+        return response, "https://unrelated.example.com/anything"
+
+    monkeypatch.setattr(media.aiohttp, "ClientSession", Session)
+    monkeypatch.setattr(media, "public_tcp_connector", lambda **_kwargs: object())
+    monkeypatch.setattr(media, "public_get", unrelated_redirect)
+
+    result = asyncio.run(media._expand_tiktok_short_url("https://pro.tiktok.com/t/ZPLr92WaR/"))
+    assert result == ""
+    assert response.released
+
+
+def test_unavailable_short_redirect_keeps_original_link_fallback(monkeypatch) -> None:
+    short_url = "https://pro.tiktok.com/t/ZPLr92WaR/"
+    attempted: list[str] = []
+
+    async def unavailable(_url: str) -> str:
+        return ""
+
+    def no_extraction(url: str):
+        attempted.append(url)
+        return None
+
+    monkeypatch.setattr(media, "_expand_tiktok_short_url", unavailable)
+    monkeypatch.setattr(media, "_extract_info_sync", no_extraction)
+
+    result = asyncio.run(media.resolve_media_url(short_url, max_bytes=25_000_000))
+    assert attempted == [short_url]
+    assert result.delivery == "link"
+    assert result.reason == "extract_failed"
+    assert result.source_url == short_url
+
