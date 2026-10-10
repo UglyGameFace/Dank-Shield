@@ -241,11 +241,18 @@ def _automatic_rank_key(item: Any, *, preferred_source: str = "") -> tuple[Any, 
     source_id = str(getattr(item, "source_id", "") or "").casefold()
     source_label = str(getattr(item, "source_label", "") or "").casefold()
     is_preferred = bool(preferred and (preferred == source_id or preferred in source_label))
-    # Compatibility and reasonable resolution/size outrank preferences.
+    # An unseeded and unmeasured source should not outrank a viable
+    # alternative solely for advertising 1080p/4K. Completion or observed
+    # live throughput is stronger evidence than provider seed counts.
+    availability = (
+        0 if measured_band <= 3
+        else 1 if seeds > 0
+        else 2
+    )
     return (
-        risk, size_penalty, resolution_penalty, audio,
-        measured_band, reported_band, 0 if is_preferred else 1,
-        -min(seeds, 80), -ratio,
+        availability, risk, size_penalty, measured_band,
+        reported_band, resolution_penalty, audio,
+        0 if is_preferred else 1, -min(seeds, 80), -ratio,
     )
 
 
