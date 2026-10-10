@@ -332,7 +332,12 @@ async def start_automatic_variant(
         str(original.current_candidate_id or ""),
         str(original.current_variant_id or ""),
     )
-    limit = _safe_int(max_file_bytes)  # Actual torrent start enforces the host cap.
+    limit = _safe_int(max_file_bytes)
+    if not limit and (start_variant is None or start_variant is start_room_variant):
+        # Read the existing configured torrent file cap once for the real
+        # production launcher. Injected test/other backends need no torrent
+        # engine initialization to rank candidates.
+        limit = _safe_int(getattr(get_torrent_manager(), "max_file_bytes", 0))
     remaining = [
         row for row in ranked_automatic_variants(
             ranked, max_file_bytes=limit, active_voters=active_voters,
