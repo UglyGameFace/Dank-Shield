@@ -148,6 +148,10 @@ def test_distinct_viewers_get_distinct_audio_consumers_without_changing_shared_c
                 {"language": "eng", "codec": "aac"},
                 {"language": "jpn", "codec": "aac"},
             ],
+            "subtitle_tracks": [
+                {"language": "eng", "codec": "subrip"},
+                {"language": "jpn", "codec": "ass"},
+            ],
         },
     )
 
@@ -197,6 +201,8 @@ def test_distinct_viewers_get_distinct_audio_consumers_without_changing_shared_c
     assert host["audio_track_url"] != viewer["audio_track_url"]
     assert host["audio_track_options"] == viewer["audio_track_options"]
     assert [row["language"] for row in host["audio_track_options"]] == ["eng", "jpn"]
+    assert host["subtitle_options"] == viewer["subtitle_options"]
+    assert [row["language"] for row in host["subtitle_options"]] == ["eng", "jpn"]
     assert viewer["sync_requested"] is True
     assert host["sync_status"] == "host"
     assert host["position_seconds"] == viewer["position_seconds"]
@@ -363,6 +369,12 @@ def test_twenty_watch_party_members_can_choose_mixed_audio_without_affecting_roo
                 {"language": "spa", "codec": "aac"},
                 {"language": "jpn", "codec": "aac"},
             ],
+            "subtitle_tracks": [
+                {"language": "eng", "codec": "subrip"},
+                {"language": "spa", "codec": "subrip"},
+                {"language": "jpn", "codec": "ass"},
+                {"language": "eng", "codec": "hdmv_pgs_subtitle"},
+            ],
         },
     )
 
@@ -412,6 +424,8 @@ def test_twenty_watch_party_members_can_choose_mixed_audio_without_affecting_roo
     assert {p["position_seconds"] for p in snapshots} == {0.0}
     assert {p["sync_status"] for p in snapshots} == {"host", "synced"}
     assert {tuple(t["language"] for t in p["audio_track_options"])
+            for p in snapshots} == {("eng", "spa", "jpn")}
+    assert {tuple(t["language"] for t in p["subtitle_options"])
             for p in snapshots} == {("eng", "spa", "jpn")}
 
     # The shared player independently adds the requested track index to each
