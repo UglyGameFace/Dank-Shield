@@ -237,3 +237,20 @@ def test_subdl_exact_episode_search_never_sends_key_to_browser(monkeypatch):
         "season_number": 2, "episode_number": 6,
     }, "en", stream_token="movie-token"))
     assert result == []
+
+
+
+def test_subdl_direct_download_urls_are_allowlisted():
+    from stoney_verify import cinema_subtitle_providers as provider
+
+    good = "https://dl.subdl.com/subtitle/abc123/file.srt"
+    assert provider._safe_download_url(good) == good
+    for unsafe in (
+        "http://dl.subdl.com/subtitle/abc/file.srt",
+        "https://dl.subdl.com.evil.test/subtitle/abc/file.srt",
+        "https://other.test/subtitle/abc/file.srt",
+        "https://dl.subdl.com@evil.test/subtitle/abc/file.srt",
+        "https://dl.subdl.com/admin",
+    ):
+        with pytest.raises(provider.SubtitleProviderUnavailable):
+            provider._safe_download_url(unsafe)
