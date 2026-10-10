@@ -55,6 +55,7 @@ def test_movie_night_public_routes_are_media_only() -> None:
     rendered = "\n".join(f"{method} {resource}" for method, resource in routes)
     assert "/movie/{room_id}/watch" in rendered
     assert "/movie/{room_id}/state" in rendered
+    assert "/movie/{room_id}/subtitle" in rendered
     assert "/movie/{room_id}/heartbeat" in rendered
     assert "/movie/{room_id}/action" in rendered
     assert "/movie/{room_id}/invite-options" in rendered
@@ -82,6 +83,7 @@ def test_cinema_library_runtime_defaults_and_episode_lookup(monkeypatch) -> None
         "default_audio_language": "",
         "audio_language_by_guild": {},
         "default_subtitle_language": "",
+        "subtitle_language_by_guild": {},
         "visual_quality": "auto",
         "feed_notification_mode": "instant",
         "feed_playable_only": True,
