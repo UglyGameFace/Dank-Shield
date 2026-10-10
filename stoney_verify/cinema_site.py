@@ -2718,6 +2718,7 @@ async def cinema_play_api(request: web.Request) -> web.Response:
                 selected=selected,
                 ranked=ranked,
                 start_variant=start_room_variant,
+                manager=manager,
             )
     except Exception as exc:
         raise web.HTTPBadGateway(
