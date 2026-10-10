@@ -183,7 +183,86 @@ def _auto_video_height(item: Any) -> int:
     return 0
 
 
-def _automatic_rank_key(item: Any, *, preferred_source: str = "") -> tuple[Any, ...]:
+_AUDIO_LANGUAGE_ALIASES = {
+    "eng": "en", "english": "en", "spa": "es", "spanish": "es",
+    "por": "pt", "portuguese": "pt", "fre": "fr", "fra": "fr",
+    "french": "fr", "deu": "de", "ger": "de", "german": "de",
+    "jpn": "ja", "japanese": "ja", "kor": "ko", "korean": "ko",
+    "ita": "it", "italian": "it", "hin": "hi", "hindi": "hi",
+    "zho": "zh", "chi": "zh", "chinese": "zh",
+}
+
+
+def _audio_language_key(value: Any) -> str:
+    """Mirror the Theater's primary audio language aliases for source scoring."""
+    text = str(value or "").strip().casefold().replace("_", "-")
+    primary = text.split("-", 1)[0].split(" ", 1)[0]
+    if primary in {"", "auto", "original", "und", "unknown"}:
+        return ""
+    return _AUDIO_LANGUAGE_ALIASES.get(
+        primary, primary if len(primary) == 2 and primary.isalpha() else "",
+    )
+
+
+def _guild_audio_preference(preferences: Mapping[str, Any], guild_id: int) -> str:
+    scoped = preferences.get("audio_language_by_guild")
+    scoped = scoped if isinstance(scoped, Mapping) else {}
+    key = str(max(0, int(guild_id or 0)))
+    if key in scoped and int(guild_id or 0) > 0:
+        # Explicit "auto" disables the global default *for this guild*.
+        return _audio_language_key(scoped[key])
+    return _audio_language_key(preferences.get("default_audio_language"))
+
+
+def _preferred_audio_language_key(item: Any, language: str) -> int:
+    """0=verified match, 1=unverified, 2=verified no matching audio.
+
+    Never treat an index label or filename hint as verified audio tracks.
+    """
+    wanted = _audio_language_key(language)
+    if not wanted:
+        return 0
+    metadata = getattr(item, "metadata", {}) or {}
+    verified = metadata.get("verified") if isinstance(metadata, Mapping) else None
+    if not isinstance(verified, Mapping) or not verified.get("available"):
+        return 1
+    names = verified.get("audio_languages")
+    names = names if isinstance(names, (list, tuple)) else ()
+    rows = verified.get("audio_tracks")
+    rows = rows if isinstance(rows, (list, tuple)) else ()
+    known = {
+        _audio_language_key(value)
+        for value in names
+    }
+    known.update(
+        _audio_language_key(track.get("language"))
+        for track in rows if isinstance(track, Mapping)
+    )
+    known.discard("")
+    if not known:
+        return 1
+    return 0 if wanted in known else 2
+
+
+async def _user_auto_preferences(user_id: int, guild_id: int) -> tuple[str, str]:
+    try:
+        profile = await get_cinema_user(int(user_id))
+        preferences = (
+            profile.get("preferences")
+            if isinstance(profile, Mapping)
+            and isinstance(profile.get("preferences"), Mapping)
+            else {}
+        )
+        source = str(preferences.get("preferred_source") or "").strip().casefold()
+        language = _guild_audio_preference(preferences, guild_id)
+        return source, language
+    except (CinemaStorageUnavailable, TypeError, ValueError):
+        return "", ""
+
+
+def _automatic_rank_key(
+    item: Any, *, preferred_source: str = "", preferred_language: str = "",
+) -> tuple[Any, ...]:
     """Compare only defensible evidence; unknown codecs/peer rates are not verified."""
     risk = int(item.browser_video_risk_key())
     audio = (
@@ -254,6 +333,7 @@ def _automatic_rank_key(item: Any, *, preferred_source: str = "") -> tuple[Any, 
     )
     return (
         availability, risk, size_penalty, measured_band,
+        _preferred_audio_language_key(item, preferred_language),
         reported_band, resolution_penalty, audio,
         0 if is_preferred else 1, -min(seeds, 80), -ratio,
     )
@@ -263,6 +343,7 @@ def ranked_automatic_variants(
     variants: Any,
     *,
     preferred_source: str = "",
+    preferred_language: str = "",
     max_file_bytes: int = 0,
     active_voters: Any = None,
 ) -> list[Any]:
@@ -280,30 +361,27 @@ def ranked_automatic_variants(
         rows,
         key=lambda item: (
             -len(set(getattr(item, "votes", ()) or ()) & active),
-            _automatic_rank_key(item, preferred_source=preferred_source),
+            _automatic_rank_key(
+                item, preferred_source=preferred_source,
+                preferred_language=preferred_language,
+            ),
         ),
     )
 
 
 async def select_preferred_variant(
-    user_id: int, variants: Any, *, active_voters: Any = None,
+    user_id: int, variants: Any, *,
+    guild_id: int = 0, active_voters: Any = None,
 ) -> Any:
-    """Choose best viable source. Provider preference only breaks close ties."""
-    try:
-        profile = await get_cinema_user(int(user_id))
-        preferences = (
-            profile.get("preferences")
-            if isinstance(profile.get("preferences"), Mapping)
-            else {}
-        )
-        preferred = str(preferences.get("preferred_source") or "").strip().casefold()
-    except (CinemaStorageUnavailable, TypeError, ValueError):
-        preferred = ""
+    """Rank for this member in this authenticated guild, never a viewer list."""
+    preferred_source, preferred_language = await _user_auto_preferences(
+        int(user_id), int(guild_id),
+    )
     rows = ranked_automatic_variants(
-        variants, preferred_source=preferred, active_voters=active_voters,
+        variants, preferred_source=preferred_source,
+        preferred_language=preferred_language, active_voters=active_voters,
     )
     return rows[0] if rows else None
-
 
 async def start_automatic_variant(
     room_id: str,
@@ -315,6 +393,7 @@ async def start_automatic_variant(
     start_variant: Any = None,
     max_file_bytes: int = 0,
     manager: Any = None,
+    guild_id: int = 0,
     active_voters: Any = None,
 ) -> tuple[CinemaPlaybackResult, Any, int]:
     """Retry only startup failures, never swap a playing room behind viewers.
@@ -344,9 +423,13 @@ async def start_automatic_variant(
         # production launcher. Injected test/other backends need no torrent
         # engine initialization to rank candidates.
         limit = _safe_int(getattr(get_torrent_manager(), "max_file_bytes", 0))
+    preferred_source, preferred_language = await _user_auto_preferences(
+        int(actor_id), int(guild_id),
+    )
     remaining = [
         row for row in ranked_automatic_variants(
             ranked, max_file_bytes=limit, active_voters=active_voters,
+            preferred_source=preferred_source, preferred_language=preferred_language,
         )
         if selected is None or row.variant_id != selected.variant_id
     ]
