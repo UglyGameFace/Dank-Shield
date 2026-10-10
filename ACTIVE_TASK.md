@@ -2,6 +2,16 @@
 
 ## CURRENT ACTIVE TASK — CINEMA-UNSUPPORTED-AUTO-SOURCE-PREFLIGHT-20261009
 
+### Browser-settings resilience, same active Cinema task, stacked companion PR #491
+
+User approved handling browser dark/forced colors, accessibility and text sizing, Data Saver, reduced motion, mobile/desktop-mode layout, background suspension, network reconnect, audio permissions, PiP/fullscreen and strict browser privacy. Opera/Opera GX, Chrome, Edge, Firefox, Safari, Samsung Internet, Brave, Vivaldi and other modern browsers are targets, not all certified by real playback.
+
+Existing correct code already implements signed video/audio, per-viewer language, prefers-reduced-motion, Auto/High/Standard/Lite effects, Data Saver and hardware hints, ResizeObserver/viewport/orientation recovery, fullscreen/PiP capability detection, codec advisories, user-gesture audio recovery, offline/page-wake, background-gated polls and private no-store authenticated HTML. Preserve it, don't duplicate it.
+
+Companion branch fix/491-cinema-browser-settings-resilience-20261009 is based on PR #490. It adds forced-color and higher-contrast support without recoloring actual video/poster imagery; observes local non-identifying forced contrast, reduced motion, Save-Data, network and visibility changes and re-evaluates decorative Auto quality only; gives Advanced Details an environment readout; and debounces pageshow/visibilitychange/online recovery bursts to prevent repeated media restarts. Never read the user's extensions, fingerprints, cookies, DRM, hardware acceleration or battery health. Cannot bypass actual autoplay/security rules. New rendered-browser JavaScript tests exercise the actual functions. Existing #490 source-risk test fixture was also updated in both branches after exact-head CI identified one obsolete mock contract.
+
+No codec transcode changes, permissions, torrent, host/viewer, source/ranking, signing, database or Discord changes in this companion. Keep both PRs draft until CI and actual cross-browser A/V tests. An HTML page opening in Chromium is not validation of Opera GX, Safari, Firefox or real video/audio decode.
+
 **Reason:** At 8:32 PM Eastern, Mad Max: Fury Road still had a black video element after automatic source selection. Advanced Stream Details now positively identify `hevc / video/matroska` and Samsung Browser's `canPlayType` reports no native decoder. User asks why Cinema auto-selected the release and why FFmpeg cannot support it.
 
 **Verified production baseline:** `aaa-cinema-pre-pregateway-bind@09affbf295a0642605aa7eb4c0532925507268cd`. PR #489 merged and Discloud status success Oct 10 00:16:18 UTC. New branch `fix/490-cinema-unsupported-source-preflight-20261009` forks this exact production SHA; do not overwrite other production features.

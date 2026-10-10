@@ -1576,7 +1576,7 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert 'b.append(uiIcon(iconName), node("span", "bottom-nav-label", label))' in script
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
-    assert 'href="/cinema/assets/site.css?v=10"' in source
+    assert 'href="/cinema/assets/site.css?v=11"' in source
     assert 'src="/cinema/assets/site.js?v=17"' in source
 
 
@@ -1592,7 +1592,7 @@ def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop
         'content="width=device-width,initial-scale=1,minimum-scale=1,'
         'viewport-fit=cover,interactive-widget=resizes-content">'
     ) in source
-    assert 'href="/cinema/assets/site.css?v=10"' in source
+    assert 'href="/cinema/assets/site.css?v=11"' in source
 
     assert "--content:min(1560px,calc(100vw - 48px))" in styles
     assert "@media(min-width:1800px)" in styles
@@ -1612,8 +1612,9 @@ def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop
     assert "min-height:54px" in styles
     assert ".feed-result-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}" in styles
     assert ".feed-result-card{" in styles
-    assert "-webkit-text-size-adjust:100%" in styles
-    assert "text-size-adjust:100%" in styles
+    # Respect the device/browser font enlargement setting instead of forcing 100%.
+    assert "-webkit-text-size-adjust:auto" in styles
+    assert "text-size-adjust:auto" in styles
 
 
 def test_full_site_auto_quality_and_source_search_controls_are_real() -> None:
