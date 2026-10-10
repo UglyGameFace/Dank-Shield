@@ -684,11 +684,25 @@ def test_existing_supported_permalinks_skip_redirect_resolution(monkeypatch, per
     async def should_not_redirect(_url: str) -> str:
         raise AssertionError("canonical URL must bypass extra shortlink network requests")
 
+    def playable_media(_url: str):
+        return {
+            "formats": [{
+                "url": "https://cdn.example.com/combined.mp4",
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "aac",
+                "filesize": 6_000_000,
+            }]
+        }
+
     monkeypatch.setattr(media, "_expand_short_share_url", should_not_redirect)
-    monkeypatch.setattr(media, "_extract_info_sync", lambda _url: None)
+    monkeypatch.setattr(media, "_extract_info_sync", playable_media)
     result = asyncio.run(media.resolve_media_url(permalink, max_bytes=25_000_000))
     assert result.provider == media.provider_for_url(permalink)
     assert result.source_url == permalink
+    assert result.progressive
+    assert result.identity == media.media_url_identity(result.canonical_url)
 
 
 def test_short_share_redirect_uses_safe_network_and_releases_response(monkeypatch) -> None:
