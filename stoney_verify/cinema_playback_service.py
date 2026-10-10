@@ -158,6 +158,7 @@ def materialize_search_results(
 
 _MIB = 1024 * 1024
 _MAX_AUTO_START_ATTEMPTS = 3
+_AUTO_START_TOTAL_BUDGET_SECONDS = 36.0
 
 
 def _safe_int(value: Any) -> int:
@@ -444,7 +445,12 @@ async def start_automatic_variant(
 
     start = start_variant or start_room_variant
     failures = 0
+    started_at = time.monotonic()
     for item in choices[:_MAX_AUTO_START_ATTEMPTS]:
+        # A normal metadata wait may consume 30 seconds. Do not chain three
+        # such waits into a ~90s web request and produce a gateway timeout.
+        if failures and time.monotonic() - started_at >= _AUTO_START_TOTAL_BUDGET_SECONDS:
+            break
         latest = manager.get(room_id)
         if (
             latest is None or latest.ended
@@ -479,7 +485,7 @@ async def start_automatic_variant(
                 raise
             failures += 1
     raise CinemaPlaybackError(
-        f"Automatic playback tried {failures} compatible candidates without a successful startup. "
+        f"Automatic playback could not start after {failures} attempted source(s). "
         "Choose another release or retry when providers are available."
     )
 
