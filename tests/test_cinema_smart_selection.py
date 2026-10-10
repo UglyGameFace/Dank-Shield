@@ -235,3 +235,21 @@ def test_verified_source_evidence_survives_same_source_refresh():
     assert refreshed is original
     assert refreshed.browser_video_risk_key() == 0
     assert refreshed.metadata["observed_swarm"]["connected_peers"] == 8
+
+
+def test_healthy_lower_resolution_beats_unseeded_1080p_and_weak_swarm():
+    unseeded = release("Film.2026.1080p.x264.mp4", seeds=0,
+                       file_size=2 * 1024 ** 3)
+    weak = release("Film.2026.1080p.x264.mp4", seeds=1,
+                   file_size=2 * 1024 ** 3)
+    healthy = release("Film.2026.720p.x264.mp4", seeds=40,
+                      file_size=1 * 1024 ** 3)
+    assert playback.ranked_automatic_variants(
+        [unseeded, weak, healthy],
+    )[0] is healthy
+
+
+def test_all_explicitly_risky_candidates_fail_closed():
+    hevc = release("Film.2026.1080p.HEVC.mkv", seeds=400)
+    avi = release("Film.2026.720p.x264.avi", seeds=20)
+    assert playback.ranked_automatic_variants([hevc, avi]) == []
