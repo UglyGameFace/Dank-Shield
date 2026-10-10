@@ -7,6 +7,7 @@ torrent lifecycle, room authority, and canonical media identity cannot diverge.
 """
 
 from dataclasses import dataclass
+import time
 from typing import Any, Mapping, Optional
 
 from .cinema_catalog import CinemaEpisode, CinemaMedia, get_details
@@ -152,23 +153,122 @@ def materialize_search_results(
     return len(candidate_ids), release_count
 
 
-async def select_preferred_variant(
-    user_id: int,
-    variants: Any,
-) -> Any:
-    """Choose the user's preferred real source when available, otherwise best-ranked first."""
+_MIB = 1024 * 1024
+_MAX_AUTO_START_ATTEMPTS = 3
 
-    rows = list(variants or ())
-    # Automatic selection is conservative across browsers. A search-result
-    # label is not codec verification, but explicit HEVC/MKV warning signs
-    # must not be chosen automatically if a less risky release is available.
-    # Explicit host source choice still uses start_room_variant unchanged.
+
+def _safe_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _auto_video_height(item: Any) -> int:
+    """Use actual probed resolution, otherwise unverified release-name clues."""
+    meta = getattr(item, "metadata", {}) or {}
+    meta = meta if isinstance(meta, Mapping) else {}
+    verified = meta.get("verified")
+    video = verified.get("video") if isinstance(verified, Mapping) else None
+    if isinstance(video, Mapping) and _safe_int(video.get("height")):
+        return _safe_int(video.get("height"))
+    release = meta.get("release_name")
+    release = release if isinstance(release, Mapping) else {}
+    resolution = str(release.get("resolution") or "").strip().casefold()
+    if resolution.endswith(("p", "i")):
+        return _safe_int(resolution[:-1])
+    return 0
+
+
+def _automatic_rank_key(item: Any, *, preferred_source: str = "") -> tuple[Any, ...]:
+    """Compare only defensible evidence; unknown codecs/peer rates are not verified."""
+    risk = int(item.browser_video_risk_key())
+    audio = (
+        int(item.browser_audio_risk_key())
+        if callable(getattr(item, "browser_audio_risk_key", None))
+        else 1
+    )
+    meta = getattr(item, "metadata", {}) or {}
+    meta = meta if isinstance(meta, Mapping) else {}
+    height = _auto_video_height(item)
+    # A large 4K remux is often a poor streaming choice; 1080p is the
+    # default browser target, then 720p. Neither is certified by a label.
+    resolution_penalty = (
+        0 if 900 <= height <= 1200
+        else 1 if 650 <= height < 900
+        else 2 if height == 0
+        else 3 if height > 1200
+        else 4
+    )
+    size = _safe_int(getattr(item, "file_size", 0))
+    # File size is unknown for many provider feeds. It should not be treated
+    # as zero-byte proof of efficiency. Strongly penalize huge files, but
+    # avoid rejecting valid movie sources solely on reported sizes.
+    size_penalty = (
+        1 if size <= 0
+        else 0 if size <= (3 * 1024 ** 3 if height <= 900 and height else 6 * 1024 ** 3)
+        else 2 if size <= 10 * 1024 ** 3
+        else 3
+    )
+    seeds = _safe_int(getattr(item, "seeds", 0))
+    leechers = _safe_int(getattr(item, "leechers", 0))
+    reported_band = 0 if seeds >= 20 else 1 if seeds >= 5 else 2 if seeds else 3
+    ratio = min(10.0, seeds / max(1, leechers))
+
+    # Only a previously started torrent can have measured live throughput.
+    # Completed torrents do not need a positive current download rate.
+    observed = meta.get("observed_swarm")
+    observed = observed if isinstance(observed, Mapping) else {}
+    age = time.monotonic() - float(observed.get("at") or 0)
+    if 0 <= age <= 180 and observed:
+        progress = float(observed.get("progress") or 0)
+        rate = _safe_int(observed.get("download_rate"))
+        connected = _safe_int(observed.get("connected_peers"))
+        measured_band = (
+            0 if progress >= 0.995
+            else 1 if rate >= 2 * _MIB
+            else 2 if rate >= _MIB // 2
+            else 3 if rate > 0 and connected > 0
+            else 5
+        )
+    else:
+        measured_band = 4  # Unknown != fast and unknown != failed.
+
+    preferred = str(preferred_source or "").strip().casefold()
+    source_id = str(getattr(item, "source_id", "") or "").casefold()
+    source_label = str(getattr(item, "source_label", "") or "").casefold()
+    is_preferred = bool(preferred and (preferred == source_id or preferred in source_label))
+    # Compatibility and reasonable resolution/size outrank preferences.
+    return (
+        risk, size_penalty, resolution_penalty, audio,
+        measured_band, reported_band, 0 if is_preferred else 1,
+        -min(seeds, 80), -ratio,
+    )
+
+
+def ranked_automatic_variants(
+    variants: Any,
+    *,
+    preferred_source: str = "",
+    max_file_bytes: int = 0,
+) -> list[Any]:
+    """Bounded, stable ranking with known format and configured file limits."""
+    limit = _safe_int(max_file_bytes)
     rows = [
-        item for item in rows
-        if item.browser_video_risk_key() < 2
+        item for item in list(variants or ())[:100]
+        if callable(getattr(item, "browser_video_risk_key", None))
+        and int(item.browser_video_risk_key()) < 2
+        and (not limit or not _safe_int(getattr(item, "file_size", 0))
+             or _safe_int(getattr(item, "file_size", 0)) <= limit)
     ]
-    if not rows:
-        return None
+    return sorted(
+        rows,
+        key=lambda item: _automatic_rank_key(item, preferred_source=preferred_source),
+    )
+
+
+async def select_preferred_variant(user_id: int, variants: Any) -> Any:
+    """Choose best viable source. Provider preference only breaks close ties."""
     try:
         profile = await get_cinema_user(int(user_id))
         preferences = (
@@ -179,20 +279,87 @@ async def select_preferred_variant(
         preferred = str(preferences.get("preferred_source") or "").strip().casefold()
     except (CinemaStorageUnavailable, TypeError, ValueError):
         preferred = ""
+    rows = ranked_automatic_variants(variants, preferred_source=preferred)
+    return rows[0] if rows else None
 
-    if preferred:
-        match = next(
-            (
-                item
-                for item in rows
-                if preferred == str(getattr(item, "source_id", "") or "").casefold()
-                or preferred in str(getattr(item, "source_label", "") or "").casefold()
-            ),
-            None,
+
+async def start_automatic_variant(
+    room_id: str,
+    *,
+    actor_id: int,
+    candidate_id: str,
+    selected: Any,
+    ranked: Any,
+    start_variant: Any = None,
+) -> tuple[CinemaPlaybackResult, Any, int]:
+    """Retry only startup failures, never swap a playing room behind viewers.
+
+    The first selection retains the user's soft preference. The remaining
+    sources are ranked by the same safety/efficiency policy, and each is
+    started at most once. No retries after a room-media state change.
+    """
+    manager = get_movie_night_manager()
+    original = manager.get(room_id)
+    if original is None or original.ended or original.host_id != int(actor_id):
+        raise PermissionError("Only the active host can change Cinema media.")
+    baseline = (
+        str(original.stream_token or ""),
+        str(original.current_candidate_id or ""),
+        str(original.current_variant_id or ""),
+    )
+    limit = _safe_int(getattr(get_torrent_manager(), "max_file_bytes", 0))
+    remaining = [
+        row for row in ranked_automatic_variants(ranked, max_file_bytes=limit)
+        if selected is None or row.variant_id != selected.variant_id
+    ]
+    choices = ([selected] if selected is not None
+               and selected.browser_video_risk_key() < 2
+               and (not limit or not _safe_int(selected.file_size)
+                    or _safe_int(selected.file_size) <= limit) else []) + remaining
+    if not choices:
+        raise CinemaPlaybackError(
+            "No automatic source passed the current compatibility and file-size checks."
         )
-        if match is not None:
-            return match
-    return rows[0]
+
+    start = start_variant or start_room_variant
+    failures = 0
+    for item in choices[:_MAX_AUTO_START_ATTEMPTS]:
+        latest = manager.get(room_id)
+        if (
+            latest is None or latest.ended
+            or int(latest.host_id) != int(actor_id)
+            or (
+                str(latest.stream_token or ""),
+                str(latest.current_candidate_id or ""),
+                str(latest.current_variant_id or ""),
+            ) != baseline
+        ):
+            raise CinemaPlaybackError("Cinema changed during automatic source selection.")
+        try:
+            result = await start(
+                room_id, actor_id=int(actor_id),
+                candidate_id=candidate_id, variant_id=item.variant_id,
+                automatic=True,
+            )
+            return result, item, failures
+        except (CinemaPlaybackError, RuntimeError, ValueError, OSError, TimeoutError):
+            # State must remain unchanged for a safe retry; e.g. a failure
+            # after a successful room commit must never trigger a second launch.
+            if (
+                (latest := manager.get(room_id)) is None or latest.ended
+                or int(latest.host_id) != int(actor_id)
+                or (
+                    str(latest.stream_token or ""),
+                    str(latest.current_candidate_id or ""),
+                    str(latest.current_variant_id or ""),
+                ) != baseline
+            ):
+                raise
+            failures += 1
+    raise CinemaPlaybackError(
+        f"Automatic playback tried {failures} compatible candidates without a successful startup. "
+        "Choose another release or retry when providers are available."
+    )
 
 
 async def search_exact_movie_sources(
@@ -278,6 +445,7 @@ async def start_room_variant(
     candidate_id: str,
     variant_id: str,
     authorized_by_vote: bool = False,
+    automatic: bool = False,
 ) -> CinemaPlaybackResult:
     """Start one existing candidate variant under the room's canonical authority."""
 
@@ -337,6 +505,25 @@ async def start_room_variant(
         raise CinemaPlaybackError(
             "This release is not a supported magnet or HTTPS .torrent source."
         )
+
+    if automatic:
+        # The downloaded torrent metadata reveals the selected file name
+        # before the browser player starts. It is stronger negative evidence
+        # than a provider label, but still cannot certify playable codecs.
+        from .media_metadata import browser_video_risk_key
+        file_meta = {
+            "release_name": dict(session.release_metadata or {}),
+            "source_reported": {"filename": str(session.file_name or "")},
+            "verified": dict(session.verified_metadata or {}),
+        }
+        if browser_video_risk_key(file_meta) >= 2:
+            if str(session.token) != previous:
+                await torrent_manager.release_lease(
+                    session.token, lease_key, remove_if_unused=True,
+                )
+            raise CinemaPlaybackError(
+                "Torrent metadata selected a video format unsuitable for automatic browser playback."
+            )
 
     stream_url = torrent_manager.stream_url(session)
     if not stream_url:
@@ -429,6 +616,8 @@ __all__ = [
     "materialize_search_results",
     "search_exact_episode_sources",
     "search_exact_movie_sources",
+    "ranked_automatic_variants",
     "select_preferred_variant",
+    "start_automatic_variant",
     "start_room_variant",
 ]
