@@ -327,11 +327,17 @@ async def start_automatic_variant(
     original = manager.get(room_id)
     if original is None or original.ended or original.host_id != int(actor_id):
         raise PermissionError("Only the active host can change Cinema media.")
-    baseline = (
-        str(original.stream_token or ""),
-        str(original.current_candidate_id or ""),
-        str(original.current_variant_id or ""),
-    )
+    def state_key(room: Any) -> tuple[str, str, str, str]:
+        options = getattr(room, "candidates", None)
+        candidate = options.get(candidate_id) if isinstance(options, Mapping) else None
+        return (
+            str(room.stream_token or ""),
+            str(room.current_candidate_id or ""),
+            str(room.current_variant_id or ""),
+            str(getattr(candidate, "selected_variant_id", "") or ""),
+        )
+
+    baseline = state_key(original)
     limit = _safe_int(max_file_bytes)
     if not limit and (start_variant is None or start_variant is start_room_variant):
         # Read the existing configured torrent file cap once for the real
@@ -360,11 +366,7 @@ async def start_automatic_variant(
         if (
             latest is None or latest.ended
             or int(latest.host_id) != int(actor_id)
-            or (
-                str(latest.stream_token or ""),
-                str(latest.current_candidate_id or ""),
-                str(latest.current_variant_id or ""),
-            ) != baseline
+            or state_key(latest) != baseline
         ):
             raise CinemaPlaybackError("Cinema changed during automatic source selection.")
         try:
@@ -385,11 +387,7 @@ async def start_automatic_variant(
             if (
                 (latest := manager.get(room_id)) is None or latest.ended
                 or int(latest.host_id) != int(actor_id)
-                or (
-                    str(latest.stream_token or ""),
-                    str(latest.current_candidate_id or ""),
-                    str(latest.current_variant_id or ""),
-                ) != baseline
+                or state_key(latest) != baseline
             ):
                 raise
             failures += 1
@@ -638,13 +636,19 @@ async def start_room_variant(
                 "Torrent metadata selected a video format unsuitable for automatic browser playback."
             )
 
-    stream_url = torrent_manager.stream_url(session)
+    try:
+        stream_url = torrent_manager.stream_url(session)
+    except Exception:
+        if str(session.token) != previous:
+            await torrent_manager.release_lease(
+                session.token, lease_key, remove_if_unused=True,
+            )
+        raise
     if not stream_url:
-        await torrent_manager.release_lease(
-            session.token,
-            lease_key,
-            remove_if_unused=True,
-        )
+        if str(session.token) != previous:
+            await torrent_manager.release_lease(
+                session.token, lease_key, remove_if_unused=True,
+            )
         raise CinemaPlaybackError(
             "The media session started but no signed public stream URL could be created."
         )
@@ -665,18 +669,25 @@ async def start_room_variant(
             "Cinema changed while this release was loading, so the stale media result was discarded."
         )
 
-    manager.select_variant(
-        latest.room_id,
-        candidate.candidate_id,
-        variant_id=variant.variant_id,
-    )
-    manager.set_room_media(
-        latest.room_id,
-        host_id=int(latest.host_id),
-        stream_token=session.token,
-        candidate_id=candidate.candidate_id,
-        variant_id=variant.variant_id,
-    )
+    try:
+        manager.select_variant(
+            latest.room_id,
+            candidate.candidate_id,
+            variant_id=variant.variant_id,
+        )
+        manager.set_room_media(
+            latest.room_id,
+            host_id=int(latest.host_id),
+            stream_token=session.token,
+            candidate_id=candidate.candidate_id,
+            variant_id=variant.variant_id,
+        )
+    except Exception:
+        if str(session.token) != previous:
+            await torrent_manager.release_lease(
+                session.token, lease_key, remove_if_unused=True,
+            )
+        raise
 
     try:
         profile = await get_cinema_user(initial_host_id)
