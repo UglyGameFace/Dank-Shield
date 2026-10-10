@@ -676,7 +676,7 @@ def test_cinema_site_play_without_room_creates_host_only_standalone_room(monkeyp
     async def preferred(_user_id, rows):
         return list(rows)[0]
 
-    async def start_variant(room_id, *, actor_id, candidate_id, variant_id):
+    async def start_variant(room_id, *, actor_id, candidate_id, variant_id, automatic=False):
         room = manager.get(room_id)
         assert room is not None
         assert actor_id == 42
@@ -777,7 +777,7 @@ def test_cinema_details_source_snapshot_is_reused_by_immediate_play(monkeypatch)
     async def preferred(_user_id, rows):
         return list(rows)[0]
 
-    async def start_variant(room_id, *, actor_id, candidate_id, variant_id):
+    async def start_variant(room_id, *, actor_id, candidate_id, variant_id, automatic=False):
         room = manager.get(room_id)
         assert room is not None
         chosen = room.candidates[candidate_id].variants[variant_id]
@@ -878,7 +878,7 @@ def test_cinema_site_manual_source_choice_overrides_auto_rank(monkeypatch) -> No
     async def should_not_auto_select(_user_id, _rows):
         raise AssertionError("manual source choice unexpectedly fell back to automatic selection")
 
-    async def start_variant(room_id, *, actor_id, candidate_id, variant_id):
+    async def start_variant(room_id, *, actor_id, candidate_id, variant_id, automatic=False):
         room = manager.get(room_id)
         assert room is not None
         assert actor_id == 42
