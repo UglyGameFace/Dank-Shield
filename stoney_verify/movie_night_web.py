@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Signed synchronized web player for Dank Shield Movie Night."""
 
+import asyncio
 import base64
 import hashlib
 from io import BytesIO
@@ -18,6 +19,10 @@ from urllib.parse import urlencode
 from aiohttp import web
 from PIL import Image, ImageDraw, ImageFilter
 
+from stoney_verify.cinema_subtitles import (
+    embedded_text_tracks,
+    embedded_vtt_for_session,
+)
 from stoney_verify.cinema_feed_service import (
     CinemaFeedConflict,
     feed_state as cinema_feed_state,
@@ -860,6 +865,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     audio_compat_url = ""
     audio_track_options: list[dict[str, Any]] = []
     audio_track_url = ""
+    subtitle_options: list[dict[str, object]] = []
     if session is not None:
         try:
             torrent_manager.schedule_metadata_probe(session)
@@ -916,6 +922,8 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
                 )
             if not audio_track_url:
                 audio_track_options = []
+    if session is not None and shutil.which("ffmpeg"):
+        subtitle_options = embedded_text_tracks(session.verified_metadata)
     cast_stream_url = (
         torrent_manager.stream_url(
             session,
@@ -942,6 +950,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         audio_compat["required"] = False
         audio_track_options = []
         audio_track_url = ""
+        subtitle_options = []
         torrent_status = {}
         startup_status = {}
     # The first torrent probe often finishes *after* this release was chosen.
@@ -1071,6 +1080,8 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "audio_codecs": list(audio_compat.get("codecs") or [])[:8],
         "audio_track_options": audio_track_options,
         "audio_track_url": audio_track_url,
+        "subtitle_options": subtitle_options,
+        "guild_id": int(room.guild_id),
         "cast_stream_url": cast_stream_url,
         "media_content_type": (
             media_content_type(session.file_name)
@@ -6709,6 +6720,49 @@ setInterval(()=>{{ if(!document.hidden) void heartbeat(false); }},3000);
 </html>"""
 
 
+async def movie_night_subtitle(request: web.Request) -> web.Response:
+    """Serve one verified embedded text stream to one authorized Cinema viewer.
+
+    This GET uses the identical signed room/user and guild-membership checks as
+    the Theater page. It never changes playback, audio or another viewer state.
+    """
+    room, uid = await _room_and_user(request)
+    raw_track = str(request.query.get("track", "") or "")
+    if not raw_track.isascii() or not raw_track.isdigit() or len(raw_track) > 2:
+        raise web.HTTPBadRequest(text="Choose a valid Cinema subtitle track.")
+    track = int(raw_track)
+    manager = get_torrent_manager()
+    session = await manager.get(room.stream_token) if room.stream_token else None
+    if session is None or not manager.session_usable(session):
+        raise web.HTTPNotFound(text="This Cinema title is no longer available.")
+    available = embedded_text_tracks(session.verified_metadata)
+    if track not in {int(row["index"]) for row in available}:
+        raise web.HTTPNotFound(text="That verified subtitle track is unavailable.")
+    consumer = f"movie:{int(uid)}:subtitle"
+    signed_stream_url = manager.stream_url(
+        session, ttl_seconds=180, consumer_key=consumer,
+    )
+    try:
+        data = await embedded_vtt_for_session(
+            token=session.token, track=track,
+            signed_stream_url=signed_stream_url,
+        )
+    except (TimeoutError, RuntimeError, ValueError, UnicodeError) as exc:
+        raise web.HTTPServiceUnavailable(
+            text="This embedded subtitle is temporarily unavailable."
+        ) from exc
+    return web.Response(
+        body=data,
+        content_type="text/vtt",
+        charset="utf-8",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        },
+    )
+
+
 async def movie_night_watch(request: web.Request) -> web.Response:
     room, uid = await _room_and_user(request)
     query = urlencode(
@@ -6749,6 +6803,7 @@ def register_movie_night_public_routes(app: web.Application) -> None:
         dank_cinema_brand_asset,
     )
     app.router.add_get("/movie/{room_id}/watch", movie_night_watch)
+    app.router.add_get("/movie/{room_id}/subtitle", movie_night_subtitle)
     app.router.add_get("/movie/{room_id}/state", movie_night_state)
     app.router.add_post("/movie/{room_id}/heartbeat", movie_night_heartbeat)
     app.router.add_post("/movie/{room_id}/action", movie_night_action)
