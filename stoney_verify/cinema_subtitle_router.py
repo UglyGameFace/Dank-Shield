@@ -544,7 +544,7 @@ def _as_vtt(raw: bytes) -> bytes:
         raise SubtitleProviderUnavailable("Unsupported subtitle text format.") from exc
 
 
-async def download_subtitle_selection(
+async def _download_selection_uncached(
     selection_id: str, *, guild_id: int, viewer_id: int,
     stream_token: str,
 ) -> bytes:
@@ -591,3 +591,37 @@ async def download_subtitle_selection(
         _VTT_CACHE.clear()
     _VTT_CACHE[cache_key] = (time.monotonic() + 1800, result)
     return result
+
+
+async def download_subtitle_selection(
+    selection_id: str, *, guild_id: int, viewer_id: int,
+    stream_token: str,
+) -> bytes:
+    """Authenticate every viewer, but share one provider download per file."""
+    selected = lookup_selection(
+        selection_id, guild_id=guild_id,
+        viewer_id=viewer_id, stream_token=stream_token,
+    )
+    account = selected["account"]
+    key = (
+        account.fingerprint, selected["media"],
+        selected["provider"], selected["reference"],
+    )
+    cached = _VTT_CACHE.get(key)
+    if cached and cached[0] > time.monotonic():
+        return cached[1]
+    task_key = (asyncio.get_running_loop(), key)
+    task = _DOWNLOAD_INFLIGHT.get(task_key)
+    if task is None:
+        task = asyncio.create_task(_download_selection_uncached(
+            selection_id, guild_id=guild_id,
+            viewer_id=viewer_id, stream_token=stream_token,
+        ))
+        _DOWNLOAD_INFLIGHT[task_key] = task
+        task.add_done_callback(
+            lambda finished, k=task_key: (
+                _DOWNLOAD_INFLIGHT.pop(k, None)
+                if _DOWNLOAD_INFLIGHT.get(k) is finished else None
+            )
+        )
+    return await asyncio.shield(task)
