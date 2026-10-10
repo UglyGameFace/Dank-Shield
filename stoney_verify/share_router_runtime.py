@@ -993,10 +993,11 @@ async def _relay_direct_memes_video(
 
 
 async def _torrent_attachment_bytes(message: discord.Message) -> bytes:
-    manager = get_torrent_manager()
     for attachment in list(getattr(message, "attachments", []) or []):
         if not is_torrent_filename(_safe_str(getattr(attachment, "filename", ""))):
             continue
+        # Ordinary proxy posts must never initialize Cinema/libtorrent.
+        manager = get_torrent_manager()
         size = _safe_int(getattr(attachment, "size", 0), 0)
         if size > manager.max_metadata_bytes:
             raise ValueError("The .torrent attachment exceeds the configured metadata limit.")
@@ -1262,8 +1263,6 @@ async def route_message(message: discord.Message) -> None:
         key_text = _dedupe_key(text)
         dedupe = (int(guild.id), int(target.id), key_text)
         duplicate = bool(key_text and dedupe in _RECENT_ROUTE_KEYS)
-        if key_text:
-            _RECENT_ROUTE_KEYS[dedupe] = now
 
         if not duplicate:
             attribution = (
@@ -1286,6 +1285,11 @@ async def route_message(message: discord.Message) -> None:
                     f"{text}\n\n{attribution}"[:2000],
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
+
+        # Only a successfully delivered post may suppress later repeats.
+        # Failed sends keep the proxy source and remain retryable.
+        if key_text:
+            _RECENT_ROUTE_KEYS[dedupe] = time.monotonic()
 
         if bool(route.get("delete_source", True)) and source_perms.manage_messages:
             try:
