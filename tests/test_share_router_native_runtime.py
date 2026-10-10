@@ -843,6 +843,8 @@ def test_share_router_optional_operator_cap_never_increases_discord_limit(monkey
 
     monkeypatch.setenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", "not-a-number")
     assert share_runtime._share_video_limit_bytes(guild) == 50 * mib
+    monkeypatch.setenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", "25")
+    assert share_runtime._share_video_limit_bytes(guild) == 1 * mib
 
 
 def test_share_router_larger_uploads_use_a_bounded_transfer_timeout(monkeypatch) -> None:
