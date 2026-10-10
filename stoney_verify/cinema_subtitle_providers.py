@@ -12,6 +12,7 @@ import os
 import re
 import time
 from collections.abc import Mapping
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -171,6 +172,34 @@ def allowed_subdl_id(stream_token: str, n_id: str) -> bool:
     )
 
 
+def _safe_download_url(url: object) -> str:
+    raw = str(url or "").strip()
+    parsed = urlsplit(raw)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "dl.subdl.com"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port not in {None, 443}
+        or not parsed.path.startswith("/subtitle/")
+    ):
+        raise SubtitleProviderUnavailable("SubDL returned an unsafe subtitle URL.")
+    return raw
+
+
+async def _read_limited_response(response: aiohttp.ClientResponse) -> bytes:
+    if response.status == 429:
+        raise SubtitleProviderUnavailable("SubDL daily download quota exhausted.")
+    if response.status != 200:
+        raise SubtitleProviderUnavailable("SubDL subtitle download unavailable.")
+    if response.content_length and response.content_length > 1_000_000:
+        raise SubtitleProviderUnavailable("SubDL subtitle file is too large.")
+    data = await response.content.read(1_000_001)
+    if len(data) > 1_000_000:
+        raise SubtitleProviderUnavailable("SubDL subtitle file is too large.")
+    return data
+
+
 async def download_subdl_vtt(stream_token: str, n_id: str) -> bytes:
     key = _operator_key()
     if not key or not allowed_subdl_id(stream_token, n_id):
@@ -188,28 +217,47 @@ async def download_subdl_vtt(stream_token: str, n_id: str) -> bytes:
             headers={"Authorization": f"Bearer {key}"},
             allow_redirects=False,
         ) as response:
-            if response.status == 429:
-                raise SubtitleProviderUnavailable("SubDL daily download quota exhausted.")
-            if response.status != 200:
-                raise SubtitleProviderUnavailable("SubDL subtitle download unavailable.")
-            if response.content_length and response.content_length > 1_000_000:
-                raise SubtitleProviderUnavailable("SubDL subtitle file is too large.")
-            data = await response.content.read(1_000_001)
-            if len(data) > 1_000_000:
-                raise SubtitleProviderUnavailable("SubDL subtitle file is too large.")
-            # Only a raw single-file subtitle is supported; archives need safe
-            # unpacking plus exact-episode checks before they can be offered.
-            if data[:2] == b"PK":
-                raise SubtitleProviderUnavailable("SubDL returned a subtitle archive.")
-            if data.startswith(b"WEBVTT"):
-                result = data
+            if response.status in {301, 302, 303, 307, 308}:
+                target = _safe_download_url(response.headers.get("Location"))
+                data = b""
             else:
-                try:
-                    result = srt_to_vtt(data).encode("utf-8")
-                except (UnicodeError, ValueError) as exc:
-                    raise SubtitleProviderUnavailable(
-                        "SubDL subtitle is not a compatible text file."
-                    ) from exc
+                data = await _read_limited_response(response)
+                if response.content_type == "application/json":
+                    try:
+                        import json
+                        payload = json.loads(data)
+                    except (ValueError, UnicodeError) as exc:
+                        raise SubtitleProviderUnavailable(
+                            "SubDL returned an invalid download response."
+                        ) from exc
+                    if not isinstance(payload, Mapping):
+                        raise SubtitleProviderUnavailable("SubDL returned no subtitle.")
+                    target = _safe_download_url(
+                        payload.get("download_url") or payload.get("url")
+                    )
+                else:
+                    target = ""
+        if target:
+            # Follow only SubDL's documented downloads host and do not forward
+            # API authorization headers to that separate origin.
+            async with session.get(
+                target, headers={"Accept": "text/plain"},
+                allow_redirects=False,
+            ) as response:
+                data = await _read_limited_response(response)
+        # Only a raw single-file subtitle is supported; archives need safe
+        # unpacking plus exact-episode checks before they can be offered.
+        if data[:2] == b"PK":
+            raise SubtitleProviderUnavailable("SubDL returned a subtitle archive.")
+        if data.startswith(b"WEBVTT"):
+            result = data
+        else:
+            try:
+                result = srt_to_vtt(data).encode("utf-8")
+            except (UnicodeError, ValueError) as exc:
+                raise SubtitleProviderUnavailable(
+                    "SubDL subtitle is not a compatible text file."
+                ) from exc
     if len(_DOWNLOAD_CACHE) >= 12:
         _DOWNLOAD_CACHE.clear()
     _DOWNLOAD_CACHE[cache_key] = (time.monotonic() + 3600, result)
