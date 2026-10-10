@@ -578,9 +578,11 @@ def choose_automatic_torrent_file(session: Any, catalog: Any) -> Any:
     for item in tuple(getattr(session, "candidates", ()) or ())[:100]:
         name = str(getattr(item, "path", "") or "")
         tags = parse_release_name(name)
+        # Season zero is valid (special episodes), so use the parser's
+        # explicit identity fields instead of truthiness.
+        known_episode = tags.get("season") is not None and tags.get("episode") is not None
         item_season = _safe_int(tags.get("season"))
         item_number = _safe_int(tags.get("episode"))
-        known_episode = bool(item_season and item_number)
         if episode and known_episode and (item_season, item_number) != (season, number):
             continue
         risk = browser_video_risk_key({
