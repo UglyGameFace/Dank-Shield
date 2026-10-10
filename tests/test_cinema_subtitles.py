@@ -172,3 +172,68 @@ def test_subtitle_endpoint_requires_authorized_viewer_and_verified_text_track(mo
             asyncio.run(movie_night_web.movie_night_subtitle(
                 SimpleNamespace(query={"track": selected}),
             ))
+
+
+
+def test_subdl_off_by_default_and_paid_operator_opt_in(monkeypatch):
+    from stoney_verify import cinema_subtitle_providers as provider
+
+    monkeypatch.delenv("DANK_CINEMA_SUBDL_COMMERCIAL_OK", raising=False)
+    monkeypatch.setenv("DANK_CINEMA_SUBDL_API_KEY", "example-private-api-key")
+    assert not provider.provider_configured()
+    monkeypatch.setenv("DANK_CINEMA_SUBDL_COMMERCIAL_OK", "true")
+    assert provider.provider_configured()
+    monkeypatch.delenv("DANK_CINEMA_SUBDL_API_KEY")
+    assert not provider.provider_configured()
+
+
+def test_subdl_uses_series_id_for_exact_episode_and_rejects_unverified_matches():
+    from stoney_verify import cinema_subtitle_providers as provider
+
+    assert provider._media_query({
+        "media_type": "episode", "tmdb_id": 555, "series_id": 77,
+        "season_number": 3, "episode_number": 9,
+    }) == ("tv", 77, 3, 9)
+    assert provider._media_query({
+        "media_type": "episode", "tmdb_id": 555, "series_id": 77,
+        "season_number": 3, "episode_number": 0,
+    }) is None
+    assert provider._media_query({
+        "media_type": "movie", "tmdb_id": 1234,
+    }) == ("movie", 1234, 0, 0)
+    rows = provider._parse_results({
+        "subtitles": [
+            {"n_id": "real-one", "lang": "en", "release_name": "Film.WEB"},
+            {"n_id": "../../../etc/passwd", "lang": "en"},
+            {"n_id": "other-language", "lang": "fr"},
+        ],
+    }, language="en")
+    assert rows == [{
+        "id": "real-one", "language": "en",
+        "label": "SubDL • Film.WEB", "source": "subdl",
+    }]
+
+
+def test_subdl_download_requires_recent_exact_media_search_selection():
+    from stoney_verify import cinema_subtitle_providers as provider
+
+    provider._ELIGIBLE_IDS.clear()
+    assert not provider.allowed_subdl_id("film-token", "not-seen")
+    provider._ELIGIBLE_IDS[("film-token", "matching-one")] = 10**15
+    assert provider.allowed_subdl_id("film-token", "matching-one")
+    assert not provider.allowed_subdl_id("different-film", "matching-one")
+    assert not provider.allowed_subdl_id("film-token", "../matching-one")
+    provider._ELIGIBLE_IDS.clear()
+
+
+def test_subdl_exact_episode_search_never_sends_key_to_browser(monkeypatch):
+    import asyncio
+    from stoney_verify import cinema_subtitle_providers as provider
+
+    monkeypatch.delenv("DANK_CINEMA_SUBDL_API_KEY", raising=False)
+    monkeypatch.delenv("DANK_CINEMA_SUBDL_COMMERCIAL_OK", raising=False)
+    result = asyncio.run(provider.search_subdl({
+        "media_type": "episode", "series_id": 500,
+        "season_number": 2, "episode_number": 6,
+    }, "en", stream_token="movie-token"))
+    assert result == []
