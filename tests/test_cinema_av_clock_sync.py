@@ -148,7 +148,7 @@ def test_aac_clock_stops_during_video_stall_and_resumes_without_reload() -> None
         ),
         "playing": _between(
             html, 'video.addEventListener("playing",()=>{',
-            'video.addEventListener("pause",refreshAudioPermissionControl);',
+            'video.addEventListener("pause",()=>{',
         ),
     }
     result = subprocess.run(
