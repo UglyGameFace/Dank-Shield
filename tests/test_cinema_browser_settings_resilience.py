@@ -171,3 +171,18 @@ def test_browser_cache_and_media_protection_remain_intact() -> None:
     assert '"Cache-Control": "private, no-store"' in source
     assert '"Referrer-Policy": "no-referrer"' in source
     assert '"Content-Security-Policy": (' in source
+
+
+def test_catalog_and_theater_share_system_accessibility_contract() -> None:
+    from pathlib import Path
+
+    css=(
+        Path(movie_night_web.__file__).resolve().parent
+        / "assets" / "cinema_site.css"
+    ).read_text(encoding="utf-8")
+    assert "@media(forced-colors:active)" in css
+    assert "@media(prefers-contrast:more)" in css
+    assert "@media(prefers-reduced-motion:reduce)" in css
+    assert "-webkit-text-size-adjust:auto;text-size-adjust:auto" in css
+    assert "forced-color-adjust:none;filter:none!important" in css
+    assert ":focus-visible" in css
