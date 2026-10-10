@@ -2478,6 +2478,10 @@ video {{
   border:1px solid var(--line-strong);background:#10201a;color:var(--text);
 }}
 .subtitle-menu input[type="file"] {{width:100%;max-width:100%;font-size:12px;color:var(--text);}}
+.subtitle-menu .subtitle-tuning {{display:grid;gap:4px;}}
+.subtitle-menu .subtitle-tuning label {{display:flex;justify-content:space-between;font-size:12px;}}
+.subtitle-menu input[type="range"] {{width:100%;accent-color:var(--lime);}}
+.video-stage video::cue {{font-size:var(--cinema-caption-size,100%);background:rgba(0,0,0,.65);color:#fff;}}
 .subtitle-search button {{
   border:1px solid var(--line-strong);border-radius:8px;
   background:#233d2d;color:var(--text);font-weight:700;
@@ -3018,6 +3022,12 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
         </div>
         <label for="subtitleFile">Use your own subtitles (.srt or .vtt)</label>
         <input id="subtitleFile" type="file" accept=".srt,.vtt,text/vtt,application/x-subrip">
+        <div class="subtitle-tuning">
+          <label for="subtitleDelay">Timing offset <output id="subtitleDelayValue">0.00s</output></label>
+          <input id="subtitleDelay" type="range" min="-5" max="5" step=".25" value="0" aria-label="Subtitle timing offset">
+          <label for="subtitleSize">Text size <output id="subtitleSizeValue">100%</output></label>
+          <input id="subtitleSize" type="range" min="75" max="175" step="5" value="100" aria-label="Subtitle text size">
+        </div>
         <small id="subtitleStatus" role="status">Select an available language.</small>
       </div>
       <div class="tap-skip-feedback left" id="tapSkipLeft" aria-live="polite">↶ 10s</div>
@@ -3437,6 +3447,17 @@ let appliedSubtitleChoice="";
 let externalSubtitleOptions=[];
 let localSubtitleVttUrl="";
 let localSubtitleLabel="";
+let subtitleDelaySeconds=0;
+let subtitleSizePercent=100;
+const subtitleOriginalCueTimes=new WeakMap();
+const SUBTITLE_STORAGE_KEY="dank-cinema-captions:"+BOOT.uid;
+try {{
+  const saved=JSON.parse(localStorage.getItem(SUBTITLE_STORAGE_KEY)||"{{}}");
+  if(Number.isFinite(Number(saved.delay)))
+    subtitleDelaySeconds=Math.max(-5,Math.min(5,Number(saved.delay)));
+  if(Number.isFinite(Number(saved.size)))
+    subtitleSizePercent=Math.max(75,Math.min(175,Number(saved.size)));
+}} catch(_) {{}}
 let lastProgressPersistAt=0;
 let lastProgressMediaKey="";
 let lastProgressRestoreKey="";
@@ -3849,6 +3870,36 @@ function renderStartupDiagnostics(server={{}}) {{
     browserEl.textContent=bits.length?bits.join(" • "):"waiting for media events";
   }}
 }}
+function rememberSubtitleTuning() {{
+  try {{ localStorage.setItem(SUBTITLE_STORAGE_KEY,JSON.stringify({{
+    delay:subtitleDelaySeconds,size:subtitleSizePercent
+  }})); }} catch(_) {{}}
+}}
+function adjustSubtitleCueTiming() {{
+  for(const item of Array.from(video.querySelectorAll('track[data-cinema-subtitle="1"]'))) {{
+    const cues=item.track?.cues;
+    if(!cues) continue;
+    for(const cue of Array.from(cues)) {{
+      let original=subtitleOriginalCueTimes.get(cue);
+      if(!original) {{
+        original={{start:cue.startTime,end:cue.endTime}};
+        subtitleOriginalCueTimes.set(cue,original);
+      }}
+      try {{
+        cue.startTime=Math.max(0,original.start+subtitleDelaySeconds);
+        cue.endTime=Math.max(cue.startTime+0.05,original.end+subtitleDelaySeconds);
+      }} catch(_) {{}}
+    }}
+  }}
+}}
+function applySubtitleTuning() {{
+  videoStage.style.setProperty("--cinema-caption-size",String(subtitleSizePercent)+"%");
+  document.getElementById("subtitleDelay").value=String(subtitleDelaySeconds);
+  document.getElementById("subtitleSize").value=String(subtitleSizePercent);
+  document.getElementById("subtitleDelayValue").textContent=subtitleDelaySeconds.toFixed(2)+"s";
+  document.getElementById("subtitleSizeValue").textContent=String(subtitleSizePercent)+"%";
+  adjustSubtitleCueTiming();
+}}
 function cinemaSubtitleOptions(s) {{
   const embedded=Array.isArray(s?.subtitle_options)?s.subtitle_options:[];
   const local=localSubtitleVttUrl
@@ -3943,6 +3994,7 @@ function syncCinemaSubtitleTracks(s) {{
   track.addEventListener("load",()=>{{
     if(track.isConnected && appliedSubtitleChoice===token+":"+selectedSubtitleChoice) {{
       try {{track.track.mode="showing";}} catch(_) {{}}
+      adjustSubtitleCueTiming();
       status.textContent="Subtitles: "+String(row.label||"Enabled");
       refreshNativePlayerCapabilities();
     }}
@@ -5870,6 +5922,17 @@ document.getElementById("subtitleTrack").addEventListener("change",event=>{{
   document.getElementById("subtitleMenu").hidden=true;
 }});
 
+document.getElementById("subtitleDelay").addEventListener("input",event=>{{
+  subtitleDelaySeconds=Math.max(-5,Math.min(5,Number(event.target.value)||0));
+  applySubtitleTuning();
+  rememberSubtitleTuning();
+}});
+document.getElementById("subtitleSize").addEventListener("input",event=>{{
+  subtitleSizePercent=Math.max(75,Math.min(175,Number(event.target.value)||100));
+  applySubtitleTuning();
+  rememberSubtitleTuning();
+}});
+applySubtitleTuning();
 document.getElementById("subtitleFile").addEventListener("change",async event=>{{
   const file=event.target.files?.[0];
   if(!file) return;
