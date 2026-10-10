@@ -500,3 +500,29 @@ def test_ambiguous_episode_pack_never_picks_unlabeled_extra_video():
     assert playback.choose_automatic_torrent_file(
         single, {"media_type": "episode", "season_number": 1, "episode_number": 1},
     ).index == 0
+
+
+def test_automatic_start_budget_stops_slow_fallback_chains(monkeypatch):
+    room = SimpleNamespace(
+        room_id="room", host_id=42, ended=False, stream_token="",
+        current_candidate_id="", current_variant_id="",
+    )
+    monkeypatch.setattr(
+        playback, "get_movie_night_manager",
+        lambda: SimpleNamespace(get=lambda _id: room),
+    )
+    monkeypatch.setattr(playback, "_AUTO_START_TOTAL_BUDGET_SECONDS", 0.0)
+    rows = [release(f"Film.2026.1080p.x264.{n}.mp4", seeds=20 - n)
+            for n in range(5)]
+    attempted = []
+
+    async def slow_metadata(_room_id, *, actor_id, candidate_id, variant_id, automatic=False):
+        attempted.append(variant_id)
+        raise TimeoutError("metadata request timed out")
+
+    with pytest.raises(playback.CinemaPlaybackError, match="1 attempted source"):
+        asyncio.run(playback.start_automatic_variant(
+            "room", actor_id=42, candidate_id="candidate",
+            selected=rows[0], ranked=rows, start_variant=slow_metadata,
+        ))
+    assert attempted == [rows[0].variant_id]
