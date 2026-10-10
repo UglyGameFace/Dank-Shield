@@ -19,6 +19,12 @@ from urllib.parse import urlencode
 from aiohttp import web
 from PIL import Image, ImageDraw, ImageFilter
 
+from stoney_verify.cinema_subtitle_providers import (
+    SubtitleProviderUnavailable,
+    download_subdl_vtt,
+    provider_configured,
+    search_subdl,
+)
 from stoney_verify.cinema_subtitles import (
     embedded_text_tracks,
     embedded_vtt_for_session,
@@ -1081,6 +1087,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "audio_track_options": audio_track_options,
         "audio_track_url": audio_track_url,
         "subtitle_options": subtitle_options,
+        "subtitle_provider_available": provider_configured(),
         "guild_id": int(room.guild_id),
         "cast_stream_url": cast_stream_url,
         "media_content_type": (
@@ -6874,6 +6881,49 @@ setInterval(()=>{{ if(!document.hidden) void heartbeat(false); }},3000);
 </html>"""
 
 
+async def movie_night_subtitle_search(request: web.Request) -> web.Response:
+    """Query licensed optional subtitle providers for this exact room title."""
+    room, _uid = await _room_and_user(request)
+    if not provider_configured():
+        return web.json_response({"results": [], "available": False})
+    if not room.stream_token:
+        return web.json_response({"results": [], "available": True})
+    candidate = room.candidates.get(room.current_candidate_id) if room.current_candidate_id else None
+    if candidate is None:
+        return web.json_response({"results": [], "available": True})
+    metadata = _candidate_web_metadata(candidate)
+    language = str(request.query.get("lang", "en") or "en").lower()[:16]
+    try:
+        choices = await search_subdl(metadata, language, stream_token=room.stream_token)
+    except (SubtitleProviderUnavailable, TimeoutError, OSError) as exc:
+        raise web.HTTPServiceUnavailable(
+            text="External subtitles are temporarily unavailable or out of quota."
+        ) from exc
+    return web.json_response({"results": choices, "available": True})
+
+
+async def movie_night_subtitle_provider(request: web.Request) -> web.Response:
+    """Deliver a selected provider subtitle only after fresh room authorization."""
+    room, _uid = await _room_and_user(request)
+    n_id = str(request.query.get("n_id", "") or "")
+    try:
+        data = await download_subdl_vtt(room.stream_token, n_id)
+    except (SubtitleProviderUnavailable, TimeoutError, OSError) as exc:
+        raise web.HTTPServiceUnavailable(
+            text="External subtitle unavailable. Search again or choose embedded text."
+        ) from exc
+    return web.Response(
+        body=data,
+        content_type="text/vtt",
+        charset="utf-8",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        },
+    )
+
+
 async def movie_night_subtitle(request: web.Request) -> web.Response:
     """Serve one verified embedded text stream to one authorized Cinema viewer.
 
@@ -6958,6 +7008,8 @@ def register_movie_night_public_routes(app: web.Application) -> None:
     )
     app.router.add_get("/movie/{room_id}/watch", movie_night_watch)
     app.router.add_get("/movie/{room_id}/subtitle", movie_night_subtitle)
+    app.router.add_get("/movie/{room_id}/subtitles/search", movie_night_subtitle_search)
+    app.router.add_get("/movie/{room_id}/subtitles/provider", movie_night_subtitle_provider)
     app.router.add_get("/movie/{room_id}/state", movie_night_state)
     app.router.add_post("/movie/{room_id}/heartbeat", movie_night_heartbeat)
     app.router.add_post("/movie/{room_id}/action", movie_night_action)
