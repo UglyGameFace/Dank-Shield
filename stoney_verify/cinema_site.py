@@ -2690,7 +2690,7 @@ async def cinema_play_api(request: web.Request) -> web.Response:
             None,
         )
     else:
-        selected = await select_preferred_variant(user_id, ranked)
+        selected = await select_preferred_variant(user_id, ranked, guild_id=int(guild_id))
     if selected is None:
         raise web.HTTPConflict(
             text=(
@@ -2719,6 +2719,7 @@ async def cinema_play_api(request: web.Request) -> web.Response:
                 ranked=ranked,
                 start_variant=start_room_variant,
                 manager=manager,
+                guild_id=int(guild_id),
             )
     except Exception as exc:
         raise web.HTTPBadGateway(
