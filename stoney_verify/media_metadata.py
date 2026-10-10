@@ -91,6 +91,71 @@ def _all_tags(text: str, patterns: tuple[tuple[str, str], ...]) -> list[str]:
     )
 
 
+def browser_video_risk_key(metadata: Mapping[str, Any] | None) -> int:
+    """Conservative cross-browser native video risk based on verified media.
+
+    No torrent title alone proves a particular browser can decode a file.
+    Unprobed releases stay unknown; we prefer known H.264/MP4 releases
+    only when the competing releases have comparable vote/seed status.
+    0=broadly browser-compatible, 1=unknown/browser-dependent, 2=risky.
+    """
+    meta = dict(metadata or {})
+    verified = meta.get("verified")
+    video = verified.get("video") if isinstance(verified, Mapping) else None
+    if not isinstance(video, Mapping) or not video.get("codec"):
+        # Torrent search ranks variants BEFORE their verified FFprobe runs.
+        # Only use provider release claims to flag obvious *risk*, never
+        # to declare a release safe or codec-verified.
+        release = meta.get("release_name")
+        release = release if isinstance(release, Mapping) else {}
+        reported = meta.get("source_reported")
+        reported = reported if isinstance(reported, Mapping) else {}
+        tags = release.get("video_tags")
+        tags = tags if isinstance(tags, (list, tuple)) else ()
+        labels = {str(tag).strip().casefold() for tag in tags}
+        if "hevc" in labels:
+            return 2
+        codec_hint = str(
+            reported.get("video_codec")
+            or reported.get("videoCodec")
+            or reported.get("codec")
+            or ""
+        ).strip().casefold().replace("-", "").replace(".", "")
+        if codec_hint in {"hevc", "h265", "x265", "h26510bit", "hevc10bit"}:
+            return 2
+        # A filename extension is a container hint, not proof of a codec.
+        for name in (
+            reported.get("filename"), reported.get("file_name"),
+            reported.get("fileName"), release.get("raw_filename"),
+        ):
+            suffix = str(name or "").strip().casefold().split("?", 1)[0]
+            if suffix.endswith((".mkv", ".avi", ".mpeg", ".mpg")):
+                return 2
+        return 1
+    codec = str(video.get("codec") or "").strip().casefold()
+    container = str(verified.get("container") or "").strip().casefold()
+    filename = str(verified.get("filename") or "").strip().casefold()
+    fmt = container.split(",")[0] if container else ""
+    if filename.endswith((".mkv", ".avi", ".mpeg", ".mpg")) or fmt in {
+        "matroska", "avi", "mpeg", "mpegvideo",
+    }:
+        return 2
+    if codec in {"mpeg2video", "mpeg4", "vc1", "wmv3", "theora"}:
+        return 2
+    if codec in {"h264", "avc", "avc1"} and (
+        filename.endswith((".mp4", ".m4v"))
+        or fmt in {"mov", "mp4", "m4a", "3gp", "3g2", "mj2"}
+    ):
+        try:
+            depth = int(video.get("bit_depth") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return 1
+        return 0 if depth <= 8 else 1
+    # WebM/VP8/VP9/AV1 and MP4/HEVC are browser-dependent. Neither
+    # native playback nor a video-transcoding fallback is guaranteed.
+    return 1
+
+
 def parse_release_name(filename: str) -> dict[str, Any]:
     """Parse scene/release-name claims without presenting them as verified facts."""
 
