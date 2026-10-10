@@ -219,7 +219,10 @@ def _automatic_rank_key(item: Any, *, preferred_source: str = "") -> tuple[Any, 
     # Completed torrents do not need a positive current download rate.
     observed = meta.get("observed_swarm")
     observed = observed if isinstance(observed, Mapping) else {}
-    age = time.monotonic() - float(observed.get("at") or 0)
+    try:
+        age = time.monotonic() - float(observed.get("at") or 0)
+    except (ValueError, TypeError, OverflowError):
+        age = float("inf")
     if 0 <= age <= 180 and observed:
         progress = float(observed.get("progress") or 0)
         rate = _safe_int(observed.get("download_rate"))
@@ -291,6 +294,7 @@ async def start_automatic_variant(
     selected: Any,
     ranked: Any,
     start_variant: Any = None,
+    max_file_bytes: int = 0,
 ) -> tuple[CinemaPlaybackResult, Any, int]:
     """Retry only startup failures, never swap a playing room behind viewers.
 
@@ -307,7 +311,7 @@ async def start_automatic_variant(
         str(original.current_candidate_id or ""),
         str(original.current_variant_id or ""),
     )
-    limit = _safe_int(getattr(get_torrent_manager(), "max_file_bytes", 0))
+    limit = _safe_int(max_file_bytes)  # Actual torrent start enforces the host cap.
     remaining = [
         row for row in ranked_automatic_variants(ranked, max_file_bytes=limit)
         if selected is None or row.variant_id != selected.variant_id
