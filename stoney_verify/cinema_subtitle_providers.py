@@ -22,7 +22,7 @@ _ID = re.compile(r"^[A-Za-z0-9_-]{2,64}$")
 _LANGUAGE = re.compile(r"^[a-z]{2,3}(?:-[a-z]{2,8})?$")
 _HEADERS = {"Accept": "application/json"}
 _PAID_CHECK: dict[str, tuple[float, bool]] = {}
-_SEARCH_CACHE: dict[tuple[str, str, int, int, int], tuple[float, list[dict]]] = {}
+_SEARCH_CACHE: dict[tuple[str, str, str, int, int, int], tuple[float, list[dict]]] = {}
 _DOWNLOAD_CACHE: dict[tuple[str, str], tuple[float, bytes]] = {}
 _ELIGIBLE_IDS: dict[tuple[str, str], float] = {}
 
@@ -60,7 +60,10 @@ async def _assert_paid(session: aiohttp.ClientSession, key: str) -> None:
             raise SubtitleProviderUnavailable("SubDL account validation failed.")
         payload = await response.json(content_type=None)
     plan = payload.get("plan") if isinstance(payload, Mapping) else {}
-    paid = bool(isinstance(plan, Mapping) and plan.get("is_pro"))
+    paid = bool(isinstance(plan, Mapping) and (
+        plan.get("is_pro") or str(plan.get("name") or "").strip().lower()
+        in {"pro", "ultra"}
+    ))
     if len(_PAID_CHECK) > 16:
         _PAID_CHECK.clear()
     _PAID_CHECK[fingerprint] = (time.monotonic() + 900, paid)
@@ -126,7 +129,7 @@ async def search_subdl(metadata: Mapping, language: str, *, stream_token: str) -
         return []
     media_type, tmdb_id, season, episode = query
     fingerprint = _key_hash(key)
-    cache_key = (fingerprint, lang, tmdb_id, season, episode)
+    cache_key = (fingerprint, media_type, lang, tmdb_id, season, episode)
     cached = _SEARCH_CACHE.get(cache_key)
     if cached and cached[0] > time.monotonic():
         results = cached[1]
