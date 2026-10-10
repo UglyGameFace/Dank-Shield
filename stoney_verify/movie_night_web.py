@@ -2260,8 +2260,10 @@ button {{ cursor:pointer; }}
 }}
 .video-stage {{
   position:relative;
+  width:100%;
   aspect-ratio:16/9;
-  min-height:228px;
+  height:auto;
+  min-height:0;
   overflow:hidden;
   contain:layout paint;
   isolation:isolate;
@@ -2271,6 +2273,21 @@ button {{ cursor:pointer; }}
     var(--backdrop-image,none);
   background-size:cover;
   background-position:center;
+}}
+/* Fullscreen/rotation recovery uses the inline aspect ratio, not a cached
+   pixel height measured while the browser was still in landscape. */
+.video-stage[data-cinema-layout="inline"] {{
+  width:100%;
+  height:auto!important;
+  min-height:0!important;
+  max-height:none!important;
+  aspect-ratio:16/9!important;
+}}
+.video-stage[data-cinema-layout="inline"] video {{
+  inset:0;
+  width:100%;
+  height:100%;
+  object-fit:contain;
 }}
 .video-stage::before {{
   content:"";
@@ -3458,21 +3475,16 @@ function stabilizePlayerLayout() {{
   if(playerLayoutRaf) cancelAnimationFrame(playerLayoutRaf);
   playerLayoutRaf=requestAnimationFrame(()=>{{
     playerLayoutRaf=0;
-    const fullscreen=theaterFullscreenActive();
-    const rect=videoStage.getBoundingClientRect();
-    const width=Math.max(1,Math.round(rect.width||videoStage.clientWidth||0));
-    if(!fullscreen && width>0) {{
-      const height=Math.max(1,Math.round(width*9/16));
-      videoStage.style.height=height+"px";
-      videoStage.style.minHeight="0";
-      videoStage.style.maxHeight=height+"px";
-      videoStage.style.aspectRatio="16 / 9";
-    }} else if(fullscreen) {{
-      videoStage.style.removeProperty("height");
-      videoStage.style.removeProperty("min-height");
-      videoStage.style.removeProperty("max-height");
-      videoStage.style.removeProperty("aspect-ratio");
-    }}
+    // Native video fullscreen can remain reported briefly after Samsung
+    // Internet/Chromium exits. Only fullscreen on the *stage element* should
+    // change its in-page aspect ratio. CSS reflows from the actual parent width.
+    const stageFullscreen=(
+      document.fullscreenElement===videoStage ||
+      document.webkitFullscreenElement===videoStage
+    );
+    videoStage.dataset.cinemaLayout=stageFullscreen?"fullscreen":"inline";
+    for(const property of ["height","min-height","max-height","aspect-ratio"])
+      videoStage.style.removeProperty(property);
     // Samsung Internet/Chromium can keep a stale native video compositor after
     // exiting fullscreen. Reassert the non-interactive media layer so the custom
     // portrait controls remain above it and continue receiving touch events.
@@ -3488,7 +3500,9 @@ function stabilizePlayerLayout() {{
 function recoverPlayerFromViewportChange() {{
   clearPlayerRecoveryTimers();
   videoStage.classList.remove("controls-hidden");
-  for(const delay of [0,60,180,420]) {{
+  // Orientation unlock and browser chrome transitions may settle after the
+  // first fullscreenchange. Recheck geometry without touching src/clock/audio.
+  for(const delay of [0,80,240,600,1200]) {{
     playerRecoveryTimers.push(setTimeout(()=>{{
       stabilizePlayerLayout();
       applyUserAudioState(false);
@@ -3499,9 +3513,11 @@ function recoverPlayerFromViewportChange() {{
 if(typeof ResizeObserver==="function") {{
   const cinemaResizeObserver=new ResizeObserver(()=>stabilizePlayerLayout());
   cinemaResizeObserver.observe(videoStage);
+  if(videoStage.parentElement) cinemaResizeObserver.observe(videoStage.parentElement);
 }}
 window.addEventListener("resize",stabilizePlayerLayout,{{passive:true}});
 window.addEventListener("orientationchange",recoverPlayerFromViewportChange,{{passive:true}});
+screen.orientation?.addEventListener?.("change",recoverPlayerFromViewportChange);
 window.visualViewport?.addEventListener("resize",stabilizePlayerLayout,{{passive:true}});
 function handlePageWake() {{
   // Mobile pageshow, visibilitychange and online may arrive in one burst.

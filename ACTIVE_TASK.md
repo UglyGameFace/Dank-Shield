@@ -1,6 +1,26 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — CINEMA-SMART-AUTOMATIC-SOURCE-SELECTION-20261010
+## CURRENT ACTIVE TASK — CINEMA-FULLSCREEN-PORTRAIT-RECOVERY-20261010
+
+**Source:** User screenshot Oct 10 16:57 Eastern, Samsung Browser, authenticated standalone Mad Max: Fury Road playback. Video displays decoded frames and user confirms clear audio; after entering fullscreen and returning to portrait, inline video stage remains visually too tall/distorted. Need correct layout for standalone and shared Theater in Private Sessions and Watch Parties without restarting a running torrent or altering audio and sync.
+
+**Live production baseline:** GitHub Discloud branch `aaa-cinema-pre-pregateway-bind@07aad2db0c376a8395725a5dbbaa403d7552f045` with `discloud/commit` success. PR #498 smart automatic selection merged, exact-head five workflows green. Running Discloud process SHA and per-mode Android viewer experience not independently verified.
+
+**Task branch:** `fix/cinema-fullscreen-portrait-recovery-20261010` based on that production SHA.
+
+**Root cause / fix:** Shared `stoney_verify/movie_night_web.py` previously set fixed pixel `videoStage.style.height=Math.round(rect.width*9/16)+"px"` in resize/fullscreen and removed it depending on a fullscreen signal that could include stale native `video.webkitDisplayingFullscreen`. Browser rotation can report transitional landscape dimensions or stale fullscreen compositor when leaving fullscreen. New code removes JS pixel locks, relies on CSS responsive 16:9 aspect ratio with explicit inline state and actual stage `document.fullscreenElement` checks; adds orientation-change, parent ResizeObserver and deferred settle rechecks. No `video.src`, `video.load`, seek, player session or audio/host timing mutations. Focused regression tests in `tests/test_cinema_fullscreen_portrait.py`.
+
+**Scope and acceptance:** Fullscreen landscape -> inline portrait -> fullscreen again (3+ cycles), Samsung Browser and another desktop/mobile browser, while video and per-viewer audio continue; no black frame, crop, stretched video, extra-height stage, player click breakage, host/viewer clock jumps, duplicate torrent sessions. Also verify Private Session and Watch Party use same shared Theater and independent viewer audio; **standalone evidence alone cannot certify modes not yet tested**. Complete exact-head CI, test and patch audit, merge/deployment status before user rechecks browser.
+
+**Research and contract evidence:** MDN Fullscreen API requires `Document.fullscreenElement` truth after the fullscreenchange event; `ScreenOrientation.lock` is limited support and may reject, so orientation is optional. Browser `HTMLMediaElement.play()` may reject NotAllowedError on audio and native `audioTracks` lacks uniform browser support. Runtime investigation confirms `/movie/{room_id}/watch` uses one `_watch_html` for all modes, each authenticated via signed room/UID URL plus guild membership and `MovieNightManager.user_can_access`. Standalone is host-only, Private is invited/host-only, Watch Party allows eligible guild members. A common `_state_payload` emits room-authoritative clock + viewer-specific `stream_consumer`, signed media and FFmpeg audio track URLs; `movie_night_preferences` fetches user preferences for current guild. The shared page's Sync gesture initiates both video + compatibility audio before awaiting async network response. Cross-mode runtime contract regressions added in `tests/test_cinema_cross_mode_theater_contract.py` for all modes and two viewers, with signed page access, separate consumer/audio URLs, same shared clock/host authority and language scoping. No live two-device browser proof exists yet, so do not claim decoded audio/video or exact A/V lip-sync guarantees.
+
+**Status:** Isolated fullscreen patch and multi-mode contract tests committed to draft PR #499; exact-head CI re-running. Discloud production remains at prior SHA until merge. Confirm CI and realistic browser/device acceptance before declaring complete.
+
+## PREVIOUS TASK CHECKPOINT — CINEMA-SMART-AUTOMATIC-SOURCE-SELECTION-20261010 (MERGED)
+
+**Result:** PR #498 merged to Discloud branch `aaa-cinema-pre-pregateway-bind@07aad2db0c376a8395725a5dbbaa403d7552f045`. Exact-head GitHub checks for its PR head `5ffd3082373b5d353b3d5bbcf4fcb43737bc2f7f` passed all 5 workflow groups; `discloud/commit` success. User independently verified standalone Mad Max video/audio. Private Session and Watch Party real-mode acceptance remains unverified.
+
+## ARCHIVED DETAILS — CINEMA-SMART-AUTOMATIC-SOURCE-SELECTION-20261010
 
 **FORCE SWITCH authorized:** User wrote `FORCE SWITCH: Complete Dank Cinema automatic smart selection`, reason prioritize intelligent selection over remaining episode-picker acceptance.
 

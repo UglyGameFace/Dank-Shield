@@ -1493,7 +1493,16 @@ def test_player_layout_recovers_from_mobile_desktop_mode_resizes() -> None:
     assert 'video.addEventListener("webkitendfullscreen"' in html
     assert 'document.addEventListener("webkitfullscreenchange",handleFullscreenChange)' in html
     assert 'video.style.pointerEvents="none"' in html
-    assert "videoStage.style.maxHeight=height+\"px\"" in html
+    # CSS now owns portrait 16:9 geometry. Cached pixel heights can retain
+    # landscape dimensions when mobile browsers exit native fullscreen.
+    assert '.video-stage[data-cinema-layout="inline"]' in html
+    assert "aspect-ratio:16/9!important;" in html
+    assert "height:auto!important;" in html
+    assert "max-height:none!important;" in html
+    assert 'videoStage.dataset.cinemaLayout=stageFullscreen?"fullscreen":"inline";' in html
+    assert "document.fullscreenElement===videoStage" in html
+    assert 'videoStage.style.height=height+"px"' not in html
+    assert 'videoStage.style.maxHeight=height+"px"' not in html
 
 
 
