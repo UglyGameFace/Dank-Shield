@@ -402,11 +402,13 @@ async def _discover(account: SubtitleAccount, metadata: Mapping, language: str) 
 
     task = asyncio.create_task(perform())
     _SEARCH_INFLIGHT[pending_key] = task
-    try:
-        return await asyncio.shield(task)
-    finally:
-        if task.done() and _SEARCH_INFLIGHT.get(pending_key) is task:
-            _SEARCH_INFLIGHT.pop(pending_key, None)
+    task.add_done_callback(
+        lambda finished, k=pending_key: (
+            _SEARCH_INFLIGHT.pop(k, None)
+            if _SEARCH_INFLIGHT.get(k) is finished else None
+        )
+    )
+    return await asyncio.shield(task)
 
 
 async def discover_subtitles(
