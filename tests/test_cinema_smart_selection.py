@@ -253,3 +253,71 @@ def test_all_explicitly_risky_candidates_fail_closed():
     hevc = release("Film.2026.1080p.HEVC.mkv", seeds=400)
     avi = release("Film.2026.720p.x264.avi", seeds=20)
     assert playback.ranked_automatic_variants([hevc, avi]) == []
+
+
+def test_auto_start_rejects_verified_incompatible_file_and_releases_lease(monkeypatch):
+    from stoney_verify.movie_night import MovieNightManager
+
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=100, channel_id=200, host_id=42,
+        stream_token="", mode="standalone",
+    )
+    candidate = manager.nominate(
+        room.room_id, user_id=42, title="Film 2026", auto_vote=False,
+    )
+    variant = manager.add_variant(
+        room.room_id, candidate.candidate_id, user_id=42,
+        source_ref="magnet:?xt=urn:btih:" + "a" * 40,
+        seeds=10, auto_vote=False,
+    )
+    torrent_session = SimpleNamespace(
+        token="new-token", file_name="Film.2026.x264.mp4",
+        file_index=0, file_size=1024,
+        candidates=[SimpleNamespace(index=0, path="Film.2026.x264.mp4", size=1024)],
+        release_metadata=parse_release_name("Film.2026.x264.mp4"),
+        verified_metadata={
+            "available": True,
+            "container": "mov,mp4,m4a,3gp,3g2,mj2",
+            "video": {"codec": "hevc", "bit_depth": 10},
+        },
+        metadata_probe_running=False,
+    )
+    released = []
+
+    class FakeTorrents:
+        max_file_bytes = 8 * 1024 ** 3
+
+        async def start_magnet(self, *_args, **_kwargs):
+            return torrent_session
+
+        def schedule_metadata_probe(self, _session):
+            return False
+
+        async def release_lease(self, token, lease_key, *, remove_if_unused):
+            released.append((token, lease_key, remove_if_unused))
+
+        def stream_url(self, _session):
+            raise AssertionError("Incompatible source must never be published")
+
+    monkeypatch.setattr(playback, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(playback, "get_torrent_manager", lambda: FakeTorrents())
+    with pytest.raises(playback.CinemaPlaybackError, match="unsuitable"):
+        asyncio.run(playback.start_room_variant(
+            room.room_id, actor_id=42, candidate_id=candidate.candidate_id,
+            variant_id=variant.variant_id, automatic=True,
+        ))
+    assert released == [("new-token", "movie:100:200", True)]
+    assert room.stream_token == ""
+    assert room.current_candidate_id == ""
+
+
+def test_auto_file_choice_prefers_non_risky_mp4_over_larger_mkv():
+    session = SimpleNamespace(candidates=[
+        SimpleNamespace(index=0, path="Film.2026.1080p.HEVC.mkv", size=4 * 1024 ** 3),
+        SimpleNamespace(index=1, path="Film.2026.720p.x264.mp4", size=2 * 1024 ** 3),
+    ])
+    chosen = playback.choose_automatic_torrent_file(
+        session, {"media_type": "movie", "title": "Film"},
+    )
+    assert chosen.index == 1
