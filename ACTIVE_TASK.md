@@ -1,5 +1,21 @@
 # Dank Shield Active Task
 
+## CURRENT ACTIVE TASK — CINEMA-SUBTITLE-SUPPORT-20261010
+
+**Authorized switch:** User explicitly requested immediate subtitle implementation after confirming PR #499 merged. This replaces the fullscreen task, which is now merged.
+
+**Production baseline:** `aaa-cinema-pre-pregateway-bind@714e2af63b7cfa0fa1837c3e9e0832445246816d` (PR #499 merge).
+
+**Branch:** `feat/cinema-subtitle-foundation-20261010`.
+
+**Scope:** Safe subtitle foundation first: bounded SRT parsing and WebVTT conversion, then authenticated per-viewer subtitle tracks, embedded text subtitle extraction, and optional external provider integration with provider quotas and licensing respected. Preserve shared playback clock and independent audio tracks; do not assume SubDL or OpenSubtitles have unlimited free commercial API usage. Provider keys must be configured securely, not committed. Validate all paths and exact-head CI before merging.
+
+**Current status:** Initial SRT→WebVTT module and unit tests committed. Browser track delivery, provider adapters, embedded extraction, per-user preferences and complete CI are not yet implemented. PR remains unmerged; do not represent this as completed subtitle support.
+
+## PREVIOUS TASK — CINEMA-FULLSCREEN-PORTRAIT-RECOVERY-20261010 (MERGED)
+
+**Result:** PR #499 merged as `714e2af63b7cfa0fa1837c3e9e0832445246816d`. Live multi-browser fullscreen and 20-person audio load acceptance remain separate from code merge.
+
 ## CURRENT ACTIVE TASK — CINEMA-FULLSCREEN-PORTRAIT-RECOVERY-20261010
 
 **Source:** User screenshot Oct 10 16:57 Eastern, Samsung Browser, authenticated standalone Mad Max: Fury Road playback. Video displays decoded frames and user confirms clear audio; after entering fullscreen and returning to portrait, inline video stage remains visually too tall/distorted. Need correct layout for standalone and shared Theater in Private Sessions and Watch Parties without restarting a running torrent or altering audio and sync.
