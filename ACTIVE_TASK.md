@@ -1,6 +1,30 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — CINEMA-AUTO-SOURCE-RESULT-WINDOW-20261010
+## CURRENT ACTIVE TASK — CINEMA-EPISODE-RELEASE-PICKER-20261010
+
+**Outcome:** Enable release selection for exact TV episodes on Dank Cinema, preserving automatic Play/Resume while allowing manual selection after no-compatible-release errors.
+
+**User evidence:** Oct 10 12:58 PM Eastern Carrie S01E01-S01E08 details screen. Every episode has Play/Resume, but no selectable release; the bottom Playback Source panel says to choose an episode, despite no actual episode-release UI.
+
+**Branch:** `fix/cinema-episode-source-picker-20261010` from Discloud auto-deploy branch `aaa-cinema-pre-pregateway-bind@812834b8ee5592026e80dc4a23b4bb82a0659f25`, after PR #495 merged and successful Discloud commit status. Running-process SHA and real provider inventory still require verification.
+
+**Status:** Backend/API/frontend work and focused tests committed in isolated branch; exact-head CI and runtime/browser acceptance pending. Not merged or deployed.
+
+### Root cause and execution
+- Movie details API returned source choices; TV details returned `sources: []` and an instruction without controls. Season cards only called `playOnSite(episode)` without a source-selection path.
+- The existing `/api/play` already accepts an opaque `source_choice` and validates it against real exact-episode provider variants. The missing part was authenticated episode-specific listing and a click path that supplies the choice.
+- New `GET /api/episode-sources/{series_id}/{season}/{episode}?tmdb_id={id}` requires the same guild/member identity, catalog episode ID and adult-content policy. It caches a bounded 90-second one-shot source snapshot already supported by the canonical Play route and returns only opaque source-choice IDs, never source URLs.
+- Site season cards gain opt-in `Choose Release`; no provider lookup occurs merely by loading a season. Source choices show provider, reported seeds, video compatibility caution, and explicit play; the existing Play/Resume stays automatic.
+
+### Tests / validation / protection
+- Focused tests cover opaque exact-episode results, lower-seed non-risky candidates, manual source choice with no duplicate search, invalid episode ID, guild adult policy, and JS event hookup.
+- Preserve exact session authority, browser player, torrent streaming, room permissions, source providers, feed settings and manual bypass of preflight for host-chosen releases.
+- Run exact-head CI, Python compile/full tests, UI/asset regression, static checks and diff review before merge. Accept production only after playing a real episode from both automatic and manual source choice and confirming first rendered frame plus audio on Android and a second browser. Available candidates may still be unverified or genuinely incompatible.
+- No Discloud changes are authorized until review and validation gates pass.
+
+**Next:** Create scoped draft PR to `aaa-cinema-pre-pregateway-bind`; await exact-head CI and inspect final diff, then verify live on Android.
+
+## PRIOR CHECKPOINT — CINEMA-AUTO-SOURCE-RESULT-WINDOW-20261010
 
 **Outcome:** Ensure high-seed HEVC/MKV results do not crowd lower-seed, potentially browser-compatible releases out of the existing per-provider selection window for Dank Cinema automatic playback.
 
