@@ -1008,6 +1008,7 @@ def test_limited_body_enforces_selected_response_budget() -> None:
     )
     assert accepted == payload
 
+
 def test_provider_result_cap_keeps_compatible_candidate_beyond_first_25() -> None:
     """High-seed HEVC entries must not hide a later x264 release."""
     items = [
