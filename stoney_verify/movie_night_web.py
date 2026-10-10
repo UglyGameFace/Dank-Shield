@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 from urllib.parse import urlencode
 
-from aiohttp import web
+from aiohttp import ClientError, web
 from PIL import Image, ImageDraw, ImageFilter
 
 from stoney_verify.cinema_subtitle_providers import (
@@ -929,7 +929,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
             if not audio_track_url:
                 audio_track_options = []
     if session is not None and shutil.which("ffmpeg"):
-        subtitle_options = embedded_text_tracks(session.verified_metadata)
+        subtitle_options = embedded_text_tracks(getattr(session, "verified_metadata", {}))
     cast_stream_url = (
         torrent_manager.stream_url(
             session,
@@ -7026,7 +7026,7 @@ async def movie_night_subtitle_search(request: web.Request) -> web.Response:
     language = str(request.query.get("lang", "en") or "en").lower()[:16]
     try:
         choices = await search_subdl(metadata, language, stream_token=room.stream_token)
-    except (SubtitleProviderUnavailable, TimeoutError, OSError) as exc:
+    except (SubtitleProviderUnavailable, TimeoutError, OSError, ClientError) as exc:
         raise web.HTTPServiceUnavailable(
             text="External subtitles are temporarily unavailable or out of quota."
         ) from exc
@@ -7039,7 +7039,7 @@ async def movie_night_subtitle_provider(request: web.Request) -> web.Response:
     n_id = str(request.query.get("n_id", "") or "")
     try:
         data = await download_subdl_vtt(room.stream_token, n_id)
-    except (SubtitleProviderUnavailable, TimeoutError, OSError) as exc:
+    except (SubtitleProviderUnavailable, TimeoutError, OSError, ClientError) as exc:
         raise web.HTTPServiceUnavailable(
             text="External subtitle unavailable. Search again or choose embedded text."
         ) from exc
@@ -7070,7 +7070,7 @@ async def movie_night_subtitle(request: web.Request) -> web.Response:
     session = await manager.get(room.stream_token) if room.stream_token else None
     if session is None or not manager.session_usable(session):
         raise web.HTTPNotFound(text="This Cinema title is no longer available.")
-    available = embedded_text_tracks(session.verified_metadata)
+    available = embedded_text_tracks(getattr(session, "verified_metadata", {}))
     if track not in {int(row["index"]) for row in available}:
         raise web.HTTPNotFound(text="That verified subtitle track is unavailable.")
     consumer = f"movie:{int(uid)}:subtitle"
