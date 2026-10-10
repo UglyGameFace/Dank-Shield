@@ -71,7 +71,7 @@ async function main() {
   video.paused=false;
   assert.equal(frame.streamHealthLabel(room),"Waiting for first decoded video frame");
   frame.startupTrace.events.first_frame=1234;
-  assert.equal(frame.streamHealthLabel(room),"Video frames rendered");
+  assert.equal(frame.streamHealthLabel(room),"Video frames rendering");
   video.paused=true;
   assert.equal(frame.streamHealthLabel(room),"Playback requested; waiting for browser video");
   video.readyState=1;
@@ -140,11 +140,14 @@ def test_cinema_host_media_playback_uses_real_state_not_old_pause_feedback() -> 
 
 def test_browser_frame_probe_must_not_forge_a_rendered_frame_from_media_time() -> None:
     html=movie_night_web._watch_html("room-video-evidence",42,"uid=42&exp=9999999999&sig=test")
-    assert 'video.requestVideoFrameCallback(()=>markStartupEvent("first_frame"))' in html
+    assert 'video.requestVideoFrameCallback(()=>{' in html
+    assert 'watchDecodedFrames(activeMediaGeneration);' in html
+    assert 'latestDecodedFrameAt=performance.now();' in html
     assert 'markStartupEvent("clock_advanced")' in html
     assert 'Number(video.currentTime||0)>0' in html
     assert 'markStartupEvent("first_frame");' not in html
-    assert 'return "Video frames rendered"' in html
+    assert 'return "Video frames rendering"' in html
+    assert 'return "Video stalled; no fresh decoded frames"' in html
     assert 'return "Video clock advancing; frames unverified"' in html
     assert 'frameSeen?"; decoded video frame confirmed"' in html
     assert 'video.addEventListener("pause",()=>{' in html
