@@ -673,7 +673,8 @@ def test_cinema_site_play_without_room_creates_host_only_standalone_room(monkeyp
         assert media.tmdb_id == 123
         return metadata, "Example Movie", outcome
 
-    async def preferred(_user_id, rows):
+    async def preferred(_user_id, rows, *, guild_id=0):
+        assert guild_id == 100
         return list(rows)[0]
 
     async def start_variant(room_id, *, actor_id, candidate_id, variant_id, automatic=False):
@@ -774,7 +775,8 @@ def test_cinema_details_source_snapshot_is_reused_by_immediate_play(monkeypatch)
         assert media.tmdb_id == 123
         return metadata, "Example Movie", outcome
 
-    async def preferred(_user_id, rows):
+    async def preferred(_user_id, rows, *, guild_id=0):
+        assert guild_id == 100
         return list(rows)[0]
 
     async def start_variant(room_id, *, actor_id, candidate_id, variant_id, automatic=False):
