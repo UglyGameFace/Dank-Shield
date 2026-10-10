@@ -1889,8 +1889,12 @@ def test_dank_cinema_host_play_does_not_wait_for_buffering_before_resume() -> No
     assert "await compatAudio.play()" not in primer
     assert "video.pause();" not in primer
     assert "const attempt=video.play();" in primer
-    assert 'if(!hostPlayGesturePending && lastState.state!=="playing")' in html
-    assert '!hostPlayGesturePending && lastState.state!=="paused"' in html
+    # Native PiP/fullscreen controls may propagate deliberate host actions,
+    # but ordinary playback events must not feed a second Play/Pause to room.
+    assert 'if(nativeVideoControlsActive() && !hostPlayGesturePending' in html
+    assert 'nativeVideoControlsActive() && lastState.state==="playing"' in html
+    assert 'requestHostVideoPlayFromState();' in html
+    assert 'try { await video.play(); } catch(_) {}' not in html
 
 
 def test_dank_cinema_resume_confirms_position_not_playback() -> None:
