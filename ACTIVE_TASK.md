@@ -1,6 +1,24 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — CINEMA-UNSUPPORTED-AUTO-SOURCE-PREFLIGHT-20261009
+## CURRENT ACTIVE TASK — CINEMA-LEGACY-PLAYBACK-GLITCH-TRUTH-20261009
+
+**Production baseline (verified):** Discloud auto-deploy branch aaa-cinema-pre-pregateway-bind at 48f4053ed329e84ec18b45728241c6ca6a844ccf; PR #490/#491 merged and deployed. Forked fix/492-cinema-playback-state-legacy-loop-20261009 from this exact SHA. No change to production until PR CI and real device validation.
+
+**User evidence:** Oct 9 ~11:24 PM Eastern, Samsung Internet The Theater / Mad Max: Fury Road. Torrent 100%, 0 B/s, seeds/leechers labeled "reported" 421/49, media verified H264 + MP4, browser canPlayType says probably, JS health says "Video playing" while timing says "Video paused • embedded audio" and scene is black/glitchy. Browser startup metadata 358ms, playing event 9.09s, initial frame callback 9.34s. Server first request and first byte **both** around 282.7 seconds after session origin: does not prove 282 seconds of download latency; browser request occurred late. 100%/0B/s can be a completed torrent, not failure. Reported seeds are provider counts, not live connections.
+
+**Confirmed old-code conflicts:**
+- streamHealthLabel is based on s.state intent + video.readyState + past first_frame, and pause events refresh some controls but not Stream Health. "Video playing" may be a stale label while the HTML video is paused.
+- Browser without requestVideoFrameCallback could mark first_frame simply because currentTime increased, falsely claiming actual rendered video.
+- applyState host polls every 2 sec and awaits video.play() while a promise can remain pending during buffering; multiple state responses may overlap rather than coalesce.
+- Ordinary HTML video play/pause events call hostAction(resume/pause) even when caused by player recovery, remoteApply timing races or involuntary media events. The custom buttons already handle explicit user actions; PiP/native fullscreen interactions need separate treatment.
+
+**Fix:** Only call host play once while pending; never await it in state reconciliation; keep explicit Play user gesture and native PiP/fullscreen host controls; guard involuntary media events from mutating shared host state; base health on actual paused/readyState and track ongoing requestVideoFrameCallback frames, including frozen playback after a 5s gap; timeupdate without frame callback reports clock advancement, not a confirmed video frame. Preserve signed source, torrent byte routes, cast, FFmpeg AAC, watch-party clock, role permissions and per-guild user audio.
+
+**Validation:** New Node regression executes rendered Theater JS with unresolved Promise, multiple simulated polls, media pause/play event forwarding and active vs stalled video health. Existing stale tests updated to assert removal of old echo. CI, source/security checks, and actual Samsung Browser (first frame, 2min continuous video + audible embedded/AAC audio, seek 1min, pause/play, background restore) required. No claim of universal browser compatibility until real testing. Examine whether overlapping viewer play promises and CDN source range performance remain concerns if tests show glitches.
+
+**Single active task only:** Do not switch to Basic Verify, Dr STONE, or unrelated Dank Shield projects without explicit FORCE SWITCH.
+
+## PRIOR CHECKPOINT — CINEMA-UNSUPPORTED-AUTO-SOURCE-PREFLIGHT-20261009
 
 ### Browser-settings resilience, same active Cinema task, stacked companion PR #491
 

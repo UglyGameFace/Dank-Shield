@@ -27,6 +27,9 @@ const video = {
 };
 const ctx = {
   video,
+  // The actual Theater initializes this before handling codec support.
+  // An empty event trace must not be treated as confirmed video frames.
+  startupTrace: {events:{}},
   document: {getElementById: () => element},
   String,
 };

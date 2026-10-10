@@ -3342,6 +3342,7 @@ let lastJoinRetargetAt=0;
 let lastHardSyncSeekAt=0;
 let streamRetryTimer=null;
 let streamRetryAttempt=0;
+const STREAM_RETRY_LIMIT=3;
 let sessionReconnectTimer=null;
 let sessionReconnectAttempt=0;
 let sessionReconnectInFlight=false;
@@ -3355,6 +3356,12 @@ let startupTrace={{
   events:{{}},
   firstFrameRequested:false
 }};
+// A browser video.play() promise may remain pending while media buffers.
+let latestDecodedFrameAt=0;
+let activeMediaGeneration=0;
+let hostAutoPlayPending=false;
+let hostAutoPlayAttempt=0;
+let hostAutoPlayBlocked=false;
 let hostSheetDismissed=true;
 let previousHostState=null;
 let controlsHideTimer=null;
@@ -3549,6 +3556,7 @@ function privateTapSkip(delta) {{
   const duration=Number.isFinite(video.duration)?Number(video.duration):Infinity;
   const target=Math.max(0,Math.min(duration,current+Number(delta||0)));
   if(!safeSeek(target)) return false;
+  scheduleHostSeekCommit(true);
   showTapSkipFeedback(delta);
   return true;
 }}
@@ -3723,7 +3731,9 @@ function renderStartupDiagnostics(server={{}}) {{
     if(e.canplay!==undefined) bits.push("can play "+fmtDiagnosticMs(e.canplay));
     if(e.play_to_playing!==undefined) bits.push("Play→playing "+fmtDiagnosticMs(e.play_to_playing));
     else if(e.playing!==undefined) bits.push("playing "+fmtDiagnosticMs(e.playing));
-    if(e.first_frame!==undefined) bits.push("frame "+fmtDiagnosticMs(e.first_frame));
+    if(e.first_frame!==undefined) bits.push("rendered frame "+fmtDiagnosticMs(e.first_frame));
+    else if(e.clock_advanced!==undefined)
+      bits.push("clock advanced "+fmtDiagnosticMs(e.clock_advanced)+" (frame unverified)");
     browserEl.textContent=bits.length?bits.join(" • "):"waiting for media events";
   }}
 }}
@@ -4118,9 +4128,12 @@ function browserVideoCapability(s) {{
   if(!codecHint) return {{
     supported:null, label:detail+" • browser codec status uncertain"
   }};
+  const frameSeen=startupTrace.events.first_frame!==undefined;
   return {{
     supported:true,
-    label:detail+" • browser reports "+decision+"; awaiting real video frames"
+    label:detail+" • browser reports "+decision+
+      (frameSeen?"; decoded video frame confirmed":
+      "; awaiting actual decoded video frame")
   }};
 }}
 function renderBrowserMediaSupport(s) {{
@@ -4142,12 +4155,23 @@ function streamHealthLabel(s) {{
   // Peer count and total torrent completion cannot establish playable media.
   // HAVE_FUTURE_DATA (3) proves the browser has at least a little video ahead.
   if(video.readyState<3) return "Preparing playable video";
+  // The room's intent to play and an HTMLVideoElement actually playing are
+  // different facts. Never leave a green success label on a paused element.
+  if(video.paused) return s.state==="playing"
+    ?"Playback requested; waiting for browser video":"Video paused";
   if(s.state==="playing" && !video.paused) {{
     if(
-      typeof video.requestVideoFrameCallback==="function"
-      && startupTrace.events.first_frame===undefined
-    ) return "Waiting for first video frame";
-    return "Video playing";
+      latestDecodedFrameAt>0 &&
+      typeof video.requestVideoFrameCallback==="function" &&
+      !document.hidden &&
+      performance.now()-latestDecodedFrameAt>5000
+    ) return "Video stalled; no fresh decoded frames";
+    if(startupTrace.events.first_frame!==undefined) return "Video frames rendering";
+    if(typeof video.requestVideoFrameCallback==="function")
+      return "Waiting for first decoded video frame";
+    // A browser without a frame callback may be advancing its audio clock
+    // while rendering no picture. Report this as unverified, not successful.
+    return "Video clock advancing; frames unverified";
   }}
   if(s.state==="playing") return "Waiting for browser playback";
   return "Video ready to play";
@@ -4537,6 +4561,13 @@ function attachStream(url, force=false) {{
   const clean=String(url||"");
   if(!clean) return;
   if(!force && attachedStreamUrl===clean && video.getAttribute("src")) return;
+  // An old stream's play() result must not control the replacement stream.
+  hostAutoPlayAttempt++;
+  hostAutoPlayPending=false;
+  hostAutoPlayBlocked=false;
+  activeMediaGeneration++;
+  latestDecodedFrameAt=0;
+  if(attachedStreamUrl!==clean) streamRetryAttempt=0;
   attachedStreamUrl=clean;
   resetStartupTrace();
   resetPlaybackRate();
@@ -4552,7 +4583,21 @@ function scheduleStreamRetry() {{
     streamRetryTimer!==null ||
     !lastState?.stream_url
   ) return;
-
+  const code=Number(video.error?.code||0);
+  if(code===1) return; // User/UA-aborted media is not a retryable error.
+  if(code===3 || code===4) {{
+    // MEDIA_ERR_DECODE and MEDIA_ERR_SRC_NOT_SUPPORTED cannot be repaired by
+    // endlessly force-loading the same bytes. Keep the session and let the
+    // viewer choose a different authorized release.
+    notice.textContent=code===3
+      ?"The browser could not decode this video. Try another Cinema release."
+      :"This browser cannot play the selected source. Try another release.";
+    return;
+  }}
+  if(streamRetryAttempt>=STREAM_RETRY_LIMIT) {{
+    notice.textContent="The media stream failed repeatedly. Automatic reload stopped. Try another release.";
+    return;
+  }}
   const step=Math.min(streamRetryAttempt,4);
   const delay=Math.min(15000,2500*Math.pow(1.6,step));
   streamRetryAttempt+=1;
@@ -4560,16 +4605,21 @@ function scheduleStreamRetry() {{
     "The source is still preparing. Keeping your Cinema session and retrying in "+
     Math.ceil(delay/1000)+"s…";
 
+  const retryStreamToken=String(lastState.stream_token||"");
   streamRetryTimer=setTimeout(async()=>{{
     streamRetryTimer=null;
-    if(terminated || !lastState?.stream_url) return;
+    if(terminated || !lastState?.stream_url ||
+       String(lastState.stream_token||"")!==retryStreamToken) return;
 
     try {{
       const fresh=await jsonFetch("/movie/"+BOOT.roomId+"/state");
       await applyState(fresh);
     }} catch(_) {{}}
 
-    if(terminated || !lastState?.stream_url) return;
+    // A host may have selected another movie while the timer was waiting.
+    // Never reload the replacement merely because the old source failed.
+    if(terminated || !lastState?.stream_url ||
+       String(lastState.stream_token||"")!==retryStreamToken) return;
     attachStream(lastState.stream_url,true);
   }},delay);
 }}
@@ -4645,14 +4695,22 @@ async function maybeRestoreWatchProgress(s) {{
   }}
 }}
 
-function scheduleHostSeekCommit() {{
-  if(remoteApply || progressResumeApplying || !lastState?.is_host) return;
+function scheduleHostSeekCommit(explicitUserSeek=false) {{
+  // Internal seeks (resume, late-join, decoder metadata) must never be sent
+  // back as new host seek commands. Explicit controls win over a state poll.
+  if((remoteApply && !explicitUserSeek) ||
+     progressResumeApplying || !lastState?.is_host) return;
   if(hostSeekCommitTimer!==null) clearTimeout(hostSeekCommitTimer);
+  // A later automatic seek or replacement must not overwrite the user's
+  // actual requested target or replay the seek against another movie.
+  const intendedSeconds=Math.max(0,Number(video.currentTime||0));
+  const selectedStreamToken=String(lastState.stream_token||"");
   hostSeekCommitTimer=setTimeout(async()=>{{
     hostSeekCommitTimer=null;
-    if(remoteApply || progressResumeApplying || !lastState?.is_host) return;
-    const seconds=Math.max(0,Number(video.currentTime||0));
-    await hostAction("seek",{{seconds}});
+    if((remoteApply && !explicitUserSeek) ||
+       progressResumeApplying || !lastState?.is_host ||
+       String(lastState.stream_token||"")!==selectedStreamToken) return;
+    await hostAction("seek",{{seconds:intendedSeconds}});
     persistWatchProgress(true);
   }},250);
 }}
@@ -4752,6 +4810,29 @@ function correctSyncedDrift(target) {{
   if(drift<=SOFT_DRIFT_STOP) resetPlaybackRate();
 }}
 
+function requestHostVideoPlayFromState() {{
+  if(hostAutoPlayPending || hostAutoPlayBlocked || !video.paused || terminated)
+    return;
+  hostAutoPlayPending=true;
+  const attempt=++hostAutoPlayAttempt;
+  let pending;
+  try {{ pending=video.play(); }}
+  catch(err) {{ pending=Promise.reject(err); }}
+  // Room polls must not block on an unsettled browser media play promise.
+  void Promise.resolve(pending).catch(err=>{{
+    if(attempt!==hostAutoPlayAttempt || terminated) return;
+    if(err?.name==="NotAllowedError") {{
+      hostAutoPlayBlocked=true;
+      notice.textContent="Your browser requires a Play tap to allow video and sound.";
+    }} else if(err?.name!=="AbortError") {{
+      notice.textContent="Browser playback failed. Check Advanced Stream Details or press Play to retry.";
+    }}
+  }}).finally(()=>{{
+    if(attempt!==hostAutoPlayAttempt) return;
+    hostAutoPlayPending=false;
+    refreshStreamHealth();
+  }});
+}}
 async function applyState(s) {{
   lastState=s;
   applyCompatAudioState(s);
@@ -4870,9 +4951,8 @@ async function applyState(s) {{
     if(s.is_host) {{
       resetPlaybackRate();
       if((s.state==="paused" || s.state==="buffering") && !video.paused) video.pause();
-      if(s.state==="playing" && video.paused) {{
-        try {{ await video.play(); }} catch(_) {{}}
-      }}
+      if(s.state==="playing" && video.paused)
+        requestHostVideoPlayFromState();
     }} else if(s.sync_status==="joining") {{
       resetPlaybackRate();
       if(!syncRequested) {{
@@ -5339,15 +5419,19 @@ async function togglePlayerPlayback() {{
 document.getElementById("centerPlay").onclick=togglePlayerPlayback;
 document.getElementById("playerToggle").onclick=togglePlayerPlayback;
 document.getElementById("rewind10").onclick=()=>{{
-  if(lastState?.is_host) safeSeek(Math.max(0,(video.currentTime||0)-10));
+  if(lastState?.is_host && safeSeek(Math.max(0,(video.currentTime||0)-10)))
+    scheduleHostSeekCommit(true);
 }};
 document.getElementById("forward10").onclick=()=>{{
-  if(lastState?.is_host) safeSeek(Math.min(Number.isFinite(video.duration)?video.duration:Infinity,(video.currentTime||0)+10));
+  if(lastState?.is_host && safeSeek(Math.min(
+    Number.isFinite(video.duration)?video.duration:Infinity,(video.currentTime||0)+10
+  ))) scheduleHostSeekCommit(true);
 }};
 document.getElementById("nextEpisode").onclick=()=>playNextEpisode(true);
 document.getElementById("timeline").addEventListener("input",event=>{{
   if(!lastState?.is_host || !Number.isFinite(video.duration) || video.duration<=0) return;
-  safeSeek((Number(event.target.value||0)/1000)*video.duration);
+  if(safeSeek((Number(event.target.value||0)/1000)*video.duration))
+    scheduleHostSeekCommit(true);
 }});
 const volumeControl=document.getElementById("volume");
 const muteControl=document.getElementById("mute");
@@ -5393,6 +5477,10 @@ function applyUserAudioState(forceAudible=false) {{
   refreshAudioPermissionControl();
 }}
 function primeAudiblePlaybackGesture() {{
+  // An explicit tap supersedes the previous automatic play attempt.
+  hostAutoPlayAttempt++;
+  hostAutoPlayPending=false;
+  hostAutoPlayBlocked=false;
   applyUserAudioState(!userMuted);
   // Request both outputs during the actual click. Never await play() before
   // telling the canonical host room to resume, and never pause a primed video.
@@ -5449,7 +5537,10 @@ video.addEventListener("playing",()=>{{
   refreshAudioPermissionControl();
   if(compatAudioActive()) void syncCompatAudio(true);
 }});
-video.addEventListener("pause",refreshAudioPermissionControl);
+video.addEventListener("pause",()=>{{
+  refreshAudioPermissionControl();
+  refreshStreamHealth();
+}});
 document.getElementById("enableAudio").onclick=async()=>{{
   const button=document.getElementById("enableAudio");
   button.disabled=true;
@@ -5527,6 +5618,20 @@ video.addEventListener("enterpictureinpicture",refreshNativePlayerCapabilities);
 video.addEventListener("leavepictureinpicture",refreshNativePlayerCapabilities);
 video.addEventListener("loadedmetadata",refreshNativePlayerCapabilities);
 video.addEventListener("contextmenu",event=>event.preventDefault());
+function watchDecodedFrames(expectedMediaGeneration) {{
+  if(expectedMediaGeneration!==activeMediaGeneration ||
+     typeof video.requestVideoFrameCallback!=="function") return;
+  try {{
+    video.requestVideoFrameCallback(()=>{{
+      if(expectedMediaGeneration!==activeMediaGeneration) return;
+      latestDecodedFrameAt=performance.now();
+      markStartupEvent("first_frame");
+      // Re-arm independently of the room poll; the callback only fires when
+      // a decoded video frame becomes available to the browser compositor.
+      watchDecodedFrames(expectedMediaGeneration);
+    }});
+  }} catch(_) {{}}
+}}
 for(const eventName of ["loadstart","loadedmetadata","loadeddata","canplay","playing","waiting","stalled","emptied","error"]) {{
   video.addEventListener(eventName,()=>{{
     stabilizePlayerLayout();
@@ -5534,11 +5639,7 @@ for(const eventName of ["loadstart","loadedmetadata","loadeddata","canplay","pla
     refreshStreamHealth();
     if(eventName==="playing" && !startupTrace.firstFrameRequested) {{
       startupTrace.firstFrameRequested=true;
-      if(typeof video.requestVideoFrameCallback==="function") {{
-        try {{
-          video.requestVideoFrameCallback(()=>markStartupEvent("first_frame"));
-        }} catch(_) {{}}
-      }}
+      watchDecodedFrames(activeMediaGeneration);
     }}
   }});
 }}
@@ -5547,7 +5648,8 @@ video.addEventListener("timeupdate",()=>{{
     startupTrace.events.playing!==undefined &&
     startupTrace.events.first_frame===undefined &&
     Number(video.currentTime||0)>0
-  ) markStartupEvent("first_frame");
+  && typeof video.requestVideoFrameCallback!=="function"
+  ) markStartupEvent("clock_advanced");
 }});
 async function enterTheaterFullscreen() {{
   const target=document.getElementById("videoStage");
@@ -6391,12 +6493,21 @@ document.getElementById("end").onclick=()=>{{
       :"End this Movie Night for everyone and release the room media session?");
   if(confirm(prompt)) hostAction("end");
 }};
+function nativeVideoControlsActive() {{
+  return document.pictureInPictureElement===video ||
+    document.fullscreenElement===video ||
+    !!video.webkitDisplayingFullscreen;
+}}
 video.addEventListener("play",()=>{{
   schedulePlayerControlsHide(2200);
   if(compatAudioActive()) void syncCompatAudio(false);
   if(remoteApply) return;
   if(lastState?.is_host) {{
-    if(!hostPlayGesturePending && lastState.state!=="playing") void hostAction("resume");
+    // Custom Theater buttons already dispatch explicit actions. An HTML
+    // play event from buffering, audio focus or state reconciliation is not a
+    // second host vote. Only native PiP/fullscreen controls need forwarding.
+    if(nativeVideoControlsActive() && !hostPlayGesturePending &&
+       lastState.state!=="playing") void hostAction("resume");
     return;
   }}
   if(lastState?.stream_url) {{
@@ -6415,20 +6526,28 @@ video.addEventListener("play",()=>{{
 video.addEventListener("pause",()=>{{
   showPlayerControls(true);
   holdCompatAudioForVideo();
-  if(!remoteApply && lastState?.is_host && !hostPlayGesturePending && lastState.state!=="paused") void hostAction("pause");
+  // Do not turn an involuntary media-element pause into a room-wide Pause.
+  // Native PiP/fullscreen controls still map to explicit host intent.
+  if(!remoteApply && lastState?.is_host && !hostPlayGesturePending &&
+     nativeVideoControlsActive() && lastState.state==="playing" &&
+     !videoClockBuffering && video.readyState>=3)
+    void hostAction("pause");
 }});
 video.addEventListener("seeking",()=>{{
   videoClockBuffering=true;
   holdCompatAudioForVideo();
 }});
 video.addEventListener("seeked",()=>{{
-  scheduleHostSeekCommit();
+  // Only native PiP/fullscreen user seeks need event-based forwarding.
+  // Theater's own controls call scheduleHostSeekCommit(true) directly.
+  if(!remoteApply && nativeVideoControlsActive())
+    scheduleHostSeekCommit();
   videoClockBuffering=!(!video.paused && video.readyState>=3);
   if(compatAudioActive())
     scheduleCompatAudioRestart(Number(video.currentTime||0),videoClockAdvancing());
 }});
 video.addEventListener("loadedmetadata",()=>{{
-  streamRetryAttempt=0;
+  // Metadata alone does not prove the decoder or source is stable.
   cancelStreamRetry();
   updatePlayerChrome();
   refreshNativePlayerCapabilities();
@@ -6458,14 +6577,19 @@ video.addEventListener("ratechange",()=>{{
     try {{ compatAudio.playbackRate=Number(video.playbackRate||1); }} catch(_) {{}}
   }}
 }});
-video.addEventListener("play",updatePlayerChrome);
-video.addEventListener("pause",updatePlayerChrome);
+video.addEventListener("play",()=>{{
+  updatePlayerChrome();
+  refreshStreamHealth();
+}});
+video.addEventListener("pause",()=>{{
+  updatePlayerChrome();
+  refreshStreamHealth();
+}});
 video.addEventListener("canplay",()=>{{
   if(!video.paused && !video.seeking) {{
     videoClockBuffering=false;
     if(compatAudioActive()) void syncCompatAudio(true);
   }}
-  streamRetryAttempt=0;
   cancelStreamRetry();
   if(notice.textContent.startsWith("The source is still preparing"))
     notice.textContent="";

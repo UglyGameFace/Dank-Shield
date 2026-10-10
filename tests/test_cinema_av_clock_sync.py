@@ -45,6 +45,10 @@ const context = {
   compatAudioStartPending: false, compatAudioNeedsGesture: false,
   compatAudioLastSyncAt: 0, videoClockBuffering: false,
   userMuted: false, terminated: false,
+  remoteApply: false,
+  // This fixture is a normal Theater page, not native PiP/fullscreen.
+  // Native-only seeks may report to the server; in-page seeks must not.
+  nativeVideoControlsActive: () => false,
   lastState: { stream_url: "/video" },
   compatAudioActive: () => true,
   compatAudioClock: () => audio.currentTime,
@@ -148,7 +152,7 @@ def test_aac_clock_stops_during_video_stall_and_resumes_without_reload() -> None
         ),
         "playing": _between(
             html, 'video.addEventListener("playing",()=>{',
-            'video.addEventListener("pause",refreshAudioPermissionControl);',
+            'video.addEventListener("pause",()=>{',
         ),
     }
     result = subprocess.run(
