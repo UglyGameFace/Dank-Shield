@@ -414,10 +414,14 @@ def test_twenty_watch_party_members_can_choose_mixed_audio_without_affecting_roo
     assert {tuple(t["language"] for t in p["audio_track_options"])
             for p in snapshots} == {("eng", "spa", "jpn")}
 
-    # Language is each viewer's selection; the room has no global audio track
-    # and the three track indexes can be selected independently by clients.
-    picks = {uid: i % 3 for i, uid in enumerate(users)}
-    assert set(picks.values()) == {0, 1, 2}
+    # The shared player independently adds the requested track index to each
+    # user's signed audio URL rather than mutating the room's media choice.
+    theater_html = movie_night_web._watch_html(
+        room.room_id, users[0], "uid=10&exp=9999999999&sig=test",
+    )
+    assert 'url.searchParams.set("track",String(track))' in theater_html
+    assert "selectedAudioTrack=value;" in theater_html
+    assert "preferredTrackForLanguage(lastState)" in theater_html
     assert room.stream_token == "one-shared-torrent"
     assert room.host_id == 10
     assert len(manager.buffer_quorum_viewers(room, now=current)) == 20
