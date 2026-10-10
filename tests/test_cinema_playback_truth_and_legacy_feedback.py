@@ -60,6 +60,8 @@ async function main() {
 
   const frame={
     video, startupTrace:{events:{}}, fmtClock:()=>"",
+    latestDecodedFrameAt:0,
+    document:{hidden:false},performance:{now:()=>9001},
     videoClockBuffering:false, compatAudioActive:()=>false,
     browserVideoCapability:()=>({supported:true}), compatAudio:{},
   };
@@ -72,6 +74,10 @@ async function main() {
   assert.equal(frame.streamHealthLabel(room),"Waiting for first decoded video frame");
   frame.startupTrace.events.first_frame=1234;
   assert.equal(frame.streamHealthLabel(room),"Video frames rendering");
+  frame.latestDecodedFrameAt=3000;
+  assert.equal(frame.streamHealthLabel(room),"Video stalled; no fresh decoded frames",
+    "A frame seen once must not remain a green success indefinitely");
+  frame.latestDecodedFrameAt=8900;
   video.paused=true;
   assert.equal(frame.streamHealthLabel(room),"Playback requested; waiting for browser video");
   video.readyState=1;
