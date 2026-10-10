@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Signed synchronized web player for Dank Shield Movie Night."""
 
+import asyncio
 import base64
 import hashlib
 from io import BytesIO
@@ -15,9 +16,19 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 from urllib.parse import urlencode
 
-from aiohttp import web
+from aiohttp import ClientError, web
 from PIL import Image, ImageDraw, ImageFilter
 
+from stoney_verify.cinema_subtitle_providers import SubtitleProviderUnavailable
+from stoney_verify.cinema_subtitle_router import (
+    discover_subtitles,
+    download_subtitle_selection,
+    provider_configured,
+)
+from stoney_verify.cinema_subtitles import (
+    embedded_text_tracks,
+    embedded_vtt_for_session,
+)
 from stoney_verify.cinema_feed_service import (
     CinemaFeedConflict,
     feed_state as cinema_feed_state,
@@ -860,6 +871,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
     audio_compat_url = ""
     audio_track_options: list[dict[str, Any]] = []
     audio_track_url = ""
+    subtitle_options: list[dict[str, object]] = []
     if session is not None:
         try:
             torrent_manager.schedule_metadata_probe(session)
@@ -916,6 +928,8 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
                 )
             if not audio_track_url:
                 audio_track_options = []
+    if session is not None and shutil.which("ffmpeg"):
+        subtitle_options = embedded_text_tracks(getattr(session, "verified_metadata", {}))
     cast_stream_url = (
         torrent_manager.stream_url(
             session,
@@ -942,6 +956,7 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         audio_compat["required"] = False
         audio_track_options = []
         audio_track_url = ""
+        subtitle_options = []
         torrent_status = {}
         startup_status = {}
     # The first torrent probe often finishes *after* this release was chosen.
@@ -1071,6 +1086,9 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "audio_codecs": list(audio_compat.get("codecs") or [])[:8],
         "audio_track_options": audio_track_options,
         "audio_track_url": audio_track_url,
+        "subtitle_options": subtitle_options,
+        "subtitle_provider_available": provider_configured(int(room.guild_id)),
+        "guild_id": int(room.guild_id),
         "cast_stream_url": cast_stream_url,
         "media_content_type": (
             media_content_type(session.file_name)
@@ -1804,9 +1822,15 @@ async def movie_night_preferences(request: web.Request) -> web.Response:
         str(guild_languages.get(str(int(room.guild_id))) or "")
         if isinstance(guild_languages, dict) else ""
     )
+    subtitle_languages = preferences.get("subtitle_language_by_guild") or {}
+    subtitle_language = (
+        str(subtitle_languages.get(str(int(room.guild_id))) or "")
+        if isinstance(subtitle_languages, dict) else ""
+    )
     return web.json_response({
         "preferences": preferences,
         "guild_audio_language": language,
+        "guild_subtitle_language": subtitle_language,
         "guild_id": int(room.guild_id),
     })
 
@@ -2429,6 +2453,41 @@ video {{
 .player-button:disabled {{ opacity:.32; }}
 .player-button[hidden] {{ display:none !important; }}
 .player-button.active {{ color:var(--lime);background:rgba(120,220,67,.11); }}
+.subtitle-menu {{
+  /* Keep the entire picker inside the fullscreen/inline video stage.
+     A scrollable panel avoids clipping on a 16:9 portrait player. */
+  position:absolute;top:0;bottom:0;right:0;z-index:38;
+  width:min(282px,92%);height:100%;max-height:100%;
+  box-sizing:border-box;overflow-y:auto;overscroll-behavior:contain;
+  background:rgba(4,15,11,.98);border:1px solid var(--line-strong);
+  box-shadow:0 12px 32px rgba(0,0,0,.65);border-radius:12px;
+  padding:12px;display:flex;flex-direction:column;gap:8px;color:var(--text);
+}}
+.subtitle-menu[hidden] {{ display:none!important; }}
+.subtitle-menu label {{font-size:13px;font-weight:800;}}
+.subtitle-menu select {{
+  width:100%;min-height:40px;border:1px solid var(--line-strong);
+  background:#10201a;color:var(--text);border-radius:8px;padding:8px;
+  font:inherit;font-size:14px;
+}}
+.subtitle-menu small {{font-size:11px;line-height:1.45;color:var(--muted);}}
+.subtitle-search {{display:flex;gap:6px;}}
+.subtitle-search[hidden] {{display:none!important;}}
+.subtitle-search input {{
+  flex:1;min-width:0;padding:8px;border-radius:8px;
+  border:1px solid var(--line-strong);background:#10201a;color:var(--text);
+}}
+.subtitle-menu input[type="file"] {{width:100%;max-width:100%;font-size:12px;color:var(--text);}}
+.subtitle-menu .subtitle-tuning {{display:grid;gap:4px;}}
+.subtitle-menu .subtitle-tuning label {{display:flex;justify-content:space-between;font-size:12px;}}
+.subtitle-menu input[type="range"] {{width:100%;accent-color:var(--lime);}}
+.video-stage video::cue {{font-size:var(--cinema-caption-size,100%);background:rgba(0,0,0,.65);color:#fff;}}
+.subtitle-search button {{
+  border:1px solid var(--line-strong);border-radius:8px;
+  background:#233d2d;color:var(--text);font-weight:700;
+  padding:8px;cursor:pointer;
+}}
+
 .control-spacer {{ flex:1; }}
 .volume-wrap {{ display:flex;align-items:center;gap:6px; }}
 .volume {{ width:70px; accent-color:var(--lime); }}
@@ -2954,6 +3013,23 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
     <div class="video-stage" id="videoStage">
       <video id="video" playsinline preload="metadata" controlslist="nodownload" aria-label="Dank Cinema video"></video>
       <audio id="compatAudio" preload="none" hidden aria-hidden="true"></audio>
+      <div class="subtitle-menu" id="subtitleMenu" hidden>
+        <label for="subtitleTrack">Subtitles for you</label>
+        <select id="subtitleTrack" aria-label="Subtitle language"><option value="off">Off</option></select>
+        <div class="subtitle-search" id="subtitleSearch" hidden>
+          <input id="subtitleSearchLanguage" type="text" value="en" maxlength="8" aria-label="Subtitle search language" placeholder="Language: en, es, ja">
+          <button id="findSubtitles" type="button">Find more</button>
+        </div>
+        <label for="subtitleFile">Use your own subtitles (.srt or .vtt)</label>
+        <input id="subtitleFile" type="file" accept=".srt,.vtt,text/vtt,application/x-subrip">
+        <div class="subtitle-tuning">
+          <label for="subtitleDelay">Timing offset <output id="subtitleDelayValue">0.00s</output></label>
+          <input id="subtitleDelay" type="range" min="-5" max="5" step=".25" value="0" aria-label="Subtitle timing offset">
+          <label for="subtitleSize">Text size <output id="subtitleSizeValue">100%</output></label>
+          <input id="subtitleSize" type="range" min="75" max="175" step="5" value="100" aria-label="Subtitle text size">
+        </div>
+        <small id="subtitleStatus" role="status">Select an available language.</small>
+      </div>
       <div class="tap-skip-feedback left" id="tapSkipLeft" aria-live="polite">↶ 10s</div>
       <div class="tap-skip-feedback right" id="tapSkipRight" aria-live="polite">10s ↷</div>
       <div class="stage-top">
@@ -3362,6 +3438,26 @@ let selectedAudioTrack="original";
 let audioSelectionToken="";
 let audioMenuSignature="";
 let preferredSubtitleLanguage="";
+let subtitlePreferenceLoaded=false;
+let subtitleUserOverride=false;
+let selectedSubtitleChoice="off";
+let subtitleSelectionToken="";
+let subtitleMenuSignature="";
+let appliedSubtitleChoice="";
+let externalSubtitleOptions=[];
+let localSubtitleVttUrl="";
+let localSubtitleLabel="";
+let subtitleDelaySeconds=0;
+let subtitleSizePercent=100;
+const subtitleOriginalCueTimes=new WeakMap();
+const SUBTITLE_STORAGE_KEY="dank-cinema-captions:"+BOOT.uid;
+try {{
+  const saved=JSON.parse(localStorage.getItem(SUBTITLE_STORAGE_KEY)||"{{}}");
+  if(Number.isFinite(Number(saved.delay)))
+    subtitleDelaySeconds=Math.max(-5,Math.min(5,Number(saved.delay)));
+  if(Number.isFinite(Number(saved.size)))
+    subtitleSizePercent=Math.max(75,Math.min(175,Number(saved.size)));
+}} catch(_) {{}}
 let lastProgressPersistAt=0;
 let lastProgressMediaKey="";
 let lastProgressRestoreKey="";
@@ -3774,6 +3870,149 @@ function renderStartupDiagnostics(server={{}}) {{
     browserEl.textContent=bits.length?bits.join(" • "):"waiting for media events";
   }}
 }}
+function rememberSubtitleTuning() {{
+  try {{ localStorage.setItem(SUBTITLE_STORAGE_KEY,JSON.stringify({{
+    delay:subtitleDelaySeconds,size:subtitleSizePercent
+  }})); }} catch(_) {{}}
+}}
+function adjustSubtitleCueTiming() {{
+  for(const item of Array.from(video.querySelectorAll('track[data-cinema-subtitle="1"]'))) {{
+    const cues=item.track?.cues;
+    if(!cues) continue;
+    for(const cue of Array.from(cues)) {{
+      let original=subtitleOriginalCueTimes.get(cue);
+      if(!original) {{
+        original={{start:cue.startTime,end:cue.endTime}};
+        subtitleOriginalCueTimes.set(cue,original);
+      }}
+      try {{
+        cue.startTime=Math.max(0,original.start+subtitleDelaySeconds);
+        cue.endTime=Math.max(cue.startTime+0.05,original.end+subtitleDelaySeconds);
+      }} catch(_) {{}}
+    }}
+  }}
+}}
+function applySubtitleTuning() {{
+  videoStage.style.setProperty("--cinema-caption-size",String(subtitleSizePercent)+"%");
+  document.getElementById("subtitleDelay").value=String(subtitleDelaySeconds);
+  document.getElementById("subtitleSize").value=String(subtitleSizePercent);
+  document.getElementById("subtitleDelayValue").textContent=subtitleDelaySeconds.toFixed(2)+"s";
+  document.getElementById("subtitleSizeValue").textContent=String(subtitleSizePercent)+"%";
+  adjustSubtitleCueTiming();
+}}
+function cinemaSubtitleOptions(s) {{
+  const embedded=Array.isArray(s?.subtitle_options)?s.subtitle_options:[];
+  const local=localSubtitleVttUrl
+    ?[{{source:"local",id:"local",language:"und",label:localSubtitleLabel}}]:[];
+  return [...embedded,...externalSubtitleOptions,...local];
+}}
+function subtitlePreferredChoice(s) {{
+  const lang=normalizedAudioLanguage(preferredSubtitleLanguage);
+  if(!lang || preferredSubtitleLanguage==="off") return "off";
+  const entry=cinemaSubtitleOptions(s).find(row=>
+    normalizedAudioLanguage(row.language||row.label)===lang
+  );
+  return entry?(entry.source && entry.source!=="local"
+    ?"provider:"+String(entry.id)
+    :"embedded:"+String(entry.index)):"off";
+}}
+function syncCinemaSubtitleTracks(s) {{
+  const token=String(s?.stream_token||"");
+  if(token!==subtitleSelectionToken) {{
+    externalSubtitleOptions=[];
+    if(localSubtitleVttUrl) URL.revokeObjectURL(localSubtitleVttUrl);
+    localSubtitleVttUrl="";
+    localSubtitleLabel="";
+  }}
+  const options=cinemaSubtitleOptions(s);
+  const signature=token+":"+options.map(row=>String(row.source||"embedded")+":"+
+    String(row.index??row.id)+":"+String(row.label)).join("|");
+  if(token!==subtitleSelectionToken) {{
+    subtitleSelectionToken=token;
+    subtitleUserOverride=false;
+    selectedSubtitleChoice=subtitlePreferenceLoaded?subtitlePreferredChoice(s):"off";
+    subtitleMenuSignature="";
+    appliedSubtitleChoice="";
+  }}
+  if(signature!==subtitleMenuSignature) {{
+    subtitleMenuSignature=signature;
+    const control=document.getElementById("subtitleTrack");
+    control.textContent="";
+    const off=document.createElement("option");
+    off.value="off";off.textContent="Off";
+    control.appendChild(off);
+    for(const row of options) {{
+      const option=document.createElement("option");
+      option.value=row.source==="local"?"local"
+        :row.source?"provider:"+String(row.id):"embedded:"+String(row.index);
+      option.textContent=String(row.label||"Subtitle "+String(Number(row.index)+1));
+      control.appendChild(option);
+    }}
+    if(!subtitleUserOverride && subtitlePreferenceLoaded)
+      selectedSubtitleChoice=subtitlePreferredChoice(s);
+  }}
+  const valid=options.some(row=>(row.source==="local"?"local"
+    :row.source?"provider:"+String(row.id)
+    :"embedded:"+String(row.index))===selectedSubtitleChoice);
+  if(selectedSubtitleChoice!=="off" && !valid) selectedSubtitleChoice="off";
+  const control=document.getElementById("subtitleTrack");
+  control.value=selectedSubtitleChoice;
+  document.getElementById("subtitleSearch").hidden=!Boolean(s?.subtitle_provider_available);
+  if(appliedSubtitleChoice===token+":"+selectedSubtitleChoice) {{
+    refreshNativePlayerCapabilities();
+    return;
+  }}
+  appliedSubtitleChoice=token+":"+selectedSubtitleChoice;
+  for(const track of Array.from(video.querySelectorAll('track[data-cinema-subtitle="1"]'))) {{
+    try {{ track.track.mode="disabled"; }} catch(_) {{}}
+    track.remove();
+  }}
+  const status=document.getElementById("subtitleStatus");
+  if(selectedSubtitleChoice==="off" || !token || !s?.stream_url) {{
+    status.textContent=options.length?"Subtitles off for this viewer.":"No embedded text subtitles in this release.";
+    refreshNativePlayerCapabilities();
+    return;
+  }}
+  const sourceIsProvider=selectedSubtitleChoice.startsWith("provider:");
+  const sourceIsLocal=selectedSubtitleChoice==="local";
+  const index=sourceIsProvider?-1:Number(selectedSubtitleChoice.slice(9));
+  const row=options.find(item=>sourceIsProvider
+    ?item.source && item.source!=="local" &&
+      "provider:"+String(item.id)===selectedSubtitleChoice
+    :sourceIsLocal?item.source==="local"
+    :!item.source && Number(item.index)===index
+  );
+  if(!row) return;
+  const track=document.createElement("track");
+  track.dataset.cinemaSubtitle="1";
+  track.kind="subtitles";
+  track.label=String(row.label||"Cinema subtitles");
+  track.srclang=String(row.language||"und");
+  track.src=sourceIsLocal?localSubtitleVttUrl
+    :sourceIsProvider
+      ?"/movie/"+encodeURIComponent(BOOT.roomId)+"/subtitles/provider?"+
+        BOOT.query+"&n_id="+encodeURIComponent(String(row.id))
+      :"/movie/"+encodeURIComponent(BOOT.roomId)+"/subtitle?"+
+        BOOT.query+"&track="+encodeURIComponent(String(index));
+  track.addEventListener("load",()=>{{
+    if(track.isConnected && appliedSubtitleChoice===token+":"+selectedSubtitleChoice) {{
+      try {{track.track.mode="showing";}} catch(_) {{}}
+      adjustSubtitleCueTiming();
+      status.textContent="Subtitles: "+String(row.label||"Enabled");
+      refreshNativePlayerCapabilities();
+    }}
+  }});
+  track.addEventListener("error",()=>{{
+    if(track.isConnected) {{
+      status.textContent="Subtitle loading failed. Choose another track or retry.";
+      notice.textContent="This embedded subtitle could not be loaded. Video and audio are unaffected.";
+    }}
+  }});
+  video.appendChild(track);
+  try {{ track.track.mode="showing"; }} catch(_) {{}}
+  status.textContent="Loading subtitles: "+String(row.label||"");
+  refreshNativePlayerCapabilities();
+}}
 function refreshAudioPermissionControl() {{
   const control=document.getElementById("enableAudioControl");
   const button=document.getElementById("enableAudio");
@@ -3791,7 +4030,11 @@ function refreshNativePlayerCapabilities() {{
 
   const captions=document.getElementById("captions");
   const tracks=video.textTracks;
-  captions.hidden=!(tracks && tracks.length);
+  const verifiedSubtitleOptions=Array.isArray(lastState?.subtitle_options)
+    ?lastState.subtitle_options:[];
+  // Always expose captions: local SRT/VTT upload needs no embedded text
+  // tracks or external API. Never show a dead/placeholder button.
+  captions.hidden=false;
   let showing=false;
   if(tracks) {{
     for(let i=0;i<tracks.length;i++) if(tracks[i].mode==="showing") showing=true;
@@ -4940,6 +5183,7 @@ async function applyState(s) {{
     return;
   }}
 
+  syncCinemaSubtitleTracks(s);
   const streamConsumer=String(s.stream_consumer||"");
   if(
     s.stream_token &&
@@ -5633,6 +5877,16 @@ document.getElementById("pip").onclick=async()=>{{
   refreshNativePlayerCapabilities();
 }};
 document.getElementById("captions").onclick=()=>{{
+  const options=cinemaSubtitleOptions(lastState);
+  const browserTracks=video.textTracks;
+  if(options.length || lastState?.subtitle_provider_available ||
+     !browserTracks || !browserTracks.length) {{
+    const menu=document.getElementById("subtitleMenu");
+    menu.hidden=!menu.hidden;
+    if(!menu.hidden) document.getElementById("subtitleTrack").focus();
+    return;
+  }}
+  // Keep native subtitle support for any browser-provided text track.
   const tracks=video.textTracks;
   if(!tracks || !tracks.length) return;
   let anyShowing=false;
@@ -5650,6 +5904,113 @@ document.getElementById("captions").onclick=()=>{{
   for(let i=0;i<tracks.length;i++)
     tracks[i].mode=(i===preferredIndex && !anyShowing)?"showing":"disabled";
   refreshNativePlayerCapabilities();
+}};
+document.getElementById("subtitleTrack").addEventListener("change",event=>{{
+  const value=String(event.target.value||"off");
+  if(value!=="off" && !cinemaSubtitleOptions(lastState).some(
+    row=>(row.source==="local"?"local"
+      :row.source?"provider:"+String(row.id):"embedded:"+String(row.index))===value
+  )) return;
+  selectedSubtitleChoice=value;
+  subtitleUserOverride=true;
+  const selected=cinemaSubtitleOptions(lastState).find(
+    row=>(row.source==="local"?"local"
+      :row.source?"provider:"+String(row.id):"embedded:"+String(row.index))===value
+  );
+  preferredSubtitleLanguage=value==="off"?"off":String(selected?.language||"");
+  if(value!=="local")
+    void saveCinemaPreferences({{guild_subtitle_language:preferredSubtitleLanguage}});
+  appliedSubtitleChoice="";
+  syncCinemaSubtitleTracks(lastState);
+  document.getElementById("subtitleMenu").hidden=true;
+}});
+
+document.getElementById("subtitleDelay").addEventListener("input",event=>{{
+  subtitleDelaySeconds=Math.max(-5,Math.min(5,Number(event.target.value)||0));
+  applySubtitleTuning();
+  rememberSubtitleTuning();
+}});
+document.getElementById("subtitleSize").addEventListener("input",event=>{{
+  subtitleSizePercent=Math.max(75,Math.min(175,Number(event.target.value)||100));
+  applySubtitleTuning();
+  rememberSubtitleTuning();
+}});
+applySubtitleTuning();
+document.getElementById("subtitleFile").addEventListener("change",async event=>{{
+  const file=event.target.files?.[0];
+  if(!file) return;
+  const status=document.getElementById("subtitleStatus");
+  if(file.size>1_000_000 || !/\\.(srt|vtt)$/i.test(file.name)) {{
+    status.textContent="Choose an SRT or VTT file smaller than 1 MB.";
+    return;
+  }}
+  try {{
+    const source=(await file.text()).replace(/\\r\\n?/g,"\\n");
+    let vtt="";
+    if(file.name.toLowerCase().endsWith(".vtt")) {{
+      if(!source.replace(/^\\uFEFF/,"").startsWith("WEBVTT")) throw Error("Invalid VTT");
+      vtt=source;
+    }} else {{
+      const blocks=[];
+      for(const group of source.trim().split(/\\n\\s*\\n/)) {{
+        let lines=group.split("\\n");
+        if(/^\\d+$/.test(lines[0]||"")) lines=lines.slice(1);
+        if(lines.length<2 || !lines[0].includes(" --> ")) continue;
+        const timing=lines.shift().replace(
+          /\\b(\\d{{2}}:\\d{{2}}:\\d{{2}}),(\\d{{3}})\\b/g,"$1.$2"
+        );
+        const cue=lines.join("\\n").replace(/&/g,"&amp;")
+          .replace(/</g,"&lt;").replace(/>/g,"&gt;");
+        blocks.push(timing+"\\n"+cue);
+      }}
+      if(!blocks.length) throw Error("No usable SRT cues");
+      vtt="WEBVTT\\n\\n"+blocks.join("\\n\\n")+"\\n";
+    }}
+    if(localSubtitleVttUrl) URL.revokeObjectURL(localSubtitleVttUrl);
+    localSubtitleVttUrl=URL.createObjectURL(
+      new Blob([vtt],{{type:"text/vtt;charset=utf-8"}})
+    );
+    localSubtitleLabel=file.name.slice(0,72);
+    selectedSubtitleChoice="local";
+    subtitleUserOverride=true;
+    subtitleMenuSignature="";
+    appliedSubtitleChoice="";
+    syncCinemaSubtitleTracks(lastState);
+    status.textContent="Local subtitles loaded for you only.";
+    document.getElementById("subtitleMenu").hidden=true;
+  }} catch(_) {{
+    status.textContent="Could not read that subtitle file.";
+  }}
+}});
+document.getElementById("findSubtitles").onclick=async()=>{{
+  if(!lastState?.subtitle_provider_available || !lastState?.stream_token) return;
+  const button=document.getElementById("findSubtitles");
+  const status=document.getElementById("subtitleStatus");
+  const language=String(document.getElementById("subtitleSearchLanguage").value||"en")
+    .trim().toLowerCase();
+  if(!/^[a-z]{{2,3}}(?:-[a-z]{{2,8}})?$/.test(language)) {{
+    status.textContent="Use a language code, for example en, es, or ja.";
+    return;
+  }}
+  const searchingToken=String(lastState.stream_token);
+  button.disabled=true;
+  status.textContent="Searching for "+language+" subtitles…";
+  try {{
+    const found=await jsonFetch(
+      "/movie/"+BOOT.roomId+"/subtitles/search?lang="+encodeURIComponent(language)
+    );
+    if(String(lastState?.stream_token||"")!==searchingToken) return;
+    externalSubtitleOptions=Array.isArray(found.results)?found.results:[];
+    subtitleMenuSignature="";
+    syncCinemaSubtitleTracks(lastState);
+    status.textContent=externalSubtitleOptions.length
+      ?String(externalSubtitleOptions.length)+" subtitle options found. Select one above."
+      :"No matching external subtitles. Embedded choices remain available.";
+  }} catch(error) {{
+    status.textContent="External subtitle search unavailable or out of quota.";
+  }} finally {{
+    button.disabled=false;
+  }}
 }};
 video.addEventListener("enterpictureinpicture",refreshNativePlayerCapabilities);
 video.addEventListener("leavepictureinpicture",refreshNativePlayerCapabilities);
@@ -5955,11 +6316,19 @@ async function loadCinemaPreferences() {{
       ||""
     );
     audioPreferenceLoaded=true;
-    preferredSubtitleLanguage=String(cinemaPreferences.default_subtitle_language||"");
+    preferredSubtitleLanguage=String(
+      response.guild_subtitle_language
+      ||cinemaPreferences.default_subtitle_language||""
+    ).toLowerCase();
+    subtitlePreferenceLoaded=true;
     syncAudioLanguageSelector();
     if(lastState) {{
       selectedAudioTrack=preferredTrackForLanguage(lastState);
       applyCompatAudioState(lastState);
+      subtitleUserOverride=false;
+      selectedSubtitleChoice=subtitlePreferredChoice(lastState);
+      appliedSubtitleChoice="";
+      syncCinemaSubtitleTracks(lastState);
       refreshNativePlayerCapabilities();
     }}
     const quality=String(cinemaPreferences.visual_quality||"auto");
@@ -6709,6 +7078,98 @@ setInterval(()=>{{ if(!document.hidden) void heartbeat(false); }},3000);
 </html>"""
 
 
+async def movie_night_subtitle_search(request: web.Request) -> web.Response:
+    """Query licensed optional subtitle providers for this exact room title."""
+    room, uid = await _room_and_user(request)
+    if not provider_configured(int(room.guild_id)):
+        return web.json_response({"results": [], "available": False})
+    if not room.stream_token:
+        return web.json_response({"results": [], "available": True})
+    candidate = room.candidates.get(room.current_candidate_id) if room.current_candidate_id else None
+    if candidate is None:
+        return web.json_response({"results": [], "available": True})
+    metadata = _candidate_web_metadata(candidate)
+    language = str(request.query.get("lang", "en") or "en").lower()[:16]
+    try:
+        choices = await discover_subtitles(
+            metadata, language, stream_token=room.stream_token,
+            guild_id=int(room.guild_id), viewer_id=int(uid),
+        )
+    except (SubtitleProviderUnavailable, TimeoutError, OSError, ClientError) as exc:
+        raise web.HTTPServiceUnavailable(
+            text="External subtitles are temporarily unavailable or out of quota."
+        ) from exc
+    return web.json_response({"results": choices, "available": True})
+
+
+async def movie_night_subtitle_provider(request: web.Request) -> web.Response:
+    """Deliver a selected provider subtitle only after fresh room authorization."""
+    room, uid = await _room_and_user(request)
+    n_id = str(request.query.get("n_id", "") or "")
+    try:
+        data = await download_subtitle_selection(
+            n_id, guild_id=int(room.guild_id),
+            viewer_id=int(uid), stream_token=room.stream_token,
+        )
+    except (SubtitleProviderUnavailable, TimeoutError, OSError, ClientError) as exc:
+        raise web.HTTPServiceUnavailable(
+            text="External subtitle unavailable. Search again or choose embedded text."
+        ) from exc
+    return web.Response(
+        body=data,
+        content_type="text/vtt",
+        charset="utf-8",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        },
+    )
+
+
+async def movie_night_subtitle(request: web.Request) -> web.Response:
+    """Serve one verified embedded text stream to one authorized Cinema viewer.
+
+    This GET uses the identical signed room/user and guild-membership checks as
+    the Theater page. It never changes playback, audio or another viewer state.
+    """
+    room, uid = await _room_and_user(request)
+    raw_track = str(request.query.get("track", "") or "")
+    if not raw_track.isascii() or not raw_track.isdigit() or len(raw_track) > 2:
+        raise web.HTTPBadRequest(text="Choose a valid Cinema subtitle track.")
+    track = int(raw_track)
+    manager = get_torrent_manager()
+    session = await manager.get(room.stream_token) if room.stream_token else None
+    if session is None or not manager.session_usable(session):
+        raise web.HTTPNotFound(text="This Cinema title is no longer available.")
+    available = embedded_text_tracks(getattr(session, "verified_metadata", {}))
+    if track not in {int(row["index"]) for row in available}:
+        raise web.HTTPNotFound(text="That verified subtitle track is unavailable.")
+    consumer = f"movie:{int(uid)}:subtitle"
+    signed_stream_url = manager.stream_url(
+        session, ttl_seconds=180, consumer_key=consumer,
+    )
+    try:
+        data = await embedded_vtt_for_session(
+            token=session.token, track=track,
+            signed_stream_url=signed_stream_url,
+        )
+    except (TimeoutError, RuntimeError, ValueError, UnicodeError) as exc:
+        raise web.HTTPServiceUnavailable(
+            text="This embedded subtitle is temporarily unavailable."
+        ) from exc
+    return web.Response(
+        body=data,
+        content_type="text/vtt",
+        charset="utf-8",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        },
+    )
+
+
 async def movie_night_watch(request: web.Request) -> web.Response:
     room, uid = await _room_and_user(request)
     query = urlencode(
@@ -6730,7 +7191,7 @@ async def movie_night_watch(request: web.Request) -> web.Response:
                 "script-src 'unsafe-inline' https://www.gstatic.com; "
                 "style-src 'unsafe-inline' https://fonts.googleapis.com; "
                 "font-src https://fonts.gstatic.com; "
-                "media-src 'self'; "
+                "media-src 'self' blob:; "
                 "connect-src 'self' https://www.gstatic.com https://*.googleapis.com; "
                 "img-src 'self' https://image.tmdb.org https://cdn.discordapp.com https://media.discordapp.net; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"
             ),
@@ -6749,6 +7210,9 @@ def register_movie_night_public_routes(app: web.Application) -> None:
         dank_cinema_brand_asset,
     )
     app.router.add_get("/movie/{room_id}/watch", movie_night_watch)
+    app.router.add_get("/movie/{room_id}/subtitle", movie_night_subtitle)
+    app.router.add_get("/movie/{room_id}/subtitles/search", movie_night_subtitle_search)
+    app.router.add_get("/movie/{room_id}/subtitles/provider", movie_night_subtitle_provider)
     app.router.add_get("/movie/{room_id}/state", movie_night_state)
     app.router.add_post("/movie/{room_id}/heartbeat", movie_night_heartbeat)
     app.router.add_post("/movie/{room_id}/action", movie_night_action)

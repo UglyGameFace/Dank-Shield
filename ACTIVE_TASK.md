@@ -1,6 +1,31 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — CINEMA-FULLSCREEN-PORTRAIT-RECOVERY-20261010
+## CURRENT ACTIVE TASK — CINEMA-SUBTITLE-SUPPORT-20261010
+
+**Authorized transition:** After merging PR #499, user explicitly said “let's do it now” then “continue implementing” subtitles. Do not switch tasks without user directive.
+
+**Production baseline:** Discloud GitHub branch `aaa-cinema-pre-pregateway-bind@714e2af63b7cfa0fa1837c3e9e0832445246816d` (PR #499 merged; running Discloud SHA not independently confirmed).
+
+**Working branch/PR:** `feat/cinema-subtitle-foundation-20261010` → draft PR #500, targeting the exact production branch. Never merge until exact-head CI and authenticated browser validation.
+
+**Implementation in branch:**
+- `stoney_verify/cinema_subtitles.py`: strict SRT → WebVTT conversion; valid text-only stream discovery (SRT/SubRip, ASS/SSA, mov_text and WebVTT; exclude bitmap PGS/VobSub), bounded 35s/1MB FFmpeg extraction through signed 127.0.0.1 torrent endpoint, max 2 parallel jobs, 8-file short-lived cache.
+- `stoney_verify/movie_night_web.py`: same signed user/room, guild membership and access checks as main Theater; per-viewer `/subtitle`, optional `/subtitles/search` and `/subtitles/provider` endpoints, state now advertises verified tracks/provider availability, responsive subtitle menu, local SRT/VTT browser file picker, viewer-local caption delay/size, and attach-only HTML `<track>` media integration. No video URL/session, audio URL, room clock, host action or viewer sync mutations.
+- `stoney_verify/cinema_library_service.py`: per-member/per-guild `subtitle_language_by_guild` with authenticated `guild_subtitle_language` preference updates. Local uploads never leave the viewer's browser.
+- `stoney_verify/cinema_subtitle_providers.py`: SubDL v2 exact metadata/language helpers and paid-plan validation, including TV-labeled exact episodes.
+- `stoney_verify/cinema_subtitle_router.py`: three-source provider system (SubSource API v1, Wyzie Subs, SubDL), authenticated guild/tenant-specific account assignment from Discloud JSON, multiple accounts for distinct authorized guilds, deterministic one-key-per-provider/guild (no same-provider quota circumvention), parallel fallback/combined results, per-account conservative rate budgets + provider 429 cooldown, opaque viewer/guild/session-bound selections, safe signed download host allowlists, exact release+episode matching and bounded ZIP text extraction. Search and download jobs are coalesced between 20 concurrent viewers and cached; independent providers remain operational when one fails.
+- `tests/test_cinema_subtitles.py` covers conversion security/limits, verified embedded text, on-demand extraction cache, authorized endpoint, user/guild scoping and SubDL v2 controls. `tests/test_cinema_subtitle_router.py` covers three-provider search, SubSource schema, Wyzie URL restrictions, quota non-evasion, 20-viewer query/download coalescing, safe archives and scoped opaque selections. `tests/test_cinema_cross_mode_theater_contract.py` verifies 20-person subtitle state without changing shared timeline. `tests/test_movie_night_web.py` updated for new preferences and route.
+- `docs/DANK_CINEMA_SUBTITLES.md` documents setup, fallback and acceptance.
+
+**Known incomplete verification:** Newest exact-head CI pending; real Discloud/Android desktop browser track rendering, FFmpeg against real partially buffered torrent, optional SubDL authenticated real API response/download, native fullscreen subtitling and 20-viewer live subtitle/audio soak not verified. Do not claim user-facing completion/deployment until each evidence gate is satisfied. Provider requires an actual approved key, not in repo.
+
+**Next single action:** Resolve exact-head CI/regression failures if any; inspect final diff then complete authenticated standalone/private/watch-party browser acceptance; merge only after required gates.
+
+## PREVIOUS TASK — CINEMA-FULLSCREEN-PORTRAIT-RECOVERY-20261010 (MERGED)
+
+**Result:** PR #499 merged as `714e2af63b7cfa0fa1837c3e9e0832445246816d`. Live multi-browser fullscreen and 20-person audio load acceptance remain separate from code merge.
+
+## ARCHIVED TASK DETAILS — CINEMA-FULLSCREEN-PORTRAIT-RECOVERY-20261010
 
 **Source:** User screenshot Oct 10 16:57 Eastern, Samsung Browser, authenticated standalone Mad Max: Fury Road playback. Video displays decoded frames and user confirms clear audio; after entering fullscreen and returning to portrait, inline video stage remains visually too tall/distorted. Need correct layout for standalone and shared Theater in Private Sessions and Watch Parties without restarting a running torrent or altering audio and sync.
 
