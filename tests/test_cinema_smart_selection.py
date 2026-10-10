@@ -372,3 +372,94 @@ def test_auto_start_stops_after_partial_source_vote_mutation(monkeypatch):
             selected=rows[0], ranked=rows, start_variant=start,
         ))
     assert len(calls) == 1
+
+
+def test_source_selection_honors_user_and_guild_audio_preferences(monkeypatch):
+    english = release(
+        "Film.2026.1080p.x264.English.mp4", seeds=20,
+        verified={
+            "available": True,
+            "container": "mov,mp4,m4a,3gp,3g2,mj2",
+            "video": {"codec": "h264", "height": 1080, "bit_depth": 8},
+            "audio_tracks": [{"codec": "aac", "language": "eng"}],
+            "audio_languages": ["eng"],
+        },
+    )
+    spanish = release(
+        "Film.2026.1080p.x264.Spanish.mp4", seeds=20,
+        verified={
+            "available": True,
+            "container": "mov,mp4,m4a,3gp,3g2,mj2",
+            "video": {"codec": "h264", "height": 1080, "bit_depth": 8},
+            "audio_tracks": [{"codec": "aac", "language": "spa"}],
+            "audio_languages": ["spa"],
+        },
+    )
+
+    async def profile(user_id):
+        if user_id == 42:
+            return {"preferences": {
+                "default_audio_language": "English",
+                "audio_language_by_guild": {"100": "spa", "200": "eng"},
+            }}
+        return {"preferences": {
+            "default_audio_language": "Spanish",
+            "audio_language_by_guild": {"100": "eng"},
+        }}
+
+    monkeypatch.setattr(playback, "get_cinema_user", profile)
+    assert asyncio.run(playback.select_preferred_variant(
+        42, [english, spanish], guild_id=100,
+    )) is spanish
+    assert asyncio.run(playback.select_preferred_variant(
+        42, [english, spanish], guild_id=200,
+    )) is english
+    assert asyncio.run(playback.select_preferred_variant(
+        77, [english, spanish], guild_id=100,
+    )) is english
+    # Without a scoped value, fallback is this user's default language.
+    assert asyncio.run(playback.select_preferred_variant(
+        77, [english, spanish], guild_id=200,
+    )) is spanish
+
+
+def test_verified_multilingual_release_matches_both_viewer_language_preferences():
+    multi = release(
+        "Film.2026.1080p.x264.mp4",
+        verified={
+            "available": True,
+            "audio_tracks": [
+                {"codec": "aac", "language": "en"},
+                {"codec": "aac", "language": "jpn"},
+            ],
+        },
+    )
+    assert playback._preferred_audio_language_key(multi, "English") == 0
+    assert playback._preferred_audio_language_key(multi, "ja") == 0
+    assert playback._preferred_audio_language_key(multi, "spa") == 2
+
+
+def test_automatic_audio_scoring_never_converts_unknown_hints_to_verified_match():
+    unverified = release("Film.2026.1080p.Spanish.x264.mp4")
+    unverified.metadata["source_reported"] = {"audio_languages": ["spa"]}
+    assert playback._preferred_audio_language_key(unverified, "Spanish") == 1
+    observed_no_language = release(
+        "Film.2026.1080p.x264.mp4",
+        verified={
+            "available": True,
+            "audio_tracks": [{"codec": "aac", "language": ""}],
+            "audio_languages": [],
+        },
+    )
+    assert playback._preferred_audio_language_key(observed_no_language, "Spanish") == 1
+
+
+def test_auto_language_override_is_scoped_and_explicit_auto_disables_global_default():
+    settings = {
+        "default_audio_language": "eng",
+        "audio_language_by_guild": {"100": "auto", "200": "ja"},
+    }
+    assert playback._guild_audio_preference(settings, 100) == ""
+    assert playback._guild_audio_preference(settings, 200) == "ja"
+    assert playback._guild_audio_preference(settings, 300) == "en"
+    assert playback._guild_audio_preference(settings, 0) == "en"
