@@ -1612,8 +1612,9 @@ def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop
     assert "min-height:54px" in styles
     assert ".feed-result-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}" in styles
     assert ".feed-result-card{" in styles
-    assert "-webkit-text-size-adjust:100%" in styles
-    assert "text-size-adjust:100%" in styles
+    # Respect the device/browser font enlargement setting instead of forcing 100%.
+    assert "-webkit-text-size-adjust:auto" in styles
+    assert "text-size-adjust:auto" in styles
 
 
 def test_full_site_auto_quality_and_source_search_controls_are_real() -> None:
