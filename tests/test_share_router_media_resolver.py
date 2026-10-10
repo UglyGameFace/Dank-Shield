@@ -21,6 +21,8 @@ def _reset_media_state():
     [
         ("https://x.com/user/status/123", "x"),
         ("https://www.tiktok.com/@user/video/123", "tiktok"),
+        ("https://pro.tiktok.com/t/ZPLr92WaR/", "tiktok"),
+        ("https://vm.tiktok.com/Short1/", "tiktok"),
         ("https://www.instagram.com/reel/ABC123/", "instagram"),
         ("https://youtu.be/abc123", "youtube"),
         ("https://www.reddit.com/r/test/comments/abc123/post/", "reddit"),
@@ -602,3 +604,253 @@ def test_live_provider_stream_skips_remux_classification() -> None:
     )
     assert resolved.delivery == "link"
     assert resolved.reason == "live_stream_requires_player"
+
+
+
+_SHORT_SHARE_CASES = (
+    ("https://pro.tiktok.com/t/ZPLr92WaR/", "https://www.tiktok.com/@creator/video/7555555555555555555", "tiktok"),
+    ("https://www.tiktok.com/t/ZPLr92WaR/", "https://www.tiktok.com/@creator/video/7555555555555555555", "tiktok"),
+    ("https://vm.tiktok.com/Short1/", "https://www.tiktok.com/@creator/video/7555555555555555555", "tiktok"),
+    ("https://vt.tiktok.com/Short1/", "https://www.tiktok.com/@creator/video/7555555555555555555", "tiktok"),
+    ("https://fb.watch/ABCabc123/", "https://www.facebook.com/watch/?v=123456789", "facebook"),
+    ("https://www.facebook.com/share/r/ABCabc123/", "https://www.facebook.com/reel/123456789", "facebook"),
+    ("https://redd.it/abc123", "https://www.reddit.com/r/test/comments/abc123/post/", "reddit"),
+    ("https://www.reddit.com/r/test/s/ABC123", "https://www.reddit.com/r/test/comments/abc123/post/", "reddit"),
+    ("https://www.instagram.com/share/reel/ABC123/", "https://www.instagram.com/reel/XYZ123/", "instagram"),
+    ("https://pin.it/ABC123", "https://www.pinterest.com/pin/123456/", "pinterest"),
+)
+
+
+@pytest.mark.parametrize(("short_url", "canonical", "provider"), _SHORT_SHARE_CASES)
+def test_short_share_across_supported_providers_uses_canonical_media_identity(
+    monkeypatch, short_url: str, canonical: str, provider: str
+) -> None:
+    assert media._short_share_provider(short_url) == provider
+    extracted: list[str] = []
+    expanded: list[str] = []
+
+    async def fake_expand(url: str) -> str:
+        expanded.append(url)
+        return canonical
+
+    def fake_extract(url: str):
+        extracted.append(url)
+        return {
+            "formats": [{
+                "url": "https://cdn.example.com/combined.mp4",
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "aac",
+                "filesize": 6_000_000,
+            }]
+        }
+
+    monkeypatch.setattr(media, "_expand_short_share_url", fake_expand)
+    monkeypatch.setattr(media, "_extract_info_sync", fake_extract)
+    result = asyncio.run(media.resolve_media_url(short_url, max_bytes=25_000_000))
+
+    assert expanded == [short_url]
+    assert extracted == [canonical]
+    assert result.progressive
+    assert result.identity == media.media_url_identity(canonical)
+    assert result.canonical_url == canonical
+    assert result.source_url == short_url
+    assert result.provider == provider
+
+
+@pytest.mark.parametrize(
+    "permalink",
+    (
+        "https://x.com/user/status/123",
+        "https://www.tiktok.com/@user/video/123",
+        "https://www.instagram.com/reel/ABC123/",
+        "https://youtu.be/abc123",
+        "https://www.reddit.com/r/test/comments/abc123/post/",
+        "https://clips.twitch.tv/FancyClip",
+        "https://www.facebook.com/watch/?v=123",
+        "https://vimeo.com/123456",
+        "https://streamable.com/abc123",
+        "https://imgur.com/gallery/abc123",
+        "https://example.tumblr.com/post/123/title",
+        "https://bsky.app/profile/example/post/abc",
+        "https://www.pinterest.com/pin/123456/",
+        "https://cdn.example.com/clip.mp4",
+    ),
+)
+def test_existing_supported_permalinks_skip_redirect_resolution(monkeypatch, permalink: str) -> None:
+    assert not media._short_share_provider(permalink)
+
+    async def should_not_redirect(_url: str) -> str:
+        raise AssertionError("canonical URL must bypass extra shortlink network requests")
+
+    def playable_media(_url: str):
+        return {
+            "formats": [{
+                "url": "https://cdn.example.com/combined.mp4",
+                "protocol": "https",
+                "ext": "mp4",
+                "vcodec": "h264",
+                "acodec": "aac",
+                "filesize": 6_000_000,
+            }]
+        }
+
+    monkeypatch.setattr(media, "_expand_short_share_url", should_not_redirect)
+    monkeypatch.setattr(media, "_extract_info_sync", playable_media)
+    result = asyncio.run(media.resolve_media_url(permalink, max_bytes=25_000_000))
+    assert result.provider == media.provider_for_url(permalink)
+    assert result.source_url == permalink
+    assert result.progressive
+    assert result.identity == media.media_url_identity(result.canonical_url)
+
+
+def test_short_share_redirect_uses_safe_network_and_releases_response(monkeypatch) -> None:
+    class Response:
+        def __init__(self):
+            self.released = False
+
+        def release(self):
+            self.released = True
+
+    class Session:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    received: list[str] = []
+    response = Response()
+    destination = "https://www.tiktok.com/@creator/video/7555555555555555555?utm_source=copy"
+
+    async def fake_public_get(_session, url, **kwargs):
+        received.append(url)
+        assert kwargs["max_redirects"] == 4
+        assert kwargs["headers"]["User-Agent"]
+        return response, destination
+
+    monkeypatch.setattr(media.aiohttp, "ClientSession", Session)
+    monkeypatch.setattr(media, "public_tcp_connector", lambda **_kwargs: object())
+    monkeypatch.setattr(media, "public_get", fake_public_get)
+
+    expanded = asyncio.run(media._expand_short_share_url("https://pro.tiktok.com/t/ZPLr92WaR/"))
+    assert expanded == "https://www.tiktok.com/@creator/video/7555555555555555555"
+    assert received == ["https://pro.tiktok.com/t/ZPLr92WaR/"]
+    assert response.released
+
+
+@pytest.mark.parametrize(
+    "bad_destination",
+    (
+        "https://unrelated.example.com/anything",
+        "http://127.0.0.1/internal",
+        "https://www.facebook.com/watch/?v=42",
+        "https://pro.tiktok.com/t/AnotherToken/",
+        "https://www.tiktok.com/@creator/profile",
+    ),
+)
+def test_short_share_rejects_unsafe_foreign_unresolved_and_nonvideo_targets(
+    monkeypatch, bad_destination: str
+) -> None:
+    class Response:
+        released = False
+
+        def release(self):
+            self.released = True
+
+    class Session:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    response = Response()
+
+    async def fake_public_get(*_args, **_kwargs):
+        return response, bad_destination
+
+    monkeypatch.setattr(media.aiohttp, "ClientSession", Session)
+    monkeypatch.setattr(media, "public_tcp_connector", lambda **_kwargs: object())
+    monkeypatch.setattr(media, "public_get", fake_public_get)
+
+    result = asyncio.run(media._expand_short_share_url("https://pro.tiktok.com/t/ZPLr92WaR/"))
+    assert result == ""
+    assert response.released
+
+
+@pytest.mark.parametrize(("short_url", "_canonical", "provider"), _SHORT_SHARE_CASES)
+def test_unavailable_short_share_redirect_keeps_original_link_fallback(
+    monkeypatch, short_url: str, _canonical: str, provider: str
+) -> None:
+    attempted: list[str] = []
+
+    async def unavailable(_url: str) -> str:
+        return ""
+
+    def no_extraction(url: str):
+        attempted.append(url)
+        return None
+
+    monkeypatch.setattr(media, "_expand_short_share_url", unavailable)
+    monkeypatch.setattr(media, "_extract_info_sync", no_extraction)
+
+    result = asyncio.run(media.resolve_media_url(short_url, max_bytes=25_000_000))
+    assert attempted == [short_url]
+    assert result.delivery == "link"
+    assert result.reason == "extract_failed"
+    assert result.source_url == short_url
+    assert result.provider == provider
+
+
+def test_disabled_short_share_provider_never_follows_redirect(monkeypatch) -> None:
+    monkeypatch.setenv("DANK_SHARE_ROUTER_MEDIA_BLOCKED_PROVIDERS", "reddit")
+
+    async def no_redirect(_url: str):
+        raise AssertionError("blocked providers cannot initiate redirect checks")
+
+    monkeypatch.setattr(media, "_expand_short_share_url", no_redirect)
+    result = asyncio.run(media.resolve_media_url("https://redd.it/abc123", max_bytes=25_000_000))
+    assert result.delivery == "link"
+    assert result.reason == "provider_disabled"
+
+
+def test_supported_short_share_redirect_uses_same_provider_and_preserves_original(monkeypatch) -> None:
+    # A Facebook Watch redirect exercises the generic public-redirect boundary,
+    # rather than only testing TikTok through its own special handler.
+    class Response:
+        def __init__(self):
+            self.released = False
+
+        def release(self):
+            self.released = True
+
+    class Session:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    response = Response()
+
+    async def fake_public_get(*_args, **_kwargs):
+        return response, "https://www.facebook.com/watch/?v=123456789"
+
+    monkeypatch.setattr(media.aiohttp, "ClientSession", Session)
+    monkeypatch.setattr(media, "public_tcp_connector", lambda **_kwargs: object())
+    monkeypatch.setattr(media, "public_get", fake_public_get)
+    assert asyncio.run(media._expand_short_share_url("https://fb.watch/ABCabc123/")) == (
+        "https://www.facebook.com/watch/?v=123456789"
+    )
+    assert response.released
