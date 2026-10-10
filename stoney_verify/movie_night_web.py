@@ -2454,11 +2454,14 @@ video {{
 .player-button[hidden] {{ display:none !important; }}
 .player-button.active {{ color:var(--lime);background:rgba(120,220,67,.11); }}
 .subtitle-menu {{
-  position:absolute;bottom:76px;right:12px;z-index:38;
-  width:min(265px,calc(100% - 24px));
-  background:rgba(4,15,11,.97);border:1px solid var(--line-strong);
+  /* Keep the entire picker inside the fullscreen/inline video stage.
+     A scrollable panel avoids clipping on a 16:9 portrait player. */
+  position:absolute;top:0;bottom:0;right:0;z-index:38;
+  width:min(282px,92%);height:100%;max-height:100%;
+  box-sizing:border-box;overflow-y:auto;overscroll-behavior:contain;
+  background:rgba(4,15,11,.98);border:1px solid var(--line-strong);
   box-shadow:0 12px 32px rgba(0,0,0,.65);border-radius:12px;
-  padding:12px;display:grid;gap:8px;color:var(--text);
+  padding:12px;display:flex;flex-direction:column;gap:8px;color:var(--text);
 }}
 .subtitle-menu[hidden] {{ display:none!important; }}
 .subtitle-menu label {{font-size:13px;font-weight:800;}}
