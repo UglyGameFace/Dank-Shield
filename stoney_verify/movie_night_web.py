@@ -49,6 +49,7 @@ from stoney_verify.cinema_playback_service import (
     search_exact_episode_sources,
     search_exact_movie_sources,
     select_preferred_variant,
+    start_automatic_variant,
     start_room_variant,
 )
 from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
@@ -1724,15 +1725,17 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
         )
 
     try:
-        playback = await start_room_variant(
+        playback, selected, _fallback_attempts = await start_automatic_variant(
             latest.room_id,
             actor_id=int(uid),
             candidate_id=candidate.candidate_id,
-            variant_id=selected.variant_id,
+            selected=selected,
+            ranked=ranked,
+            start_variant=start_room_variant,
         )
     except Exception as exc:
         raise web.HTTPBadGateway(
-            text="The next episode source could not be started. Try another source from Cinema."
+            text="Cinema could not start a compatible next-episode release. Try a manual source."
         ) from exc
 
     try:
