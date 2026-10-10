@@ -92,6 +92,15 @@ def test_media_state_exposes_verified_hints_not_unsafe_unverified_guesses(monkey
         guild_id=44, channel_id=45, host_id=46,
         stream_token="stub-token", mode="standalone",
     )
+    candidate = manager.nominate(
+        room.room_id, user_id=46, title="Known Movie", auto_vote=False,
+    )
+    variant = manager.add_variant(
+        room.room_id, candidate.candidate_id, user_id=46,
+        source_ref="magnet:?xt=urn:btih:verified-source", auto_vote=False,
+    )
+    room.current_candidate_id = candidate.candidate_id
+    room.current_variant_id = variant.variant_id
     session = SimpleNamespace(
         token="stub-token", file_name="movie.mkv",
         release_metadata={"title": "Test"},
@@ -131,6 +140,8 @@ def test_media_state_exposes_verified_hints_not_unsafe_unverified_guesses(monkey
     assert result["video_verified"] is True
     assert result["video_codec"] == "hevc"
     assert result["video_container"] == "matroska,webm"
+    assert variant.metadata["verified"]["video"]["codec"] == "hevc"
+    assert variant.browser_video_risk_key() == 2
     assert result["media_content_type"] == "video/x-matroska"
     assert "sig=" in result["stream_url"]
 

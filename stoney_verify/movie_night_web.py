@@ -943,6 +943,21 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         audio_track_url = ""
         torrent_status = {}
         startup_status = {}
+    # The first torrent probe often finishes *after* this release was chosen.
+    # Carry authoritative codec evidence back into its room variant so the
+    # next automatic selection will not forget a verified incompatible source.
+    # Do not change the active movie, its host authorization or viewer clocks.
+    if (
+        session is not None and variant is not None
+        and isinstance(getattr(session, "verified_metadata", None), Mapping)
+        and session.verified_metadata.get("available")
+    ):
+        latest_verified = dict(session.verified_metadata)
+        if (variant.metadata or {}).get("verified") != latest_verified:
+            variant.metadata = {
+                **dict(variant.metadata or {}),
+                "verified": latest_verified,
+            }
     swarm = _swarm_display(torrent_status, variant)
     sync_ready = bool(
         int(user_id) == int(room.host_id)
@@ -1700,7 +1715,13 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
     ranked = manager.ranked_variants(latest.room_id, candidate.candidate_id)
     selected = await select_preferred_variant(int(uid), ranked)
     if selected is None:
-        raise web.HTTPConflict(text="No playable next-episode release is available.")
+        raise web.HTTPConflict(
+            text=(
+                "Next-episode releases have video formats risky for browser playback. "
+                "Cinema will not automatically start an HEVC/MKV source that may show "
+                "a black screen. Try another release."
+            )
+        )
 
     try:
         playback = await start_room_variant(

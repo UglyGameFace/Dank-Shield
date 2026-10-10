@@ -1,6 +1,28 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — CINEMA-AUDIO-LANGUAGE-AUTOPLAY-TRUTH-20261009
+## CURRENT ACTIVE TASK — CINEMA-UNSUPPORTED-AUTO-SOURCE-PREFLIGHT-20261009
+
+**Reason:** At 8:32 PM Eastern, Mad Max: Fury Road still had a black video element after automatic source selection. Advanced Stream Details now positively identify `hevc / video/matroska` and Samsung Browser's `canPlayType` reports no native decoder. User asks why Cinema auto-selected the release and why FFmpeg cannot support it.
+
+**Verified production baseline:** `aaa-cinema-pre-pregateway-bind@09affbf295a0642605aa7eb4c0532925507268cd`. PR #489 merged and Discloud status success Oct 10 00:16:18 UTC. New branch `fix/490-cinema-unsupported-source-preflight-20261009` forks this exact production SHA; do not overwrite other production features.
+
+### Root cause and focused prevention
+
+- `cinema_site` materializes provider results and calls `select_preferred_variant` **before torrent starts**. `MovieSourceVariant.browser_video_risk_key` added in #489 only used `metadata.verified.video`; provider search metadata deliberately sets `source_reported_verified=False`, and FFprobe runs asynchronously *after* torrent pieces arrive. Thus most releases were scored `1 = unknown` before launch even if `release_name.video_tags` contained HEVC/x265. A remembered preferred provider could override the ranking entirely. Later browser detection only warns after the source was committed.
+- New ranking rejects only **high-confidence negative release-name/container clues** (HEVC, x265/H265, .mkv, .avi, .mpeg/.mpg). Such clues never prove that another source is safe. Unmarked releases still remain unknown until a real probe, and Android-specific capabilities cannot be inferred from server-side filename alone.
+- `select_preferred_variant` excludes risk-2 variants from **automatic** site and next-episode selection, including a dangerous preferred provider. If all releases are risky, it fails with a useful compatibility error rather than knowingly starting a black screen. Explicit host-picked variants and original room authority/signatures are unchanged.
+- Targeted regression tests cover HEVC/x265, unsafe containers, unknown-versus-verified risk, preferred-provider override, only-unsupported-source fail-closed.
+- **This is not a universal video conversion claim.** HEVC-to-H264 requires decode/re-encode; changing MKV to MP4 without conversion cannot make an unsupported HEVC decoder work. Discloud shows 1.46 vCPU, 1.46 GB RAM with peaks of 80% CPU and 85.9% RAM; enabling unbounded FFmpeg video workers endangers Discord bot stability. Do not activate transcoding without measured bounded concurrency and real browser evidence.
+
+### Acceptance
+
+- New exact-head CI, source-choice tests, final security/diff review; no unrelated changes.
+- On Android test auto source ranking for multiple candidates, all-risky sources refusal, explicit manual behavior, per-guild language and AAC sync unchanged. When provider metadata hides codec, later probe/browser diagnostic must still surface issue; no false universal-playability claim.
+- **Still open:** reliable audio synchronization and source-specific HEVC video fallback. Do not mark Cinema broadly fixed solely on source preflight or CI. Keep prior verification/Dr STONE work suspended.
+
+### Prior history
+
+## HISTORICAL CHECKPOINT — CINEMA-AUDIO-LANGUAGE-AUTOPLAY-TRUTH-20261009
 
 **Scope:** Continue active Dank Cinema AAC audio stability task after Oct 9 7:12–7:13 PM Eastern user screenshots. Issues: incorrect movie heading ("Portuguese 5.1" for Mad Max artwork), English 7.1 track switching, distracting Audio permission button, black video with "Video playing" badge, automatic release selection, and language preference per user per guild. No FORCE SWITCH to another project.
 

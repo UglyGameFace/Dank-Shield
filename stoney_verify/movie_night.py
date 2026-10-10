@@ -75,10 +75,36 @@ class MovieSourceVariant:
         """
         meta = dict(self.metadata or {})
         verified = meta.get("verified")
-        if not isinstance(verified, Mapping):
-            return 1
-        video = verified.get("video")
+        video = verified.get("video") if isinstance(verified, Mapping) else None
         if not isinstance(video, Mapping) or not video.get("codec"):
+            # Torrent search ranks variants BEFORE their verified FFprobe runs.
+            # Only use provider release claims to flag obvious *risk*, never
+            # to declare a release safe or codec-verified.
+            release = meta.get("release_name")
+            release = release if isinstance(release, Mapping) else {}
+            reported = meta.get("source_reported")
+            reported = reported if isinstance(reported, Mapping) else {}
+            tags = release.get("video_tags")
+            tags = tags if isinstance(tags, (list, tuple)) else ()
+            labels = {str(tag).strip().casefold() for tag in tags}
+            if "hevc" in labels:
+                return 2
+            codec_hint = str(
+                reported.get("video_codec")
+                or reported.get("videoCodec")
+                or reported.get("codec")
+                or ""
+            ).strip().casefold().replace("-", "").replace(".", "")
+            if codec_hint in {"hevc", "h265", "x265", "h26510bit", "hevc10bit"}:
+                return 2
+            # A filename extension is a container hint, not proof of a codec.
+            for name in (
+                reported.get("filename"), reported.get("file_name"),
+                reported.get("fileName"), release.get("raw_filename"),
+            ):
+                suffix = str(name or "").strip().casefold().split("?", 1)[0]
+                if suffix.endswith((".mkv", ".avi", ".mpeg", ".mpg")):
+                    return 2
             return 1
         codec = str(video.get("codec") or "").strip().casefold()
         container = str(verified.get("container") or "").strip().casefold()

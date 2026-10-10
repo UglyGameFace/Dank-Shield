@@ -159,6 +159,14 @@ async def select_preferred_variant(
     """Choose the user's preferred real source when available, otherwise best-ranked first."""
 
     rows = list(variants or ())
+    # Automatic selection is conservative across browsers. A search-result
+    # label is not codec verification, but explicit HEVC/MKV warning signs
+    # must not be chosen automatically if a less risky release is available.
+    # Explicit host source choice still uses start_room_variant unchanged.
+    rows = [
+        item for item in rows
+        if item.browser_video_risk_key() < 2
+    ]
     if not rows:
         return None
     try:
