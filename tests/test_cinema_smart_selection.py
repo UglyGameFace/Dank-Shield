@@ -477,3 +477,26 @@ def test_torrent_special_episode_selection_accepts_season_zero():
     assert playback.choose_automatic_torrent_file(
         session, {"media_type": "episode", "season_number": 0, "episode_number": 5},
     ) is None
+
+
+def test_ambiguous_episode_pack_never_picks_unlabeled_extra_video():
+    pack = SimpleNamespace(candidates=[
+        SimpleNamespace(index=0, path="Show.S01E02.1080p.x264.mp4", size=2_000_000_000),
+        SimpleNamespace(index=1, path="bonus.mov", size=500_000_000),
+    ])
+    assert playback.choose_automatic_torrent_file(
+        pack, {"media_type": "episode", "season_number": 1, "episode_number": 1},
+    ) is None
+    unlabeled_pack = SimpleNamespace(candidates=[
+        SimpleNamespace(index=0, path="video1.mp4", size=1_000_000_000),
+        SimpleNamespace(index=1, path="video2.mp4", size=2_000_000_000),
+    ])
+    assert playback.choose_automatic_torrent_file(
+        unlabeled_pack, {"media_type": "episode", "season_number": 1, "episode_number": 1},
+    ) is None
+    single = SimpleNamespace(candidates=[
+        SimpleNamespace(index=0, path="video.mp4", size=1_000_000_000),
+    ])
+    assert playback.choose_automatic_torrent_file(
+        single, {"media_type": "episode", "season_number": 1, "episode_number": 1},
+    ).index == 0
