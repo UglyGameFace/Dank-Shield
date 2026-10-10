@@ -796,3 +796,59 @@ def test_proxy_send_failure_preserves_source_and_allows_retry(monkeypatch) -> No
     asyncio.run(share_runtime.route_message(make_message(3)))
     assert len(target.sent) == 1
     assert deleted == [2, 3]
+
+
+def test_share_router_upload_cap_tracks_live_guild_boost_changes(monkeypatch) -> None:
+    """Never keep yesterday's 100 MiB after the guild loses Level 3."""
+    mib = 1024 * 1024
+    monkeypatch.delenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", raising=False)
+    guild = SimpleNamespace(premium_tier=3, filesize_limit=10 * mib)
+
+    # Discord.py's stale 10 MiB value must not hide a Level 3 allowance.
+    assert share_runtime._share_video_limit_bytes(guild) == 100 * mib
+
+    # A live GUILD_UPDATE can mutate the same guild instance at any time.
+    # Even if a library property still reported 100 MiB, it may not override
+    # the lower, newly reported premium tier.
+    guild.filesize_limit = 100 * mib
+    guild.premium_tier = 2
+    assert share_runtime._share_video_limit_bytes(guild) == 50 * mib
+
+    guild.premium_tier = 1
+    assert share_runtime._share_video_limit_bytes(guild) == 20 * mib
+    guild.premium_tier = 0
+    assert share_runtime._share_video_limit_bytes(guild) == 20 * mib
+
+    guild.premium_tier = 3
+    assert share_runtime._share_video_limit_bytes(guild) == 100 * mib
+    guild.premium_tier = None
+    assert share_runtime._share_video_limit_bytes(guild) == 20 * mib
+    guild.premium_tier = 999
+    assert share_runtime._share_video_limit_bytes(guild) == 20 * mib
+
+
+def test_share_router_optional_operator_cap_never_increases_discord_limit(monkeypatch) -> None:
+    mib = 1024 * 1024
+    guild = SimpleNamespace(premium_tier=3, filesize_limit=100 * mib)
+    monkeypatch.setenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", str(25 * mib))
+    assert share_runtime._share_video_limit_bytes(guild) == 25 * mib
+
+    guild.premium_tier = 0
+    assert share_runtime._share_video_limit_bytes(guild) == 20 * mib
+
+    # An obsolete 100 MiB override must not force uploads above tier 2.
+    guild.premium_tier = 2
+    monkeypatch.setenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", str(100 * mib))
+    assert share_runtime._share_video_limit_bytes(guild) == 50 * mib
+
+    monkeypatch.setenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", "not-a-number")
+    assert share_runtime._share_video_limit_bytes(guild) == 50 * mib
+
+
+def test_share_router_larger_uploads_use_a_bounded_transfer_timeout(monkeypatch) -> None:
+    monkeypatch.delenv("DANK_SHARE_ROUTER_VIDEO_TIMEOUT_SECONDS", raising=False)
+    assert share_runtime._share_video_timeout_seconds() == 120.0
+    monkeypatch.setenv("DANK_SHARE_ROUTER_VIDEO_TIMEOUT_SECONDS", "9999")
+    assert share_runtime._share_video_timeout_seconds() == 180.0
+    monkeypatch.setenv("DANK_SHARE_ROUTER_VIDEO_TIMEOUT_SECONDS", "1")
+    assert share_runtime._share_video_timeout_seconds() == 12.0
