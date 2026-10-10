@@ -959,6 +959,18 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
                 **dict(variant.metadata or {}),
                 "verified": latest_verified,
             }
+    if session is not None and variant is not None and torrent_status:
+        # Real observed performance exists only for this *started* torrent.
+        # A finished download may show 0 B/s and must not be called stalled.
+        variant.metadata = {
+            **dict(variant.metadata or {}),
+            "observed_swarm": {
+                "at": time.monotonic(),
+                "download_rate": max(0, int(torrent_status.get("download_rate") or 0)),
+                "connected_peers": max(0, int(torrent_status.get("peers") or 0)),
+                "progress": max(0.0, min(1.0, float(torrent_status.get("progress") or 0))),
+            },
+        }
     swarm = _swarm_display(torrent_status, variant)
     sync_ready = bool(
         int(user_id) == int(room.host_id)
