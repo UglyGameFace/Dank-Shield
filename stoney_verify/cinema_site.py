@@ -725,7 +725,7 @@ def _cinema_entry_html(
   <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=11">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=12">
 </head>
 <body>
   <div class="app-shell">
@@ -3378,7 +3378,7 @@ def _site_html(guild_id: int, user_id: int) -> str:
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=11">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=12">
 </head>
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
