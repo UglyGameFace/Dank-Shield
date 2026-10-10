@@ -184,3 +184,54 @@ def test_auto_start_does_not_retry_manual_authority_changes(monkeypatch):
             "room", actor_id=42, candidate_id="candidate",
             selected=None, ranked=[],
         ))
+
+
+def test_explicit_active_watch_party_votes_override_automatic_ranking():
+    crowd_choice = release("Film.2026.720p.x264.mp4", seeds=5)
+    fast_candidate = release("Film.2026.1080p.x264.mp4", seeds=300)
+    crowd_choice.votes.update({11, 12})
+    fast_candidate.votes.update({13})
+    assert playback.ranked_automatic_variants(
+        [fast_candidate, crowd_choice], active_voters={11, 12, 13},
+    )[0] is crowd_choice
+    # Stale/disconnected voters do not outweigh active room members.
+    assert playback.ranked_automatic_variants(
+        [fast_candidate, crowd_choice], active_voters={13},
+    )[0] is fast_candidate
+
+
+def test_verified_source_evidence_survives_same_source_refresh():
+    from stoney_verify.movie_night import MovieNightManager
+
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=100, channel_id=200, host_id=42,
+        stream_token="", mode="standalone",
+    )
+    candidate = manager.nominate(
+        room.room_id, user_id=42, title="Film",
+        auto_vote=False,
+    )
+    kw = dict(
+        room_id=room.room_id, candidate_id=candidate.candidate_id, user_id=42,
+        source_ref="magnet:?xt=urn:btih:" + "b" * 40,
+        auto_vote=False,
+    )
+    original = manager.add_variant(
+        **kw, seeds=12, metadata={"release_name": {"video_tags": []}},
+    )
+    original.metadata["verified"] = {
+        "available": True, "filename": "film.mp4",
+        "container": "mov,mp4,m4a,3gp,3g2,mj2",
+        "video": {"codec": "h264", "height": 1080, "bit_depth": 8},
+    }
+    original.metadata["observed_swarm"] = {
+        "at": time.monotonic(), "download_rate": 3 * 1024 ** 2,
+        "connected_peers": 8, "progress": 0.3,
+    }
+    refreshed = manager.add_variant(
+        **kw, seeds=8, metadata={"release_name": {"video_tags": ["H.264"]}},
+    )
+    assert refreshed is original
+    assert refreshed.browser_video_risk_key() == 0
+    assert refreshed.metadata["observed_swarm"]["connected_peers"] == 8
