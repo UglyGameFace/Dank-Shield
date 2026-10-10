@@ -2,21 +2,29 @@
 
 ## CURRENT ACTIVE TASK — CINEMA-SUBTITLE-SUPPORT-20261010
 
-**Authorized switch:** User explicitly requested immediate subtitle implementation after confirming PR #499 merged. This replaces the fullscreen task, which is now merged.
+**Authorized transition:** After merging PR #499, user explicitly said “let's do it now” then “continue implementing” subtitles. Do not switch tasks without user directive.
 
-**Production baseline:** `aaa-cinema-pre-pregateway-bind@714e2af63b7cfa0fa1837c3e9e0832445246816d` (PR #499 merge).
+**Production baseline:** Discloud GitHub branch `aaa-cinema-pre-pregateway-bind@714e2af63b7cfa0fa1837c3e9e0832445246816d` (PR #499 merged; running Discloud SHA not independently confirmed).
 
-**Branch:** `feat/cinema-subtitle-foundation-20261010`.
+**Working branch/PR:** `feat/cinema-subtitle-foundation-20261010` → draft PR #500, targeting the exact production branch. Never merge until exact-head CI and authenticated browser validation.
 
-**Scope:** Safe subtitle foundation first: bounded SRT parsing and WebVTT conversion, then authenticated per-viewer subtitle tracks, embedded text subtitle extraction, and optional external provider integration with provider quotas and licensing respected. Preserve shared playback clock and independent audio tracks; do not assume SubDL or OpenSubtitles have unlimited free commercial API usage. Provider keys must be configured securely, not committed. Validate all paths and exact-head CI before merging.
+**Implementation in branch:**
+- `stoney_verify/cinema_subtitles.py`: strict SRT → WebVTT conversion; valid text-only stream discovery (SRT/SubRip, ASS/SSA, mov_text and WebVTT; exclude bitmap PGS/VobSub), bounded 35s/1MB FFmpeg extraction through signed 127.0.0.1 torrent endpoint, max 2 parallel jobs, 8-file short-lived cache.
+- `stoney_verify/movie_night_web.py`: same signed user/room, guild membership and access checks as main Theater; per-viewer `/subtitle`, optional `/subtitles/search` and `/subtitles/provider` endpoints, state now advertises verified tracks/provider availability, responsive subtitle menu, local SRT/VTT browser file picker, viewer-local caption delay/size, and attach-only HTML `<track>` media integration. No video URL/session, audio URL, room clock, host action or viewer sync mutations.
+- `stoney_verify/cinema_library_service.py`: per-member/per-guild `subtitle_language_by_guild` with authenticated `guild_subtitle_language` preference updates. Local uploads never leave the viewer's browser.
+- `stoney_verify/cinema_subtitle_providers.py`: optional SubDL v2 exact TMDB movie / series+season+episode search, quotas and caches, and text-file download with server-held key only. Requires `DANK_CINEMA_SUBDL_API_KEY` and operator's `DANK_CINEMA_SUBDL_COMMERCIAL_OK=true` and verified paid plan, since shared free keys are prohibited for commercial/public bots. Fail closed on quotas, network errors and unsupported archives.
+- `tests/test_cinema_subtitles.py` covers conversion security/limits, embedded-only verified inventory, on-demand extraction cache, authorized endpoint, source bounds, user/guild scoping, provider opt-in and exact episode identity. `tests/test_movie_night_web.py` updated for new preferences and route.
+- `docs/DANK_CINEMA_SUBTITLES.md` documents setup, fallback and acceptance.
 
-**Current status:** Initial SRT→WebVTT module and unit tests committed. Browser track delivery, provider adapters, embedded extraction, per-user preferences and complete CI are not yet implemented. PR remains unmerged; do not represent this as completed subtitle support.
+**Known incomplete verification:** Newest exact-head CI pending; real Discloud/Android desktop browser track rendering, FFmpeg against real partially buffered torrent, optional SubDL authenticated real API response/download, native fullscreen subtitling and 20-viewer live subtitle/audio soak not verified. Do not claim user-facing completion/deployment until each evidence gate is satisfied. Provider requires an actual approved key, not in repo.
+
+**Next single action:** Resolve exact-head CI/regression failures if any; inspect final diff then complete authenticated standalone/private/watch-party browser acceptance; merge only after required gates.
 
 ## PREVIOUS TASK — CINEMA-FULLSCREEN-PORTRAIT-RECOVERY-20261010 (MERGED)
 
 **Result:** PR #499 merged as `714e2af63b7cfa0fa1837c3e9e0832445246816d`. Live multi-browser fullscreen and 20-person audio load acceptance remain separate from code merge.
 
-## CURRENT ACTIVE TASK — CINEMA-FULLSCREEN-PORTRAIT-RECOVERY-20261010
+## ARCHIVED TASK DETAILS — CINEMA-FULLSCREEN-PORTRAIT-RECOVERY-20261010
 
 **Source:** User screenshot Oct 10 16:57 Eastern, Samsung Browser, authenticated standalone Mad Max: Fury Road playback. Video displays decoded frames and user confirms clear audio; after entering fullscreen and returning to portrait, inline video stage remains visually too tall/distorted. Need correct layout for standalone and shared Theater in Private Sessions and Watch Parties without restarting a running torrent or altering audio and sync.
 
