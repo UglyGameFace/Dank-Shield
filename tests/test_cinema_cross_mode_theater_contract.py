@@ -251,3 +251,79 @@ def test_authenticated_audio_language_preferences_are_per_member_and_guild(
 
 async def async_room(room, uid):
     return room, uid
+
+
+def test_twenty_person_watch_party_uses_one_clock_and_group_buffer_quorum() -> None:
+    """Host plus 19 late joiners: each must sync before joining buffer quorum."""
+    manager = MovieNightManager(
+        viewer_ttl_seconds=120,
+        buffer_low_seconds=4,
+        buffer_resume_seconds=10,
+        buffer_max_hold_seconds=20,
+        late_join_min_buffer_seconds=8,
+        late_join_max_buffer_seconds=15,
+    )
+    room = manager.create_room(
+        guild_id=100, channel_id=200, host_id=10,
+        stream_token="torrent-token", mode="watch_party", now=100.0,
+    )
+    manager.apply_host_action(
+        room.room_id, host_id=10, action="resume", now=100.0,
+    )
+    joiners = list(range(20, 39))
+    for uid in joiners:
+        manager.join_room(room.room_id, user_id=uid, now=101.0)
+
+    assert len(manager.active_viewers(room, now=101.0)) == 20
+    assert manager.buffer_quorum_viewers(room, now=101.0) == {10}
+
+    target = room.current_position(101.0)
+    manager.heartbeat(
+        room.room_id, user_id=10, position_seconds=target,
+        byte_position=1000, buffered_until_byte=80_000,
+        buffered_until_seconds=target + 25, media_duration_seconds=7200,
+        paused=False, now=101.0,
+    )
+    for uid in joiners:
+        # Each viewer explicitly requests sync, aligns to the same room
+        # clock and reports enough buffered media before the server admits
+        # them into the active quorum.
+        assert manager.user_can_access(room, uid)
+        manager.heartbeat(
+            room.room_id, user_id=uid, position_seconds=target,
+            byte_position=1000, buffered_until_byte=60_000,
+            buffered_until_seconds=target + 16,
+            media_duration_seconds=7200,
+            paused=False, client_session_id=f"viewer-{uid}",
+            sync_requested=True, sync_buffer_target_seconds=12,
+            now=101.0,
+        )
+        assert room.viewers[uid].sync_ready
+
+    assert len(manager.buffer_quorum_viewers(room, now=101.0)) == 20
+    assert room.host_id == 10
+    assert room.stream_token == "torrent-token"
+    assert room.playback_state == "playing"
+
+    # A weak synchronized participant may cause one bounded group hold,
+    # but must not permanently stall the other nineteen participants.
+    manager.heartbeat(
+        room.room_id, user_id=38,
+        position_seconds=room.current_position(102.0),
+        byte_position=2000, buffered_until_byte=2200,
+        buffered_until_seconds=room.current_position(102.0) + 1,
+        media_duration_seconds=7200,
+        paused=False, client_session_id="viewer-38",
+        sync_requested=True, now=102.0,
+    )
+    assert room.playback_state == "buffering"
+    held_position = room.playback_position
+    manager.heartbeat(
+        room.room_id, user_id=10, position_seconds=held_position,
+        byte_position=2000, buffered_until_byte=80_000,
+        buffered_until_seconds=held_position + 25,
+        media_duration_seconds=7200, paused=True, now=123.0,
+    )
+    assert room.playback_state == "playing"
+    assert room.stream_token == "torrent-token"
+    assert room.host_id == 10
