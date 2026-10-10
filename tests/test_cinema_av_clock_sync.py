@@ -45,6 +45,10 @@ const context = {
   compatAudioStartPending: false, compatAudioNeedsGesture: false,
   compatAudioLastSyncAt: 0, videoClockBuffering: false,
   userMuted: false, terminated: false,
+  remoteApply: false,
+  // This fixture is a normal Theater page, not native PiP/fullscreen.
+  // Native-only seeks may report to the server; in-page seeks must not.
+  nativeVideoControlsActive: () => false,
   lastState: { stream_url: "/video" },
   compatAudioActive: () => true,
   compatAudioClock: () => audio.currentTime,
