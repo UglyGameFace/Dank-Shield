@@ -4701,12 +4701,16 @@ function scheduleHostSeekCommit(explicitUserSeek=false) {{
   if((remoteApply && !explicitUserSeek) ||
      progressResumeApplying || !lastState?.is_host) return;
   if(hostSeekCommitTimer!==null) clearTimeout(hostSeekCommitTimer);
+  // A later automatic seek or replacement must not overwrite the user's
+  // actual requested target or replay the seek against another movie.
+  const intendedSeconds=Math.max(0,Number(video.currentTime||0));
+  const selectedStreamToken=String(lastState.stream_token||"");
   hostSeekCommitTimer=setTimeout(async()=>{{
     hostSeekCommitTimer=null;
     if((remoteApply && !explicitUserSeek) ||
-       progressResumeApplying || !lastState?.is_host) return;
-    const seconds=Math.max(0,Number(video.currentTime||0));
-    await hostAction("seek",{{seconds}});
+       progressResumeApplying || !lastState?.is_host ||
+       String(lastState.stream_token||"")!==selectedStreamToken) return;
+    await hostAction("seek",{{seconds:intendedSeconds}});
     persistWatchProgress(true);
   }},250);
 }}
