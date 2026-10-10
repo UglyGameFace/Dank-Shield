@@ -1815,9 +1815,15 @@ async def movie_night_preferences(request: web.Request) -> web.Response:
         str(guild_languages.get(str(int(room.guild_id))) or "")
         if isinstance(guild_languages, dict) else ""
     )
+    subtitle_languages = preferences.get("subtitle_language_by_guild") or {}
+    subtitle_language = (
+        str(subtitle_languages.get(str(int(room.guild_id))) or "")
+        if isinstance(subtitle_languages, dict) else ""
+    )
     return web.json_response({
         "preferences": preferences,
         "guild_audio_language": language,
+        "guild_subtitle_language": subtitle_language,
         "guild_id": int(room.guild_id),
     })
 
