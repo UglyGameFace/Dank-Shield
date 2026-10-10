@@ -2618,7 +2618,14 @@ async def cinema_play_api(request: web.Request) -> web.Response:
     else:
         selected = await select_preferred_variant(user_id, ranked)
     if selected is None:
-        raise web.HTTPConflict(text="No playable release remains for this title.")
+        raise web.HTTPConflict(
+            text=(
+                "Cinema found releases, but their reported video codecs or "
+                "containers are risky for browser playback (for example HEVC/MKV). "
+                "Automatic playback was stopped instead of starting a black screen. "
+                "Choose a different release or try again when compatible sources are available."
+            )
+        )
 
     try:
         playback = await start_room_variant(
