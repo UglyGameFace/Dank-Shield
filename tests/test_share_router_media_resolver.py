@@ -738,4 +738,3 @@ def test_unavailable_short_redirect_keeps_original_link_fallback(monkeypatch) ->
     assert result.delivery == "link"
     assert result.reason == "extract_failed"
     assert result.source_url == short_url
-
