@@ -3977,8 +3977,9 @@ function refreshNativePlayerCapabilities() {{
   const tracks=video.textTracks;
   const verifiedSubtitleOptions=Array.isArray(lastState?.subtitle_options)
     ?lastState.subtitle_options:[];
-  captions.hidden=!(lastState?.subtitle_provider_available ||
-    verifiedSubtitleOptions.length || (tracks && tracks.length));
+  // Always expose captions: local SRT/VTT upload needs no embedded text
+  // tracks or external API. Never show a dead/placeholder button.
+  captions.hidden=false;
   let showing=false;
   if(tracks) {{
     for(let i=0;i<tracks.length;i++) if(tracks[i].mode==="showing") showing=true;
@@ -5822,7 +5823,9 @@ document.getElementById("pip").onclick=async()=>{{
 }};
 document.getElementById("captions").onclick=()=>{{
   const options=cinemaSubtitleOptions(lastState);
-  if(options.length || lastState?.subtitle_provider_available) {{
+  const browserTracks=video.textTracks;
+  if(options.length || lastState?.subtitle_provider_available ||
+     !browserTracks || !browserTracks.length) {{
     const menu=document.getElementById("subtitleMenu");
     menu.hidden=!menu.hidden;
     if(!menu.hidden) document.getElementById("subtitleTrack").focus();
