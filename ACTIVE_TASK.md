@@ -1,6 +1,34 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — CINEMA-EPISODE-RELEASE-PICKER-20261010
+## CURRENT ACTIVE TASK — CINEMA-SMART-AUTOMATIC-SOURCE-SELECTION-20261010
+
+**FORCE SWITCH authorized:** User wrote `FORCE SWITCH: Complete Dank Cinema automatic smart selection`, reason prioritize intelligent selection over remaining episode-picker acceptance.
+
+**Outcome:** Deterministic, conservative automatic movie/episode source choice based on verified compatibility when known, quality/file-size efficiency and bounded swarm evidence, plus bounded safe startup fallback without host/viewer state loops. No false promises of codec proof before torrent bytes arrive.
+
+**Source/branch:** `fix/cinema-smart-auto-selection-20261010` created from exact Discloud GitHub deployed branch `aaa-cinema-pre-pregateway-bind@b93dc9bae8cf1f9d2eef58636565a392e38a7b10` (PR #496 merge). GitHub `discloud/commit` reported success, real runtime SHA not independently validated.
+
+**Status:** Investigation underway, no code changes yet. Single Active Task Lock is now this task.
+
+### Execution path and root cause found
+- Provider responses cap results at 25/100; PR #495 moved compatibility-aware lookahead earlier, but still relies on unverified release names.
+- `cinema_site.cinema_play_api` and `movie_night_web.movie_night_next_episode` call `select_preferred_variant` and then `start_room_variant` once. Failures generate errors instead of trying a different eligible release.
+- `MovieNightManager.ranked_variants` is seed/vote driven; `select_preferred_variant` filters risk-2 then lets remembered provider preference override any better candidate. Actual file bytes/codecs cannot be known until `TorrentManager.start_magnet` downloads torrent metadata and later asynchronously probes downloaded file pieces.
+- `TorrentManager.status` exposes **actual** download rate / connected peers, but only for sessions already started; provider-reported seeds are never equivalent to current live throughput. Verified codec metadata propagates later in `movie_night_web._state_payload`.
+- Room authority, leases, owner decisions and signed watch links must remain untouched by unsafe retry logic.
+
+### Suspended task checkpoint (do not resume without new FORCE SWITCH)
+`CINEMA-EPISODE-RELEASE-PICKER-20261010` PR #496 merged at `b93dc9bae8cf1f9d2eef58636565a392e38a7b10`, pre-merge exact-head workflows five green, GitHub Discloud deployment commit status success. In-scope backend API/frontend/asset/test code in six files. Remaining: live Android/desktop user acceptance (Choose Release visible for Carrie S01E01, select source, signed watch first video frame and audible audio, ordinary Resume, different browser). Blocker: no authenticated Android browser or direct Discloud runtime access. Git clean PR merged; no live acceptance claim. Next after resumption: collect browser evidence, repair any same-root failures, complete DoD.
+
+### Acceptance and risks
+- Shared policy must respect verified vs unverified data, incompatible-codec exclusions, provider limits, real vs reported swarm metrics, download caps, quality/file-size defaults, and soft preference.
+- Retry only bounded, sequential, **before** a successful room-media commit. Do not auto-swap shared media after playback has started or let a viewer force host state.
+- Preserve manual source choice as explicit override, session signing, exact identity, adult policy, lease cleanup and race guards.
+- Tests, compile, full CI, security and diff inspection, Discloud deployment SHA and Android + another browser A/V acceptance required. Never claim perfect universal playback or that unstarted torrents have measured download speeds.
+
+**Next:** Implement smallest correct shared selection/fallback mechanisms and targeted regression tests; do not touch unrelated tasks.
+
+## SUSPENDED CHECKPOINT — CINEMA-EPISODE-RELEASE-PICKER-20261010
 
 **Outcome:** Enable release selection for exact TV episodes on Dank Cinema, preserving automatic Play/Resume while allowing manual selection after no-compatible-release errors.
 
