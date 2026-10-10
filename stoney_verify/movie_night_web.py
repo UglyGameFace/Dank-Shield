@@ -3342,6 +3342,7 @@ let lastJoinRetargetAt=0;
 let lastHardSyncSeekAt=0;
 let streamRetryTimer=null;
 let streamRetryAttempt=0;
+const STREAM_RETRY_LIMIT=3;
 let sessionReconnectTimer=null;
 let sessionReconnectAttempt=0;
 let sessionReconnectInFlight=false;
@@ -4566,6 +4567,7 @@ function attachStream(url, force=false) {{
   hostAutoPlayBlocked=false;
   activeMediaGeneration++;
   latestDecodedFrameAt=0;
+  if(attachedStreamUrl!==clean) streamRetryAttempt=0;
   attachedStreamUrl=clean;
   resetStartupTrace();
   resetPlaybackRate();
@@ -4581,7 +4583,21 @@ function scheduleStreamRetry() {{
     streamRetryTimer!==null ||
     !lastState?.stream_url
   ) return;
-
+  const code=Number(video.error?.code||0);
+  if(code===1) return; // User/UA-aborted media is not a retryable error.
+  if(code===3 || code===4) {{
+    // MEDIA_ERR_DECODE and MEDIA_ERR_SRC_NOT_SUPPORTED cannot be repaired by
+    // endlessly force-loading the same bytes. Keep the session and let the
+    // viewer choose a different authorized release.
+    notice.textContent=code===3
+      ?"The browser could not decode this video. Try another Cinema release."
+      :"This browser cannot play the selected source. Try another release.";
+    return;
+  }}
+  if(streamRetryAttempt>=STREAM_RETRY_LIMIT) {{
+    notice.textContent="The media stream failed repeatedly. Automatic reload stopped. Try another release.";
+    return;
+  }}
   const step=Math.min(streamRetryAttempt,4);
   const delay=Math.min(15000,2500*Math.pow(1.6,step));
   streamRetryAttempt+=1;
@@ -4589,16 +4605,21 @@ function scheduleStreamRetry() {{
     "The source is still preparing. Keeping your Cinema session and retrying in "+
     Math.ceil(delay/1000)+"s…";
 
+  const retryStreamToken=String(lastState.stream_token||"");
   streamRetryTimer=setTimeout(async()=>{{
     streamRetryTimer=null;
-    if(terminated || !lastState?.stream_url) return;
+    if(terminated || !lastState?.stream_url ||
+       String(lastState.stream_token||"")!==retryStreamToken) return;
 
     try {{
       const fresh=await jsonFetch("/movie/"+BOOT.roomId+"/state");
       await applyState(fresh);
     }} catch(_) {{}}
 
-    if(terminated || !lastState?.stream_url) return;
+    // A host may have selected another movie while the timer was waiting.
+    // Never reload the replacement merely because the old source failed.
+    if(terminated || !lastState?.stream_url ||
+       String(lastState.stream_token||"")!==retryStreamToken) return;
     attachStream(lastState.stream_url,true);
   }},delay);
 }}
@@ -6522,7 +6543,7 @@ video.addEventListener("seeked",()=>{{
     scheduleCompatAudioRestart(Number(video.currentTime||0),videoClockAdvancing());
 }});
 video.addEventListener("loadedmetadata",()=>{{
-  streamRetryAttempt=0;
+  // Metadata alone does not prove the decoder or source is stable.
   cancelStreamRetry();
   updatePlayerChrome();
   refreshNativePlayerCapabilities();
@@ -6565,7 +6586,6 @@ video.addEventListener("canplay",()=>{{
     videoClockBuffering=false;
     if(compatAudioActive()) void syncCompatAudio(true);
   }}
-  streamRetryAttempt=0;
   cancelStreamRetry();
   if(notice.textContent.startsWith("The source is still preparing"))
     notice.textContent="";
