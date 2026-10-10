@@ -3355,6 +3355,10 @@ let startupTrace={{
   events:{{}},
   firstFrameRequested:false
 }};
+// A browser video.play() promise may remain pending while media buffers.
+let hostAutoPlayPending=false;
+let hostAutoPlayAttempt=0;
+let hostAutoPlayBlocked=false;
 let hostSheetDismissed=true;
 let previousHostState=null;
 let controlsHideTimer=null;
@@ -4547,6 +4551,10 @@ function attachStream(url, force=false) {{
   const clean=String(url||"");
   if(!clean) return;
   if(!force && attachedStreamUrl===clean && video.getAttribute("src")) return;
+  // An old stream's play() result must not control the replacement stream.
+  hostAutoPlayAttempt++;
+  hostAutoPlayPending=false;
+  hostAutoPlayBlocked=false;
   attachedStreamUrl=clean;
   resetStartupTrace();
   resetPlaybackRate();
@@ -4762,6 +4770,29 @@ function correctSyncedDrift(target) {{
   if(drift<=SOFT_DRIFT_STOP) resetPlaybackRate();
 }}
 
+function requestHostVideoPlayFromState() {{
+  if(hostAutoPlayPending || hostAutoPlayBlocked || !video.paused || terminated)
+    return;
+  hostAutoPlayPending=true;
+  const attempt=++hostAutoPlayAttempt;
+  let pending;
+  try {{ pending=video.play(); }}
+  catch(err) {{ pending=Promise.reject(err); }}
+  // Room polls must not block on an unsettled browser media play promise.
+  void Promise.resolve(pending).catch(err=>{{
+    if(attempt!==hostAutoPlayAttempt || terminated) return;
+    if(err?.name==="NotAllowedError") {{
+      hostAutoPlayBlocked=true;
+      notice.textContent="Your browser requires a Play tap to allow video and sound.";
+    }} else if(err?.name!=="AbortError") {{
+      notice.textContent="Browser playback failed. Check Advanced Stream Details or press Play to retry.";
+    }}
+  }}).finally(()=>{{
+    if(attempt!==hostAutoPlayAttempt) return;
+    hostAutoPlayPending=false;
+    refreshStreamHealth();
+  }});
+}}
 async function applyState(s) {{
   lastState=s;
   applyCompatAudioState(s);
@@ -4880,9 +4911,8 @@ async function applyState(s) {{
     if(s.is_host) {{
       resetPlaybackRate();
       if((s.state==="paused" || s.state==="buffering") && !video.paused) video.pause();
-      if(s.state==="playing" && video.paused) {{
-        try {{ await video.play(); }} catch(_) {{}}
-      }}
+      if(s.state==="playing" && video.paused)
+        requestHostVideoPlayFromState();
     }} else if(s.sync_status==="joining") {{
       resetPlaybackRate();
       if(!syncRequested) {{
@@ -5403,6 +5433,10 @@ function applyUserAudioState(forceAudible=false) {{
   refreshAudioPermissionControl();
 }}
 function primeAudiblePlaybackGesture() {{
+  // An explicit tap supersedes the previous automatic play attempt.
+  hostAutoPlayAttempt++;
+  hostAutoPlayPending=false;
+  hostAutoPlayBlocked=false;
   applyUserAudioState(!userMuted);
   // Request both outputs during the actual click. Never await play() before
   // telling the canonical host room to resume, and never pause a primed video.
@@ -6405,12 +6439,21 @@ document.getElementById("end").onclick=()=>{{
       :"End this Movie Night for everyone and release the room media session?");
   if(confirm(prompt)) hostAction("end");
 }};
+function nativeVideoControlsActive() {{
+  return document.pictureInPictureElement===video ||
+    document.fullscreenElement===video ||
+    !!video.webkitDisplayingFullscreen;
+}}
 video.addEventListener("play",()=>{{
   schedulePlayerControlsHide(2200);
   if(compatAudioActive()) void syncCompatAudio(false);
   if(remoteApply) return;
   if(lastState?.is_host) {{
-    if(!hostPlayGesturePending && lastState.state!=="playing") void hostAction("resume");
+    // Custom Theater buttons already dispatch explicit actions. An HTML
+    // play event from buffering, audio focus or state reconciliation is not a
+    // second host vote. Only native PiP/fullscreen controls need forwarding.
+    if(nativeVideoControlsActive() && !hostPlayGesturePending &&
+       lastState.state!=="playing") void hostAction("resume");
     return;
   }}
   if(lastState?.stream_url) {{
@@ -6429,7 +6472,12 @@ video.addEventListener("play",()=>{{
 video.addEventListener("pause",()=>{{
   showPlayerControls(true);
   holdCompatAudioForVideo();
-  if(!remoteApply && lastState?.is_host && !hostPlayGesturePending && lastState.state!=="paused") void hostAction("pause");
+  // Do not turn an involuntary media-element pause into a room-wide Pause.
+  // Native PiP/fullscreen controls still map to explicit host intent.
+  if(!remoteApply && lastState?.is_host && !hostPlayGesturePending &&
+     nativeVideoControlsActive() && lastState.state==="playing" &&
+     !videoClockBuffering && video.readyState>=3)
+    void hostAction("pause");
 }});
 video.addEventListener("seeking",()=>{{
   videoClockBuffering=true;
