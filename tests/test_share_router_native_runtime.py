@@ -854,3 +854,49 @@ def test_share_router_larger_uploads_use_a_bounded_transfer_timeout(monkeypatch)
     assert share_runtime._share_video_timeout_seconds() == 180.0
     monkeypatch.setenv("DANK_SHARE_ROUTER_VIDEO_TIMEOUT_SECONDS", "1")
     assert share_runtime._share_video_timeout_seconds() == 12.0
+
+
+def test_boost_downgrade_during_download_skips_oversize_upload(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Avoid sending an attachment after Level 3 drops to Level 2 mid-transfer."""
+    message, _routes, target = _direct_memes_fixture()
+    monkeypatch.delenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", raising=False)
+    mib = 1024 * 1024
+    message.guild.premium_tier = 3
+    cleanup_path = tmp_path / "large-video.mp4"
+    cleanup_path.write_bytes(b"temporary media")
+
+    class FakeFile:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    fake_file = FakeFile()
+
+    async def fake_prepare(_message, _target, _text):
+        assert share_runtime._share_video_limit_bytes(message.guild) == 100 * mib
+        # A Discord guild update arrives while an 80 MiB upload is staged.
+        message.guild.premium_tier = 2
+        return SimpleNamespace(
+            file=fake_file,
+            size_bytes=80 * mib,
+            cleanup_path=cleanup_path,
+        )
+
+    monkeypatch.setattr(share_runtime, "_prepare_native_video", fake_prepare)
+    was_sent = asyncio.run(
+        share_runtime._relay_native_video_upload(
+            message,
+            target,
+            message.content,
+            content="Share Router native video",
+        )
+    )
+    assert was_sent is False
+    assert target.sent == []
+    assert fake_file.closed
+    assert not cleanup_path.exists()
+    assert share_runtime._share_video_limit_bytes(message.guild) == 50 * mib
