@@ -327,3 +327,97 @@ def test_twenty_person_watch_party_uses_one_clock_and_group_buffer_quorum() -> N
     assert room.playback_state == "playing"
     assert room.stream_token == "torrent-token"
     assert room.host_id == 10
+
+
+def test_twenty_watch_party_members_can_choose_mixed_audio_without_affecting_room_clock(
+    monkeypatch,
+) -> None:
+    """20 isolated media/audio consumers with one room and three audio choices."""
+    manager = MovieNightManager(viewer_ttl_seconds=120)
+    room = manager.create_room(
+        guild_id=100, channel_id=200, host_id=10,
+        stream_token="one-shared-torrent", mode="watch_party",
+    )
+    current = time.monotonic()
+    users = [10, *range(20, 39)]
+    for uid in users:
+        manager.heartbeat(
+            room.room_id, user_id=uid,
+            position_seconds=0, byte_position=0,
+            buffered_until_byte=100_000, buffered_until_seconds=24,
+            media_duration_seconds=7200, paused=True,
+            client_session_id=f"client-{uid}",
+            sync_requested=uid != 10, sync_buffer_target_seconds=12,
+            now=current,
+        )
+    assert len(manager.buffer_quorum_viewers(room, now=current)) == 20
+
+    session = SimpleNamespace(
+        file_name="Film.1080p.mp4", file_size=10_000_000,
+        release_metadata={"title": "Film"},
+        verified_metadata={
+            "available": True, "container": "mp4",
+            "video": {"codec": "h264"},
+            "audio_tracks": [
+                {"language": "eng", "codec": "aac"},
+                {"language": "spa", "codec": "aac"},
+                {"language": "jpn", "codec": "aac"},
+            ],
+        },
+    )
+
+    class TorrentStub:
+        async def get(self, token):
+            assert token == "one-shared-torrent"
+            return session
+
+        def session_usable(self, _session):
+            return True
+
+        def schedule_metadata_probe(self, _session):
+            return None
+
+        def stream_url(self, _session, *, ttl_seconds, consumer_key):
+            return f"https://example.invalid/video?cid={consumer_key}"
+
+        def compat_audio_url(self, _session, *, ttl_seconds, consumer_key):
+            return f"https://example.invalid/audio?cid={consumer_key}"
+
+        def browser_audio_compatibility(self, _session):
+            return {"required": False, "codecs": ["aac"]}
+
+        def status(self, _session):
+            return {}
+
+        def consumer_startup_status(self, _session, consumer_key):
+            return {"consumer": consumer_key}
+
+    monkeypatch.setattr(movie_night_web, "get_torrent_manager", TorrentStub)
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(
+        movie_night_web.shutil, "which",
+        lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None,
+    )
+    monkeypatch.setattr(movie_night_web, "_discord_viewer_summaries", lambda *_a: [])
+    monkeypatch.setattr(movie_night_web, "_discord_room_context", lambda *_a: {})
+
+    snapshots = [
+        asyncio.run(movie_night_web._state_payload(room, uid))
+        for uid in users
+    ]
+    assert len({p["stream_consumer"] for p in snapshots}) == 20
+    assert len({p["stream_url"] for p in snapshots}) == 20
+    assert len({p["audio_track_url"] for p in snapshots}) == 20
+    assert {p["stream_token"] for p in snapshots} == {"one-shared-torrent"}
+    assert {p["position_seconds"] for p in snapshots} == {0.0}
+    assert {p["sync_status"] for p in snapshots} == {"host", "synced"}
+    assert {tuple(t["language"] for t in p["audio_track_options"])
+            for p in snapshots} == {("eng", "spa", "jpn")}
+
+    # Language is each viewer's selection; the room has no global audio track
+    # and the three track indexes can be selected independently by clients.
+    picks = {uid: i % 3 for i, uid in enumerate(users)}
+    assert set(picks.values()) == {0, 1, 2}
+    assert room.stream_token == "one-shared-torrent"
+    assert room.host_id == 10
+    assert len(manager.buffer_quorum_viewers(room, now=current)) == 20
