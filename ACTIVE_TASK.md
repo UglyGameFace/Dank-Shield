@@ -1,6 +1,33 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — CINEMA-LEGACY-PLAYBACK-GLITCH-TRUTH-20261009
+## CURRENT ACTIVE TASK — CINEMA-AUTO-SOURCE-RESULT-WINDOW-20261010
+
+**Outcome:** Ensure high-seed HEVC/MKV results do not crowd lower-seed, potentially browser-compatible releases out of the existing per-provider selection window for Dank Cinema automatic playback.
+
+**Branch:** `fix/cinema-auto-source-compatible-results-20261010` from `aaa-cinema-pre-pregateway-bind@86d1a4f1dcee575b17d61597903fdf4d2e200a2e` (PR #492 merged). No production change or Discloud deployment.
+
+**Status:** Implementation and focused regression tests committed on isolated branch. Exact-head CI, full relevant validation, live candidate evidence and signed playback/first-frame acceptance pending.
+
+### Root cause / execution
+- Provider JSON normalization cut to the first 25 raw entries in `media_source_resolver._search_one`, before Cinema knew video risk. RSS extraction also stopped at 25.
+- An index sorted by reported seeds can thus provide 25 HEVC/MKV variants while a potentially compatible H264 result in the same response is never passed to the existing automatic chooser. Site Play/Resume then receives only risk-2 candidates and PR #490's correct preflight refuses all instead of starting known-risk video.
+- Actual Discloud running SHA, real Carrie source metadata, and existence of a compatible release have not been independently confirmed. No claim a suitable source always exists.
+
+### Scope and changes
+- Keep per-source output 25, total output 100, bounded response bytes, SSRF-safe provider fetching, exact title/episode identity, adult rules, source preferences, lease/host authority and manual override unchanged.
+- Inspect at most 100 already returned items per provider, prioritize risk-0/risk-1 entries ahead of risk-2 using the *same* helper as room ranking, maintain original order within risk class.
+- Move existing risk scoring from `MovieSourceVariant` to `media_metadata.browser_video_risk_key` with a delegating method. This prevents duplicate conflicting codec policies.
+- Expand RSS iteration lookahead to the existing 100-result bound without adding HTTP retries or extra provider requests.
+- Regression tests: candidate after slot 25 survives in JSON; stable ordering and upper bound; RSS candidate after slot 25 survives; existing source preflight and source normalization suites remain authoritative.
+
+### Validation / blockers / next step
+- Source editing done through GitHub connector; local checkout unavailable (container has no GitHub network route).
+- Await exact-head CI and diff review, including existing media metadata, room ranking, source resolver, Cinema and browser playback suites.
+- Retest automatic episode and movie selection against actual provider data. Manual source choice and prior known-risk HEVC fail-closed semantics must remain unchanged. Verify on Android and a second browser to first frame/audio before claiming end-to-end playback.
+- This task does not enable HEVC transcode, guarantee a compatible source exists, change RSS provider configuration, or fix unrelated A/V or website failures.
+- Next: Open scoped PR into actual Discloud auto-deploy branch, run checks, review diff. Do not merge/deploy before validation.
+
+## PRIOR CHECKPOINT — CINEMA-LEGACY-PLAYBACK-GLITCH-TRUTH-20261009
 
 **Production baseline (verified):** Discloud auto-deploy branch aaa-cinema-pre-pregateway-bind at 48f4053ed329e84ec18b45728241c6ca6a844ccf; PR #490/#491 merged and deployed. Forked fix/492-cinema-playback-state-legacy-loop-20261009 from this exact SHA. No change to production until PR CI and real device validation.
 
