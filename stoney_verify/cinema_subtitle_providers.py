@@ -174,13 +174,17 @@ def allowed_subdl_id(stream_token: str, n_id: str) -> bool:
 
 def _safe_download_url(url: object) -> str:
     raw = str(url or "").strip()
-    parsed = urlsplit(raw)
+    try:
+        parsed = urlsplit(raw)
+        safe_port = parsed.port in {None, 443}
+    except ValueError as exc:
+        raise SubtitleProviderUnavailable("SubDL returned an invalid subtitle URL.") from exc
     if (
         parsed.scheme != "https"
         or parsed.hostname != "dl.subdl.com"
         or parsed.username is not None
         or parsed.password is not None
-        or parsed.port not in {None, 443}
+        or not safe_port
         or not parsed.path.startswith("/subtitle/")
     ):
         raise SubtitleProviderUnavailable("SubDL returned an unsafe subtitle URL.")
