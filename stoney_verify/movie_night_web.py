@@ -1728,7 +1728,7 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
     ranked = manager.ranked_variants(latest.room_id, candidate.candidate_id)
     active_voters = manager.active_viewers(latest)
     selected = await select_preferred_variant(
-        int(uid), ranked, active_voters=active_voters,
+        int(uid), ranked, guild_id=int(latest.guild_id), active_voters=active_voters,
     )
     if selected is None:
         raise web.HTTPConflict(
@@ -1748,6 +1748,7 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
             ranked=ranked,
             start_variant=start_room_variant,
             manager=manager,
+            guild_id=int(latest.guild_id),
             active_voters=active_voters,
         )
     except Exception as exc:
