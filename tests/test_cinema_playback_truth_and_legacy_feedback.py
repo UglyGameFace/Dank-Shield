@@ -170,7 +170,8 @@ def test_cinema_internal_seeks_do_not_echo_host_commands() -> None:
     )[0]
     assert "remoteApply && !explicitUserSeek" in core
     assert "progressResumeApplying" in core
-    assert 'await hostAction("seek",{seconds});' in core
+    assert 'await hostAction("seek",{seconds:intendedSeconds});' in core
+    assert 'String(lastState.stream_token||"")!==selectedStreamToken' in core
     assert 'scheduleHostSeekCommit(true);' in html
     # Native PiP/fullscreen seeks may still be deliberate, but internal
     # seeked events cannot modify the room's authoritative playback anchor.
