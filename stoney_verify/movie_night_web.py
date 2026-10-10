@@ -4148,13 +4148,13 @@ function streamHealthLabel(s) {{
   ) return "Browser may not support this video codec";
   if(s.state==="buffering") return "Preparing stream";
   if(video.seeking) return "Seeking to playback position";
+  // Peer count and total torrent completion cannot establish playable media.
+  // HAVE_FUTURE_DATA (3) proves the browser has at least a little video ahead.
+  if(video.readyState<3) return "Preparing playable video";
   // The room's intent to play and an HTMLVideoElement actually playing are
   // different facts. Never leave a green success label on a paused element.
   if(video.paused) return s.state==="playing"
     ?"Playback requested; waiting for browser video":"Video paused";
-  // Peer count and total torrent completion cannot establish playable media.
-  // HAVE_FUTURE_DATA (3) proves the browser has at least a little video ahead.
-  if(video.readyState<3) return "Preparing playable video";
   if(s.state==="playing" && !video.paused) {{
     if(startupTrace.events.first_frame!==undefined) return "Video frames rendered";
     if(typeof video.requestVideoFrameCallback==="function")
