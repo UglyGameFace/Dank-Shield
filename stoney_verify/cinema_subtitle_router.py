@@ -8,6 +8,7 @@ Fallback is between independent subtitle providers, respecting their limits.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import json
@@ -41,6 +42,8 @@ _RESULTS_CACHE: dict[tuple, tuple[float, list[dict]]] = {}
 _VTT_CACHE: dict[tuple, tuple[float, bytes]] = {}
 _WINDOWS: dict[tuple, int] = {}
 _COOLDOWN: dict[str, float] = {}
+_SEARCH_INFLIGHT: dict[tuple, asyncio.Task] = {}
+_DOWNLOAD_INFLIGHT: dict[tuple, asyncio.Task] = {}
 _MAX_FILE = 1_000_000
 _TIMEOUT = aiohttp.ClientTimeout(total=12, connect=5)
 
@@ -157,7 +160,12 @@ def _budget(account: SubtitleAccount, *, cost: int = 1) -> None:
         tag = (fingerprint, seconds, bucket)
         _WINDOWS[tag] = _WINDOWS.get(tag, 0) + cost
     if len(_WINDOWS) > 4096:
-        _WINDOWS.clear()
+        # Keep active counters. Clearing them would effectively reset an
+        # account's allowance during a busy day.
+        for old in list(_WINDOWS):
+            _fingerprint, window_size, bucket = old
+            if bucket < int(now // window_size) - 1:
+                _WINDOWS.pop(old, None)
 
 
 def _handle_response(response: aiohttp.ClientResponse, account: SubtitleAccount) -> None:
@@ -372,17 +380,33 @@ async def _discover(account: SubtitleAccount, metadata: Mapping, language: str) 
     cached = _RESULTS_CACHE.get(cache_key)
     if cached and cached[0] > time.monotonic():
         return cached[1]
-    async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
-        if account.provider == "wyzie":
-            rows = await _search_wyzie(session, account, metadata, language)
-        elif account.provider == "subsource":
-            rows = await _search_subsource(session, account, metadata, language)
-        else:
-            rows = await _search_subdl(session, account, metadata, language)
-    if len(_RESULTS_CACHE) >= 90:
-        _RESULTS_CACHE.clear()
-    _RESULTS_CACHE[cache_key] = (time.monotonic() + 600, rows)
-    return rows
+    # One upstream search per provider/credential/title/language, even if all
+    # twenty Watch Party viewers click Find subtitles simultaneously.
+    pending_key = (asyncio.get_running_loop(), cache_key)
+    pending = _SEARCH_INFLIGHT.get(pending_key)
+    if pending is not None:
+        return await pending
+
+    async def perform() -> list[dict]:
+        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+            if account.provider == "wyzie":
+                rows = await _search_wyzie(session, account, metadata, language)
+            elif account.provider == "subsource":
+                rows = await _search_subsource(session, account, metadata, language)
+            else:
+                rows = await _search_subdl(session, account, metadata, language)
+        if len(_RESULTS_CACHE) >= 90:
+            _RESULTS_CACHE.clear()
+        _RESULTS_CACHE[cache_key] = (time.monotonic() + 600, rows)
+        return rows
+
+    task = asyncio.create_task(perform())
+    _SEARCH_INFLIGHT[pending_key] = task
+    try:
+        return await asyncio.shield(task)
+    finally:
+        if task.done() and _SEARCH_INFLIGHT.get(pending_key) is task:
+            _SEARCH_INFLIGHT.pop(pending_key, None)
 
 
 async def discover_subtitles(
@@ -395,15 +419,25 @@ async def discover_subtitles(
     lang = str(language or "").strip().lower()
     if not _LANG.fullmatch(lang) or _media_query(metadata) is None:
         return []
-    matches: list[dict] = []
-    for provider in _PROVIDERS:
-        account = account_for(guild_id, provider)
-        if account is None:
-            continue
+    # Independent providers run concurrently. One failing source cannot
+    # delay or abort results from the other two.
+    assigned = [
+        (provider, account_for(guild_id, provider)) for provider in _PROVIDERS
+    ]
+    assigned = [(provider, account) for provider, account in assigned if account]
+
+    async def query_provider(provider: str, account: SubtitleAccount) -> tuple[str, SubtitleAccount, list[dict]]:
         try:
             rows = await _discover(account, metadata, lang)
         except (SubtitleProviderUnavailable, TimeoutError, aiohttp.ClientError, OSError):
-            continue
+            return provider, account, []
+        return provider, account, rows
+
+    responses = await asyncio.gather(*[
+        query_provider(provider, account) for provider, account in assigned
+    ])
+    matches: list[dict] = []
+    for provider, account, rows in responses:
         for row in rows:
             if len(matches) >= 15:
                 break
@@ -431,9 +465,6 @@ async def discover_subtitles(
                 "id": opaque_id, "source": provider,
                 "language": lang, "label": str(row.get("label") or "")[:116],
             })
-        # Query all independently authorized sources, rather than rotating
-        # to a different credential of one exhausted provider. Cached searches
-        # make this inexpensive for 20 viewers of the same release.
     return matches
 
 
