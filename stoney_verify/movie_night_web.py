@@ -1744,6 +1744,7 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
             selected=selected,
             ranked=ranked,
             start_variant=start_room_variant,
+            manager=manager,
         )
     except Exception as exc:
         raise web.HTTPBadGateway(
