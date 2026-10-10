@@ -261,7 +261,9 @@ def test_movie_candidate_supports_multiple_release_variants_and_votes() -> None:
     )
 
     ranked = manager.ranked_variants(room_id, candidate.candidate_id, now=108.0)
-    assert ranked[0].variant_id == small_hevc.variant_id
+    # Explicit HEVC codec evidence is unsafe for automatic browser ranking,
+    # even when provider seed counts favor the HEVC file.
+    assert ranked[0].variant_id == huge_h264.variant_id
 
     manager.vote_variant(
         room_id,
