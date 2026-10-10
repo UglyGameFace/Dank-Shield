@@ -122,16 +122,17 @@ def test_distinct_viewers_get_distinct_audio_consumers_without_changing_shared_c
     )
     if mode == "private":
         manager.invite_private_viewer(room.room_id, host_id=10, user_id=20)
+    current = time.monotonic()
 
     manager.heartbeat(
         room.room_id, user_id=10, position_seconds=55,
         byte_position=10, buffered_until_byte=100,
-        paused=False, client_session_id="host-phone", now=101.0,
+        paused=False, client_session_id="host-phone", now=current,
     )
     manager.heartbeat(
         room.room_id, user_id=20, position_seconds=0,
         byte_position=0, buffered_until_byte=0, paused=True,
-        client_session_id="viewer-laptop", sync_requested=True, now=101.0,
+        client_session_id="viewer-laptop", sync_requested=True, now=current,
     )
     before_host = room.host_id
     before_media = room.stream_token
@@ -187,6 +188,7 @@ def test_distinct_viewers_get_distinct_audio_consumers_without_changing_shared_c
     viewer = asyncio.run(movie_night_web._state_payload(room, 20))
 
     assert host["mode"] == viewer["mode"] == mode
+    assert host["viewer_count"] == viewer["viewer_count"] == 2
     assert host["is_host"] and not viewer["is_host"]
     assert host["stream_token"] == viewer["stream_token"] == "torrent-token"
     assert host["stream_consumer"] == "movie:10:host-phone"
