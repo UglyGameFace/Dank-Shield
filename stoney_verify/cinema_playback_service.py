@@ -376,6 +376,10 @@ async def start_automatic_variant(
                 automatic=True,
             )
             return result, item, failures
+        except PermissionError:
+            # PermissionError is an OSError subclass. Host/lease authority
+            # failures are never recoverable by trying another source.
+            raise
         except (CinemaPlaybackError, ClientError, RuntimeError, ValueError, OSError, TimeoutError) as exc:
             print(
                 "⚠️ cinema_auto_source startup_failed "
