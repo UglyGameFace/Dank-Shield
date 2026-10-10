@@ -45,6 +45,8 @@ def test_untrusted_provider_hints_can_rule_out_obvious_risks_not_prove_safety() 
     variant = _variant("Mad.Max.Fury.Road.2015.1080p.WEBRip")
     variant.metadata["source_reported"] = {"codec": "hevc", "filename": "release.mp4"}
     assert variant.browser_video_risk_key() == 2
+    variant.metadata["source_reported"] = {"videoCodec": "H.265", "filename": "release.mp4"}
+    assert variant.browser_video_risk_key() == 2
     variant.metadata["source_reported"] = {"video_codec": "h264", "filename": "release.mp4"}
     assert variant.browser_video_risk_key() == 1
     variant.metadata["source_reported"] = {"filename": "release.avi"}
