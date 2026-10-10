@@ -254,6 +254,7 @@ def ranked_automatic_variants(
     *,
     preferred_source: str = "",
     max_file_bytes: int = 0,
+    active_voters: Any = None,
 ) -> list[Any]:
     """Bounded, stable ranking with known format and configured file limits."""
     limit = _safe_int(max_file_bytes)
@@ -264,13 +265,19 @@ def ranked_automatic_variants(
         and (not limit or not _safe_int(getattr(item, "file_size", 0))
              or _safe_int(getattr(item, "file_size", 0)) <= limit)
     ]
+    active = set(active_voters or ())
     return sorted(
         rows,
-        key=lambda item: _automatic_rank_key(item, preferred_source=preferred_source),
+        key=lambda item: (
+            -len(set(getattr(item, "votes", ()) or ()) & active),
+            _automatic_rank_key(item, preferred_source=preferred_source),
+        ),
     )
 
 
-async def select_preferred_variant(user_id: int, variants: Any) -> Any:
+async def select_preferred_variant(
+    user_id: int, variants: Any, *, active_voters: Any = None,
+) -> Any:
     """Choose best viable source. Provider preference only breaks close ties."""
     try:
         profile = await get_cinema_user(int(user_id))
@@ -282,7 +289,9 @@ async def select_preferred_variant(user_id: int, variants: Any) -> Any:
         preferred = str(preferences.get("preferred_source") or "").strip().casefold()
     except (CinemaStorageUnavailable, TypeError, ValueError):
         preferred = ""
-    rows = ranked_automatic_variants(variants, preferred_source=preferred)
+    rows = ranked_automatic_variants(
+        variants, preferred_source=preferred, active_voters=active_voters,
+    )
     return rows[0] if rows else None
 
 
@@ -296,6 +305,7 @@ async def start_automatic_variant(
     start_variant: Any = None,
     max_file_bytes: int = 0,
     manager: Any = None,
+    active_voters: Any = None,
 ) -> tuple[CinemaPlaybackResult, Any, int]:
     """Retry only startup failures, never swap a playing room behind viewers.
 
@@ -314,7 +324,9 @@ async def start_automatic_variant(
     )
     limit = _safe_int(max_file_bytes)  # Actual torrent start enforces the host cap.
     remaining = [
-        row for row in ranked_automatic_variants(ranked, max_file_bytes=limit)
+        row for row in ranked_automatic_variants(
+            ranked, max_file_bytes=limit, active_voters=active_voters,
+        )
         if selected is None or row.variant_id != selected.variant_id
     ]
     choices = ([selected] if selected is not None
