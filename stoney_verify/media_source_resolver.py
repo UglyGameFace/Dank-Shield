@@ -15,7 +15,7 @@ from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urljoin, urlsp
 
 import aiohttp
 
-from stoney_verify.media_metadata import parse_release_name
+from stoney_verify.media_metadata import browser_video_risk_key, parse_release_name
 from stoney_verify.media_source_registry import (
     PROVIDER_TYPE_FEED,
     CustomMediaSource,
@@ -1051,7 +1051,7 @@ def _extract_feed_items(payload: bytes, query: str) -> list[Mapping[str, Any]]:
         if not _item_source_ref(item):
             continue
         rows.append(item)
-        if len(rows) >= _MAX_SOURCE_RESULTS:
+        if len(rows) >= _MAX_TOTAL_RESULTS:
             break
     return rows
 
@@ -1107,6 +1107,25 @@ async def _read_json_limited(response: aiohttp.ClientResponse) -> Any:
         raise ValueError("source did not return valid JSON") from exc
 
 
+def _bounded_browser_compatible_variants(
+    source: CustomMediaSource,
+    items: list[Mapping[str, Any]],
+) -> list[ResolvedMediaVariant]:
+    """Prefer non-risky releases before applying the existing per-source cap.
+
+    Provider responses may contain many HEVC/MKV releases at the top.
+    Inspect at most the existing global result budget, keep provider ordering
+    within each video-risk tier, and never certify unverified codecs as safe.
+    """
+    variants = [
+        variant
+        for item in items[:_MAX_TOTAL_RESULTS]
+        if (variant := _variant_from_item(source, item)) is not None
+    ]
+    variants.sort(key=lambda variant: browser_video_risk_key(variant.metadata))
+    return variants[:_MAX_SOURCE_RESULTS]
+
+
 async def _search_one(
     source: CustomMediaSource,
     query: str,
@@ -1157,12 +1176,7 @@ async def _search_one(
                     if response.status != 200:
                         return [], f"{source.label}: HTTP {response.status}"
                     items = await _read_structured_items_limited(response, query)
-                    variants = [
-                        variant
-                        for item in items[:_MAX_SOURCE_RESULTS]
-                        if (variant := _variant_from_item(source, item)) is not None
-                    ]
-                    return variants, ""
+                    return _bounded_browser_compatible_variants(source, items), ""
             return [], f"{source.label}: too many redirects"
     except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError) as exc:
         return [], f"{source.label}: {type(exc).__name__}: {exc}"
