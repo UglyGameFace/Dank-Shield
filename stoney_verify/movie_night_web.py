@@ -2440,6 +2440,22 @@ video {{
 .player-button:disabled {{ opacity:.32; }}
 .player-button[hidden] {{ display:none !important; }}
 .player-button.active {{ color:var(--lime);background:rgba(120,220,67,.11); }}
+.subtitle-menu {{
+  position:absolute;bottom:76px;right:12px;z-index:38;
+  width:min(265px,calc(100% - 24px));
+  background:rgba(4,15,11,.97);border:1px solid var(--line-strong);
+  box-shadow:0 12px 32px rgba(0,0,0,.65);border-radius:12px;
+  padding:12px;display:grid;gap:8px;color:var(--text);
+}}
+.subtitle-menu[hidden] {{ display:none!important; }}
+.subtitle-menu label {{font-size:13px;font-weight:800;}}
+.subtitle-menu select {{
+  width:100%;min-height:40px;border:1px solid var(--line-strong);
+  background:#10201a;color:var(--text);border-radius:8px;padding:8px;
+  font:inherit;font-size:14px;
+}}
+.subtitle-menu small {{font-size:11px;line-height:1.45;color:var(--muted);}}
+
 .control-spacer {{ flex:1; }}
 .volume-wrap {{ display:flex;align-items:center;gap:6px; }}
 .volume {{ width:70px; accent-color:var(--lime); }}
@@ -2965,6 +2981,11 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
     <div class="video-stage" id="videoStage">
       <video id="video" playsinline preload="metadata" controlslist="nodownload" aria-label="Dank Cinema video"></video>
       <audio id="compatAudio" preload="none" hidden aria-hidden="true"></audio>
+      <div class="subtitle-menu" id="subtitleMenu" hidden>
+        <label for="subtitleTrack">Subtitles for you</label>
+        <select id="subtitleTrack" aria-label="Subtitle language"><option value="off">Off</option></select>
+        <small id="subtitleStatus" role="status">Select an available language.</small>
+      </div>
       <div class="tap-skip-feedback left" id="tapSkipLeft" aria-live="polite">↶ 10s</div>
       <div class="tap-skip-feedback right" id="tapSkipRight" aria-live="polite">10s ↷</div>
       <div class="stage-top">
@@ -3373,6 +3394,12 @@ let selectedAudioTrack="original";
 let audioSelectionToken="";
 let audioMenuSignature="";
 let preferredSubtitleLanguage="";
+let subtitlePreferenceLoaded=false;
+let subtitleUserOverride=false;
+let selectedSubtitleChoice="off";
+let subtitleSelectionToken="";
+let subtitleMenuSignature="";
+let appliedSubtitleChoice="";
 let lastProgressPersistAt=0;
 let lastProgressMediaKey="";
 let lastProgressRestoreKey="";
@@ -3785,6 +3812,91 @@ function renderStartupDiagnostics(server={{}}) {{
     browserEl.textContent=bits.length?bits.join(" • "):"waiting for media events";
   }}
 }}
+function cinemaSubtitleOptions(s) {{
+  return Array.isArray(s?.subtitle_options)?s.subtitle_options:[];
+}}
+function subtitlePreferredChoice(s) {{
+  const lang=normalizedAudioLanguage(preferredSubtitleLanguage);
+  if(!lang || preferredSubtitleLanguage==="off") return "off";
+  const entry=cinemaSubtitleOptions(s).find(row=>
+    normalizedAudioLanguage(row.language||row.label)===lang
+  );
+  return entry?"embedded:"+String(entry.index):"off";
+}}
+function syncCinemaSubtitleTracks(s) {{
+  const token=String(s?.stream_token||"");
+  const options=cinemaSubtitleOptions(s);
+  const signature=token+":"+options.map(row=>String(row.index)+":"+String(row.label)).join("|");
+  if(token!==subtitleSelectionToken) {{
+    subtitleSelectionToken=token;
+    subtitleUserOverride=false;
+    selectedSubtitleChoice=subtitlePreferenceLoaded?subtitlePreferredChoice(s):"off";
+    subtitleMenuSignature="";
+    appliedSubtitleChoice="";
+  }}
+  if(signature!==subtitleMenuSignature) {{
+    subtitleMenuSignature=signature;
+    const control=document.getElementById("subtitleTrack");
+    control.textContent="";
+    const off=document.createElement("option");
+    off.value="off";off.textContent="Off";
+    control.appendChild(off);
+    for(const row of options) {{
+      const option=document.createElement("option");
+      option.value="embedded:"+String(row.index);
+      option.textContent=String(row.label||"Subtitle "+String(Number(row.index)+1));
+      control.appendChild(option);
+    }}
+    if(!subtitleUserOverride && subtitlePreferenceLoaded)
+      selectedSubtitleChoice=subtitlePreferredChoice(s);
+  }}
+  const valid=options.some(row=>"embedded:"+String(row.index)===selectedSubtitleChoice);
+  if(selectedSubtitleChoice!=="off" && !valid) selectedSubtitleChoice="off";
+  const control=document.getElementById("subtitleTrack");
+  control.value=selectedSubtitleChoice;
+  if(appliedSubtitleChoice===token+":"+selectedSubtitleChoice) {{
+    refreshNativePlayerCapabilities();
+    return;
+  }}
+  appliedSubtitleChoice=token+":"+selectedSubtitleChoice;
+  for(const track of Array.from(video.querySelectorAll('track[data-cinema-subtitle="1"]'))) {{
+    try {{ track.track.mode="disabled"; }} catch(_) {{}}
+    track.remove();
+  }}
+  const status=document.getElementById("subtitleStatus");
+  if(selectedSubtitleChoice==="off" || !token || !s?.stream_url) {{
+    status.textContent=options.length?"Subtitles off for this viewer.":"No embedded text subtitles in this release.";
+    refreshNativePlayerCapabilities();
+    return;
+  }}
+  const index=Number(selectedSubtitleChoice.slice(9));
+  const row=options.find(item=>Number(item.index)===index);
+  if(!row) return;
+  const track=document.createElement("track");
+  track.dataset.cinemaSubtitle="1";
+  track.kind="subtitles";
+  track.label=String(row.label||"Cinema subtitles");
+  track.srclang=String(row.language||"und");
+  track.src="/movie/"+encodeURIComponent(BOOT.roomId)+"/subtitle?"+
+    BOOT.query+"&track="+encodeURIComponent(String(index));
+  track.addEventListener("load",()=>{{
+    if(track.isConnected && appliedSubtitleChoice===token+":"+selectedSubtitleChoice) {{
+      try {{track.track.mode="showing";}} catch(_) {{}}
+      status.textContent="Subtitles: "+String(row.label||"Enabled");
+      refreshNativePlayerCapabilities();
+    }}
+  }});
+  track.addEventListener("error",()=>{{
+    if(track.isConnected) {{
+      status.textContent="Subtitle loading failed. Choose another track or retry.";
+      notice.textContent="This embedded subtitle could not be loaded. Video and audio are unaffected.";
+    }}
+  }});
+  video.appendChild(track);
+  try {{ track.track.mode="showing"; }} catch(_) {{}}
+  status.textContent="Loading subtitles: "+String(row.label||"");
+  refreshNativePlayerCapabilities();
+}}
 function refreshAudioPermissionControl() {{
   const control=document.getElementById("enableAudioControl");
   const button=document.getElementById("enableAudio");
@@ -3802,7 +3914,9 @@ function refreshNativePlayerCapabilities() {{
 
   const captions=document.getElementById("captions");
   const tracks=video.textTracks;
-  captions.hidden=!(tracks && tracks.length);
+  const verifiedSubtitleOptions=Array.isArray(lastState?.subtitle_options)
+    ?lastState.subtitle_options:[];
+  captions.hidden=!(verifiedSubtitleOptions.length || (tracks && tracks.length));
   let showing=false;
   if(tracks) {{
     for(let i=0;i<tracks.length;i++) if(tracks[i].mode==="showing") showing=true;
@@ -4951,6 +5065,7 @@ async function applyState(s) {{
     return;
   }}
 
+  syncCinemaSubtitleTracks(s);
   const streamConsumer=String(s.stream_consumer||"");
   if(
     s.stream_token &&
@@ -5644,6 +5759,14 @@ document.getElementById("pip").onclick=async()=>{{
   refreshNativePlayerCapabilities();
 }};
 document.getElementById("captions").onclick=()=>{{
+  const options=cinemaSubtitleOptions(lastState);
+  if(options.length) {{
+    const menu=document.getElementById("subtitleMenu");
+    menu.hidden=!menu.hidden;
+    if(!menu.hidden) document.getElementById("subtitleTrack").focus();
+    return;
+  }}
+  // Keep native subtitle support for any browser-provided text track.
   const tracks=video.textTracks;
   if(!tracks || !tracks.length) return;
   let anyShowing=false;
@@ -5662,6 +5785,23 @@ document.getElementById("captions").onclick=()=>{{
     tracks[i].mode=(i===preferredIndex && !anyShowing)?"showing":"disabled";
   refreshNativePlayerCapabilities();
 }};
+document.getElementById("subtitleTrack").addEventListener("change",event=>{{
+  const value=String(event.target.value||"off");
+  if(value!=="off" && !cinemaSubtitleOptions(lastState).some(
+    row=>"embedded:"+String(row.index)===value
+  )) return;
+  selectedSubtitleChoice=value;
+  subtitleUserOverride=true;
+  const selected=cinemaSubtitleOptions(lastState).find(
+    row=>"embedded:"+String(row.index)===value
+  );
+  preferredSubtitleLanguage=value==="off"?"off":String(selected?.language||"");
+  void saveCinemaPreferences({{guild_subtitle_language:preferredSubtitleLanguage}});
+  appliedSubtitleChoice="";
+  syncCinemaSubtitleTracks(lastState);
+  document.getElementById("subtitleMenu").hidden=true;
+}});
+
 video.addEventListener("enterpictureinpicture",refreshNativePlayerCapabilities);
 video.addEventListener("leavepictureinpicture",refreshNativePlayerCapabilities);
 video.addEventListener("loadedmetadata",refreshNativePlayerCapabilities);
@@ -5966,11 +6106,19 @@ async function loadCinemaPreferences() {{
       ||""
     );
     audioPreferenceLoaded=true;
-    preferredSubtitleLanguage=String(cinemaPreferences.default_subtitle_language||"");
+    preferredSubtitleLanguage=String(
+      response.guild_subtitle_language
+      ||cinemaPreferences.default_subtitle_language||""
+    ).toLowerCase();
+    subtitlePreferenceLoaded=true;
     syncAudioLanguageSelector();
     if(lastState) {{
       selectedAudioTrack=preferredTrackForLanguage(lastState);
       applyCompatAudioState(lastState);
+      subtitleUserOverride=false;
+      selectedSubtitleChoice=subtitlePreferredChoice(lastState);
+      appliedSubtitleChoice="";
+      syncCinemaSubtitleTracks(lastState);
       refreshNativePlayerCapabilities();
     }}
     const quality=String(cinemaPreferences.visual_quality||"auto");
