@@ -70,7 +70,7 @@ def configured_accounts() -> tuple[SubtitleAccount, ...]:
         except ValueError:
             entries = []
     accounts: list[SubtitleAccount] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for item in entries:
         if not isinstance(item, Mapping):
             continue
@@ -270,7 +270,8 @@ async def _search_subsource(
     session: aiohttp.ClientSession, account: SubtitleAccount,
     metadata: Mapping, language: str,
 ) -> list[dict]:
-    title = str(metadata.get("series_title") if metadata.get("media_type") == "episode"
+    title = str((metadata.get("series_title") or metadata.get("title"))
+                if metadata.get("media_type") == "episode"
                 else metadata.get("title") or "").strip()[:120]
     if len(title) < 2:
         return []
@@ -407,7 +408,7 @@ async def discover_subtitles(
             if len(matches) >= 15:
                 break
             ref = str(row.get("reference") or "")
-            if not ref or len(ref) > 900:
+            if not ref or len(ref) > 2048:
                 continue
             opaque_id = secrets.token_urlsafe(18)
             if len(_OPTIONS) >= 512:
@@ -430,8 +431,9 @@ async def discover_subtitles(
                 "id": opaque_id, "source": provider,
                 "language": lang, "label": str(row.get("label") or "")[:116],
             })
-        if len(matches) >= 6:
-            break
+        # Query all independently authorized sources, rather than rotating
+        # to a different credential of one exhausted provider. Cached searches
+        # make this inexpensive for 20 viewers of the same release.
     return matches
 
 
