@@ -3383,7 +3383,7 @@ def _site_html(guild_id: int, user_id: int) -> str:
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=17" defer></script>
+  <script src="/cinema/assets/site.js?v=18" defer></script>
 </body>
 </html>"""
 
