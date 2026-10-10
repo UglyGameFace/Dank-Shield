@@ -321,3 +321,54 @@ def test_auto_file_choice_prefers_non_risky_mp4_over_larger_mkv():
         session, {"media_type": "movie", "title": "Film"},
     )
     assert chosen.index == 1
+
+
+def test_auto_start_does_not_retry_permission_error_from_source(monkeypatch):
+    room = SimpleNamespace(
+        room_id="room", host_id=42, ended=False,
+        stream_token="", current_candidate_id="", current_variant_id="",
+    )
+    monkeypatch.setattr(
+        playback, "get_movie_night_manager",
+        lambda: SimpleNamespace(get=lambda _id: room),
+    )
+    rows = [release(f"Film.2026.1080p.x264.{n}.mp4") for n in range(5)]
+    calls = []
+
+    async def start(_room_id, *, actor_id, candidate_id, variant_id, automatic=False):
+        calls.append(variant_id)
+        raise PermissionError("lease belongs to another owner")
+
+    with pytest.raises(PermissionError, match="lease belongs"):
+        asyncio.run(playback.start_automatic_variant(
+            "room", actor_id=42, candidate_id="candidate",
+            selected=rows[0], ranked=rows, start_variant=start,
+        ))
+    assert calls == [rows[0].variant_id]
+
+
+def test_auto_start_stops_after_partial_source_vote_mutation(monkeypatch):
+    selected_candidate = SimpleNamespace(selected_variant_id="old")
+    room = SimpleNamespace(
+        room_id="room", host_id=42, ended=False,
+        stream_token="", current_candidate_id="", current_variant_id="",
+        candidates={"candidate": selected_candidate},
+    )
+    monkeypatch.setattr(
+        playback, "get_movie_night_manager",
+        lambda: SimpleNamespace(get=lambda _id: room),
+    )
+    rows = [release(f"Film.2026.1080p.x264.{n}.mp4") for n in range(4)]
+    calls = []
+
+    async def start(_room_id, *, actor_id, candidate_id, variant_id, automatic=False):
+        calls.append(variant_id)
+        selected_candidate.selected_variant_id = variant_id
+        raise RuntimeError("partial mutation")
+
+    with pytest.raises(RuntimeError, match="partial mutation"):
+        asyncio.run(playback.start_automatic_variant(
+            "room", actor_id=42, candidate_id="candidate",
+            selected=rows[0], ranked=rows, start_variant=start,
+        ))
+    assert len(calls) == 1
