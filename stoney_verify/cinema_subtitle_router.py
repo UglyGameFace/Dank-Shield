@@ -276,18 +276,18 @@ async def _search_subsource(
         return []
     # SubSource uses an internal movie identifier; never treat TMDB ID as its ID.
     titles = await _json_request(
-        session, account, "/movies/search", params={"query": title, "type": "text"},
+        session, account, "/movies/search", params={"searchType": "text", "q": title.lower()},
     )
     movie_id = None
     year = int(metadata.get("year") or 0)
     for item in _subsource_rows(titles)[:20]:
-        name = str(item.get("name") or item.get("title") or "").casefold()
+        name = str(item.get("title") or item.get("name") or "").casefold()
         if name != title.casefold():
             continue
-        candidate_year = int(item.get("year") or 0)
+        candidate_year = int(item.get("releaseYear") or item.get("year") or 0)
         if year and candidate_year and abs(year - candidate_year) > 1:
             continue
-        raw = str(item.get("id") or "")
+        raw = str(item.get("movieId") or item.get("id") or "")
         if raw.isdigit():
             movie_id = int(raw)
             break
@@ -297,16 +297,19 @@ async def _search_subsource(
     lang_names = {"en": "english", "es": "spanish", "fr": "french",
                   "ja": "japanese", "de": "german", "it": "italian",
                   "pt": "portuguese", "ko": "korean", "zh": "chinese"}
-    params = {"movie_id": str(movie_id), "language": lang_names.get(language, language)}
-    payload = await _json_request(session, account, "/subtitles", params=params)
+    params = {"movieId": str(movie_id), "language": lang_names.get(language, language), "limit": "100"}
     season = int(metadata.get("season_number") or 0)
     episode = int(metadata.get("episode_number") or 0)
+    if metadata.get("media_type") == "episode":
+        params.update({"seasonNumber": str(season), "episodeNumber": str(episode)})
+    payload = await _json_request(session, account, "/subtitles", params=params)
     rows = []
     for item in _subsource_rows(payload)[:80]:
-        raw_id = str(item.get("id") or "")
+        raw_id = str(item.get("subtitleId") or item.get("id") or "")
         if not raw_id.isdigit():
             continue
-        release = str(item.get("release_name") or item.get("release") or item.get("name") or "")
+        release_raw = item.get("releaseInfo") or item.get("release_name") or item.get("release") or item.get("name") or ""
+        release = " ".join(str(part) for part in release_raw) if isinstance(release_raw, list) else str(release_raw)
         if season or episode:
             pattern = rf"(?i)(?:s0*{season}e0*{episode}|(?<!\d){season}x0*{episode}(?!\d))"
             if not re.search(pattern, release):
