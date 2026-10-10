@@ -29,7 +29,8 @@
 *{box-sizing:border-box}
 html{
   background:var(--bg);scroll-behavior:smooth;
-  -webkit-text-size-adjust:100%;text-size-adjust:100%;
+  /* Respect device/browser text scaling instead of forcing 100%. */
+  -webkit-text-size-adjust:auto;text-size-adjust:auto;
   max-width:100%;overflow-x:hidden;
 }
 body{
@@ -619,6 +620,20 @@ html[data-quality="standard"] .hero-grain{opacity:.035}
   .details-content{padding:176px 14px 18px}
   .details-bg{height:264px}
   .bottom-nav{left:7px;right:7px;padding:5px}
+}
+@media(forced-colors:active){
+  /* Contrast themes should affect controls/text, not movie artwork. */
+  .media-card img,.brand-lockup-img,.hero img,.details-bg img,video{
+    forced-color-adjust:none;filter:none!important
+  }
+  button,select,input,a,.media-card,.modal,.icon-btn{
+    border-color:ButtonText
+  }
+  :focus-visible{outline:3px solid Highlight!important;outline-offset:3px}
+}
+@media(prefers-contrast:more){
+  :root{--muted:#c8d6ce;--muted-2:#abbab3;--line:rgba(255,255,255,.45)}
+  :focus-visible{outline:3px solid var(--lime);outline-offset:3px}
 }
 @media(prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
