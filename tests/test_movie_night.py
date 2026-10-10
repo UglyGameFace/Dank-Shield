@@ -370,9 +370,13 @@ def test_auto_source_favors_verified_playable_video_before_quality_or_seeds() ->
     ranked = manager.ranked_variants(room_id, candidate.candidate_id, now=108.0)
     assert ranked[0].variant_id == safe.variant_id
 
-    # Votes remain authoritative for multi-viewer rooms.
-    manager.vote_variant(room_id, candidate.candidate_id, risky.variant_id, user_id=20, approve=True, now=109.0)
-    ranked = manager.ranked_variants(room_id, candidate.candidate_id, now=108.0)
+    # The proposer already voted when adding the variant; an active host
+    # supplies a second distinct vote. Use the fixture's simulated clock.
+    manager.vote_variant(
+        room_id, candidate.candidate_id, risky.variant_id,
+        user_id=10, approve=True, now=109.0,
+    )
+    ranked = manager.ranked_variants(room_id, candidate.candidate_id, now=110.0)
     assert ranked[0].variant_id == risky.variant_id
 
 
