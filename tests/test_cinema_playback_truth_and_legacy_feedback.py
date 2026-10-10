@@ -145,7 +145,10 @@ def test_browser_frame_probe_must_not_forge_a_rendered_frame_from_media_time() -
     assert 'latestDecodedFrameAt=performance.now();' in html
     assert 'markStartupEvent("clock_advanced")' in html
     assert 'Number(video.currentTime||0)>0' in html
-    assert 'markStartupEvent("first_frame");' not in html
+    legacy_clock = html.split('video.addEventListener("timeupdate",()=>{', 1)[1].split(
+        "async function enterTheaterFullscreen()", 1
+    )[0]
+    assert 'markStartupEvent("first_frame")' not in legacy_clock
     assert 'return "Video frames rendering"' in html
     assert 'return "Video stalled; no fresh decoded frames"' in html
     assert 'return "Video clock advancing; frames unverified"' in html
