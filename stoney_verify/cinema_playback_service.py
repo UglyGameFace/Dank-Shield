@@ -574,8 +574,11 @@ def choose_automatic_torrent_file(session: Any, catalog: Any) -> Any:
     episode = str(metadata.get("media_type") or "").casefold() == "episode"
     season = _safe_int(metadata.get("season_number"))
     number = _safe_int(metadata.get("episode_number"))
+    files = tuple(getattr(session, "candidates", ()) or ())[:100]
     possible = []
-    for item in tuple(getattr(session, "candidates", ()) or ())[:100]:
+    saw_labeled_episode = False
+    matched_episode = False
+    for item in files:
         name = str(getattr(item, "path", "") or "")
         tags = parse_release_name(name)
         # Season zero is valid (special episodes), so use the parser's
@@ -583,8 +586,11 @@ def choose_automatic_torrent_file(session: Any, catalog: Any) -> Any:
         known_episode = tags.get("season") is not None and tags.get("episode") is not None
         item_season = _safe_int(tags.get("season"))
         item_number = _safe_int(tags.get("episode"))
-        if episode and known_episode and (item_season, item_number) != (season, number):
-            continue
+        if episode and known_episode:
+            saw_labeled_episode = True
+            if (item_season, item_number) != (season, number):
+                continue
+            matched_episode = True
         risk = browser_video_risk_key({
             "release_name": tags,
             "source_reported": {"filename": name},
@@ -595,6 +601,11 @@ def choose_automatic_torrent_file(session: Any, catalog: Any) -> Any:
         size = _safe_int(getattr(item, "size", 0))
         small_extra = 1 if size < 25 * _MIB else 0
         possible.append(((exactness if episode else 0, risk, small_extra, -size), item))
+    if episode and not matched_episode:
+        # A multi-file pack with no exact episode proof is ambiguous.
+        # Never silently play an unlabeled trailer or the wrong episode.
+        if saw_labeled_episode or len(files) != 1:
+            return None
     return min(possible, key=lambda entry: entry[0])[1] if possible else None
 
 
