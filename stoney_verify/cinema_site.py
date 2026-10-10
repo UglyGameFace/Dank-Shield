@@ -107,6 +107,7 @@ from .cinema_playback_service import (
     search_exact_episode_sources,
     search_exact_movie_sources,
     select_preferred_variant,
+    start_automatic_variant,
     start_room_variant,
 )
 from .movie_night import get_movie_night_manager
@@ -2689,7 +2690,7 @@ async def cinema_play_api(request: web.Request) -> web.Response:
             None,
         )
     else:
-        selected = await select_preferred_variant(user_id, ranked)
+        selected = await select_preferred_variant(user_id, ranked, guild_id=int(guild_id))
     if selected is None:
         raise web.HTTPConflict(
             text=(
@@ -2701,15 +2702,28 @@ async def cinema_play_api(request: web.Request) -> web.Response:
         )
 
     try:
-        playback = await start_room_variant(
-            room_id,
-            actor_id=int(user_id),
-            candidate_id=candidate.candidate_id,
-            variant_id=selected.variant_id,
-        )
+        if requested_source_ref:
+            playback = await start_room_variant(
+                room_id,
+                actor_id=int(user_id),
+                candidate_id=candidate.candidate_id,
+                variant_id=selected.variant_id,
+            )
+            fallback_attempts = 0
+        else:
+            playback, selected, fallback_attempts = await start_automatic_variant(
+                room_id,
+                actor_id=int(user_id),
+                candidate_id=candidate.candidate_id,
+                selected=selected,
+                ranked=ranked,
+                start_variant=start_room_variant,
+                manager=manager,
+                guild_id=int(guild_id),
+            )
     except Exception as exc:
         raise web.HTTPBadGateway(
-            text="The selected Cinema source could not be started."
+            text="Cinema could not start a compatible source. Try a manual release or search again."
         ) from exc
 
     response_ready_at = time.monotonic()
@@ -2754,6 +2768,7 @@ async def cinema_play_api(request: web.Request) -> web.Response:
                 "source_id": str(selected.source_id or ""),
                 "source_label": str(selected.source_label or "Cinema source"),
                 "selection_mode": "manual" if requested_source_ref else "automatic",
+                "startup_fallbacks": fallback_attempts,
             },
         }
     )

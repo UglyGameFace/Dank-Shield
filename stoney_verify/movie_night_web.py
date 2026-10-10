@@ -49,6 +49,7 @@ from stoney_verify.cinema_playback_service import (
     search_exact_episode_sources,
     search_exact_movie_sources,
     select_preferred_variant,
+    start_automatic_variant,
     start_room_variant,
 )
 from stoney_verify.movie_night import MovieNightRoom, get_movie_night_manager
@@ -958,6 +959,18 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
                 **dict(variant.metadata or {}),
                 "verified": latest_verified,
             }
+    if session is not None and variant is not None and torrent_status:
+        # Real observed performance exists only for this *started* torrent.
+        # A finished download may show 0 B/s and must not be called stalled.
+        variant.metadata = {
+            **dict(variant.metadata or {}),
+            "observed_swarm": {
+                "at": time.monotonic(),
+                "download_rate": max(0, int(torrent_status.get("download_rate") or 0)),
+                "connected_peers": max(0, int(torrent_status.get("peers") or 0)),
+                "progress": max(0.0, min(1.0, float(torrent_status.get("progress") or 0))),
+            },
+        }
     swarm = _swarm_display(torrent_status, variant)
     sync_ready = bool(
         int(user_id) == int(room.host_id)
@@ -1713,7 +1726,10 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
     if candidate is None:
         raise web.HTTPConflict(text="The next episode could not be attached to this Cinema room.")
     ranked = manager.ranked_variants(latest.room_id, candidate.candidate_id)
-    selected = await select_preferred_variant(int(uid), ranked)
+    active_voters = manager.active_viewers(latest)
+    selected = await select_preferred_variant(
+        int(uid), ranked, guild_id=int(latest.guild_id), active_voters=active_voters,
+    )
     if selected is None:
         raise web.HTTPConflict(
             text=(
@@ -1724,15 +1740,20 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
         )
 
     try:
-        playback = await start_room_variant(
+        playback, selected, _fallback_attempts = await start_automatic_variant(
             latest.room_id,
             actor_id=int(uid),
             candidate_id=candidate.candidate_id,
-            variant_id=selected.variant_id,
+            selected=selected,
+            ranked=ranked,
+            start_variant=start_room_variant,
+            manager=manager,
+            guild_id=int(latest.guild_id),
+            active_voters=active_voters,
         )
     except Exception as exc:
         raise web.HTTPBadGateway(
-            text="The next episode source could not be started. Try another source from Cinema."
+            text="Cinema could not start a compatible next-episode release. Try a manual source."
         ) from exc
 
     try:

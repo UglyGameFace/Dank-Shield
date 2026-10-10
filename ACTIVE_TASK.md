@@ -1,6 +1,40 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — CINEMA-EPISODE-RELEASE-PICKER-20261010
+## CURRENT ACTIVE TASK — CINEMA-SMART-AUTOMATIC-SOURCE-SELECTION-20261010
+
+**FORCE SWITCH authorized:** User wrote `FORCE SWITCH: Complete Dank Cinema automatic smart selection`, reason prioritize intelligent selection over remaining episode-picker acceptance.
+
+**Outcome:** Deterministic, conservative automatic movie/episode source choice based on verified compatibility when known, quality/file-size efficiency and bounded swarm evidence, plus bounded safe startup fallback without host/viewer state loops. No false promises of codec proof before torrent bytes arrive.
+
+**Source/branch:** `fix/cinema-smart-auto-selection-20261010` created from exact Discloud GitHub deployed branch `aaa-cinema-pre-pregateway-bind@b93dc9bae8cf1f9d2eef58636565a392e38a7b10` (PR #496 merge). GitHub `discloud/commit` reported success, real runtime SHA not independently validated.
+
+**Status:** Root-cause investigation and implementation committed on isolated task branch; targeted regression tests added. Pre-merge CI and browser/Discloud acceptance pending. Not deployed.
+
+**Implementation checkpoint:** `cinema_playback_service` now uses one source ranking policy for automatic site and next episode selection: confirmed compatibility, size/resolution efficiency, audio, recent measured download performance when available, reported seeds with saturation, and soft provider preference. Sequential automatic startup tries no more than three eligible candidates while retaining room token/host/candidate baseline; explicitly chosen manual sources are unchanged. On automatic launch the selected torrent file is checked, wrong-episode entries excluded, browser-risky codecs/containers rejected before room commit, and leases released for newly rejected sessions. `movie_night_web` carries live peer/download metrics and verified codecs into existing same-source room variants, `MovieNightManager.add_variant` preserves that evidence on provider refresh. No post-commit automatic room swapping, parallel torrents, or video transcoding. Targeted tests in `tests/test_cinema_smart_selection.py`; existing site mocks updated for new explicit automatic flag.
+
+**Per-user/per-guild language integration (same active task):** Existing `cinema_library_service` persists each member's `audio_language_by_guild` and global default; `movie_night_web` independently loads audio track preferences and signs viewer-specific track URLs. Smart ranking now reads the authenticated host's user ID and room guild ID, prefers verified matching audio tracks using browser-consistent aliases, and preserves explicit `auto` overrides without forcing other viewers' audio or trusting provider filename language claims. Site and next-episode call sites pass the authenticated guild ID; fallback uses the same scoring. Regression tests cover different users, two guilds, multilingual audio tracks, unknown labels, explicit auto override, and season-zero specials. Subtitle preference is currently a separate global default; do not claim it is guild-scoped or silently expand this task into subtitle settings.
+
+**Outstanding evidence and risks:** Torrent filename is only negative confidence, not proof of actual codec; FFprobe waits for downloaded bytes and happens asynchronously, and only previously started sources have measured throughput. Host watch-party content never changes automatically after a successful commit. Actual Discloud CPU, decoder support per browser, and live A/V playback cannot be certified by CI alone. Verify session lease cleanup and all regression suites before merge; inspect final diff and stale compatibility logic.
+
+### Execution path and root cause found
+- Provider responses cap results at 25/100; PR #495 moved compatibility-aware lookahead earlier, but still relies on unverified release names.
+- `cinema_site.cinema_play_api` and `movie_night_web.movie_night_next_episode` call `select_preferred_variant` and then `start_room_variant` once. Failures generate errors instead of trying a different eligible release.
+- `MovieNightManager.ranked_variants` is seed/vote driven; `select_preferred_variant` filters risk-2 then lets remembered provider preference override any better candidate. Actual file bytes/codecs cannot be known until `TorrentManager.start_magnet` downloads torrent metadata and later asynchronously probes downloaded file pieces.
+- `TorrentManager.status` exposes **actual** download rate / connected peers, but only for sessions already started; provider-reported seeds are never equivalent to current live throughput. Verified codec metadata propagates later in `movie_night_web._state_payload`.
+- Room authority, leases, owner decisions and signed watch links must remain untouched by unsafe retry logic.
+
+### Suspended task checkpoint (do not resume without new FORCE SWITCH)
+`CINEMA-EPISODE-RELEASE-PICKER-20261010` PR #496 merged at `b93dc9bae8cf1f9d2eef58636565a392e38a7b10`, pre-merge exact-head workflows five green, GitHub Discloud deployment commit status success. In-scope backend API/frontend/asset/test code in six files. Remaining: live Android/desktop user acceptance (Choose Release visible for Carrie S01E01, select source, signed watch first video frame and audible audio, ordinary Resume, different browser). Blocker: no authenticated Android browser or direct Discloud runtime access. Git clean PR merged; no live acceptance claim. Next after resumption: collect browser evidence, repair any same-root failures, complete DoD.
+
+### Acceptance and risks
+- Shared policy must respect verified vs unverified data, incompatible-codec exclusions, provider limits, real vs reported swarm metrics, download caps, quality/file-size defaults, and soft preference.
+- Retry only bounded, sequential, **before** a successful room-media commit. Do not auto-swap shared media after playback has started or let a viewer force host state.
+- Preserve manual source choice as explicit override, session signing, exact identity, adult policy, lease cleanup and race guards.
+- Tests, compile, full CI, security and diff inspection, Discloud deployment SHA and Android + another browser A/V acceptance required. Never claim perfect universal playback or that unstarted torrents have measured download speeds.
+
+**Next:** Implement smallest correct shared selection/fallback mechanisms and targeted regression tests; do not touch unrelated tasks.
+
+## SUSPENDED CHECKPOINT — CINEMA-EPISODE-RELEASE-PICKER-20261010
 
 **Outcome:** Enable release selection for exact TV episodes on Dank Cinema, preserving automatic Play/Resume while allowing manual selection after no-compatible-release errors.
 

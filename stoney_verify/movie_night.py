@@ -1065,7 +1065,13 @@ class MovieNightManager:
             existing_variant.seeds = max(0, int(seeds or 0))
             existing_variant.leechers = max(0, int(leechers or 0))
             if metadata:
-                existing_variant.metadata = dict(metadata)
+                incoming = dict(metadata)
+                # A new provider poll cannot erase file-probed codec evidence
+                # or an observed live torrent rate for this same source.
+                for key in ("verified", "observed_swarm"):
+                    if key not in incoming and key in existing_variant.metadata:
+                        incoming[key] = existing_variant.metadata[key]
+                existing_variant.metadata = incoming
             if auto_vote:
                 existing_variant.votes.add(uid)
             return existing_variant

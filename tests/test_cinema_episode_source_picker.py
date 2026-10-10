@@ -111,7 +111,7 @@ def test_episode_manual_source_choice_uses_picker_snapshot_and_exact_identity(mo
     expected_ref = safe_ref
     started = []
 
-    async def start_variant(room_id, *, actor_id, candidate_id, variant_id):
+    async def start_variant(room_id, *, actor_id, candidate_id, variant_id, automatic=False):
         room = manager.get(room_id)
         assert room is not None and room.host_id == actor_id == 42
         chosen = room.candidates[candidate_id].variants[variant_id]

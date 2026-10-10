@@ -133,6 +133,11 @@ def browser_video_risk_key(metadata: Mapping[str, Any] | None) -> int:
                 return 2
         return 1
     codec = str(video.get("codec") or "").strip().casefold()
+    # These codecs may decode on particular devices, but without trusted
+    # browser capability evidence are not safe *automatic* cross-browser bets.
+    # The host can still manually select them.
+    if codec in {"hevc", "h265", "h.265", "x265"}:
+        return 2
     container = str(verified.get("container") or "").strip().casefold()
     filename = str(verified.get("filename") or "").strip().casefold()
     fmt = container.split(",")[0] if container else ""
