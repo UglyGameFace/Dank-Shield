@@ -573,6 +573,19 @@ async def _relay_native_video_upload(
             pass
 
     try:
+        # A boost may disappear while a large video is being downloaded or
+        # remuxed. Re-check the CURRENT tier immediately before sending, not
+        # only when preparing the file. The caller keeps the source-link
+        # fallback if the server no longer permits this attachment.
+        current_limit = _share_video_limit_bytes(message.guild)
+        if native_video.size_bytes > current_limit:
+            _log(
+                f"native video fallback guild={message.guild.id} "
+                f"source={message.channel.id} target={target.id} "
+                f"reason=boost_tier_changed bytes={native_video.size_bytes} "
+                f"current_limit={current_limit}"
+            )
+            return False
         await target.send(**send_payload)
     except (discord.Forbidden, discord.HTTPException) as exc:
         _log(
