@@ -342,6 +342,64 @@ def test_default_variant_order_is_seed_first_and_zero_seed_is_last() -> None:
     assert prettier_but_dead.swarm_health["label"] == "dead"
 
 
+def test_auto_source_favors_verified_playable_video_before_quality_or_seeds() -> None:
+    manager, room_id = _room_with_three_viewers()
+    candidate = manager.nominate(
+        room_id, user_id=20, title="Browser Video Compatibility", now=105.0,
+    )
+    risky = manager.add_variant(
+        room_id, candidate.candidate_id, user_id=20,
+        source_ref="authorized:high-seed-hevc-mkv",
+        seeds=90, leechers=2, peers=92,
+        metadata={"verified": {
+            "filename": "release.mkv", "container": "matroska,webm",
+            "video": {"codec": "hevc", "bit_depth": 10, "width": 3840, "height": 2160},
+        }}, now=106.0,
+    )
+    safe = manager.add_variant(
+        room_id, candidate.candidate_id, user_id=30,
+        source_ref="authorized:seeded-h264-mp4",
+        seeds=12, leechers=1, peers=13,
+        metadata={"verified": {
+            "filename": "release.mp4", "container": "mov,mp4,m4a,3gp,3g2,mj2",
+            "video": {"codec": "h264", "bit_depth": 8, "width": 1920, "height": 1080},
+        }}, now=107.0,
+    )
+    assert safe.browser_video_risk_key() == 0
+    assert risky.browser_video_risk_key() == 2
+    ranked = manager.ranked_variants(room_id, candidate.candidate_id, now=108.0)
+    assert ranked[0].variant_id == safe.variant_id
+
+    # The proposer already voted when adding the variant; an active host
+    # supplies a second distinct vote. Use the fixture's simulated clock.
+    manager.vote_variant(
+        room_id, candidate.candidate_id, risky.variant_id,
+        user_id=10, approve=True, now=109.0,
+    )
+    ranked = manager.ranked_variants(room_id, candidate.candidate_id, now=110.0)
+    assert ranked[0].variant_id == risky.variant_id
+
+
+def test_video_risk_is_unknown_without_verified_codec_not_fake_safe() -> None:
+    manager, room_id = _room_with_three_viewers()
+    candidate = manager.nominate(
+        room_id, user_id=20, title="Unprobed Codec", now=105.0,
+    )
+    unknown = manager.add_variant(
+        room_id, candidate.candidate_id, user_id=20,
+        source_ref="authorized:not-yet-probed", seeds=8,
+        metadata={"release_name": {"resolution": "1080p"}}, now=106.0,
+    )
+    assert unknown.browser_video_risk_key() == 1
+    unknown.metadata["verified"] = {
+        "filename": "high-depth.mp4", "container": "mov,mp4",
+        "video": {"codec": "h264", "bit_depth": 10},
+    }
+    assert unknown.browser_video_risk_key() == 1
+    unknown.metadata["verified"]["video"]["bit_depth"] = "invalid"
+    assert unknown.browser_video_risk_key() == 1
+
+
 def test_browser_safe_audio_beats_known_risky_audio_when_both_are_seeded() -> None:
     manager, room_id = _room_with_three_viewers()
     candidate = manager.nominate(
@@ -390,6 +448,39 @@ def test_browser_safe_audio_beats_known_risky_audio_when_both_are_seeded() -> No
     assert safe.browser_audio_risk_key() == 0
     assert risky.browser_audio_risk_key() == 2
     assert ranked[0].variant_id == safe.variant_id
+
+
+def test_mixed_aac_and_dts_release_is_not_misranked_browser_safe() -> None:
+    manager, room_id = _room_with_three_viewers()
+    candidate = manager.nominate(
+        room_id, user_id=20, title="Multi-track Audio", now=105.0,
+    )
+    mixed = manager.add_variant(
+        room_id, candidate.candidate_id, user_id=20,
+        source_ref="authorized:mixed",
+        seeds=90, leechers=3, peers=93,
+        metadata={
+            "verified": {
+                "audio_tracks": [
+                    {"codec": "dts", "language": "por"},
+                    {"codec": "aac", "language": "eng"},
+                ],
+            },
+        }, now=106.0,
+    )
+    native = manager.add_variant(
+        room_id, candidate.candidate_id, user_id=30,
+        source_ref="authorized:native",
+        seeds=20, leechers=1, peers=21,
+        metadata={"verified": {
+            "audio_tracks": [{"codec": "aac", "language": "eng"}],
+        }}, now=107.0,
+    )
+    assert mixed.browser_audio_risk_key() == 2
+    assert native.browser_audio_risk_key() == 0
+    assert manager.ranked_variants(
+        room_id, candidate.candidate_id, now=108.0,
+    )[0].variant_id == native.variant_id
 
 
 def test_zero_seed_browser_safe_audio_still_loses_to_seeded_release() -> None:

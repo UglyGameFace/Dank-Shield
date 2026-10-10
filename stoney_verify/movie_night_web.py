@@ -36,6 +36,7 @@ from stoney_verify.cinema_media_identity import (
 )
 from stoney_verify.cinema_library_service import (
     CinemaStorageUnavailable,
+    InvalidCinemaState,
     get_cinema_user,
     get_media_state,
     notify_watch_party_invite,
@@ -903,7 +904,11 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
                 title = str(row.get("title") or "").strip()[:80]
                 codec = str(row.get("codec") or "").strip()[:24]
                 label = " • ".join(part for part in (language, title or codec) if part)
-                audio_track_options.append({"index": index, "label": label or f"Track {index + 1}"})
+                audio_track_options.append({
+                    "index": index,
+                    "label": label or f"Track {index + 1}",
+                    "language": language.lower(),
+                })
             if len(audio_track_options) > 1:
                 audio_track_url = torrent_manager.compat_audio_url(
                     session, ttl_seconds=21600, consumer_key=consumer_key,
@@ -1010,7 +1015,9 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "mode": room_mode,
         "private": private_mode,
         "standalone": standalone_mode,
-        "title": str(title or session_fallback_title),
+        # The release candidate may have a language/codec label as its title.
+        # Always prefer canonical catalog identity for the Theater heading.
+        "title": str(movie_metadata.get("title") or title or session_fallback_title),
         "movie": movie_metadata,
         "queue": queue_items,
         "release_source": source,
@@ -1040,6 +1047,27 @@ async def _state_payload(room: MovieNightRoom, user_id: int) -> dict[str, Any]:
         "media_content_type": (
             media_content_type(session.file_name)
             if session is not None
+            else ""
+        ),
+        # Safe browser-capability hints only; the signed media URL, source
+        # authority, and verified probe state remain unchanged.
+        "video_verified": bool(
+            session is not None
+            and isinstance(session.verified_metadata, Mapping)
+            and session.verified_metadata.get("available")
+            and isinstance(session.verified_metadata.get("video"), Mapping)
+            and session.verified_metadata["video"].get("codec")
+        ),
+        "video_codec": (
+            str(session.verified_metadata["video"].get("codec") or "")[:32]
+            if session is not None
+            and isinstance(session.verified_metadata, Mapping)
+            and isinstance(session.verified_metadata.get("video"), Mapping)
+            else ""
+        ),
+        "video_container": (
+            str(session.verified_metadata.get("container") or "")[:80]
+            if session is not None and isinstance(session.verified_metadata, Mapping)
             else ""
         ),
         "cast_supported_media": (
@@ -1708,7 +1736,7 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
 
 
 async def movie_night_preferences(request: web.Request) -> web.Response:
-    _room, uid = await _room_and_user(request)
+    room, uid = await _room_and_user(request)
     try:
         if request.method == "GET":
             row = await get_cinema_user(int(uid))
@@ -1719,16 +1747,26 @@ async def movie_night_preferences(request: web.Request) -> web.Response:
                 payload = {}
             if not isinstance(payload, dict):
                 payload = {}
-            row = await update_cinema_preferences(int(uid), payload)
+            row = await update_cinema_preferences(
+                int(uid), payload, guild_id=int(room.guild_id),
+            )
+    except InvalidCinemaState as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
     except CinemaStorageUnavailable as exc:
         raise web.HTTPServiceUnavailable(
             text="Cinema preferences are temporarily unavailable."
         ) from exc
-    return web.json_response(
-        {
-            "preferences": dict(row.get("preferences") or {}),
-        }
+    preferences = dict(row.get("preferences") or {})
+    guild_languages = preferences.get("audio_language_by_guild") or {}
+    language = (
+        str(guild_languages.get(str(int(room.guild_id))) or "")
+        if isinstance(guild_languages, dict) else ""
     )
+    return web.json_response({
+        "preferences": preferences,
+        "guild_audio_language": language,
+        "guild_id": int(room.guild_id),
+    })
 
 
 async def movie_night_queue_search(request: web.Request) -> web.Response:
@@ -3020,6 +3058,8 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
       <div class="stat"><b>Buffer target</b><span id="buffer">—</span></div>
       <div class="stat"><b>Server startup</b><span id="serverStartup">—</span></div>
       <div class="stat"><b>Browser startup</b><span id="browserStartup">—</span></div>
+      <div class="stat"><b>Playback timing</b><span id="audioClockStatus">Waiting for video</span></div>
+      <div class="stat"><b>Browser media support</b><span id="browserMediaSupport">Checking video codec</span></div>
     </div>
     <div class="quality-control">
       <label for="qualityMode">Visual quality</label>
@@ -3046,9 +3086,25 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
       <label for="audioTrack">Audio track</label>
       <select class="quality-select" id="audioTrack" aria-label="Audio track"></select>
     </div>
+    <div class="quality-control">
+      <label for="audioLanguage">My audio language</label>
+      <select class="quality-select" id="audioLanguage" aria-label="Preferred audio language for this server">
+        <option value="">Automatic (release default)</option>
+        <option value="en">English</option>
+        <option value="pt">Português</option>
+        <option value="es">Español</option>
+        <option value="fr">Français</option>
+        <option value="de">Deutsch</option>
+        <option value="it">Italiano</option>
+        <option value="ja">日本語</option>
+        <option value="ko">한국어</option>
+        <option value="hi">हिन्दी</option>
+        <option value="zh">中文</option>
+      </select>
+    </div>
     <div class="quality-control" id="enableAudioControl" hidden>
-      <label for="enableAudio">Audio permission</label>
-      <button class="quality-select" id="enableAudio" type="button">Enable audio</button>
+      <label for="enableAudio">Audio recovery</label>
+      <button class="quality-select" id="enableAudio" type="button">Restore audio</button>
     </div>
     <div class="quality-note" id="playbackPreferenceNote">Playback speed is synchronized for everyone when you are the host. Audio selection stays local to each viewer.</div>
     <div class="quality-note" id="qualityNote">Auto balances artwork depth with device and network capability. Playback features stay identical in every mode.</div>
@@ -3175,6 +3231,7 @@ let hostPlayGesturePending=false;
 let lastState=null;
 let cinemaPreferences={{}};
 let preferredAudioLanguage="";
+let audioPreferenceLoaded=false;
 let selectedAudioTrack="original";
 let audioSelectionToken="";
 let audioMenuSignature="";
@@ -3579,9 +3636,10 @@ function refreshAudioPermissionControl() {{
   const button=document.getElementById("enableAudio");
   // The paused flag can flip during loading and FFmpeg restarts without
   // confirming audible output. Keep the real recovery action discoverable.
-  control.hidden=!(compatAudioActive() && !userMuted);
-  button.textContent=compatAudio.paused || compatAudioNeedsGesture
-    ?"Enable audio":"Restart audio";
+  // Ordinary playback and track selection start sound directly. A browser may
+  // still block autoplay, but recovery is offered only after a real failure.
+  control.hidden=!(compatAudioActive() && !userMuted && compatAudioNeedsGesture);
+  button.textContent="Restore audio";
 }}
 function refreshNativePlayerCapabilities() {{
   const pip=document.getElementById("pip");
@@ -3931,20 +3989,94 @@ function applyModeSurface(s) {{
 
   previousHostState=!!s.is_host;
 }}
+function browserVideoCapability(s) {{
+  // This is an advisory from the ACTUAL browser. A recognized extension and
+  // reported seeds are not proof of a usable video decoder or visible frame.
+  if(!s?.video_verified) return {{
+    supported:null, label:"Codec not yet verified; attempting native playback"
+  }};
+  if(typeof video.canPlayType!=="function") return {{
+    supported:null, label:"Browser does not expose codec checks"
+  }};
+  const mime=String(s.media_content_type||"").split(";")[0].toLowerCase();
+  const codec=String(s.video_codec||"").toLowerCase();
+  const names={{
+    h264:"avc1.42E01E",avc:"avc1.42E01E",avc1:"avc1.42E01E",
+    hevc:"hvc1",h265:"hvc1",vp8:"vp8",vp9:"vp09.00.10.08",
+    av1:"av01.0.04M.08",mpeg2video:"mp2v"
+  }};
+  const codecHint=names[codec]||"";
+  const media=mime.startsWith("video/")?mime:"";
+  if(!media) return {{supported:null,label:"Unknown video container"}};
+  let decision="";
+  try {{
+    decision=String(video.canPlayType(
+      codecHint?media+'; codecs="'+codecHint+'"':media
+    )||"").toLowerCase();
+  }} catch(_) {{}}
+  const detail=(codec||"unknown codec")+" / "+media;
+  if(!decision) return {{
+    supported:false,
+    label:detail+" • browser reports no native decode; choose another release"
+  }};
+  if(!codecHint) return {{
+    supported:null, label:detail+" • browser codec status uncertain"
+  }};
+  return {{
+    supported:true,
+    label:detail+" • browser reports "+decision+"; awaiting real video frames"
+  }};
+}}
+function renderBrowserMediaSupport(s) {{
+  const element=document.getElementById("browserMediaSupport");
+  if(!element) return;
+  const result=browserVideoCapability(s||lastState);
+  element.textContent=result.label;
+}}
 function streamHealthLabel(s) {{
   if(s.media_missing) return "Source unavailable";
   if(!s.stream_url) return "Waiting for source";
   if(video.error) return "Media error";
+  if(
+    s.video_verified && browserVideoCapability(s).supported===false
+    && startupTrace.events.first_frame===undefined
+  ) return "Browser may not support this video codec";
   if(s.state==="buffering") return "Preparing stream";
   if(video.seeking) return "Seeking to playback position";
   // Peer count and total torrent completion cannot establish playable media.
   // HAVE_FUTURE_DATA (3) proves the browser has at least a little video ahead.
   if(video.readyState<3) return "Preparing playable video";
-  if(s.state==="playing" && !video.paused) return "Video playing";
+  if(s.state==="playing" && !video.paused) {{
+    if(
+      typeof video.requestVideoFrameCallback==="function"
+      && startupTrace.events.first_frame===undefined
+    ) return "Waiting for first video frame";
+    return "Video playing";
+  }}
   if(s.state==="playing") return "Waiting for browser playback";
   return "Video ready to play";
 }}
+function renderAudioClockDiagnostics() {{
+  const element=document.getElementById("audioClockStatus");
+  if(!element) return;
+  const videoTime=Number(video.currentTime||0);
+  const videoState=video.seeking?"seeking":videoClockBuffering||video.readyState<3
+    ?"buffering":video.paused?"paused":"advancing";
+  if(!compatAudioActive()) {{
+    element.textContent="Video "+videoState+" • embedded audio";
+    return;
+  }}
+  const audioTime=compatAudioClock();
+  const drift=audioTime-videoTime;
+  const audioState=compatAudioNeedsGesture?"blocked":compatAudio.error?"error":
+    compatAudio.paused?"paused":compatAudio.readyState<2?"buffering":"playing";
+  element.textContent="Video "+fmtClock(videoTime)+" ("+videoState+") • AAC "+
+    fmtClock(audioTime)+" ("+audioState+") • drift "+
+    (drift>=0?"+":"")+drift.toFixed(2)+"s";
+}}
 function refreshStreamHealth() {{
+  renderAudioClockDiagnostics();
+  renderBrowserMediaSupport(lastState);
   const element=document.getElementById("healthText");
   if(element && lastState)
     element.textContent="Stream Health: "+streamHealthLabel(lastState);
@@ -4227,11 +4359,44 @@ async function syncCompatAudio(force=false) {{
     ?1:Math.max(0.88,Math.min(1.12,1+drift*0.07));
   try {{ compatAudio.playbackRate=baseRate*correction; }} catch(_) {{}}
 }}
-function applyCompatAudioState(s) {{
+function normalizedAudioLanguage(value) {{
+  const raw=String(value||"").trim().toLowerCase().split(/[\\s•,]/)[0].replace(/_/g,"-");
+  const first=raw.split("-")[0];
+  const aliases={{
+    eng:"en",english:"en",por:"pt",portuguese:"pt",spa:"es",spanish:"es",
+    fre:"fr",fra:"fr",french:"fr",ger:"de",deu:"de",german:"de",
+    ita:"it",italian:"it",jpn:"ja",japanese:"ja",kor:"ko",korean:"ko",
+    hin:"hi",hindi:"hi",chi:"zh",zho:"zh",chinese:"zh",
+  }};
+  return aliases[first] || (first.length===2?first:"");
+}}
+function preferredTrackForLanguage(s) {{
+  const language=normalizedAudioLanguage(preferredAudioLanguage);
+  if(!language) return "original";
+  const rows=Array.isArray(s?.audio_track_options)?s.audio_track_options:[];
+  const track=rows.find(row=>
+    normalizedAudioLanguage(row.language||row.label)===language
+  );
+  return track?"sidecar:"+String(track.index):"original";
+}}
+function syncAudioLanguageSelector() {{
+  const control=document.getElementById("audioLanguage");
+  if(!control) return;
+  const language=normalizedAudioLanguage(preferredAudioLanguage);
+  if(language && !Array.from(control.options).some(row=>row.value===language)) {{
+    const option=document.createElement("option");
+    option.value=language;
+    option.textContent=language.toUpperCase();
+    control.appendChild(option);
+  }}
+  control.value=language;
+}}
+function applyCompatAudioState(s, userGesture=false) {{
   const token=String(s?.stream_token||"");
   if(audioSelectionToken!==token) {{
     audioSelectionToken=token;
-    selectedAudioTrack="original";
+    selectedAudioTrack=audioPreferenceLoaded
+      ?preferredTrackForLanguage(s):"original";
     audioMenuSignature="";
   }}
   const options=Array.isArray(s?.audio_track_options)?s.audio_track_options:[];
@@ -4265,7 +4430,10 @@ function applyCompatAudioState(s) {{
     const target=changed
       ?Number(video.currentTime||s.position_seconds||0)
       :Number(s.position_seconds||0);
-    void restartCompatAudio(target,!video.paused);
+    if(userGesture && !userMuted && videoClockAdvancing())
+      void startCompatAudioFromGesture(target,true,true);
+    else
+      void restartCompatAudio(target,videoClockAdvancing());
   }}
 }}
 
@@ -5546,8 +5714,19 @@ async function loadCinemaPreferences() {{
   try {{
     const response=await jsonFetch("/movie/"+BOOT.roomId+"/preferences");
     cinemaPreferences=response.preferences||{{}};
-    preferredAudioLanguage=String(cinemaPreferences.default_audio_language||"");
+    preferredAudioLanguage=String(
+      response.guild_audio_language
+      ||cinemaPreferences.default_audio_language
+      ||""
+    );
+    audioPreferenceLoaded=true;
     preferredSubtitleLanguage=String(cinemaPreferences.default_subtitle_language||"");
+    syncAudioLanguageSelector();
+    if(lastState) {{
+      selectedAudioTrack=preferredTrackForLanguage(lastState);
+      applyCompatAudioState(lastState);
+      refreshNativePlayerCapabilities();
+    }}
     const quality=String(cinemaPreferences.visual_quality||"auto");
     if(["auto","high","standard","lite"].includes(quality)) {{
       qualitySelect.value=quality;
@@ -5568,13 +5747,29 @@ document.getElementById("playbackSpeed").addEventListener("change",async event=>
   await hostAction("speed",{{rate}});
   saveCinemaPreferences({{playback_speed:rate}});
 }});
+document.getElementById("audioLanguage").addEventListener("change",event=>{{
+  const chosen=String(event.target.value||"");
+  preferredAudioLanguage=chosen==="auto"?"":normalizedAudioLanguage(chosen);
+  saveCinemaPreferences({{guild_audio_language:preferredAudioLanguage||"auto"}});
+  if(!lastState) return;
+  selectedAudioTrack=preferredTrackForLanguage(lastState);
+  applyCompatAudioState(lastState,true);
+  refreshNativePlayerCapabilities();
+  if(preferredAudioLanguage && selectedAudioTrack==="original")
+    notice.textContent="This release does not offer your preferred audio language. Its original audio will be used.";
+}});
 document.getElementById("audioTrack").addEventListener("change",event=>{{
   const value=String(event.target.value||"original");
   if(value==="original" || value.startsWith("sidecar:")) {{
     const options=Array.isArray(lastState?.audio_track_options)?lastState.audio_track_options:[];
     if(value.startsWith("sidecar:") && !options.some(row=>"sidecar:"+String(row.index)===value)) return;
     selectedAudioTrack=value;
-    applyCompatAudioState(lastState);
+    const selected=options.find(row=>"sidecar:"+String(row.index)===value);
+    preferredAudioLanguage=value==="original"
+      ?"":normalizedAudioLanguage(selected?.language||selected?.label);
+    syncAudioLanguageSelector();
+    saveCinemaPreferences({{guild_audio_language:preferredAudioLanguage||"auto"}});
+    applyCompatAudioState(lastState,true);
     notice.textContent=value==="original"
       ?"Using the original audio track.":"Switching this viewer to the selected audio track…";
     refreshNativePlayerCapabilities();
@@ -5588,9 +5783,9 @@ document.getElementById("audioTrack").addEventListener("change",event=>{{
     try {{ tracks[i].enabled=i===index; }} catch(_) {{}}
   }}
   selectedAudioTrack=value;
-  preferredAudioLanguage=String(tracks[index]?.language||tracks[index]?.label||"");
-  if(preferredAudioLanguage)
-    saveCinemaPreferences({{default_audio_language:preferredAudioLanguage}});
+  preferredAudioLanguage=normalizedAudioLanguage(tracks[index]?.language||tracks[index]?.label);
+  syncAudioLanguageSelector();
+  saveCinemaPreferences({{guild_audio_language:preferredAudioLanguage||"auto"}});
   refreshNativePlayerCapabilities();
 }});
 window.addEventListener("resize",()=>{{
@@ -6145,11 +6340,13 @@ video.addEventListener("loadedmetadata",()=>{{
   refreshNativePlayerCapabilities();
   const tracks=video.audioTracks;
   if(tracks && tracks.length && preferredAudioLanguage) {{
-    const target=preferredAudioLanguage.toLowerCase();
-    for(let i=0;i<tracks.length;i++) {{
-      const label=String(tracks[i].language||tracks[i].label||"").toLowerCase();
-      if(label.includes(target)) {{
-        try {{ tracks[i].enabled=true; }} catch(_) {{}}
+    const target=normalizedAudioLanguage(preferredAudioLanguage);
+    const match=Array.from(tracks).findIndex(track=>
+      normalizedAudioLanguage(track.language||track.label)===target
+    );
+    if(target && match>=0) {{
+      for(let i=0;i<tracks.length;i++) {{
+        try {{ tracks[i].enabled=i===match; }} catch(_) {{}}
       }}
     }}
   }}
@@ -6158,8 +6355,10 @@ video.addEventListener("loadedmetadata",()=>{{
 video.addEventListener("durationchange",updatePlayerChrome);
 video.addEventListener("timeupdate",()=>{{
   updatePlayerChrome();
+  renderAudioClockDiagnostics();
   if(compatAudioActive()) void syncCompatAudio(false);
 }});
+compatAudio.addEventListener("timeupdate",renderAudioClockDiagnostics);
 video.addEventListener("ratechange",()=>{{
   if(compatAudioActive()) {{
     try {{ compatAudio.playbackRate=Number(video.playbackRate||1); }} catch(_) {{}}

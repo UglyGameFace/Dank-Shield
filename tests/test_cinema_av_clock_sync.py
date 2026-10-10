@@ -136,7 +136,7 @@ def test_aac_clock_stops_during_video_stall_and_resumes_without_reload() -> None
         ),
         "sync": _between(
             html, "async function syncCompatAudio(force=false) {",
-            "function applyCompatAudioState(s)",
+            "function normalizedAudioLanguage(value)",
         ),
         "seeking": _between(
             html, 'video.addEventListener("seeking",()=>{',

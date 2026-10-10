@@ -65,6 +65,44 @@ class MovieSourceVariant:
     metadata: dict[str, Any] = field(default_factory=dict)
     votes: set[int] = field(default_factory=set)
 
+    def browser_video_risk_key(self) -> int:
+        """Conservative cross-browser native video risk based on verified media.
+
+        No torrent title alone proves a particular browser can decode a file.
+        Unprobed releases stay unknown; we prefer known H.264/MP4 releases
+        only when the competing releases have comparable vote/seed status.
+        0=broadly browser-compatible, 1=unknown/browser-dependent, 2=risky.
+        """
+        meta = dict(self.metadata or {})
+        verified = meta.get("verified")
+        if not isinstance(verified, Mapping):
+            return 1
+        video = verified.get("video")
+        if not isinstance(video, Mapping) or not video.get("codec"):
+            return 1
+        codec = str(video.get("codec") or "").strip().casefold()
+        container = str(verified.get("container") or "").strip().casefold()
+        filename = str(verified.get("filename") or "").strip().casefold()
+        fmt = container.split(",")[0] if container else ""
+        if filename.endswith((".mkv", ".avi", ".mpeg", ".mpg")) or fmt in {
+            "matroska", "avi", "mpeg", "mpegvideo",
+        }:
+            return 2
+        if codec in {"mpeg2video", "mpeg4", "vc1", "wmv3", "theora"}:
+            return 2
+        if codec in {"h264", "avc", "avc1"} and (
+            filename.endswith((".mp4", ".m4v"))
+            or fmt in {"mov", "mp4", "m4a", "3gp", "3g2", "mj2"}
+        ):
+            try:
+                depth = int(video.get("bit_depth") or 0)
+            except (TypeError, ValueError, OverflowError):
+                return 1
+            return 0 if depth <= 8 else 1
+        # WebM/VP8/VP9/AV1 and MP4/HEVC are browser-dependent. Neither
+        # native playback nor a video-transcoding fallback is guaranteed.
+        return 1
+
     def browser_audio_risk_key(self) -> int:
         """0=safest for browsers, 1=unknown/conditional, 2=known risky."""
 
@@ -82,15 +120,23 @@ class MovieSourceVariant:
 
         widely_safe = {"aac", "mp3"}
         conditional = {"opus", "vorbis"}
-        risky = {"ac3", "eac3", "dts", "truehd", "flac"}
+        risky = {
+            "ac3", "eac3", "dca", "dts", "truehd", "mlp",
+            "flac", "pcm_s16le", "pcm_s24le", "pcm_s32le",
+        }
 
-        if codecs & widely_safe:
-            return 0
+        # The stream's first/default track and per-viewer browser codecs are
+        # not interchangeable. The transcoder requires a sidecar when ANY
+        # verified track is unsupported. A safe secondary AAC track must not
+        # make a mixed DTS/AAC release appear browser-native-safe.
+        if codecs & risky:
+            return 2
         if codecs:
-            if codecs <= risky:
-                return 2
+            if codecs <= widely_safe:
+                return 0
             if codecs & conditional:
                 return 1
+            return 1
 
         release = (
             meta.get("release_name")
@@ -1132,6 +1178,7 @@ class MovieNightManager:
             return (
                 -votes,
                 0 if seeds > 0 else 1,
+                item.browser_video_risk_key(),
                 item.browser_audio_risk_key(),
                 -seeds,
                 -ratio,

@@ -1,6 +1,30 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — CINEMA-AAC-AUDIO-STABILITY-20261009
+## CURRENT ACTIVE TASK — CINEMA-AUDIO-LANGUAGE-AUTOPLAY-TRUTH-20261009
+
+**Scope:** Continue active Dank Cinema AAC audio stability task after Oct 9 7:12–7:13 PM Eastern user screenshots. Issues: incorrect movie heading ("Portuguese 5.1" for Mad Max artwork), English 7.1 track switching, distracting Audio permission button, black video with "Video playing" badge, automatic release selection, and language preference per user per guild. No FORCE SWITCH to another project.
+
+**Confirmed Discloud baseline:** aaa-cinema-pre-pregateway-bind @ e8773215fb29654decdc7baf8c3dfbf8481eb174. PR #488 merged and deployed successfully at 23:08:44 UTC Oct 9 before screenshots. Branch fix/489-cinema-audio-language-title-truth-20261009 is based on this production SHA.
+
+### Confirmed code issues and scoped changes
+
+- _state_payload serialized room candidate title despite canonical catalog movie_metadata. Prefer canonical movie title to release tags.
+- Verified audio track metadata has language and title. Existing sidecar selection didn't persist preferred language (only native audio selections saved GLOBAL default_audio_language). Add per-user/per-guild preference in existing Cinema user profile JSON, bounded by authenticated room guild ID. Respect viewer-only selection; never change shared room media just to honor one viewer's language.
+- Start selected AAC track within real user gesture; browser may still require gesture on restricted autoplay, so show recovery only when genuine playback block is reported.
+- Stream health said "Video playing" before already-tracked first_frame video callback. Display honest waiting-for-frame status and limited, safe video/AAC clock/readiness diagnostics in Advanced Stream Details to enable empirical live debugging.
+- MovieSourceVariant browser_audio_risk_key marked mixed AAC/DTS audio safe just because any stream was AAC, whereas actual browser_audio_compatibility requires sidecar if any codec is unsupported. Align ranking; add deterministic mixed-codec test. Do not change seed/quality weights blindly.
+- User reports audio skipping even with healthy torrent download speed. Screenshots do not prove exact FFmpeg/decoder/sync fault. The new readout allows checking video/audio clocks, stalls and AAC error without exposing signed media URL. No claim of audible sound recovery without live multi-minute tests.
+
+### Acceptance and safety
+
+- Exact-head GitHub CI pending, tests for per-guild isolation and language matching, mixed-codec ranking, title truth and audio recovery only on browser failure.
+- Before merge: examine complete diff; validate correct title, English selection, no permission prompt during normal Play, correct first frame, audio/video synchronization after seek and buffering, Android plus another browser, host and viewer. No torrent engine/room permissions/auth changes.
+- Stay on this single Cinema audio task. Dr. STONE HTML-JSON issue and Dank Shield self-verification remain suspended with prior checkpoints below. Preserve PR #487 and #488 already deployed; do not merge main blindly.
+
+---
+
+
+## HISTORICAL CHECKPOINT — CINEMA-AAC-AUDIO-STABILITY-20261009
 
 ### October 9 continuation: AAC skipping / time drift after PR #487 deployment
 
