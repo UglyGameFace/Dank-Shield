@@ -3912,7 +3912,9 @@ function subtitlePreferredChoice(s) {{
   const entry=cinemaSubtitleOptions(s).find(row=>
     normalizedAudioLanguage(row.language||row.label)===lang
   );
-  return entry?"embedded:"+String(entry.index):"off";
+  return entry?(entry.source && entry.source!=="local"
+    ?"provider:"+String(entry.id)
+    :"embedded:"+String(entry.index)):"off";
 }}
 function syncCinemaSubtitleTracks(s) {{
   const token=String(s?.stream_token||"");
@@ -3941,17 +3943,17 @@ function syncCinemaSubtitleTracks(s) {{
     control.appendChild(off);
     for(const row of options) {{
       const option=document.createElement("option");
-      option.value=row.source==="subdl"?"subdl:"+String(row.id)
-        :row.source==="local"?"local":"embedded:"+String(row.index);
+      option.value=row.source==="local"?"local"
+        :row.source?"provider:"+String(row.id):"embedded:"+String(row.index);
       option.textContent=String(row.label||"Subtitle "+String(Number(row.index)+1));
       control.appendChild(option);
     }}
     if(!subtitleUserOverride && subtitlePreferenceLoaded)
       selectedSubtitleChoice=subtitlePreferredChoice(s);
   }}
-  const valid=options.some(row=>(row.source==="subdl"
-    ?"subdl:"+String(row.id):row.source==="local"
-    ?"local":"embedded:"+String(row.index))===selectedSubtitleChoice);
+  const valid=options.some(row=>(row.source==="local"?"local"
+    :row.source?"provider:"+String(row.id)
+    :"embedded:"+String(row.index))===selectedSubtitleChoice);
   if(selectedSubtitleChoice!=="off" && !valid) selectedSubtitleChoice="off";
   const control=document.getElementById("subtitleTrack");
   control.value=selectedSubtitleChoice;
@@ -3971,13 +3973,14 @@ function syncCinemaSubtitleTracks(s) {{
     refreshNativePlayerCapabilities();
     return;
   }}
-  const sourceIsSubdl=selectedSubtitleChoice.startsWith("subdl:");
+  const sourceIsProvider=selectedSubtitleChoice.startsWith("provider:");
   const sourceIsLocal=selectedSubtitleChoice==="local";
-  const index=sourceIsSubdl?-1:Number(selectedSubtitleChoice.slice(9));
-  const row=options.find(item=>sourceIsSubdl
-    ?item.source==="subdl" && "subdl:"+String(item.id)===selectedSubtitleChoice
+  const index=sourceIsProvider?-1:Number(selectedSubtitleChoice.slice(9));
+  const row=options.find(item=>sourceIsProvider
+    ?item.source && item.source!=="local" &&
+      "provider:"+String(item.id)===selectedSubtitleChoice
     :sourceIsLocal?item.source==="local"
-    :item.source!=="subdl" && item.source!=="local" && Number(item.index)===index
+    :!item.source && Number(item.index)===index
   );
   if(!row) return;
   const track=document.createElement("track");
@@ -3986,7 +3989,7 @@ function syncCinemaSubtitleTracks(s) {{
   track.label=String(row.label||"Cinema subtitles");
   track.srclang=String(row.language||"und");
   track.src=sourceIsLocal?localSubtitleVttUrl
-    :sourceIsSubdl
+    :sourceIsProvider
       ?"/movie/"+encodeURIComponent(BOOT.roomId)+"/subtitles/provider?"+
         BOOT.query+"&n_id="+encodeURIComponent(String(row.id))
       :"/movie/"+encodeURIComponent(BOOT.roomId)+"/subtitle?"+
@@ -5905,14 +5908,14 @@ document.getElementById("captions").onclick=()=>{{
 document.getElementById("subtitleTrack").addEventListener("change",event=>{{
   const value=String(event.target.value||"off");
   if(value!=="off" && !cinemaSubtitleOptions(lastState).some(
-    row=>(row.source==="subdl"?"subdl:"+String(row.id)
-      :row.source==="local"?"local":"embedded:"+String(row.index))===value
+    row=>(row.source==="local"?"local"
+      :row.source?"provider:"+String(row.id):"embedded:"+String(row.index))===value
   )) return;
   selectedSubtitleChoice=value;
   subtitleUserOverride=true;
   const selected=cinemaSubtitleOptions(lastState).find(
-    row=>(row.source==="subdl"?"subdl:"+String(row.id)
-      :row.source==="local"?"local":"embedded:"+String(row.index))===value
+    row=>(row.source==="local"?"local"
+      :row.source?"provider:"+String(row.id):"embedded:"+String(row.index))===value
   );
   preferredSubtitleLanguage=value==="off"?"off":String(selected?.language||"");
   if(value!=="local")
