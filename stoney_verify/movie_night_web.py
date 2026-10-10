@@ -3356,6 +3356,8 @@ let startupTrace={{
   firstFrameRequested:false
 }};
 // A browser video.play() promise may remain pending while media buffers.
+let latestDecodedFrameAt=0;
+let activeMediaGeneration=0;
 let hostAutoPlayPending=false;
 let hostAutoPlayAttempt=0;
 let hostAutoPlayBlocked=false;
@@ -4156,7 +4158,13 @@ function streamHealthLabel(s) {{
   if(video.paused) return s.state==="playing"
     ?"Playback requested; waiting for browser video":"Video paused";
   if(s.state==="playing" && !video.paused) {{
-    if(startupTrace.events.first_frame!==undefined) return "Video frames rendered";
+    if(
+      latestDecodedFrameAt>0 &&
+      typeof video.requestVideoFrameCallback==="function" &&
+      !document.hidden &&
+      performance.now()-latestDecodedFrameAt>5000
+    ) return "Video stalled; no fresh decoded frames";
+    if(startupTrace.events.first_frame!==undefined) return "Video frames rendering";
     if(typeof video.requestVideoFrameCallback==="function")
       return "Waiting for first decoded video frame";
     // A browser without a frame callback may be advancing its audio clock
@@ -4555,6 +4563,8 @@ function attachStream(url, force=false) {{
   hostAutoPlayAttempt++;
   hostAutoPlayPending=false;
   hostAutoPlayBlocked=false;
+  activeMediaGeneration++;
+  latestDecodedFrameAt=0;
   attachedStreamUrl=clean;
   resetStartupTrace();
   resetPlaybackRate();
@@ -5574,6 +5584,20 @@ video.addEventListener("enterpictureinpicture",refreshNativePlayerCapabilities);
 video.addEventListener("leavepictureinpicture",refreshNativePlayerCapabilities);
 video.addEventListener("loadedmetadata",refreshNativePlayerCapabilities);
 video.addEventListener("contextmenu",event=>event.preventDefault());
+function watchDecodedFrames(expectedMediaGeneration) {{
+  if(expectedMediaGeneration!==activeMediaGeneration ||
+     typeof video.requestVideoFrameCallback!=="function") return;
+  try {{
+    video.requestVideoFrameCallback(()=>{{
+      if(expectedMediaGeneration!==activeMediaGeneration) return;
+      latestDecodedFrameAt=performance.now();
+      markStartupEvent("first_frame");
+      // Re-arm independently of the room poll; the callback only fires when
+      // a decoded video frame becomes available to the browser compositor.
+      watchDecodedFrames(expectedMediaGeneration);
+    }});
+  }} catch(_) {{}}
+}}
 for(const eventName of ["loadstart","loadedmetadata","loadeddata","canplay","playing","waiting","stalled","emptied","error"]) {{
   video.addEventListener(eventName,()=>{{
     stabilizePlayerLayout();
@@ -5581,11 +5605,7 @@ for(const eventName of ["loadstart","loadedmetadata","loadeddata","canplay","pla
     refreshStreamHealth();
     if(eventName==="playing" && !startupTrace.firstFrameRequested) {{
       startupTrace.firstFrameRequested=true;
-      if(typeof video.requestVideoFrameCallback==="function") {{
-        try {{
-          video.requestVideoFrameCallback(()=>markStartupEvent("first_frame"));
-        }} catch(_) {{}}
-      }}
+      watchDecodedFrames(activeMediaGeneration);
     }}
   }});
 }}
