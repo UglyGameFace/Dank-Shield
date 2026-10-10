@@ -3723,7 +3723,9 @@ function renderStartupDiagnostics(server={{}}) {{
     if(e.canplay!==undefined) bits.push("can play "+fmtDiagnosticMs(e.canplay));
     if(e.play_to_playing!==undefined) bits.push("Play→playing "+fmtDiagnosticMs(e.play_to_playing));
     else if(e.playing!==undefined) bits.push("playing "+fmtDiagnosticMs(e.playing));
-    if(e.first_frame!==undefined) bits.push("frame "+fmtDiagnosticMs(e.first_frame));
+    if(e.first_frame!==undefined) bits.push("rendered frame "+fmtDiagnosticMs(e.first_frame));
+    else if(e.clock_advanced!==undefined)
+      bits.push("clock advanced "+fmtDiagnosticMs(e.clock_advanced)+" (frame unverified)");
     browserEl.textContent=bits.length?bits.join(" • "):"waiting for media events";
   }}
 }}
@@ -4118,9 +4120,12 @@ function browserVideoCapability(s) {{
   if(!codecHint) return {{
     supported:null, label:detail+" • browser codec status uncertain"
   }};
+  const frameSeen=startupTrace.events.first_frame!==undefined;
   return {{
     supported:true,
-    label:detail+" • browser reports "+decision+"; awaiting real video frames"
+    label:detail+" • browser reports "+decision+
+      (frameSeen?"; decoded video frame confirmed":
+      "; awaiting actual decoded video frame")
   }};
 }}
 function renderBrowserMediaSupport(s) {{
@@ -4139,15 +4144,20 @@ function streamHealthLabel(s) {{
   ) return "Browser may not support this video codec";
   if(s.state==="buffering") return "Preparing stream";
   if(video.seeking) return "Seeking to playback position";
+  // The room's intent to play and an HTMLVideoElement actually playing are
+  // different facts. Never leave a green success label on a paused element.
+  if(video.paused) return s.state==="playing"
+    ?"Playback requested; waiting for browser video":"Video paused";
   // Peer count and total torrent completion cannot establish playable media.
   // HAVE_FUTURE_DATA (3) proves the browser has at least a little video ahead.
   if(video.readyState<3) return "Preparing playable video";
   if(s.state==="playing" && !video.paused) {{
-    if(
-      typeof video.requestVideoFrameCallback==="function"
-      && startupTrace.events.first_frame===undefined
-    ) return "Waiting for first video frame";
-    return "Video playing";
+    if(startupTrace.events.first_frame!==undefined) return "Video frames rendered";
+    if(typeof video.requestVideoFrameCallback==="function")
+      return "Waiting for first decoded video frame";
+    // A browser without a frame callback may be advancing its audio clock
+    // while rendering no picture. Report this as unverified, not successful.
+    return "Video clock advancing; frames unverified";
   }}
   if(s.state==="playing") return "Waiting for browser playback";
   return "Video ready to play";
@@ -5449,7 +5459,10 @@ video.addEventListener("playing",()=>{{
   refreshAudioPermissionControl();
   if(compatAudioActive()) void syncCompatAudio(true);
 }});
-video.addEventListener("pause",refreshAudioPermissionControl);
+video.addEventListener("pause",()=>{{
+  refreshAudioPermissionControl();
+  refreshStreamHealth();
+}});
 document.getElementById("enableAudio").onclick=async()=>{{
   const button=document.getElementById("enableAudio");
   button.disabled=true;
@@ -5547,7 +5560,8 @@ video.addEventListener("timeupdate",()=>{{
     startupTrace.events.playing!==undefined &&
     startupTrace.events.first_frame===undefined &&
     Number(video.currentTime||0)>0
-  ) markStartupEvent("first_frame");
+  && typeof video.requestVideoFrameCallback!=="function"
+  ) markStartupEvent("clock_advanced");
 }});
 async function enterTheaterFullscreen() {{
   const target=document.getElementById("videoStage");
@@ -6458,8 +6472,14 @@ video.addEventListener("ratechange",()=>{{
     try {{ compatAudio.playbackRate=Number(video.playbackRate||1); }} catch(_) {{}}
   }}
 }});
-video.addEventListener("play",updatePlayerChrome);
-video.addEventListener("pause",updatePlayerChrome);
+video.addEventListener("play",()=>{{
+  updatePlayerChrome();
+  refreshStreamHealth();
+}});
+video.addEventListener("pause",()=>{{
+  updatePlayerChrome();
+  refreshStreamHealth();
+}});
 video.addEventListener("canplay",()=>{{
   if(!video.paused && !video.seeking) {{
     videoClockBuffering=false;
