@@ -2787,6 +2787,23 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
   .theater-grid {{ grid-template-columns:minmax(0,1fr) 390px; }}
   .video-stage {{ min-height:0; }}
 }}
+/* Respect system contrast without recoloring or filtering the actual movie. */
+@media (forced-colors:active) {{
+  .video-stage video,
+  .poster img,
+  .backdrop img {{ forced-color-adjust:none;filter:none !important; }}
+  button, select, input, summary {{
+    border-color:ButtonText;
+  }}
+  .player-button, .quality-select, .nav-item, .host-action, .center-play {{
+    outline:1px solid ButtonText;
+  }}
+  :focus-visible {{ outline:3px solid Highlight !important;outline-offset:3px; }}
+}}
+@media (prefers-contrast:more) {{
+  :root {{ --muted:#c8d6ce;--muted-2:#adbdaf;--line:rgba(255,255,255,.45); }}
+  :focus-visible {{ outline:3px solid var(--lime);outline-offset:3px; }}
+}}
 @media (prefers-reduced-motion:reduce) {{
   html {{ scroll-behavior:auto; }}
   *,*::before,*::after {{
@@ -3081,6 +3098,7 @@ html[data-quality="lite"] * {{ text-shadow:none !important; }}
       <div class="stat"><b>Browser startup</b><span id="browserStartup">—</span></div>
       <div class="stat"><b>Playback timing</b><span id="audioClockStatus">Waiting for video</span></div>
       <div class="stat"><b>Browser media support</b><span id="browserMediaSupport">Checking video codec</span></div>
+      <div class="stat"><b>Browser & device settings</b><span id="browserEnvironment">Checking local preferences</span></div>
     </div>
     <div class="quality-control">
       <label for="qualityMode">Visual quality</label>
@@ -3197,6 +3215,54 @@ function autoQualityMode() {{
   ) return "standard";
   return "high";
 }}
+function browserEnvironmentSummary() {{
+  // Only report exposed, non-identifying browser signals. Autoplay permission,
+  // DRM, hardware acceleration, extensions and audio device routing cannot
+  // reliably be read from this page; never claim otherwise.
+  const media=(query)=>{{
+    try {{ return !!window.matchMedia?.(query)?.matches; }}
+    catch(_) {{ return false; }}
+  }};
+  const connection=navigator.connection||navigator.mozConnection||navigator.webkitConnection;
+  const contrast=media("(forced-colors: active)")?"Forced colors":
+    media("(prefers-contrast: more)")?"Higher contrast":"Default contrast";
+  const motion=media("(prefers-reduced-motion: reduce)")?"Reduced motion":"Normal motion";
+  const bandwidth=connection?.saveData?"Data Saver on":"Data Saver not reported";
+  const network=navigator.onLine===false?"Offline":"Network status unverified";
+  const tab=document.hidden?"Background tab":"Foreground tab";
+  return [contrast,motion,bandwidth,network,tab].join(" • ");
+}}
+function refreshBrowserEnvironment() {{
+  const node=document.getElementById("browserEnvironment");
+  if(node) node.textContent=browserEnvironmentSummary();
+}}
+function refreshAdaptiveBrowserSettings() {{
+  refreshBrowserEnvironment();
+  // Auto adjusts *decorative effects only*, never source or video bitrate.
+  if(document.documentElement.dataset.qualityPreference==="auto")
+    applyQualityMode("auto");
+}}
+function installBrowserSettingsListeners() {{
+  for(const query of [
+    "(forced-colors: active)",
+    "(prefers-contrast: more)",
+    "(prefers-reduced-motion: reduce)",
+    "(prefers-color-scheme: dark)"
+  ]) {{
+    let media;
+    try {{ media=window.matchMedia?.(query); }} catch(_) {{ continue; }}
+    if(media?.addEventListener) media.addEventListener("change",refreshAdaptiveBrowserSettings);
+    else if(media?.addListener) media.addListener(refreshAdaptiveBrowserSettings);
+  }}
+  const connection=navigator.connection||navigator.mozConnection||navigator.webkitConnection;
+  if(connection?.addEventListener)
+    connection.addEventListener("change",refreshAdaptiveBrowserSettings);
+  window.addEventListener("online",refreshBrowserEnvironment);
+  window.addEventListener("offline",refreshBrowserEnvironment);
+  document.addEventListener("visibilitychange",refreshBrowserEnvironment);
+  window.addEventListener("pageshow",refreshBrowserEnvironment);
+  refreshBrowserEnvironment();
+}}
 function applyQualityMode(preference) {{
   const requested=["auto","high","standard","lite"].includes(preference)?preference:"auto";
   const effective=requested==="auto"?autoQualityMode():requested;
@@ -3212,6 +3278,7 @@ function applyQualityMode(preference) {{
 let storedQuality="auto";
 try {{ storedQuality=localStorage.getItem(QUALITY_STORAGE_KEY)||"auto"; }} catch(_) {{}}
 applyQualityMode(storedQuality);
+installBrowserSettingsListeners();
 let artworkResizeTimer=null;
 window.addEventListener("resize",()=>{{
   if(artworkResizeTimer!==null) clearTimeout(artworkResizeTimer);
@@ -3279,6 +3346,7 @@ let sessionReconnectTimer=null;
 let sessionReconnectAttempt=0;
 let sessionReconnectInFlight=false;
 let pageHiddenAt=0;
+let lastPageWakeAt=0;
 let stateFetchFailures=0;
 let attachedStreamUrl="";
 let startupTrace={{
@@ -3408,8 +3476,15 @@ window.addEventListener("resize",stabilizePlayerLayout,{{passive:true}});
 window.addEventListener("orientationchange",recoverPlayerFromViewportChange,{{passive:true}});
 window.visualViewport?.addEventListener("resize",stabilizePlayerLayout,{{passive:true}});
 function handlePageWake() {{
+  // Mobile pageshow, visibilitychange and online may arrive in one burst.
+  // One recovery request is sufficient; avoid reloading the movie multiple
+  // times, including when a browser wakes while still offline/hidden.
+  if(document.hidden || navigator.onLine===false || terminated) return;
+  const now=Date.now();
+  if(lastPageWakeAt && now-lastPageWakeAt<1000) return;
+  lastPageWakeAt=now;
   recoverPlayerFromViewportChange();
-  const hiddenFor=pageHiddenAt>0?Math.max(0,Date.now()-pageHiddenAt):0;
+  const hiddenFor=pageHiddenAt>0?Math.max(0,now-pageHiddenAt):0;
   pageHiddenAt=0;
   void recoverSessionConnection(hiddenFor>=BACKGROUND_MEDIA_REFRESH_MS);
 }}
@@ -5809,9 +5884,7 @@ document.getElementById("audioTrack").addEventListener("change",event=>{{
   saveCinemaPreferences({{guild_audio_language:preferredAudioLanguage||"auto"}});
   refreshNativePlayerCapabilities();
 }});
-window.addEventListener("resize",()=>{{
-  if(document.documentElement.dataset.qualityPreference==="auto") applyQualityMode("auto");
-}},{{passive:true}});
+window.addEventListener("resize",()=>refreshAdaptiveBrowserSettings(),{{passive:true}});
 
 document.addEventListener("keydown",event=>{{
   if(event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
