@@ -156,7 +156,6 @@ def browser_video_risk_key(metadata: Mapping[str, Any] | None) -> int:
     return 1
 
 
-
 def parse_release_name(filename: str) -> dict[str, Any]:
     """Parse scene/release-name claims without presenting them as verified facts."""
 
