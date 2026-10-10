@@ -1700,7 +1700,13 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
     ranked = manager.ranked_variants(latest.room_id, candidate.candidate_id)
     selected = await select_preferred_variant(int(uid), ranked)
     if selected is None:
-        raise web.HTTPConflict(text="No playable next-episode release is available.")
+        raise web.HTTPConflict(
+            text=(
+                "Next-episode releases have video formats risky for browser playback. "
+                "Cinema will not automatically start an HEVC/MKV source that may show "
+                "a black screen. Try another release."
+            )
+        )
 
     try:
         playback = await start_room_variant(
