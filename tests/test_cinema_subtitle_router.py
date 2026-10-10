@@ -202,3 +202,90 @@ def test_browser_tracks_use_opaque_ids_for_all_three_providers():
     assert 'id="subtitleFile"' in html
     assert 'id="subtitleSize"' in html
     assert 'id="subtitleDelay"' in html
+
+
+
+def test_twenty_viewers_share_single_upstream_search(monkeypatch):
+    account = router.SubtitleAccount(
+        provider="wyzie", name="shared", key="tenant-key-private",
+        guild_ids=frozenset({111}),
+    )
+    calls = []
+
+    async def fake_search(session, config, metadata, language):
+        calls.append(language)
+        await asyncio.sleep(0.01)
+        return [{"source": "wyzie", "reference": "https://sub.wyzie.io/c/one?tok=ok",
+                 "language": "en", "label": "English"}]
+
+    monkeypatch.setattr(router, "_search_wyzie", fake_search)
+    metadata = {"media_type": "movie", "tmdb_id": 1205}
+
+    async def twenty():
+        return await asyncio.gather(*[
+            router._discover(account, metadata, "en") for _ in range(20)
+        ])
+    responses = asyncio.run(twenty())
+    assert len(calls) == 1
+    assert all(result == responses[0] for result in responses)
+
+
+def test_twenty_viewers_share_download_but_cannot_use_each_others_selection(monkeypatch):
+    account = router.SubtitleAccount(
+        provider="wyzie", name="shared", key="tenant-key-private",
+        guild_ids=frozenset({111}),
+    )
+    monkeypatch.setattr(router, "account_for", lambda guild, provider: account)
+    now = time.monotonic()
+    for user_id in range(20, 40):
+        router._OPTIONS["view-" + str(user_id)] = (now + 900, {
+            "account": account, "provider": "wyzie",
+            "reference": "https://sub.wyzie.io/c/one?tok=sample",
+            "stream_token": "film-token", "guild_id": 111,
+            "viewer_id": user_id, "media": ("movie", 1205, 0, 0),
+        })
+    calls = []
+
+    async def fake_download(selection_id, *, guild_id, viewer_id, stream_token):
+        calls.append(viewer_id)
+        await asyncio.sleep(0.02)
+        result = b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nTest\n"
+        key = (account.fingerprint, ("movie", 1205, 0, 0), "wyzie",
+               "https://sub.wyzie.io/c/one?tok=sample")
+        router._VTT_CACHE[key] = (time.monotonic() + 500, result)
+        return result
+
+    monkeypatch.setattr(router, "_download_selection_uncached", fake_download)
+
+    async def twenty():
+        return await asyncio.gather(*[
+            router.download_subtitle_selection(
+                "view-" + str(uid), guild_id=111,
+                viewer_id=uid, stream_token="film-token",
+            )
+            for uid in range(20, 40)
+        ])
+
+    results = asyncio.run(twenty())
+    assert len(calls) == 1
+    assert len(results) == 20
+    assert all(value == results[0] for value in results)
+    with pytest.raises(router.SubtitleProviderUnavailable):
+        asyncio.run(router.download_subtitle_selection(
+            "view-20", guild_id=111, viewer_id=21, stream_token="film-token",
+        ))
+
+
+def test_provider_429_cools_only_its_account_and_keeps_other_provider_usable(monkeypatch):
+    _settings(monkeypatch)
+    account = router.account_for(111, "wyzie")
+    other = router.account_for(111, "subsource")
+    monkeypatch.setattr(router.time, "time", lambda: 1000.0)
+    with pytest.raises(router.SubtitleProviderUnavailable):
+        router._handle_response(SimpleNamespace(
+            status=429, headers={"Retry-After": "900"},
+        ), account)
+    assert router._COOLDOWN[account.fingerprint] == 1900.0
+    with pytest.raises(router.SubtitleProviderUnavailable):
+        router._budget(account)
+    router._budget(other)
