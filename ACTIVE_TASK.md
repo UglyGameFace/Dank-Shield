@@ -8,7 +8,11 @@
 
 **Source/branch:** `fix/cinema-smart-auto-selection-20261010` created from exact Discloud GitHub deployed branch `aaa-cinema-pre-pregateway-bind@b93dc9bae8cf1f9d2eef58636565a392e38a7b10` (PR #496 merge). GitHub `discloud/commit` reported success, real runtime SHA not independently validated.
 
-**Status:** Investigation underway, no code changes yet. Single Active Task Lock is now this task.
+**Status:** Root-cause investigation and implementation committed on isolated task branch; targeted regression tests added. Pre-merge CI and browser/Discloud acceptance pending. Not deployed.
+
+**Implementation checkpoint:** `cinema_playback_service` now uses one source ranking policy for automatic site and next episode selection: confirmed compatibility, size/resolution efficiency, audio, recent measured download performance when available, reported seeds with saturation, and soft provider preference. Sequential automatic startup tries no more than three eligible candidates while retaining room token/host/candidate baseline; explicitly chosen manual sources are unchanged. On automatic launch the selected torrent file is checked, wrong-episode entries excluded, browser-risky codecs/containers rejected before room commit, and leases released for newly rejected sessions. `movie_night_web` carries live peer/download metrics and verified codecs into existing same-source room variants, `MovieNightManager.add_variant` preserves that evidence on provider refresh. No post-commit automatic room swapping, parallel torrents, or video transcoding. Targeted tests in `tests/test_cinema_smart_selection.py`; existing site mocks updated for new explicit automatic flag.
+
+**Outstanding evidence and risks:** Torrent filename is only negative confidence, not proof of actual codec; FFprobe waits for downloaded bytes and happens asynchronously, and only previously started sources have measured throughput. Host watch-party content never changes automatically after a successful commit. Actual Discloud CPU, decoder support per browser, and live A/V playback cannot be certified by CI alone. Verify session lease cleanup and all regression suites before merge; inspect final diff and stale compatibility logic.
 
 ### Execution path and root cause found
 - Provider responses cap results at 25/100; PR #495 moved compatibility-aware lookahead earlier, but still relies on unverified release names.
