@@ -463,3 +463,17 @@ def test_auto_language_override_is_scoped_and_explicit_auto_disables_global_defa
     assert playback._guild_audio_preference(settings, 200) == "ja"
     assert playback._guild_audio_preference(settings, 300) == "en"
     assert playback._guild_audio_preference(settings, 0) == "en"
+
+
+def test_torrent_special_episode_selection_accepts_season_zero():
+    session = SimpleNamespace(candidates=[
+        SimpleNamespace(index=0, path="Show.S00E02.1080p.x264.mp4", size=2_000_000_000),
+        SimpleNamespace(index=1, path="Show.S00E01.720p.x264.mp4", size=1_000_000_000),
+    ])
+    selected = playback.choose_automatic_torrent_file(
+        session, {"media_type": "episode", "season_number": 0, "episode_number": 1},
+    )
+    assert selected.index == 1
+    assert playback.choose_automatic_torrent_file(
+        session, {"media_type": "episode", "season_number": 0, "episode_number": 5},
+    ) is None
