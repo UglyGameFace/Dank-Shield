@@ -63,8 +63,17 @@ _VIDEO_CONTENT_TYPES = {
     "video/quicktime": ".mov",
     "image/gif": ".gif",
 }
-_DEFAULT_VIDEO_MAX_BYTES = 25 * 1024 * 1024
-_DEFAULT_VIDEO_TIMEOUT_SECONDS = 12.0
+# Discord's baseline upload allowance is 20 MiB as of September 2026.
+# discord.py 2.7.1 may still report the obsolete 10 MiB base value.
+# Premium tier is updated on the guild object by Discord GUILD_UPDATE events.
+_DISCORD_DEFAULT_UPLOAD_BYTES = 20 * 1024 * 1024
+_DISCORD_UPLOAD_BYTES_BY_TIER = {
+    0: _DISCORD_DEFAULT_UPLOAD_BYTES,
+    1: _DISCORD_DEFAULT_UPLOAD_BYTES,
+    2: 50 * 1024 * 1024,
+    3: 100 * 1024 * 1024,
+}
+_DEFAULT_VIDEO_TIMEOUT_SECONDS = 120.0
 _TRUSTED_VIDEO_HOSTS = {
     "video.twimg.com",
     "media.tenor.com",
@@ -263,26 +272,33 @@ def _video_source_urls(message: discord.Message) -> list[str]:
 
 
 def _share_video_limit_bytes(guild: discord.Guild) -> int:
+    """Use the guild's CURRENT boost tier for each share, never a saved tier.
+
+    discord.py 2.7.1 has a stale 10 MiB base allowance, so calculate the
+    documented 20/50/100 MiB limits from the live premium_tier field. This is
+    read on every message, including after Discord's GUILD_UPDATE downgrade.
+    Unknown tiers fail closed to the 20 MiB base; Discord remains authoritative
+    and may still reject an upload if its state changed before our send.
+
+    An explicitly set DANK_SHARE_ROUTER_MAX_VIDEO_BYTES can only LOWER the
+    allowance. Leaving it unset automatically allows the tier maximum.
+    """
     try:
-        configured = int(
-            str(
-                os.getenv(
-                    "DANK_SHARE_ROUTER_MAX_VIDEO_BYTES",
-                    str(_DEFAULT_VIDEO_MAX_BYTES),
-                )
-                or _DEFAULT_VIDEO_MAX_BYTES
-            ).strip()
-        )
-    except Exception:
-        configured = _DEFAULT_VIDEO_MAX_BYTES
-    configured = max(1024 * 1024, min(configured, 100 * 1024 * 1024))
-    try:
-        guild_limit = int(getattr(guild, "filesize_limit", 0) or 0)
-    except Exception:
-        guild_limit = 0
-    if guild_limit > 0:
-        return max(1024 * 1024, min(configured, guild_limit))
-    return configured
+        tier = int(getattr(guild, "premium_tier", 0))
+    except (TypeError, ValueError, OverflowError):
+        tier = 0
+    permitted = _DISCORD_UPLOAD_BYTES_BY_TIER.get(tier, _DISCORD_DEFAULT_UPLOAD_BYTES)
+
+    raw_cap = str(os.getenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", "") or "").strip()
+    if raw_cap:
+        try:
+            requested = int(raw_cap)
+        except ValueError:
+            requested = 0
+        if requested > 0:
+            # Preserve the historical 1 MiB minimum for explicit caps.
+            return min(permitted, max(1024 * 1024, requested))
+    return permitted
 
 
 def _first_x_status_url(text: str) -> str:
@@ -334,7 +350,9 @@ def _share_video_timeout_seconds() -> float:
         )
     except Exception:
         raw = _DEFAULT_VIDEO_TIMEOUT_SECONDS
-    return max(3.0, min(raw, 30.0))
+    # Larger boosted uploads need time to transfer without giving up after
+    # twelve seconds; retain an operator-configurable bounded timeout.
+    return max(12.0, min(raw, 180.0))
 
 
 def _video_filename(url: str, content_type: str) -> str:
@@ -555,6 +573,19 @@ async def _relay_native_video_upload(
             pass
 
     try:
+        # A boost may disappear while a large video is being downloaded or
+        # remuxed. Re-check the CURRENT tier immediately before sending, not
+        # only when preparing the file. The caller keeps the source-link
+        # fallback if the server no longer permits this attachment.
+        current_limit = _share_video_limit_bytes(message.guild)
+        if native_video.size_bytes > current_limit:
+            _log(
+                f"native video fallback guild={message.guild.id} "
+                f"source={message.channel.id} target={target.id} "
+                f"reason=boost_tier_changed bytes={native_video.size_bytes} "
+                f"current_limit={current_limit}"
+            )
+            return False
         await target.send(**send_payload)
     except (discord.Forbidden, discord.HTTPException) as exc:
         _log(

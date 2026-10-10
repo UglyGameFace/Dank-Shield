@@ -796,3 +796,107 @@ def test_proxy_send_failure_preserves_source_and_allows_retry(monkeypatch) -> No
     asyncio.run(share_runtime.route_message(make_message(3)))
     assert len(target.sent) == 1
     assert deleted == [2, 3]
+
+
+def test_share_router_upload_cap_tracks_live_guild_boost_changes(monkeypatch) -> None:
+    """Never keep yesterday's 100 MiB after the guild loses Level 3."""
+    mib = 1024 * 1024
+    monkeypatch.delenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", raising=False)
+    guild = SimpleNamespace(premium_tier=3, filesize_limit=10 * mib)
+
+    # Discord.py's stale 10 MiB value must not hide a Level 3 allowance.
+    assert share_runtime._share_video_limit_bytes(guild) == 100 * mib
+
+    # A live GUILD_UPDATE can mutate the same guild instance at any time.
+    # Even if a library property still reported 100 MiB, it may not override
+    # the lower, newly reported premium tier.
+    guild.filesize_limit = 100 * mib
+    guild.premium_tier = 2
+    assert share_runtime._share_video_limit_bytes(guild) == 50 * mib
+
+    guild.premium_tier = 1
+    assert share_runtime._share_video_limit_bytes(guild) == 20 * mib
+    guild.premium_tier = 0
+    assert share_runtime._share_video_limit_bytes(guild) == 20 * mib
+
+    guild.premium_tier = 3
+    assert share_runtime._share_video_limit_bytes(guild) == 100 * mib
+    guild.premium_tier = None
+    assert share_runtime._share_video_limit_bytes(guild) == 20 * mib
+    guild.premium_tier = 999
+    assert share_runtime._share_video_limit_bytes(guild) == 20 * mib
+
+
+def test_share_router_optional_operator_cap_never_increases_discord_limit(monkeypatch) -> None:
+    mib = 1024 * 1024
+    guild = SimpleNamespace(premium_tier=3, filesize_limit=100 * mib)
+    monkeypatch.setenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", str(25 * mib))
+    assert share_runtime._share_video_limit_bytes(guild) == 25 * mib
+
+    guild.premium_tier = 0
+    assert share_runtime._share_video_limit_bytes(guild) == 20 * mib
+
+    # An obsolete 100 MiB override must not force uploads above tier 2.
+    guild.premium_tier = 2
+    monkeypatch.setenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", str(100 * mib))
+    assert share_runtime._share_video_limit_bytes(guild) == 50 * mib
+
+    monkeypatch.setenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", "not-a-number")
+    assert share_runtime._share_video_limit_bytes(guild) == 50 * mib
+    monkeypatch.setenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", "25")
+    assert share_runtime._share_video_limit_bytes(guild) == 1 * mib
+
+
+def test_share_router_larger_uploads_use_a_bounded_transfer_timeout(monkeypatch) -> None:
+    monkeypatch.delenv("DANK_SHARE_ROUTER_VIDEO_TIMEOUT_SECONDS", raising=False)
+    assert share_runtime._share_video_timeout_seconds() == 120.0
+    monkeypatch.setenv("DANK_SHARE_ROUTER_VIDEO_TIMEOUT_SECONDS", "9999")
+    assert share_runtime._share_video_timeout_seconds() == 180.0
+    monkeypatch.setenv("DANK_SHARE_ROUTER_VIDEO_TIMEOUT_SECONDS", "1")
+    assert share_runtime._share_video_timeout_seconds() == 12.0
+
+
+def test_boost_downgrade_during_download_skips_oversize_upload(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Avoid sending an attachment after Level 3 drops to Level 2 mid-transfer."""
+    message, _routes, target = _direct_memes_fixture()
+    monkeypatch.delenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", raising=False)
+    mib = 1024 * 1024
+    message.guild.premium_tier = 3
+    cleanup_path = tmp_path / "large-video.mp4"
+    cleanup_path.write_bytes(b"temporary media")
+
+    class FakeFile:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    fake_file = FakeFile()
+
+    async def fake_prepare(_message, _target, _text):
+        assert share_runtime._share_video_limit_bytes(message.guild) == 100 * mib
+        # A Discord guild update arrives while an 80 MiB upload is staged.
+        message.guild.premium_tier = 2
+        return SimpleNamespace(
+            file=fake_file,
+            size_bytes=80 * mib,
+            cleanup_path=cleanup_path,
+        )
+
+    monkeypatch.setattr(share_runtime, "_prepare_native_video", fake_prepare)
+    was_sent = asyncio.run(
+        share_runtime._relay_native_video_upload(
+            message,
+            target,
+            message.content,
+            content="Share Router native video",
+        )
+    )
+    assert was_sent is False
+    assert target.sent == []
+    assert fake_file.closed
+    assert not cleanup_path.exists()
+    assert share_runtime._share_video_limit_bytes(message.guild) == 50 * mib
