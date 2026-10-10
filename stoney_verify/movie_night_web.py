@@ -3555,6 +3555,7 @@ function privateTapSkip(delta) {{
   const duration=Number.isFinite(video.duration)?Number(video.duration):Infinity;
   const target=Math.max(0,Math.min(duration,current+Number(delta||0)));
   if(!safeSeek(target)) return false;
+  scheduleHostSeekCommit(true);
   showTapSkipFeedback(delta);
   return true;
 }}
@@ -4673,12 +4674,16 @@ async function maybeRestoreWatchProgress(s) {{
   }}
 }}
 
-function scheduleHostSeekCommit() {{
-  if(remoteApply || progressResumeApplying || !lastState?.is_host) return;
+function scheduleHostSeekCommit(explicitUserSeek=false) {{
+  // Internal seeks (resume, late-join, decoder metadata) must never be sent
+  // back as new host seek commands. Explicit controls win over a state poll.
+  if((remoteApply && !explicitUserSeek) ||
+     progressResumeApplying || !lastState?.is_host) return;
   if(hostSeekCommitTimer!==null) clearTimeout(hostSeekCommitTimer);
   hostSeekCommitTimer=setTimeout(async()=>{{
     hostSeekCommitTimer=null;
-    if(remoteApply || progressResumeApplying || !lastState?.is_host) return;
+    if((remoteApply && !explicitUserSeek) ||
+       progressResumeApplying || !lastState?.is_host) return;
     const seconds=Math.max(0,Number(video.currentTime||0));
     await hostAction("seek",{{seconds}});
     persistWatchProgress(true);
@@ -5389,15 +5394,19 @@ async function togglePlayerPlayback() {{
 document.getElementById("centerPlay").onclick=togglePlayerPlayback;
 document.getElementById("playerToggle").onclick=togglePlayerPlayback;
 document.getElementById("rewind10").onclick=()=>{{
-  if(lastState?.is_host) safeSeek(Math.max(0,(video.currentTime||0)-10));
+  if(lastState?.is_host && safeSeek(Math.max(0,(video.currentTime||0)-10)))
+    scheduleHostSeekCommit(true);
 }};
 document.getElementById("forward10").onclick=()=>{{
-  if(lastState?.is_host) safeSeek(Math.min(Number.isFinite(video.duration)?video.duration:Infinity,(video.currentTime||0)+10));
+  if(lastState?.is_host && safeSeek(Math.min(
+    Number.isFinite(video.duration)?video.duration:Infinity,(video.currentTime||0)+10
+  ))) scheduleHostSeekCommit(true);
 }};
 document.getElementById("nextEpisode").onclick=()=>playNextEpisode(true);
 document.getElementById("timeline").addEventListener("input",event=>{{
   if(!lastState?.is_host || !Number.isFinite(video.duration) || video.duration<=0) return;
-  safeSeek((Number(event.target.value||0)/1000)*video.duration);
+  if(safeSeek((Number(event.target.value||0)/1000)*video.duration))
+    scheduleHostSeekCommit(true);
 }});
 const volumeControl=document.getElementById("volume");
 const muteControl=document.getElementById("mute");
@@ -6504,7 +6513,10 @@ video.addEventListener("seeking",()=>{{
   holdCompatAudioForVideo();
 }});
 video.addEventListener("seeked",()=>{{
-  scheduleHostSeekCommit();
+  // Only native PiP/fullscreen user seeks need event-based forwarding.
+  // Theater's own controls call scheduleHostSeekCommit(true) directly.
+  if(!remoteApply && nativeVideoControlsActive())
+    scheduleHostSeekCommit();
   videoClockBuffering=!(!video.paused && video.readyState>=3);
   if(compatAudioActive())
     scheduleCompatAudioRestart(Number(video.currentTime||0),videoClockAdvancing());
