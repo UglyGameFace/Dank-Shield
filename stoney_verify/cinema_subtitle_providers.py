@@ -110,7 +110,18 @@ def _parse_results(payload: object, *, language: str) -> list[dict]:
         if not _ID.fullmatch(n_id):
             continue
         lang = str(item.get("lang") or item.get("language") or language).strip().lower()
-        if lang not in {language, "english" if language == "en" else language}:
+        language_names = {
+            "en": {"en", "eng", "english"},
+            "es": {"es", "spa", "spanish"},
+            "fr": {"fr", "fra", "fre", "french"},
+            "ja": {"ja", "jpn", "japanese"},
+            "de": {"de", "deu", "ger", "german"},
+            "it": {"it", "ita", "italian"},
+            "pt": {"pt", "por", "portuguese"},
+            "ko": {"ko", "kor", "korean"},
+            "zh": {"zh", "zho", "chi", "chinese"},
+        }
+        if lang not in language_names.get(language, {language}):
             continue
         release = str(item.get("release_name") or item.get("name") or "").strip()[:96]
         options.append({
