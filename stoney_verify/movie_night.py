@@ -91,6 +91,7 @@ class MovieSourceVariant:
                 return 2
             codec_hint = str(
                 reported.get("video_codec")
+                or reported.get("videoCodec")
                 or reported.get("codec")
                 or ""
             ).strip().casefold().replace("-", "").replace(".", "")
