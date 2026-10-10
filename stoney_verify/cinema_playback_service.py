@@ -9,6 +9,8 @@ torrent lifecycle, room authority, and canonical media identity cannot diverge.
 import asyncio
 from dataclasses import dataclass
 import time
+
+from aiohttp import ClientError
 from typing import Any, Mapping, Optional
 
 from .cinema_catalog import CinemaEpisode, CinemaMedia, get_details
@@ -367,7 +369,12 @@ async def start_automatic_variant(
                 automatic=True,
             )
             return result, item, failures
-        except (CinemaPlaybackError, RuntimeError, ValueError, OSError, TimeoutError):
+        except (CinemaPlaybackError, ClientError, RuntimeError, ValueError, OSError, TimeoutError) as exc:
+            print(
+                "⚠️ cinema_auto_source startup_failed "
+                f"attempt={failures + 1}/{min(_MAX_AUTO_START_ATTEMPTS, len(choices))} "
+                f"reason={type(exc).__name__}"
+            )
             # State must remain unchanged for a safe retry; e.g. a failure
             # after a successful room commit must never trigger a second launch.
             if (
