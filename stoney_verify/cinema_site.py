@@ -89,6 +89,7 @@ from .cinema_feed_personalization import (
     save_feed_rule,
 )
 from .media_source_registry import enabled_structured_sources, load_media_source_registry
+from .media_metadata import browser_video_risk_key
 from .media_source_resolver import (
     preview_custom_media_source,
     search_movie_sources,
@@ -724,7 +725,7 @@ def _cinema_entry_html(
   <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=11">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=12">
 </head>
 <body>
   <div class="app-shell">
@@ -2120,6 +2121,118 @@ async def cinema_search_api(request: web.Request) -> web.Response:
     )
 
 
+def _site_source_rows(outcome: Any) -> list[dict[str, Any]]:
+    """Browser-safe release choices; never expose magnets or torrent URLs."""
+    variants = sorted(
+        tuple(getattr(outcome, "variants", ()) or ()),
+        key=lambda item: (
+            browser_video_risk_key(item.metadata),
+            -max(0, int(item.seeds or 0)),
+        ),
+    )
+    result: list[dict[str, Any]] = []
+    for variant in variants[:25]:
+        seeds = max(0, int(variant.seeds or 0))
+        leechers = max(0, int(variant.leechers or 0))
+        health = (
+            "Strong" if seeds >= 20
+            else "Good" if seeds >= 5
+            else "Limited" if seeds > 0
+            else "No active seeds reported"
+        )
+        risk = browser_video_risk_key(variant.metadata)
+        result.append(
+            {
+                "source_id": str(variant.source_id or ""),
+                "source_label": str(variant.source_label or "Cinema source"),
+                "source_choice": _source_choice_id(variant.source_ref),
+                "title": str(variant.title or "")[:180],
+                "file_size": int(variant.file_size or 0),
+                "seeds": seeds,
+                "leechers": leechers,
+                "health": health,
+                "video_risk": "risky" if risk == 2 else "unverified" if risk == 1 else "verified",
+                "playable": True,
+            }
+        )
+    return result
+
+
+async def _site_episode_source_context(
+    guild_id: int,
+    user_id: int,
+    series_id: int,
+    season_number: int,
+    episode_number: int,
+    expected_tmdb_id: int = 0,
+) -> tuple[Any, dict[str, Any], str, Any]:
+    """Exact episode lookup shared by the picker and Play route."""
+    if series_id <= 0 or season_number < 0 or episode_number <= 0:
+        raise web.HTTPBadRequest(text="Invalid TV episode identity.")
+    details = await get_details("tv", series_id)
+    if bool(details.media.adult) and not await _guild_adult_content_enabled(guild_id):
+        raise web.HTTPForbidden(text="Adult-content Cinema playback is disabled for this server.")
+    episodes = await get_season(series_id, season_number)
+    episode = next(
+        (row for row in episodes if int(row.episode_number) == episode_number),
+        None,
+    )
+    if episode is None:
+        raise web.HTTPNotFound(text="That TV episode is not available in the catalog.")
+    if expected_tmdb_id > 0 and int(episode.tmdb_id) != expected_tmdb_id:
+        raise web.HTTPConflict(text="The episode identity changed. Refresh Cinema and try again.")
+
+    cached = _cached_source_snapshot(guild_id, user_id, "episode", int(episode.tmdb_id))
+    if cached is not None:
+        metadata, query, outcome = cached
+    else:
+        metadata, query, outcome = await search_exact_episode_sources(
+            int(guild_id), series=details.media, episode=episode,
+        )
+    return episode, metadata, query, outcome
+
+
+async def cinema_episode_sources_api(request: web.Request) -> web.Response:
+    guild_id, user_id = await _site_identity(request)
+    try:
+        series_id = int(request.match_info.get("series_id") or 0)
+        season_number = int(request.match_info.get("season_number") or 0)
+        episode_number = int(request.match_info.get("episode_number") or 0)
+        expected_tmdb_id = int(request.query.get("tmdb_id") or 0)
+    except (TypeError, ValueError):
+        raise web.HTTPBadRequest(text="Invalid TV episode identity.")
+    try:
+        episode, metadata, query, outcome = await _site_episode_source_context(
+            guild_id, user_id, series_id, season_number, episode_number,
+            expected_tmdb_id,
+        )
+    except web.HTTPException:
+        raise
+    except Exception as exc:
+        print(
+            "⚠️ cinema_site episode choices unavailable "
+            f"guild={int(guild_id)} series={series_id} "
+            f"season={season_number} episode={episode_number} "
+            f"error_type={type(exc).__name__}"
+        )
+        raise web.HTTPServiceUnavailable(
+            text="Episode releases could not be searched. Try again."
+        ) from exc
+    _cache_source_snapshot(
+        guild_id, user_id, "episode", int(episode.tmdb_id),
+        metadata=metadata, query=query, outcome=outcome,
+    )
+    return web.json_response({
+        "episode": {
+            "series_id": series_id,
+            "season_number": season_number,
+            "episode_number": episode_number,
+            "tmdb_id": int(episode.tmdb_id),
+        },
+        "sources": _site_source_rows(outcome),
+    })
+
+
 async def cinema_details_api(request: web.Request) -> web.Response:
     _guild_id, user_id = await _site_identity(request)
     media_type = str(request.match_info.get("media_type") or "").strip().lower()
@@ -2169,42 +2282,13 @@ async def cinema_details_api(request: web.Request) -> web.Response:
     if media_type == "movie":
         try:
             source_metadata, source_query, source_outcome = await search_exact_movie_sources(
-                int(_guild_id),
-                media=details.media,
+                int(_guild_id), media=details.media,
             )
             _cache_source_snapshot(
-                _guild_id,
-                user_id,
-                "movie",
-                tmdb_id,
-                metadata=source_metadata,
-                query=source_query,
-                outcome=source_outcome,
+                _guild_id, user_id, "movie", tmdb_id,
+                metadata=source_metadata, query=source_query, outcome=source_outcome,
             )
-            for variant in source_outcome.variants[:8]:
-                seeds = max(0, int(variant.seeds or 0))
-                leechers = max(0, int(variant.leechers or 0))
-                if seeds >= 20:
-                    health = "Strong"
-                elif seeds >= 5:
-                    health = "Good"
-                elif seeds > 0:
-                    health = "Limited"
-                else:
-                    health = "No active seeds reported"
-                source_rows.append(
-                    {
-                        "source_id": str(variant.source_id or ""),
-                        "source_label": str(variant.source_label or "Cinema source"),
-                        "source_choice": _source_choice_id(variant.source_ref),
-                        "title": str(variant.title or "")[:180],
-                        "file_size": int(variant.file_size or 0),
-                        "seeds": seeds,
-                        "leechers": leechers,
-                        "health": health,
-                        "playable": True,
-                    }
-                )
+            source_rows = _site_source_rows(source_outcome)
         except Exception:
             source_rows = []
 
@@ -2476,34 +2560,23 @@ async def cinema_play_api(request: web.Request) -> web.Response:
             series_id = int(payload.get("series_id") or 0)
             season_number = int(payload.get("season_number") or 0)
             episode_number = int(payload.get("episode_number") or 0)
-        except Exception:
-            series_id = season_number = episode_number = 0
-        if series_id <= 0 or season_number < 0 or episode_number <= 0:
+            expected_tmdb_id = int(payload.get("tmdb_id") or 0)
+        except (TypeError, ValueError):
             raise web.HTTPBadRequest(text="Invalid TV episode identity.")
         try:
-            details = await get_details("tv", series_id)
-            episodes = await get_season(series_id, season_number)
-            episode = next(
-                (
-                    item
-                    for item in episodes
-                    if int(item.episode_number) == episode_number
-                ),
-                None,
-            )
-            if episode is None:
-                raise web.HTTPNotFound(text="That TV episode is not available in the catalog.")
-            requested_tmdb_id = int(payload.get("tmdb_id") or 0)
-            if requested_tmdb_id > 0 and int(episode.tmdb_id) != requested_tmdb_id:
-                raise web.HTTPConflict(text="The episode identity changed. Refresh Cinema and try again.")
-            metadata, query, outcome = await search_exact_episode_sources(
-                int(guild_id),
-                series=details.media,
-                episode=episode,
+            _episode, metadata, query, outcome = await _site_episode_source_context(
+                guild_id, user_id, series_id, season_number, episode_number,
+                expected_tmdb_id,
             )
         except web.HTTPException:
             raise
         except Exception as exc:
+            print(
+                "⚠️ cinema_site episode source search failed "
+                f"guild={int(guild_id)} user={int(user_id)} series={series_id} "
+                f"season={season_number} episode={episode_number} "
+                f"error_type={type(exc).__name__}"
+            )
             raise web.HTTPServiceUnavailable(
                 text="Cinema episode source search is temporarily unavailable."
             ) from exc
@@ -3305,12 +3378,12 @@ def _site_html(guild_id: int, user_id: int) -> str:
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#030806">
   <title>Dank Cinema</title>
-  <link rel="stylesheet" href="/cinema/assets/site.css?v=11">
+  <link rel="stylesheet" href="/cinema/assets/site.css?v=12">
 </head>
 <body>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <script>window.__DANK_CINEMA_BOOT__={boot};</script>
-  <script src="/cinema/assets/site.js?v=17" defer></script>
+  <script src="/cinema/assets/site.js?v=18" defer></script>
 </body>
 </html>"""
 
@@ -3435,6 +3508,10 @@ def register_cinema_site_routes(app: web.Application) -> None:
     app.router.add_get(
         "/cinema/{guild_id}/api/season/{series_id}/{season_number}",
         cinema_season_api,
+    )
+    app.router.add_get(
+        "/cinema/{guild_id}/api/episode-sources/{series_id}/{season_number}/{episode_number}",
+        cinema_episode_sources_api,
     )
     app.router.add_post("/cinema/{guild_id}/api/play", cinema_play_api)
     app.router.add_get("/cinema/{guild_id}/api/library", cinema_library_api)

@@ -257,6 +257,19 @@ img{max-width:100%}
 .episode-progress-label{line-height:1.3;text-align:right}
 .episode-play{min-height:38px;padding:8px 11px;white-space:nowrap;font-size:.7rem}
 .episode-library-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+.episode-choose-source{min-height:36px;font-size:.7rem;white-space:nowrap}
+.episode-source-panel{
+  grid-column:1/-1;display:grid;gap:8px;min-width:0;
+  padding:12px;border:1px solid var(--line);border-radius:12px;
+  background:var(--surface-2);cursor:default
+}
+.episode-source-panel h3{margin:0;font-size:.91rem}
+.episode-source-panel .source-card{
+  width:100%;display:grid;gap:4px;text-align:left;
+  color:var(--text);white-space:normal;overflow-wrap:anywhere
+}
+.episode-source-panel .source-card:hover{border-color:var(--line-strong)}
+.episode-source-panel .section-sub{margin:0}
 .episode-library-actions .btn{min-height:34px;padding:6px 9px;font-size:.66rem;flex:0 0 auto}
 .rating-select{
   min-height:46px;border-radius:12px;border:1px solid rgba(167,255,100,.22);
