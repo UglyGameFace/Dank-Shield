@@ -75,8 +75,12 @@ async def _assert_paid(session: aiohttp.ClientSession, key: str) -> None:
 def _media_query(metadata: Mapping) -> tuple[str, int, int, int] | None:
     media_type = str(metadata.get("media_type") or "").lower()
     try:
-        if media_type == "episode":
-            title_id = int(metadata.get("series_id") or 0)
+        if media_type in {"episode", "tv"}:
+            title_id = int(
+                metadata.get("series_id") or (
+                    metadata.get("tmdb_id") if media_type == "tv" else 0
+                ) or 0
+            )
             season = int(metadata.get("season_number") or 0)
             episode = int(metadata.get("episode_number") or 0)
             if title_id <= 0 or not 0 <= season <= 100 or not 1 <= episode <= 300:
