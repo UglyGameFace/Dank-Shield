@@ -296,7 +296,8 @@ def _share_video_limit_bytes(guild: discord.Guild) -> int:
         except ValueError:
             requested = 0
         if requested > 0:
-            return min(permitted, requested)
+            # Preserve the historical 1 MiB minimum for explicit caps.
+            return min(permitted, max(1024 * 1024, requested))
     return permitted
 
 
