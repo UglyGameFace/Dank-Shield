@@ -14,7 +14,7 @@ import asyncio
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import aiohttp
 from typing import Any, Mapping, Optional
@@ -327,36 +327,56 @@ def media_url_identity(value: str) -> str:
 
 
 
+
+# Redirect-only share URLs from recognized providers. Full video permalinks
+# (including youtu.be -> watch and ordinary social posts) remain on the
+# existing canonicalizer/extractor path without extra network requests.
 _TIKTOK_SHORT_PATH_RE = re.compile(r"^/t/[A-Za-z0-9_-]+/?$", re.IGNORECASE)
-_TIKTOK_REDIRECT_TIMEOUT_SECONDS = 6.0
+_SHARE_TOKEN_PATH_RE = re.compile(r"^/[A-Za-z0-9_-]+/?$")
+_SHARE_PATH_RE = re.compile(r"^/share/(?:r|v|p|reel|video|post)/[A-Za-z0-9_-]+/?$", re.IGNORECASE)
+_REDDIT_SHARE_PATH_RE = re.compile(r"^/r/[^/]+/s/[A-Za-z0-9_-]+/?$", re.IGNORECASE)
+_SHORT_SHARE_TIMEOUT_SECONDS = 6.0
 
 
-def _is_tiktok_short_url(value: str) -> bool:
+def _short_share_provider(value: str) -> str:
     parsed = _parsed_http_url(value)
-    if parsed is None or provider_for_url(value) != "tiktok":
-        return False
+    if parsed is None:
+        return ""
+    provider = provider_for_url(value)
     host = str(parsed.hostname or "").lower().strip(".")
     path = str(parsed.path or "")
-    if _TIKTOK_SHORT_PATH_RE.fullmatch(path):
-        return True
-    # TikTok's vm./vt. share domains put the opaque token at the path root.
-    return host in {"vm.tiktok.com", "vt.tiktok.com"} and bool(
-        re.fullmatch(r"/[A-Za-z0-9_-]+/?", path)
-    )
+    if provider == "tiktok":
+        if _TIKTOK_SHORT_PATH_RE.fullmatch(path):
+            return provider
+        if host in {"vm.tiktok.com", "vt.tiktok.com"} and _SHARE_TOKEN_PATH_RE.fullmatch(path):
+            return provider
+    elif provider == "facebook":
+        if host == "fb.watch" and _SHARE_TOKEN_PATH_RE.fullmatch(path):
+            return provider
+        if _host_matches(host, "facebook.com") and _SHARE_PATH_RE.fullmatch(path):
+            return provider
+    elif provider == "reddit":
+        if host == "redd.it" and _SHARE_TOKEN_PATH_RE.fullmatch(path):
+            return provider
+        if _host_matches(host, "reddit.com") and _REDDIT_SHARE_PATH_RE.fullmatch(path):
+            return provider
+    elif provider == "instagram":
+        if _host_matches(host, "instagram.com") and _SHARE_PATH_RE.fullmatch(path):
+            return provider
+    elif provider == "pinterest":
+        if host == "pin.it" and _SHARE_TOKEN_PATH_RE.fullmatch(path):
+            return provider
+    return ""
 
 
-async def _expand_tiktok_short_url(value: str) -> str:
-    """Resolve a public TikTok share redirect to an actual video permalink.
-
-    Use the canonical SSRF-safe network owner (not a second media downloader).
-    Fetch only redirect headers and discard the response body; do not accept
-    foreign provider pages or arbitrary tracking destinations as a video URL.
-    """
-    if not _is_tiktok_short_url(value) or not is_safe_media_download_url(value):
+async def _expand_short_share_url(value: str) -> str:
+    """Resolve a known provider's share redirect using the public-only network owner."""
+    provider = _short_share_provider(value)
+    if not provider or not is_safe_media_download_url(value):
         return ""
     try:
         timeout = aiohttp.ClientTimeout(
-            total=_TIKTOK_REDIRECT_TIMEOUT_SECONDS,
+            total=_SHORT_SHARE_TIMEOUT_SECONDS,
             connect=3.0,
             sock_read=4.0,
         )
@@ -372,19 +392,25 @@ async def _expand_tiktok_short_url(value: str) -> str:
             )
             try:
                 canonical = canonicalize_media_url(final_url)
-                parsed = _parsed_http_url(canonical)
+                # Accept only a supported, non-short permalink from the same
+                # provider. No off-provider or nested shortlink extraction.
                 if (
-                    parsed is not None
-                    and provider_for_url(canonical) == "tiktok"
-                    and _TIKTOK_VIDEO_RE.search(str(parsed.path or ""))
+                    is_safe_media_download_url(canonical)
+                    and provider_for_url(canonical) == provider
+                    and not _short_share_provider(canonical)
                 ):
+                    if provider == "tiktok":
+                        parsed = _parsed_http_url(canonical)
+                        if parsed is None or not _TIKTOK_VIDEO_RE.search(str(parsed.path or "")):
+                            return ""
                     return canonical
             finally:
                 response.release()
     except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError):
-        # The canonical extractor retains its old generic-shortlink fallback.
+        # Ordinary extraction and the source link remain available.
         pass
     return ""
+
 
 
 def _parse_policy_list(name: str) -> set[str]:
@@ -810,12 +836,16 @@ async def _resolve_extracted(
             reason="extract_failed",
         )
     else:
+        # The extractor consumed the resolved permalink, so metadata identity
+        # must use that permalink, not the user's original short share URL.
         resolution = select_media_resolution(
             info,
-            source_url=source_url,
+            source_url=canonical,
             provider=provider,
             max_bytes=max_bytes,
         )
+        if resolution.source_url != source_url:
+            resolution = replace(resolution, source_url=source_url)
 
     if resolution.delivery == "progressive":
         _record(provider, "progressive")
@@ -855,8 +885,11 @@ async def resolve_media_url(value: str, *, max_bytes: int) -> MediaResolution:
             reason="provider_disabled",
         )
 
-    if provider == "tiktok" and _is_tiktok_short_url(canonical):
-        expanded = await _expand_tiktok_short_url(canonical)
+    if _short_share_provider(canonical):
+        # Limit redirect resolution with the same bounded extraction budget.
+        semaphore = _ensure_async_state()
+        async with semaphore:
+            expanded = await _expand_short_share_url(canonical)
         if expanded:
             canonical = expanded
             identity = media_url_identity(expanded)
