@@ -6,6 +6,7 @@ Discord controls and the web Theater both use this module so source selection,
 torrent lifecycle, room authority, and canonical media identity cannot diverge.
 """
 
+import asyncio
 from dataclasses import dataclass
 import time
 from typing import Any, Mapping, Optional
@@ -595,6 +596,18 @@ async def start_room_variant(
                     session.token, lease_key, remove_if_unused=True,
                 )
                 raise
+        # If the existing bounded probe can run immediately from downloaded
+        # head/tail pieces, wait briefly for *actual* video codec evidence
+        # before committing the stream. Never wait for an entire torrent.
+        try:
+            torrent_manager.schedule_metadata_probe(session)
+            for _ in range(12):
+                if not bool(getattr(session, "metadata_probe_running", False)):
+                    break
+                await asyncio.sleep(0.15)
+        except (RuntimeError, AttributeError):
+            pass
+
         # The downloaded torrent metadata reveals the selected file name
         # before the browser player starts. It is stronger negative evidence
         # than a provider label, but still cannot certify playable codecs.
