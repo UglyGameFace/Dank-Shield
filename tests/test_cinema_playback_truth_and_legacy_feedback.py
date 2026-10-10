@@ -155,3 +155,24 @@ def test_browser_frame_probe_must_not_forge_a_rendered_frame_from_media_time() -
     assert 'frameSeen?"; decoded video frame confirmed"' in html
     assert 'video.addEventListener("pause",()=>{' in html
     assert "refreshStreamHealth();" in html
+
+
+def test_cinema_internal_seeks_do_not_echo_host_commands() -> None:
+    html=movie_night_web._watch_html("room-seek-truth",42,"uid=42&exp=9999999999&sig=test")
+    core=html.split("function scheduleHostSeekCommit(explicitUserSeek=false) {",1)[1].split(
+        "function updateNextEpisodeControl()",1
+    )[0]
+    assert "remoteApply && !explicitUserSeek" in core
+    assert "progressResumeApplying" in core
+    assert 'await hostAction("seek",{seconds});' in core
+    assert 'scheduleHostSeekCommit(true);' in html
+    # Native PiP/fullscreen seeks may still be deliberate, but internal
+    # seeked events cannot modify the room's authoritative playback anchor.
+    event=html.split('video.addEventListener("seeked",()=>{',1)[1].split(
+        'video.addEventListener("loadedmetadata"',1
+    )[0]
+    assert "if(!remoteApply && nativeVideoControlsActive())" in event
+    assert 'scheduleHostSeekCommit();' in event
+    assert "scheduleCompatAudioRestart(" in event  # existing AAC alignment retained
+    for name in ('"rewind10"', '"forward10"', '"timeline"'):
+        assert name in html
