@@ -442,6 +442,42 @@ async def search_exact_episode_sources(
     return metadata, query, filter_outcome_for_catalog(outcome, metadata)
 
 
+def choose_automatic_torrent_file(session: Any, catalog: Any) -> Any:
+    """Select the actual playable file, not blindly the largest torrent entry.
+
+    Single torrents and multi-episode packs share one metadata path. Reject
+    explicit wrong-episode entries, then prefer the exact episode and a
+    container without known browser risks. Never infer codec verification
+    from a filename.
+    """
+    from .media_metadata import browser_video_risk_key, parse_release_name
+
+    metadata = catalog if isinstance(catalog, Mapping) else {}
+    episode = str(metadata.get("media_type") or "").casefold() == "episode"
+    season = _safe_int(metadata.get("season_number"))
+    number = _safe_int(metadata.get("episode_number"))
+    possible = []
+    for item in tuple(getattr(session, "candidates", ()) or ())[:100]:
+        name = str(getattr(item, "path", "") or "")
+        tags = parse_release_name(name)
+        item_season = _safe_int(tags.get("season"))
+        item_number = _safe_int(tags.get("episode"))
+        known_episode = bool(item_season and item_number)
+        if episode and known_episode and (item_season, item_number) != (season, number):
+            continue
+        risk = browser_video_risk_key({
+            "release_name": tags,
+            "source_reported": {"filename": name},
+        })
+        # Exact episode identity beats an unmarked extra file. For movies,
+        # choose a format without explicit browser codec/container red flags.
+        exactness = 0 if episode and known_episode else 1
+        size = _safe_int(getattr(item, "size", 0))
+        small_extra = 1 if size < 25 * _MIB else 0
+        possible.append(((exactness if episode else 0, risk, small_extra, -size), item))
+    return min(possible, key=lambda entry: entry[0])[1] if possible else None
+
+
 async def start_room_variant(
     room_id: str,
     *,
@@ -511,6 +547,34 @@ async def start_room_variant(
         )
 
     if automatic:
+        catalog = (
+            candidate.metadata.get("catalog")
+            if isinstance(getattr(candidate, "metadata", None), Mapping)
+            else {}
+        )
+        chosen_file = choose_automatic_torrent_file(session, catalog)
+        if chosen_file is None:
+            if str(session.token) != previous:
+                await torrent_manager.release_lease(
+                    session.token, lease_key, remove_if_unused=True,
+                )
+            raise CinemaPlaybackError(
+                "Torrent metadata contains no file matching the requested episode."
+            )
+        if int(chosen_file.index) != int(session.file_index):
+            if str(session.token) == previous:
+                raise CinemaPlaybackError(
+                    "Cinema cannot silently change an existing shared torrent file."
+                )
+            try:
+                session = await torrent_manager.select_file(
+                    session.token, int(chosen_file.index), owner_id=initial_host_id,
+                )
+            except Exception:
+                await torrent_manager.release_lease(
+                    session.token, lease_key, remove_if_unused=True,
+                )
+                raise
         # The downloaded torrent metadata reveals the selected file name
         # before the browser player starts. It is stronger negative evidence
         # than a provider label, but still cannot certify playable codecs.
@@ -620,6 +684,7 @@ __all__ = [
     "materialize_search_results",
     "search_exact_episode_sources",
     "search_exact_movie_sources",
+    "choose_automatic_torrent_file",
     "ranked_automatic_variants",
     "select_preferred_variant",
     "start_automatic_variant",
