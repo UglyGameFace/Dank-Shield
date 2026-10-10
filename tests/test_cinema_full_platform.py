@@ -2255,8 +2255,16 @@ def test_theater_queue_play_next_prioritizes_selected_item(monkeypatch) -> None:
 
 
 def test_preferred_source_selection_is_shared_and_falls_back_safely(monkeypatch) -> None:
-    first = SimpleNamespace(source_id="alpha", source_label="Alpha Source")
-    preferred = SimpleNamespace(source_id="beta", source_label="Beta Premium")
+    # Selection expects candidate variants with an explicit video risk key.
+    # Unverified candidates must be unknown, never certified browser-safe.
+    first = SimpleNamespace(
+        source_id="alpha", source_label="Alpha Source",
+        browser_video_risk_key=lambda: 1,
+    )
+    preferred = SimpleNamespace(
+        source_id="beta", source_label="Beta Premium",
+        browser_video_risk_key=lambda: 1,
+    )
 
     async def profile(_user_id: int):
         return {"preferences": {"preferred_source": "beta"}}
