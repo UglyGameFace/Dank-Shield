@@ -114,3 +114,61 @@ def test_subtitle_preferences_are_normalized_and_guild_scoped():
     assert preferences["subtitle_language_by_guild"] == {
         "100": "jpn", "200": "off",
     }
+
+
+
+def test_subtitle_endpoint_requires_authorized_viewer_and_verified_text_track(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from aiohttp import web
+    from stoney_verify import movie_night_web
+
+    class TorrentStub:
+        def __init__(self):
+            self.session = SimpleNamespace(
+                token="valid-token",
+                verified_metadata={
+                    "available": True,
+                    "subtitle_tracks": [
+                        {"codec": "subrip", "language": "en"},
+                        {"codec": "hdmv_pgs_subtitle", "language": "fr"},
+                    ],
+                },
+            )
+
+        async def get(self, token):
+            assert token == "valid-token"
+            return self.session
+
+        def session_usable(self, session):
+            return session is self.session
+
+        def stream_url(self, session, *, ttl_seconds, consumer_key):
+            assert session is self.session and ttl_seconds == 180
+            assert consumer_key == "movie:20:subtitle"
+            return "https://example.invalid/media/torrent/stream/valid-token/test.mkv?sig=ok"
+
+    room = SimpleNamespace(stream_token="valid-token", room_id="r", guild_id=100)
+    async def authorized(_request):
+        return room, 20
+
+    async def extracted(*, token, track, signed_stream_url):
+        assert token == "valid-token" and track == 0
+        assert signed_stream_url.startswith("https://example.invalid/")
+        return b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n"
+
+    monkeypatch.setattr(movie_night_web, "_room_and_user", authorized)
+    monkeypatch.setattr(movie_night_web, "get_torrent_manager", TorrentStub)
+    monkeypatch.setattr(movie_night_web, "embedded_vtt_for_session", extracted)
+    response = asyncio.run(movie_night_web.movie_night_subtitle(
+        SimpleNamespace(query={"track": "0"}),
+    ))
+    assert response.status == 200
+    assert response.content_type == "text/vtt"
+    assert response.headers["Cache-Control"] == "private, no-store"
+    assert response.body.startswith(b"WEBVTT")
+    for selected in ("1", "99", "../0", "no"):
+        with pytest.raises((web.HTTPNotFound, web.HTTPBadRequest)):
+            asyncio.run(movie_night_web.movie_night_subtitle(
+                SimpleNamespace(query={"track": selected}),
+            ))
