@@ -19,7 +19,7 @@ import time
 import zipfile
 from collections.abc import Mapping
 from dataclasses import dataclass
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 
 import aiohttp
 
@@ -438,8 +438,9 @@ async def discover_subtitles(
     ])
     matches: list[dict] = []
     for provider, account, rows in responses:
+        per_provider_count = 0
         for row in rows:
-            if len(matches) >= 15:
+            if len(matches) >= 15 or per_provider_count >= 5:
                 break
             ref = str(row.get("reference") or "")
             if not ref or len(ref) > 2048:
@@ -465,6 +466,7 @@ async def discover_subtitles(
                 "id": opaque_id, "source": provider,
                 "language": lang, "label": str(row.get("label") or "")[:116],
             })
+            per_provider_count += 1
     return matches
 
 
@@ -559,7 +561,14 @@ async def _download_selection_uncached(
     async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
         if provider == "wyzie":
             url = _safe_wyzie_url(ref)
-            raw = await _binary_get(session, account, url, headers={"Accept": "text/vtt"})
+            parts = urlsplit(url)
+            params = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+                      if k != "to"]
+            params.append(("to", "vtt"))
+            vtt_url = urlunsplit((parts.scheme, parts.netloc, parts.path,
+                                  urlencode(params), ""))
+            raw = await _binary_get(session, account, vtt_url,
+                                    headers={"Accept": "text/vtt"})
             result = _as_vtt(raw)
         elif provider == "subsource":
             if not ref.isdigit():
