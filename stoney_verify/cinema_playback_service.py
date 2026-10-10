@@ -683,7 +683,13 @@ async def start_room_variant(
             variant_id=variant.variant_id,
         )
     except Exception:
-        if str(session.token) != previous:
+        current = manager.get(room.room_id)
+        # Never discard a lease already referenced by committed room state,
+        # even if a later viewer-state update failed after the token changed.
+        if (
+            str(session.token) != previous
+            and (current is None or str(current.stream_token or "") != session.token)
+        ):
             await torrent_manager.release_lease(
                 session.token, lease_key, remove_if_unused=True,
             )
