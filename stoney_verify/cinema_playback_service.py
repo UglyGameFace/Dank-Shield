@@ -295,6 +295,7 @@ async def start_automatic_variant(
     ranked: Any,
     start_variant: Any = None,
     max_file_bytes: int = 0,
+    manager: Any = None,
 ) -> tuple[CinemaPlaybackResult, Any, int]:
     """Retry only startup failures, never swap a playing room behind viewers.
 
@@ -302,7 +303,7 @@ async def start_automatic_variant(
     sources are ranked by the same safety/efficiency policy, and each is
     started at most once. No retries after a room-media state change.
     """
-    manager = get_movie_night_manager()
+    manager = manager or get_movie_night_manager()
     original = manager.get(room_id)
     if original is None or original.ended or original.host_id != int(actor_id):
         raise PermissionError("Only the active host can change Cinema media.")
