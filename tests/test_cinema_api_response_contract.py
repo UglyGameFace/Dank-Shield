@@ -69,7 +69,7 @@ async function expectMessage(value) {
 
 (async () => {
   nextResponse = response(200, "text/html; charset=utf-8", "<!doctype html><title>Redirect</title>");
-  await expectMessage("instead of JSON for /play");
+  await expectMessage("instead of JSON for /cinema/123/api/play");
   assert.equal(errors.at(-1)[0], "cinema_api_non_json_success");
 
   nextResponse = response(200, "text/html", "<!doctype html>", {
@@ -119,7 +119,7 @@ async function expectMessage(value) {
   assert.equal(errors.at(-1)[1].path, "/cinema/123/api/play");
 
   nextResponse = response(204, "", "");
-  await expectMessage("instead of JSON for /play");
+  await expectMessage("instead of JSON for /cinema/123/api/play");
 
   console.log("Cinema API success, HTML, redirect, errors, and invalid JSON verified");
 })().catch((error) => {
