@@ -19,7 +19,8 @@ def isolated_sessions(tmp_path, monkeypatch):
     live._PENDING.clear()
     live._REGISTERED.clear()
     live._STARTED_BOTS.clear()
-    live._VOICE_REFRESH.clear()
+    live._VOICE_PENDING.clear()
+    live._VOICE_WORKERS.clear()
     return tmp_path
 
 

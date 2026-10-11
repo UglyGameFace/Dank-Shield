@@ -1,6 +1,33 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — TOKE-SINGLE-GIF-20261011
+## CURRENT ACTIVE TASK — TOKE-MOBILE-STATUS-SYNC-20261011
+
+**User report:** In Discord Android, the ended Toke card kept saying a frozen "Closed 5 seconds ago" until force-closing Discord. Members also need accurate VC participation counts when several join within seconds.
+
+**Branch:** `fix/toke-mobile-time-state-sync-20261011` based on the production auto-deploy branch `aaa-cinema-pre-pregateway-bind`, after merged PR #507 (`c3040079eab39b73b9c1d5fb1f528ded3a2cee66`).
+
+### Root causes confirmed
+- Toke used Discord relative timestamp markdown `<t:UNIX:R>` for both "Ends" and "Closed". Discord Android has a long-standing, documented issue where relative time display can freeze until client interaction/restart. A bot cannot force a clock in an already-open message to tick, or detect when a member merely views a message.
+- The Toke voice-state listener dropped every update for a guild within a five-second throttle, including final member joins/leaves. No trailing synchronization was scheduled. That could leave VC counts stale until a button or unrelated event refreshed the public card.
+
+### Scoped fix
+- Use **static localized Discord times** `<t:UNIX:f>` for "Scheduled end" and "Closed at". Fixed times do not depend on mobile relative countdown behavior, remain timezone-aware, and remain accurate when an app view is cached.
+- Active cards show a **fixed last-checked time** and instruct members to use Refresh for on-demand live status. The expiry worker still transitions to a grey/closed card and removes buttons at the configured time (polling at 15-second intervals, plus Discord API latency).
+- Replace lossy guild-wide VC throttle with one 2-second coalescing worker per guild, collecting changed channel IDs. A second pass is guaranteed if events arrive during an edit, eliminating lost final VC changes without triggering an API edit per rapid voice event.
+- No per-view activity event exists in Discord; do not promise an automatic refresh just because a member scrolls to the card. No constant periodic edit loop, which would be rate-limit- and scale-hostile.
+- Change only Toke UI, Toke tests, the targeted regression workflow and this checkpoint. Preserve merged Toke #507 GIF, expiry, roster, Share Router, Cinema and profile card behavior.
+
+### Acceptance gates
+- [ ] Exact-head focused tests for absolute timestamps, mobile stale-clock cases, grouped VC updates, late arrivals, guild isolation and old Toke regressions.
+- [ ] Exact-head full Dank Shield CI, security and design checks.
+- [ ] Merge into Discloud's `aaa-cinema-pre-pregateway-bind` only when safe.
+- [ ] Real Android acceptance: inspect active and ended session without restarting Discord; validate fixed local clock, automatic end-state, Refresh button counts, and burst of several VC joins/leaves.
+
+**Status:** In progress, PR draft. Not merged or deployed; Discloud revision and real mobile behavior unverified.
+
+---
+
+## PREVIOUS TASK — TOKE-SINGLE-GIF-20261011
 
 **Owner report:** Toke posts show the same GIF as a large attachment above the card and as an image inside the card after status updates. Screenshot Oct 11, Android. User asks to fix the duplicate.
 
