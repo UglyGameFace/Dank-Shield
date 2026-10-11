@@ -191,3 +191,96 @@ def test_toke_participant_names_and_messages_not_persisted(isolated_sessions):
     assert '"cheers_ids":[789]' in saved
     assert '"message_text"' not in saved
     assert '"media_url"' not in saved
+
+
+def test_composer_gif_message_is_consumed_only_after_card_is_posted(isolated_sessions, monkeypatch):
+    from stoney_verify.commands_ext import public_toke
+    events = []
+
+    async def publish(guild, author, pending, captured):
+        assert pending.channel_id == captured.channel.id
+        events.append("published")
+        return SimpleNamespace(jump_url="https://discord.com/channels/123/999/888")
+
+    monkeypatch.setattr(public_toke, "publish_toke_from_draft", publish)
+
+    async def on_delete():
+        events.append("deleted")
+
+    async def on_dm(_text):
+        events.append("dm")
+
+    author = SimpleNamespace(id=444, bot=False, send=on_dm)
+    source = SimpleNamespace(id=555)
+    guild = SimpleNamespace(id=123)
+    live.begin_capture(guild.id, author.id, source.id, 777, "where are you")
+    msg = SimpleNamespace(
+        guild=guild, author=author, channel=source, webhook_id=None,
+        content="https://tenor.com/view/dancing-gif-123", attachments=[],
+        embeds=[], delete=on_delete,
+    )
+    asyncio.run(live._on_toke_media_message(msg))
+    assert events == ["published", "deleted", "dm"]
+    assert live.pending_for(guild.id, author.id) is None
+
+
+def test_failed_gif_publication_preserves_original_message(isolated_sessions, monkeypatch):
+    from stoney_verify.commands_ext import public_toke
+    events = []
+
+    async def reject(*_args):
+        raise RuntimeError("target unavailable")
+
+    monkeypatch.setattr(public_toke, "publish_toke_from_draft", reject)
+
+    async def on_delete():
+        events.append("deleted")
+
+    async def on_dm(_text):
+        events.append("dm")
+
+    author = SimpleNamespace(id=444, bot=False, send=on_dm)
+    source = SimpleNamespace(id=555)
+    guild = SimpleNamespace(id=123)
+    live.begin_capture(guild.id, author.id, source.id, 777, "")
+    msg = SimpleNamespace(
+        guild=guild, author=author, channel=source, webhook_id=None,
+        content="", attachments=[SimpleNamespace(filename="sesh.gif", content_type="image/gif")],
+        embeds=[], delete=on_delete,
+    )
+    asyncio.run(live._on_toke_media_message(msg))
+    assert events == ["dm"]
+    assert live.pending_for(guild.id, author.id) is None
+
+
+def test_regular_text_is_not_intercepted_during_gif_capture(isolated_sessions, monkeypatch):
+    from stoney_verify.commands_ext import public_toke
+    async def forbidden(*_args):
+        raise AssertionError("regular chat was incorrectly consumed")
+    monkeypatch.setattr(public_toke, "publish_toke_from_draft", forbidden)
+    author = SimpleNamespace(id=444, bot=False)
+    source = SimpleNamespace(id=555)
+    guild = SimpleNamespace(id=123)
+    live.begin_capture(guild.id, author.id, source.id, 777, "")
+    msg = SimpleNamespace(
+        guild=guild, author=author, channel=source, webhook_id=None,
+        content="hello everyone", attachments=[], embeds=[],
+    )
+    asyncio.run(live._on_toke_media_message(msg))
+    assert live.pending_for(guild.id, author.id) is not None
+
+
+def test_persisted_cooldown_uses_successful_launch_history(isolated_sessions):
+    from stoney_verify.commands_ext import public_toke
+
+    async def check():
+        await toke_sessions.save_new(_session(123, 456))
+        guild_time, user_time = await toke_sessions.recent_launch_times(123, 111)
+        assert guild_time > 0 and user_time > 0
+        assert (await toke_sessions.recent_launch_times(123, 222))[1] == 0
+        settings = live.settings_from_config({})
+        delay, reason = await public_toke._persistent_cooldown_remaining(123, 111, settings)
+        assert delay > 14 * 60 and "your" in reason
+        delay2, reason2 = await public_toke._persistent_cooldown_remaining(123, 222, settings)
+        assert delay2 > 4 * 60 and "server" in reason2
+    asyncio.run(check())
