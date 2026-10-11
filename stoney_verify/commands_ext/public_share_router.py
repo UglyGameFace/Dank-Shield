@@ -221,7 +221,7 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
         )[:1024],
         inline=False,
     )
-    embed.set_footer(text="Share Router proxy channels keep plain names so mobile sharing stays reliable.")
+    embed.set_footer(text="Share Router v2 • Custom sources per guild • Clean proxy forwarding")
     return embed
 
 
