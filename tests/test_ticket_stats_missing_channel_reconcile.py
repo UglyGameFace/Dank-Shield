@@ -128,7 +128,7 @@ def test_missed_native_delete_closes_and_deletes_without_duplicate_refresh(monke
     from stoney_verify import security_stats
     monkeypatch.setattr(security_stats, "refresh_ticket_stats_for_guild_id", unexpected_refresh)
 
-    result = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
+    result = run(ticket_events.reconcile_missing_ticket_channels_for_guild(FakeGuild()))
     assert result == {"checked": 1, "deleted": 1, "uncertain": 0, "rest_checks": 1}
     assert calls == [("closed", 990), ("deleted", 990)]
 
@@ -161,8 +161,43 @@ def test_closed_archived_ticket_removed_offline_is_marked_deleted(monkeypatch):
     monkeypatch.setattr(ticket_events, "_find_ticket_row_by_channel_id", find)
     monkeypatch.setattr(ticket_events, "repo_mark_ticket_closed", no_close)
     monkeypatch.setattr(ticket_events, "repo_mark_ticket_deleted", delete)
-    result = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
+    result = run(ticket_events.reconcile_missing_ticket_channels_for_guild(FakeGuild()))
     assert result["deleted"] == 1 and deletes == [995]
+
+
+def test_raw_thread_deletion_reuses_ticket_delete_lifecycle(monkeypatch):
+    calls = []
+
+    async def find(cid):
+        assert cid == 991
+        return {"guild_id": "777", "status": "open", "discord_thread_id": "991"}
+
+    async def mark(channel):
+        calls.append(channel.id)
+        assert channel.guild.id == 777
+        return True
+
+    monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(get_guild=lambda gid: FakeGuild()))
+    monkeypatch.setattr(ticket_events, "_find_ticket_row_by_channel_id", find)
+    monkeypatch.setattr(ticket_events, "_mark_deleted_after_external_channel_delete", mark)
+    payload = SimpleNamespace(guild_id=777, thread_id=991)
+    run(ticket_events._handle_raw_ticket_thread_delete(payload))
+    assert calls == [991]
+
+
+def test_raw_thread_delete_ignores_unknown_or_cross_guild_rows(monkeypatch):
+    async def find(_cid):
+        return {"guild_id": "999", "status": "open"}
+
+    async def never_mark(_channel):
+        raise AssertionError("cross-guild row must not be changed")
+
+    monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(get_guild=lambda gid: FakeGuild()))
+    monkeypatch.setattr(ticket_events, "_find_ticket_row_by_channel_id", find)
+    monkeypatch.setattr(ticket_events, "_mark_deleted_after_external_channel_delete", never_mark)
+    run(ticket_events._handle_raw_ticket_thread_delete(
+        SimpleNamespace(guild_id=777, thread_id=991)
+    ))
 
 
 def test_existing_cached_ticket_never_fetches_or_deletes(monkeypatch):
@@ -178,7 +213,7 @@ def test_existing_cached_ticket_never_fetches_or_deletes(monkeypatch):
     monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
     monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=no_fetch))
     monkeypatch.setattr(ticket_events, "_mark_deleted_after_external_channel_delete", no_delete)
-    result = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild([990])))
+    result = run(ticket_events.reconcile_missing_ticket_channels_for_guild(FakeGuild([990])))
     assert result["deleted"] == 0 and result["rest_checks"] == 0
 
 
@@ -191,7 +226,7 @@ def test_ghost_and_channel_less_tickets_are_preserved(monkeypatch):
 
     monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
     monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=no_fetch))
-    result = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
+    result = run(ticket_events.reconcile_missing_ticket_channels_for_guild(FakeGuild()))
     assert result["deleted"] == 0 and result["rest_checks"] == 0
 
 
@@ -217,7 +252,7 @@ def test_uncertain_discord_result_never_deletes(monkeypatch, err):
     monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
     monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=fetch))
     monkeypatch.setattr(ticket_events, "_mark_deleted_after_external_channel_delete", no_delete)
-    result = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
+    result = run(ticket_events.reconcile_missing_ticket_channels_for_guild(FakeGuild()))
     assert result["deleted"] == 0 and result["uncertain"] == 1
 
 
@@ -236,7 +271,7 @@ def test_second_valid_identity_prevents_false_ticket_delete(monkeypatch):
     monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
     monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=fetch))
     monkeypatch.setattr(ticket_events, "_mark_deleted_after_external_channel_delete", no_delete)
-    result = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
+    result = run(ticket_events.reconcile_missing_ticket_channels_for_guild(FakeGuild()))
     assert result["deleted"] == 0 and result["rest_checks"] == 2
 
 
@@ -253,8 +288,8 @@ def test_rest_budget_rotates_past_inconclusive_rows(monkeypatch):
 
     monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
     monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=fetch))
-    first = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
-    second = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
+    first = run(ticket_events.reconcile_missing_ticket_channels_for_guild(FakeGuild()))
+    second = run(ticket_events.reconcile_missing_ticket_channels_for_guild(FakeGuild()))
     assert first["rest_checks"] == second["rest_checks"] == 25
     assert seen[0] == 1000
     assert seen[25] == 1025
@@ -270,7 +305,7 @@ def test_db_outage_skips_scan_and_never_calls_discord(monkeypatch):
 
     monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
     monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=no_fetch))
-    result = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
+    result = run(ticket_events.reconcile_missing_ticket_channels_for_guild(FakeGuild()))
     assert result["uncertain"] == 1 and result["rest_checks"] == 0
 
 
@@ -287,5 +322,5 @@ def test_failed_lifecycle_write_remains_retriable(monkeypatch):
     monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
     monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=fetch))
     monkeypatch.setattr(ticket_events, "_mark_deleted_after_external_channel_delete", fail_to_write)
-    result = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
+    result = run(ticket_events.reconcile_missing_ticket_channels_for_guild(FakeGuild()))
     assert result["deleted"] == 0 and result["uncertain"] == 1
