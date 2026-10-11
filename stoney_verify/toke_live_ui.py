@@ -287,6 +287,193 @@ class TokeCheersView(discord.ui.View):
         await self._respond(interaction, "end")
 
 
+async def save_toke_settings(guild_id: int, user_id: int, settings: Mapping[str, Any]) -> dict[str, Any]:
+    """Fail closed on guild-config persistence failures; never claim a false save."""
+    from stoney_verify.guild_config import get_guild_config, upsert_guild_config
+    payload = settings_from_config({SETTINGS_KEY: settings})
+    await upsert_guild_config(
+        guild_id,
+        {
+            SETTINGS_KEY: payload,
+            "__config_write_mode": "explicit_override",
+            "__config_write_source": "toke_live_settings",
+            "__config_write_actor_id": str(user_id),
+            "__config_write_allow_keys": [SETTINGS_KEY],
+        },
+    )
+    stored = await get_guild_config(guild_id, force_refresh=True)
+    actual = settings_from_config(stored)
+    if actual != payload:
+        raise RuntimeError("Guild settings could not be verified after saving. Nothing was confirmed.")
+    return actual
+
+
+def _setting_embed(settings: Mapping[str, Any]) -> discord.Embed:
+    voice_id = int(settings.get("voice_channel_id", 0) or 0)
+    return discord.Embed(
+        title="💨 Toke Sesh Settings",
+        description=(
+            "These settings apply only to this Discord server. "
+            "Starter and notification roles remain in Community & Pings.\n\n"
+            f"**Session lifetime:** {settings['session_minutes']} minutes\n"
+            f"**Member cooldown:** {settings['user_cooldown_minutes']} minutes\n"
+            f"**Server cooldown:** {settings['guild_cooldown_minutes']} minutes\n"
+            f"**Maximum interested:** {settings['max_interested']}\n"
+            f"**Show participant names:** {'Yes' if settings['show_member_names'] else 'No'}\n"
+            f"**Default voice:** {f'<#{voice_id}>' if voice_id else 'None (use starter voice if connected)'}"
+        ),
+        color=discord.Color.green(),
+    )
+
+
+class TokeSettingsModal(discord.ui.Modal, title="Toke Meetup Settings"):
+    lifetime = discord.ui.TextInput(label="Sesh duration (15-240 min)", max_length=3, default="60")
+    user_cooldown = discord.ui.TextInput(label="Member cooldown (0-1440 min)", max_length=4, default="15")
+    guild_cooldown = discord.ui.TextInput(label="Server cooldown (0-240 min)", max_length=3, default="5")
+    maximum = discord.ui.TextInput(label="Maximum interested (1-250)", max_length=3, default="100")
+    names = discord.ui.TextInput(label="Show participant names (yes/no)", max_length=3, default="yes")
+
+    def __init__(self, owner_id: int, saved: Mapping[str, Any]) -> None:
+        super().__init__(timeout=300)
+        self.owner_id = int(owner_id)
+        self.lifetime.default = str(saved["session_minutes"])
+        self.user_cooldown.default = str(saved["user_cooldown_minutes"])
+        self.guild_cooldown.default = str(saved["guild_cooldown_minutes"])
+        self.maximum.default = str(saved["max_interested"])
+        self.names.default = "yes" if saved["show_member_names"] else "no"
+        self.voice_id = int(saved.get("voice_channel_id", 0))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        member = interaction.user
+        if (
+            interaction.guild is None or member.id != self.owner_id
+            or not getattr(member.guild_permissions, "manage_guild", False)
+        ):
+            return await interaction.response.send_message("Manage Server is required for Toke settings.", ephemeral=True)
+        values = [
+            (str(self.lifetime.value), 15, 240, "duration"),
+            (str(self.user_cooldown.value), 0, 1440, "member cooldown"),
+            (str(self.guild_cooldown.value), 0, 240, "server cooldown"),
+            (str(self.maximum.value), 1, 250, "participant limit"),
+        ]
+        nums = []
+        for raw, low, high, name in values:
+            try:
+                number = int(raw)
+            except ValueError:
+                return await interaction.response.send_message(f"{name} must be a whole number.", ephemeral=True)
+            if not low <= number <= high:
+                return await interaction.response.send_message(f"{name} must be between {low} and {high}.", ephemeral=True)
+            nums.append(number)
+        choice = str(self.names.value or "").strip().casefold()
+        if choice not in {"yes", "no"}:
+            return await interaction.response.send_message("Enter yes or no for participant names.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            actual = await save_toke_settings(interaction.guild.id, member.id, {
+                "session_minutes": nums[0],
+                "user_cooldown_minutes": nums[1],
+                "guild_cooldown_minutes": nums[2],
+                "max_interested": nums[3],
+                "show_member_names": choice == "yes",
+                "voice_channel_id": self.voice_id,
+            })
+        except Exception as exc:
+            return await interaction.edit_original_response(content=f"❌ Settings not saved: {type(exc).__name__}: {exc}")
+        await interaction.edit_original_response(content="✅ Toke settings saved and verified.", embed=_setting_embed(actual))
+
+
+class TokeSettingsView(discord.ui.View):
+    def __init__(self, owner_id: int, settings: Mapping[str, Any]) -> None:
+        super().__init__(timeout=600)
+        self.owner_id = int(owner_id)
+        self.settings = dict(settings)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Open your own Toke Settings panel.", ephemeral=True)
+            return False
+        if not getattr(getattr(interaction.user, "guild_permissions", None), "manage_guild", False):
+            await interaction.response.send_message("Manage Server is required.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Edit Settings", emoji="⚙️", style=discord.ButtonStyle.primary)
+    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.send_modal(TokeSettingsModal(self.owner_id, self.settings))
+
+    @discord.ui.button(label="Choose Default VC", emoji="🔊", style=discord.ButtonStyle.secondary)
+    async def voice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from stoney_verify.ui.resource_browser import DankGuildResourceBrowserView
+        guild = interaction.guild
+        if guild is None:
+            return
+
+        async def picked(item_interaction: discord.Interaction, channel: Any) -> None:
+            if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
+                return await item_interaction.response.send_message("Choose a voice channel.", ephemeral=True)
+            cfg = await _get_live_config(guild.id)
+            settings = settings_from_config(cfg)
+            settings["voice_channel_id"] = int(channel.id)
+            await item_interaction.response.defer(ephemeral=True, thinking=True)
+            try:
+                actual = await save_toke_settings(guild.id, item_interaction.user.id, settings)
+            except Exception as exc:
+                return await item_interaction.edit_original_response(content=f"❌ Could not save Toke voice channel: {exc}")
+            await item_interaction.edit_original_response(content="✅ Default Toke VC saved.", embed=_setting_embed(actual), view=TokeSettingsView(self.owner_id, actual))
+
+        view = DankGuildResourceBrowserView(
+            guild=guild, author_id=self.owner_id,
+            resource_kinds=("voice", "stage"), on_pick=picked,
+            custom_id="dank:toke:default_voice",
+            title="Choose Default Toke VC",
+            placeholder="Choose a voice channel…",
+            on_home=lambda back: open_toke_settings(back, replace=True),
+        )
+        await interaction.response.edit_message(embed=view.embed(), view=view)
+
+    @discord.ui.button(label="Clear Default VC", emoji="🧹", style=discord.ButtonStyle.secondary)
+    async def clear_voice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        cfg = await _get_live_config(interaction.guild.id)
+        new_settings = settings_from_config(cfg)
+        new_settings["voice_channel_id"] = 0
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            actual = await save_toke_settings(interaction.guild.id, interaction.user.id, new_settings)
+        except Exception as exc:
+            return await interaction.edit_original_response(content=f"❌ Could not clear VC: {exc}")
+        await interaction.edit_original_response(content="✅ Cleared default VC.", embed=_setting_embed(actual), view=TokeSettingsView(self.owner_id, actual))
+
+    @discord.ui.button(label="Back to Community & Pings", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        from stoney_verify.commands_ext.public_community_pings import _open_manager_message
+        await _open_manager_message(interaction, owner_id=self.owner_id)
+
+
+async def _get_live_config(guild_id: int) -> Mapping[str, Any]:
+    from stoney_verify.guild_config import get_guild_config
+    return await get_guild_config(guild_id, refresh=True)
+
+
+async def open_toke_settings(interaction: discord.Interaction, *, replace: bool = True) -> None:
+    guild = interaction.guild
+    if guild is None or not getattr(getattr(interaction.user, "guild_permissions", None), "manage_guild", False):
+        return await interaction.response.send_message("Manage Server is required.", ephemeral=True)
+    cfg = await _get_live_config(guild.id)
+    settings = settings_from_config(cfg)
+    view = TokeSettingsView(interaction.user.id, settings)
+    if replace and interaction.message is not None and not interaction.response.is_done():
+        await interaction.response.edit_message(embed=_setting_embed(settings), view=view)
+    elif interaction.response.is_done():
+        await interaction.edit_original_response(embed=_setting_embed(settings), view=view)
+    else:
+        await interaction.response.send_message(embed=_setting_embed(settings), view=view, ephemeral=True)
+
+
 def pending_for(guild_id: int, user_id: int) -> PendingToke | None:
     now = time.monotonic()
     for key, pending in list(_PENDING.items()):
@@ -384,7 +571,7 @@ async def _on_toke_media_message(message: discord.Message) -> None:
         _PENDING.pop((pending.guild_id, pending.user_id), None)
 
 
-async def _on_toke_voice_state(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState) -> None:
+async def _on_toke_voice_state(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState, *, bot: Any) -> None:
     if member.guild is None:
         return
     affected = {int(ch.id) for ch in (before.channel, after.channel) if ch is not None}
@@ -396,9 +583,6 @@ async def _on_toke_voice_state(member: discord.Member, before: discord.VoiceStat
     _VOICE_REFRESH[member.guild.id] = now
     for session in await toke_sessions.all_active(member.guild.id):
         if int(session.get("voice_channel_id", 0)) not in affected:
-            continue
-        bot = member.guild._state._get_client() if hasattr(member.guild._state, "_get_client") else None
-        if bot is None:
             continue
         try:
             await refresh_card(bot, session)
@@ -456,6 +640,9 @@ def register_toke_runtime(bot: Any) -> None:
         if _LOOP_TASK is None or _LOOP_TASK.done():
             _LOOP_TASK = asyncio.create_task(_expire_and_refresh(bot))
 
+    async def voice_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState) -> None:
+        await _on_toke_voice_state(member, before, after, bot=bot)
+
     bot.add_listener(_on_toke_media_message, "on_message")
-    bot.add_listener(_on_toke_voice_state, "on_voice_state_update")
+    bot.add_listener(voice_update, "on_voice_state_update")
     bot.add_listener(on_ready, "on_ready")
