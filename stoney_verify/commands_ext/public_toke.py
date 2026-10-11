@@ -10,6 +10,11 @@ from time import monotonic
 from typing import Any, Optional
 from urllib.parse import urlsplit
 
+from stoney_verify import toke_sessions
+from stoney_verify.toke_live_ui import (
+    TokeCheersView, begin_capture, choose_voice, pending_for, render_card, settings_from_config,
+)
+
 import discord
 from discord import app_commands
 
@@ -125,11 +130,11 @@ def _format_wait(seconds: float) -> str:
     return f"{secs}s"
 
 
-def _cooldown_remaining(*, now: float, guild_id: int, user_id: int) -> tuple[float, str]:
+def _cooldown_remaining(*, now: float, guild_id: int, user_id: int, user_seconds: int = TOKE_USER_COOLDOWN_SECONDS, guild_seconds: int = TOKE_GUILD_COOLDOWN_SECONDS) -> tuple[float, str]:
     user_last = _TOKE_USER_LAST.get((int(guild_id), int(user_id)), 0.0)
     guild_last = _TOKE_GUILD_LAST.get(int(guild_id), 0.0)
-    user_remaining = max(0.0, TOKE_USER_COOLDOWN_SECONDS - (now - user_last)) if user_last else 0.0
-    guild_remaining = max(0.0, TOKE_GUILD_COOLDOWN_SECONDS - (now - guild_last)) if guild_last else 0.0
+    user_remaining = max(0.0, user_seconds - (now - user_last)) if user_last else 0.0
+    guild_remaining = max(0.0, guild_seconds - (now - guild_last)) if guild_last else 0.0
     if user_remaining >= guild_remaining and user_remaining > 0:
         return user_remaining, "your /toke cooldown"
     if guild_remaining > 0:
@@ -227,26 +232,6 @@ async def open_member_community_pings(
     await open_generic_member(interaction, replace_message=replace_message)
 
 
-class TokeCheersView(discord.ui.View):
-    def __init__(self, starter_id: int, stoner_role_id: int) -> None:
-        super().__init__(timeout=15 * 60)
-        self.starter_id = int(starter_id)
-        self.stoner_role_id = int(stoner_role_id)
-        self.cheered_ids: set[int] = set()
-        self.cheers_count = 0
-
-    @discord.ui.button(label="Cheers", emoji="💨", style=discord.ButtonStyle.success)
-    async def cheers(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        member = interaction.user if isinstance(interaction.user, discord.Member) else None
-        user_id = _safe_int(getattr(member, "id", 0), 0)
-        if member is None or user_id <= 0 or not _member_has_role_id(member, self.stoner_role_id):
-            return await _reply(interaction, "The configured /toke starter role is required to join this cheers.")
-        if user_id in self.cheered_ids:
-            return await _reply(interaction, "You already sent cheers on this call.")
-        self.cheered_ids.add(user_id)
-        self.cheers_count += 1
-        button.label = f"Cheers · {self.cheers_count}"
-        await interaction.response.edit_message(view=self)
 
 
 def _target_channel(
@@ -259,6 +244,157 @@ def _target_channel(
         return channel if isinstance(channel, discord.TextChannel) else None
     channel = interaction.channel
     return channel if isinstance(channel, discord.TextChannel) else None
+
+
+async def _publish_toke(
+    *,
+    guild: discord.Guild,
+    member: discord.Member,
+    channel: discord.TextChannel,
+    starter_role: discord.Role,
+    notify_role: discord.Role,
+    message_text: str,
+    clean_media: str,
+    upload: Optional[discord.Attachment],
+    settings: Mapping[str, Any],
+) -> discord.Message:
+    """The only outbound /toke send path for slash and normal-composer media."""
+    me = guild.me
+    if not isinstance(me, discord.Member):
+        raise ValueError("Dank Shield could not resolve its guild member.")
+    perms = channel.permissions_for(me)
+    if not (perms.view_channel and perms.send_messages and perms.embed_links):
+        raise ValueError("Dank Shield needs View Channel, Send Messages and Embed Links in the Toke channel.")
+    if upload is not None and not perms.attach_files:
+        raise ValueError("Dank Shield needs Attach Files to repost your GIF.")
+    if not _ping_permission_ready(notify_role, perms):
+        raise ValueError("The Toke notification role is not mentionable and Dank Shield cannot mention it.")
+    if upload is not None and not _attachment_is_supported_media(upload):
+        raise ValueError("Only GIF, JPG, PNG and WEBP images can be attached.")
+
+    async with _toke_lock(guild.id):
+        now = monotonic()
+        user_seconds = int(settings["user_cooldown_minutes"]) * 60
+        guild_seconds = int(settings["guild_cooldown_minutes"]) * 60
+        remaining, label = _cooldown_remaining(
+            now=now, guild_id=guild.id, user_id=member.id,
+            user_seconds=user_seconds, guild_seconds=guild_seconds,
+        )
+        if remaining:
+            raise ValueError(f"Wait {_format_wait(remaining)} for {label}.")
+
+        embed = discord.Embed(
+            title="💨 Toke Time",
+            description=(
+                f"**{discord.utils.escape_markdown(member.display_name)}** is calling the sesh crowd."
+                + (f"\\n\\n> {discord.utils.escape_markdown(_clean_member_message(message_text))}" if message_text else "")
+            ),
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.set_footer(text="Only members with the configured /toke notification role were notified.")
+        upload_file: Optional[discord.File] = None
+        direct = bool(clean_media and _is_direct_media_url(clean_media))
+        if upload is not None:
+            upload_file = await upload.to_file()
+            embed.set_image(url=f"attachment://{upload_file.filename}")
+        elif direct:
+            embed.set_image(url=clean_media)
+
+        content = notify_role.mention
+        if clean_media and not direct:
+            content += f"\\n{clean_media}"
+        voice_id = choose_voice(guild, member, settings)
+        view = TokeCheersView(
+            member.id, starter_role.id, voice_channel_id=voice_id, guild_id=guild.id,
+        )
+        payload: dict[str, Any] = {
+            "content": content,
+            "embed": embed,
+            "view": view,
+            "allowed_mentions": _toke_allowed_mentions(notify_role),
+        }
+        if upload_file is not None:
+            payload["file"] = upload_file
+        sent = await channel.send(**payload)
+        try:
+            session = await toke_sessions.save_new({
+                "guild_id": guild.id,
+                "message_id": sent.id,
+                "channel_id": channel.id,
+                "starter_id": member.id,
+                "starter_role_id": starter_role.id,
+                "notify_role_id": notify_role.id,
+                "voice_channel_id": voice_id,
+                "max_interested": int(settings["max_interested"]),
+                "show_member_names": bool(settings["show_member_names"]),
+                "expires_at": __import__("time").time() + int(settings["session_minutes"]) * 60,
+            })
+        except Exception:
+            # A card that cannot track participants must not remain posted with
+            # a broken button. Log and attempt to undo the posted announcement.
+            try:
+                await sent.delete()
+            except discord.HTTPException:
+                print(f"[toke] CRITICAL could not remove untracked session guild={guild.id} message={sent.id}")
+            raise
+        _TOKE_USER_LAST[(int(guild.id), int(member.id))] = monotonic()
+        _TOKE_GUILD_LAST[int(guild.id)] = monotonic()
+        try:
+            await sent.edit(embed=render_card(guild, session, embed), view=TokeCheersView(
+                member.id, starter_role.id, guild_id=guild.id, message_id=sent.id,
+                voice_channel_id=voice_id,
+            ))
+        except discord.HTTPException as exc:
+            print(f"[toke] initial card status edit failed guild={guild.id} message={sent.id}: {exc}")
+        return sent
+
+
+async def publish_toke_from_draft(
+    guild: discord.Guild | None,
+    member: discord.Member,
+    draft: Any,
+    media_message: discord.Message | None,
+) -> discord.Message:
+    if guild is None or not isinstance(member, discord.Member):
+        raise ValueError("Your server membership could not be resolved.")
+    if int(guild.id) != int(draft.guild_id):
+        raise ValueError("Your /toke draft belongs to a different server.")
+    cfg = await _config(guild)
+    stoner_id, ping_id = toke_role_ids(parse_community_pings(cfg), cfg)
+    starter_role, notify_role = guild.get_role(stoner_id), guild.get_role(ping_id)
+    if not isinstance(starter_role, discord.Role) or not isinstance(notify_role, discord.Role):
+        raise ValueError("The Toke roles need to be repaired in Community & Pings.")
+    if not _member_has_role_id(member, stoner_id):
+        raise ValueError("You no longer have permission to start /toke.")
+    channel = guild.get_channel(int(draft.destination_id))
+    if not isinstance(channel, discord.TextChannel):
+        raise ValueError("Your configured Toke destination has been removed.")
+
+    clean_media = ""
+    upload = None
+    if media_message is not None:
+        for attachment in media_message.attachments:
+            if _attachment_is_supported_media(attachment):
+                upload = attachment
+                break
+        if upload is None:
+            match = re.search(r"https?://[^\\s<>]+", str(media_message.content or ""))
+            if match:
+                clean_media = _clean_media_url(match.group(0))
+            else:
+                for item in media_message.embeds:
+                    if getattr(item, "url", None):
+                        clean_media = _clean_media_url(item.url)
+                        break
+        if upload is None and not clean_media:
+            raise ValueError("No supported GIF or picture could be read. Check Message Content Intent.")
+
+    return await _publish_toke(
+        guild=guild, member=member, channel=channel, starter_role=starter_role,
+        notify_role=notify_role, message_text=draft.note,
+        clean_media=clean_media, upload=upload, settings=settings_from_config(cfg),
+    )
 
 
 @app_commands.describe(
@@ -333,75 +469,45 @@ async def open_toke_command(
             f"{ping_role.mention} is not mentionable and Dank Shield lacks Mention @everyone, @here, and All Roles in {channel.mention}.",
         )
 
-    now = monotonic()
-    _prune_cooldowns(now)
-    remaining, label = _cooldown_remaining(now=now, guild_id=guild.id, user_id=member.id)
+    settings = settings_from_config(cfg)
+    remaining, label = _cooldown_remaining(
+        now=monotonic(), guild_id=guild.id, user_id=member.id,
+        user_seconds=int(settings["user_cooldown_minutes"]) * 60,
+        guild_seconds=int(settings["guild_cooldown_minutes"]) * 60,
+    )
     if remaining > 0:
         return await _reply(interaction, f"Wait {_format_wait(remaining)} for {label}.")
 
     clean_message = _clean_member_message(message)
-    async with _toke_lock(int(guild.id)):
-        now = monotonic()
-        remaining, label = _cooldown_remaining(now=now, guild_id=guild.id, user_id=member.id)
-        if remaining > 0:
-            return await _reply(interaction, f"Wait {_format_wait(remaining)} for {label}.")
-
-        embed = discord.Embed(
-            title="💨 Toke Time",
-            description=(
-                f"**{discord.utils.escape_markdown(member.display_name)}** is calling the sesh crowd."
-                + (f"\n\n> {discord.utils.escape_markdown(clean_message)}" if clean_message else "")
-            ),
-            color=discord.Color.green(),
-            timestamp=discord.utils.utcnow(),
+    if upload is None and not clean_media:
+        if not bool(getattr(interaction.client.intents, "message_content", False)):
+            return await _reply(interaction, "Dank Shield needs the Discord Message Content intent to capture normal GIFs. Use /toke upload or media instead.")
+        source = interaction.channel
+        if not isinstance(source, discord.TextChannel):
+            return await _reply(interaction, "Use /toke in a regular text channel to send your GIF normally.")
+        draft = pending_for(guild.id, member.id)
+        if draft is not None:
+            return await _reply(interaction, "You already have a Toke draft waiting for a GIF. Use its Post Without Media or Cancel button.")
+        compose = begin_capture(guild.id, member.id, source.id, channel.id, clean_message)
+        return await interaction.followup.send(
+            "💨 **Toke is ready.** Send a GIF or picture using Discord's normal message box "
+            "in this channel within 90 seconds. Dank Shield will create the sesh card and "
+            "remove your temporary GIF message only after it posts successfully. "
+            "Or tap **Post Without Media**.",
+            view=compose, ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
-        embed.set_footer(text="Only members with the configured /toke notification role were notified.")
-
-        upload_file: Optional[discord.File] = None
-        direct_media = bool(clean_media and _is_direct_media_url(clean_media))
-        if upload is not None:
-            try:
-                upload_file = await upload.to_file()
-            except discord.HTTPException as exc:
-                return await _reply(
-                    interaction,
-                    f"Discord could not read the uploaded /toke media: {type(exc).__name__}.",
-                )
-            embed.set_image(url=f"attachment://{upload_file.filename}")
-        elif direct_media:
-            embed.set_image(url=clean_media)
-
-        send_content = ping_role.mention
-        if clean_media and not direct_media:
-            # Keep share-page URLs (for example normal Tenor/Giphy links) on
-            # the same message so Discord can render its native link preview.
-            # Dank Shield never fetches arbitrary user URLs server-side.
-            send_content += f"\n{clean_media}"
-
-        send_payload: dict[str, Any] = {
-            "content": send_content,
-            "embed": embed,
-            "view": TokeCheersView(member.id, stoner_role.id),
-            "allowed_mentions": _toke_allowed_mentions(ping_role),
-        }
-        if upload_file is not None:
-            send_payload["file"] = upload_file
-
-        try:
-            sent = await channel.send(**send_payload)
-        except discord.Forbidden:
-            return await _reply(interaction, f"Discord blocked the sesh ping in {channel.mention}.")
-        except discord.HTTPException as exc:
-            return await _reply(interaction, f"Discord could not send the sesh ping: {type(exc).__name__}.")
-
-        stamp = monotonic()
-        _TOKE_USER_LAST[(int(guild.id), int(member.id))] = stamp
-        _TOKE_GUILD_LAST[int(guild.id)] = stamp
-
+    try:
+        sent = await _publish_toke(
+            guild=guild, member=member, channel=channel, starter_role=stoner_role,
+            notify_role=ping_role, message_text=clean_message,
+            clean_media=clean_media, upload=upload, settings=settings,
+        )
+    except (ValueError, discord.HTTPException, OSError) as exc:
+        return await _reply(interaction, f"Toke was not sent: {type(exc).__name__}: {exc}")
     await interaction.followup.send(
         f"💨 Toke call sent in {channel.mention}: {sent.jump_url}",
-        ephemeral=True,
-        allowed_mentions=discord.AllowedMentions.none(),
+        ephemeral=True, allowed_mentions=discord.AllowedMentions.none(),
     )
 
 
@@ -412,6 +518,7 @@ __all__ = [
     "TOKE_GUILD_COOLDOWN_SECONDS",
     "TOKE_USER_COOLDOWN_SECONDS",
     "TokeCheersView",
+    "publish_toke_from_draft",
     "_attachment_is_supported_media",
     "_clean_media_url",
     "_clean_member_message",
