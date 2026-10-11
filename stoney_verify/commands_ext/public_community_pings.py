@@ -1359,6 +1359,14 @@ class CommunityPingsManagerView(_OwnedView):
             placeholder="Choose who receives /toke pings…",
         )
 
+    @discord.ui.button(label="Toke Settings", emoji="⚙️", style=discord.ButtonStyle.secondary, row=2)
+    async def toke_settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _staff_authorized(interaction):
+            return
+        from stoney_verify.toke_live_ui import open_toke_settings
+        await open_toke_settings(interaction)
+
     @discord.ui.button(label="Movie Night Notify", emoji="🎬", style=discord.ButtonStyle.primary, row=2)
     async def movie_night_notify(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
