@@ -482,11 +482,13 @@ async def open_toke_settings(interaction: discord.Interaction, *, replace: bool 
 
 
 def pending_for(guild_id: int, user_id: int) -> PendingToke | None:
-    now = time.monotonic()
-    for key, pending in list(_PENDING.items()):
-        if pending.deadline <= now:
-            _PENDING.pop(key, None)
-    return _PENDING.get((int(guild_id), int(user_id)))
+    # O(1) path for the bot's high-volume, global on_message listener.
+    key = (int(guild_id), int(user_id))
+    pending = _PENDING.get(key)
+    if pending is not None and pending.deadline <= time.monotonic():
+        _PENDING.pop(key, None)
+        return None
+    return pending
 
 
 class TokeComposeView(discord.ui.View):
@@ -619,6 +621,10 @@ async def _on_toke_voice_state(member: discord.Member, before: discord.VoiceStat
 async def _expire_and_refresh(bot: Any) -> None:
     while not bot.is_closed():
         try:
+            current = time.monotonic()
+            for key, pending in list(_PENDING.items()):
+                if pending.deadline <= current:
+                    _PENDING.pop(key, None)
             expired = await toke_sessions.end_expired()
             for session in expired:
                 try:
