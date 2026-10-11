@@ -6,7 +6,9 @@
 
 **Branch:** `feat/verify-unverified-reminders-20261011`, based on documented Discloud branch `aaa-cinema-pre-pregateway-bind` at `50f5f69dbdc6f99ecc383cf67644e328b1a015bc` after Server Stats PR #509 merged. Discloud's actual deployed revision remains unconfirmed.
 
-**Status:** Implementation and regression candidate on branch; draft PR, exact-head CI and live Discord/Discloud/Supabase acceptance still required. Nothing has been enabled in a server.
+**Status:** PR #510 draft, implementation and regression candidate on branch. Exact-head CI, live Discord/Discloud/storage acceptance still required. Nothing enabled in a server. As of 2026-10-11, Schema Authority SQL, Ticket Owner and Dank Design checks are green on current head; full CI remains pending.
+
+**Storage decision:** User recalled plans to use Discloud's database and questioned unlimited storage. Official Discloud Docs confirm managed PostgreSQL/MySQL/MongoDB/Redis templates and local SQLite support, but Diamond's *unlimited bandwidth* does not document unlimited database storage. This PR currently stores delivery attempts in Supabase because it is the existing config owner; do NOT migrate the entire bot's persistence speculatively, and keep PR draft until supported Discloud database instance and safe persistence/backup/migration strategy are identified. Per-guild settings still use existing guild_config. Avoid merging another Supabase dependency if moving this ledger to a provisioned Discloud database is chosen.
 
 **Execution path / source of truth:** Existing `/verify` staff center -> opt-in `Unverified Reminders` manager; `guild_config` CAS per-guild settings -> `verification_modes.basic_verify_allowed_for_guild` -> `role_truth.member_is_pending_verification` -> Discord fresh member role check -> service-role-only Supabase atomic claim -> private DM with saved verify-channel/panel link. Native worker installed once in `app._start_workers_once`; no new verification state model.
 
