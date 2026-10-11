@@ -190,7 +190,7 @@ def test_promoted_shortcuts_use_opt_in_in_place_navigation() -> None:
     assert "await open_generic_member(interaction, replace_message=replace_message)" in toke_source
 
     preset_start = toke_source.index("async def open_toke_preset_setup")
-    preset_end = toke_source.index("class TokeCheersView", preset_start)
+    preset_end = toke_source.index("def _target_channel(", preset_start)
     preset_block = toke_source[preset_start:preset_end]
     assert "await _defer_update(interaction)" not in preset_block
     assert "await _defer_private(interaction)" not in preset_block

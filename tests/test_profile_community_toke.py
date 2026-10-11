@@ -160,11 +160,12 @@ def test_toke_media_send_path_keeps_one_canonical_post() -> None:
     assert 'media="Optional image/GIF URL' in source
     assert "Choose either a media URL or an upload, not both." in source
     assert 'embed.set_image(url=f"attachment://{upload_file.filename}")' in source
-    assert "elif direct_media:" in source
+    assert "elif direct:" in source
     assert "embed.set_image(url=clean_media)" in source
-    assert 'send_content += f"\\n{clean_media}"' in source
-    assert 'send_payload["file"] = upload_file' in source
-    assert "await channel.send(**send_payload)" in source
+    assert 'content += f"\\n{clean_media}"' in source
+    assert 'payload["file"] = upload_file' in source
+    assert "await channel.send(**payload)" in source
+    assert "await toke_sessions.save_new(" in source
     assert "aiohttp" not in source
 
 
@@ -343,6 +344,7 @@ def test_generic_manager_exposes_add_edit_and_safe_remove_controls() -> None:
         "Toke Notify",
         "Movie Night Notify",
         "Toke Channel",
+        "Toke Settings",
         "Clear Toke Channel",
         "Refresh",
         "Home",
@@ -512,7 +514,8 @@ def test_member_picker_rejects_stale_configuration_before_mutation() -> None:
     assert "on_pick=apply_selection" in member_block
 
 
-def test_cheers_card_is_response_only_and_has_one_button() -> None:
+def test_cheers_card_shows_interested_joining_and_vc_actions() -> None:
     view = public_toke.TokeCheersView(starter_id=123, stoner_role_id=456)
-    assert _labels(view) == {"Cheers"}
-    assert len(view.children) == 1
+    assert {"Cheers", "I'm Joining", "Withdraw", "Who's Coming?", "Refresh", "End Sesh"} <= _labels(view)
+    assert view.timeout is None
+    assert len(view.children) == 6
