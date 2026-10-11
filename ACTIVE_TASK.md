@@ -1,6 +1,45 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — DANK-CINEMA-EPISODE-HTML-20261009
+## CURRENT ACTIVE TASK — DANK-SHARE-ROUTER-CUSTOM-SOURCES-20261010
+
+**Outcome:** Add independently configurable Share Router proxy source channels per guild, with searchable/paged setup, creation, route editing/removal, and safe custom-source deletion. Preserve the four canonical default sources, legacy route IDs, media relay stack, and unrelated guild configurations.
+
+**Branch:** `feat/share-router-custom-sources-per-guild-20261010` based on `main@df839a303d229c385bf1885a1e5e9677ab903b5a`.
+
+**Status:** Code and regression tests in progress. Do not claim Discloud acceptance or ready-to-merge until exact-head CI, diff review, and real Discord tests have passed. Production remains unchanged.
+
+### Scope and root cause
+
+- Configuration is keyed per guild in `data/share_routes.json`, and the runtime routes by source/target channel ID. There is no per-guild hardcoding in the delivery path.
+- Previous setup picker only enumerated `DEFAULT_SHARE_CHANNELS` (four fixed proxies), while deletion used a 25-item non-paged picker. The limitation was source provisioning and UI, not media transport.
+- New `custom_sources` within each guild's existing bucket track explicitly bot-managed extra proxy channel IDs. Legacy saved routes remain authoritative for forwarding; no migration or channel deletion is needed.
+- Create creates a hidden, non-NSFW source, with saved identity and rollback if persistence fails. Additional `🔗 SHARE ROUTES N` categories handle Discord's 50-children-per-category ceiling, without any arbitrary low bot-side limit. Actual Discord per-guild limits still apply.
+- Edit/remove routes and delete custom proxies use paged, searchable resource browsers. Only explicitly registered custom proxies are eligible for Discord channel deletion, after interactive confirmation and revalidation. Four built-ins cannot be deleted from the custom manager.
+- Existing permission/safety/media behavior remains in the single canonical `share_router_runtime` listener; no duplicate runtime/media resolver.
+
+### Changes
+
+- `stoney_verify/share_router_resources.py`: custom name validation; mark all managed hubs and their sources as reserved design infrastructure.
+- `stoney_verify/share_router_runtime.py`: per-guild source registry in legacy JSON bucket, guarded channel creation/deletion, overflow categories, and corruption-safe config reads.
+- `stoney_verify/commands_ext/public_share_router.py`: mobile creation modal, custom deletion confirmation, paged searchable source/route/removal browsers, refreshed health summary.
+- `tests/test_share_router_custom_sources.py`: guild separation, names, category overflow, legacy route preservation, cleanup, rollback, file corruption protection, and menu contracts.
+- No Cinema, verification, Share Router media extraction, or unrelated commands changed.
+
+### Validation, cleanup and risks
+
+- GitHub CI/regression checks and full runtime smoke tests pending.
+- Validate source create and configure in two guilds, including an ordinary gaming-clip URL, a direct video, a failed upstream extraction with link fallback, and role/channel permission rejection. Verify source cleanup after success and preservation on failure.
+- Ensure per-guild persistence survives a Discloud restart with stable `DANK_DATA_DIR` / `DANK_SHARE_ROUTES_FILE`; the feature inherits the existing local route-file durability contract, it does not create a new database service.
+- Discord enforces 50 channels per category and 500 total guild channels, so "unlimited" means no additional bot-side configuration cap, not limitless physical channels.
+- The active branch is isolated. Inspect any CI failures and the final PR diff before asking for merge.
+
+### Suspended task — Dank Cinema
+
+The previous active task **DANK-CINEMA-EPISODE-HTML-20261009** was explicitly suspended by the user's FORCE SWITCH. Its branch `fix/cinema-play-html-response-20261009` originated at `main@27b90e536d946636d2504df3056d546f6dbefe79`. Recorded scope: Dr. STONE S01E01 play request returning HTML rather than expected JSON, preserve canonical episode lookup and playback stack; JS response-type/redirect checks, play ingress logging, and targeted contract tests were implemented, but exact-head CI, Discloud branch, authenticated browser evidence, first-frame acceptance, and cleanup review remained unverified. Resume on that branch only after the user explicitly force-switches back. Existing cinema/verification issues remain on backlog and do not enter this Share Router PR.
+
+---
+
+## HISTORICAL SUSPENDED TASK — DANK-CINEMA-EPISODE-HTML-20261009
 
 **Outcome:** Investigate and repair the reported Dr. STONE S01E01 website playback error where the browser receives HTML while expecting JSON. Preserve the canonical episode search, source ranking, torrent session/room, and cross-browser behavior.
 
