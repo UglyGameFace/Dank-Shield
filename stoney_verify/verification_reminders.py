@@ -23,7 +23,8 @@ DELIVERY_TABLE = "dank_verify_reminder_delivery"
 CLAIM_RPC = "claim_dank_verify_reminder"
 SCAN_SIZE = 100
 GUILDS_PER_PASS = 25
-MAX_DMS_PER_PASS = 10
+MAX_DELIVERIES_PER_PASS = 10
+MAX_PER_GUILD_PER_PASS = 3
 POLL_SECONDS = 180
 
 
@@ -43,6 +44,8 @@ class ReminderPolicy:
     repeat_hours: int = 48
     max_reminders: int = 3
     message: str = ""
+    delivery: str = "dm"
+    reminder_channel_id: int = 0
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -51,6 +54,8 @@ class ReminderPolicy:
             "repeat_hours": self.repeat_hours,
             "max_reminders": self.max_reminders,
             "message": self.message,
+            "delivery": self.delivery,
+            "reminder_channel_id": str(self.reminder_channel_id) if self.reminder_channel_id else "",
         }
 
 
@@ -65,6 +70,8 @@ def parse_policy(cfg: Mapping[str, Any]) -> ReminderPolicy:
         repeat_hours=max(12, min(720, _as_int(raw.get("repeat_hours"), 48))),
         max_reminders=max(1, min(5, _as_int(raw.get("max_reminders"), 3))),
         message=str(raw.get("message") or "").strip()[:240],
+        delivery="channel" if raw.get("delivery") == "channel" else "dm",
+        reminder_channel_id=max(0, _as_int(raw.get("reminder_channel_id"), 0)),
     )
 
 
@@ -83,6 +90,13 @@ def verification_channel(guild: discord.Guild, cfg: Mapping[str, Any]) -> discor
     # Deliberately no fuzzy channel-name fallback for unsolicited DMs.
     channel_id = _as_int(cfg.get("verify_channel_id"), 0)
     channel = guild.get_channel(channel_id) if channel_id > 0 else None
+    return channel if isinstance(channel, discord.TextChannel) else None
+
+
+def delivery_channel(guild: discord.Guild, policy: ReminderPolicy) -> discord.TextChannel | None:
+    if policy.delivery != "channel":
+        return None
+    channel = guild.get_channel(policy.reminder_channel_id) if policy.reminder_channel_id > 0 else None
     return channel if isinstance(channel, discord.TextChannel) else None
 
 
@@ -188,6 +202,16 @@ class ReminderWorker:
                 return 0
             if guild.get_role(_as_int(cfg.get("verified_role_id"), 0)) is None:
                 return 0
+            notice_channel = delivery_channel(guild, policy) if policy.delivery == "channel" else None
+            if policy.delivery == "channel":
+                if notice_channel is None:
+                    return 0
+                sender = guild.me
+                if sender is None:
+                    return 0
+                permissions = notice_channel.permissions_for(sender)
+                if not permissions.view_channel or not permissions.send_messages:
+                    return 0
             clear_role_truth_cache(guild.id)
             cursor = self.member_cursors.get(guild.id, 0)
             after = discord.Object(id=cursor) if cursor else None
@@ -198,6 +222,7 @@ class ReminderWorker:
                 return 0
             self.member_cursors[guild.id] = max(int(m.id) for m in fetched) if len(fetched) == SCAN_SIZE else 0
             claims = 0
+            remaining = min(remaining, MAX_PER_GUILD_PER_PASS)
             now = datetime.now(timezone.utc)
             for member in fetched:
                 if claims >= remaining:
@@ -208,6 +233,8 @@ class ReminderWorker:
                     continue
                 if not channel.permissions_for(member).view_channel:
                     continue
+                if notice_channel is not None and not notice_channel.permissions_for(member).view_channel:
+                    continue
                 # Discord can update member roles while we page through a guild.
                 # Re-fetch before taking a durable attempt from the member's budget.
                 try:
@@ -216,16 +243,22 @@ class ReminderWorker:
                     continue
                 if not pending_for_reminder(current, cfg) or not channel.permissions_for(current).view_channel:
                     continue
+                if notice_channel is not None and not notice_channel.permissions_for(current).view_channel:
+                    continue
                 if not await _claim_delivery(guild.id, current, policy):
                     continue
                 claims += 1  # Budget even failures; avoid an unbounded DM storm.
                 try:
-                    await current.send(
-                        reminder_text(guild, channel, cfg, policy),
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
+                    body = reminder_text(guild, channel, cfg, policy)
+                    if notice_channel is not None:
+                        await notice_channel.send(
+                            f"{current.mention} {body}",
+                            allowed_mentions=discord.AllowedMentions(users=[current], roles=False, everyone=False),
+                        )
+                    else:
+                        await current.send(body, allowed_mentions=discord.AllowedMentions.none())
                 except (discord.Forbidden, discord.HTTPException) as exc:
-                    print(f"ℹ️ verify reminder DM unavailable guild={guild.id} kind={type(exc).__name__}")
+                    print(f"ℹ️ verify reminder delivery unavailable guild={guild.id} kind={type(exc).__name__}")
                 await asyncio.sleep(0.5)
             return claims
         except asyncio.CancelledError:
@@ -244,9 +277,9 @@ class ReminderWorker:
         self.guild_cursor = (index + count) % len(guilds)
         claimed = 0
         for guild in batch:
-            if claimed >= MAX_DMS_PER_PASS:
+            if claimed >= MAX_DELIVERIES_PER_PASS:
                 break
-            claimed += await self.scan_guild(guild, remaining=MAX_DMS_PER_PASS - claimed)
+            claimed += await self.scan_guild(guild, remaining=MAX_DELIVERIES_PER_PASS - claimed)
             await asyncio.sleep(0)
         return claimed
 
