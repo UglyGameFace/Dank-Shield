@@ -212,6 +212,17 @@ class ReminderWorker:
                 if not await _claim_delivery(guild.id, current, policy):
                     continue
                 claims += 1  # Budget even failures; avoid an unbounded DM storm.
+                # A member can finish Simple Verify during the PostgreSQL
+                # transaction. Fetch their current roles one last time before
+                # delivery rather than sending an already-obsolete reminder.
+                try:
+                    current = await guild.fetch_member(int(member.id))
+                except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+                    continue
+                if not pending_for_reminder(current, cfg) or not channel.permissions_for(current).view_channel:
+                    continue
+                if notice_channel is not None and not notice_channel.permissions_for(current).view_channel:
+                    continue
                 try:
                     body = reminder_text(guild, channel, cfg, policy)
                     if notice_channel is not None:
