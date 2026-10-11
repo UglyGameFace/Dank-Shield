@@ -582,8 +582,7 @@ async def _mark_deleted_after_external_channel_delete(
         return False
 
 
-
-async def reconcile_missing_active_ticket_channels_for_guild(
+async def reconcile_missing_ticket_channels_for_guild(
     guild: discord.Guild,
 ) -> Dict[str, int]:
     """Recover missed native deletions without mistaking cache misses for deletion.
@@ -719,6 +718,27 @@ async def _handle_channel_delete(channel: discord.abc.GuildChannel) -> None:
             )
 
     _forget_channel_runtime_state(channel.id)
+
+
+
+async def _handle_raw_ticket_thread_delete(payload: discord.RawThreadDeleteEvent) -> None:
+    """Handle ticket threads even when Discord did not cache the deleted thread."""
+    guild_id = _safe_int(getattr(payload, "guild_id", 0), 0)
+    thread_id = _safe_int(getattr(payload, "thread_id", 0), 0)
+    if not guild_id or not thread_id:
+        return
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return
+    row = await _find_ticket_row_by_channel_id(thread_id)
+    if not isinstance(row, dict) or _row_status(row) == "deleted":
+        return
+    # Only touch canonical ticket rows belonging to the gateway guild.
+    if _safe_int(row.get("guild_id"), 0) != guild_id:
+        return
+    await _mark_deleted_after_external_channel_delete(
+        SimpleNamespace(id=thread_id, guild=guild)
+    )
 
 
 async def _handle_channel_update(
@@ -1026,6 +1046,9 @@ def setup(client: discord.Client) -> None:
     async def on_guild_channel_delete(channel: discord.abc.GuildChannel) -> None:
         await _handle_channel_delete(channel)
 
+    async def on_raw_thread_delete(payload: discord.RawThreadDeleteEvent) -> None:
+        await _handle_raw_ticket_thread_delete(payload)
+
     async def on_guild_channel_update(
         before: discord.abc.GuildChannel,
         after: discord.abc.GuildChannel,
@@ -1046,6 +1069,7 @@ def setup(client: discord.Client) -> None:
 
     _register("on_guild_channel_create", on_guild_channel_create)
     _register("on_guild_channel_delete", on_guild_channel_delete)
+    _register("on_raw_thread_delete", on_raw_thread_delete)
     _register("on_guild_channel_update", on_guild_channel_update)
     _register("on_message", on_message)
     _register("on_message_edit", on_message_edit)
