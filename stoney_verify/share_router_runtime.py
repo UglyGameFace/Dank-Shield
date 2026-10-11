@@ -1227,6 +1227,24 @@ async def _route_rejection_log(
             embed.add_field(name="Target", value=f"{target.mention} ({target.id})", inline=False)
         embed.add_field(name="Author", value=f"{message.author.mention} ({message.author.id})", inline=False)
         await _send_modlog(message.guild, embed)
+        # The source must survive failed delivery so the sender can retry. Give
+        # that sender a private actionable explanation instead of leaving a
+        # mysterious message in the drop-off channel.
+        jump_url = str(getattr(message, "jump_url", "") or "").strip()
+        notice = (
+            f"⚠️ Share Router could not deliver your post in **{getattr(message.guild, 'name', 'this server')}**.\n"
+            f"Reason: {reason[:600]}\n"
+            "Your original post was kept in the proxy channel so you can retry. "
+            "Ask a server admin to review Share Router setup if needed."
+        )
+        if jump_url:
+            notice += f"\nOriginal: {jump_url}"
+        try:
+            await message.author.send(
+                notice[:1900], allowed_mentions=discord.AllowedMentions.none()
+            )
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -1625,6 +1643,13 @@ async def route_message(message: discord.Message) -> None:
         routes = await guild_routes(int(guild.id))
         route = route_for_source(routes, int(message.channel.id))
         if route is None:
+            if is_share_router_design_resource(message.channel):
+                await _route_rejection_log(
+                    message,
+                    target=None,
+                    reason="This Share Router proxy has no destination configured. Use Add / Change Route.",
+                )
+                return
             # Direct-destination enhancement ignores webhooks so a webhook or
             # relay cannot recursively manufacture another inline-video reply.
             # Existing proxy-source webhook behavior remains unchanged.
@@ -1714,6 +1739,11 @@ async def route_message(message: discord.Message) -> None:
 
         text = _message_share_text(message)
         if not text:
+            await _route_rejection_log(
+                message,
+                target=target,
+                reason="No forwardable text, link, or attachment was found in this share.",
+            )
             return
 
         now = time.monotonic()
@@ -1729,20 +1759,27 @@ async def route_message(message: discord.Message) -> None:
             native_content = (
                 f"{_suppress_url_previews(text)}\n\n{attribution}"
             )
-            native_sent = await _relay_native_video_upload(
-                message,
-                target,
-                text,
-                content=native_content,
-            )
-            if not native_sent:
-                # A provider-link route is still preferable to losing the share
-                # when media is unsupported, unavailable, or Discord rejects
-                # the attachment at send time.
-                await target.send(
-                    f"{text}\n\n{attribution}"[:2000],
-                    allowed_mentions=discord.AllowedMentions.none(),
+            try:
+                native_sent = await _relay_native_video_upload(
+                    message,
+                    target,
+                    text,
+                    content=native_content,
                 )
+                if not native_sent:
+                    # Preserve existing provider-link fallback for unsupported
+                    # videos. A failed send must leave its source intact.
+                    await target.send(
+                        f"{text}\n\n{attribution}"[:2000],
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+            except Exception as exc:
+                await _route_rejection_log(
+                    message,
+                    target=target,
+                    reason=f"Destination delivery failed: {type(exc).__name__}: {exc}",
+                )
+                return
 
         # Only a successfully delivered post may suppress later repeats.
         # Failed sends keep the proxy source and remain retryable.
