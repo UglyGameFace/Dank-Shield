@@ -23,12 +23,13 @@
 - `tickets_new/repository.py`: new narrow paginated non-deleted ticket identity reader with explicit failure result and complete scan cap, no schema migration.
 - `ticket_events.py`: reuse the canonical external deletion close/delete transition for normal channels and raw thread delete events; reconcile absent IDs through confirmed Discord REST 10003; preserve live, ghost and unknown/permission-blocked rows; cursor/25 REST checks per guild per pass prevents starvation or API pressure; skip individual stat edits because the existing periodic worker refreshes once.
 - `security_stats.py`: call reconciliation from existing 10-minute enabled-display refresh loop before metric reads. Live channel delete events continue their immediate refresh path.
-- `tests/test_ticket_stats_missing_channel_reconcile.py`: regression scenarios for pagination, DB failure, missed native deletion, cached/live/ghost/legacy safety, forbidden/non-10003/5xx/timeouts, alternate channel identity, fair budget and persistence failure.
+- `commands_ext/public_server_stats.py`: Enable/Repair and Refresh Now reconcile first and surface an explicit uncertainty warning instead of claiming complete accuracy when DB/Discord checks fail.
+- `tests/test_ticket_stats_missing_channel_reconcile.py`: regression scenarios for pagination, DB failure, missed native deletion, cached/live/ghost/legacy safety, forbidden/non-10003/5xx/timeouts, alternate channel identity, fair budget, persistence failure, raw thread events, and staff Refresh Now feedback.
 
 ### Validation, cleanup, risks and next steps
 
 - Run exact-head focused and relevant full GitHub Actions validation and review final diff; avoid claims of complete before results.
-- Test real Discord native deletion while online and offline/restarted; verify open/claimed counts decline only after deletion is confirmed and persisted; verify historic closed count semantics and DB recovery retry. Check logs and actual Discloud SHA.
+- Test real Discord native deletion while online and offline/restarted, including Refresh Now and Enable/Repair; verify open/claimed counts decline only after deletion is confirmed and persisted; verify historic closed count semantics and DB recovery retry. Check logs and actual Discloud SHA.
 - Discord API and DB outages cannot establish a missing ticket; retain an uncertain row until later recovery. No transcript can be recovered if the channel disappeared before bot could capture it. Audit-log actor attribution remains out of scope unless needed for reliable state.
 - Scoped changes only; no Cinema, Share Router, Toke, or other moderation changes. Before merge, inspect branch conflicts and latest main/production drift.
 
