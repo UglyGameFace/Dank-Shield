@@ -193,6 +193,27 @@ def test_toke_participant_names_and_messages_not_persisted(isolated_sessions):
     assert '"media_url"' not in saved
 
 
+def test_embed_only_native_gif_formats_are_detected(isolated_sessions):
+    gif_embed = SimpleNamespace(
+        url=None,
+        image=SimpleNamespace(url="https://media.tenor.com/123/reaction.gif"),
+        video=None, thumbnail=None,
+    )
+    message = SimpleNamespace(content="", attachments=[], embeds=[gif_embed])
+    assert live._has_gif_media(message)
+    assert live.media_url_from_message(message).endswith("/reaction.gif")
+    keyboard = SimpleNamespace(
+        content="https://tenor.com/view/dance-gif-1234",
+        attachments=[], embeds=[],
+    )
+    assert live.media_url_from_message(keyboard) == keyboard.content
+    unrelated = SimpleNamespace(
+        content="https://youtube.com/watch?v=abc", attachments=[], embeds=[],
+    )
+    assert live.media_url_from_message(unrelated) == ""
+    assert not live._has_gif_media(unrelated)
+
+
 def test_composer_gif_message_is_consumed_only_after_card_is_posted(isolated_sessions, monkeypatch):
     from stoney_verify.commands_ext import public_toke
     events = []
