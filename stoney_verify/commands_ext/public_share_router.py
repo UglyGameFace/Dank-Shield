@@ -703,22 +703,46 @@ class ShareRouterView(_OwnedView):
                 allowed_mentions=_ALLOWED_MENTIONS,
             )
 
-        embed = await _share_router_embed(guild)
-        notes: list[str] = []
-        if result.created:
-            notes.append("Created: " + ", ".join(result.created))
-        if result.repaired:
-            notes.append("Repaired: " + ", ".join(result.repaired))
-        notes.extend(result.warnings)
-        if not notes:
-            notes.append("Hub names and privacy were already in the expected state.")
-        embed.add_field(name="Last repair", value="\n".join(notes)[:1024], inline=False)
-        await interaction.edit_original_response(
-            content=None,
-            embed=embed,
-            view=ShareRouterView(self.owner_id),
-            allowed_mentions=_ALLOWED_MENTIONS,
-        )
+        # A repair is not complete until its status message is delivered.
+        # The old code left the interaction on "thinking" if reading route
+        # health or editing the result failed after the Discord defer.
+        try:
+            embed = await _share_router_embed(guild)
+            notes: list[str] = []
+            if result.created:
+                notes.append("Created: " + ", ".join(result.created))
+            if result.repaired:
+                notes.append("Repaired: " + ", ".join(result.repaired))
+            notes.extend(result.warnings)
+            if not notes:
+                notes.append("Hub names and privacy were already in the expected state.")
+            embed.add_field(name="Last repair", value="\n".join(notes)[:1024], inline=False)
+            await interaction.edit_original_response(
+                content=None,
+                embed=embed,
+                view=ShareRouterView(self.owner_id),
+                allowed_mentions=_ALLOWED_MENTIONS,
+            )
+        except Exception as exc:
+            print(
+                "⚠️ share_router repair status failed "
+                f"guild={int(guild.id)} error={type(exc).__name__}: {exc}"
+            )
+            try:
+                await interaction.edit_original_response(
+                    content=(
+                        f"⚠️ Hub repair ran, but Share Router could not display its status: "
+                        f"{type(exc).__name__}. Refresh the panel and check Discloud logs."
+                    ),
+                    embed=None,
+                    view=ShareRouterView(self.owner_id),
+                    allowed_mentions=_ALLOWED_MENTIONS,
+                )
+            except discord.HTTPException:
+                print(
+                    "❌ share_router repair could not send failure status "
+                    f"guild={int(guild.id)}"
+                )
 
     @discord.ui.button(label="Add / Change Route", emoji="➕", style=discord.ButtonStyle.success, row=0)
     async def add_route(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
