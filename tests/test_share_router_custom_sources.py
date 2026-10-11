@@ -437,7 +437,7 @@ def test_source_cleanup_only_enqueues_successful_route_acks():
     assert "await message.delete()" in runtime
     assert "source.get_partial_message(message_id).delete()" in runtime
     assert "message.delete(reason=" not in runtime
-    assert "get_partial_message(message_id).delete(" not in runtime
+    assert "get_partial_message(message_id).delete(reason=" not in runtime
     assert source.count("await _cleanup_delivered_proxy_post(message, enabled=cleanup_source)") == 2
     assert source.index("await _cleanup_delivered_proxy_post") > source.index("torrent_duplicate is not None")
     assert source.index("native_sent = await _relay_native_video_upload(") < source.rindex(
