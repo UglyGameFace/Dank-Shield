@@ -6,7 +6,7 @@
 
 **Branch:** `fix/share-router-prod-branch-reconcile-20261010` based on historically documented Discloud Auto Deploy branch `aaa-cinema-pre-pregateway-bind`. **Important:** Discloud's *current* selected branch/SHA is still not verified because the connector has no Discloud access. Do not change it blindly.
 
-**Outcome:** Ship the merged Share Router PR #502's per-guild custom-source panel and runtime onto the older deployment branch without touching Cinema code. Fix proxy cleanup API misuse, and make failing interactions give explicit user-facing errors. Preserve existing default/legacy routes and production media routing.
+**Outcome:** Restore BOTH merged PR #502 (custom Share Router and clean proxy forwarding) and PR #503 (Toke sessions, normal GIF composer, visible participants, VC support and per-guild settings) onto the confirmed Discloud Auto Deploy branch without touching Cinema code. Fix proxy cleanup API misuse, and keep existing default routes and media behavior.
 
 ### Root cause and evidence
 - Screenshots showed the older six-button Share Router menu with no **Create Proxy**. This matches `aaa-cinema-pre-pregateway-bind` exactly: old `public_share_router.py`, hardcoded four sources and no per-guild `custom_sources`; `main` includes these.
@@ -17,16 +17,17 @@
 - "Dank Shield is thinking" can come from a deferred button before a response; screenshots alone do not establish a timed-out callback. The old repair's after-defer status render is outside its try/except and needs an explicit error state if it fails.
 
 ### Scope and changes
-- Transfer only `stoney_verify/share_router_resources.py`, `stoney_verify/share_router_runtime.py`, `stoney_verify/commands_ext/public_share_router.py`, and scoped share router regression tests from the validated PR #502. Keep this branch's `share_router_media_resolver.py` and all Cinema files unchanged.
+- Transfer Share Router identity, runtime, UI and regression tests from merged PR #502; preserve `share_router_media_resolver.py` and every Cinema file.
+- Restore Toke PR #503 files only: `public_toke.py`, `public_community_pings.py` (8-line menu addition), `public_command_surface_v2.py` (2-line listener registration), `toke_sessions.py`, `toke_live_ui.py`, and Toke-specific tests/workflow. No Cinema code, media resolver, or unrelated startup changes.
 - Validate: creating sources per guild, browse/search >25, permission-check live source and destination, keep built-in four, configure destinations, preserve legacy routes, accurate cleanup diagnostics, delete-source rollback on error, and restart persistence.
 - Use one canonical Share Router runtime and one instance of each listener. Avoid config/environment resets or new Supabase migrations.
 - PR targets the documented Discloud branch so merging it there can produce a candidate without changing Cinema. Do not claim production release until current Discloud branch/SHA confirmed.
 
 ### Acceptance & status
-- **In progress**: branch created and Share Router-only files ported. PR/checks and live Android/Discloud acceptance pending.
+- **In progress**: both Share Router #502 and Toke #503 source changes ported onto one Discloud-branch recovery candidate. Exact-head combined CI and real Android/Discloud acceptance pending.
 - Require focused and full CI on exact head, a fresh /dank → Community Tools → Share Router panel with **Create Proxy** and Custom proxies count, successful + failed source forwarding, and empty proxy after successfully relayed share.
-- Deployment operator must confirm Discloud auto-deploy is actually tracking `aaa-cinema-pre-pregateway-bind` (or identify its actual branch) before promoting. A merge to a different branch does not update production.
-- Toke PR #503 remains merged into `main` but is not asserted live on Discloud; any separate Toke promotion is outside this Share Router task.
+- The user supplied an Oct 10 Discloud dashboard screenshot confirming Auto Deploy follows `aaa-cinema-pre-pregateway-bind`, with last deployed #499. The PR base is correct. Merge only after exact-head validation; verify full deployed SHA afterwards.
+- Toke PR #503 is merged into `main` but was missing from production. This recovery restores it alongside Share Router; neither is considered live until actual branch deployment and Discord interaction acceptance.
 
 ---
 
