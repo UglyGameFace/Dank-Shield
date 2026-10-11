@@ -600,6 +600,36 @@ async def _open_delete_source_picker(interaction: discord.Interaction) -> None:
     await _replace(interaction, embed=view.embed(), view=view)
 
 
+
+class ShareRouterPruneConfirmView(_OwnedView):
+    @discord.ui.button(label="Confirm cleanup", emoji="🧹", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            count = await prune_missing_custom_share_sources(guild)
+        except (discord.HTTPException, OSError, ValueError) as exc:
+            return await interaction.edit_original_response(
+                content=f"❌ Could not verify missing proxy channels: {exc}",
+                embed=None, view=ShareRouterView(self.owner_id),
+            )
+        await interaction.edit_original_response(
+            content=f"✅ Pruned {count} custom proxy registration(s) not visible in Discord's live channel listing for this server. No Discord channel was deleted.",
+            embed=await _share_router_embed(guild),
+            view=ShareRouterView(self.owner_id),
+        )
+
+    @discord.ui.button(label="Cancel", emoji="↩️", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_share_router(interaction, replace_message=True)
+
+
 class ShareRouterView(_OwnedView):
     @discord.ui.button(label="Create Proxy", emoji="➕", style=discord.ButtonStyle.primary, row=2)
     async def create_proxy(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -613,21 +643,21 @@ class ShareRouterView(_OwnedView):
         _ = button
         if not await _require_manage(interaction):
             return
-        guild = interaction.guild
-        if guild is None:
-            return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            count = await prune_missing_custom_share_sources(guild)
-        except (discord.HTTPException, OSError, ValueError) as exc:
-            return await interaction.edit_original_response(
-                content=f"❌ Could not check deleted proxy channels: {exc}",
-                embed=None, view=ShareRouterView(self.owner_id),
-            )
-        await interaction.edit_original_response(
-            content=f"✅ Cleaned {count} missing custom proxy registration(s) from this server. Live channels were untouched.",
-            embed=await _share_router_embed(guild),
-            view=ShareRouterView(self.owner_id),
+        await _replace(
+            interaction,
+            embed=discord.Embed(
+                title="⚠️ Confirm stale proxy cleanup",
+                description=(
+                    "Only custom proxy IDs absent from Discord's channel listing in this server "
+                    "will be unregistered, along with their saved routes. No live channel is deleted. "
+                    "**Important:** Discord may omit channels that Dank Shield cannot view. "
+                    "If access was revoked rather than the channel being deleted, restore bot "
+                    "View Channel permissions instead of cleaning. This action cannot reliably "
+                    "distinguish every permission change from deletion."
+                ),
+                color=discord.Color.orange(),
+            ),
+            view=ShareRouterPruneConfirmView(int(interaction.user.id)),
         )
 
     @discord.ui.button(label="Delete Custom Proxy", emoji="🗑️", style=discord.ButtonStyle.secondary, row=2)
