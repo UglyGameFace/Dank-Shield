@@ -205,6 +205,31 @@ def test_custom_proxy_delete_cleans_its_route_but_not_other_guilds(isolated_rout
     asyncio.run(check())
 
 
+def test_route_save_revalidates_against_deleted_source(isolated_router):
+    guild = FakeGuild(556)
+
+    async def check():
+        source = await router.create_custom_share_source(guild, None, "Gaming Clips")
+        await router.save_managed_share_route(
+            guild,
+            source_channel_id=source.id,
+            target_channel_id=777,
+            created_by_id=555,
+        )
+        assert router.route_for_source(await router.guild_routes(guild.id), source.id) is not None
+        await router.delete_custom_share_source(guild, source.id)
+        with pytest.raises(ValueError, match="no longer"):
+            await router.save_managed_share_route(
+                guild,
+                source_channel_id=source.id,
+                target_channel_id=888,
+                created_by_id=555,
+            )
+        assert await router.guild_routes(guild.id) == []
+
+    asyncio.run(check())
+
+
 def test_failed_registration_rolls_back_channel_and_preserves_saved_data(isolated_router, monkeypatch):
     guild = FakeGuild(555)
     async def initial():
@@ -245,7 +270,7 @@ def test_new_ui_pages_sources_and_routes_and_preserves_old_routing_behavior():
     assert ui.count("DankGuildResourceBrowserView(") >= 4
     assert "choices=choices[:25]" not in ui
     assert 'route = route_for_source(routes, int(message.channel.id))' in runtime
-    assert 'await save_route(' in ui
+    assert 'await save_managed_share_route(' in ui
     assert tuple(DEFAULT_SHARE_CHANNELS) == (
         "share-gaming-news", "share-deals", "share-memes", "share-announcements",
     )
