@@ -59,6 +59,9 @@ class FakeGuild:
     def get_channel(self, channel_id: int):
         return self.channels.get(channel_id)
 
+    async def fetch_channels(self):
+        return [*self.categories, *self.channels.values()]
+
     async def create_category(self, name: str, **_kwargs) -> FakeCategory:
         category = FakeCategory(next(self._ids), name, self)
         self.categories.append(category)
@@ -250,6 +253,26 @@ def test_failed_registration_rolls_back_channel_and_preserves_saved_data(isolate
     assert not guild.categories[0].channels
 
 
+def test_verified_missing_proxy_cleanup_is_per_guild(isolated_router):
+    a, b = FakeGuild(900), FakeGuild(901)
+
+    async def check():
+        source_a = await router.create_custom_share_source(a, None, "Gaming Clips")
+        source_b = await router.create_custom_share_source(b, None, "Gaming Clips")
+        await router.save_route(a.id, source_channel_id=source_a.id, target_channel_id=777)
+        await router.save_route(b.id, source_channel_id=source_b.id, target_channel_id=888)
+        # Simulate deleting a Discord source outside the bot's management UI.
+        await source_a.delete()
+        assert await router.prune_missing_custom_share_sources(a) == 1
+        assert await router.guild_custom_share_sources(a.id) == []
+        assert await router.guild_routes(a.id) == []
+        assert await router.prune_missing_custom_share_sources(b) == 0
+        assert await router.guild_custom_share_sources(b.id) == [source_b.id]
+        assert (await router.guild_routes(b.id))[0]["target_channel_id"] == "888"
+
+    asyncio.run(check())
+
+
 def test_corrupt_route_file_never_resets_other_guilds(isolated_router):
     router.ROUTES_FILE.write_text("{broken", encoding="utf-8")
     with pytest.raises(ValueError):
@@ -263,6 +286,7 @@ def test_new_ui_pages_sources_and_routes_and_preserves_old_routing_behavior():
     runtime = (root / "stoney_verify/share_router_runtime.py").read_text(encoding="utf-8")
     assert 'label="Create Proxy"' in ui
     assert 'label="Delete Custom Proxy"' in ui
+    assert 'label="Clean Missing Proxies"' in ui
     assert "ShareRouterDeleteSourceConfirmView" in ui
     assert 'custom_id="dank:share_router:source"' in ui
     assert 'custom_id="dank:share_router:remove"' in ui
