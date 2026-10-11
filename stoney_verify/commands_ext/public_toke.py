@@ -396,7 +396,7 @@ async def publish_toke_from_draft(
                 upload = attachment
                 break
         if upload is None:
-            match = re.search(r"https?://[^\\s<>]+", str(media_message.content or ""))
+            match = re.search(r"https?://[^\s<>]+", str(media_message.content or ""))
             if match:
                 clean_media = _clean_media_url(match.group(0))
             else:
