@@ -714,6 +714,7 @@ async def create_custom_share_source(
              if len(item.channels) < _DISCORD_CATEGORY_CHANNEL_LIMIT),
             None,
         )
+        created_overflow_category = None
         if category is None:
             indices = {
                 int(key.split("-")[-1])
@@ -728,13 +729,24 @@ async def create_custom_share_source(
                 category_name, overwrites=overwrites,
                 reason="Dank Shield Share Router additional proxy hub",
             )
+            created_overflow_category = category
 
         overwrites = _permission_overwrite_map(guild, actor)
         overwrites = await _add_configured_staff_overwrites(guild, overwrites)
-        source = await guild.create_text_channel(
-            name, category=category, nsfw=False, overwrites=overwrites,
-            reason="Dank Shield custom Share Router proxy",
-        )
+        try:
+            source = await guild.create_text_channel(
+                name, category=category, nsfw=False, overwrites=overwrites,
+                reason="Dank Shield custom Share Router proxy",
+            )
+        except Exception:
+            # Creating an overflow category must not leave an empty orphan when
+            # the channel API rejects a guild at its server-wide channel limit.
+            if created_overflow_category is not None:
+                try:
+                    await created_overflow_category.delete(reason="Share Router proxy creation failed")
+                except Exception:
+                    _log(f"overflow category cleanup failed guild={guild.id} category={category.id}")
+            raise
         try:
             async with _DATA_LOCK:
                 data = _load_all_unlocked()
@@ -758,6 +770,14 @@ async def create_custom_share_source(
                 await source.delete(reason="Share Router registration failed; rollback")
             except Exception:
                 _log(f"CRITICAL: failed to rollback unregistered source guild={guild.id} source={source.id}")
+            if created_overflow_category is not None and not any(
+                int(getattr(child, "id", 0)) != int(source.id)
+                for child in created_overflow_category.channels
+            ):
+                try:
+                    await created_overflow_category.delete(reason="Share Router registration failed")
+                except Exception:
+                    _log(f"overflow category cleanup failed guild={guild.id} category={category.id}")
             raise
         return source
 
@@ -775,6 +795,7 @@ async def delete_custom_share_source(guild: discord.Guild, source_id: int) -> No
                 raise ValueError("This is not a registered custom proxy in this server.")
 
         source = guild.get_channel(int(source_id))
+        overflow_category = None
         if source is not None:
             if (
                 not isinstance(source, discord.TextChannel)
@@ -782,6 +803,8 @@ async def delete_custom_share_source(guild: discord.Guild, source_id: int) -> No
                 or not is_share_router_managed_category_name(source.category.name)
             ):
                 raise ValueError("Proxy was moved outside Share Routes; restore it before deleting.")
+            if not is_share_router_category_name(source.category.name):
+                overflow_category = source.category
             await source.delete(reason="Dank Shield custom Share Router proxy removed")
 
         async with _DATA_LOCK:
@@ -803,6 +826,15 @@ async def delete_custom_share_source(guild: discord.Guild, source_id: int) -> No
             ]
             data[key] = bucket
             _save_all_unlocked(data)
+
+        if overflow_category is not None and not any(
+            int(getattr(child, "id", 0)) != int(source_id)
+            for child in overflow_category.channels
+        ):
+            try:
+                await overflow_category.delete(reason="Dank Shield empty overflow proxy hub cleanup")
+            except Exception:
+                _log(f"overflow category cleanup failed guild={guild.id} category={overflow_category.id}")
 
 
 async def save_route(
