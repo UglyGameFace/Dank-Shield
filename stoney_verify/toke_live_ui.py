@@ -77,7 +77,8 @@ def _display_members(guild: discord.Guild, identifiers: list[int], limit: int = 
     for member_id in identifiers[:limit]:
         member = guild.get_member(int(member_id))
         name = member.display_name if member is not None else f"Member {member_id}"
-        result.append(discord.utils.escape_markdown(discord.utils.escape_mentions(name))[:75])
+        safe_name = discord.utils.escape_markdown(discord.utils.escape_mentions(name))[:55]
+        result.append(f"{safe_name} (<@{int(member_id)}>)")
     if len(identifiers) > limit:
         result.append(f"and {len(identifiers) - limit} more (tap Who's Coming)")
     return ", ".join(result) if result else "Nobody yet"
@@ -341,7 +342,7 @@ class TokeSettingsModal(discord.ui.Modal, title="Toke Meetup Settings"):
         self.guild_cooldown.default = str(saved["guild_cooldown_minutes"])
         self.maximum.default = str(saved["max_interested"])
         self.names.default = "yes" if saved["show_member_names"] else "no"
-        self.voice_id = int(saved.get("voice_channel_id", 0))
+        self.voice_id = int(saved.get("voice_channel_id", 0))  # Refreshed before saving.
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         member = interaction.user
@@ -370,13 +371,14 @@ class TokeSettingsModal(discord.ui.Modal, title="Toke Meetup Settings"):
             return await interaction.response.send_message("Enter yes or no for participant names.", ephemeral=True)
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
+            fresh = settings_from_config(await _get_live_config(interaction.guild.id))
             actual = await save_toke_settings(interaction.guild.id, member.id, {
                 "session_minutes": nums[0],
                 "user_cooldown_minutes": nums[1],
                 "guild_cooldown_minutes": nums[2],
                 "max_interested": nums[3],
                 "show_member_names": choice == "yes",
-                "voice_channel_id": self.voice_id,
+                "voice_channel_id": int(fresh["voice_channel_id"]),
             })
         except Exception as exc:
             return await interaction.edit_original_response(content=f"❌ Settings not saved: {type(exc).__name__}: {exc}")
