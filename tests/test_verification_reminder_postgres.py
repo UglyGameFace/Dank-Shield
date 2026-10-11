@@ -89,3 +89,53 @@ def test_concurrent_claims_allow_only_one_sender():
                 (str(guild), str(user)),
             )
             assert cursor.fetchone()[0] == 1
+
+
+@requires_postgres
+def test_retention_keeps_active_counter_and_deletes_only_matching_stale_generation():
+    guild = _new_snowflake()
+    user = _new_snowflake()
+    joined = datetime.now(timezone.utc) - timedelta(days=150)
+    assert ledger.claim_sync(guild, user, joined, repeat_hours=48, max_reminders=1)
+
+    with ledger._connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "update public.dank_verify_reminder_delivery "
+                "set last_claimed_at = now() - interval '100 days' "
+                "where guild_id = %s and user_id = %s",
+                (str(guild), str(user)),
+            )
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+    rows = ledger.stale_candidates_sync(cutoff, limit=50)
+    assert any(row[0:2] == (str(guild), str(user)) for row in rows)
+
+    # A row isn't removed simply because it is old. Correct joined_at
+    # generation AND explicit confirmed-departure call are required.
+    assert not ledger.delete_departed_sync(
+        str(guild), str(user), joined + timedelta(seconds=1), cutoff
+    )
+    assert not ledger.claim_sync(guild, user, joined, repeat_hours=48, max_reminders=1)
+    assert ledger.delete_departed_sync(str(guild), str(user), joined, cutoff)
+    assert not ledger.delete_departed_sync(str(guild), str(user), joined, cutoff)
+
+
+@requires_postgres
+def test_retention_never_deletes_fresh_claim_even_if_old_scan_had_selected_it():
+    guild = _new_snowflake()
+    user = _new_snowflake()
+    joined = datetime.now(timezone.utc) - timedelta(days=150)
+    assert ledger.claim_sync(guild, user, joined, repeat_hours=48, max_reminders=3)
+    with ledger._connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "update public.dank_verify_reminder_delivery "
+                "set last_claimed_at = now() - interval '100 days' "
+                "where guild_id = %s and user_id = %s",
+                (str(guild), str(user)),
+            )
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+    assert any(row[0:2] == (str(guild), str(user))
+               for row in ledger.stale_candidates_sync(cutoff, limit=50))
+    assert ledger.claim_sync(guild, user, joined, repeat_hours=48, max_reminders=3)
+    assert not ledger.delete_departed_sync(str(guild), str(user), joined, cutoff)
