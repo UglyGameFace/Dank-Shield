@@ -1,5 +1,26 @@
 # Dank Shield Active Task
 
+## CURRENT ACTIVE TASK — TOKE-SINGLE-GIF-20261011
+
+**Owner report:** Toke posts show the same GIF as a large attachment above the card and as an image inside the card after status updates. Screenshot Oct 11, Android. User asks to fix the duplicate.
+
+**Branch:** `fix/toke-single-gif-preview-20261011` from Discloud Auto Deploy branch `aaa-cinema-pre-pregateway-bind`. Isolated Toke fix; other projects paused.
+
+### Confirmed cause and supported solution
+- `_publish_toke` sent an uploaded GIF as `file=upload_file` AND `embed.set_image(attachment://filename)`. It then `sent.edit(embed=render_card(...))` to add persistent Cheers/VC data and edits again on reactions. Discord API issue #5675 describes how PATCH/edit causes attachment:// images to display twice.
+- GIF uploads and ordinary keyboard files now appear **once** as native message attachments, never again in an edited embed. A public Tenor/Giphy GIF CDN URL is instead displayed **inside the embed**, without file upload.
+- GIF-picker message extraction prefers persistent Tenor/Giphy CDN media from source embeds over their public viewing-page link. User source is deleted only after full successful post; avoid embedding short-lived Discord attachment CDN URLs from messages that will be deleted.
+- If only a non-direct viewing-page URL is available, keep a clickable link **inside the card description** instead of `message.content`, preventing an additional standalone unfurled preview.
+- Existing one canonical send, session persistence, Cheers, Joining, VC tracking, roles, authorization, and cooldowns remain unchanged.
+- Never use `suppress_embeds` to solve this, as it also hides the intended Toke embed.
+
+### Validation
+- New end-to-end mocked send/edit regression checks on upload / direct public media / Tenor view-page link, plus existing Toke tests.
+- CI and actual Android visuals pending; no claim client-specific presentation is guaranteed until verified.
+- The previous profile-card single-line fix remains on open draft PR #506 with its own checkpoint, not included here. Share Router/Cinema remain untouched.
+
+---
+
 ## CURRENT ACTIVE TASK — DANK-SHARE-ROUTER-PRODUCTION-RECONCILE-20261010
 
 **User force switch:** Toke overhaul PR #503 was merged into `main@fee272e35e75a1eed0f4c2d6f7a21350173fffae`; user explicitly switched back to Share Router to make the live feature work. Preserve Toke and Cinema; do not implement unrelated features during this task.
