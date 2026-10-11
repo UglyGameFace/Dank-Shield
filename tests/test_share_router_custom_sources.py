@@ -321,7 +321,7 @@ def test_successful_delivery_deletes_source_without_queue(isolated_router):
 
     async def check():
         source = await router.create_custom_share_source(guild, None, "Gaming Clips")
-        async def delete(**_kwargs):
+        async def delete():
             deleted.append(source.id)
         message = SimpleNamespace(id=31337, guild=guild, channel=source, delete=delete)
         await router._cleanup_delivered_proxy_post(message, enabled=True)
@@ -353,7 +353,7 @@ def test_delivered_cleanup_retries_after_permission_failure_per_guild(isolated_r
 
         guild.me = object()
         source.permissions_for = lambda _member: SimpleNamespace(manage_messages=permit)
-        async def retry_delete(**_kwargs):
+        async def retry_delete():
             deleted.append(31338)
         source.get_partial_message = lambda message_id: SimpleNamespace(delete=retry_delete)
 
@@ -413,7 +413,7 @@ def test_cleanup_retry_queue_rotates_fairly_between_guilds(isolated_router, monk
         source_a.permissions_for = lambda _member: SimpleNamespace(manage_messages=False)
         source_b.permissions_for = lambda _member: SimpleNamespace(manage_messages=True)
         removed = []
-        async def delete_b(**_kwargs):
+        async def delete_b():
             removed.append(902)
         source_b.get_partial_message = lambda _id: SimpleNamespace(delete=delete_b)
         bot = SimpleNamespace(
@@ -433,6 +433,11 @@ def test_source_cleanup_only_enqueues_successful_route_acks():
     runtime = (root / "stoney_verify/share_router_runtime.py").read_text(encoding="utf-8")
     ui = (root / "stoney_verify/commands_ext/public_share_router.py").read_text(encoding="utf-8")
     source = runtime.split("async def route_message(", 1)[1].split("def _merged_overwrite(", 1)[0]
+    # discord.py 2.7.1 Message.delete/PartialMessage.delete accept no reason kwarg.
+    assert "await message.delete()" in runtime
+    assert "source.get_partial_message(message_id).delete()" in runtime
+    assert "message.delete(reason=" not in runtime
+    assert "get_partial_message(message_id).delete(" not in runtime
     assert source.count("await _cleanup_delivered_proxy_post(message, enabled=cleanup_source)") == 2
     assert source.index("await _cleanup_delivered_proxy_post") > source.index("torrent_duplicate is not None")
     assert source.index("native_sent = await _relay_native_video_upload(") < source.rindex(
