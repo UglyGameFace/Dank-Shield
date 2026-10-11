@@ -594,6 +594,42 @@ def _draw_rich(image: Image.Image, draw: ImageDraw.ImageDraw, xy: tuple[int, int
     return x
 
 
+def _draw_complete_one_line(
+    image: Image.Image,
+    xy: tuple[int, int],
+    text: str,
+    *,
+    max_width: int,
+    max_height: int,
+    assets: Mapping[str, bytes],
+    start_size: int,
+    min_size: int,
+    fill: tuple[int, int, int, int],
+) -> int:
+    """Fit a complete platform username without wrapping or ellipsis."""
+    clean = _safe(text, 2048)
+    if not clean:
+        return 0
+    probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    font_size = min_size
+    for attempt in range(start_size, min_size - 1, -1):
+        font = _font(attempt, regular=True)
+        if _rich_width(probe, clean, font, assets, attempt) + 8 <= max_width:
+            font_size = attempt
+            break
+    font = _font(font_size, regular=True)
+    source_width = _rich_width(probe, clean, font, assets, font_size) + 8
+    tile = Image.new("RGBA", (max(1, source_width), max_height), (0, 0, 0, 0))
+    _draw_rich(
+        tile, ImageDraw.Draw(tile, "RGBA"), (4, max(1, (max_height - font_size) // 2)),
+        clean, font=font, fill=fill, assets=assets, emoji_size=font_size,
+    )
+    if tile.width > max_width:
+        tile.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+    image.alpha_composite(tile, xy)
+    return max_height
+
+
 def _asset_tile(payload: bytes, size: int, fallback: str) -> Image.Image:
     tile = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     try:
@@ -879,20 +915,18 @@ def _draw_platforms(
         label_font = _font(15, regular=True)
         label = f"{getattr(focus_spec, 'label', focus).upper()} FOCUS"
         draw.text((x + size + 16, y + 5), label, font=label_font, fill=palette.primary + (255,))
-        username = _safe(focus_entry.get("username"), 80)
+        username = _safe(focus_entry.get("username"), 2048)
         username_text = username if username and platform_entry_mode(focus_entry) != "logo" else "Platform-focused style"
-        _draw_complete(
+        _draw_complete_one_line(
             image,
-            draw,
             (x + size + 16, y + 31),
             username_text,
             max_width=max(100, spec.brand_x - (x + size + 16) - 20),
-            max_lines=2,
+            max_height=24,
             assets=assets,
             start_size=18,
             min_size=10,
             fill=palette.highlight + (250,),
-            limit=100,
         )
         others = [entry for entry in normalized if str(entry.get("platform") or "") != focus][:3]
         small_x = x + size + 16
@@ -963,7 +997,7 @@ def _draw_platforms(
             _asset_tile(bytes(logos.get(platform) or _logo_bytes(platform)), size - 8, platform_spec.label),
             (x + 4, y + 4),
         )
-        username = _safe(entry.get("username"), 80)
+        username = _safe(entry.get("username"), 2048)
         if username and platform_entry_mode(entry) != "logo":
             shared.append(f"{platform_spec.label}: {username}")
         x += 66
@@ -973,18 +1007,16 @@ def _draw_platforms(
         line_y = 164
         max_width = max(120, spec.brand_x - spec.platform_x - 24)
         for value in shared[:2]:
-            used = _draw_complete(
+            used = _draw_complete_one_line(
                 image,
-                draw,
                 (spec.platform_x, line_y),
                 value,
                 max_width=max_width,
-                max_lines=2,
+                max_height=22,
                 assets=assets,
                 start_size=16,
                 min_size=10,
                 fill=palette.tertiary + (255,),
-                limit=120,
             )
             if used:
                 line_y += used + 5
