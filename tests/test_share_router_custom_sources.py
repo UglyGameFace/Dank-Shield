@@ -69,6 +69,7 @@ class FakeGuild:
 def isolated_router(monkeypatch, tmp_path):
     monkeypatch.setattr(router, "ROUTES_FILE", tmp_path / "share_routes.json")
     monkeypatch.setattr(router.discord, "TextChannel", FakeTextChannel)
+    monkeypatch.setattr(router.discord, "CategoryChannel", FakeCategory)
     async def no_staff(_guild, overwrites):
         return overwrites
     monkeypatch.setattr(router, "_add_configured_staff_overwrites", no_staff)
