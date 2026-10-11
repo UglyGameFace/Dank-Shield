@@ -212,7 +212,8 @@ def test_channel_delivery_scoped_to_one_member_mention(monkeypatch):
     assert "<@100>" in content
     assert mentions.everyone is False
     assert mentions.roles is False
-    assert mentions.users == [guild.members[0].id]
+    assert len(mentions.users) == 1
+    assert mentions.users[0].id == guild.members[0].id
     assert not guild.members[0].sent
 
 
