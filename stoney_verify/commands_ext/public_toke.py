@@ -143,6 +143,27 @@ def _cooldown_remaining(*, now: float, guild_id: int, user_id: int, user_seconds
     return 0.0, ""
 
 
+async def _persistent_cooldown_remaining(
+    guild_id: int, user_id: int, settings: Mapping[str, Any]
+) -> tuple[float, str]:
+    """Use both live monotonic and recorded send times; restart cannot reset limits."""
+    user_seconds = int(settings["user_cooldown_minutes"]) * 60
+    guild_seconds = int(settings["guild_cooldown_minutes"]) * 60
+    volatile, label = _cooldown_remaining(
+        now=monotonic(), guild_id=guild_id, user_id=user_id,
+        user_seconds=user_seconds, guild_seconds=guild_seconds,
+    )
+    guild_last, user_last = await toke_sessions.recent_launch_times(guild_id, user_id)
+    current = time.time()
+    persisted_user = max(0.0, user_seconds - (current - user_last)) if user_last else 0
+    persisted_guild = max(0.0, guild_seconds - (current - guild_last)) if guild_last else 0
+    if persisted_user > max(volatile, persisted_guild):
+        return persisted_user, "your /toke cooldown"
+    if persisted_guild > volatile:
+        return persisted_guild, "this server's /toke cooldown"
+    return volatile, label
+
+
 def _prune_cooldowns(now: float) -> None:
     horizon = max(TOKE_USER_COOLDOWN_SECONDS, TOKE_GUILD_COOLDOWN_SECONDS) * 2
     for key, ts in list(_TOKE_USER_LAST.items()):
@@ -275,12 +296,7 @@ async def _publish_toke(
 
     async with _toke_lock(guild.id):
         now = monotonic()
-        user_seconds = int(settings["user_cooldown_minutes"]) * 60
-        guild_seconds = int(settings["guild_cooldown_minutes"]) * 60
-        remaining, label = _cooldown_remaining(
-            now=now, guild_id=guild.id, user_id=member.id,
-            user_seconds=user_seconds, guild_seconds=guild_seconds,
-        )
+        remaining, label = await _persistent_cooldown_remaining(guild.id, member.id, settings)
         if remaining:
             raise ValueError(f"Wait {_format_wait(remaining)} for {label}.")
 
@@ -329,7 +345,7 @@ async def _publish_toke(
                 "voice_channel_id": voice_id,
                 "max_interested": int(settings["max_interested"]),
                 "show_member_names": bool(settings["show_member_names"]),
-                "expires_at": __import__("time").time() + int(settings["session_minutes"]) * 60,
+                "expires_at": time.time() + int(settings["session_minutes"]) * 60,
             })
         except Exception:
             # A card that cannot track participants must not remain posted with
@@ -471,11 +487,7 @@ async def open_toke_command(
         )
 
     settings = settings_from_config(cfg)
-    remaining, label = _cooldown_remaining(
-        now=monotonic(), guild_id=guild.id, user_id=member.id,
-        user_seconds=int(settings["user_cooldown_minutes"]) * 60,
-        guild_seconds=int(settings["guild_cooldown_minutes"]) * 60,
-    )
+    remaining, label = await _persistent_cooldown_remaining(guild.id, member.id, settings)
     if remaining > 0:
         return await _reply(interaction, f"Wait {_format_wait(remaining)} for {label}.")
 
