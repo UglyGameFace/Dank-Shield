@@ -3,7 +3,7 @@ from __future__ import annotations
 """Opt-in, per-guild Simple Verify nudges backed by canonical role truth.
 
 Only the saved verification mode, mapped roles and channel can authorize a
-reminder. Delivery claims are atomic in Supabase and fail closed on errors.
+reminder. Delivery claims are atomic in Discloud PostgreSQL and fail closed on errors.
 """
 
 import asyncio
@@ -17,10 +17,9 @@ from .guild_config import get_guild_config
 from .role_truth import clear_cache as clear_role_truth_cache
 from .role_truth import member_is_pending_verification
 from .setup_engine.verification_modes import basic_verify_allowed_for_guild
+from .verification_reminder_postgres import claim_sync as _pg_claim_sync, ready_sync as _pg_ready_sync
 
 REMINDER_CONFIG_KEY = "unverified_reminders_v1"
-DELIVERY_TABLE = "dank_verify_reminder_delivery"
-CLAIM_RPC = "claim_dank_verify_reminder"
 SCAN_SIZE = 100
 GUILDS_PER_PASS = 25
 MAX_DELIVERIES_PER_PASS = 10
@@ -119,59 +118,20 @@ def reminder_text(
     return f"**{guild.name}** verification reminder\n\n{greeting}\n\n✅ Verify here: {destination}\n\nIf you've already verified, you can ignore this message."
 
 
-async def _ledger_ready() -> bool:
-    def check() -> bool:
-        from .globals import get_supabase
-        sb = get_supabase()
-        if sb is None:
-            return False
-        sb.table(DELIVERY_TABLE).select("guild_id").limit(1).execute()
-        probe = sb.rpc(CLAIM_RPC, {
-            "p_guild_id": "invalid",
-            "p_user_id": "invalid",
-            "p_joined_at": datetime.now(timezone.utc).isoformat(),
-            "p_repeat_hours": 48,
-            "p_max_reminders": 3,
-        }).execute()
-        return getattr(probe, "data", None) is False
-
-    try:
-        return await asyncio.to_thread(check)
-    except Exception as exc:
-        print(f"⚠️ verify reminders ledger unavailable error={type(exc).__name__}")
-        return False
-
-
 async def ledger_ready() -> bool:
-    """Used by the admin UI: never enable an undeliverable feature."""
-    return await _ledger_ready()
+    """Check the Discloud PostgreSQL ledger; fail closed if not provisioned."""
+    return await asyncio.to_thread(_pg_ready_sync)
 
 
 async def _claim_delivery(guild_id: int, member: discord.Member, policy: ReminderPolicy) -> bool:
-    joined = member.joined_at
-    if joined is None:
-        return False
-
-    def claim() -> bool:
-        from .globals import get_supabase
-        sb = get_supabase()
-        if sb is None:
-            return False
-        response = sb.rpc(CLAIM_RPC, {
-            "p_guild_id": str(guild_id),
-            "p_user_id": str(member.id),
-            "p_joined_at": joined.astimezone(timezone.utc).isoformat(),
-            "p_repeat_hours": policy.repeat_hours,
-            "p_max_reminders": policy.max_reminders,
-        }).execute()
-        # A missing/invalid RPC result is NOT permission to send.
-        return getattr(response, "data", None) is True
-
-    try:
-        return await asyncio.to_thread(claim)
-    except Exception as exc:
-        print(f"⚠️ verify reminder atomic claim failed guild={guild_id} error={type(exc).__name__}")
-        return False
+    return await asyncio.to_thread(
+        _pg_claim_sync,
+        int(guild_id),
+        int(member.id),
+        getattr(member, "joined_at", None),
+        repeat_hours=policy.repeat_hours,
+        max_reminders=policy.max_reminders,
+    )
 
 
 class ReminderWorker:
@@ -211,6 +171,10 @@ class ReminderWorker:
                 permissions = notice_channel.permissions_for(sender)
                 if not permissions.view_channel or not permissions.send_messages:
                     return 0
+            # Skip expensive member pagination if the private PostgreSQL ledger
+            # cannot be reached. No Supabase fallback may send duplicates.
+            if not await ledger_ready():
+                return 0
             clear_role_truth_cache(guild.id)
             cursor = self.member_cursors.get(guild.id, 0)
             after = discord.Object(id=cursor) if cursor else None
