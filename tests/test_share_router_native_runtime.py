@@ -532,6 +532,7 @@ def test_runtime_listener_install_is_explicit_and_idempotent() -> None:
     assert ensure_share_router_runtime(bot) is True
     assert ensure_share_router_runtime(bot) is True
     assert len(bot.extra_events.get("on_message", [])) == 1
+    assert len(bot.extra_events.get("on_ready", [])) == 1
 
 
 def test_share_router_is_a_public_core_runtime_without_new_slash_child() -> None:

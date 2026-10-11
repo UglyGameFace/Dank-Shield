@@ -40,7 +40,10 @@ from stoney_verify.share_router_media_resolver import (
 from stoney_verify.share_router_resources import (
     DEFAULT_SHARE_CHANNELS,
     SHARE_ROUTER_CATEGORY_NAME,
+    custom_share_source_name,
     is_share_router_category_name,
+    is_share_router_managed_category_name,
+    normalize_share_router_name,
     is_share_router_design_resource,
     share_source_key,
 )
@@ -53,6 +56,14 @@ from stoney_verify.torrent_streaming import (
 from stoney_verify.torrent_media_server import media_server_ready
 
 _DATA_LOCK = asyncio.Lock()
+# Only successfully delivered posts are eligible for automatic cleanup retries.
+_SOURCE_CLEANUP_TASK: Optional[asyncio.Task[None]] = None
+_SOURCE_CLEANUP_INTERVAL_SECONDS = 900
+_SOURCE_CLEANUP_MAX_PER_PASS = 50
+_SOURCE_CLEANUP_CURSOR = 0
+_GUILD_SOURCE_LOCKS: dict[int, asyncio.Lock] = {}
+# Discord allows 50 channels per category and 500 channels per guild.
+_DISCORD_CATEGORY_CHANNEL_LIMIT = 50
 _RECENT_ROUTE_KEYS: dict[tuple[int, int, str], float] = {}
 URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
 _X_STATUS_PATH_RE = re.compile(r"^/([^/]+)/status/(\d+)(?:/.*)?$", re.IGNORECASE)
@@ -621,13 +632,13 @@ def _utc_iso() -> str:
 
 
 def _load_all_unlocked() -> dict[str, Any]:
-    try:
-        if not ROUTES_FILE.exists():
-            return {}
-        data = json.loads(ROUTES_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:
+    if not ROUTES_FILE.exists():
         return {}
+    # Do not silently overwrite other guilds' routes when storage is unreadable.
+    data = json.loads(ROUTES_FILE.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("Share Router configuration must contain a JSON object.")
+    return data
 
 
 def _save_all_unlocked(data: Mapping[str, Any]) -> None:
@@ -660,6 +671,251 @@ async def guild_routes(guild_id: int) -> list[dict[str, Any]]:
             item["delete_source"] = bool(item.get("delete_source", True))
             clean.append(item)
         return clean
+
+
+async def guild_custom_share_sources(guild_id: int) -> list[int]:
+    """Explicit custom proxy IDs scoped to one guild, using the existing route file."""
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        bucket = data.get(str(int(guild_id))) or {}
+        raw = bucket.get("custom_sources", []) if isinstance(bucket, dict) else []
+        if not isinstance(raw, list):
+            return []
+        return list(dict.fromkeys(
+            source_id for item in raw if (source_id := _safe_int(item, 0)) > 0
+        ))
+
+
+def _guild_source_lock(guild_id: int) -> asyncio.Lock:
+    return _GUILD_SOURCE_LOCKS.setdefault(int(guild_id), asyncio.Lock())
+
+
+async def available_share_source_ids(guild: discord.Guild) -> set[int]:
+    """One authority for visible defaults, registered custom IDs and legacy routes."""
+    category = find_share_router_category(guild)
+    ids: set[int] = set(await guild_custom_share_sources(int(guild.id)))
+    if category is not None:
+        ids.update(
+            int(source.id) for name in DEFAULT_SHARE_CHANNELS
+            if (source := find_share_source_channel(category, name)) is not None
+        )
+    ids.update(
+        _safe_int(route.get("source_channel_id"), 0)
+        for route in await guild_routes(int(guild.id))
+    )
+    return {
+        source_id for source_id in ids
+        if isinstance(guild.get_channel(source_id), discord.TextChannel)
+    }
+
+
+async def save_managed_share_route(
+    guild: discord.Guild,
+    *,
+    source_channel_id: int,
+    target_channel_id: int,
+    created_by_id: int,
+) -> None:
+    """Revalidate selection under the same per-guild lock as proxy deletion."""
+    async with _guild_source_lock(int(guild.id)):
+        if int(source_channel_id) not in await available_share_source_ids(guild):
+            raise ValueError("The proxy source no longer exists or is no longer configured.")
+        await save_route(
+            int(guild.id),
+            source_channel_id=int(source_channel_id),
+            target_channel_id=int(target_channel_id),
+            delete_source=True,
+            created_by_id=int(created_by_id),
+        )
+
+
+async def prune_missing_custom_share_sources(guild: discord.Guild) -> int:
+    """Admin-triggered cleanup, using Discord's live channel listing as authority."""
+    async with _guild_source_lock(int(guild.id)):
+        # Never infer deletion solely from an incomplete gateway channel cache.
+        live_ids = {
+            int(channel.id) for channel in await guild.fetch_channels()
+        }
+        async with _DATA_LOCK:
+            data = _load_all_unlocked()
+            key = str(int(guild.id))
+            bucket = data.get(key)
+            if not isinstance(bucket, dict):
+                return 0
+            raw = bucket.get("custom_sources", [])
+            if not isinstance(raw, list):
+                return 0
+            stale = {
+                source_id for item in raw
+                if (source_id := _safe_int(item, 0)) > 0 and source_id not in live_ids
+            }
+            if not stale:
+                return 0
+            bucket["custom_sources"] = [
+                item for item in raw if _safe_int(item, 0) not in stale
+            ]
+            bucket["routes"] = [
+                route for route in bucket.get("routes", [])
+                if not (
+                    isinstance(route, dict)
+                    and _safe_int(route.get("source_channel_id"), 0) in stale
+                )
+            ]
+            data[key] = bucket
+            _save_all_unlocked(data)
+            return len(stale)
+
+
+async def create_custom_share_source(
+    guild: discord.Guild,
+    actor: discord.abc.User,
+    requested_name: str,
+) -> discord.TextChannel:
+    """Create a private, non-NSFW proxy and persist its identity within this guild."""
+    name = custom_share_source_name(requested_name)
+    async with _guild_source_lock(int(guild.id)):
+        hub = find_share_router_category(guild)
+        if hub is None:
+            raise ValueError("Run Create / Repair Hub before creating a custom proxy.")
+
+        managed = [
+            category for category in guild.categories
+            if is_share_router_managed_category_name(category.name)
+        ]
+        # Never reuse a name already present in a managed hub: duplicates make
+        # Android share-sheet selection ambiguous.
+        if any(
+            channel.name == name
+            for category in managed for channel in category.text_channels
+        ):
+            raise ValueError(f"#{name} already exists. Choose a different name.")
+
+        category = next(
+            (item for item in [hub, *[c for c in managed if c.id != hub.id]]
+             if len(item.channels) < _DISCORD_CATEGORY_CHANNEL_LIMIT),
+            None,
+        )
+        created_overflow_category = None
+        if category is None:
+            indices = {
+                int(key.split("-")[-1])
+                for item in managed
+                if (key := normalize_share_router_name(item.name)).rsplit("-", 1)[-1].isdigit()
+            }
+            index = next(n for n in range(2, 1000) if n not in indices)
+            category_name = f"🔗 SHARE ROUTES {index}"
+            overwrites = _permission_overwrite_map(guild, actor)
+            overwrites = await _add_configured_staff_overwrites(guild, overwrites)
+            category = await guild.create_category(
+                category_name, overwrites=overwrites,
+                reason="Dank Shield Share Router additional proxy hub",
+            )
+            created_overflow_category = category
+
+        overwrites = _permission_overwrite_map(guild, actor)
+        overwrites = await _add_configured_staff_overwrites(guild, overwrites)
+        try:
+            source = await guild.create_text_channel(
+                name, category=category, nsfw=False, overwrites=overwrites,
+                reason="Dank Shield custom Share Router proxy",
+            )
+        except Exception:
+            # Creating an overflow category must not leave an empty orphan when
+            # the channel API rejects a guild at its server-wide channel limit.
+            if created_overflow_category is not None:
+                try:
+                    await created_overflow_category.delete(reason="Share Router proxy creation failed")
+                except Exception:
+                    _log(f"overflow category cleanup failed guild={guild.id} category={category.id}")
+            raise
+        try:
+            async with _DATA_LOCK:
+                data = _load_all_unlocked()
+                key = str(int(guild.id))
+                bucket = data.get(key)
+                if not isinstance(bucket, dict):
+                    bucket = {}
+                sources = [
+                    _safe_int(value, 0)
+                    for value in bucket.get("custom_sources", [])
+                ]
+                bucket["custom_sources"] = [
+                    str(value) for value in dict.fromkeys([*sources, int(source.id)])
+                    if value > 0
+                ]
+                data[key] = bucket
+                _save_all_unlocked(data)
+        except Exception:
+            # An unregistered proxy would accept posts without routing them.
+            try:
+                await source.delete(reason="Share Router registration failed; rollback")
+            except Exception:
+                _log(f"CRITICAL: failed to rollback unregistered source guild={guild.id} source={source.id}")
+            if created_overflow_category is not None and not any(
+                int(getattr(child, "id", 0)) != int(source.id)
+                for child in created_overflow_category.channels
+            ):
+                try:
+                    await created_overflow_category.delete(reason="Share Router registration failed")
+                except Exception:
+                    _log(f"overflow category cleanup failed guild={guild.id} category={category.id}")
+            raise
+        return source
+
+
+async def delete_custom_share_source(guild: discord.Guild, source_id: int) -> None:
+    """Delete only an explicitly registered custom proxy, then its saved route."""
+    async with _guild_source_lock(int(guild.id)):
+        async with _DATA_LOCK:
+            data = _load_all_unlocked()
+            bucket = data.get(str(int(guild.id)))
+            sources = bucket.get("custom_sources", []) if isinstance(bucket, dict) else []
+            if not isinstance(sources, list) or int(source_id) not in {
+                _safe_int(value, 0) for value in sources
+            }:
+                raise ValueError("This is not a registered custom proxy in this server.")
+
+        source = guild.get_channel(int(source_id))
+        overflow_category = None
+        if source is not None:
+            if (
+                not isinstance(source, discord.TextChannel)
+                or source.category is None
+                or not is_share_router_managed_category_name(source.category.name)
+            ):
+                raise ValueError("Proxy was moved outside Share Routes; restore it before deleting.")
+            if not is_share_router_category_name(source.category.name):
+                overflow_category = source.category
+            await source.delete(reason="Dank Shield custom Share Router proxy removed")
+
+        async with _DATA_LOCK:
+            data = _load_all_unlocked()
+            key = str(int(guild.id))
+            bucket = data.get(key)
+            if not isinstance(bucket, dict):
+                return
+            bucket["custom_sources"] = [
+                value for value in bucket.get("custom_sources", [])
+                if _safe_int(value, 0) != int(source_id)
+            ]
+            bucket["routes"] = [
+                route for route in bucket.get("routes", [])
+                if not (
+                    isinstance(route, dict)
+                    and _safe_int(route.get("source_channel_id"), 0) == int(source_id)
+                )
+            ]
+            data[key] = bucket
+            _save_all_unlocked(data)
+
+        if overflow_category is not None and not any(
+            int(getattr(child, "id", 0)) != int(source_id)
+            for child in overflow_category.channels
+        ):
+            try:
+                await overflow_category.delete(reason="Dank Shield empty overflow proxy hub cleanup")
+            except Exception:
+                _log(f"overflow category cleanup failed guild={guild.id} category={overflow_category.id}")
 
 
 async def save_route(
@@ -784,6 +1040,11 @@ def route_permission_blockers(
     return blockers
 
 
+def route_deletes_source(source: discord.TextChannel, route: Mapping[str, Any]) -> bool:
+    """Managed proxy hubs are always temporary; keep legacy external routes compatible."""
+    return bool(route.get("delete_source", True)) or is_share_router_design_resource(source)
+
+
 def route_health(guild: discord.Guild, route: Mapping[str, Any]) -> RouteHealth:
     blockers: list[str] = []
     warnings: list[str] = []
@@ -811,7 +1072,7 @@ def route_health(guild: discord.Guild, route: Mapping[str, Any]) -> RouteHealth:
         route_permission_blockers(
             source,
             target,
-            delete_source=bool(route.get("delete_source", True)),
+            delete_source=route_deletes_source(source, route),
         )
     )
 
@@ -966,6 +1227,24 @@ async def _route_rejection_log(
             embed.add_field(name="Target", value=f"{target.mention} ({target.id})", inline=False)
         embed.add_field(name="Author", value=f"{message.author.mention} ({message.author.id})", inline=False)
         await _send_modlog(message.guild, embed)
+        # The source must survive failed delivery so the sender can retry. Give
+        # that sender a private actionable explanation instead of leaving a
+        # mysterious message in the drop-off channel.
+        jump_url = str(getattr(message, "jump_url", "") or "").strip()
+        notice = (
+            f"⚠️ Share Router could not deliver your post in **{getattr(message.guild, 'name', 'this server')}**.\n"
+            f"Reason: {reason[:600]}\n"
+            "Your original post was kept in the proxy channel so you can retry. "
+            "Ask a server admin to review Share Router setup if needed."
+        )
+        if jump_url:
+            notice += f"\nOriginal: {jump_url}"
+        try:
+            await message.author.send(
+                notice[:1900], allowed_mentions=discord.AllowedMentions.none()
+            )
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -1179,6 +1458,176 @@ async def _route_torrent_media(
     return False
 
 
+async def guild_pending_source_cleanup_count(guild_id: int) -> int:
+    """Number of previously delivered posts awaiting Discord deletion."""
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        bucket = data.get(str(int(guild_id)))
+        pending = bucket.get("pending_source_cleanup", []) if isinstance(bucket, dict) else []
+        return len(pending) if isinstance(pending, list) else 0
+
+
+async def _record_undelivered_cleanup(guild_id: int, source_id: int, message_id: int) -> None:
+    """Persist a known-delivered post only after Discord could not remove its source."""
+    if guild_id <= 0 or source_id <= 0 or message_id <= 0:
+        return
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        guild_key = str(int(guild_id))
+        bucket = data.get(guild_key)
+        if not isinstance(bucket, dict):
+            bucket = {}
+        pending = bucket.get("pending_source_cleanup", [])
+        if not isinstance(pending, list):
+            pending = []
+        key = (int(source_id), int(message_id))
+        if not any(
+            isinstance(item, dict)
+            and (_safe_int(item.get("source_channel_id"), 0), _safe_int(item.get("message_id"), 0)) == key
+            for item in pending
+        ):
+            pending.append({
+                "source_channel_id": str(int(source_id)),
+                "message_id": str(int(message_id)),
+            })
+            bucket["pending_source_cleanup"] = pending
+            data[guild_key] = bucket
+            _save_all_unlocked(data)
+
+
+async def _remove_delivered_cleanup_entries(completed: set[tuple[int, int, int]]) -> None:
+    """Clear only IDs verified deleted (or already absent), preserving concurrent additions."""
+    if not completed:
+        return
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        changed = False
+        for guild_id in {entry[0] for entry in completed}:
+            bucket = data.get(str(guild_id))
+            if not isinstance(bucket, dict):
+                continue
+            pending = bucket.get("pending_source_cleanup")
+            if not isinstance(pending, list) or not pending:
+                continue
+            retained = [
+                item for item in pending
+                if not (
+                    isinstance(item, dict)
+                    and (guild_id, _safe_int(item.get("source_channel_id"), 0), _safe_int(item.get("message_id"), 0))
+                    in completed
+                )
+            ]
+            if len(retained) != len(pending):
+                bucket["pending_source_cleanup"] = retained
+                changed = True
+        if changed:
+            _save_all_unlocked(data)
+
+
+async def _cleanup_delivered_proxy_post(message: discord.Message, *, enabled: bool) -> None:
+    """Never discard failed sends. Successful sends clean their source or queue retry."""
+    if not enabled:
+        return
+    try:
+        await message.delete()
+        return
+    except discord.NotFound:
+        return
+    except Exception as exc:
+        _log(
+            f"delivered source cleanup blocked guild={message.guild.id} "
+            f"source={message.channel.id} message={message.id} error={type(exc).__name__}"
+        )
+    try:
+        await _record_undelivered_cleanup(
+            int(message.guild.id), int(message.channel.id), int(message.id)
+        )
+    except Exception as exc:
+        # Never claim the source is clean if both immediate deletion and durable
+        # retry registration fail. The original source post is still present.
+        _log(
+            f"CRITICAL: delivered cleanup retry could not be persisted "
+            f"guild={message.guild.id} source={message.channel.id} "
+            f"message={message.id} error={type(exc).__name__}"
+        )
+
+
+async def _sweep_delivered_cleanup_once(bot: Any) -> int:
+    """Pace REST deletes and rotate fairly across guilds with blocked entries."""
+    global _SOURCE_CLEANUP_CURSOR
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        pending: list[tuple[int, int, int]] = []
+        for guild_id, bucket in data.items():
+            if not isinstance(bucket, dict):
+                continue
+            stored = bucket.get("pending_source_cleanup", [])
+            if not isinstance(stored, list):
+                continue
+            for item in stored:
+                if not isinstance(item, dict):
+                    continue
+                entry = (
+                    _safe_int(guild_id, 0),
+                    _safe_int(item.get("source_channel_id"), 0),
+                    _safe_int(item.get("message_id"), 0),
+                )
+                if all(entry):
+                    pending.append(entry)
+        if not pending:
+            return 0
+        start = _SOURCE_CLEANUP_CURSOR % len(pending)
+        count = min(len(pending), _SOURCE_CLEANUP_MAX_PER_PASS)
+        selected = [pending[(start + n) % len(pending)] for n in range(count)]
+        _SOURCE_CLEANUP_CURSOR = (start + count) % len(pending)
+
+    completed: set[tuple[int, int, int]] = set()
+    for guild_id, source_id, message_id in selected:
+        guild = bot.get_guild(guild_id)
+        if guild is None:
+            continue
+        source = guild.get_channel(source_id)
+        if not isinstance(source, discord.TextChannel):
+            # Cache gaps/permission changes must never be interpreted as deletion.
+            continue
+        # Never delete from a channel repurposed after it was used as a proxy.
+        routes = await guild_routes(guild_id)
+        is_live_proxy = is_share_router_design_resource(source) or any(
+            _safe_int(route.get("source_channel_id"), 0) == source_id
+            and bool(route.get("delete_source", True))
+            for route in routes
+        )
+        if not is_live_proxy:
+            continue
+        me = getattr(guild, "me", None)
+        if me is None or not source.permissions_for(me).manage_messages:
+            continue
+        try:
+            await source.get_partial_message(message_id).delete()
+        except discord.NotFound:
+            completed.add((guild_id, source_id, message_id))
+        except (discord.Forbidden, discord.HTTPException):
+            continue
+        except Exception as exc:
+            _log(f"cleanup retry failed guild={guild_id} source={source_id} error={type(exc).__name__}")
+        else:
+            completed.add((guild_id, source_id, message_id))
+
+    await _remove_delivered_cleanup_entries(completed)
+    return len(completed)
+
+
+async def _share_router_cleanup_loop(bot: Any) -> None:
+    while not bot.is_closed():
+        try:
+            await _sweep_delivered_cleanup_once(bot)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log(f"delivered cleanup sweep failed: {type(exc).__name__}: {exc}")
+        await asyncio.sleep(_SOURCE_CLEANUP_INTERVAL_SECONDS)
+
+
 async def route_message(message: discord.Message) -> None:
     """Route one human message when its channel is a configured proxy source."""
 
@@ -1192,6 +1641,13 @@ async def route_message(message: discord.Message) -> None:
         routes = await guild_routes(int(guild.id))
         route = route_for_source(routes, int(message.channel.id))
         if route is None:
+            if is_share_router_design_resource(message.channel):
+                await _route_rejection_log(
+                    message,
+                    target=None,
+                    reason="This Share Router proxy has no destination configured. Use Add / Change Route.",
+                )
+                return
             # Direct-destination enhancement ignores webhooks so a webhook or
             # relay cannot recursively manufacture another inline-video reply.
             # Existing proxy-source webhook behavior remains unchanged.
@@ -1235,11 +1691,11 @@ async def route_message(message: discord.Message) -> None:
         me = guild.me
         if not isinstance(me, discord.Member):
             return
-        source_perms = message.channel.permissions_for(me)
+        cleanup_source = route_deletes_source(message.channel, route)
         permission_blockers = route_permission_blockers(
             message.channel,
             target,
-            delete_source=bool(route.get("delete_source", True)),
+            delete_source=cleanup_source,
         )
         if permission_blockers:
             await _route_rejection_log(
@@ -1260,13 +1716,7 @@ async def route_message(message: discord.Message) -> None:
             return
 
         if torrent_duplicate is not None:
-            if bool(route.get("delete_source", True)) and source_perms.manage_messages:
-                try:
-                    await message.delete(reason="Dank Shield Share Router: torrent source routed")
-                except discord.NotFound:
-                    pass
-                except Exception:
-                    pass
+            await _cleanup_delivered_proxy_post(message, enabled=cleanup_source)
 
             embed = discord.Embed(
                 title=(
@@ -1287,6 +1737,11 @@ async def route_message(message: discord.Message) -> None:
 
         text = _message_share_text(message)
         if not text:
+            await _route_rejection_log(
+                message,
+                target=target,
+                reason="No forwardable text, link, or attachment was found in this share.",
+            )
             return
 
         now = time.monotonic()
@@ -1302,33 +1757,34 @@ async def route_message(message: discord.Message) -> None:
             native_content = (
                 f"{_suppress_url_previews(text)}\n\n{attribution}"
             )
-            native_sent = await _relay_native_video_upload(
-                message,
-                target,
-                text,
-                content=native_content,
-            )
-            if not native_sent:
-                # A provider-link route is still preferable to losing the share
-                # when media is unsupported, unavailable, or Discord rejects
-                # the attachment at send time.
-                await target.send(
-                    f"{text}\n\n{attribution}"[:2000],
-                    allowed_mentions=discord.AllowedMentions.none(),
+            try:
+                native_sent = await _relay_native_video_upload(
+                    message,
+                    target,
+                    text,
+                    content=native_content,
                 )
+                if not native_sent:
+                    # Preserve existing provider-link fallback for unsupported
+                    # videos. A failed send must leave its source intact.
+                    await target.send(
+                        f"{text}\n\n{attribution}"[:2000],
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+            except Exception as exc:
+                await _route_rejection_log(
+                    message,
+                    target=target,
+                    reason=f"Destination delivery failed: {type(exc).__name__}: {exc}",
+                )
+                return
 
         # Only a successfully delivered post may suppress later repeats.
         # Failed sends keep the proxy source and remain retryable.
         if key_text:
             _RECENT_ROUTE_KEYS[dedupe] = time.monotonic()
 
-        if bool(route.get("delete_source", True)) and source_perms.manage_messages:
-            try:
-                await message.delete(reason="Dank Shield Share Router: proxy message routed")
-            except discord.NotFound:
-                pass
-            except Exception:
-                pass
+        await _cleanup_delivered_proxy_post(message, enabled=cleanup_source)
 
         embed = discord.Embed(
             title="🔗 Share Router Routed Message" if not duplicate else "🔁 Share Router Duplicate Cleaned",
@@ -1591,6 +2047,13 @@ def ensure_share_router_runtime(bot: Any) -> bool:
             ):
                 return True
         bot.add_listener(route_message, "on_message")
+
+        async def start_cleanup_worker() -> None:
+            global _SOURCE_CLEANUP_TASK
+            if _SOURCE_CLEANUP_TASK is None or _SOURCE_CLEANUP_TASK.done():
+                _SOURCE_CLEANUP_TASK = asyncio.create_task(_share_router_cleanup_loop(bot))
+
+        bot.add_listener(start_cleanup_worker, "on_ready")
         _log("active; private share proxies can route into configured destinations")
         return True
     except Exception as exc:
