@@ -596,20 +596,31 @@ def _is_gif_like_url(value: Any) -> bool:
 
 
 def media_url_from_message(message: discord.Message) -> str:
-    """Handle normal Tenor/Giphy message URLs plus mobile embed-only GIFs."""
-    for found in re.findall(r"https?://[^\s<>]+", str(message.content or "")):
-        if _is_gif_like_url(found):
-            return found.rstrip(".,")
+    """Prefer GIF-picker CDN media over the Tenor/Giphy page that unfurls."""
+    from stoney_verify.commands_ext.public_toke import _is_stable_provider_media_url
+
+    candidates: list[str] = []
     for embed in (message.embeds or []):
+        # Discord GIF picker can expose a playable public image here, even
+        # when message.content contains a separate Tenor viewing-page link.
         for candidate in (
-            getattr(embed, "url", None),
             getattr(getattr(embed, "image", None), "url", None),
             getattr(getattr(embed, "video", None), "url", None),
             getattr(getattr(embed, "thumbnail", None), "url", None),
+            getattr(embed, "url", None),
         ):
             if _is_gif_like_url(candidate):
-                return str(candidate)
-    return ""
+                candidates.append(str(candidate))
+    for found in re.findall(r"https?://[^\s<>]+", str(message.content or "")):
+        if _is_gif_like_url(found):
+            candidates.append(found.rstrip(".,"))
+
+    # Preserve inline display whenever the media host is independent of the
+    # member's temporary message (which is deleted after publishing).
+    for candidate in candidates:
+        if _is_stable_provider_media_url(candidate):
+            return candidate
+    return candidates[0] if candidates else ""
 
 
 def _has_gif_media(message: discord.Message) -> bool:
