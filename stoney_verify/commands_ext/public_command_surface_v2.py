@@ -852,6 +852,8 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
         open_ticket_operations_center,
     )
     from .public_toke import open_toke_command
+    from stoney_verify.toke_live_ui import register_toke_runtime
+    register_toke_runtime(bot)
     from .public_verify_command_center import open_verify_command_center
 
     replacements = (
