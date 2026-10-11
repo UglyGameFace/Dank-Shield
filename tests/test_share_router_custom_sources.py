@@ -287,7 +287,7 @@ def test_new_ui_pages_sources_and_routes_and_preserves_old_routing_behavior():
     runtime = (root / "stoney_verify/share_router_runtime.py").read_text(encoding="utf-8")
     assert 'label="Create Proxy"' in ui
     assert 'label="Delete Custom Proxy"' in ui
-    assert 'label="Clean Missing Proxies"' in ui
+    assert 'label="Remove Missing Proxies"' in ui
     assert "ShareRouterDeleteSourceConfirmView" in ui
     assert 'custom_id="dank:share_router:source"' in ui
     assert 'custom_id="dank:share_router:remove"' in ui
