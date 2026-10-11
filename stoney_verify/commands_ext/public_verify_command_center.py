@@ -126,7 +126,7 @@ def _center_embed() -> discord.Embed:
         title="✅ Verification Center",
         description=(
             "Member status, diagnostics, verification, role repair, server-wide Pending/Unverified "
-            "repair, role mapping, and the public Verify panel are all here."
+            "repair, role mapping, the public Verify panel, and opt-in unverified reminders are all here."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -220,6 +220,14 @@ class VerifyCenterView(_OwnedView):
         _ = button
         from .public_command_hub import _invoke_saved
         await _invoke_saved("setup", interaction)
+
+    @discord.ui.button(label="Unverified Reminders", emoji="🔔", style=discord.ButtonStyle.secondary, row=2)
+    async def reminders(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_staff(interaction):
+            return
+        from .public_verify_reminder_ui import open_reminder_settings
+        await open_reminder_settings(interaction, self.owner_id)
 
 
 class VerifyMemberActionView(_OwnedView):
