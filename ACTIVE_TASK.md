@@ -2,7 +2,7 @@
 
 ## CURRENT ACTIVE TASK — DANK-SHARE-ROUTER-CUSTOM-SOURCES-20261010
 
-**Outcome:** Add independently configurable Share Router proxy source channels per guild, with searchable/paged setup, creation, route editing/removal, and safe custom-source deletion. Preserve the four canonical default sources, legacy route IDs, media relay stack, and unrelated guild configurations.
+**Outcome:** Add independently configurable Share Router proxy source channels per guild with searchable/paged setup, creation, route editing/removal, and safe deletion. Automatically clear successful shares from managed proxy sources, with durable retry for Discord deletion failures and no silent deletion of undelivered shares. Preserve the canonical default sources, legacy external route behavior, media relay stack, and unrelated guild configurations.
 
 **Branch:** `feat/share-router-custom-sources-per-guild-20261010` based on `main@df839a303d229c385bf1885a1e5e9677ab903b5a`.
 
@@ -15,22 +15,23 @@
 - New `custom_sources` within each guild's existing bucket track explicitly bot-managed extra proxy channel IDs. Legacy saved routes remain authoritative for forwarding; no migration or channel deletion is needed.
 - Create creates a hidden, non-NSFW source, with saved identity and rollback if persistence fails. Additional `🔗 SHARE ROUTES N` categories handle Discord's 50-children-per-category ceiling, without any arbitrary low bot-side limit. Actual Discord per-guild limits still apply.
 - Edit/remove routes and delete custom proxies use paged, searchable resource browsers. Only explicitly registered custom proxies are eligible for Discord channel deletion, after interactive confirmation and revalidation. Four built-ins cannot be deleted from the custom manager.
-- Existing permission/safety/media behavior remains in the single canonical `share_router_runtime` listener; no duplicate runtime/media resolver.
+- Managed proxy sources now always require Manage Messages and auto-delete successfully forwarded posts, even if a historical route carried `delete_source=false`; unrelated legacy external channels still honor that opt-out. Failed deliveries remain in the source so user content is never silently lost. The existing one-message-listener runtime owns the cleanup path and installs one idempotent periodic worker for known-delivered messages that Discord initially refused to delete. No duplicate media resolver.
 
 ### Changes
 
 - `stoney_verify/share_router_resources.py`: custom name validation; mark all managed hubs and their sources as reserved design infrastructure.
-- `stoney_verify/share_router_runtime.py`: per-guild source registry in legacy JSON bucket, guarded channel creation/deletion, overflow categories, and corruption-safe config reads.
-- `stoney_verify/commands_ext/public_share_router.py`: mobile creation modal, custom deletion confirmation, paged searchable source/route/removal browsers, refreshed health summary.
-- `tests/test_share_router_custom_sources.py`: guild separation, names, category overflow, legacy route preservation, cleanup, rollback, file corruption protection, and menu contracts.
+- `stoney_verify/share_router_runtime.py`: per-guild source registry in legacy JSON bucket, guarded channel creation/deletion, overflow categories, corruption-safe config reads, unified post-forward cleanup, and per-guild persisted deletion retry IDs (no message bodies).
+- `stoney_verify/commands_ext/public_share_router.py`: mobile creation modal, custom deletion confirmation, paged searchable source/route/removal browsers, refreshed health summary with pending cleanup count.
+- `tests/test_share_router_custom_sources.py`: guild separation, names, category overflow, legacy route preservation, delivery deletion and failed-deletion retry, failed-send preservation, cleanup rollback, file corruption protection, and menu contracts.
 - No Cinema, verification, Share Router media extraction, or unrelated commands changed.
 
 ### Validation, cleanup and risks
 
-- GitHub CI/regression checks and full runtime smoke tests pending.
-- Validate source create and configure in two guilds, including an ordinary gaming-clip URL, a direct video, a failed upstream extraction with link fallback, and role/channel permission rejection. Verify source cleanup after success and preservation on failure.
+- GitHub CI/regression checks and full runtime smoke tests pending at latest PR head. Passing checks on earlier commits do not validate the updated cleanup code.
+- Validate source create and configure in two guilds, including an ordinary gaming-clip URL, a direct video, a failed upstream extraction with link fallback, and role/channel permission rejection. Verify immediate deletion after successful send, that a transient Discord deletion failure is logged and queued per guild, automatic retry after Manage Messages is restored, and that failed sends remain recoverable.
 - Ensure per-guild persistence survives a Discloud restart with stable `DANK_DATA_DIR` / `DANK_SHARE_ROUTES_FILE`; the feature inherits the existing local route-file durability contract, it does not create a new database service.
 - Discord enforces 50 channels per category and 500 total guild channels, so "unlimited" means no additional bot-side configuration cap, not limitless physical channels.
+- Clean-channel semantics are best effort, not an unconditional guarantee: lack of Manage Messages, Discord API outages, or failed delivery can leave an original post. Never auto-delete an undelivered source just to make the channel appear clean. The periodic worker only retries IDs known to have been delivered; it does not bulk-delete historic unknown posts. A crash after forward but before deletion is a residual orphan scenario to evaluate in real-world validation.
 - The active branch is isolated. Inspect any CI failures and the final PR diff before asking for merge.
 
 ### Suspended task — Dank Cinema
