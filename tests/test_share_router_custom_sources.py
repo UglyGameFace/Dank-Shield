@@ -392,6 +392,42 @@ def test_cleanup_does_not_delete_message_from_repurposed_channel(isolated_router
     asyncio.run(check())
 
 
+def test_cleanup_retry_queue_rotates_fairly_between_guilds(isolated_router, monkeypatch):
+    guild_a, guild_b = FakeGuild(1106), FakeGuild(1107)
+    monkeypatch.setattr(router, "_SOURCE_CLEANUP_MAX_PER_PASS", 1)
+    monkeypatch.setattr(router, "_SOURCE_CLEANUP_CURSOR", 0)
+
+    async def failed_delete(**_kwargs):
+        raise OSError("initial delete failed")
+
+    async def check():
+        source_a = await router.create_custom_share_source(guild_a, None, "Gaming Clips")
+        source_b = await router.create_custom_share_source(guild_b, None, "Gaming Clips")
+        for guild, source, message_id in ((guild_a, source_a, 901), (guild_b, source_b, 902)):
+            message = SimpleNamespace(
+                id=message_id, guild=guild, channel=source, delete=failed_delete
+            )
+            await router._cleanup_delivered_proxy_post(message, enabled=True)
+            guild.me = object()
+
+        source_a.permissions_for = lambda _member: SimpleNamespace(manage_messages=False)
+        source_b.permissions_for = lambda _member: SimpleNamespace(manage_messages=True)
+        removed = []
+        async def delete_b(**_kwargs):
+            removed.append(902)
+        source_b.get_partial_message = lambda _id: SimpleNamespace(delete=delete_b)
+        bot = SimpleNamespace(
+            get_guild=lambda guild_id: {guild_a.id: guild_a, guild_b.id: guild_b}.get(guild_id)
+        )
+        assert await router._sweep_delivered_cleanup_once(bot) == 0
+        assert await router._sweep_delivered_cleanup_once(bot) == 1
+        assert removed == [902]
+        assert await router.guild_pending_source_cleanup_count(guild_a.id) == 1
+        assert await router.guild_pending_source_cleanup_count(guild_b.id) == 0
+
+    asyncio.run(check())
+
+
 def test_source_cleanup_only_enqueues_successful_route_acks():
     root = Path(__file__).resolve().parents[1]
     runtime = (root / "stoney_verify/share_router_runtime.py").read_text(encoding="utf-8")
