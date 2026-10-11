@@ -1,5 +1,45 @@
 # Dank Shield Active Task
 
+## CURRENT ACTIVE TASK — DANK-STATS-NATIVE-TICKET-DELETE-20261011
+
+**User-approved force switch:** "Fix Dank Shield Server Stats accuracy" because staff can delete ticket channels directly in Discord, missed events or bot downtime can leave stored counters stale, and all displayed counters must remain grounded in authoritative data.
+
+**Outcome:** Reconcile native ticket deletions safely, recover missed channel-deletion events, and keep existing Server Stats accurate without inventing closures or destabilizing other subsystems.
+
+**Branch:** \`fix/dank-stats-ticket-reconciliation-20261011\` based on documented Discloud Auto Deploy branch \`aaa-cinema-pre-pregateway-bind\`, after merged PR #508 (merge SHA \`57d194714b3c1b4088259a63acc5b9387fa691fb\`). **Discloud's actual running branch and SHA require independent verification.**
+
+**Status:** Implementation candidate staged; targeted/full CI, exact-head reviews and live Discloud acceptance pending. Production not changed by this branch.
+
+### Root cause and execution path
+
+- Existing \`stoney_verify/app.py\` registers \`ticket_events.setup(bot)\`; \`ticket_events.py\` already handles \`on_guild_channel_delete\` by close-then-delete through \`tickets_new.repository\` and explicitly refreshes \`security_stats\` on durable success.
+- Missing events while offline, lost Discord gateway events, and transient DB failures leave rows \`open\`/\`claimed\` despite vanished channels. Server Stats currently polls all saved lifecycle rows every 10 minutes and takes \`max(DB open, visible active channels)\`; its live-channel **floor can raise a false zero but cannot lower a stale DB count**.
+- \`security_stats.py\` refresh loop can reconcile before counting without adding another independent worker. State must only be deleted on authoritative REST 404 / Discord error code 10003, never on cache misses, 403, 5xx or DB failure. Ghost/channel-less ticket rows and surviving alternate thread/channel identities must be preserved.
+- A native deletion is an irreversible delete, not necessarily a completed closure. Historical \`Closed Tickets\` counts durable \`closed\` records; deleted records are excluded. Do not fabricate extra closed tickets in the display merely to increase the number.
+- Other security counters use durable source registries and current Discord member counts. Do not widen this ticket-state task into unrelated metric redesign.
+
+### Changes
+
+- \`tickets_new/repository.py\`: new narrow paginated active ticket identity reader with explicit failure result and complete scan cap, no schema migration.
+- \`ticket_events.py\`: reuse the canonical external deletion close/delete transition; reconcile absent IDs through confirmed Discord REST 10003; preserve live, ghost and unknown/permission-blocked rows; cursor/25 REST checks per guild per pass prevents starvation or API pressure; skip individual stat edits because the existing periodic worker refreshes once.
+- \`security_stats.py\`: call reconciliation from existing 10-minute enabled-display refresh loop before metric reads. Live channel delete events continue their immediate refresh path.
+- \`tests/test_ticket_stats_missing_channel_reconcile.py\`: regression scenarios for pagination, DB failure, missed native deletion, cached/live/ghost/legacy safety, forbidden/non-10003/5xx/timeouts, alternate channel identity, fair budget and persistence failure.
+
+### Validation, cleanup, risks and next steps
+
+- Run exact-head focused and relevant full GitHub Actions validation and review final diff; avoid claims of complete before results.
+- Test real Discord native deletion while online and offline/restarted; verify open/claimed counts decline only after deletion is confirmed and persisted; verify historic closed count semantics and DB recovery retry. Check logs and actual Discloud SHA.
+- Discord API and DB outages cannot establish a missing ticket; retain an uncertain row until later recovery. No transcript can be recovered if the channel disappeared before bot could capture it. Audit-log actor attribution remains out of scope unless needed for reliable state.
+- Scoped changes only; no Cinema, Share Router, Toke, or other moderation changes. Before merge, inspect branch conflicts and latest main/production drift.
+
+### Suspended task checkpoint — Toke mobile status sync
+
+Prior active task \`TOKE-MOBILE-STATUS-SYNC-20261011\` used \`fix/toke-mobile-time-state-sync-20261011\` and PR #508 targeting \`aaa-cinema-pre-pregateway-bind\`; GitHub reports PR #508 merged at \`57d194714b3c1b4088259a63acc5b9387fa691fb\` (Oct 11). Implemented absolute Discord timestamps, a Refresh snapshot and coalesced VC-count updates to avoid Android-relative-clock freezing/lost voice events. PR body reports exact-head 74 targeted tests passing and incomplete broader/live Android acceptance. The user reported the time refreshed only on app force-close; no confirmed Android/Discloud acceptance was supplied. Preserve Toke files untouched; resume validation only after another exact FORCE SWITCH.
+
+---
+
+# Dank Shield Previous Task Records
+
 ## CURRENT ACTIVE TASK — TOKE-MOBILE-STATUS-SYNC-20261011
 
 **User report:** In Discord Android, the ended Toke card kept saying a frozen "Closed 5 seconds ago" until force-closing Discord. Members also need accurate VC participation counts when several join within seconds.
