@@ -676,6 +676,7 @@ def _bounded_name_tile(
         secondary=palette.secondary,
         role="name",
         custom_font_bytes=custom_font_bytes,
+        preserve_text=True,
     )
     bounds = tile.getbbox()
     cropped = tile.crop(bounds) if bounds else tile
@@ -683,6 +684,57 @@ def _bounded_name_tile(
         cropped.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
     layer = Image.new("RGBA", (max_width, max_height), (0, 0, 0, 0))
     layer.alpha_composite(cropped, (0, max(0, (max_height - cropped.height) // 2)))
+    return layer
+
+
+def _single_line_emoji_name_tile(
+    name: str,
+    *,
+    spec: Layout,
+    palette: ProfilePalette,
+    assets: Mapping[str, bytes],
+    style_key: str = "clean",
+    custom_font_bytes: bytes = b"",
+) -> Image.Image:
+    """Fit the *complete* emoji-heavy name inside one header row.
+
+    Rendering at the final fixed font size was cutting off the middle/end of
+    decorated names. Fit actual raster width with combined grapheme tokens,
+    then downsample the *entire* line only if even the minimum size overflows.
+    No character slicing or ellipsis is allowed.
+    """
+    max_width = max(120, spec.content_right - spec.content_x - 24)
+    max_height = 76
+    probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    min_size = 20
+    size = min_size
+    for attempt in range(spec.name_size, min_size - 1, -2):
+        font = _font(attempt, style_key=style_key, custom_font=custom_font_bytes)
+        emoji_size = max(15, int(attempt * 0.84))
+        if _rich_width(probe, name, font, assets, emoji_size) + 12 <= max_width:
+            size = attempt
+            break
+
+    font = _font(size, style_key=style_key, custom_font=custom_font_bytes)
+    emoji_size = max(15, int(size * 0.84))
+    rendered_width = max(1, _rich_width(probe, name, font, assets, emoji_size) + 12)
+    # Allocate the measured complete line before any downscaling, so even
+    # multiple emoji ZWJ sequences cannot be accidentally clipped mid-token.
+    full = Image.new("RGBA", (rendered_width, max_height), (0, 0, 0, 0))
+    _draw_rich(
+        full,
+        ImageDraw.Draw(full, "RGBA"),
+        (6, max(2, (max_height - size) // 2)),
+        name,
+        font=font,
+        fill=palette.text + (255,),
+        assets=assets,
+        emoji_size=emoji_size,
+    )
+    if full.width > max_width:
+        full.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+    layer = Image.new("RGBA", (max_width, max_height), (0, 0, 0, 0))
+    layer.alpha_composite(full, (0, (max_height - full.height) // 2))
     return layer
 
 def _draw_meta_dates(image: Image.Image, dates: Sequence[str], palette: ProfilePalette, spec: Layout, assets: Mapping[str, bytes]) -> None:
@@ -1029,24 +1081,18 @@ def render_profile_signature(
     eyebrow = _fit(draw, eyebrow_value, eyebrow_font, spec.content_right - spec.content_x, assets, 18, 70)
     _draw_rich(image, draw, (spec.content_x, 42), eyebrow, font=eyebrow_font, fill=palette.primary + (255,), assets=assets, emoji_size=18)
 
-    name = _safe(display_name, 72) or "Member"
-    name_max_width = max(120, spec.content_right - spec.content_x - 24)
+    # Discord display names are user-controlled Unicode, not a fixed-width
+    # product label. Never cut by code point or replace the end with ellipsis.
+    name = _safe(display_name, 2048) or "Member"
     if _emoji_sequences(name):
-        font = _font(spec.name_size)
-        fitted = _fit(draw, name, font, name_max_width, assets, 50, 72)
-        name_layer = Image.new("RGBA", (name_max_width, 76), (0, 0, 0, 0))
-        name_draw = ImageDraw.Draw(name_layer, "RGBA")
-        _draw_rich(
-            name_layer,
-            name_draw,
-            (0, 6),
-            fitted,
-            font=font,
-            fill=palette.text + (255,),
+        name_tile = _single_line_emoji_name_tile(
+            name,
+            spec=spec,
+            palette=palette,
             assets=assets,
-            emoji_size=50,
+            style_key=style_key,
+            custom_font_bytes=bytes(style.get("custom_font") or b""),
         )
-        image.alpha_composite(name_layer, (spec.content_x, spec.name_y - 6))
     else:
         name_tile = _bounded_name_tile(
             name,
@@ -1055,7 +1101,7 @@ def render_profile_signature(
             palette=palette,
             custom_font_bytes=bytes(style.get("custom_font") or b""),
         )
-        image.alpha_composite(name_tile, (spec.content_x, spec.name_y - 6))
+    image.alpha_composite(name_tile, (spec.content_x, spec.name_y - 6))
 
     _draw_meta_dates(image, date_labels, palette, spec, assets)
 
