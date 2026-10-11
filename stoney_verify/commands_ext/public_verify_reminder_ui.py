@@ -25,14 +25,21 @@ async def _load(guild: discord.Guild) -> tuple[Mapping[str, Any], ReminderPolicy
     return raw, parse_policy(raw)
 
 
+def _role_id(cfg: Mapping[str, Any], key: str) -> int:
+    try:
+        return int(str(cfg.get(key) or "0"))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _can_enable(guild: discord.Guild, cfg: Mapping[str, Any]) -> str:
     if str(cfg.get("source") or "").startswith(("unavailable:", "unconfigured:")):
         return "The server's saved configuration is unavailable."
     if not basic_verify_allowed_for_guild(guild, cfg):
         return "This server does not currently have Simple Verify enabled."
-    if not guild.get_role(int(cfg.get("unverified_role_id") or 0)):
+    if not guild.get_role(_role_id(cfg, "unverified_role_id")):
         return "Map the Unverified role in Verification Center first."
-    if not guild.get_role(int(cfg.get("verified_role_id") or 0)):
+    if not guild.get_role(_role_id(cfg, "verified_role_id")):
         return "Map the Verified role in Verification Center first."
     if verification_channel(guild, cfg) is None:
         return "Save an existing text channel as the verification channel first."
