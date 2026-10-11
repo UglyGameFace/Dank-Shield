@@ -498,6 +498,13 @@ async def open_toke_command(
         source = interaction.channel
         if not isinstance(source, discord.TextChannel):
             return await _reply(interaction, "Use /toke in a regular text channel to send your GIF normally.")
+        source_perms = source.permissions_for(me)
+        if not (source_perms.view_channel and source_perms.read_message_history and source_perms.manage_messages):
+            return await _reply(
+                interaction,
+                "Dank Shield needs View Channel, Read Message History and Manage Messages here "
+                "to capture and clean up a temporary GIF. Ask staff to grant these or use /toke upload: or media:.",
+            )
         draft = pending_for(guild.id, member.id)
         if draft is not None:
             return await _reply(interaction, "You already have a Toke draft waiting for a GIF. Use its Post Without Media or Cancel button.")
