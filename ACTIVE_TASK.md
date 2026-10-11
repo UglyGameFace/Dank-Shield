@@ -20,7 +20,7 @@
 
 ### Changes
 
-- \`tickets_new/repository.py\`: new narrow paginated active ticket identity reader with explicit failure result and complete scan cap, no schema migration.
+- \`tickets_new/repository.py\`: new narrow paginated non-deleted ticket identity reader with explicit failure result and complete scan cap, no schema migration.
 - \`ticket_events.py\`: reuse the canonical external deletion close/delete transition; reconcile absent IDs through confirmed Discord REST 10003; preserve live, ghost and unknown/permission-blocked rows; cursor/25 REST checks per guild per pass prevents starvation or API pressure; skip individual stat edits because the existing periodic worker refreshes once.
 - \`security_stats.py\`: call reconciliation from existing 10-minute enabled-display refresh loop before metric reads. Live channel delete events continue their immediate refresh path.
 - \`tests/test_ticket_stats_missing_channel_reconcile.py\`: regression scenarios for pagination, DB failure, missed native deletion, cached/live/ghost/legacy safety, forbidden/non-10003/5xx/timeouts, alternate channel identity, fair budget and persistence failure.
