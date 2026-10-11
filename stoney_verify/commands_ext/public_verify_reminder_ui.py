@@ -94,7 +94,7 @@ def _embed(guild: discord.Guild, cfg: Mapping[str, Any], policy: ReminderPolicy)
     )
     if blocker:
         embed.add_field(name="Setup required", value=blocker, inline=False)
-    embed.set_footer(text="Disabled by default • Supabase delivery ledger required before enabling")
+    embed.set_footer(text="Disabled by default • Discloud PostgreSQL ledger required before enabling")
     return embed
 
 
@@ -206,7 +206,7 @@ class ReminderSettingsView(_OwnedView):
             if blocker:
                 return await _private(interaction, f"❌ Cannot enable: {blocker}")
             if not await ledger_ready():
-                return await _private(interaction, "❌ Reminder delivery table is unavailable. Apply the new Supabase migration before enabling.")
+                return await _private(interaction, "❌ Discloud PostgreSQL reminder ledger is unavailable. Verify the private database URL and apply the PostgreSQL reminder migration.")
         if not await _save(interaction, cfg, replace(policy, enabled=not policy.enabled)):
             return
         fresh, current = await _load(interaction.guild)
