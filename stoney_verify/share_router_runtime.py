@@ -40,7 +40,10 @@ from stoney_verify.share_router_media_resolver import (
 from stoney_verify.share_router_resources import (
     DEFAULT_SHARE_CHANNELS,
     SHARE_ROUTER_CATEGORY_NAME,
+    custom_share_source_name,
     is_share_router_category_name,
+    is_share_router_managed_category_name,
+    normalize_share_router_name,
     is_share_router_design_resource,
     share_source_key,
 )
@@ -53,6 +56,9 @@ from stoney_verify.torrent_streaming import (
 from stoney_verify.torrent_media_server import media_server_ready
 
 _DATA_LOCK = asyncio.Lock()
+_GUILD_SOURCE_LOCKS: dict[int, asyncio.Lock] = {}
+# Discord allows 50 channels per category and 500 channels per guild.
+_DISCORD_CATEGORY_CHANNEL_LIMIT = 50
 _RECENT_ROUTE_KEYS: dict[tuple[int, int, str], float] = {}
 URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
 _X_STATUS_PATH_RE = re.compile(r"^/([^/]+)/status/(\d+)(?:/.*)?$", re.IGNORECASE)
@@ -621,13 +627,13 @@ def _utc_iso() -> str:
 
 
 def _load_all_unlocked() -> dict[str, Any]:
-    try:
-        if not ROUTES_FILE.exists():
-            return {}
-        data = json.loads(ROUTES_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:
+    if not ROUTES_FILE.exists():
         return {}
+    # Do not silently overwrite other guilds' routes when storage is unreadable.
+    data = json.loads(ROUTES_FILE.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("Share Router configuration must contain a JSON object.")
+    return data
 
 
 def _save_all_unlocked(data: Mapping[str, Any]) -> None:
@@ -660,6 +666,143 @@ async def guild_routes(guild_id: int) -> list[dict[str, Any]]:
             item["delete_source"] = bool(item.get("delete_source", True))
             clean.append(item)
         return clean
+
+
+async def guild_custom_share_sources(guild_id: int) -> list[int]:
+    """Explicit custom proxy IDs scoped to one guild, using the existing route file."""
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        bucket = data.get(str(int(guild_id))) or {}
+        raw = bucket.get("custom_sources", []) if isinstance(bucket, dict) else []
+        if not isinstance(raw, list):
+            return []
+        return list(dict.fromkeys(
+            source_id for item in raw if (source_id := _safe_int(item, 0)) > 0
+        ))
+
+
+def _guild_source_lock(guild_id: int) -> asyncio.Lock:
+    return _GUILD_SOURCE_LOCKS.setdefault(int(guild_id), asyncio.Lock())
+
+
+async def create_custom_share_source(
+    guild: discord.Guild,
+    actor: discord.abc.User,
+    requested_name: str,
+) -> discord.TextChannel:
+    """Create a private, non-NSFW proxy and persist its identity within this guild."""
+    name = custom_share_source_name(requested_name)
+    async with _guild_source_lock(int(guild.id)):
+        hub = find_share_router_category(guild)
+        if hub is None:
+            raise ValueError("Run Create / Repair Hub before creating a custom proxy.")
+
+        managed = [
+            category for category in guild.categories
+            if is_share_router_managed_category_name(category.name)
+        ]
+        # Never reuse a name already present in a managed hub: duplicates make
+        # Android share-sheet selection ambiguous.
+        if any(
+            channel.name == name
+            for category in managed for channel in category.text_channels
+        ):
+            raise ValueError(f"#{name} already exists. Choose a different name.")
+
+        category = next(
+            (item for item in [hub, *[c for c in managed if c.id != hub.id]]
+             if len(item.channels) < _DISCORD_CATEGORY_CHANNEL_LIMIT),
+            None,
+        )
+        if category is None:
+            indices = {
+                int(key.split("-")[-1])
+                for item in managed
+                if (key := normalize_share_router_name(item.name)).rsplit("-", 1)[-1].isdigit()
+            }
+            index = next(n for n in range(2, 1000) if n not in indices)
+            category_name = f"🔗 SHARE ROUTES {index}"
+            overwrites = _permission_overwrite_map(guild, actor)
+            overwrites = await _add_configured_staff_overwrites(guild, overwrites)
+            category = await guild.create_category(
+                category_name, overwrites=overwrites,
+                reason="Dank Shield Share Router additional proxy hub",
+            )
+
+        overwrites = _permission_overwrite_map(guild, actor)
+        overwrites = await _add_configured_staff_overwrites(guild, overwrites)
+        source = await guild.create_text_channel(
+            name, category=category, nsfw=False, overwrites=overwrites,
+            reason="Dank Shield custom Share Router proxy",
+        )
+        try:
+            async with _DATA_LOCK:
+                data = _load_all_unlocked()
+                key = str(int(guild.id))
+                bucket = data.get(key)
+                if not isinstance(bucket, dict):
+                    bucket = {}
+                sources = [
+                    _safe_int(value, 0)
+                    for value in bucket.get("custom_sources", [])
+                ]
+                bucket["custom_sources"] = [
+                    str(value) for value in dict.fromkeys([*sources, int(source.id)])
+                    if value > 0
+                ]
+                data[key] = bucket
+                _save_all_unlocked(data)
+        except Exception:
+            # An unregistered proxy would accept posts without routing them.
+            try:
+                await source.delete(reason="Share Router registration failed; rollback")
+            except Exception:
+                _log(f"CRITICAL: failed to rollback unregistered source guild={guild.id} source={source.id}")
+            raise
+        return source
+
+
+async def delete_custom_share_source(guild: discord.Guild, source_id: int) -> None:
+    """Delete only an explicitly registered custom proxy, then its saved route."""
+    async with _guild_source_lock(int(guild.id)):
+        async with _DATA_LOCK:
+            data = _load_all_unlocked()
+            bucket = data.get(str(int(guild.id)))
+            sources = bucket.get("custom_sources", []) if isinstance(bucket, dict) else []
+            if not isinstance(sources, list) or int(source_id) not in {
+                _safe_int(value, 0) for value in sources
+            }:
+                raise ValueError("This is not a registered custom proxy in this server.")
+
+        source = guild.get_channel(int(source_id))
+        if source is not None:
+            if (
+                not isinstance(source, discord.TextChannel)
+                or source.category is None
+                or not is_share_router_managed_category_name(source.category.name)
+            ):
+                raise ValueError("Proxy was moved outside Share Routes; restore it before deleting.")
+            await source.delete(reason="Dank Shield custom Share Router proxy removed")
+
+        async with _DATA_LOCK:
+            data = _load_all_unlocked()
+            key = str(int(guild.id))
+            bucket = data.get(key)
+            if not isinstance(bucket, dict):
+                return
+            bucket["custom_sources"] = [
+                value for value in bucket.get("custom_sources", [])
+                if _safe_int(value, 0) != int(source_id)
+            ]
+            bucket["routes"] = [
+                route for route in bucket.get("routes", [])
+                if not (
+                    isinstance(route, dict)
+                    and _safe_int(route.get("source_channel_id"), 0) == int(source_id)
+                )
+            ]
+            data[key] = bucket
+            _save_all_unlocked(data)
 
 
 async def save_route(
