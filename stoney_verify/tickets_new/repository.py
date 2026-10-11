@@ -1494,6 +1494,62 @@ async def list_open_tickets_for_guild(
         return []
 
 
+
+def _select_active_ticket_channel_identities_for_guild_sync(
+    guild_id: str,
+) -> Optional[List[Dict[str, Any]]]:
+    """Page active channel identities; None means the scan is not trustworthy."""
+    sb = _sb()
+    if sb is None:
+        return None
+
+    page_size = 250
+    rows: List[Dict[str, Any]] = []
+    for page_index in range(200):
+        start = page_index * page_size
+        response = (
+            sb.table(TICKETS_TABLE)
+            .select("id,status,channel_id,discord_thread_id,is_ghost")
+            .eq("guild_id", guild_id)
+            .in_("status", ["open", "claimed"])
+            .order("id", desc=False)
+            .range(start, start + page_size - 1)
+            .execute()
+        )
+        page = getattr(response, "data", None)
+        if page is None:
+            return None
+        rows.extend(row for row in page if isinstance(row, dict))
+        if len(page) < page_size:
+            return rows
+
+    print(
+        f"⚠️ repository active-ticket channel reconciliation page cap "
+        f"guild={guild_id}; refusing partial scan"
+    )
+    return None
+
+
+async def list_active_ticket_channel_identities_for_guild(
+    guild_id: int | str,
+) -> Optional[List[Dict[str, Any]]]:
+    """An accurate, bounded-column snapshot for external deletion recovery."""
+    gid = _as_str_id(guild_id)
+    if not gid:
+        return None
+    try:
+        return await _run_db_op(
+            "select active ticket channel identities",
+            lambda: _select_active_ticket_channel_identities_for_guild_sync(gid),
+        )
+    except Exception as exc:
+        print(
+            f"⚠️ repository active-ticket channel reconciliation failed "
+            f"guild={gid} error={type(exc).__name__}: {exc}"
+        )
+        return None
+
+
 async def list_tickets_for_owner(
     *,
     guild_id: int | str,
@@ -2618,6 +2674,7 @@ __all__ = [
     "get_ticket_by_any_channel_id",
     "find_open_ticket_for_owner",
     "list_open_tickets_for_guild",
+    "list_active_ticket_channel_identities_for_guild",
     "list_tickets_for_owner",
     "insert_ticket",
     "upsert_ticket",
