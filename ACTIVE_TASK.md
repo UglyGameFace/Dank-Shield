@@ -17,6 +17,7 @@
 - Shared typography engine: add an **opt-in** `preserve_text=True` setting. First reduce font size within the existing normal range; if still too wide, draw the whole name once and uniformly scale its tile to the allotted single-line rectangle. Other welcome/profile metadata typography keeps existing defaults.
 - Modern rich emoji names: measure complete emoji/text tokens, select the largest fitting font, or uniformly rescale the full composed raster (never `_fit` or split grapheme sequences). Respect fixed avatar/brand/platform regions.
 - Legacy compact renderer: use the same full-name preserve mode.
+- Platform username/handle text in standard and platform-focused themes also uses a single complete line instead of the prior two-line `_draw_complete` wrapping path. Server branding and role labels keep their established rules.
 - Regression tests: exact long emoji screenshot pattern, mixed Unicode, styled effects, all layouts, safe pixel bounds, legacy, and non-name typography compatibility.
 
 ### Remaining gates
