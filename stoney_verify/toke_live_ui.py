@@ -112,87 +112,137 @@ def _sesh_people(
     return people, voice if is_voice else None, len(voice_ids)
 
 
+_STATUS_ICONS = {
+    "Host": "👑",
+    "💨 Cheers": "💨",
+    "🙋 Joining": "🙋",
+    "🔊 In VC": "🔊",
+}
+
+
 def _sesh_member_lines(
     people: list[tuple[int, tuple[str, ...]]], *,
-    starter_id: int, limit: int = 8, host_named_in_header: bool = False,
+    starter_id: int, limit: int = 3, host_named_in_header: bool = False,
 ) -> str:
-    """Use exactly one Discord mention per member, never name + mention.
+    """Compact mobile-first preview: roles first, one name or mention after.
 
-    The public card already names the host in its original description, so
-    its roster line shows 'Host' without printing the same name again.
+    The full roster lives behind Who's Coming. Never concatenate multiple
+    duplicate labels onto a heavily decorated Discord nickname.
     """
     rendered: list[str] = []
     for uid, statuses in people[:limit]:
+        icons = "".join(_STATUS_ICONS[s] for s in statuses if s in _STATUS_ICONS)
         subject = "**Host**" if host_named_in_header and uid == starter_id else f"<@{uid}>"
-        parts = tuple(status for status in statuses if status != "Host")
-        suffix = " · ".join(parts)
-        if not suffix:
-            suffix = "Started the sesh" if uid == starter_id else "Here"
-        rendered.append(f"{subject} • {suffix}")
+        rendered.append(f"{icons}  {subject}".strip())
     if len(people) > limit:
-        rendered.append(f"…and {len(people) - limit} more. Tap **Who's Coming?**")
+        rendered.append(f"**+{len(people) - limit} more** · See **Who's Coming?**")
     return "\n".join(rendered) if rendered else "Nobody yet"
 
 
 def render_card(guild: discord.Guild, session: Mapping[str, Any], original: discord.Embed) -> discord.Embed:
+    """Render a genuinely closed card, or a concise participant dashboard."""
     embed = original.copy()
     embed.clear_fields()
-    cheers_ids = {int(uid) for uid in session.get("cheers_ids", []) if int(uid) > 0}
+    cheer_ids = {int(uid) for uid in session.get("cheers_ids", []) if int(uid) > 0}
     going_ids = {int(uid) for uid in session.get("going_ids", []) if int(uid) > 0}
+    active = bool(session.get("active", False))
+    expiry = float(session.get("expires_at", 0) or 0)
+    if not active or expiry <= time.time():
+        ended_at = int(session.get("closed_at") or expiry or time.time())
+        reason = str(session.get("close_reason") or "expired")
+        embed.title = "💨 Toke Time · Sesh Ended"
+        if embed.description:
+            embed.description = embed.description.replace(
+                "is calling the sesh crowd.", "hosted this sesh."
+            )
+        embed.add_field(
+            name="✅ This sesh has ended",
+            value=(
+                f"Closed <t:{ended_at}:R>."
+                + (" The time limit was reached." if reason == "expired" else " The host or staff ended it.")
+                + "\nStart a new `/toke` when you're ready. This announcement is no longer taking responses."
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="📊 Final responses",
+            value=f"💨 Cheers **{len(cheer_ids)}**  ·  🙋 Joining **{len(going_ids)}**",
+            inline=False,
+        )
+        embed.color = discord.Color.dark_grey()
+        return embed
+
     people, voice, voice_count = _sesh_people(guild, session)
     visible = bool(session.get("show_member_names", True))
-
+    channel_text = voice.mention if voice is not None else "No VC selected"
     embed.add_field(
-        name=f"👥 Sesh crowd • 💨 Cheers {len(cheers_ids)} · 🙋 Joining {len(going_ids)}",
+        name="📊 Sesh activity",
         value=(
-            _sesh_member_lines(
-                people,
-                starter_id=int(session.get("starter_id", 0)),
-                host_named_in_header=True,
-            )
-            if visible else "Participant names are private in this server."
+            f"💨 **Cheers: {len(cheer_ids)}**   ·   🙋 **Joining: {len(going_ids)}**\n"
+            f"🔊 **In VC: {voice_count}**   ·   {channel_text}"
         )[:1024],
         inline=False,
     )
     embed.add_field(
-        name=f"🔊 In voice now • {voice_count}",
-        value=voice.mention if voice is not None else "No voice channel selected yet.",
-        inline=False,
-    )
-    active = bool(session.get("active", False))
-    embed.add_field(
-        name="Session",
+        name=f"👥 People • {len(people)}",
         value=(
-            f"Ends <t:{int(session.get('expires_at', 0))}:R> • "
-            "Cheers = interested; I'm Joining = planning to come."
-        ) if active else "This sesh has ended. Start a new /toke to invite everyone again.",
+            _sesh_member_lines(
+                people, starter_id=int(session.get("starter_id", 0)),
+                host_named_in_header=True,
+            ) if visible else "Participant names are private in this server."
+        )[:1024],
         inline=False,
     )
-    embed.color = discord.Color.green() if active else discord.Color.dark_grey()
+    embed.add_field(
+        name="⏳ Session",
+        value=f"Ends <t:{int(expiry)}:R>  ·  💨 Interested  ·  🙋 Planning to join  ·  🔊 In voice",
+        inline=False,
+    )
+    embed.color = discord.Color.green()
     return embed
 
 
-async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discord.Interaction | None = None) -> None:
+async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discord.Interaction | None = None) -> bool:
+    """Reconcile from current store state, then acknowledge terminal delivery.
+
+    Never edit Discord using a stale active=True snapshot (the old expiry bug).
+    """
     guild = bot.get_guild(int(session["guild_id"]))
     if guild is None:
-        return
+        return False
     channel = guild.get_channel(int(session["channel_id"]))
     if not isinstance(channel, discord.TextChannel):
-        return
+        return False
+    current = await toke_sessions.get(int(session["guild_id"]), int(session["message_id"]))
+    if current is None:
+        return False
     if interaction is not None and interaction.message is not None:
         message = interaction.message
     else:
-        message = await channel.fetch_message(int(session["message_id"]))
-    existing = (message.embeds or [])
+        try:
+            message = await channel.fetch_message(int(session["message_id"]))
+        except discord.NotFound:
+            if not current.get("active", False):
+                await toke_sessions.mark_closed_synced(int(session["guild_id"]), int(session["message_id"]))
+            return False
+    existing = message.embeds or []
     if not existing:
-        return
-    view = TokeCheersView(
-        int(session["starter_id"]), int(session["starter_role_id"]),
-        voice_channel_id=int(session.get("voice_channel_id", 0) or 0),
-        active=bool(session.get("active", False)),
-        guild_id=int(session["guild_id"]), message_id=int(session["message_id"]),
+        return False
+    active = bool(current.get("active", False))
+    view = (
+        TokeCheersView(
+            int(current["starter_id"]), int(current["starter_role_id"]),
+            voice_channel_id=int(current.get("voice_channel_id", 0) or 0),
+            active=True, guild_id=int(current["guild_id"]), message_id=int(current["message_id"]),
+        ) if active else None
     )
-    await message.edit(embed=render_card(guild, session, existing[0]), view=view, allowed_mentions=discord.AllowedMentions.none())
+    await message.edit(
+        embed=render_card(guild, current, existing[0]),
+        view=view, allowed_mentions=discord.AllowedMentions.none(),
+    )
+    if not active:
+        await toke_sessions.mark_closed_synced(int(current["guild_id"]), int(current["message_id"]))
+    return True
 
 
 class TokeRosterView(discord.ui.View):
@@ -203,7 +253,7 @@ class TokeRosterView(discord.ui.View):
         self.page = max(0, int(page))
         people, _, _ = _sesh_people(guild, session)
         self.lines = [
-            f"{index}. <@{uid}> • " + " · ".join(statuses)
+            f"{index}. " + "".join(_STATUS_ICONS[s] for s in statuses if s in _STATUS_ICONS) + f"  <@{uid}>"
             for index, (uid, statuses) in enumerate(people, start=1)
         ]
         self.pages = max(1, (len(self.lines) + 14) // 15)
@@ -221,7 +271,7 @@ class TokeRosterView(discord.ui.View):
             description="\n".join(self.lines[start:start+15]) or "Nobody has responded yet.",
             color=discord.Color.green(),
         ).set_footer(
-            text=f"Page {self.page+1}/{self.pages} • Each person is listed once with their current status."
+            text=f"Page {self.page+1}/{self.pages} • 👑 Host · 💨 Cheers · 🙋 Joining · 🔊 In VC"
         )
 
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, custom_id="dank:toke:roster:prev")
