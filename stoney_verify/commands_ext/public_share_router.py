@@ -24,6 +24,7 @@ from stoney_verify.share_router_runtime import (
     find_share_source_channel,
     guild_routes,
     guild_custom_share_sources,
+    guild_pending_source_cleanup_count,
     prune_missing_custom_share_sources,
     remove_route,
     route_health,
@@ -151,6 +152,21 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
     embed.add_field(name="Proxy hub", value=hub_status[:1024], inline=False)
     live_custom = sum(isinstance(guild.get_channel(source_id), discord.TextChannel) for source_id in custom_ids)
     embed.add_field(name="Custom proxies", value=f"{live_custom} active / {len(custom_ids)} registered in this server. Create Proxy adds another source without replacing the four defaults.", inline=False)
+    pending_cleanup = await guild_pending_source_cleanup_count(int(guild.id))
+    cleanup_status = (
+        f"⚠️ {pending_cleanup} delivered post(s) awaiting deletion. "
+        "Check Dank Shield's Manage Messages permission in the proxy channels."
+        if pending_cleanup else "✅ Delivered shares are removed from their proxy sources."
+    )
+    embed.add_field(
+        name="Automatic proxy cleanup",
+        value=(
+            f"{cleanup_status}\n"
+            "If forwarding fails, the original is kept so no share is lost. "
+            "Successful forwards are cleaned automatically, including custom and default proxies."
+        )[:1024],
+        inline=False,
+    )
 
     lines: list[str] = []
     healthy = 0
