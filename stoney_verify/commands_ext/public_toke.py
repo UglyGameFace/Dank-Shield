@@ -109,6 +109,17 @@ def _is_direct_media_url(value: str) -> bool:
     return False
 
 
+def _is_stable_provider_media_url(value: str) -> bool:
+    """Avoid embedding short-lived Discord CDN URLs from deleted draft posts."""
+    parsed = urlsplit(str(value or ""))
+    host = str(parsed.hostname or "").lower()
+    return parsed.scheme.lower() == "https" and (
+        host == "media.tenor.com"
+        or host == "i.giphy.com"
+        or (host.startswith("media") and host.endswith(".giphy.com"))
+    )
+
+
 def _attachment_is_supported_media(attachment: Any) -> bool:
     content_type = str(getattr(attachment, "content_type", "") or "").lower()
     if ";" in content_type:
@@ -313,14 +324,22 @@ async def _publish_toke(
         upload_file: Optional[discord.File] = None
         direct = bool(clean_media and _is_direct_media_url(clean_media))
         if upload is not None:
+            # Discord may display an attachment both as its own preview and as
+            # attachment:// embed media after any message edit (Cheers, VC,
+            # expiry, etc.). Toke cards are edited routinely, so use the
+            # native attachment preview ONCE instead of duplicating it.
             upload_file = await upload.to_file()
-            embed.set_image(url=f"attachment://{upload_file.filename}")
         elif direct:
+            # Provider/CDN URLs do not require a message attachment and remain
+            # inside the Toke embed through later session edits.
             embed.set_image(url=clean_media)
+        elif clean_media:
+            # Putting a Tenor/Giphy page URL in message.content lets Discord
+            # unfurl a SECOND standalone preview above the Toke card.
+            # Keep the fallback link clickable inside the card instead.
+            embed.description += f"\n\n[Open shared GIF or image]({clean_media})"
 
         content = notify_role.mention
-        if clean_media and not direct:
-            content += f"\n{clean_media}"
         voice_id = choose_voice(guild, member, settings)
         view = TokeCheersView(
             member.id, starter_role.id, voice_channel_id=voice_id, guild_id=guild.id,
@@ -391,13 +410,18 @@ async def publish_toke_from_draft(
     clean_media = ""
     upload = None
     if media_message is not None:
-        for attachment in media_message.attachments:
-            if _attachment_is_supported_media(attachment):
-                upload = attachment
-                break
-        if upload is None:
-            found = media_url_from_message(media_message)
-            if found:
+        found = media_url_from_message(media_message)
+        # Prefer a provider-hosted public image when Discord's GIF picker
+        # supplied one; it can stay *inside* the embed without a local upload
+        # and without leaving a duplicate native attachment on edits.
+        if found and _is_stable_provider_media_url(found):
+            clean_media = _clean_media_url(found)
+        else:
+            for attachment in media_message.attachments:
+                if _attachment_is_supported_media(attachment):
+                    upload = attachment
+                    break
+            if upload is None and found:
                 clean_media = _clean_media_url(found)
         if upload is None and not clean_media:
             raise ValueError("No supported GIF or picture could be read. Check Message Content Intent.")
