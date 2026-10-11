@@ -654,7 +654,7 @@ class ShareRouterView(_OwnedView):
             return
         await interaction.response.send_modal(ShareRouterCreateSourceModal(int(interaction.user.id)))
 
-    @discord.ui.button(label="Clean Missing Proxies", emoji="🧹", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Remove Missing Proxies", emoji="🧹", style=discord.ButtonStyle.secondary, row=2)
     async def clean_missing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_manage(interaction):
