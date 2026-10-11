@@ -1851,9 +1851,9 @@ async def refresh_all_security_stats_displays() -> None:
         try:
             # Use the existing ten-minute display worker rather than starting a
             # second ticket polling loop. Reconcile before calculating counters.
-            from .ticket_events import reconcile_missing_active_ticket_channels_for_guild
+            from .ticket_events import reconcile_missing_ticket_channels_for_guild
 
-            await reconcile_missing_active_ticket_channels_for_guild(guild)
+            await reconcile_missing_ticket_channels_for_guild(guild)
         except Exception as exc:
             print(
                 f"⚠️ security_stats ticket reconciliation failed guild={gid} "
