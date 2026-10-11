@@ -685,6 +685,45 @@ def _guild_source_lock(guild_id: int) -> asyncio.Lock:
     return _GUILD_SOURCE_LOCKS.setdefault(int(guild_id), asyncio.Lock())
 
 
+async def available_share_source_ids(guild: discord.Guild) -> set[int]:
+    """One authority for visible defaults, registered custom IDs and legacy routes."""
+    category = find_share_router_category(guild)
+    ids: set[int] = set(await guild_custom_share_sources(int(guild.id)))
+    if category is not None:
+        ids.update(
+            int(source.id) for name in DEFAULT_SHARE_CHANNELS
+            if (source := find_share_source_channel(category, name)) is not None
+        )
+    ids.update(
+        _safe_int(route.get("source_channel_id"), 0)
+        for route in await guild_routes(int(guild.id))
+    )
+    return {
+        source_id for source_id in ids
+        if isinstance(guild.get_channel(source_id), discord.TextChannel)
+    }
+
+
+async def save_managed_share_route(
+    guild: discord.Guild,
+    *,
+    source_channel_id: int,
+    target_channel_id: int,
+    created_by_id: int,
+) -> None:
+    """Revalidate selection under the same per-guild lock as proxy deletion."""
+    async with _guild_source_lock(int(guild.id)):
+        if int(source_channel_id) not in await available_share_source_ids(guild):
+            raise ValueError("The proxy source no longer exists or is no longer configured.")
+        await save_route(
+            int(guild.id),
+            source_channel_id=int(source_channel_id),
+            target_channel_id=int(target_channel_id),
+            delete_source=True,
+            created_by_id=int(created_by_id),
+        )
+
+
 async def create_custom_share_source(
     guild: discord.Guild,
     actor: discord.abc.User,
