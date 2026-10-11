@@ -16,6 +16,7 @@ from ..verification_reminders import (
     parse_policy,
     reminder_text,
     verification_channel,
+    delivery_channel,
 )
 from .public_verify_command_center import _OwnedView, _private, _replace, _require_staff
 
@@ -43,6 +44,14 @@ def _can_enable(guild: discord.Guild, cfg: Mapping[str, Any]) -> str:
         return "Map the Verified role in Verification Center first."
     if verification_channel(guild, cfg) is None:
         return "Save an existing text channel as the verification channel first."
+    policy = parse_policy(cfg)
+    if policy.delivery == "channel":
+        channel = delivery_channel(guild, policy)
+        if channel is None:
+            return "Choose a reminder text channel below."
+        me = guild.me
+        if me is None or not channel.permissions_for(me).view_channel or not channel.permissions_for(me).send_messages:
+            return "Dank Shield needs View Channel and Send Messages in the reminder channel."
     return ""
 
 
@@ -74,7 +83,13 @@ def _embed(guild: discord.Guild, cfg: Mapping[str, Any], policy: ReminderPolicy)
     )
     embed.add_field(
         name="Delivery",
-        value="Private DM • no public pings • atomic duplicate prevention",
+        value=(
+            "Private DM (no public ping)" if policy.delivery == "dm"
+            else "Member mention in " + (
+                delivery_channel(guild, policy).mention
+                if delivery_channel(guild, policy) else "an unconfigured channel"
+            )
+        ) + " • atomic duplicate prevention",
         inline=False,
     )
     if blocker:
@@ -109,7 +124,7 @@ class SettingsModal(discord.ui.Modal, title="Verification Reminder Settings"):
     repeat_delay = discord.ui.TextInput(label="Repeat cooldown (hours, 12-720)", max_length=3)
     max_times = discord.ui.TextInput(label="Maximum reminders per join (1-5)", max_length=1)
     message = discord.ui.TextInput(
-        label="Friendly DM wording (optional)", style=discord.TextStyle.paragraph,
+        label="Friendly reminder wording (optional)", style=discord.TextStyle.paragraph,
         max_length=240, required=False,
         placeholder="Please verify to unlock access to our server.",
     )
@@ -144,11 +159,41 @@ class SettingsModal(discord.ui.Modal, title="Verification Reminder Settings"):
             await _private(interaction, embed=_embed(interaction.guild, fresh, current), view=ReminderSettingsView(self.owner_id, current))
 
 
+class ReminderChannelPicker(discord.ui.ChannelSelect):
+    def __init__(self, parent: "ReminderSettingsView") -> None:
+        self.parent_view = parent
+        super().__init__(
+            placeholder="Select reminder channel (channel mode)",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+            row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.parent_view.owner_id or not await _require_staff(interaction):
+            return
+        picked = self.values[0] if self.values else None
+        guild = interaction.guild
+        channel = guild.get_channel(int(getattr(picked, "id", 0) or 0)) if guild else None
+        if not isinstance(channel, discord.TextChannel):
+            return await _private(interaction, "❌ Select an existing text channel.")
+        bot_member = guild.me
+        if bot_member is None or not channel.permissions_for(bot_member).view_channel or not channel.permissions_for(bot_member).send_messages:
+            return await _private(interaction, "❌ Dank Shield needs View Channel and Send Messages there.")
+        cfg, policy = await _load(guild)
+        updated = replace(policy, reminder_channel_id=int(channel.id))
+        if await _save(interaction, cfg, updated):
+            fresh, current = await _load(guild)
+            await _replace(interaction, embed=_embed(guild, fresh, current), view=ReminderSettingsView(self.parent_view.owner_id, current))
+
+
 class ReminderSettingsView(_OwnedView):
     def __init__(self, owner_id: int, policy: ReminderPolicy) -> None:
         super().__init__(owner_id)
         self.toggle.label = "Disable" if policy.enabled else "Enable"
         self.toggle.style = discord.ButtonStyle.danger if policy.enabled else discord.ButtonStyle.success
+        self.add_item(ReminderChannelPicker(self))
 
     @discord.ui.button(label="Enable", emoji="🔔", style=discord.ButtonStyle.success, row=0)
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -175,7 +220,7 @@ class ReminderSettingsView(_OwnedView):
         _, policy = await _load(interaction.guild)
         await interaction.response.send_modal(SettingsModal(self.owner_id, policy))
 
-    @discord.ui.button(label="Preview DM", emoji="✉️", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Preview", emoji="✉️", style=discord.ButtonStyle.secondary, row=0)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_staff(interaction):
@@ -186,7 +231,29 @@ class ReminderSettingsView(_OwnedView):
             return await _private(interaction, "❌ Configure the verification channel before previewing.")
         await _private(interaction, reminder_text(interaction.guild, channel, cfg, policy))
 
-    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Use Channel", emoji="📣", style=discord.ButtonStyle.secondary, row=1)
+    async def use_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_staff(interaction):
+            return
+        cfg, policy = await _load(interaction.guild)
+        if delivery_channel(interaction.guild, replace(policy, delivery="channel")) is None:
+            return await _private(interaction, "❌ Select a reminder text channel using the picker below first.")
+        if await _save(interaction, cfg, replace(policy, delivery="channel")):
+            fresh, current = await _load(interaction.guild)
+            await _replace(interaction, embed=_embed(interaction.guild, fresh, current), view=ReminderSettingsView(self.owner_id, current))
+
+    @discord.ui.button(label="Use DMs", emoji="✉️", style=discord.ButtonStyle.secondary, row=1)
+    async def use_dms(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_staff(interaction):
+            return
+        cfg, policy = await _load(interaction.guild)
+        if await _save(interaction, cfg, replace(policy, delivery="dm")):
+            fresh, current = await _load(interaction.guild)
+            await _replace(interaction, embed=_embed(interaction.guild, fresh, current), view=ReminderSettingsView(self.owner_id, current))
+
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_staff(interaction):
@@ -194,7 +261,7 @@ class ReminderSettingsView(_OwnedView):
         cfg, policy = await _load(interaction.guild)
         await _replace(interaction, embed=_embed(interaction.guild, cfg, policy), view=ReminderSettingsView(self.owner_id, policy))
 
-    @discord.ui.button(label="Back to Verification", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Back to Verification", emoji="◀️", style=discord.ButtonStyle.secondary, row=3)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_staff(interaction):
