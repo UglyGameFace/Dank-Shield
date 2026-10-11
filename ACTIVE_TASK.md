@@ -18,6 +18,10 @@
 
 **Next action:** Finish exact-head reminder+retention CI, PG16 SQL workflow, and final scoped diff inspection. Confirm Discloud private database config/migration without sharing secrets. Canary Simple Verify role changes, member departures and role/Discord/DB outages; only then remove draft status and merge.
 
+### Backlog — Bad actor historical intelligence (NOT active)
+
+**User requirement (Oct 11):** Dank Shield should remember documented bad actors so that a planned additional security feature can use an established history rather than starting cold. Preserve meaningful historical security evidence from indiscriminate database expiry: store authenticated Discord IDs, guild scope, exact source event, timestamp, action, severity/confidence, outcome/reversal, and provenance only where necessary. Keep a per-guild vs cross-guild disclosure/authority model, false-positive corrections and appeals, explicit retention and deletion authority, minimal PII, deduplication, capacity and privacy safeguards. Do not treat reports/allegations as verified facts, or auto-punish without safeguards. This is a distinct evidence collection/assessment capability, **not** authorization to implement it while PostgreSQL reminder integration PR #511 is active. No new bad-actor collection or security enforcement is claimed. Investigate existing AntiNuke/raid/spam/moderation reputation authority and migrations only after this task's Definition of Done or exact FORCE SWITCH. The broad PostgreSQL data lifecycle policy must allow justified durable evidence instead of indiscriminate short TTLs.
+
 ### SUSPENDED — PR #509 Server Stats live acceptance
 The prior Server Stats code was merged into the deployment branch before PR #510, but real Discloud-native deletion and reconciliation acceptance remains pending. No code changes to Server Stats are permitted inside this active task.
 
