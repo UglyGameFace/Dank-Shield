@@ -318,7 +318,7 @@ def test_retention_deletes_only_rest_confirmed_departed_members(monkeypatch):
             raise AssertionError("unexpected member lookup")
 
     def fake_candidates(cutoff, *, after, limit):
-        assert cutoff <= now - timedelta(days=90)
+        assert now - timedelta(days=90) <= cutoff <= now - timedelta(days=89)
         assert after is None
         assert limit == reminders.CLEANUP_BATCH_SIZE
         return rows
@@ -352,7 +352,10 @@ def test_retention_failure_does_not_reset_paging_or_remove_state(monkeypatch):
 
 def test_retention_keyset_continues_past_members_still_present(monkeypatch):
     old = datetime.now(timezone.utc) - timedelta(days=95)
-    rows = [("1", str(i), old, old) for i in range(reminders.CLEANUP_BATCH_SIZE)]
+    rows = sorted(
+        [("1", str(i), old, old) for i in range(reminders.CLEANUP_BATCH_SIZE)],
+        key=lambda item: (item[3], item[0], item[1]),
+    )
     pages = []
 
     def candidates(cutoff, *, after, limit):
