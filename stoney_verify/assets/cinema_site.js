@@ -147,13 +147,76 @@
       },
       ...options,
     });
+    // Report the API pathname, never URL query parameters or signed tokens.
+    const method = String(options.method || "GET").toUpperCase();
+    let requestPath = String(path || "").split("?")[0].split("#")[0];
+    try {
+      requestPath = new URL(API_BASE + path, window.location.href).pathname;
+    } catch (_error) {
+      // Preserve only the query-stripped relative path if URL parsing fails.
+    }
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+    const isJson = /\b(?:application\/json|[a-z0-9.+-]+\+json)\b/.test(contentType);
+    let finalPath = "";
+    try {
+      finalPath = new URL(response.url, window.location.href).pathname;
+    } catch (_error) {
+      // An opaque proxy response may not expose its final URL.
+    }
+    if (response.redirected) {
+      console.error("cinema_api_unexpected_redirect", {
+        path: requestPath, method, status: response.status,
+        contentType: contentType || "missing", finalPath,
+      });
+      throw new Error(
+        `Cinema request was redirected to ${finalPath || "another page"} (HTTP ${response.status}). Reopen Cinema and retry. If it continues, check site routing and sign-in.`,
+      );
+    }
     if (!response.ok) {
-      const text = (await response.text()).trim();
+      let message = `Cinema request failed (HTTP ${response.status}).`;
+      if (contentType.includes("text/html")) {
+        message = `Cinema received an HTML error page (HTTP ${response.status}) instead of an API response. Check the site origin or proxy.`;
+      } else {
+        const body = (await response.text()).trim();
+        if (isJson) {
+          try {
+            const data = JSON.parse(body);
+            message = String(data.error || data.message || data.detail || message).slice(0, 500);
+          } catch (_error) {
+            message = body.slice(0, 500) || message;
+          }
+        } else {
+          message = body.slice(0, 500) || message;
+        }
+      }
+      if (contentType.includes("text/html") || response.status >= 500) {
+        console.error("cinema_api_http_error", {
+          path: requestPath, method, status: response.status,
+          contentType: contentType || "missing", finalPath,
+        });
+        message += ` Request: ${method} ${requestPath}. Response: ${contentType || "unknown type"}.`;
+      }
       const diagnostic = authDiagnosticText(await authDiagnostics());
-      const message = text || `Cinema request failed (${response.status}).`;
       throw new Error(diagnostic ? `${message}\n\n${diagnostic}` : message);
     }
-    return response.json();
+    if (!isJson) {
+      console.error("cinema_api_non_json_success", {
+        path: requestPath, method, status: response.status,
+        contentType: contentType || "missing", finalPath,
+      });
+      throw new Error(
+        `Cinema API returned ${contentType || "an unknown response type"} (HTTP ${response.status}) instead of JSON for ${requestPath}. Check the site origin and routing before retrying.`,
+      );
+    }
+    try {
+      return await response.json();
+    } catch (_error) {
+      console.error("cinema_api_invalid_json", {
+        path: requestPath, method, status: response.status,
+        contentType: contentType || "missing", finalPath,
+      });
+      throw new Error(`Cinema API returned invalid JSON (HTTP ${response.status}) for ${requestPath}. Check the site logs before retrying.`);
+    }
   }
 
   function node(tag, className = "", text = "") {

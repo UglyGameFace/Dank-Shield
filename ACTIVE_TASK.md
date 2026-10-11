@@ -1,6 +1,24 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — CINEMA-SUBTITLE-SUPPORT-20261010
+## CURRENT ACTIVE TASK — CINEMA-HTML-INSTEAD-OF-JSON-REGRESSION-20261010
+
+**User evidence:** 2026-10-10 19:16 ET Samsung Browser at `stoneyverify.discloud.dev`, Cinema TV episode card `E3 • OutKast`; bottom toast shows `Unexpected token '<', "<!doctype "... is not valid JSON`. This is a JSON parser consuming HTML on an API call. Exact originating request URL/status/content type is not observable from screenshot.
+
+**Production branch at investigation:** `aaa-cinema-pre-pregateway-bind@965633cce170f0d222d8edf5f9777f5a50d40788`, merge of PR #500 at 23:17:11 UTC, AFTER screenshot (~23:16:49 UTC). Therefore new subtitle code cannot explain this screenshot. GitHub `discloud/commit` status is success, but deployed process SHA and live network body not independently verified.
+
+**Root cause confirmed in code:** `stoney_verify/assets/cinema_site.js` production helper `api()` assumed every HTTP success was JSON and called `response.json()` regardless of content type or redirects. A main-branch-only fix and its test `tests/test_cinema_api_response_contract.py` already handled HTML/redirect/malformed-JSON cases, but were not merged into the Discloud branch. This is a cross-branch regression; passing CI on that branch did not cover the missing contract. The *upstream reason* why one API request returned HTML (login/redirect, proxy/origin route, or temporary gateway response) is not proven. Backend `cinema_play_api` returns `web.json_response` normally; do not label the episode corrupt or guess the proxy status.
+
+**Task/branch:** Isolated branch `fix/cinema-api-html-json-contract-discloud-20261010`, based on exact Discloud GitHub SHA `965633cce170f0d222d8edf5f9777f5a50d40788`; dedicated draft PR until tests, root-cause analysis and browser/Discloud acceptance.
+
+**Patch:** Port the proven main-branch response guard to Cinema's actual production JS (content-type validation, unexpected redirects, bounded HTML errors, malformed JSON, sanitized method/path/status logging); port Node-backed JS regression from main; bump `site.js` version 18→19 for Samsung/other browser cache refresh. Do not auto-retry the POST /play request because it may create a room/torrent session and could duplicate work. No playback, Cinema auth, torrent, sync, or subtitle API logic changed.
+
+**Unresolved acceptance:** Obtain actual failing API method/path/status/Content-Type/redirect and origin logs from a recurrence. Exact-head CI, review, Discloud deployed SHA, live Samsung Browser reproduction and ideally second browser validation required before calling this fixed. The patch makes the error diagnosable and prevents raw JSON parse leakage; it cannot guarantee the upstream HTML source is repaired.
+
+## PREVIOUS TASK — CINEMA-SUBTITLE-SUPPORT-20261010 (MERGED)
+
+**Status:** PR #500 merged into Discloud branch `965633cce170f0d222d8edf5f9777f5a50d40788` on 2026-10-10 23:17:11 UTC. Pending separate live subtitle acceptance.
+
+## ARCHIVED TASK DETAILS — CINEMA-SUBTITLE-SUPPORT-20261010
 
 **Authorized transition:** After merging PR #499, user explicitly said “let's do it now” then “continue implementing” subtitles. Do not switch tasks without user directive.
 
