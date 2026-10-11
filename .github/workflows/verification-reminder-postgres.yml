@@ -1,0 +1,58 @@
+name: Verification Reminder PostgreSQL
+
+on:
+  pull_request:
+    branches: [aaa-cinema-pre-pregateway-bind]
+    paths:
+      - ".github/workflows/verification-reminder-postgres.yml"
+      - "postgres/migrations/202610110001_verify_unverified_reminders.sql"
+      - "stoney_verify/verification_reminder_postgres.py"
+      - "stoney_verify/verification_reminders.py"
+      - "tests/test_verification_reminder_postgres.py"
+      - "tests/test_verification_reminders.py"
+      - "requirements.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-ledger:
+    name: PostgreSQL 16 reminder claims and concurrency
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+      DANK_VERIFY_REMINDER_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      RUN_REMINDER_PG_INTEGRATION: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Apply schema twice and confirm idempotence
+        run: |
+          psql -v ON_ERROR_STOP=1 -f postgres/migrations/202610110001_verify_unverified_reminders.sql
+          psql -v ON_ERROR_STOP=1 -f postgres/migrations/202610110001_verify_unverified_reminders.sql
+      - name: Install isolated PostgreSQL test dependencies
+        run: python -m pip install -q pytest "psycopg[binary]>=3.2.0,<4.0.0"
+      - name: Verify atomic claims and replay safety on PostgreSQL 16
+        run: python -m pytest tests/test_verification_reminder_postgres.py -q --tb=short

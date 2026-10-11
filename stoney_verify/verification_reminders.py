@@ -3,10 +3,11 @@ from __future__ import annotations
 """Opt-in, per-guild Simple Verify nudges backed by canonical role truth.
 
 Only the saved verification mode, mapped roles and channel can authorize a
-reminder. Delivery claims are atomic in Supabase and fail closed on errors.
+reminder. Delivery claims are atomic in Discloud PostgreSQL and fail closed on errors.
 """
 
 import asyncio
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
@@ -17,15 +18,22 @@ from .guild_config import get_guild_config
 from .role_truth import clear_cache as clear_role_truth_cache
 from .role_truth import member_is_pending_verification
 from .setup_engine.verification_modes import basic_verify_allowed_for_guild
+from .verification_reminder_postgres import (
+    claim_sync as _pg_claim_sync,
+    ready_sync as _pg_ready_sync,
+    stale_candidates_sync as _pg_stale_candidates_sync,
+    delete_departed_sync as _pg_delete_departed_sync,
+)
 
 REMINDER_CONFIG_KEY = "unverified_reminders_v1"
-DELIVERY_TABLE = "dank_verify_reminder_delivery"
-CLAIM_RPC = "claim_dank_verify_reminder"
 SCAN_SIZE = 100
 GUILDS_PER_PASS = 25
 MAX_DELIVERIES_PER_PASS = 10
 MAX_PER_GUILD_PER_PASS = 3
 POLL_SECONDS = 180
+RETENTION_DAYS = 90
+CLEANUP_BATCH_SIZE = 12
+CLEANUP_INTERVAL_SECONDS = 3600
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -119,59 +127,20 @@ def reminder_text(
     return f"**{guild.name}** verification reminder\n\n{greeting}\n\n✅ Verify here: {destination}\n\nIf you've already verified, you can ignore this message."
 
 
-async def _ledger_ready() -> bool:
-    def check() -> bool:
-        from .globals import get_supabase
-        sb = get_supabase()
-        if sb is None:
-            return False
-        sb.table(DELIVERY_TABLE).select("guild_id").limit(1).execute()
-        probe = sb.rpc(CLAIM_RPC, {
-            "p_guild_id": "invalid",
-            "p_user_id": "invalid",
-            "p_joined_at": datetime.now(timezone.utc).isoformat(),
-            "p_repeat_hours": 48,
-            "p_max_reminders": 3,
-        }).execute()
-        return getattr(probe, "data", None) is False
-
-    try:
-        return await asyncio.to_thread(check)
-    except Exception as exc:
-        print(f"⚠️ verify reminders ledger unavailable error={type(exc).__name__}")
-        return False
-
-
 async def ledger_ready() -> bool:
-    """Used by the admin UI: never enable an undeliverable feature."""
-    return await _ledger_ready()
+    """Check the Discloud PostgreSQL ledger; fail closed if not provisioned."""
+    return await asyncio.to_thread(_pg_ready_sync)
 
 
 async def _claim_delivery(guild_id: int, member: discord.Member, policy: ReminderPolicy) -> bool:
-    joined = member.joined_at
-    if joined is None:
-        return False
-
-    def claim() -> bool:
-        from .globals import get_supabase
-        sb = get_supabase()
-        if sb is None:
-            return False
-        response = sb.rpc(CLAIM_RPC, {
-            "p_guild_id": str(guild_id),
-            "p_user_id": str(member.id),
-            "p_joined_at": joined.astimezone(timezone.utc).isoformat(),
-            "p_repeat_hours": policy.repeat_hours,
-            "p_max_reminders": policy.max_reminders,
-        }).execute()
-        # A missing/invalid RPC result is NOT permission to send.
-        return getattr(response, "data", None) is True
-
-    try:
-        return await asyncio.to_thread(claim)
-    except Exception as exc:
-        print(f"⚠️ verify reminder atomic claim failed guild={guild_id} error={type(exc).__name__}")
-        return False
+    return await asyncio.to_thread(
+        _pg_claim_sync,
+        int(guild_id),
+        int(member.id),
+        getattr(member, "joined_at", None),
+        repeat_hours=policy.repeat_hours,
+        max_reminders=policy.max_reminders,
+    )
 
 
 class ReminderWorker:
@@ -180,6 +149,11 @@ class ReminderWorker:
         self.task: asyncio.Task[None] | None = None
         self.guild_cursor = 0
         self.member_cursors: dict[int, int] = {}
+        # In-memory keyset cursor only controls scan progress. Actual reminder
+        # budgets are durable in PostgreSQL and never reset by cleanup.
+        self.cleanup_cursor: tuple[datetime, str, str] | None = None
+        # Do not add cleanup traffic to Discord's busy startup window.
+        self.cleanup_due = time.monotonic() + CLEANUP_INTERVAL_SECONDS
 
     def start(self) -> asyncio.Task[None]:
         if self.task is None or self.task.done():
@@ -211,6 +185,10 @@ class ReminderWorker:
                 permissions = notice_channel.permissions_for(sender)
                 if not permissions.view_channel or not permissions.send_messages:
                     return 0
+            # Skip expensive member pagination if the private PostgreSQL ledger
+            # cannot be reached. No Supabase fallback may send duplicates.
+            if not await ledger_ready():
+                return 0
             clear_role_truth_cache(guild.id)
             cursor = self.member_cursors.get(guild.id, 0)
             after = discord.Object(id=cursor) if cursor else None
@@ -248,6 +226,17 @@ class ReminderWorker:
                 if not await _claim_delivery(guild.id, current, policy):
                     continue
                 claims += 1  # Budget even failures; avoid an unbounded DM storm.
+                # A member can finish Simple Verify during the PostgreSQL
+                # transaction. Fetch their current roles one last time before
+                # delivery rather than sending an already-obsolete reminder.
+                try:
+                    current = await guild.fetch_member(int(member.id))
+                except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+                    continue
+                if not pending_for_reminder(current, cfg) or not channel.permissions_for(current).view_channel:
+                    continue
+                if notice_channel is not None and not notice_channel.permissions_for(current).view_channel:
+                    continue
                 try:
                     body = reminder_text(guild, channel, cfg, policy)
                     if notice_channel is not None:
@@ -290,11 +279,67 @@ class ReminderWorker:
             await asyncio.sleep(0)
         return claimed
 
+    async def cleanup_stale_history(self) -> int:
+        """Delete old delivery counters ONLY after authoritative member absence.
+
+        A still-unverified member may be present for longer than 90 days.
+        Their tiny claim record must survive so the per-join maximum cannot
+        silently reset. Cache misses/permissions/HTTP errors never authorize
+        deletion. The hourly sweep checks at most 12 stale candidates.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
+        try:
+            rows = await asyncio.to_thread(
+                _pg_stale_candidates_sync,
+                cutoff,
+                after=self.cleanup_cursor,
+                limit=CLEANUP_BATCH_SIZE,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"⚠️ verify reminder cleanup unavailable error={type(exc).__name__}")
+            return 0
+
+        deleted = 0
+        for guild_id, user_id, joined_at, last_claimed_at in rows:
+            guild = self.bot.get_guild(int(guild_id))
+            if guild is None:
+                continue  # Never infer departure from guild cache absence.
+            try:
+                await guild.fetch_member(int(user_id))
+            except discord.NotFound as exc:
+                if getattr(exc, "code", None) != 10007:
+                    continue  # 404 Unknown Guild or another resource is not proof.
+                try:
+                    if await asyncio.to_thread(
+                        _pg_delete_departed_sync,
+                        guild_id, user_id, joined_at, cutoff,
+                    ):
+                        deleted += 1
+                except asyncio.CancelledError:
+                    raise
+                except Exception as delete_exc:
+                    print(f"⚠️ verify reminder cleanup delete unavailable error={type(delete_exc).__name__}")
+            except (discord.Forbidden, discord.HTTPException):
+                continue
+            await asyncio.sleep(0)
+
+        if rows and len(rows) == CLEANUP_BATCH_SIZE:
+            guild_id, user_id, _, last_claimed_at = rows[-1]
+            self.cleanup_cursor = (last_claimed_at, guild_id, user_id)
+        else:
+            self.cleanup_cursor = None
+        return deleted
+
     async def run(self) -> None:
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             try:
                 await self.run_pass()
+                if time.monotonic() >= self.cleanup_due:
+                    self.cleanup_due = time.monotonic() + CLEANUP_INTERVAL_SECONDS
+                    await self.cleanup_stale_history()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

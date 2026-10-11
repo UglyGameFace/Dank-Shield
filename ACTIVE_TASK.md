@@ -1,6 +1,37 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — VERIFY-UNVERIFIED-REMINDERS-20261011
+## CURRENT ACTIVE TASK — VERIFY-REMINDERS-DISCLOUD-POSTGRES-20261011
+
+**User continuation after PR #510 merge:** DankShield-DB PostgreSQL 16 was provisioned in Discloud (private connection only, reported online with 512 MB RAM / 0.25 CPU and 46 MB used); user saved Dank Shield VLAN enabled with internal hostname `dankbot`. Task remains **Unverified Member Reminders** under Single Active Task Lock. No unrelated fixes.
+
+**Code branch:** `fix/verify-reminders-discloud-postgres-20261011`, from Discloud GitHub integration branch `aaa-cinema-pre-pregateway-bind` merge commit `f4eb863505cf8478100e3401ce3243a108df4f78` (PR #510); Discloud running SHA still needs verification.
+
+**Root cause:** PR #510 uses Supabase RPC `claim_dank_verify_reminder` for durable send cooldowns while the user's actual Discloud PostgreSQL instance has no connected app driver/schema. Bot app already uses Supabase `guild_configs` and `role_truth`; these remain the canonical verification/configuration owners. Supabase's migration workflow runs from `main`, not Discloud's deployment branch, so PR #510 merge did not guarantee the original Supabase reminder schema. The new Discloud Postgres is accessible only via private VLAN, not from hosted GitHub CI.
+
+**Required behavior and changes:** Retain the shipped staff Verification Center, per-server settings, Simple Verify eligibility and safe DM/channel delivery. Replace the single delivery-ledger owner with PostgreSQL 16 one-statement atomic `INSERT .. ON CONFLICT WHERE .. RETURNING`. Add `psycopg[binary]`, private DSN `DANK_VERIFY_REMINDER_DATABASE_URL` in Discloud env, `VLAN=true`/`HOSTNAME=dankbot` in the deployment file. Provide an idempotent standalone PostgreSQL migration and opt-in one-off operator migration command, never startup DDL. Feature fails closed when URL, table, connection, permissions or claim are unavailable. No automatic fallback to Supabase or a second verification authority.
+
+**Changes on branch:** `verification_reminder_postgres.py`, replacement storage calls in `verification_reminders.py`, reminder UI messaging, `postgres/migrations/202610110001_verify_unverified_reminders.sql`, `tools/migrate_verify_reminders_postgres.py`, updated dependencies, `discloud.config`, example env/docs, unit and PG16 integration tests/workflow.
+
+**Validation and blockers:** Existing #510 exact-head CI was green before merge. Follow-up PostgreSQL branch full CI and PG16 atomicity tests pending until PR workflow completes. Actual private database connection, credentials, same-cluster reachability, live schema migration, recovery after restart and mobile Discord canary cannot be proven from GitHub and are unverified. Do not request database secrets in chat, edit Supabase schema, or claim live delivery until proven. If the Discloud UI offers no authorized private-network command runner to execute the migration, identify a supported operator-run SQL path; do not invent one.
+
+**Expanded user requirement (same database integration task, Oct 11):** New Discloud PostgreSQL should never silently grow with useless historical records. Adopt forward-looking storage governance for ALL future Discloud PostgreSQL feature tables, but do not start an unrelated legacy Supabase purge. Pre-existing `docs/PRIVACY_POLICY.md` §7 remains authoritative. Added `postgres/data_lifecycle.json` + `tests/test_postgres_data_lifecycle.py` gate requiring each new table to register purpose, owning cleanup service, minimal fields, TTL/preservation rule, bounded cleanup, backup class and migration; document contract at `docs/discloud-postgres-data-lifecycle.md`. No universal destructive sweeper. Reminder rows are only guild/member IDs, join time, last claim and attempt count. An hourly bounded sweep may remove a record after >=90 days inactivity only when Discord REST reports Unknown Member 10007, with SQL membership-generation and age guards. Live members are NEVER expired merely by age, preventing recycled spam budgets. Verify Discloud storage limits and backup/restore before future irreplaceable migrations; capacity warning thresholds are guidance, not shipped alerts.
+
+**Existing bad-actor owner confirmed (Oct 11):** `stoney_verify/anti_nuke_hostile_actor_runtime.py` already implements persistent guild-scoped confirmed hostile-actor reputation in Supabase table `guild_security_actor_reputation` plus a local mirror, tracking first/last seen, incident count, classification, source, related ID and explicit clearance. It is authoritative today; do not collect a duplicate PostgreSQL registry or run blanket TTL against it. The forward PostgreSQL lifecycle contract now requires `retention_class`, `historical_reuse` and `review_interval_days` in addition to bounded owner-specific cleanup, preserving purposeful longer-lived security, moderation, settings and recovery history. The distinct future security intelligence feature remains backlog-only, with evidence confidence, corrections, review and per-guild privacy constraints.
+
+**Next action:** Finish exact-head reminder+retention CI, PG16 SQL workflow, and final scoped diff inspection. Confirm Discloud private database config/migration without sharing secrets. Canary Simple Verify role changes, member departures and role/Discord/DB outages; only then remove draft status and merge.
+
+### Backlog — Bad actor historical intelligence (NOT active)
+
+**User requirement (Oct 11):** Dank Shield should remember documented bad actors so that a planned additional security feature can use an established history rather than starting cold. Preserve meaningful historical security evidence from indiscriminate database expiry: store authenticated Discord IDs, guild scope, exact source event, timestamp, action, severity/confidence, outcome/reversal, and provenance only where necessary. Keep a per-guild vs cross-guild disclosure/authority model, false-positive corrections and appeals, explicit retention and deletion authority, minimal PII, deduplication, capacity and privacy safeguards. Do not treat reports/allegations as verified facts, or auto-punish without safeguards. This is a distinct evidence collection/assessment capability, **not** authorization to implement it while PostgreSQL reminder integration PR #511 is active. No new bad-actor collection or security enforcement is claimed. Investigate existing AntiNuke/raid/spam/moderation reputation authority and migrations only after this task's Definition of Done or exact FORCE SWITCH. The broad PostgreSQL data lifecycle policy must allow justified durable evidence instead of indiscriminate short TTLs.
+
+### SUSPENDED — PR #509 Server Stats live acceptance
+The prior Server Stats code was merged into the deployment branch before PR #510, but real Discloud-native deletion and reconciliation acceptance remains pending. No code changes to Server Stats are permitted inside this active task.
+
+---
+
+## PRIOR TASK RECORD — VERIFY-UNVERIFIED-REMINDERS-20261011
+
+
 
 **Force switch (Oct 11):** Implement Dank Shield Unverified Member Reminders, starting with existing per-guild Simple Verify and its verified/unverified role truth. No separate verification authority; no unrelated feature work.
 
