@@ -176,23 +176,25 @@ def test_render_distinguishes_cheers_joining_voice_and_hidden_names(isolated_ses
         description="**🎃👻💀LongStyledHost💀👻🎃** is calling the sesh crowd.",
     )
     card = live.render_card(guild, session, original)
-    assert any("Cheers 2" in f.name and "Joining 2" in f.name for f in card.fields)
-    assert any("In voice now • 2" in f.name for f in card.fields)
-    crowd = card.fields[0].value
+    assert "Cheers: 2" in card.fields[0].value
+    assert "Joining: 2" in card.fields[0].value
+    assert "In VC: 2" in card.fields[0].value
+    assert "<#999>" in card.fields[0].value
+    crowd = card.fields[1].value
     assert crowd.count("**Host**") == 1
-    assert "💨 Cheers" in crowd and "🙋 Joining" in crowd and "🔊 In VC" in crowd
+    assert "👑💨🙋🔊" in crowd
     assert crowd.count("<@3>") == 1
     assert crowd.count("<@2>") == 1
     assert "<@1>" not in crowd  # Host is already identified in the description.
     assert "LongStyledHost" not in crowd
     assert card.description.count("LongStyledHost") == 1
-    assert "<#999>" == card.fields[1].value
+    assert "👥 People" in card.fields[1].name
 
     session["show_member_names"] = False
     hidden = live.render_card(guild, session, original)
-    assert hidden.fields[0].value == "Participant names are private in this server."
+    assert hidden.fields[1].value == "Participant names are private in this server."
     assert "<@3>" not in "\n".join(str(f.value) for f in hidden.fields)
-    assert hidden.fields[1].value == "<#999>"
+    assert "<#999>" in hidden.fields[0].value
 
 
 def test_toke_roster_deduplicates_all_attendance_sources(isolated_sessions, monkeypatch):
@@ -212,8 +214,8 @@ def test_toke_roster_deduplicates_all_attendance_sources(isolated_sessions, monk
     text = "\n".join(roster.lines)
     for member_id in (1, 2, 3, 4):
         assert text.count(f"<@{member_id}>") == 1
-    assert text.count("Host") == 1
-    assert "🙋 Joining" in text and "🔊 In VC" in text
+    assert text.count("👑") == 1
+    assert "🙋" in text and "🔊" in text
     assert roster.pages == 1
 
 
@@ -233,17 +235,18 @@ def test_toke_roster_pagination_shows_every_member_once(isolated_sessions, monke
     for member_id in range(1, 51):
         assert names.count(f"<@{member_id}>") == 1
     crowd = live.render_card(guild, session, discord.Embed(description="A host is calling the sesh crowd."))
-    assert "and 42 more" in crowd.fields[0].value
-    assert len(crowd.fields[0].value) <= 1024
+    assert "+47 more" in crowd.fields[1].value
+    assert len(crowd.fields[1].value) <= 1024
+    assert len(crowd.fields[1].value.splitlines()) == 4
 
 
 def test_toke_single_member_without_cheers_still_shows_host(isolated_sessions):
     guild = SimpleNamespace(get_channel=lambda _n: None)
     session = {**_session(), "starter_id": 1, "cheers_ids": [], "going_ids": []}
     card = live.render_card(guild, session, discord.Embed(description="Host is calling."))
-    assert card.fields[0].value == "**Host** • Started the sesh"
-    assert "Cheers 0" in card.fields[0].name
-    assert card.fields[1].value == "No voice channel selected yet."
+    assert card.fields[1].value == "👑  **Host**"
+    assert "Cheers: 0" in card.fields[0].value
+    assert "No VC selected" in card.fields[0].value
 
 
 def test_manager_and_command_are_wired_to_single_toke_runtime():
