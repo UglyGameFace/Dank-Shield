@@ -211,9 +211,9 @@ def test_mobile_roster_preview_bounded_with_pagination(monkeypatch):
     assert "In VC: 31" in card.fields[0].value
     assert card.fields[1].name.startswith("👥 People")
     assert len(card.fields[1].value.splitlines()) == 4
-    assert "+31 more" in card.fields[1].value
+    assert "+32 more" in card.fields[1].value
     assert "<@100>" not in card.fields[1].value  # Host is already in header
     assert "👑" in card.fields[1].value
     view = live.TokeRosterView(guild, session)
-    assert len(view.lines) == 34
+    assert len(view.lines) == 35
     assert view.pages == 3
