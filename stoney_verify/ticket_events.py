@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from types import SimpleNamespace
 from typing import Dict, Optional, Set
 
 import discord
 
-from .globals import STAFF_ROLE_ID, TICKET_CATEGORY_ID, TRANSCRIPTS_CHANNEL_ID
+from .globals import bot, STAFF_ROLE_ID, TICKET_CATEGORY_ID, TRANSCRIPTS_CHANNEL_ID
 from .tickets_new.claim_policy import (
     evaluate_ticket_action,
     is_staff_member as claim_policy_is_staff_member,
@@ -20,6 +21,7 @@ from .tickets_new.service import (
 from .tickets_new.sync_service import sync_one_ticket_channel
 from .tickets_new.repository import (
     _find_ticket_row_by_channel_id,
+    list_active_ticket_channel_identities_for_guild,
     safe_optional_update_by_channel_id,
     mark_ticket_closed as repo_mark_ticket_closed,
     mark_ticket_deleted as repo_mark_ticket_deleted,
@@ -69,6 +71,8 @@ EVENT_SYNC_DELAY_SECONDS = 0.90
 MESSAGE_SYNC_DEBOUNCE_SECONDS = 1.50
 SELF_MUTATION_COOLDOWN_SECONDS = 2.50
 TIMER_CANCEL_COOLDOWN_SECONDS = 5.00
+_TICKET_RECONCILE_REST_BUDGET = 25
+_TICKET_RECONCILE_CURSOR: Dict[int, int] = {}
 
 
 # ============================================================
@@ -515,6 +519,8 @@ async def _handle_channel_create(channel: discord.abc.GuildChannel) -> None:
 
 async def _mark_deleted_after_external_channel_delete(
     channel: discord.TextChannel,
+    *,
+    refresh_stats: bool = True,
 ) -> bool:
     """
     External Discord deletion is authoritative.
@@ -557,7 +563,7 @@ async def _mark_deleted_after_external_channel_delete(
             deleted_by_name="System",
             reason="Channel deleted event",
         )
-        if deleted_ok:
+        if deleted_ok and refresh_stats:
             try:
                 from .security_stats import refresh_ticket_stats_for_guild_id
 
@@ -574,6 +580,103 @@ async def _mark_deleted_after_external_channel_delete(
             repr(e),
         )
         return False
+
+
+
+async def reconcile_missing_active_ticket_channels_for_guild(
+    guild: discord.Guild,
+) -> Dict[str, int]:
+    """Recover missed native deletions without mistaking cache misses for deletion.
+
+    The authoritative signal is Discord REST code 10003 for *every* channel/thread
+    identity. Forbidden, rate limits, timeouts and incomplete DB reads never
+    transition ticket state. The cursor limits REST pressure and avoids starvation.
+    """
+    gid = int(guild.id)
+    summary = {"checked": 0, "deleted": 0, "uncertain": 0, "rest_checks": 0}
+    rows = await list_active_ticket_channel_identities_for_guild(gid)
+    if rows is None:
+        print(f"⚠️ ticket_events missing-channel scan unavailable guild={gid}; DB state untouched")
+        summary["uncertain"] += 1
+        return summary
+
+    if not rows:
+        _TICKET_RECONCILE_CURSOR.pop(gid, None)
+        return summary
+
+    start = _TICKET_RECONCILE_CURSOR.get(gid, 0) % len(rows)
+    # The rows are in a stable ID order so work resumes fairly between passes.
+    for offset in range(len(rows)):
+        index = (start + offset) % len(rows)
+        row = rows[index]
+        if not isinstance(row, dict) or row.get("is_ghost") is True:
+            continue
+        ids = []
+        for key in ("channel_id", "discord_thread_id"):
+            cid = _safe_int(row.get(key), 0)
+            if cid > 0 and cid not in ids:
+                ids.append(cid)
+        if not ids:
+            continue  # Channel-less/legacy records cannot be disproved by Discord.
+
+        summary["checked"] += 1
+        if any(
+            (getattr(guild, "get_channel", lambda _cid: None)(cid) is not None)
+            or (getattr(guild, "get_thread", lambda _cid: None)(cid) is not None)
+            for cid in ids
+        ):
+            continue
+
+        all_missing = True
+        for cid in ids:
+            if summary["rest_checks"] >= _TICKET_RECONCILE_REST_BUDGET:
+                _TICKET_RECONCILE_CURSOR[gid] = index
+                return summary
+            summary["rest_checks"] += 1
+            try:
+                await bot.fetch_channel(cid)
+            except discord.NotFound as exc:
+                if getattr(exc, "code", None) != 10003:
+                    all_missing = False
+                    summary["uncertain"] += 1
+                    break
+            except (discord.Forbidden, discord.HTTPException, asyncio.TimeoutError) as exc:
+                all_missing = False
+                summary["uncertain"] += 1
+                _debug(
+                    f"missing-channel scan inconclusive guild={gid} "
+                    f"channel={cid} error={type(exc).__name__}"
+                )
+                break
+            except Exception as exc:
+                all_missing = False
+                summary["uncertain"] += 1
+                _debug(
+                    f"missing-channel scan failed guild={gid} "
+                    f"channel={cid} error={type(exc).__name__}"
+                )
+                break
+            else:
+                all_missing = False
+                break
+
+        if all_missing:
+            reference = SimpleNamespace(id=ids[0], guild=guild)
+            if await _mark_deleted_after_external_channel_delete(
+                reference, refresh_stats=False
+            ):
+                summary["deleted"] += 1
+            else:
+                summary["uncertain"] += 1
+
+    _TICKET_RECONCILE_CURSOR[gid] = (start + len(rows)) % len(rows)
+    if summary["deleted"] or summary["uncertain"]:
+        print(
+            f"🧩 ticket_events missing-channel reconciliation guild={gid} "
+            f"checked={summary['checked']} deleted={summary['deleted']} "
+            f"uncertain={summary['uncertain']} rest={summary['rest_checks']}"
+        )
+    return summary
 
 
 async def _handle_channel_delete(channel: discord.abc.GuildChannel) -> None:
