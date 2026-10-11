@@ -113,7 +113,14 @@ async def _ledger_ready() -> bool:
         if sb is None:
             return False
         sb.table(DELIVERY_TABLE).select("guild_id").limit(1).execute()
-        return True
+        probe = sb.rpc(CLAIM_RPC, {
+            "p_guild_id": "invalid",
+            "p_user_id": "invalid",
+            "p_joined_at": datetime.now(timezone.utc).isoformat(),
+            "p_repeat_hours": 48,
+            "p_max_reminders": 3,
+        }).execute()
+        return getattr(probe, "data", None) is False
 
     try:
         return await asyncio.to_thread(check)
@@ -190,10 +197,10 @@ class ReminderWorker:
                 self.member_cursors[guild.id] = 0
                 return 0
             self.member_cursors[guild.id] = max(int(m.id) for m in fetched) if len(fetched) == SCAN_SIZE else 0
-            sent = 0
+            claims = 0
             now = datetime.now(timezone.utc)
             for member in fetched:
-                if sent >= remaining:
+                if claims >= remaining:
                     break
                 if not pending_for_reminder(member, cfg):
                     continue
@@ -201,25 +208,26 @@ class ReminderWorker:
                     continue
                 if not channel.permissions_for(member).view_channel:
                     continue
-                if not await _claim_delivery(guild.id, member, policy):
-                    continue
-                # Verify again from Discord after any DB wait to avoid stale state.
+                # Discord can update member roles while we page through a guild.
+                # Re-fetch before taking a durable attempt from the member's budget.
                 try:
                     current = await guild.fetch_member(int(member.id))
                 except (discord.HTTPException, discord.NotFound, discord.Forbidden):
                     continue
                 if not pending_for_reminder(current, cfg) or not channel.permissions_for(current).view_channel:
                     continue
+                if not await _claim_delivery(guild.id, current, policy):
+                    continue
+                claims += 1  # Budget even failures; avoid an unbounded DM storm.
                 try:
                     await current.send(
                         reminder_text(guild, channel, cfg, policy),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
-                    sent += 1
                 except (discord.Forbidden, discord.HTTPException) as exc:
                     print(f"ℹ️ verify reminder DM unavailable guild={guild.id} kind={type(exc).__name__}")
-                await asyncio.sleep(0)
-            return sent
+                await asyncio.sleep(0.5)
+            return claims
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -234,13 +242,13 @@ class ReminderWorker:
         count = min(GUILDS_PER_PASS, len(guilds))
         batch = [guilds[(index + i) % len(guilds)] for i in range(count)]
         self.guild_cursor = (index + count) % len(guilds)
-        sent = 0
+        claimed = 0
         for guild in batch:
-            if sent >= MAX_DMS_PER_PASS:
+            if claimed >= MAX_DMS_PER_PASS:
                 break
-            sent += await self.scan_guild(guild, remaining=MAX_DMS_PER_PASS - sent)
+            claimed += await self.scan_guild(guild, remaining=MAX_DMS_PER_PASS - claimed)
             await asyncio.sleep(0)
-        return sent
+        return claimed
 
     async def run(self) -> None:
         await self.bot.wait_until_ready()
