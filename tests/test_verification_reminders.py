@@ -52,7 +52,8 @@ def test_text_links_to_saved_panel_and_does_not_ping():
     text = reminders.reminder_text(
         guild, channel, {"basic_verify_panel_message_id": "111"}, reminders.ReminderPolicy(),
     )
-    assert "https://discord.com/channels/123/987/111" in text
+    assert "https://discord.com/channels/123/987" in text
+    assert "https://discord.com/channels/123/987/111" not in text  # stale panel IDs can break
     assert "tap **Verify**" in text
     assert "@everyone" not in text
 
@@ -63,7 +64,7 @@ def _guild(*, fresh_pending=True, count=2):
     for i in range(count):
         member = SimpleNamespace(
             id=100 + i, joined_at=now - timedelta(days=5),
-            bot=False, pending=True, sent=[],
+            bot=False, pending=True, sent=[], mention=f"<@{100 + i}>",
         )
 
         async def send(content, *, allowed_mentions, _m=member):
@@ -84,7 +85,7 @@ def _guild(*, fresh_pending=True, count=2):
         return object() if role_id in (10, 11) else None
 
     return SimpleNamespace(
-        id=1234, members=members, fetch_members=fetch_members,
+        id=1234, name="Demo guild", me=SimpleNamespace(id=999), members=members, fetch_members=fetch_members,
         fetch_member=fetch_member, get_role=get_role,
     )
 
@@ -152,6 +153,13 @@ def test_attempt_budget_counts_even_failed_dm(monkeypatch):
     assert run(worker.scan_guild(guild, remaining=2)) == 2
     assert len(claimed) == 2
     assert sum(len(m.sent) for m in guild.members) == 2
+    assert worker.member_cursors[guild.id] == guild.members[1].id
+
+    # A capped scan resumes at the NEXT unsent member, not the end of the page.
+    assert run(worker.scan_guild(guild, remaining=2)) == 2
+    assert len(claimed) == 4
+    assert worker.member_cursors[guild.id] == 0
+    assert sum(len(m.sent) for m in guild.members) == 4
 
 
 def test_no_reminders_when_role_mapping_missing(monkeypatch):
@@ -170,3 +178,53 @@ def test_worker_registration_is_idempotent(monkeypatch):
     assert "start_unverified_reminder_worker(bot)" in app
     assert "Unverified Reminders" in center
     assert "on_ready" in app
+
+def test_channel_delivery_scoped_to_one_member_mention(monkeypatch):
+    config = _setup(monkeypatch)
+    config[reminders.REMINDER_CONFIG_KEY] = {
+        "enabled": True, "delivery": "channel", "reminder_channel_id": "44",
+    }
+    guild = _guild(count=1)
+    worker = reminders.ReminderWorker(SimpleNamespace())
+    channel_messages = []
+
+    class NoticeChannel:
+        def permissions_for(self, member):
+            return SimpleNamespace(view_channel=True, send_messages=True)
+
+        async def send(self, content, *, allowed_mentions):
+            channel_messages.append((content, allowed_mentions))
+
+    monkeypatch.setattr(reminders, "delivery_channel", lambda *args: NoticeChannel())
+
+    async def claim(*args):
+        return True
+
+    monkeypatch.setattr(reminders, "_claim_delivery", claim)
+
+    async def no_sleep(*args):
+        return None
+
+    monkeypatch.setattr(reminders.asyncio, "sleep", no_sleep)
+    assert run(worker.scan_guild(guild, remaining=1)) == 1
+    assert len(channel_messages) == 1
+    content, mentions = channel_messages[0]
+    assert "<@100>" in content
+    assert mentions.everyone is False
+    assert mentions.roles is False
+    assert mentions.users == [guild.members[0].id]
+    assert not guild.members[0].sent
+
+
+def test_channel_disabled_when_bot_cannot_send(monkeypatch):
+    cfg = _setup(monkeypatch)
+    cfg[reminders.REMINDER_CONFIG_KEY] = {
+        "enabled": True, "delivery": "channel", "reminder_channel_id": "44",
+    }
+    guild = _guild()
+    worker = reminders.ReminderWorker(SimpleNamespace())
+    monkeypatch.setattr(reminders, "delivery_channel", lambda *a: SimpleNamespace(
+        permissions_for=lambda member: SimpleNamespace(view_channel=True, send_messages=False),
+    ))
+    assert run(worker.scan_guild(guild, remaining=10)) == 0
+    assert worker.member_cursors == {}
