@@ -1,6 +1,29 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — VERIFY-UNVERIFIED-REMINDERS-20261011
+## CURRENT ACTIVE TASK — VERIFY-REMINDERS-DISCLOUD-POSTGRES-20261011
+
+**User continuation after PR #510 merge:** DankShield-DB PostgreSQL 16 was provisioned in Discloud (private connection only, reported online with 512 MB RAM / 0.25 CPU and 46 MB used); user saved Dank Shield VLAN enabled with internal hostname `dankbot`. Task remains **Unverified Member Reminders** under Single Active Task Lock. No unrelated fixes.
+
+**Code branch:** `fix/verify-reminders-discloud-postgres-20261011`, from Discloud GitHub integration branch `aaa-cinema-pre-pregateway-bind` merge commit `f4eb863505cf8478100e3401ce3243a108df4f78` (PR #510); Discloud running SHA still needs verification.
+
+**Root cause:** PR #510 uses Supabase RPC `claim_dank_verify_reminder` for durable send cooldowns while the user's actual Discloud PostgreSQL instance has no connected app driver/schema. Bot app already uses Supabase `guild_configs` and `role_truth`; these remain the canonical verification/configuration owners. Supabase's migration workflow runs from `main`, not Discloud's deployment branch, so PR #510 merge did not guarantee the original Supabase reminder schema. The new Discloud Postgres is accessible only via private VLAN, not from hosted GitHub CI.
+
+**Required behavior and changes:** Retain the shipped staff Verification Center, per-server settings, Simple Verify eligibility and safe DM/channel delivery. Replace the single delivery-ledger owner with PostgreSQL 16 one-statement atomic `INSERT .. ON CONFLICT WHERE .. RETURNING`. Add `psycopg[binary]`, private DSN `DANK_VERIFY_REMINDER_DATABASE_URL` in Discloud env, `VLAN=true`/`HOSTNAME=dankbot` in the deployment file. Provide an idempotent standalone PostgreSQL migration and opt-in one-off operator migration command, never startup DDL. Feature fails closed when URL, table, connection, permissions or claim are unavailable. No automatic fallback to Supabase or a second verification authority.
+
+**Changes on branch:** `verification_reminder_postgres.py`, replacement storage calls in `verification_reminders.py`, reminder UI messaging, `postgres/migrations/202610110001_verify_unverified_reminders.sql`, `tools/migrate_verify_reminders_postgres.py`, updated dependencies, `discloud.config`, example env/docs, unit and PG16 integration tests/workflow.
+
+**Validation and blockers:** Existing #510 exact-head CI was green before merge. Follow-up PostgreSQL branch full CI and PG16 atomicity tests pending until PR workflow completes. Actual private database connection, credentials, same-cluster reachability, live schema migration, recovery after restart and mobile Discord canary cannot be proven from GitHub and are unverified. Do not request database secrets in chat, edit Supabase schema, or claim live delivery until proven. If the Discloud UI offers no authorized private-network command runner to execute the migration, identify a supported operator-run SQL path; do not invent one.
+
+**Next action:** Finish branch regression and SQL workflow CI; review only impacted files and full diff; obtain Discloud environment configuration and migration proof privately; test one overdue Simple Verify member, a verified member, DM/channel permission failures, cooldown across bot restart and disabled/unavailable DB; only then remove draft status and merge.
+
+### SUSPENDED — PR #509 Server Stats live acceptance
+The prior Server Stats code was merged into the deployment branch before PR #510, but real Discloud-native deletion and reconciliation acceptance remains pending. No code changes to Server Stats are permitted inside this active task.
+
+---
+
+## PRIOR TASK RECORD — VERIFY-UNVERIFIED-REMINDERS-20261011
+
+
 
 **Force switch (Oct 11):** Implement Dank Shield Unverified Member Reminders, starting with existing per-guild Simple Verify and its verified/unverified role truth. No separate verification authority; no unrelated feature work.
 
