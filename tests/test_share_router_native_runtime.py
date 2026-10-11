@@ -532,6 +532,7 @@ def test_runtime_listener_install_is_explicit_and_idempotent() -> None:
     assert ensure_share_router_runtime(bot) is True
     assert ensure_share_router_runtime(bot) is True
     assert len(bot.extra_events.get("on_message", [])) == 1
+    assert len(bot.extra_events.get("on_ready", [])) == 1
 
 
 def test_share_router_is_a_public_core_runtime_without_new_slash_child() -> None:
@@ -685,3 +686,218 @@ def test_legacy_startup_guard_is_side_effect_free_compatibility_only() -> None:
     assert "app_commands" not in LEGACY
     assert "dank_group" not in LEGACY
     assert "\ninstall()\n" not in LEGACY
+
+
+def test_plain_proxy_message_never_initializes_cinema_torrent_manager(monkeypatch) -> None:
+    def unavailable_manager():
+        raise AssertionError("ordinary shares must not construct libtorrent")
+
+    monkeypatch.setattr(share_runtime, "get_torrent_manager", unavailable_manager)
+
+    for content, attachments in (
+        ("A plain text share", []),
+        ("https://www.facebook.com/watch/?v=123", []),
+        ("A video uploaded from Android", [SimpleNamespace(filename="clip.mp4")]),
+    ):
+        message = SimpleNamespace(content=content, attachments=attachments)
+        assert asyncio.run(share_runtime._route_torrent_media(message, SimpleNamespace(id=22))) is None
+
+
+def test_proxy_send_failure_preserves_source_and_allows_retry(monkeypatch) -> None:
+    class FakeMember:
+        id = 444
+        mention = "<@444>"
+        bot = False
+
+    class FakeTextChannel:
+        def __init__(self, channel_id: int) -> None:
+            self.id = channel_id
+            self.mention = f"<#{channel_id}>"
+            self.sent: list[str] = []
+            self.fail_send = False
+
+        def permissions_for(self, _member):
+            return SimpleNamespace(
+                view_channel=True,
+                send_messages=True,
+                manage_messages=True,
+            )
+
+        async def send(self, content: str, **_kwargs):
+            if self.fail_send:
+                raise RuntimeError("simulated Discord send failure")
+            self.sent.append(content)
+            return SimpleNamespace(id=999)
+
+    member = FakeMember()
+    source = FakeTextChannel(11)
+    target = FakeTextChannel(22)
+    guild = SimpleNamespace(
+        id=101,
+        me=member,
+        get_channel=lambda channel_id: {11: source, 22: target}.get(channel_id),
+    )
+    routes = [{"source_channel_id": "11", "target_channel_id": "22", "enabled": True, "delete_source": True}]
+    deleted: list[int] = []
+
+    def make_message(message_id: int):
+        async def delete(**_kwargs):
+            deleted.append(message_id)
+
+        return SimpleNamespace(
+            id=message_id,
+            guild=guild,
+            channel=source,
+            author=member,
+            content="https://www.facebook.com/watch/?v=123",
+            attachments=[],
+            embeds=[],
+            webhook_id=None,
+            delete=delete,
+        )
+
+    async def configured_routes(_guild_id: int):
+        return routes
+
+    async def link_only(*_args, **_kwargs):
+        return False
+
+    async def no_modlog(*_args, **_kwargs):
+        return None
+
+    def unavailable_manager():
+        raise AssertionError("ordinary shares must not construct libtorrent")
+
+    monkeypatch.setattr(share_runtime.discord, "TextChannel", FakeTextChannel)
+    monkeypatch.setattr(share_runtime.discord, "Member", FakeMember)
+    monkeypatch.setattr(share_runtime, "guild_routes", configured_routes)
+    monkeypatch.setattr(share_runtime, "source_age_blocker", lambda _source: "")
+    monkeypatch.setattr(share_runtime, "source_privacy_blocker", lambda _source: "")
+    monkeypatch.setattr(share_runtime, "route_permission_blockers", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(share_runtime, "_relay_native_video_upload", link_only)
+    monkeypatch.setattr(share_runtime, "_send_modlog", no_modlog)
+    monkeypatch.setattr(share_runtime, "get_torrent_manager", unavailable_manager)
+    monkeypatch.setattr(share_runtime, "_RECENT_ROUTE_KEYS", {})
+
+    target.fail_send = True
+    asyncio.run(share_runtime.route_message(make_message(1)))
+    assert target.sent == []
+    assert deleted == []
+    assert share_runtime._RECENT_ROUTE_KEYS == {}
+
+    target.fail_send = False
+    asyncio.run(share_runtime.route_message(make_message(2)))
+    assert len(target.sent) == 1
+    assert "facebook.com/watch/" in target.sent[0]
+    assert deleted == [2]
+    key = (101, 22, _dedupe_key("https://www.facebook.com/watch/?v=123"))
+    assert key in share_runtime._RECENT_ROUTE_KEYS
+
+    # A successful delivery is still deduped using the existing route contract.
+    asyncio.run(share_runtime.route_message(make_message(3)))
+    assert len(target.sent) == 1
+    assert deleted == [2, 3]
+
+
+def test_share_router_upload_cap_tracks_live_guild_boost_changes(monkeypatch) -> None:
+    """Never keep yesterday's 100 MiB after the guild loses Level 3."""
+    mib = 1024 * 1024
+    monkeypatch.delenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", raising=False)
+    guild = SimpleNamespace(premium_tier=3, filesize_limit=10 * mib)
+
+    # Discord.py's stale 10 MiB value must not hide a Level 3 allowance.
+    assert share_runtime._share_video_limit_bytes(guild) == 100 * mib
+
+    # A live GUILD_UPDATE can mutate the same guild instance at any time.
+    # Even if a library property still reported 100 MiB, it may not override
+    # the lower, newly reported premium tier.
+    guild.filesize_limit = 100 * mib
+    guild.premium_tier = 2
+    assert share_runtime._share_video_limit_bytes(guild) == 50 * mib
+
+    guild.premium_tier = 1
+    assert share_runtime._share_video_limit_bytes(guild) == 20 * mib
+    guild.premium_tier = 0
+    assert share_runtime._share_video_limit_bytes(guild) == 20 * mib
+
+    guild.premium_tier = 3
+    assert share_runtime._share_video_limit_bytes(guild) == 100 * mib
+    guild.premium_tier = None
+    assert share_runtime._share_video_limit_bytes(guild) == 20 * mib
+    guild.premium_tier = 999
+    assert share_runtime._share_video_limit_bytes(guild) == 20 * mib
+
+
+def test_share_router_optional_operator_cap_never_increases_discord_limit(monkeypatch) -> None:
+    mib = 1024 * 1024
+    guild = SimpleNamespace(premium_tier=3, filesize_limit=100 * mib)
+    monkeypatch.setenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", str(25 * mib))
+    assert share_runtime._share_video_limit_bytes(guild) == 25 * mib
+
+    guild.premium_tier = 0
+    assert share_runtime._share_video_limit_bytes(guild) == 20 * mib
+
+    # An obsolete 100 MiB override must not force uploads above tier 2.
+    guild.premium_tier = 2
+    monkeypatch.setenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", str(100 * mib))
+    assert share_runtime._share_video_limit_bytes(guild) == 50 * mib
+
+    monkeypatch.setenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", "not-a-number")
+    assert share_runtime._share_video_limit_bytes(guild) == 50 * mib
+    monkeypatch.setenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", "25")
+    assert share_runtime._share_video_limit_bytes(guild) == 1 * mib
+
+
+def test_share_router_larger_uploads_use_a_bounded_transfer_timeout(monkeypatch) -> None:
+    monkeypatch.delenv("DANK_SHARE_ROUTER_VIDEO_TIMEOUT_SECONDS", raising=False)
+    assert share_runtime._share_video_timeout_seconds() == 120.0
+    monkeypatch.setenv("DANK_SHARE_ROUTER_VIDEO_TIMEOUT_SECONDS", "9999")
+    assert share_runtime._share_video_timeout_seconds() == 180.0
+    monkeypatch.setenv("DANK_SHARE_ROUTER_VIDEO_TIMEOUT_SECONDS", "1")
+    assert share_runtime._share_video_timeout_seconds() == 12.0
+
+
+def test_boost_downgrade_during_download_skips_oversize_upload(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Avoid sending an attachment after Level 3 drops to Level 2 mid-transfer."""
+    message, _routes, target = _direct_memes_fixture()
+    monkeypatch.delenv("DANK_SHARE_ROUTER_MAX_VIDEO_BYTES", raising=False)
+    mib = 1024 * 1024
+    message.guild.premium_tier = 3
+    cleanup_path = tmp_path / "large-video.mp4"
+    cleanup_path.write_bytes(b"temporary media")
+
+    class FakeFile:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    fake_file = FakeFile()
+
+    async def fake_prepare(_message, _target, _text):
+        assert share_runtime._share_video_limit_bytes(message.guild) == 100 * mib
+        # A Discord guild update arrives while an 80 MiB upload is staged.
+        message.guild.premium_tier = 2
+        return SimpleNamespace(
+            file=fake_file,
+            size_bytes=80 * mib,
+            cleanup_path=cleanup_path,
+        )
+
+    monkeypatch.setattr(share_runtime, "_prepare_native_video", fake_prepare)
+    was_sent = asyncio.run(
+        share_runtime._relay_native_video_upload(
+            message,
+            target,
+            message.content,
+            content="Share Router native video",
+        )
+    )
+    assert was_sent is False
+    assert target.sent == []
+    assert fake_file.closed
+    assert not cleanup_path.exists()
+    assert share_runtime._share_video_limit_bytes(message.guild) == 50 * mib
