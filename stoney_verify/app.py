@@ -1062,6 +1062,14 @@ async def _start_workers_once() -> None:
     except Exception as e:
         print("⚠️ Ticket automation worker failed:", repr(e))
 
+    try:
+        from .verification_reminders import start_unverified_reminder_worker
+
+        start_unverified_reminder_worker(bot)
+        print("🔔 Opt-in verification reminder worker started")
+    except Exception as e:
+        print("⚠️ Verification reminder worker failed:", repr(e))
+
 
 async def _startup_background_runner() -> None:
     try:
