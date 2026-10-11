@@ -17,11 +17,43 @@
 ### Validation
 - New end-to-end mocked send/edit regression checks on upload / direct public media / Tenor view-page link, plus existing Toke tests.
 - CI and actual Android visuals pending; no claim client-specific presentation is guaranteed until verified.
-- The previous profile-card single-line fix remains on open draft PR #506 with its own checkpoint, not included here. Share Router/Cinema remain untouched.
+- PR #506 merged into production branch at 7b71a8a32be2a358efd50a3758b4e462a808a540. Preserve its complete single-line profile-renderer implementation and archived checkpoint below; no profile, Share Router or Cinema files altered by GIF fix.
+
 
 ---
 
-## CURRENT ACTIVE TASK — DANK-SHARE-ROUTER-PRODUCTION-RECONCILE-20261010
+## PREVIOUS TASK — PROFILE-USERNAME-SINGLE-LINE-20261011
+
+**User-approved switch:** PR #505 (deduplicated Toke names) was merged to the documented Discloud Auto Deploy branch `aaa-cinema-pre-pregateway-bind`. The user then authorized the separately scoped profile-card layout fix. Share Router and Toke remain preserved and are not being modified in this PR.
+
+**Branch:** `fix/profile-name-single-line-fit-20261011` from `aaa-cinema-pre-pregateway-bind`.
+
+**Outcome:** Display the **whole profile-card display name on exactly one line** in Classic, Minimal, Spotlight and legacy compact layouts, including ornate Unicode/emoji combinations. Prevent textual truncation, ellipses, wrapping, and overlaps with avatar/platform/brand fields. Work inside the current fixed 1400x300 / legacy dimensions.
+
+### Confirmed root causes
+- The modern renderer uses fixed-size emoji rich text then `_fit(...)` to replace long names with `…`, creating `UglyGa…` in screenshot.
+- The shared `welcome_card_typography_engine._fitted_tile` always shortens text to `...` if it cannot fit at `min_size`; this also affects styled, no-emoji names and the legacy renderer.
+- Previous name input was hard-capped to 72/80 code points, which can bisect extended emoji sequences and result in partial text. Valid Discord display names are taken whole with a defensive 2048-character ceiling.
+
+### Scoped implementation
+- Shared typography engine: add an **opt-in** `preserve_text=True` setting. First reduce font size within the existing normal range; if still too wide, draw the whole name once and uniformly scale its tile to the allotted single-line rectangle. Other welcome/profile metadata typography keeps existing defaults.
+- Modern rich emoji names: measure complete emoji/text tokens, select the largest fitting font, or uniformly rescale the full composed raster (never `_fit` or split grapheme sequences). Respect fixed avatar/brand/platform regions.
+- Legacy compact renderer: use the same full-name preserve mode.
+- Platform username/handle text in standard and platform-focused themes also uses a single complete line instead of the prior two-line `_draw_complete` wrapping path. Server branding and role labels keep their established rules.
+- Regression tests: exact long emoji screenshot pattern, mixed Unicode, styled effects, all layouts, safe pixel bounds, legacy, and non-name typography compatibility.
+
+### Remaining gates
+- Exact-head profile-name-focused CI, full CI, asset/visual regressions, and real Android view at a representative phone width.
+- Confirm a truly extreme name must shrink in fixed-space geometry; no claim that arbitrary text can remain simultaneously fully readable at normal font size on a fixed-width card.
+- PR remains draft until tests and live acceptance. No Toke, Share Router, Cinema, or unrelated modules changed.
+
+### Suspended checkpoints
+Share Router #502 and Toke #503 were restored to the production branch through PR #504; Toke name duplication was addressed by PR #505. The earlier Cinema restart/branch divergence remains a separate recorded project. No further changes to those areas in this task.
+
+---
+
+## PREVIOUS TASK — DANK-SHARE-ROUTER-PRODUCTION-RECONCILE-20261010
+
 
 **User force switch:** Toke overhaul PR #503 was merged into `main@fee272e35e75a1eed0f4c2d6f7a21350173fffae`; user explicitly switched back to Share Router to make the live feature work. Preserve Toke and Cinema; do not implement unrelated features during this task.
 
