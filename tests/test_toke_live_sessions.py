@@ -226,6 +226,7 @@ def test_toke_roster_pagination_shows_every_member_once(isolated_sessions, monke
     session = {
         **_session(), "starter_id": 1, "voice_channel_id": 987,
         "cheers_ids": list(range(2, 41)), "going_ids": list(range(35, 51)),
+        "active": True,
     }
     # 1 host + 39 cheers + 10 new joiners = 50 unique people.
     view = live.TokeRosterView(guild, session)
@@ -242,7 +243,7 @@ def test_toke_roster_pagination_shows_every_member_once(isolated_sessions, monke
 
 def test_toke_single_member_without_cheers_still_shows_host(isolated_sessions):
     guild = SimpleNamespace(get_channel=lambda _n: None)
-    session = {**_session(), "starter_id": 1, "cheers_ids": [], "going_ids": []}
+    session = {**_session(), "starter_id": 1, "cheers_ids": [], "going_ids": [], "active": True}
     card = live.render_card(guild, session, discord.Embed(description="Host is calling."))
     assert card.fields[1].value == "👑  **Host**"
     assert "Cheers: 0" in card.fields[0].value
