@@ -21,7 +21,7 @@ from .tickets_new.service import (
 from .tickets_new.sync_service import sync_one_ticket_channel
 from .tickets_new.repository import (
     _find_ticket_row_by_channel_id,
-    list_active_ticket_channel_identities_for_guild,
+    list_non_deleted_ticket_channel_identities_for_guild,
     safe_optional_update_by_channel_id,
     mark_ticket_closed as repo_mark_ticket_closed,
     mark_ticket_deleted as repo_mark_ticket_deleted,
@@ -594,7 +594,7 @@ async def reconcile_missing_active_ticket_channels_for_guild(
     """
     gid = int(guild.id)
     summary = {"checked": 0, "deleted": 0, "uncertain": 0, "rest_checks": 0}
-    rows = await list_active_ticket_channel_identities_for_guild(gid)
+    rows = await list_non_deleted_ticket_channel_identities_for_guild(gid)
     if rows is None:
         print(f"⚠️ ticket_events missing-channel scan unavailable guild={gid}; DB state untouched")
         summary["uncertain"] += 1
