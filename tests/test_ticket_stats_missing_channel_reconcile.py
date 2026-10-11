@@ -366,3 +366,30 @@ def test_deleted_record_not_misrepresented_as_completed_close():
         "claimed_tickets": 1,
         "closed_tickets": 1,
     }
+
+
+def test_staff_refresh_reports_partial_ticket_truth(monkeypatch):
+    from stoney_verify.commands_ext import public_server_stats
+
+    async def reconcile(_guild):
+        return {"deleted": 0, "uncertain": 2, "rest_checks": 3}
+
+    monkeypatch.setattr(ticket_events, "reconcile_missing_ticket_channels_for_guild", reconcile)
+    summary = run(public_server_stats._reconcile_tickets_before_stats(FakeGuild()))
+    assert summary["uncertain"] == 2
+    assert "could not be verified" in public_server_stats._ticket_reconciliation_note(summary)
+    assert "Reconciled 2" in public_server_stats._ticket_reconciliation_note({
+        "deleted": 2, "uncertain": 0, "rest_checks": 2,
+    })
+
+
+def test_staff_refresh_handles_reconciliation_error_without_claiming_accuracy(monkeypatch):
+    from stoney_verify.commands_ext import public_server_stats
+
+    async def reconcile(_guild):
+        raise RuntimeError("database is unavailable")
+
+    monkeypatch.setattr(ticket_events, "reconcile_missing_ticket_channels_for_guild", reconcile)
+    summary = run(public_server_stats._reconcile_tickets_before_stats(FakeGuild()))
+    assert summary["uncertain"] == 1
+    assert "may" in public_server_stats._ticket_reconciliation_note(summary)
