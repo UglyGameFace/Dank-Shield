@@ -60,6 +60,7 @@ _DATA_LOCK = asyncio.Lock()
 _SOURCE_CLEANUP_TASK: Optional[asyncio.Task[None]] = None
 _SOURCE_CLEANUP_INTERVAL_SECONDS = 900
 _SOURCE_CLEANUP_MAX_PER_PASS = 50
+_SOURCE_CLEANUP_CURSOR = 0
 _GUILD_SOURCE_LOCKS: dict[int, asyncio.Lock] = {}
 # Discord allows 50 channels per category and 500 channels per guild.
 _DISCORD_CATEGORY_CHANNEL_LIMIT = 50
@@ -1534,14 +1535,18 @@ async def _cleanup_delivered_proxy_post(message: discord.Message, *, enabled: bo
 
 
 async def _sweep_delivered_cleanup_once(bot: Any) -> int:
-    """Bounded REST work against only posts known to have been delivered."""
+    """Pace REST deletes and rotate fairly across guilds with blocked entries."""
+    global _SOURCE_CLEANUP_CURSOR
     async with _DATA_LOCK:
         data = _load_all_unlocked()
         pending: list[tuple[int, int, int]] = []
         for guild_id, bucket in data.items():
             if not isinstance(bucket, dict):
                 continue
-            for item in bucket.get("pending_source_cleanup", []):
+            stored = bucket.get("pending_source_cleanup", [])
+            if not isinstance(stored, list):
+                continue
+            for item in stored:
                 if not isinstance(item, dict):
                     continue
                 entry = (
@@ -1551,13 +1556,15 @@ async def _sweep_delivered_cleanup_once(bot: Any) -> int:
                 )
                 if all(entry):
                     pending.append(entry)
-                if len(pending) >= _SOURCE_CLEANUP_MAX_PER_PASS:
-                    break
-            if len(pending) >= _SOURCE_CLEANUP_MAX_PER_PASS:
-                break
+        if not pending:
+            return 0
+        start = _SOURCE_CLEANUP_CURSOR % len(pending)
+        count = min(len(pending), _SOURCE_CLEANUP_MAX_PER_PASS)
+        selected = [pending[(start + n) % len(pending)] for n in range(count)]
+        _SOURCE_CLEANUP_CURSOR = (start + count) % len(pending)
 
     completed: set[tuple[int, int, int]] = set()
-    for guild_id, source_id, message_id in pending:
+    for guild_id, source_id, message_id in selected:
         guild = bot.get_guild(guild_id)
         if guild is None:
             continue
