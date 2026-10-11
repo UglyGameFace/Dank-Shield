@@ -43,6 +43,35 @@ from ..security_stats import (
 from .public_setup_group import _require_setup_permission
 
 
+
+async def _reconcile_tickets_before_stats(guild: discord.Guild) -> dict[str, int]:
+    """Check missing ticket channels before a staff-requested stat refresh."""
+    try:
+        from ..ticket_events import reconcile_missing_ticket_channels_for_guild
+
+        return await reconcile_missing_ticket_channels_for_guild(guild)
+    except Exception as exc:
+        print(
+            f"⚠️ server_stats ticket verification unavailable guild={guild.id} "
+            f"error={type(exc).__name__}"
+        )
+        return {"deleted": 0, "uncertain": 1, "rest_checks": 0}
+
+
+def _ticket_reconciliation_note(summary: Mapping[str, int]) -> str:
+    if int(summary.get("uncertain", 0)):
+        return (
+            "\n⚠️ Some ticket records could not be verified. Ticket totals may "
+            "remain stale until Discord/database access recovers."
+        )
+    deleted = int(summary.get("deleted", 0))
+    if deleted:
+        return f"\n🧹 Reconciled {deleted} externally deleted ticket record(s)."
+    if int(summary.get("rest_checks", 0)) >= 25:
+        return "\nℹ️ Missing-channel checks are rate-limited and continue on later refreshes."
+    return ""
+
+
 _METRIC_TITLES = {
     key: metric.title
     for key, metric in SECURITY_STATS_METRICS.items()
@@ -525,8 +554,12 @@ class ServerStatsView(discord.ui.View):
         if guild is None:
             return await interaction.response.send_message("❌ Use this inside a server.", ephemeral=True)
         await interaction.response.defer()
+        ticket_summary = await _reconcile_tickets_before_stats(guild)
         _ok, note = await ensure_security_stats_display(guild)
-        await _render_center(interaction, content=note)
+        await _render_center(
+            interaction,
+            content=note + _ticket_reconciliation_note(ticket_summary),
+        )
 
     @discord.ui.button(
         label="Disable & Remove",
@@ -564,10 +597,15 @@ class ServerStatsView(discord.ui.View):
         cfg = await get_guild_config(int(guild.id), refresh=True)
         if not _cfg_bool(cfg, SECURITY_STATS_ENABLED_KEY, False):
             return await _render_center(interaction, content="ℹ️ Server Stats are disabled. Press **Enable Stats** first.")
+        ticket_summary = await _reconcile_tickets_before_stats(guild)
         changed = await refresh_security_stats_display(guild, force=True)
+        note = (
+            "✅ Server Stats display refreshed."
+            if changed else "⚠️ Server Stats display could not be refreshed."
+        )
         await _render_center(
             interaction,
-            content="✅ Server Stats refreshed and repaired." if changed else "ℹ️ Server Stats did not need a refresh.",
+            content=note + _ticket_reconciliation_note(ticket_summary),
         )
 
     @discord.ui.button(
