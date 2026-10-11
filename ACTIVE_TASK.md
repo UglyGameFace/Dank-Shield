@@ -14,6 +14,14 @@
 - Existing one canonical send, session persistence, Cheers, Joining, VC tracking, roles, authorization, and cooldowns remain unchanged.
 - Never use `suppress_embeds` to solve this, as it also hides the intended Toke embed.
 
+### Expanded owner report: expired cards and confusing crowd layout
+- At the 60-minute limit, the public Toke card continued to show a green active status with a relative timestamp in the past; buttons could produce a Discord "didn't respond in time" message after bot restart.
+- Root cause: `end_expired()` collected `active=True` copies **before** marking sessions inactive. The worker therefore reused a stale snapshot. Other code paths could mark the storage inactive before the worker saw an expiry, permanently skipping the public edit. Startup restored only active button views, leaving stale expired buttons unhandled.
+- A durable `close_pending` reconciliation queue now covers expiration, explicit End Sesh, legacy inactive records and failed card edits across restarts. It is only acknowledged after a terminal card update removes all components. Old callbacks remain registered until closure can be delivered. Worker retries every 15 seconds.
+- Every interaction now acknowledges before storage access or Discord edits and returns a friendly ended response for old buttons. Public ended cards change title, color and description, preserve media, show final counts, and remove participation controls.
+- Active card displays a compact stats field (Cheers, Joining and live VC with channel), at most three unique members with small status icons, and links longer rosters to Who's Coming. No repeated decorated names or verbose labels beside each member. The paged roster uses the same concise icons.
+- New 8-case regression suite validates restart recovery, stale clicks, durable retries, automatic/manual ending, and 35-person mobile layout. Full CI, Android visual acceptance, and Discloud deployment proof still required.
+
 ### Validation
 - New end-to-end mocked send/edit regression checks on upload / direct public media / Tenor view-page link, plus existing Toke tests.
 - CI and actual Android visuals pending; no claim client-specific presentation is guaranteed until verified.
