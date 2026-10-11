@@ -24,7 +24,12 @@ _DEFAULTS = {
 }
 _PENDING: dict[tuple[int, int], "PendingToke"] = {}
 _REGISTERED: set[tuple[int, int]] = set()
-_VOICE_REFRESH: dict[int, float] = {}
+# Voice events can arrive in bursts when several members join. A simple
+# "ignore anything within five seconds" gate loses the *last* update, leaving
+# the card inaccurate until someone manually presses Refresh.
+_VOICE_PENDING: dict[int, set[int]] = {}
+_VOICE_WORKERS: dict[int, asyncio.Task[None]] = {}
+_VOICE_DEBOUNCE_SECONDS = 2.0
 _STARTED_BOTS: set[int] = set()
 _LOOP_TASK: asyncio.Task[None] | None = None
 
@@ -158,7 +163,7 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
         embed.add_field(
             name="✅ This sesh has ended",
             value=(
-                f"Closed <t:{ended_at}:R>."
+                f"Closed at <t:{ended_at}:f>."
                 + (" The time limit was reached." if reason == "expired" else " The host or staff ended it.")
                 + "\nStart a new `/toke` when you're ready. This announcement is no longer taking responses."
             ),
@@ -195,7 +200,10 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
     )
     embed.add_field(
         name="⏳ Session",
-        value=f"Ends <t:{int(expiry)}:R>  ·  💨 Interested  ·  🙋 Planning to join  ·  🔊 In voice",
+        value=(
+            f"Scheduled end: <t:{int(expiry)}:f>\n"
+            f"Counts last checked: <t:{int(time.time())}:t>  ·  Tap **Refresh** for current status."
+        ),
         inline=False,
     )
     embed.color = discord.Color.green()
@@ -768,23 +776,46 @@ async def _on_toke_media_message(message: discord.Message) -> None:
         _PENDING.pop((pending.guild_id, pending.user_id), None)
 
 
-async def _on_toke_voice_state(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState, *, bot: Any) -> None:
+async def _flush_toke_voice_updates(guild: discord.Guild, bot: Any) -> None:
+    """Coalesce VC churn, then refresh the *final* observed membership.
+
+    Exactly one worker per guild. If more events arrive while a card is being
+    edited, run another pass rather than losing the trailing member change.
+    """
+    gid = int(guild.id)
+    try:
+        while _VOICE_PENDING.get(gid):
+            await asyncio.sleep(_VOICE_DEBOUNCE_SECONDS)
+            affected = _VOICE_PENDING.pop(gid, set())
+            if not affected:
+                continue
+            for session in await toke_sessions.all_active(gid):
+                if int(session.get("voice_channel_id", 0) or 0) not in affected:
+                    continue
+                try:
+                    await refresh_card(bot, session)
+                except (discord.HTTPException, ValueError, OSError) as exc:
+                    print(
+                        f"[toke] voice refresh error guild={gid} "
+                        f"message={session.get('message_id')} error={type(exc).__name__}"
+                    )
+    finally:
+        _VOICE_WORKERS.pop(gid, None)
+
+
+async def _on_toke_voice_state(
+    member: discord.Member, before: discord.VoiceState, after: discord.VoiceState, *, bot: Any
+) -> None:
     if member.guild is None:
         return
     affected = {int(ch.id) for ch in (before.channel, after.channel) if ch is not None}
     if not affected:
         return
-    now = time.monotonic()
-    if now - _VOICE_REFRESH.get(member.guild.id, 0) < 5:
-        return
-    _VOICE_REFRESH[member.guild.id] = now
-    for session in await toke_sessions.all_active(member.guild.id):
-        if int(session.get("voice_channel_id", 0)) not in affected:
-            continue
-        try:
-            await refresh_card(bot, session)
-        except (discord.HTTPException, ValueError, OSError):
-            continue
+    gid = int(member.guild.id)
+    _VOICE_PENDING.setdefault(gid, set()).update(affected)
+    worker = _VOICE_WORKERS.get(gid)
+    if worker is None or worker.done():
+        _VOICE_WORKERS[gid] = asyncio.create_task(_flush_toke_voice_updates(member.guild, bot))
 
 
 async def _expire_and_refresh(bot: Any) -> None:
