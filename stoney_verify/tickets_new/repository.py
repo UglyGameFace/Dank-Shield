@@ -1494,11 +1494,10 @@ async def list_open_tickets_for_guild(
         return []
 
 
-
 def _select_non_deleted_ticket_channel_identities_for_guild_sync(
     guild_id: str,
 ) -> Optional[List[Dict[str, Any]]]:
-    """Page active channel identities; None means the scan is not trustworthy."""
+    """Page open, claimed and closed channel identities or fail explicitly."""
     sb = _sb()
     if sb is None:
         return None
