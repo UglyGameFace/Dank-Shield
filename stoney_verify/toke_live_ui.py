@@ -537,7 +537,7 @@ def _is_gif_like_url(value: Any) -> bool:
     return bool(
         re.match(r"^https?://", url, re.I)
         and re.search(
-            r"(?:tenor\\.com|giphy\\.com|discordapp\\.(?:net|com)|\\.(?:gif|png|jpe?g|webp)(?:[?#]|$))",
+            r"(?:tenor\.com|giphy\.com|discordapp\.(?:net|com)|\.(?:gif|png|jpe?g|webp)(?:[?#]|$))",
             url, re.I,
         )
     )
@@ -545,7 +545,7 @@ def _is_gif_like_url(value: Any) -> bool:
 
 def media_url_from_message(message: discord.Message) -> str:
     """Handle normal Tenor/Giphy message URLs plus mobile embed-only GIFs."""
-    for found in re.findall(r"https?://[^\\s<>]+", str(message.content or "")):
+    for found in re.findall(r"https?://[^\s<>]+", str(message.content or "")):
         if _is_gif_like_url(found):
             return found.rstrip(".,")
     for embed in (message.embeds or []):
