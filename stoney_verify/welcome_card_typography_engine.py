@@ -645,6 +645,7 @@ def _fitted_tile(
     primary: tuple[int, int, int],
     secondary: tuple[int, int, int],
     custom_font_bytes: Optional[bytes] = None,
+    preserve_text: bool = False,
 ) -> tuple[str, Image.Image]:
     candidate = text
     minimum = max(8, int(min_size))
@@ -660,6 +661,27 @@ def _fitted_tile(
         )
         if _fits(tile, max_width=max_width, max_height=max_height):
             return candidate, tile
+
+    if preserve_text:
+        # Discord display names must not be abbreviated or split by a fixed
+        # template. Render the complete styled text at minimum size and scale
+        # its raster uniformly if it still exceeds the single-line slot.
+        # This retains grapheme sequences and custom typography effects.
+        full = _styled_tile(
+            candidate,
+            style=style,
+            size=minimum,
+            role=role,
+            primary=primary,
+            secondary=secondary,
+            custom_font_bytes=custom_font_bytes,
+        )
+        if full.width > max_width or full.height > max_height:
+            full.thumbnail(
+                (max(1, int(max_width)), max(1, int(max_height))),
+                Image.Resampling.LANCZOS,
+            )
+        return candidate, full
 
     suffix = "..."
     clusters = list(grapheme_clusters(candidate))
@@ -715,8 +737,9 @@ def render_styled_text_tile(
     secondary: tuple[int, int, int],
     role: str = "name",
     custom_font_bytes: Optional[bytes] = None,
+    preserve_text: bool = False,
 ) -> Image.Image:
-    """Render one fitted typography tile using the canonical style effects."""
+    """Render a fitted tile, optionally preserving the entire text on one line."""
     style = _render_style(style_key, custom_font_bytes)
     _rendered, tile = _fitted_tile(
         str(text or ""),
@@ -729,6 +752,7 @@ def render_styled_text_tile(
         primary=primary,
         secondary=secondary,
         custom_font_bytes=custom_font_bytes,
+        preserve_text=preserve_text,
     )
     return tile
 

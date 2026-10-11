@@ -471,7 +471,8 @@ def render_profile_signature(
     content_x = metrics["content_x"]
     right_edge = avatar_x - 28 if layout == "spotlight" else SIGNATURE_WIDTH - 42
     eyebrow_font = _font(15, style_key=style_key, custom_font=custom_font, regular=True)
-    name_text = _safe_text(display_name, 80) or "Member"
+    # No arbitrary character cap: the typography tile fits the full name.
+    name_text = _safe_text(display_name, 2048) or "Member"
     name_tile = render_styled_text_tile(
         name_text,
         style_key=style_key,
@@ -483,6 +484,7 @@ def render_profile_signature(
         secondary=secondary,
         role="name",
         custom_font_bytes=custom_font,
+        preserve_text=True,
     )
     chip_font = _font(15, style_key=style_key, custom_font=custom_font, regular=True)
 
