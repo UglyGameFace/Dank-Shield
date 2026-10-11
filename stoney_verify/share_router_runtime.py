@@ -2055,7 +2055,7 @@ def ensure_share_router_runtime(bot: Any) -> bool:
                 _SOURCE_CLEANUP_TASK = asyncio.create_task(_share_router_cleanup_loop(bot))
 
         bot.add_listener(start_cleanup_worker, "on_ready")
-        _log("active; private share proxies can route into configured destinations")
+        _log(f"active; private share proxies can route into configured destinations build={SHARE_ROUTER_FEATURE_BUILD}")
         return True
     except Exception as exc:
         _log(f"runtime install failed: {type(exc).__name__}: {exc}")
