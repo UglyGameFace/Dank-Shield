@@ -117,3 +117,57 @@ def claim_sync(
     except Exception:
         # An uncertain transaction result means DO NOT send another reminder.
         return False
+
+
+def stale_candidates_sync(
+    cutoff: datetime,
+    *,
+    after: tuple[datetime, str, str] | None = None,
+    limit: int = 12,
+) -> list[tuple[str, str, datetime, datetime]]:
+    """Read a bounded keyset page; NEVER interpret a DB error as no rows.
+
+    All rows are just compact counters, not names, message copies or DM content.
+    Only the caller may decide a record is safe to delete after Discord REST
+    confirms that the user has actually left the guild.
+    """
+    if cutoff.tzinfo is None or not 1 <= limit <= 50:
+        raise ValueError("Invalid verification reminder cleanup scan")
+    sql = (
+        "select guild_id, user_id, joined_at, last_claimed_at "
+        "from public.dank_verify_reminder_delivery "
+        "where last_claimed_at < %s "
+    )
+    params: list[object] = [cutoff]
+    if after is not None:
+        sql += "and (last_claimed_at, guild_id, user_id) > (%s, %s, %s) "
+        params.extend(after)
+    sql += "order by last_claimed_at, guild_id, user_id limit %s"
+    params.append(limit)
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(sql, tuple(params))
+            return list(cursor.fetchall())
+
+
+def delete_departed_sync(
+    guild_id: str,
+    user_id: str,
+    joined_at: datetime,
+    cutoff: datetime,
+) -> bool:
+    """Compare both membership generation and age to avoid deleting fresh claims.
+
+    The caller MUST already have confirmed REST 404 for this guild member.
+    """
+    if joined_at.tzinfo is None or cutoff.tzinfo is None:
+        return False
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "delete from public.dank_verify_reminder_delivery "
+                "where guild_id = %s and user_id = %s and joined_at = %s "
+                "and last_claimed_at < %s returning 1",
+                (guild_id, user_id, joined_at, cutoff),
+            )
+            return cursor.fetchone() is not None
