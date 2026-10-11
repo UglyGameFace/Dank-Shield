@@ -16,10 +16,13 @@ from stoney_verify.share_router_resources import (
 )
 from stoney_verify.share_router_runtime import (
     create_or_repair_hidden_share_hub,
+    create_custom_share_source,
+    delete_custom_share_source,
     ensure_share_router_runtime,
     find_share_router_category,
     find_share_source_channel,
     guild_routes,
+    guild_custom_share_sources,
     remove_route,
     route_health,
     route_permission_blockers,
@@ -27,7 +30,7 @@ from stoney_verify.share_router_runtime import (
     source_age_blocker,
     source_privacy_blocker,
 )
-from stoney_verify.ui import DankChoice, DankGuildResourceBrowserView, DankPickerView
+from stoney_verify.ui import DankGuildResourceBrowserView
 
 _ALLOWED_MENTIONS = discord.AllowedMentions.none()
 
@@ -291,35 +294,24 @@ async def open_share_router(
         await _private(interaction, embed=embed, view=view)
 
 
-def _source_choices(guild: discord.Guild, routes: list[dict[str, Any]]) -> list[DankChoice]:
+async def _available_source_ids(guild: discord.Guild, routes: list[dict[str, Any]]) -> set[int]:
+    """Canonical, registered custom, and legacy routed sources for this guild."""
     category = find_share_router_category(guild)
-    if category is None:
-        return []
-
-    target_by_source = {
-        _safe_int(route.get("source_channel_id"), 0): _safe_int(route.get("target_channel_id"), 0)
-        for route in routes
+    source_ids: set[int] = set()
+    if category is not None:
+        source_ids.update(
+            int(source.id) for name in DEFAULT_SHARE_CHANNELS
+            if (source := find_share_source_channel(category, name)) is not None
+        )
+    source_ids.update(await guild_custom_share_sources(int(guild.id)))
+    # Preserve legacy/custom routes that were already installed before this UI.
+    source_ids.update(
+        _safe_int(route.get("source_channel_id"), 0) for route in routes
+    )
+    return {
+        source_id for source_id in source_ids
+        if isinstance(guild.get_channel(source_id), discord.TextChannel)
     }
-    choices: list[DankChoice] = []
-    for canonical in DEFAULT_SHARE_CHANNELS:
-        source = find_share_source_channel(category, canonical)
-        if source is None:
-            continue
-        target = guild.get_channel(target_by_source.get(int(source.id), 0))
-        description = (
-            f"Currently routes to {_target_label(target)}"
-            if isinstance(target, discord.TextChannel)
-            else "No destination saved yet"
-        )
-        choices.append(
-            DankChoice(
-                label=canonical,
-                value=str(int(source.id)),
-                description=description,
-                emoji="🔗",
-            )
-        )
-    return choices
 
 
 async def _open_source_picker(interaction: discord.Interaction) -> None:
@@ -328,41 +320,37 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
         return await _private(interaction, "❌ Use Share Router inside a server.")
 
     routes = await guild_routes(int(guild.id))
-    choices = _source_choices(guild, routes)
-    if not choices:
+    source_ids = await _available_source_ids(guild, routes)
+    if not source_ids:
         return await _private(
             interaction,
-            "❌ No canonical proxy channels are available. Run Create / Repair Hub first.",
+            "❌ No proxy channels are available. Run Create / Repair Hub or Create Proxy first.",
         )
 
     async def back(back_interaction: discord.Interaction) -> None:
         await open_share_router(back_interaction, replace_message=True)
 
-    async def picked(pick_interaction: discord.Interaction, value: str) -> None:
-        source = guild.get_channel(_safe_int(value, 0))
-        if not isinstance(source, discord.TextChannel):
-            return await _private(pick_interaction, "❌ That proxy source no longer exists.")
-        await _open_target_browser(pick_interaction, source)
+    async def picked(pick_interaction: discord.Interaction, resource: Any) -> None:
+        if not await _require_manage(pick_interaction):
+            return
+        current = await _available_source_ids(guild, await guild_routes(int(guild.id)))
+        if not isinstance(resource, discord.TextChannel) or resource.id not in current:
+            return await _private(pick_interaction, "❌ This proxy source is no longer configured.")
+        await _open_target_browser(pick_interaction, resource)
 
-    view = DankPickerView(
+    view = DankGuildResourceBrowserView(
+        guild=guild,
         author_id=int(interaction.user.id),
-        choices=choices,
+        resource_kinds=("text",),
         on_pick=picked,
         custom_id="dank:share_router:source",
-        placeholder="Choose the plain proxy source…",
+        placeholder="Choose a proxy source…",
         title="Choose Share Router Source",
+        predicate=lambda resource: int(getattr(resource, "id", 0)) in source_ids,
         on_home=back,
         home_label="Share Router",
     )
-    embed = discord.Embed(
-        title="🔗 Choose Proxy Source",
-        description=(
-            "Pick the plain channel that should appear in the mobile share sheet. "
-            "Next you will choose its real destination."
-        ),
-        color=discord.Color.blurple(),
-    )
-    await _replace(interaction, embed=embed, view=view)
+    await _replace(interaction, embed=view.embed(), view=view)
 
 
 async def _open_target_browser(
@@ -380,6 +368,11 @@ async def _open_target_browser(
         pick_interaction: discord.Interaction,
         resource: Any,
     ) -> None:
+        if not await _require_manage(pick_interaction):
+            return
+        source_ids = await _available_source_ids(guild, await guild_routes(int(guild.id)))
+        if int(source.id) not in source_ids:
+            return await _private(pick_interaction, "❌ This proxy source is no longer configured.")
         if not isinstance(resource, discord.TextChannel):
             return await _private(pick_interaction, "❌ Pick a normal text channel.")
 
@@ -455,53 +448,44 @@ async def _open_remove_picker(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
         return await _private(interaction, "❌ Use Share Router inside a server.")
-
     routes = await guild_routes(int(guild.id))
-    choices: list[DankChoice] = []
-    for route in routes:
-        source_id = _safe_int(route.get("source_channel_id"), 0)
-        target_id = _safe_int(route.get("target_channel_id"), 0)
-        source = guild.get_channel(source_id)
-        target = guild.get_channel(target_id)
-        source_label = f"#{source.name}" if isinstance(source, discord.TextChannel) else f"source {source_id}"
-        choices.append(
-            DankChoice(
-                label=source_label,
-                value=str(source_id),
-                description=f"Destination: {_target_label(target if isinstance(target, discord.TextChannel) else None)}",
-                emoji="🗑️",
-            )
-        )
-
-    if not choices:
-        return await _private(interaction, "ℹ️ There are no saved Share Router routes to remove.")
+    source_ids = {
+        _safe_int(route.get("source_channel_id"), 0) for route in routes
+    }
+    source_ids = {
+        source_id for source_id in source_ids
+        if isinstance(guild.get_channel(source_id), discord.TextChannel)
+    }
+    if not source_ids:
+        return await _private(interaction, "ℹ️ No saved routes with existing sources are available.")
 
     async def back(back_interaction: discord.Interaction) -> None:
         await open_share_router(back_interaction, replace_message=True)
 
-    async def picked(pick_interaction: discord.Interaction, value: str) -> None:
-        await remove_route(int(guild.id), _safe_int(value, 0))
+    async def picked(pick_interaction: discord.Interaction, resource: Any) -> None:
+        if not await _require_manage(pick_interaction):
+            return
+        current = await guild_routes(int(guild.id))
+        if not isinstance(resource, discord.TextChannel) or resource.id not in {
+            _safe_int(route.get("source_channel_id"), 0) for route in current
+        }:
+            return await _private(pick_interaction, "❌ That route no longer exists.")
+        await remove_route(int(guild.id), int(resource.id))
         await open_share_router(pick_interaction, replace_message=True)
 
-    view = DankPickerView(
+    view = DankGuildResourceBrowserView(
+        guild=guild,
         author_id=int(interaction.user.id),
-        choices=choices[:25],
+        resource_kinds=("text",),
         on_pick=picked,
         custom_id="dank:share_router:remove",
         placeholder="Choose a saved route to remove…",
-        title="Remove Share Route",
+        title="Remove Share Route (keeps the channels)",
+        predicate=lambda resource: int(getattr(resource, "id", 0)) in source_ids,
         on_home=back,
         home_label="Share Router",
     )
-    await _replace(
-        interaction,
-        embed=discord.Embed(
-            title="🗑️ Remove Share Route",
-            description="This removes only the saved forwarding rule. It does not delete channels.",
-            color=discord.Color.orange(),
-        ),
-        view=view,
-    )
+    await _replace(interaction, embed=view.embed(), view=view)
 
 
 class ShareRouterView(_OwnedView):
