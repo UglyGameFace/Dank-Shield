@@ -304,7 +304,7 @@ async def _publish_toke(
             title="💨 Toke Time",
             description=(
                 f"**{discord.utils.escape_markdown(member.display_name)}** is calling the sesh crowd."
-                + (f"\\n\\n> {discord.utils.escape_markdown(_clean_member_message(message_text))}" if message_text else "")
+                + (f"\n\n> {discord.utils.escape_markdown(_clean_member_message(message_text))}" if message_text else "")
             ),
             color=discord.Color.green(),
             timestamp=discord.utils.utcnow(),
@@ -320,7 +320,7 @@ async def _publish_toke(
 
         content = notify_role.mention
         if clean_media and not direct:
-            content += f"\\n{clean_media}"
+            content += f"\n{clean_media}"
         voice_id = choose_voice(guild, member, settings)
         view = TokeCheersView(
             member.id, starter_role.id, voice_channel_id=voice_id, guild_id=guild.id,
