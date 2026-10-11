@@ -96,6 +96,25 @@ def test_settings_default_and_per_guild_ranges():
     assert setting["voice_channel_id"] == 777
 
 
+def test_per_guild_settings_modal_and_mobile_controls_render():
+    saved = live.settings_from_config({
+        live.SETTINGS_KEY: {
+            "session_minutes": 90, "user_cooldown_minutes": 20,
+            "guild_cooldown_minutes": 8, "max_interested": 45,
+            "show_member_names": False, "voice_channel_id": 987654321,
+        },
+    })
+    modal = live.TokeSettingsModal(owner_id=123, saved=saved)
+    assert len(modal.children) == 5
+    assert str(modal.lifetime.default) == "90"
+    assert str(modal.user_cooldown.default) == "20"
+    assert str(modal.names.default) == "no"
+    panel = live.TokeSettingsView(123, saved)
+    labels = {getattr(child, "label", "") for child in panel.children}
+    assert {"Edit Settings", "Choose Default VC", "Clear Default VC", "Back to Community & Pings"} <= labels
+    assert len(panel.children) <= 5
+
+
 def test_concurrent_guests_can_only_record_once_and_capacity(isolated_sessions):
     async def run():
         await toke_sessions.save_new({**_session(), "max_interested": 1})
