@@ -724,6 +724,43 @@ async def save_managed_share_route(
         )
 
 
+async def prune_missing_custom_share_sources(guild: discord.Guild) -> int:
+    """Admin-triggered cleanup, using Discord's live channel listing as authority."""
+    async with _guild_source_lock(int(guild.id)):
+        # Never infer deletion solely from an incomplete gateway channel cache.
+        live_ids = {
+            int(channel.id) for channel in await guild.fetch_channels()
+        }
+        async with _DATA_LOCK:
+            data = _load_all_unlocked()
+            key = str(int(guild.id))
+            bucket = data.get(key)
+            if not isinstance(bucket, dict):
+                return 0
+            raw = bucket.get("custom_sources", [])
+            if not isinstance(raw, list):
+                return 0
+            stale = {
+                source_id for item in raw
+                if (source_id := _safe_int(item, 0)) > 0 and source_id not in live_ids
+            }
+            if not stale:
+                return 0
+            bucket["custom_sources"] = [
+                item for item in raw if _safe_int(item, 0) not in stale
+            ]
+            bucket["routes"] = [
+                route for route in bucket.get("routes", [])
+                if not (
+                    isinstance(route, dict)
+                    and _safe_int(route.get("source_channel_id"), 0) in stale
+                )
+            ]
+            data[key] = bucket
+            _save_all_unlocked(data)
+            return len(stale)
+
+
 async def create_custom_share_source(
     guild: discord.Guild,
     actor: discord.abc.User,
