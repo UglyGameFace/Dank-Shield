@@ -144,7 +144,7 @@ async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discor
         active=bool(session.get("active", False)),
         guild_id=int(session["guild_id"]), message_id=int(session["message_id"]),
     )
-    await message.edit(embed=render_card(guild, session, existing[0]), view=view)
+    await message.edit(embed=render_card(guild, session, existing[0]), view=view, allowed_mentions=discord.AllowedMentions.none())
 
 
 class TokeRosterView(discord.ui.View):
@@ -532,20 +532,39 @@ def begin_capture(guild_id: int, user_id: int, channel_id: int, destination_id: 
     return TokeComposeView(user_id, guild_id)
 
 
-def _has_gif_media(message: discord.Message) -> bool:
-    if any(
-        str(getattr(a, "content_type", "") or "").lower().startswith("image/")
-        or str(getattr(a, "filename", "") or "").lower().endswith((".gif", ".png", ".jpg", ".jpeg", ".webp"))
-        for a in (message.attachments or [])
-    ):
-        return True
-    raw = str(message.content or "")
-    if re.search(r"https?://\S*(?:tenor\.com|giphy\.com|discordapp\.(?:net|com)|\.gif|\.webp)", raw, flags=re.I):
-        return True
-    return any(
-        re.search(r"tenor|giphy|\.(?:gif|png|jpe?g|webp)", str(getattr(e, "url", "") or ""), re.I)
-        for e in (message.embeds or [])
+def _is_gif_like_url(value: Any) -> bool:
+    url = str(value or "").strip()
+    return bool(
+        re.match(r"^https?://", url, re.I)
+        and re.search(
+            r"(?:tenor\\.com|giphy\\.com|discordapp\\.(?:net|com)|\\.(?:gif|png|jpe?g|webp)(?:[?#]|$))",
+            url, re.I,
+        )
     )
+
+
+def media_url_from_message(message: discord.Message) -> str:
+    """Handle normal Tenor/Giphy message URLs plus mobile embed-only GIFs."""
+    for found in re.findall(r"https?://[^\\s<>]+", str(message.content or "")):
+        if _is_gif_like_url(found):
+            return found.rstrip(".,")
+    for embed in (message.embeds or []):
+        for candidate in (
+            getattr(embed, "url", None),
+            getattr(getattr(embed, "image", None), "url", None),
+            getattr(getattr(embed, "video", None), "url", None),
+            getattr(getattr(embed, "thumbnail", None), "url", None),
+        ):
+            if _is_gif_like_url(candidate):
+                return str(candidate)
+    return ""
+
+
+def _has_gif_media(message: discord.Message) -> bool:
+    from stoney_verify.commands_ext.public_toke import _attachment_is_supported_media
+    if any(_attachment_is_supported_media(a) for a in (message.attachments or [])):
+        return True
+    return bool(media_url_from_message(message))
 
 
 async def _on_toke_media_message(message: discord.Message) -> None:
