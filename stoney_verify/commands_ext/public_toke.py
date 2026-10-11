@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 import weakref
 from collections.abc import Mapping
 from time import monotonic
