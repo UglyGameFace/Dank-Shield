@@ -10,9 +10,9 @@ backups. These have their own authoritative owners and retention obligations.
 Every new PostgreSQL table must be registered in
 `postgres/data_lifecycle.json` and pass
 `tests/test_postgres_data_lifecycle.py`. Record its owning subsystem,
-purpose, exact stored fields, personally identifying data exposure,
-retention/expiry rule, indexes, cleanup interval/batch size, and preservation
-conditions. Prefer storing IDs, expiry/counters and state, not full messages,
+purpose, retention class, justified historical reuse, review cadence, exact
+stored fields, personally identifying data exposure, retention/expiry rule,
+indexes, cleanup interval/batch size, and preservation conditions. Prefer storing IDs, expiry/counters and state, not full messages,
 attachments, streaming payloads, or redundant member profiles.
 
 **Feature-owned cleanup:** each table has exactly one lifecycle authority.
@@ -21,6 +21,50 @@ remove records only when the owner can establish they're no longer needed.
 If the evidence is missing or the database/API is unavailable, preserve
 data and retry later rather than guessing. Do not run DDL, mass delete,
 VACUUM FULL or unbounded scans on bot startup.
+
+## Keep valuable history, not just more rows
+
+A record can be **durable without being permanent or automatically punitive**.
+Future migrations must classify each table as temporary, operational control,
+durable security evidence, moderation audit, guild configuration, support
+record, member preference, or aggregated analytics. The table registry must
+state its specific historical reuse, an owner and a periodic policy review
+interval (`review_interval_days`). Review means evaluate necessity and
+correctness, **not** automatically delete a row when the review date arrives.
+
+**Existing bad-actor authority:** `stoney_verify/anti_nuke_hostile_actor_runtime.py`
+already persists confirmed, guild-scoped AntiNuke hostile-actor reputation
+to `guild_security_actor_reputation` in Supabase and a local record. It
+tracks classifications, incident counts, first/last seen times and explicit
+staff clearance. Its owner must remain authoritative until a separately
+approved, validated migration exists. Do not add a parallel PostgreSQL
+offender registry or treat a missing Simple Verify response as misconduct.
+Its cleared/inactive records should remain distinguishable from current
+hostile evidence; no generic PostgreSQL cleanup should affect those data.
+
+**Future security intelligence:** documented enforcement events can be useful
+for detecting repeat abuse. A proposed history feature should retain
+authenticated Discord IDs, server scope, evidence provenance, incident and
+review timestamps, action/reason, source/version, confidence, correction/
+appeal outcome and authorized expiry or removal. Preserve verified incidents
+according to a documented security-retention policy, not a global 30/90-day
+TTL. Mere reports, name similarity, new accounts and other low-confidence
+signals must never become confirmed identity or automatic punishment on their
+own. Prefer bounded metadata or references over collecting every message or
+private content. Cross-server sharing or enforcement needs a separate
+authorization/privacy design and cannot be inferred from one server's report.
+
+**Other useful future history:** keep owner-approved moderation/ticket audit
+trails for accountability, config/permission revision history for rollback,
+member consent/preferences that must survive restarts, verified lifecycle
+transitions for restoring access, and privacy-conscious aggregated community
+statistics for trend comparisons. Preserve only fields with a concrete
+feature or recovery purpose; short-lived sessions, logs, spam windows and
+media caches still expire.
+
+No collection, cross-guild reputation network, new security enforcement,
+new historical data table, Supabase migration or bulk legacy deletion is
+authorized by this retention policy alone.
 
 ## Retention classes
 
