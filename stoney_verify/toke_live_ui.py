@@ -112,87 +112,137 @@ def _sesh_people(
     return people, voice if is_voice else None, len(voice_ids)
 
 
+_STATUS_ICONS = {
+    "Host": "👑",
+    "💨 Cheers": "💨",
+    "🙋 Joining": "🙋",
+    "🔊 In VC": "🔊",
+}
+
+
 def _sesh_member_lines(
     people: list[tuple[int, tuple[str, ...]]], *,
-    starter_id: int, limit: int = 8, host_named_in_header: bool = False,
+    starter_id: int, limit: int = 3, host_named_in_header: bool = False,
 ) -> str:
-    """Use exactly one Discord mention per member, never name + mention.
+    """Compact mobile-first preview: roles first, one name or mention after.
 
-    The public card already names the host in its original description, so
-    its roster line shows 'Host' without printing the same name again.
+    The full roster lives behind Who's Coming. Never concatenate multiple
+    duplicate labels onto a heavily decorated Discord nickname.
     """
     rendered: list[str] = []
     for uid, statuses in people[:limit]:
+        icons = "".join(_STATUS_ICONS[s] for s in statuses if s in _STATUS_ICONS)
         subject = "**Host**" if host_named_in_header and uid == starter_id else f"<@{uid}>"
-        parts = tuple(status for status in statuses if status != "Host")
-        suffix = " · ".join(parts)
-        if not suffix:
-            suffix = "Started the sesh" if uid == starter_id else "Here"
-        rendered.append(f"{subject} • {suffix}")
+        rendered.append(f"{icons}  {subject}".strip())
     if len(people) > limit:
-        rendered.append(f"…and {len(people) - limit} more. Tap **Who's Coming?**")
+        rendered.append(f"**+{len(people) - limit} more** · See **Who's Coming?**")
     return "\n".join(rendered) if rendered else "Nobody yet"
 
 
 def render_card(guild: discord.Guild, session: Mapping[str, Any], original: discord.Embed) -> discord.Embed:
+    """Render a genuinely closed card, or a concise participant dashboard."""
     embed = original.copy()
     embed.clear_fields()
-    cheers_ids = {int(uid) for uid in session.get("cheers_ids", []) if int(uid) > 0}
+    cheer_ids = {int(uid) for uid in session.get("cheers_ids", []) if int(uid) > 0}
     going_ids = {int(uid) for uid in session.get("going_ids", []) if int(uid) > 0}
+    active = bool(session.get("active", False))
+    expiry = float(session.get("expires_at", 0) or 0)
+    if not active or expiry <= time.time():
+        ended_at = int(session.get("closed_at") or expiry or time.time())
+        reason = str(session.get("close_reason") or "expired")
+        embed.title = "💨 Toke Time · Sesh Ended"
+        if embed.description:
+            embed.description = embed.description.replace(
+                "is calling the sesh crowd.", "hosted this sesh."
+            )
+        embed.add_field(
+            name="✅ This sesh has ended",
+            value=(
+                f"Closed <t:{ended_at}:R>."
+                + (" The time limit was reached." if reason == "expired" else " The host or staff ended it.")
+                + "\nStart a new `/toke` when you're ready. This announcement is no longer taking responses."
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="📊 Final responses",
+            value=f"💨 Cheers **{len(cheer_ids)}**  ·  🙋 Joining **{len(going_ids)}**",
+            inline=False,
+        )
+        embed.color = discord.Color.dark_grey()
+        return embed
+
     people, voice, voice_count = _sesh_people(guild, session)
     visible = bool(session.get("show_member_names", True))
-
+    channel_text = voice.mention if voice is not None else "No VC selected"
     embed.add_field(
-        name=f"👥 Sesh crowd • 💨 Cheers {len(cheers_ids)} · 🙋 Joining {len(going_ids)}",
+        name="📊 Sesh activity",
         value=(
-            _sesh_member_lines(
-                people,
-                starter_id=int(session.get("starter_id", 0)),
-                host_named_in_header=True,
-            )
-            if visible else "Participant names are private in this server."
+            f"💨 **Cheers: {len(cheer_ids)}**   ·   🙋 **Joining: {len(going_ids)}**\n"
+            f"🔊 **In VC: {voice_count}**   ·   {channel_text}"
         )[:1024],
         inline=False,
     )
     embed.add_field(
-        name=f"🔊 In voice now • {voice_count}",
-        value=voice.mention if voice is not None else "No voice channel selected yet.",
-        inline=False,
-    )
-    active = bool(session.get("active", False))
-    embed.add_field(
-        name="Session",
+        name=f"👥 People • {len(people)}",
         value=(
-            f"Ends <t:{int(session.get('expires_at', 0))}:R> • "
-            "Cheers = interested; I'm Joining = planning to come."
-        ) if active else "This sesh has ended. Start a new /toke to invite everyone again.",
+            _sesh_member_lines(
+                people, starter_id=int(session.get("starter_id", 0)),
+                host_named_in_header=True,
+            ) if visible else "Participant names are private in this server."
+        )[:1024],
         inline=False,
     )
-    embed.color = discord.Color.green() if active else discord.Color.dark_grey()
+    embed.add_field(
+        name="⏳ Session",
+        value=f"Ends <t:{int(expiry)}:R>  ·  💨 Interested  ·  🙋 Planning to join  ·  🔊 In voice",
+        inline=False,
+    )
+    embed.color = discord.Color.green()
     return embed
 
 
-async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discord.Interaction | None = None) -> None:
+async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discord.Interaction | None = None) -> bool:
+    """Reconcile from current store state, then acknowledge terminal delivery.
+
+    Never edit Discord using a stale active=True snapshot (the old expiry bug).
+    """
     guild = bot.get_guild(int(session["guild_id"]))
     if guild is None:
-        return
+        return False
     channel = guild.get_channel(int(session["channel_id"]))
     if not isinstance(channel, discord.TextChannel):
-        return
+        return False
+    current = await toke_sessions.get(int(session["guild_id"]), int(session["message_id"]))
+    if current is None:
+        return False
     if interaction is not None and interaction.message is not None:
         message = interaction.message
     else:
-        message = await channel.fetch_message(int(session["message_id"]))
-    existing = (message.embeds or [])
+        try:
+            message = await channel.fetch_message(int(session["message_id"]))
+        except discord.NotFound:
+            if not current.get("active", False):
+                await toke_sessions.mark_closed_synced(int(session["guild_id"]), int(session["message_id"]))
+            return False
+    existing = message.embeds or []
     if not existing:
-        return
-    view = TokeCheersView(
-        int(session["starter_id"]), int(session["starter_role_id"]),
-        voice_channel_id=int(session.get("voice_channel_id", 0) or 0),
-        active=bool(session.get("active", False)),
-        guild_id=int(session["guild_id"]), message_id=int(session["message_id"]),
+        return False
+    active = bool(current.get("active", False))
+    view = (
+        TokeCheersView(
+            int(current["starter_id"]), int(current["starter_role_id"]),
+            voice_channel_id=int(current.get("voice_channel_id", 0) or 0),
+            active=True, guild_id=int(current["guild_id"]), message_id=int(current["message_id"]),
+        ) if active else None
     )
-    await message.edit(embed=render_card(guild, session, existing[0]), view=view, allowed_mentions=discord.AllowedMentions.none())
+    await message.edit(
+        embed=render_card(guild, current, existing[0]),
+        view=view, allowed_mentions=discord.AllowedMentions.none(),
+    )
+    if not active:
+        await toke_sessions.mark_closed_synced(int(current["guild_id"]), int(current["message_id"]))
+    return True
 
 
 class TokeRosterView(discord.ui.View):
@@ -203,7 +253,7 @@ class TokeRosterView(discord.ui.View):
         self.page = max(0, int(page))
         people, _, _ = _sesh_people(guild, session)
         self.lines = [
-            f"{index}. <@{uid}> • " + " · ".join(statuses)
+            f"{index}. " + "".join(_STATUS_ICONS[s] for s in statuses if s in _STATUS_ICONS) + f"  <@{uid}>"
             for index, (uid, statuses) in enumerate(people, start=1)
         ]
         self.pages = max(1, (len(self.lines) + 14) // 15)
@@ -221,7 +271,7 @@ class TokeRosterView(discord.ui.View):
             description="\n".join(self.lines[start:start+15]) or "Nobody has responded yet.",
             color=discord.Color.green(),
         ).set_footer(
-            text=f"Page {self.page+1}/{self.pages} • Each person is listed once with their current status."
+            text=f"Page {self.page+1}/{self.pages} • 👑 Host · 💨 Cheers · 🙋 Joining · 🔊 In VC"
         )
 
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, custom_id="dank:toke:roster:prev")
@@ -264,32 +314,69 @@ class TokeCheersView(discord.ui.View):
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         if guild is None or member is None or interaction.message is None:
             return await interaction.response.send_message("This sesh is no longer available.", ephemeral=True)
-        session = await toke_sessions.get(guild.id, interaction.message.id)
-        if not session or not session.get("active"):
-            return await interaction.response.send_message("This sesh has ended or expired.", ephemeral=True)
-        if action == "end":
-            if member.id != int(session["starter_id"]) and not member.guild_permissions.manage_guild:
-                return await interaction.response.send_message("Only the starter or server managers can end this sesh.", ephemeral=True)
-        else:
-            role_ids = {int(session["starter_role_id"]), int(session["notify_role_id"])}
-            if not any(int(role.id) in role_ids for role in member.roles):
-                return await interaction.response.send_message("Join the server's configured Toke community or notification role first.", ephemeral=True)
+        # Acknowledge before file I/O or Discord edits: avoids the dreaded
+        # "Dank Shield didn't respond in time" on busy Discloud instances.
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
+            session = await toke_sessions.get(guild.id, interaction.message.id)
+            if not session:
+                return await interaction.edit_original_response(
+                    content="This sesh is no longer available. Use /toke to start another."
+                )
+            if not session.get("active", False):
+                # A previously expired card may still show old buttons while a
+                # background Discord edit was delayed. Fix the public card now.
+                try:
+                    await refresh_card(interaction.client, session, interaction)
+                except (discord.HTTPException, ValueError, OSError) as exc:
+                    print(f"[toke] closed-card click sync failed guild={guild.id}: {type(exc).__name__}: {exc}")
+                return await interaction.edit_original_response(
+                    content="✅ This sesh has already ended. Start a new /toke to invite everyone."
+                )
+            if action == "end":
+                if member.id != int(session["starter_id"]) and not member.guild_permissions.manage_guild:
+                    return await interaction.edit_original_response(
+                        content="Only the starter or server managers can end this sesh."
+                    )
+            else:
+                role_ids = {int(session["starter_role_id"]), int(session["notify_role_id"])}
+                if not any(int(role.id) in role_ids for role in member.roles):
+                    return await interaction.edit_original_response(
+                        content="Join the server's configured Toke community or notification role first."
+                    )
             updated, error = await toke_sessions.react(
                 guild.id, interaction.message.id, member.id, action,
                 max_interested=int(session.get("max_interested", 100)),
             )
             if error:
+                if updated is None:
+                    closed = await toke_sessions.get(guild.id, interaction.message.id)
+                    if closed and not closed.get("active", False):
+                        try:
+                            await refresh_card(interaction.client, closed, interaction)
+                        except (discord.HTTPException, ValueError, OSError):
+                            pass
                 return await interaction.edit_original_response(content=f"⚠️ {error}")
-            await refresh_card(interaction.client, updated, interaction)
-        except (OSError, ValueError, discord.HTTPException) as exc:
-            return await interaction.edit_original_response(content=f"⚠️ Could not update the sesh. Try again: {type(exc).__name__}")
+            try:
+                await refresh_card(interaction.client, updated, interaction)
+            except (discord.HTTPException, ValueError, OSError) as exc:
+                print(f"[toke] card edit retry queued guild={guild.id} message={interaction.message.id} error={type(exc).__name__}")
+                if action == "end":
+                    return await interaction.edit_original_response(
+                        content="✅ Sesh ended. The public card will update when Discord accepts the edit."
+                    )
+                return await interaction.edit_original_response(
+                    content="✅ Your response was saved. The card refresh is delayed; use Refresh in a moment."
+                )
+        except (OSError, ValueError) as exc:
+            return await interaction.edit_original_response(
+                content=f"⚠️ Could not save your sesh response: {type(exc).__name__}."
+            )
         await interaction.edit_original_response(content={
-            "cheers": "💨 Cheers recorded. Others can see you're interested.",
+            "cheers": "💨 Cheers recorded.",
             "going": "🙋 You're on the joining list. Use Join VC when ready.",
             "withdraw": "✅ You were removed from the interested and joining lists.",
-            "end": "✅ Sesh ended.",
+            "end": "✅ Sesh ended. This card is now closed.",
         }[action])
 
     @discord.ui.button(label="Cheers", emoji="💨", style=discord.ButtonStyle.success, custom_id="dank:toke:v2:cheers", row=0)
@@ -310,28 +397,49 @@ class TokeCheersView(discord.ui.View):
         guild, msg = interaction.guild, interaction.message
         if guild is None or msg is None:
             return
-        session = await toke_sessions.get(guild.id, msg.id)
-        if not session:
-            return await interaction.response.send_message("This session is no longer available.", ephemeral=True)
-        if not session.get("show_member_names", True):
-            return await interaction.response.send_message("This server keeps participant names private.", ephemeral=True)
-        view = TokeRosterView(guild, session)
-        await interaction.response.send_message(embed=view.embed(), view=view, ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            session = await toke_sessions.get(guild.id, msg.id)
+            if not session or not session.get("active", False):
+                return await interaction.edit_original_response(
+                    content="✅ This sesh has ended. Run /toke to start a new one."
+                )
+            if not session.get("show_member_names", True):
+                return await interaction.edit_original_response(
+                    content="This server keeps participant names private."
+                )
+            view = TokeRosterView(guild, session)
+            await interaction.edit_original_response(embed=view.embed(), view=view)
+        except (discord.HTTPException, OSError, ValueError) as exc:
+            await interaction.edit_original_response(
+                content=f"⚠️ Could not open the member list: {type(exc).__name__}."
+            )
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank:toke:v2:refresh", row=1)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if interaction.guild is None or interaction.message is None:
             return
-        session = await toke_sessions.get(interaction.guild.id, interaction.message.id)
-        if not session:
-            return await interaction.response.send_message("No active sesh was found.", ephemeral=True)
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            await refresh_card(interaction.client, session, interaction)
-        except discord.HTTPException:
-            return await interaction.edit_original_response(content="Discord could not refresh this card.")
-        await interaction.edit_original_response(content="✅ Updated who's interested and who's in VC.")
+            session = await toke_sessions.get(interaction.guild.id, interaction.message.id)
+            if not session:
+                return await interaction.edit_original_response(
+                    content="This sesh is no longer available."
+                )
+            updated = await refresh_card(interaction.client, session, interaction)
+            if not session.get("active", False):
+                return await interaction.edit_original_response(
+                    content="✅ This sesh has ended. The public card is now closed."
+                    if updated else "✅ This sesh has ended. The card will update shortly."
+                )
+            await interaction.edit_original_response(
+                content="✅ Updated the participation counts and VC presence."
+            )
+        except (discord.HTTPException, OSError, ValueError) as exc:
+            await interaction.edit_original_response(
+                content=f"⚠️ Could not refresh the card: {type(exc).__name__}."
+            )
 
     @discord.ui.button(label="End Sesh", emoji="🛑", style=discord.ButtonStyle.danger, custom_id="dank:toke:v2:end", row=1)
     async def end(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -596,20 +704,31 @@ def _is_gif_like_url(value: Any) -> bool:
 
 
 def media_url_from_message(message: discord.Message) -> str:
-    """Handle normal Tenor/Giphy message URLs plus mobile embed-only GIFs."""
-    for found in re.findall(r"https?://[^\s<>]+", str(message.content or "")):
-        if _is_gif_like_url(found):
-            return found.rstrip(".,")
+    """Prefer GIF-picker CDN media over the Tenor/Giphy page that unfurls."""
+    from stoney_verify.commands_ext.public_toke import _is_stable_provider_media_url
+
+    candidates: list[str] = []
     for embed in (message.embeds or []):
+        # Discord GIF picker can expose a playable public image here, even
+        # when message.content contains a separate Tenor viewing-page link.
         for candidate in (
-            getattr(embed, "url", None),
             getattr(getattr(embed, "image", None), "url", None),
             getattr(getattr(embed, "video", None), "url", None),
             getattr(getattr(embed, "thumbnail", None), "url", None),
+            getattr(embed, "url", None),
         ):
             if _is_gif_like_url(candidate):
-                return str(candidate)
-    return ""
+                candidates.append(str(candidate))
+    for found in re.findall(r"https?://[^\s<>]+", str(message.content or "")):
+        if _is_gif_like_url(found):
+            candidates.append(found.rstrip(".,"))
+
+    # Preserve inline display whenever the media host is independent of the
+    # member's temporary message (which is deleted after publishing).
+    for candidate in candidates:
+        if _is_stable_provider_media_url(candidate):
+            return candidate
+    return candidates[0] if candidates else ""
 
 
 def _has_gif_media(message: discord.Message) -> bool:
@@ -675,20 +794,24 @@ async def _expire_and_refresh(bot: Any) -> None:
             for key, pending in list(_PENDING.items()):
                 if pending.deadline <= current:
                     _PENDING.pop(key, None)
-            expired = await toke_sessions.end_expired()
-            for session in expired:
+            # Persistent queue includes pre-existing expired cards, explicit
+            # End Sesh actions and any failed Discord edits from prior boots.
+            for session in await toke_sessions.pending_closed():
                 try:
                     await refresh_card(bot, session)
-                except (discord.HTTPException, ValueError, OSError):
-                    pass
+                except (discord.HTTPException, ValueError, OSError) as exc:
+                    print(
+                        f"[toke] terminal card retry guild={session.get('guild_id')} "
+                        f"message={session.get('message_id')} error={type(exc).__name__}"
+                    )
         except (OSError, ValueError) as exc:
             print(f"[toke] session cleanup failed: {type(exc).__name__}: {exc}")
-        await asyncio.sleep(120)
+        await asyncio.sleep(15)
 
 
 async def restore_active_views(bot: Any) -> int:
     count = 0
-    for session in await toke_sessions.all_active():
+    for session in await toke_sessions.recoverable_views():
         gid, mid = int(session["guild_id"]), int(session["message_id"])
         if (gid, mid) in _REGISTERED or bot.get_guild(gid) is None:
             continue
@@ -696,7 +819,7 @@ async def restore_active_views(bot: Any) -> int:
             TokeCheersView(
                 int(session["starter_id"]), int(session["starter_role_id"]),
                 voice_channel_id=int(session.get("voice_channel_id", 0)),
-                guild_id=gid, message_id=mid,
+                guild_id=gid, message_id=mid, active=True,
             ),
             message_id=mid,
         )

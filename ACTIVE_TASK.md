@@ -1,6 +1,36 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — PROFILE-USERNAME-SINGLE-LINE-20261011
+## CURRENT ACTIVE TASK — TOKE-SINGLE-GIF-20261011
+
+**Owner report:** Toke posts show the same GIF as a large attachment above the card and as an image inside the card after status updates. Screenshot Oct 11, Android. User asks to fix the duplicate.
+
+**Branch:** `fix/toke-single-gif-preview-20261011` from Discloud Auto Deploy branch `aaa-cinema-pre-pregateway-bind`. Isolated Toke fix; other projects paused.
+
+### Confirmed cause and supported solution
+- `_publish_toke` sent an uploaded GIF as `file=upload_file` AND `embed.set_image(attachment://filename)`. It then `sent.edit(embed=render_card(...))` to add persistent Cheers/VC data and edits again on reactions. Discord API issue #5675 describes how PATCH/edit causes attachment:// images to display twice.
+- GIF uploads and ordinary keyboard files now appear **once** as native message attachments, never again in an edited embed. A public Tenor/Giphy GIF CDN URL is instead displayed **inside the embed**, without file upload.
+- GIF-picker message extraction prefers persistent Tenor/Giphy CDN media from source embeds over their public viewing-page link. User source is deleted only after full successful post; avoid embedding short-lived Discord attachment CDN URLs from messages that will be deleted.
+- If only a non-direct viewing-page URL is available, keep a clickable link **inside the card description** instead of `message.content`, preventing an additional standalone unfurled preview.
+- Existing one canonical send, session persistence, Cheers, Joining, VC tracking, roles, authorization, and cooldowns remain unchanged.
+- Never use `suppress_embeds` to solve this, as it also hides the intended Toke embed.
+
+### Expanded owner report: expired cards and confusing crowd layout
+- At the 60-minute limit, the public Toke card continued to show a green active status with a relative timestamp in the past; buttons could produce a Discord "didn't respond in time" message after bot restart.
+- Root cause: `end_expired()` collected `active=True` copies **before** marking sessions inactive. The worker therefore reused a stale snapshot. Other code paths could mark the storage inactive before the worker saw an expiry, permanently skipping the public edit. Startup restored only active button views, leaving stale expired buttons unhandled.
+- A durable `close_pending` reconciliation queue now covers expiration, explicit End Sesh, legacy inactive records and failed card edits across restarts. It is only acknowledged after a terminal card update removes all components. Old callbacks remain registered until closure can be delivered. Worker retries every 15 seconds.
+- Every interaction now acknowledges before storage access or Discord edits and returns a friendly ended response for old buttons. Public ended cards change title, color and description, preserve media, show final counts, and remove participation controls.
+- Active card displays a compact stats field (Cheers, Joining and live VC with channel), at most three unique members with small status icons, and links longer rosters to Who's Coming. No repeated decorated names or verbose labels beside each member. The paged roster uses the same concise icons.
+- New 8-case regression suite validates restart recovery, stale clicks, durable retries, automatic/manual ending, and 35-person mobile layout. Full CI, Android visual acceptance, and Discloud deployment proof still required.
+
+### Validation
+- New end-to-end mocked send/edit regression checks on upload / direct public media / Tenor view-page link, plus existing Toke tests.
+- CI and actual Android visuals pending; no claim client-specific presentation is guaranteed until verified.
+- PR #506 merged into production branch at 7b71a8a32be2a358efd50a3758b4e462a808a540. Preserve its complete single-line profile-renderer implementation and archived checkpoint below; no profile, Share Router or Cinema files altered by GIF fix.
+
+
+---
+
+## PREVIOUS TASK — PROFILE-USERNAME-SINGLE-LINE-20261011
 
 **User-approved switch:** PR #505 (deduplicated Toke names) was merged to the documented Discloud Auto Deploy branch `aaa-cinema-pre-pregateway-bind`. The user then authorized the separately scoped profile-card layout fix. Share Router and Toke remain preserved and are not being modified in this PR.
 
