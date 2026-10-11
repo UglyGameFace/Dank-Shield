@@ -151,6 +151,24 @@ def test_discord_cdn_attachment_url_is_not_mistaken_for_persistent_provider_asse
     assert toke._is_stable_provider_media_url("https://i.giphy.com/gif.gif")
 
 
+def test_native_tenor_video_track_does_not_replace_gif_image():
+    # GIF picker can supply a moving MP4 plus a thumbnail GIF. The Toke
+    # embed must use the image, never try set_image(url=video.mp4).
+    message = SimpleNamespace(
+        content="https://tenor.com/view/sesh-gif-8765",
+        attachments=[],
+        embeds=[SimpleNamespace(
+            url="https://tenor.com/view/sesh-gif-8765",
+            image=None,
+            video=SimpleNamespace(url="https://media.tenor.com/abc/tenor.mp4"),
+            thumbnail=SimpleNamespace(url="https://media.tenor.com/abc/tenor.gif"),
+        )],
+    )
+    assert live.media_url_from_message(message) == "https://media.tenor.com/abc/tenor.gif"
+    assert not toke._is_stable_provider_media_url("https://media.tenor.com/abc/tenor.mp4")
+    assert not toke._is_direct_media_url("https://media.tenor.com/abc/tenor.mp4")
+
+
 def test_no_suppress_embeds_flag_hides_interactive_toke_embed():
     # Discord's suppress_embeds flag also suppresses bot-authored custom
     # embeds. Do not use it as a workaround for duplicate GIF previews.
