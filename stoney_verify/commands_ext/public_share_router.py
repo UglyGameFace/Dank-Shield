@@ -24,6 +24,7 @@ from stoney_verify.share_router_runtime import (
     find_share_source_channel,
     guild_routes,
     guild_custom_share_sources,
+    prune_missing_custom_share_sources,
     remove_route,
     route_health,
     route_permission_blockers,
@@ -606,6 +607,28 @@ class ShareRouterView(_OwnedView):
         if not await _require_manage(interaction):
             return
         await interaction.response.send_modal(ShareRouterCreateSourceModal(int(interaction.user.id)))
+
+    @discord.ui.button(label="Clean Missing Proxies", emoji="🧹", style=discord.ButtonStyle.secondary, row=2)
+    async def clean_missing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            count = await prune_missing_custom_share_sources(guild)
+        except (discord.HTTPException, OSError, ValueError) as exc:
+            return await interaction.edit_original_response(
+                content=f"❌ Could not check deleted proxy channels: {exc}",
+                embed=None, view=ShareRouterView(self.owner_id),
+            )
+        await interaction.edit_original_response(
+            content=f"✅ Cleaned {count} missing custom proxy registration(s) from this server. Live channels were untouched.",
+            embed=await _share_router_embed(guild),
+            view=ShareRouterView(self.owner_id),
+        )
 
     @discord.ui.button(label="Delete Custom Proxy", emoji="🗑️", style=discord.ButtonStyle.secondary, row=2)
     async def delete_proxy(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
