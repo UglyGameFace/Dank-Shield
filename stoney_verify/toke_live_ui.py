@@ -456,9 +456,9 @@ class TokeCheersView(discord.ui.View):
             clock = int(time.time())
             await interaction.edit_original_response(
                 content=(
-                    f"✅ **Sesh status checked <t:{clock}:t>**\\n"
+                    f"✅ **Sesh status checked <t:{clock}:t>**\n"
                     f"💨 Cheers: **{cheers}** · 🙋 Joining: **{joining}** · "
-                    f"🔊 In VC: **{voice_count}**\\n"
+                    f"🔊 In VC: **{voice_count}**\n"
                     f"Scheduled end: <t:{int(latest['expires_at'])}:f>"
                     + (f" · {voice.mention}" if voice is not None else "")
                 ),
