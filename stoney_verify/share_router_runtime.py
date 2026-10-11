@@ -1439,6 +1439,15 @@ async def _route_torrent_media(
     return False
 
 
+async def guild_pending_source_cleanup_count(guild_id: int) -> int:
+    """Number of previously delivered posts awaiting Discord deletion."""
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        bucket = data.get(str(int(guild_id)))
+        pending = bucket.get("pending_source_cleanup", []) if isinstance(bucket, dict) else []
+        return len(pending) if isinstance(pending, list) else 0
+
+
 async def _record_undelivered_cleanup(guild_id: int, source_id: int, message_id: int) -> None:
     """Persist a known-delivered post only after Discord could not remove its source."""
     if guild_id <= 0 or source_id <= 0 or message_id <= 0:
