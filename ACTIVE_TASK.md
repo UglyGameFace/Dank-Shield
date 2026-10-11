@@ -1,6 +1,43 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — DANK-SHARE-ROUTER-CUSTOM-SOURCES-20261010
+## CURRENT ACTIVE TASK — DANK-TOKE-LIVE-SESH-20261010
+
+**Outcome:** Convert /toke into a simple guild-specific live meetup with visible Cheers and joining participants, actual VC occupancy and a Join VC link, end/expiry controls, durable post/button state, standard Discord composer GIF/photo capture after one /toke command, and editable per-guild settings.
+
+**Branch:** `feat/toke-live-sesh-participants-gifs-20261010` from `main@7f30dcb617ea5262bf34aeb82f028ecd06459530`.
+
+**Status:** In progress, draft/CI and live Discord acceptance pending. No unrelated work, production not changed by this branch.
+
+### User-approved behavior
+- /toke with a URL or uploaded media still posts directly. /toke without media starts a 90-second, ephemeral capture: the member sends an image/GIF through the normal Discord composer in the same text channel, or taps Post Without Media / Cancel. Only a recognized GIF/photo message gets captured; other normal chat does not.
+- Normal Discord GIFs, keyboard GIFs when supplied as GIF URLs/embeds, and image uploads are accepted, subject to Discord Message Content privileged intent and platform/client behavior. Do not promise Discord's GIF picker can be programmatically opened by a bot.
+- The temporary member GIF post is deleted only after the destination /toke card successfully posts. Failed cards keep the original and notify the sender privately when possible.
+- Cheers and I'm Joining are separate actions; participant roster and actual VC occupancy are distinct. Members can withdraw. No repeat role ping on Cheers/Join. Starter and Manage Server can end sessions. Voice join uses the normal Discord channel URL and checks source/destination permissions.
+- Existing Community & Pings starter and notification roles still govern usage, current /toke role ping only at session creation. Per-guild settings cover lifetime, user/server cooldown, participant names, maximum interested, and default VC.
+- Active sessions persist by guild/message ID and restore persistent views on bot ready. IDs/choices are saved without member chat content. Expiration disables actions and marks session ended. Toke data file must survive Discloud restart.
+
+### Files
+- `stoney_verify/toke_sessions.py` durable per-guild session state
+- `stoney_verify/toke_live_ui.py` participant/VC UI, media composer capture and settings controls
+- `stoney_verify/commands_ext/public_toke.py` existing /toke entry wired through one canonical send path
+- `stoney_verify/commands_ext/public_community_pings.py` Toke Settings doorway
+- `stoney_verify/commands_ext/public_command_surface_v2.py` once-only runtime listener registration
+- Focused regression tests must validate state isolation, GIF capture, cooldowns, duplicate Cheers, privacy, VC membership, idempotent listener registration, short-lived drafts, and per-guild settings.
+
+### Validation and blockers
+- Validate exact-head PR CI and source diffs; prior Share Router green checks do not cover this task.
+- Verify Message Content intent is enabled and approved in the Discord Developer Portal for the deployed bot if required. Bot can only see message content, embeds, and attachments when Discord grants the privileged intent; otherwise /toke media: or upload: remains the fallback.
+- Voice counts refresh on participant action and voice state events, with throttling. Discord cached member/channel state may lag.
+- No guarantees about keyboard GIF clients that provide no media or URL the bot can see. No unapproved extra slash command roots, and no second Toke runtime.
+- Real Android/desktop and multi-member testing, Discloud persistence check, and rollback are required before declaring complete.
+
+### Suspended work
+
+The previous active Share Router task **DANK-SHARE-ROUTER-CUSTOM-SOURCES-20261010** was accepted/merged in PR #502 (main@7f30dcb617ea5262bf34aeb82f028ecd06459530). Discord screenshots afterwards showed an older Share Router panel without Create Proxy, so Discloud release/branch verification remains unresolved. The user then explicitly approved switching to the Toke overhaul. Preserve Share Router's deployed-state investigation checkpoint and return only after a new FORCE SWITCH. Cinema remains suspended.
+
+---
+
+## SUSPENDED/HISTORICAL TASK — DANK-SHARE-ROUTER-CUSTOM-SOURCES-20261010
 
 **Outcome:** Add independently configurable Share Router proxy source channels per guild with searchable/paged setup, creation, route editing/removal, and safe deletion. Automatically clear successful shares from managed proxy sources, with durable retry for Discord deletion failures and no silent deletion of undelivered shares. Preserve the canonical default sources, legacy external route behavior, media relay stack, and unrelated guild configurations.
 
