@@ -414,10 +414,10 @@ class TokeSettingsView(discord.ui.View):
         async def picked(item_interaction: discord.Interaction, channel: Any) -> None:
             if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
                 return await item_interaction.response.send_message("Choose a voice channel.", ephemeral=True)
+            await item_interaction.response.defer(ephemeral=True, thinking=True)
             cfg = await _get_live_config(guild.id)
             settings = settings_from_config(cfg)
             settings["voice_channel_id"] = int(channel.id)
-            await item_interaction.response.defer(ephemeral=True, thinking=True)
             try:
                 actual = await save_toke_settings(guild.id, item_interaction.user.id, settings)
             except Exception as exc:
@@ -437,10 +437,10 @@ class TokeSettingsView(discord.ui.View):
     @discord.ui.button(label="Clear Default VC", emoji="🧹", style=discord.ButtonStyle.secondary)
     async def clear_voice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
+        await interaction.response.defer(ephemeral=True, thinking=True)
         cfg = await _get_live_config(interaction.guild.id)
         new_settings = settings_from_config(cfg)
         new_settings["voice_channel_id"] = 0
-        await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             actual = await save_toke_settings(interaction.guild.id, interaction.user.id, new_settings)
         except Exception as exc:
@@ -463,6 +463,11 @@ async def open_toke_settings(interaction: discord.Interaction, *, replace: bool 
     guild = interaction.guild
     if guild is None or not getattr(getattr(interaction.user, "guild_permissions", None), "manage_guild", False):
         return await interaction.response.send_message("Manage Server is required.", ephemeral=True)
+    if not interaction.response.is_done():
+        if replace and interaction.message is not None:
+            await interaction.response.defer()
+        else:
+            await interaction.response.defer(ephemeral=True, thinking=True)
     cfg = await _get_live_config(guild.id)
     settings = settings_from_config(cfg)
     view = TokeSettingsView(interaction.user.id, settings)
