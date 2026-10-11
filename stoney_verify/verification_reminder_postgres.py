@@ -69,7 +69,9 @@ def ready_sync() -> bool:
                     "and has_table_privilege(current_user, "
                     "'public.dank_verify_reminder_delivery', 'INSERT') "
                     "and has_table_privilege(current_user, "
-                    "'public.dank_verify_reminder_delivery', 'UPDATE')"
+                    "'public.dank_verify_reminder_delivery', 'UPDATE') "
+                    "and has_table_privilege(current_user, "
+                    "'public.dank_verify_reminder_delivery', 'DELETE')"
                 )
                 row = cursor.fetchone()
                 return bool(row and row[0] is True)
