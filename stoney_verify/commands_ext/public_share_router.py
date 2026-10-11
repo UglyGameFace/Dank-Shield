@@ -126,6 +126,7 @@ def _target_label(target: Optional[discord.TextChannel]) -> str:
 
 async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
     routes = await guild_routes(int(guild.id))
+    custom_ids = await guild_custom_share_sources(int(guild.id))
     category = find_share_router_category(guild)
 
     embed = discord.Embed(
@@ -146,6 +147,8 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
         found = sum(1 for name in DEFAULT_SHARE_CHANNELS if find_share_source_channel(category, name) is not None)
         hub_status = f"✅ {category.name} • {found}/{len(DEFAULT_SHARE_CHANNELS)} proxy channels present."
     embed.add_field(name="Proxy hub", value=hub_status[:1024], inline=False)
+    live_custom = sum(isinstance(guild.get_channel(source_id), discord.TextChannel) for source_id in custom_ids)
+    embed.add_field(name="Custom proxies", value=f"{live_custom} active / {len(custom_ids)} registered in this server. Create Proxy adds another source without replacing the four defaults.", inline=False)
 
     lines: list[str] = []
     healthy = 0
@@ -166,6 +169,8 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
         elif health.warnings:
             line += f" • {health.warnings[0]}"
         lines.append(line[:300])
+    if len(routes) > 20:
+        lines.append(f"…and {len(routes) - 20} more. All routes remain active.")
 
     if routes:
         embed.add_field(
@@ -488,7 +493,145 @@ async def _open_remove_picker(interaction: discord.Interaction) -> None:
     await _replace(interaction, embed=view.embed(), view=view)
 
 
+
+class ShareRouterCreateSourceModal(discord.ui.Modal, title="Create Share Router Proxy"):
+    name = discord.ui.TextInput(
+        label="Proxy channel name",
+        placeholder="gaming-clips",
+        min_length=1,
+        max_length=100,
+        required=True,
+    )
+
+    def __init__(self, owner_id: int) -> None:
+        super().__init__(timeout=300)
+        self.owner_id = int(owner_id)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id or not await _require_manage(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return
+        if not (interaction.user.guild_permissions.administrator or interaction.user.guild_permissions.manage_channels):
+            return await _private(interaction, "❌ Manage Channels permission is required to create proxies.")
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            source = await create_custom_share_source(guild, interaction.user, str(self.name.value))
+        except (discord.HTTPException, OSError, ValueError) as exc:
+            return await interaction.edit_original_response(
+                content=f"❌ Proxy creation failed: {exc}",
+                embed=None, view=ShareRouterView(self.owner_id),
+            )
+        await interaction.edit_original_response(
+            content=f"✅ Created {source.mention}. Use Add / Change Route to select the destination.",
+            embed=await _share_router_embed(guild),
+            view=ShareRouterView(self.owner_id),
+        )
+
+
+class ShareRouterDeleteSourceConfirmView(_OwnedView):
+    def __init__(self, owner_id: int, source_id: int) -> None:
+        super().__init__(owner_id)
+        self.source_id = int(source_id)
+
+    @discord.ui.button(label="Delete Proxy Channel", emoji="🗑️", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        if not (interaction.user.guild_permissions.administrator or interaction.user.guild_permissions.manage_channels):
+            return await _private(interaction, "❌ Manage Channels permission is required to delete proxies.")
+        guild = interaction.guild
+        if guild is None:
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            await delete_custom_share_source(guild, self.source_id)
+        except (discord.HTTPException, OSError, ValueError) as exc:
+            return await interaction.edit_original_response(
+                content=f"❌ Proxy deletion stopped: {exc}",
+                embed=None, view=ShareRouterView(self.owner_id),
+            )
+        await interaction.edit_original_response(
+            content="✅ Custom proxy channel and its route removed. Built-in proxies were not changed.",
+            embed=await _share_router_embed(guild),
+            view=ShareRouterView(self.owner_id),
+        )
+
+    @discord.ui.button(label="Keep Proxy", emoji="↩️", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_share_router(interaction, replace_message=True)
+
+
+async def _open_delete_source_picker(interaction: discord.Interaction) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return await _private(interaction, "❌ Use Share Router inside a server.")
+    custom_ids = set(await guild_custom_share_sources(int(guild.id)))
+    active = {
+        source_id for source_id in custom_ids
+        if isinstance(guild.get_channel(source_id), discord.TextChannel)
+    }
+    if not active:
+        return await _private(interaction, "ℹ️ No custom proxy channels are available to delete.")
+
+    async def back(back_interaction: discord.Interaction) -> None:
+        await open_share_router(back_interaction, replace_message=True)
+
+    async def picked(pick_interaction: discord.Interaction, resource: Any) -> None:
+        if not await _require_manage(pick_interaction):
+            return
+        if (
+            not isinstance(resource, discord.TextChannel)
+            or int(resource.id) not in set(await guild_custom_share_sources(int(guild.id)))
+        ):
+            return await _private(pick_interaction, "❌ This is no longer a registered custom proxy.")
+        embed = discord.Embed(
+            title="⚠️ Permanently delete proxy?",
+            description=(
+                f"Delete {resource.mention} from Discord and remove its saved forwarding rule? "
+                "Any remaining messages in this proxy will also be deleted. "
+                "The destination and four built-in proxy channels are never deleted."
+            ),
+            color=discord.Color.orange(),
+        )
+        await _replace(
+            pick_interaction, embed=embed,
+            view=ShareRouterDeleteSourceConfirmView(int(pick_interaction.user.id), int(resource.id)),
+        )
+
+    view = DankGuildResourceBrowserView(
+        guild=guild,
+        author_id=int(interaction.user.id),
+        resource_kinds=("text",),
+        on_pick=picked,
+        custom_id="dank:share_router:delete_source",
+        placeholder="Choose a custom proxy to delete…",
+        title="Delete Custom Proxy Channel",
+        predicate=lambda resource: int(getattr(resource, "id", 0)) in active,
+        on_home=back,
+        home_label="Share Router",
+    )
+    await _replace(interaction, embed=view.embed(), view=view)
+
+
 class ShareRouterView(_OwnedView):
+    @discord.ui.button(label="Create Proxy", emoji="➕", style=discord.ButtonStyle.primary, row=2)
+    async def create_proxy(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        await interaction.response.send_modal(ShareRouterCreateSourceModal(int(interaction.user.id)))
+
+    @discord.ui.button(label="Delete Custom Proxy", emoji="🗑️", style=discord.ButtonStyle.secondary, row=2)
+    async def delete_proxy(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        await _open_delete_source_picker(interaction)
+
     @discord.ui.button(label="Create / Repair Hub", emoji="🛠️", style=discord.ButtonStyle.primary, row=0)
     async def repair(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
