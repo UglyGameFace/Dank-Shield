@@ -58,6 +58,7 @@ from stoney_verify.torrent_media_server import media_server_ready
 _DATA_LOCK = asyncio.Lock()
 # Only successfully delivered posts are eligible for automatic cleanup retries.
 _SOURCE_CLEANUP_TASK: Optional[asyncio.Task[None]] = None
+SHARE_ROUTER_FEATURE_BUILD = "custom-sources-v2-prod-reconcile"
 _SOURCE_CLEANUP_INTERVAL_SECONDS = 900
 _SOURCE_CLEANUP_MAX_PER_PASS = 50
 _SOURCE_CLEANUP_CURSOR = 0
