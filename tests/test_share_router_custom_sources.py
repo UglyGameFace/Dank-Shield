@@ -16,10 +16,16 @@ from stoney_verify.share_router_resources import (
 
 
 class FakeCategory:
-    def __init__(self, category_id: int, name: str) -> None:
+    def __init__(self, category_id: int, name: str, guild: FakeGuild) -> None:
         self.id = category_id
         self.name = name
+        self.guild = guild
         self.channels: list[FakeTextChannel] = []
+        self.deleted = False
+
+    async def delete(self, **_kwargs) -> None:
+        self.deleted = True
+        self.guild.categories.remove(self)
 
     @property
     def text_channels(self) -> list[FakeTextChannel]:
@@ -48,13 +54,13 @@ class FakeGuild:
         self.default_role = object()
         self.me = None
         self.channels: dict[int, FakeTextChannel] = {}
-        self.categories = [FakeCategory(next(self._ids), "🔗 SHARE ROUTES")]
+        self.categories = [FakeCategory(next(self._ids), "🔗 SHARE ROUTES", self)]
 
     def get_channel(self, channel_id: int):
         return self.channels.get(channel_id)
 
     async def create_category(self, name: str, **_kwargs) -> FakeCategory:
-        category = FakeCategory(next(self._ids), name)
+        category = FakeCategory(next(self._ids), name, self)
         self.categories.append(category)
         return category
 
@@ -136,6 +142,44 @@ def test_proxy_category_overflow_keeps_default_hub_and_scales_picker(isolated_ro
         second = await router.create_custom_share_source(guild, None, "Funny Clips")
         assert second.category is added.category
         assert await router.guild_custom_share_sources(guild.id) == [added.id, second.id]
+
+    asyncio.run(check())
+
+
+def test_empty_overflow_category_is_cleaned_after_delete(isolated_router):
+    guild = FakeGuild(102)
+    for n in range(50):
+        channel = FakeTextChannel(guild, f"existing-{n}", guild.categories[0], next(guild._ids))
+        guild.categories[0].channels.append(channel)
+        guild.channels[channel.id] = channel
+
+    async def check():
+        source = await router.create_custom_share_source(guild, None, "Gaming Clips")
+        overflow = source.category
+        assert len(guild.categories) == 2
+        await router.delete_custom_share_source(guild, source.id)
+        assert overflow.deleted
+        assert guild.categories == [guild.categories[0]]
+
+    asyncio.run(check())
+
+
+def test_overflow_creation_failure_cleans_category(isolated_router):
+    guild = FakeGuild(103)
+    for n in range(50):
+        channel = FakeTextChannel(guild, f"existing-{n}", guild.categories[0], next(guild._ids))
+        guild.categories[0].channels.append(channel)
+        guild.channels[channel.id] = channel
+
+    async def fail_creation(*_args, **_kwargs):
+        raise OSError("guild channel quota exceeded")
+    guild.create_text_channel = fail_creation
+
+    async def check():
+        with pytest.raises(OSError, match="quota"):
+            await router.create_custom_share_source(guild, None, "Gaming Clips")
+        assert len(guild.categories) == 1
+        assert await router.guild_custom_share_sources(guild.id) == []
 
     asyncio.run(check())
 
