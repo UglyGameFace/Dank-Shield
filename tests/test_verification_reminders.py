@@ -261,3 +261,26 @@ def test_postgres_claim_path_is_single_owner(monkeypatch):
     monkeypatch.setattr(reminders, "_pg_claim_sync", claim)
     assert run(reminders._claim_delivery(1234, FakeMember(), reminders.ReminderPolicy()))
     assert calls == [(1234, 3344, FakeMember.joined_at, 48, 3)]
+
+
+def test_verifies_during_postgres_claim_cannot_receive_stale_reminder(monkeypatch):
+    _setup(monkeypatch)
+    guild = _guild(count=1)
+    worker = reminders.ReminderWorker(SimpleNamespace())
+    original_fetch = guild.fetch_member
+    calls = []
+
+    async def fetch_member(member_id):
+        calls.append(member_id)
+        fetched = await original_fetch(member_id)
+        fetched.pending = len(calls) == 1
+        return fetched
+
+    async def claimed(*args):
+        return True
+
+    guild.fetch_member = fetch_member
+    monkeypatch.setattr(reminders, "_claim_delivery", claimed)
+    assert run(worker.scan_guild(guild, remaining=1)) == 1
+    assert len(calls) == 2
+    assert not guild.members[0].sent
