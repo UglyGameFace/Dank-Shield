@@ -4,6 +4,8 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import discord
+
 from stoney_verify import verification_reminders as reminders
 
 
@@ -284,3 +286,83 @@ def test_verifies_during_postgres_claim_cannot_receive_stale_reminder(monkeypatc
     assert run(worker.scan_guild(guild, remaining=1)) == 1
     assert len(calls) == 2
     assert not guild.members[0].sent
+
+
+def _unknown_member_error(code=10007):
+    return discord.NotFound(
+        SimpleNamespace(status=404, reason="Not Found"),
+        {"code": code, "message": "Unknown Member"},
+    )
+
+
+def test_retention_deletes_only_rest_confirmed_departed_members(monkeypatch):
+    now = datetime.now(timezone.utc)
+    stale_at = now - timedelta(days=95)
+    joined = stale_at - timedelta(days=4)
+    rows = [
+        ("123", "100", joined, stale_at),  # member still in server
+        ("123", "101", joined, stale_at),  # HTTP 403, never delete
+        ("123", "102", joined, stale_at),  # member definitively departed
+        ("999", "103", joined, stale_at),  # guild not accessible
+    ]
+    deleted = []
+
+    class FakeGuild:
+        async def fetch_member(self, user_id):
+            if user_id == 100:
+                return SimpleNamespace(id=100)
+            if user_id == 101:
+                raise _unknown_member_error(10004)  # unknown guild, not member
+            if user_id == 102:
+                raise _unknown_member_error()
+            raise AssertionError("unexpected member lookup")
+
+    def fake_candidates(cutoff, *, after, limit):
+        assert cutoff <= now - timedelta(days=90)
+        assert after is None
+        assert limit == reminders.CLEANUP_BATCH_SIZE
+        return rows
+
+    def fake_delete(gid, uid, joined_at, cutoff):
+        deleted.append((gid, uid, joined_at))
+        return True
+
+    monkeypatch.setattr(reminders, "_pg_stale_candidates_sync", fake_candidates)
+    monkeypatch.setattr(reminders, "_pg_delete_departed_sync", fake_delete)
+    bot = SimpleNamespace(get_guild=lambda guild_id: FakeGuild() if guild_id == 123 else None)
+    worker = reminders.ReminderWorker(bot)
+    assert run(worker.cleanup_stale_history()) == 1
+    assert deleted == [("123", "102", joined)]
+    assert worker.cleanup_cursor is None
+
+
+def test_retention_failure_does_not_reset_paging_or_remove_state(monkeypatch):
+    bot = SimpleNamespace(get_guild=lambda gid: None)
+    worker = reminders.ReminderWorker(bot)
+    cursor = (datetime.now(timezone.utc), "1", "2")
+    worker.cleanup_cursor = cursor
+
+    def broken_query(*args, **kwargs):
+        raise OSError("unreachable")
+
+    monkeypatch.setattr(reminders, "_pg_stale_candidates_sync", broken_query)
+    assert run(worker.cleanup_stale_history()) == 0
+    assert worker.cleanup_cursor == cursor
+
+
+def test_retention_keyset_continues_past_members_still_present(monkeypatch):
+    old = datetime.now(timezone.utc) - timedelta(days=95)
+    rows = [("1", str(i), old, old) for i in range(reminders.CLEANUP_BATCH_SIZE)]
+    pages = []
+
+    def candidates(cutoff, *, after, limit):
+        pages.append(after)
+        return rows if after is None else []
+
+    monkeypatch.setattr(reminders, "_pg_stale_candidates_sync", candidates)
+    worker = reminders.ReminderWorker(SimpleNamespace(get_guild=lambda guild_id: None))
+    assert run(worker.cleanup_stale_history()) == 0
+    assert worker.cleanup_cursor == (old, "1", rows[-1][1])
+    assert run(worker.cleanup_stale_history()) == 0
+    assert worker.cleanup_cursor is None
+    assert pages == [None, (old, "1", rows[-1][1])]
