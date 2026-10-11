@@ -105,6 +105,10 @@ def _setup(monkeypatch, *, enabled=True):
     monkeypatch.setattr(reminders, "get_guild_config", get_config)
     monkeypatch.setattr(reminders, "basic_verify_allowed_for_guild", lambda *a: True)
     monkeypatch.setattr(reminders, "clear_role_truth_cache", lambda *a: None)
+    async def ready():
+        return True
+
+    monkeypatch.setattr(reminders, "ledger_ready", ready)
     monkeypatch.setattr(reminders, "verification_channel", lambda *a: SimpleNamespace(
         id=77, permissions_for=lambda member: SimpleNamespace(view_channel=True),
     ))
@@ -229,3 +233,31 @@ def test_channel_disabled_when_bot_cannot_send(monkeypatch):
     ))
     assert run(worker.scan_guild(guild, remaining=10)) == 0
     assert worker.member_cursors == {}
+
+
+def test_database_not_ready_blocks_scanning_before_member_fetch(monkeypatch):
+    _setup(monkeypatch)
+    guild = _guild()
+    worker = reminders.ReminderWorker(SimpleNamespace())
+
+    async def not_ready():
+        return False
+
+    monkeypatch.setattr(reminders, "ledger_ready", not_ready)
+    assert run(worker.scan_guild(guild, remaining=10)) == 0
+    assert worker.member_cursors == {}
+
+
+def test_postgres_claim_path_is_single_owner(monkeypatch):
+    class FakeMember:
+        id = 3344
+        joined_at = datetime.now(timezone.utc)
+
+    calls = []
+    def claim(guild_id, user_id, joined_at, *, repeat_hours, max_reminders):
+        calls.append((guild_id, user_id, joined_at, repeat_hours, max_reminders))
+        return True
+
+    monkeypatch.setattr(reminders, "_pg_claim_sync", claim)
+    assert run(reminders._claim_delivery(1234, FakeMember(), reminders.ReminderPolicy()))
+    assert calls == [(1234, 3344, FakeMember.joined_at, 48, 3)]
