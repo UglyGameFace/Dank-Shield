@@ -146,6 +146,8 @@ class SettingsModal(discord.ui.Modal, title="Verification Reminder Settings"):
             return await _private(interaction, "❌ All three scheduling fields must contain whole numbers.")
         if not (1 <= first <= 720 and 12 <= repeat <= 720 and 1 <= maximum <= 5):
             return await _private(interaction, "❌ First delay must be 1-720h, repeat 12-720h, max 1-5.")
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
         cfg, old = await _load(interaction.guild)
         updated = replace(
             old,
@@ -181,6 +183,8 @@ class ReminderChannelPicker(discord.ui.ChannelSelect):
         bot_member = guild.me
         if bot_member is None or not channel.permissions_for(bot_member).view_channel or not channel.permissions_for(bot_member).send_messages:
             return await _private(interaction, "❌ Dank Shield needs View Channel and Send Messages there.")
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         cfg, policy = await _load(guild)
         updated = replace(policy, reminder_channel_id=int(channel.id))
         if await _save(interaction, cfg, updated):
@@ -191,6 +195,7 @@ class ReminderChannelPicker(discord.ui.ChannelSelect):
 class ReminderSettingsView(_OwnedView):
     def __init__(self, owner_id: int, policy: ReminderPolicy) -> None:
         super().__init__(owner_id)
+        self.policy = policy
         self.toggle.label = "Disable" if policy.enabled else "Enable"
         self.toggle.style = discord.ButtonStyle.danger if policy.enabled else discord.ButtonStyle.success
         self.add_item(ReminderChannelPicker(self))
@@ -200,6 +205,8 @@ class ReminderSettingsView(_OwnedView):
         _ = button
         if not await _require_staff(interaction):
             return
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         cfg, policy = await _load(interaction.guild)
         if not policy.enabled:
             blocker = _can_enable(interaction.guild, cfg)
@@ -217,8 +224,9 @@ class ReminderSettingsView(_OwnedView):
         _ = button
         if not await _require_staff(interaction):
             return
-        _, policy = await _load(interaction.guild)
-        await interaction.response.send_modal(SettingsModal(self.owner_id, policy))
+        # Opening a modal must acknowledge the click immediately. Use the
+        # current displayed defaults and reload authoritative settings on submit.
+        await interaction.response.send_modal(SettingsModal(self.owner_id, self.policy))
 
     @discord.ui.button(label="Preview", emoji="✉️", style=discord.ButtonStyle.secondary, row=0)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -273,5 +281,7 @@ class ReminderSettingsView(_OwnedView):
 async def open_reminder_settings(interaction: discord.Interaction, owner_id: int) -> None:
     if not await _require_staff(interaction):
         return
+    if not interaction.response.is_done():
+        await interaction.response.defer()
     cfg, policy = await _load(interaction.guild)
     await _replace(interaction, embed=_embed(interaction.guild, cfg, policy), view=ReminderSettingsView(owner_id, policy))
