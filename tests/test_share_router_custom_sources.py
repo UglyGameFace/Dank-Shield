@@ -440,3 +440,54 @@ def test_source_cleanup_only_enqueues_successful_route_acks():
     )
     assert 'name="Automatic proxy cleanup"' in ui
     assert "delivered posts are removed" not in ui.lower() or "Failed shares" in ui
+
+
+def test_failed_share_notifies_sender_without_deleting_original(isolated_router, monkeypatch):
+    guild = FakeGuild(1200)
+    guild.name = "Test Guild"
+    notifications = []
+
+    class Author:
+        id = 303
+        mention = "<@303>"
+
+        async def send(self, content: str, **kwargs):
+            notifications.append((content, kwargs))
+
+    async def ignored_modlog(*_args, **_kwargs):
+        return None
+    monkeypatch.setattr(router, "_send_modlog", ignored_modlog)
+
+    async def check():
+        source = await router.create_custom_share_source(guild, None, "Gaming Clips")
+        source.mention = "<#123>"
+        message = SimpleNamespace(
+            id=90001,
+            guild=guild,
+            channel=source,
+            author=Author(),
+            jump_url="https://discord.com/channels/1200/123/90001",
+        )
+        await router._route_rejection_log(
+            message,
+            target=None,
+            reason="No destination is configured.",
+        )
+        assert len(notifications) == 1
+        assert "No destination is configured" in notifications[0][0]
+        assert "original post was kept" in notifications[0][0]
+        assert "90001" in notifications[0][0]
+        assert await router.guild_pending_source_cleanup_count(guild.id) == 0
+
+    asyncio.run(check())
+
+
+def test_failure_paths_preserve_proxy_messages_and_report_rejection():
+    root = Path(__file__).resolve().parents[1]
+    runtime = (root / "stoney_verify/share_router_runtime.py").read_text(encoding="utf-8")
+    section = runtime.split("async def route_message(", 1)[1].split("def _merged_overwrite(", 1)[0]
+    assert "This Share Router proxy has no destination configured." in section
+    assert "No forwardable text, link, or attachment" in section
+    assert "Destination delivery failed:" in section
+    assert "await _route_rejection_log(" in section
+    assert "Your original post was kept" in runtime
