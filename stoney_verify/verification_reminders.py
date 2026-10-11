@@ -109,10 +109,9 @@ def reminder_text(
     guild: discord.Guild, channel: discord.TextChannel,
     cfg: Mapping[str, Any], policy: ReminderPolicy,
 ) -> str:
-    panel_id = _as_int(cfg.get("basic_verify_panel_message_id"), 0)
+    # Channel link remains valid if staff remove/repost the Verify panel.
+    # Never direct a member to an old saved message ID that may be deleted.
     destination = f"https://discord.com/channels/{guild.id}/{channel.id}"
-    if panel_id > 0:
-        destination += f"/{panel_id}"
     greeting = policy.message or (
         "Friendly reminder: you haven't finished verifying yet. "
         "To unlock your server access, open the verification channel and tap **Verify**."
@@ -220,13 +219,14 @@ class ReminderWorker:
             if not fetched:
                 self.member_cursors[guild.id] = 0
                 return 0
-            self.member_cursors[guild.id] = max(int(m.id) for m in fetched) if len(fetched) == SCAN_SIZE else 0
             claims = 0
             remaining = min(remaining, MAX_PER_GUILD_PER_PASS)
             now = datetime.now(timezone.utc)
+            last_processed = cursor
             for member in fetched:
                 if claims >= remaining:
                     break
+                last_processed = int(member.id)
                 if not pending_for_reminder(member, cfg):
                     continue
                 if not member_is_due(member, delay_hours=policy.delay_hours, now=now):
@@ -260,6 +260,13 @@ class ReminderWorker:
                 except (discord.Forbidden, discord.HTTPException) as exc:
                     print(f"ℹ️ verify reminder delivery unavailable guild={guild.id} kind={type(exc).__name__}")
                 await asyncio.sleep(0.5)
+            # Never advance past members not yet processed when the delivery
+            # budget runs out halfway through a page.
+            page_exhausted = last_processed == int(fetched[-1].id)
+            self.member_cursors[guild.id] = (
+                0 if page_exhausted and len(fetched) < SCAN_SIZE
+                else last_processed
+            )
             return claims
         except asyncio.CancelledError:
             raise
