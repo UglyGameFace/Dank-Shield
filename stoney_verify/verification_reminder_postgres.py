@@ -62,7 +62,17 @@ def ready_sync() -> bool:
                     "select guild_id, user_id, joined_at, last_claimed_at, attempts "
                     "from public.dank_verify_reminder_delivery limit 0"
                 )
-        return True
+                cursor.execute(
+                    "select "
+                    "has_table_privilege(current_user, "
+                    "'public.dank_verify_reminder_delivery', 'SELECT') "
+                    "and has_table_privilege(current_user, "
+                    "'public.dank_verify_reminder_delivery', 'INSERT') "
+                    "and has_table_privilege(current_user, "
+                    "'public.dank_verify_reminder_delivery', 'UPDATE')"
+                )
+                row = cursor.fetchone()
+                return bool(row and row[0] is True)
     except Exception:
         # A missing table, VLAN route, environment secret or DB error must block
         # the Enable button and all worker sends.
