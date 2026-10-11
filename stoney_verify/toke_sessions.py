@@ -65,6 +65,7 @@ async def save_new(session: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("Toke session identifiers are invalid.")
     value = dict(session)
     value["guild_id"], value["message_id"] = gid, mid
+    value["created_at"] = time.time()
     value["cheers_ids"], value["going_ids"] = [], []
     value["active"] = True
     async with _LOCK:
@@ -95,6 +96,22 @@ async def all_active(guild_id: int | None = None) -> list[dict[str, Any]]:
             if session.get("active", False)
             and (guild_id is None or int(session.get("guild_id", 0)) == int(guild_id))
         ]
+
+
+async def recent_launch_times(guild_id: int, starter_id: int) -> tuple[float, float]:
+    """Persist cooldown boundaries over process restarts without storing messages."""
+    async with _LOCK:
+        data = _read()
+        guild_last = 0.0
+        member_last = 0.0
+        for session in data.values():
+            if int(session.get("guild_id", 0)) != int(guild_id):
+                continue
+            sent_at = float(session.get("created_at", 0) or 0)
+            guild_last = max(guild_last, sent_at)
+            if int(session.get("starter_id", 0)) == int(starter_id):
+                member_last = max(member_last, sent_at)
+        return guild_last, member_last
 
 
 async def react(
