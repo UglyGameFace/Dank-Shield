@@ -139,6 +139,37 @@ def test_modern_styled_card_uses_preserve_mode(layout: str, monkeypatch) -> None
     assert tile.getbbox() is not None
 
 
+@pytest.mark.parametrize("theme", ["420_lobby", "steam_focus"])
+def test_platform_usernames_are_drawn_complete_once_per_handle(theme: str, monkeypatch) -> None:
+    # A game-platform handle is also a username. Never wrap it mid-glyph.
+    from PIL import Image
+
+    long_handle = "🎃𝕲𝖆𝖒𝖊𝕱𝖆𝖈𝖊👻" * 10
+    expected = f"Steam: {long_handle}" if theme == "420_lobby" else long_handle
+    logged: list[str] = []
+    original = live._draw_rich
+
+    def spy(image, draw, xy, value, **kwargs):
+        logged.append(value)
+        return original(image, draw, xy, value, **kwargs)
+
+    monkeypatch.setattr(live, "_draw_rich", spy)
+    image = Image.new("RGBA", (1400, 300), (0, 0, 0, 255))
+    live._draw_platforms(
+        image,
+        [{"platform": "steam", "username": long_handle, "mode": "username"}],
+        {},
+        "Member",
+        live.PROFILE_THEME_PALETTES[theme],
+        live._LAYOUTS["classic"],
+        {},
+        theme,
+    )
+    assert logged.count(expected) == 1
+    assert "…" not in expected
+    assert all("…" not in part and "..." not in part for part in logged)
+
+
 def test_rich_name_preserves_joined_emoji_as_complete_tokens() -> None:
     name = "🇺🇸👨‍👩‍👧‍👦👍🏽🎃CrypticSnipe👻"
     tokens = live._emoji_tokens(name)
