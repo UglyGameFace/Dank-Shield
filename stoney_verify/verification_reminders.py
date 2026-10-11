@@ -7,6 +7,7 @@ reminder. Delivery claims are atomic in Discloud PostgreSQL and fail closed on e
 """
 
 import asyncio
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
@@ -17,7 +18,12 @@ from .guild_config import get_guild_config
 from .role_truth import clear_cache as clear_role_truth_cache
 from .role_truth import member_is_pending_verification
 from .setup_engine.verification_modes import basic_verify_allowed_for_guild
-from .verification_reminder_postgres import claim_sync as _pg_claim_sync, ready_sync as _pg_ready_sync
+from .verification_reminder_postgres import (
+    claim_sync as _pg_claim_sync,
+    ready_sync as _pg_ready_sync,
+    stale_candidates_sync as _pg_stale_candidates_sync,
+    delete_departed_sync as _pg_delete_departed_sync,
+)
 
 REMINDER_CONFIG_KEY = "unverified_reminders_v1"
 SCAN_SIZE = 100
@@ -25,6 +31,9 @@ GUILDS_PER_PASS = 25
 MAX_DELIVERIES_PER_PASS = 10
 MAX_PER_GUILD_PER_PASS = 3
 POLL_SECONDS = 180
+RETENTION_DAYS = 90
+CLEANUP_BATCH_SIZE = 12
+CLEANUP_INTERVAL_SECONDS = 3600
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -140,6 +149,11 @@ class ReminderWorker:
         self.task: asyncio.Task[None] | None = None
         self.guild_cursor = 0
         self.member_cursors: dict[int, int] = {}
+        # In-memory keyset cursor only controls scan progress. Actual reminder
+        # budgets are durable in PostgreSQL and never reset by cleanup.
+        self.cleanup_cursor: tuple[datetime, str, str] | None = None
+        # Do not add cleanup traffic to Discord's busy startup window.
+        self.cleanup_due = time.monotonic() + CLEANUP_INTERVAL_SECONDS
 
     def start(self) -> asyncio.Task[None]:
         if self.task is None or self.task.done():
@@ -265,11 +279,67 @@ class ReminderWorker:
             await asyncio.sleep(0)
         return claimed
 
+    async def cleanup_stale_history(self) -> int:
+        """Delete old delivery counters ONLY after authoritative member absence.
+
+        A still-unverified member may be present for longer than 90 days.
+        Their tiny claim record must survive so the per-join maximum cannot
+        silently reset. Cache misses/permissions/HTTP errors never authorize
+        deletion. The hourly sweep checks at most 12 stale candidates.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
+        try:
+            rows = await asyncio.to_thread(
+                _pg_stale_candidates_sync,
+                cutoff,
+                after=self.cleanup_cursor,
+                limit=CLEANUP_BATCH_SIZE,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"⚠️ verify reminder cleanup unavailable error={type(exc).__name__}")
+            return 0
+
+        deleted = 0
+        for guild_id, user_id, joined_at, last_claimed_at in rows:
+            guild = self.bot.get_guild(int(guild_id))
+            if guild is None:
+                continue  # Never infer departure from guild cache absence.
+            try:
+                await guild.fetch_member(int(user_id))
+            except discord.NotFound as exc:
+                if getattr(exc, "code", None) != 10007:
+                    continue  # 404 Unknown Guild or another resource is not proof.
+                try:
+                    if await asyncio.to_thread(
+                        _pg_delete_departed_sync,
+                        guild_id, user_id, joined_at, cutoff,
+                    ):
+                        deleted += 1
+                except asyncio.CancelledError:
+                    raise
+                except Exception as delete_exc:
+                    print(f"⚠️ verify reminder cleanup delete unavailable error={type(delete_exc).__name__}")
+            except (discord.Forbidden, discord.HTTPException):
+                continue
+            await asyncio.sleep(0)
+
+        if rows and len(rows) == CLEANUP_BATCH_SIZE:
+            guild_id, user_id, _, last_claimed_at = rows[-1]
+            self.cleanup_cursor = (last_claimed_at, guild_id, user_id)
+        else:
+            self.cleanup_cursor = None
+        return deleted
+
     async def run(self) -> None:
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             try:
                 await self.run_pass()
+                if time.monotonic() >= self.cleanup_due:
+                    self.cleanup_due = time.monotonic() + CLEANUP_INTERVAL_SECONDS
+                    await self.cleanup_stale_history()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
