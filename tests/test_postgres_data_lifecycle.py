@@ -38,7 +38,20 @@ def test_every_postgres_table_declares_owner_and_retention() -> None:
         f"orphan={sorted(set(tables) - created)}"
     )
 
+    allowed_classes = {
+        "temporary",
+        "operational_control",
+        "durable_security_evidence",
+        "moderation_audit",
+        "guild_configuration",
+        "support_record",
+        "member_preference",
+        "aggregated_analytics",
+    }
     required = {
+        "retention_class",
+        "historical_reuse",
+        "review_interval_days",
         "feature",
         "owner",
         "purpose",
@@ -61,6 +74,10 @@ def test_every_postgres_table_declares_owner_and_retention() -> None:
         assert isinstance(settings["max_candidates_per_cleanup"], int)
         assert 1 <= settings["max_candidates_per_cleanup"] <= 1000
         assert len(settings["stored_fields"]) == len(set(settings["stored_fields"]))
+        assert settings["retention_class"] in allowed_classes, table_name
+        assert isinstance(settings["historical_reuse"], str) and settings["historical_reuse"].strip()
+        assert isinstance(settings["review_interval_days"], int)
+        assert 30 <= settings["review_interval_days"] <= 730
         assert (ROOT / settings["migration"]).is_file()
 
 
