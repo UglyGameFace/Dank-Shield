@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 from stoney_verify import toke_sessions
 from stoney_verify.toke_live_ui import (
-    TokeCheersView, begin_capture, choose_voice, pending_for, render_card, settings_from_config,
+    TokeCheersView, begin_capture, choose_voice, media_url_from_message, pending_for, render_card, settings_from_config,
 )
 
 import discord
@@ -396,14 +396,9 @@ async def publish_toke_from_draft(
                 upload = attachment
                 break
         if upload is None:
-            match = re.search(r"https?://[^\s<>]+", str(media_message.content or ""))
-            if match:
-                clean_media = _clean_media_url(match.group(0))
-            else:
-                for item in media_message.embeds:
-                    if getattr(item, "url", None):
-                        clean_media = _clean_media_url(item.url)
-                        break
+            found = media_url_from_message(media_message)
+            if found:
+                clean_media = _clean_media_url(found)
         if upload is None and not clean_media:
             raise ValueError("No supported GIF or picture could be read. Check Message Content Intent.")
 
