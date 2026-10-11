@@ -441,8 +441,28 @@ class TokeCheersView(discord.ui.View):
                     content="✅ This sesh has ended. The public card is now closed."
                     if updated else "✅ This sesh has ended. The card will update shortly."
                 )
+            # Return the freshly sampled numbers to the member as well as
+            # editing the public card. Discord Android may cache an existing
+            # embed; this ephemeral interaction gives an authoritative
+            # snapshot even when the old card hasn't repainted yet.
+            latest = await toke_sessions.get(interaction.guild.id, interaction.message.id)
+            if not latest or not latest.get("active", False):
+                return await interaction.edit_original_response(
+                    content="✅ This sesh has ended. The public card is closing."
+                )
+            _, voice, voice_count = _sesh_people(interaction.guild, latest)
+            cheers = len({int(uid) for uid in latest.get("cheers_ids", [])})
+            joining = len({int(uid) for uid in latest.get("going_ids", [])})
+            clock = int(time.time())
             await interaction.edit_original_response(
-                content="✅ Updated the participation counts and VC presence."
+                content=(
+                    f"✅ **Sesh status checked <t:{clock}:t>**\\n"
+                    f"💨 Cheers: **{cheers}** · 🙋 Joining: **{joining}** · "
+                    f"🔊 In VC: **{voice_count}**\\n"
+                    f"Scheduled end: <t:{int(latest['expires_at'])}:f>"
+                    + (f" · {voice.mention}" if voice is not None else "")
+                ),
+                allowed_mentions=discord.AllowedMentions.none(),
             )
         except (discord.HTTPException, OSError, ValueError) as exc:
             await interaction.edit_original_response(
