@@ -71,7 +71,7 @@ def test_active_channel_snapshot_paginates_without_truncating(monkeypatch):
             return self
 
         def in_(self, key, values):
-            assert key == "status" and values == ["open", "claimed"]
+            assert key == "status" and values == ["open", "claimed", "closed"]
             return self
 
         def order(self, key, *, desc):
@@ -87,13 +87,13 @@ def test_active_channel_snapshot_paginates_without_truncating(monkeypatch):
             return SimpleNamespace(data=rows[self.start : self.end + 1])
 
     monkeypatch.setattr(repository, "_sb", lambda: SimpleNamespace(table=lambda _: Query()))
-    assert len(repository._select_active_ticket_channel_identities_for_guild_sync("777")) == 503
+    assert len(repository._select_non_deleted_ticket_channel_identities_for_guild_sync("777")) == 503
     assert ranges == [(0, 249), (250, 499), (500, 749)]
 
 
 def test_active_snapshot_unavailable_is_not_empty_success(monkeypatch):
     monkeypatch.setattr(repository, "_sb", lambda: None)
-    assert repository._select_active_ticket_channel_identities_for_guild_sync("777") is None
+    assert repository._select_non_deleted_ticket_channel_identities_for_guild_sync("777") is None
 
 
 def test_missed_native_delete_closes_and_deletes_without_duplicate_refresh(monkeypatch):
@@ -120,7 +120,7 @@ def test_missed_native_delete_closes_and_deletes_without_duplicate_refresh(monke
     async def unexpected_refresh(_gid):
         raise AssertionError("periodic stats worker owns the single refresh")
 
-    monkeypatch.setattr(ticket_events, "list_active_ticket_channel_identities_for_guild", list_rows)
+    monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
     monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=fetch))
     monkeypatch.setattr(ticket_events, "_find_ticket_row_by_channel_id", find)
     monkeypatch.setattr(ticket_events, "repo_mark_ticket_closed", close)
@@ -133,6 +133,38 @@ def test_missed_native_delete_closes_and_deletes_without_duplicate_refresh(monke
     assert calls == [("closed", 990), ("deleted", 990)]
 
 
+def test_closed_archived_ticket_removed_offline_is_marked_deleted(monkeypatch):
+    closed = active_row(995)
+    closed["status"] = "closed"
+
+    async def list_rows(_gid):
+        return [closed]
+
+    async def fetch(_cid):
+        raise discord_error()
+
+    async def find(cid):
+        assert cid == 995
+        return {"status": "closed"}
+
+    async def no_close(**_kwargs):
+        raise AssertionError("already closed tickets must not be closed twice")
+
+    deletes = []
+
+    async def delete(**kwargs):
+        deletes.append(kwargs["channel_id"])
+        return True
+
+    monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
+    monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=fetch))
+    monkeypatch.setattr(ticket_events, "_find_ticket_row_by_channel_id", find)
+    monkeypatch.setattr(ticket_events, "repo_mark_ticket_closed", no_close)
+    monkeypatch.setattr(ticket_events, "repo_mark_ticket_deleted", delete)
+    result = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
+    assert result["deleted"] == 1 and deletes == [995]
+
+
 def test_existing_cached_ticket_never_fetches_or_deletes(monkeypatch):
     async def list_rows(_gid):
         return [active_row()]
@@ -143,7 +175,7 @@ def test_existing_cached_ticket_never_fetches_or_deletes(monkeypatch):
     async def no_delete(*_args, **_kwargs):
         raise AssertionError("cached ticket must not be deleted")
 
-    monkeypatch.setattr(ticket_events, "list_active_ticket_channel_identities_for_guild", list_rows)
+    monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
     monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=no_fetch))
     monkeypatch.setattr(ticket_events, "_mark_deleted_after_external_channel_delete", no_delete)
     result = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild([990])))
@@ -157,7 +189,7 @@ def test_ghost_and_channel_less_tickets_are_preserved(monkeypatch):
     async def no_fetch(_cid):
         raise AssertionError("ghost or unbound row must not incur REST lookup")
 
-    monkeypatch.setattr(ticket_events, "list_active_ticket_channel_identities_for_guild", list_rows)
+    monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
     monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=no_fetch))
     result = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
     assert result["deleted"] == 0 and result["rest_checks"] == 0
@@ -182,7 +214,7 @@ def test_uncertain_discord_result_never_deletes(monkeypatch, err):
     async def no_delete(*_args, **_kwargs):
         raise AssertionError("uncertain channel state must not be deleted")
 
-    monkeypatch.setattr(ticket_events, "list_active_ticket_channel_identities_for_guild", list_rows)
+    monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
     monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=fetch))
     monkeypatch.setattr(ticket_events, "_mark_deleted_after_external_channel_delete", no_delete)
     result = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
@@ -201,7 +233,7 @@ def test_second_valid_identity_prevents_false_ticket_delete(monkeypatch):
     async def no_delete(*_args, **_kwargs):
         raise AssertionError("existing thread prevents deletion")
 
-    monkeypatch.setattr(ticket_events, "list_active_ticket_channel_identities_for_guild", list_rows)
+    monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
     monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=fetch))
     monkeypatch.setattr(ticket_events, "_mark_deleted_after_external_channel_delete", no_delete)
     result = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
@@ -219,7 +251,7 @@ def test_rest_budget_rotates_past_inconclusive_rows(monkeypatch):
         seen.append(cid)
         raise discord_error(50001, status=403)
 
-    monkeypatch.setattr(ticket_events, "list_active_ticket_channel_identities_for_guild", list_rows)
+    monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
     monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=fetch))
     first = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
     second = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
@@ -236,7 +268,7 @@ def test_db_outage_skips_scan_and_never_calls_discord(monkeypatch):
     async def no_fetch(_cid):
         raise AssertionError("DB outage must not trigger speculative deletions")
 
-    monkeypatch.setattr(ticket_events, "list_active_ticket_channel_identities_for_guild", list_rows)
+    monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
     monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=no_fetch))
     result = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
     assert result["uncertain"] == 1 and result["rest_checks"] == 0
@@ -252,7 +284,7 @@ def test_failed_lifecycle_write_remains_retriable(monkeypatch):
     async def fail_to_write(*_args, **_kwargs):
         return False
 
-    monkeypatch.setattr(ticket_events, "list_active_ticket_channel_identities_for_guild", list_rows)
+    monkeypatch.setattr(ticket_events, "list_non_deleted_ticket_channel_identities_for_guild", list_rows)
     monkeypatch.setattr(ticket_events, "bot", SimpleNamespace(fetch_channel=fetch))
     monkeypatch.setattr(ticket_events, "_mark_deleted_after_external_channel_delete", fail_to_write)
     result = run(ticket_events.reconcile_missing_active_ticket_channels_for_guild(FakeGuild()))
