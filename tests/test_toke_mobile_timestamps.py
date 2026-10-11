@@ -145,3 +145,54 @@ def test_toke_voice_updates_are_isolated_by_guild(monkeypatch):
         await asyncio.gather(*tuple(live._VOICE_WORKERS.values()))
         assert sorted(groups) == [123, 234]
     asyncio.run(run())
+
+
+def test_refresh_returns_current_counts_in_private_reply_even_if_embed_is_cached(monkeypatch):
+    class FakeVoice:
+        id = 987
+        mention = "<#987>"
+        members = [SimpleNamespace(id=42), SimpleNamespace(id=43), SimpleNamespace(id=44)]
+
+    monkeypatch.setattr(live.discord, "VoiceChannel", FakeVoice)
+    session = {
+        **_session(), "voice_channel_id": 987,
+        "cheers_ids": [42, 43], "going_ids": [43],
+    }
+    events = []
+
+    async def read(_gid, _mid):
+        return dict(session)
+
+    async def public_card_refresh(*_args, **_kwargs):
+        events.append("public_edit")
+        return True
+
+    async def defer(**kwargs):
+        events.append("deferred")
+        assert kwargs.get("ephemeral") is True
+
+    async def reply(**kwargs):
+        events.append(("reply", kwargs))
+
+    monkeypatch.setattr(live.toke_sessions, "get", read)
+    monkeypatch.setattr(live, "refresh_card", public_card_refresh)
+
+    voice = FakeVoice()
+    guild = SimpleNamespace(id=123, get_channel=lambda cid: voice if cid == 987 else None)
+    interaction = SimpleNamespace(
+        guild=guild, message=SimpleNamespace(id=456), client=object(),
+        response=SimpleNamespace(defer=defer),
+        edit_original_response=reply,
+    )
+    view = live.TokeCheersView(42, 9, guild_id=123, message_id=456)
+    asyncio.run(view.refresh(interaction, None))
+    assert events[:2] == ["deferred", "public_edit"]
+    body = events[2][1]["content"]
+    assert "Cheers: **2**" in body
+    assert "Joining: **1**" in body
+    assert "In VC: **3**" in body
+    assert "<#987>" in body
+    assert "Scheduled end: <t:" in body and ":f>" in body
+    assert "status checked <t:" in body
+    assert ":R>" not in body
+    assert "\\n" not in body  # Real multiline text, not literal backslashes.
