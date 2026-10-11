@@ -17,6 +17,7 @@ from stoney_verify.share_router_resources import (
 from stoney_verify.share_router_runtime import (
     create_or_repair_hidden_share_hub,
     create_custom_share_source,
+    available_share_source_ids,
     delete_custom_share_source,
     ensure_share_router_runtime,
     find_share_router_category,
@@ -26,7 +27,7 @@ from stoney_verify.share_router_runtime import (
     remove_route,
     route_health,
     route_permission_blockers,
-    save_route,
+    save_managed_share_route,
     source_age_blocker,
     source_privacy_blocker,
 )
@@ -300,23 +301,8 @@ async def open_share_router(
 
 
 async def _available_source_ids(guild: discord.Guild, routes: list[dict[str, Any]]) -> set[int]:
-    """Canonical, registered custom, and legacy routed sources for this guild."""
-    category = find_share_router_category(guild)
-    source_ids: set[int] = set()
-    if category is not None:
-        source_ids.update(
-            int(source.id) for name in DEFAULT_SHARE_CHANNELS
-            if (source := find_share_source_channel(category, name)) is not None
-        )
-    source_ids.update(await guild_custom_share_sources(int(guild.id)))
-    # Preserve legacy/custom routes that were already installed before this UI.
-    source_ids.update(
-        _safe_int(route.get("source_channel_id"), 0) for route in routes
-    )
-    return {
-        source_id for source_id in source_ids
-        if isinstance(guild.get_channel(source_id), discord.TextChannel)
-    }
+    _ = routes
+    return await available_share_source_ids(guild)
 
 
 async def _open_source_picker(interaction: discord.Interaction) -> None:
@@ -406,13 +392,15 @@ async def _open_target_browser(
             )
             return await _private(pick_interaction, embed=embed)
 
-        await save_route(
-            int(guild.id),
-            source_channel_id=int(source.id),
-            target_channel_id=int(resource.id),
-            delete_source=True,
-            created_by_id=int(pick_interaction.user.id),
-        )
+        try:
+            await save_managed_share_route(
+                guild,
+                source_channel_id=int(source.id),
+                target_channel_id=int(resource.id),
+                created_by_id=int(pick_interaction.user.id),
+            )
+        except (OSError, ValueError) as exc:
+            return await _private(pick_interaction, f"❌ Share route could not be saved: {exc}")
         await open_share_router(pick_interaction, replace_message=True)
 
     def allowed_target(resource: Any) -> bool:
