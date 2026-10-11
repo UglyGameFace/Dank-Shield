@@ -159,10 +159,13 @@ def test_toke_media_send_path_keeps_one_canonical_post() -> None:
     assert "upload: Optional[discord.Attachment] = None" in source
     assert 'media="Optional image/GIF URL' in source
     assert "Choose either a media URL or an upload, not both." in source
-    assert 'embed.set_image(url=f"attachment://{upload_file.filename}")' in source
+    # Editing an attachment:// embed causes some Discord clients to show
+    # the same attachment above and inside the interactive Toke card.
+    assert 'embed.set_image(url=f"attachment://{upload_file.filename}")' not in source
     assert "elif direct:" in source
     assert "embed.set_image(url=clean_media)" in source
-    assert 'content += f"\\n{clean_media}"' in source
+    assert 'embed.description += f"\\n\\n[Open shared GIF or image]({clean_media})"' in source
+    assert 'content += f"\\n{clean_media}"' not in source
     assert 'payload["file"] = upload_file' in source
     assert "await channel.send(**payload)" in source
     assert "await toke_sessions.save_new(" in source
