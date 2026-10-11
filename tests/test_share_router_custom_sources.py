@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from itertools import count
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -298,3 +299,108 @@ def test_new_ui_pages_sources_and_routes_and_preserves_old_routing_behavior():
     assert tuple(DEFAULT_SHARE_CHANNELS) == (
         "share-gaming-news", "share-deals", "share-memes", "share-announcements",
     )
+
+
+def test_managed_proxy_always_cleans_even_with_historical_keep_source_route(isolated_router):
+    guild = FakeGuild(1101)
+
+    async def check():
+        source = await router.create_custom_share_source(guild, None, "Gaming Clips")
+        legacy_keep = {"source_channel_id": str(source.id), "delete_source": False}
+        assert router.route_deletes_source(source, legacy_keep) is True
+        ordinary_category = FakeCategory(90909, "ordinary", guild)
+        ordinary = FakeTextChannel(guild, "normal-chat", ordinary_category, 90910)
+        assert router.route_deletes_source(ordinary, legacy_keep) is False
+        assert router.route_deletes_source(ordinary, {"delete_source": True}) is True
+    asyncio.run(check())
+
+
+def test_successful_delivery_deletes_source_without_queue(isolated_router):
+    guild = FakeGuild(1102)
+    deleted = []
+
+    async def check():
+        source = await router.create_custom_share_source(guild, None, "Gaming Clips")
+        async def delete(**_kwargs):
+            deleted.append(source.id)
+        message = SimpleNamespace(id=31337, guild=guild, channel=source, delete=delete)
+        await router._cleanup_delivered_proxy_post(message, enabled=True)
+        assert await router.guild_pending_source_cleanup_count(guild.id) == 0
+        await router._cleanup_delivered_proxy_post(message, enabled=False)
+        assert deleted == [source.id]
+
+    asyncio.run(check())
+
+
+def test_delivered_cleanup_retries_after_permission_failure_per_guild(isolated_router):
+    guild, other = FakeGuild(1103), FakeGuild(1104)
+    deleted = []
+    permit = False
+
+    async def check():
+        nonlocal permit
+        source = await router.create_custom_share_source(guild, None, "Gaming Clips")
+        neighbor = await router.create_custom_share_source(other, None, "Gaming Clips")
+
+        async def failed_delete(**_kwargs):
+            raise OSError("Discord deletion temporarily unavailable")
+
+        message = SimpleNamespace(id=31338, guild=guild, channel=source, delete=failed_delete)
+        await router._cleanup_delivered_proxy_post(message, enabled=True)
+        await router._cleanup_delivered_proxy_post(message, enabled=True)
+        assert await router.guild_pending_source_cleanup_count(guild.id) == 1
+        assert await router.guild_pending_source_cleanup_count(other.id) == 0
+
+        guild.me = object()
+        source.permissions_for = lambda _member: SimpleNamespace(manage_messages=permit)
+        async def retry_delete(**_kwargs):
+            deleted.append(31338)
+        source.get_partial_message = lambda message_id: SimpleNamespace(delete=retry_delete)
+
+        bot = SimpleNamespace(get_guild=lambda gid: {guild.id:guild, other.id:other}.get(gid))
+        assert await router._sweep_delivered_cleanup_once(bot) == 0
+        assert deleted == []
+        permit = True
+        assert await router._sweep_delivered_cleanup_once(bot) == 1
+        assert deleted == [31338]
+        assert await router.guild_pending_source_cleanup_count(guild.id) == 0
+        assert await router.guild_custom_share_sources(other.id) == [neighbor.id]
+
+    asyncio.run(check())
+
+
+def test_cleanup_does_not_delete_message_from_repurposed_channel(isolated_router):
+    guild = FakeGuild(1105)
+
+    async def check():
+        source = await router.create_custom_share_source(guild, None, "Gaming Clips")
+        async def failed_delete(**_kwargs):
+            raise OSError("simulated")
+        message = SimpleNamespace(id=31339, guild=guild, channel=source, delete=failed_delete)
+        await router._cleanup_delivered_proxy_post(message, enabled=True)
+        source.category = FakeCategory(50505, "ordinary", guild)
+        # The route was removed after delivery, so the channel is no longer a proxy.
+        assert await router.guild_pending_source_cleanup_count(guild.id) == 1
+        guild.me = object()
+        source.permissions_for = lambda _member: SimpleNamespace(manage_messages=True)
+        async def unsafe_delete(**_kwargs):
+            raise AssertionError("must not delete from repurposed channel")
+        source.get_partial_message = lambda _id: SimpleNamespace(delete=unsafe_delete)
+        bot = SimpleNamespace(get_guild=lambda _id: guild)
+        assert await router._sweep_delivered_cleanup_once(bot) == 0
+        assert await router.guild_pending_source_cleanup_count(guild.id) == 1
+    asyncio.run(check())
+
+
+def test_source_cleanup_only_enqueues_successful_route_acks():
+    root = Path(__file__).resolve().parents[1]
+    runtime = (root / "stoney_verify/share_router_runtime.py").read_text(encoding="utf-8")
+    ui = (root / "stoney_verify/commands_ext/public_share_router.py").read_text(encoding="utf-8")
+    source = runtime.split("async def route_message(", 1)[1].split("def _merged_overwrite(", 1)[0]
+    assert source.count("await _cleanup_delivered_proxy_post(message, enabled=cleanup_source)") == 2
+    assert source.index("await _cleanup_delivered_proxy_post") > source.index("torrent_duplicate is not None")
+    assert source.index("native_sent = await _relay_native_video_upload(") < source.rindex(
+        "await _cleanup_delivered_proxy_post"
+    )
+    assert 'name="Automatic proxy cleanup"' in ui
+    assert "delivered posts are removed" not in ui.lower() or "Failed shares" in ui
