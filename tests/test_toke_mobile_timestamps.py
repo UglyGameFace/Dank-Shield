@@ -185,7 +185,7 @@ def test_refresh_returns_current_counts_in_private_reply_even_if_embed_is_cached
         edit_original_response=reply,
     )
     view = live.TokeCheersView(42, 9, guild_id=123, message_id=456)
-    asyncio.run(view.refresh(interaction, None))
+    asyncio.run(view.refresh.callback(interaction))  # discord.py View binds the button callback
     assert events[:2] == ["deferred", "public_edit"]
     body = events[2][1]["content"]
     assert "Cheers: **2**" in body
