@@ -1495,7 +1495,7 @@ async def list_open_tickets_for_guild(
 
 
 
-def _select_active_ticket_channel_identities_for_guild_sync(
+def _select_non_deleted_ticket_channel_identities_for_guild_sync(
     guild_id: str,
 ) -> Optional[List[Dict[str, Any]]]:
     """Page active channel identities; None means the scan is not trustworthy."""
@@ -1511,7 +1511,7 @@ def _select_active_ticket_channel_identities_for_guild_sync(
             sb.table(TICKETS_TABLE)
             .select("id,status,channel_id,discord_thread_id,is_ghost")
             .eq("guild_id", guild_id)
-            .in_("status", ["open", "claimed"])
+            .in_("status", ["open", "claimed", "closed"])
             .order("id", desc=False)
             .range(start, start + page_size - 1)
             .execute()
@@ -1524,13 +1524,13 @@ def _select_active_ticket_channel_identities_for_guild_sync(
             return rows
 
     print(
-        f"⚠️ repository active-ticket channel reconciliation page cap "
+        f"⚠️ repository ticket channel reconciliation page cap "
         f"guild={guild_id}; refusing partial scan"
     )
     return None
 
 
-async def list_active_ticket_channel_identities_for_guild(
+async def list_non_deleted_ticket_channel_identities_for_guild(
     guild_id: int | str,
 ) -> Optional[List[Dict[str, Any]]]:
     """An accurate, bounded-column snapshot for external deletion recovery."""
@@ -1539,12 +1539,12 @@ async def list_active_ticket_channel_identities_for_guild(
         return None
     try:
         return await _run_db_op(
-            "select active ticket channel identities",
-            lambda: _select_active_ticket_channel_identities_for_guild_sync(gid),
+            "select non-deleted ticket channel identities",
+            lambda: _select_non_deleted_ticket_channel_identities_for_guild_sync(gid),
         )
     except Exception as exc:
         print(
-            f"⚠️ repository active-ticket channel reconciliation failed "
+            f"⚠️ repository ticket channel reconciliation failed "
             f"guild={gid} error={type(exc).__name__}: {exc}"
         )
         return None
@@ -2674,7 +2674,7 @@ __all__ = [
     "get_ticket_by_any_channel_id",
     "find_open_ticket_for_owner",
     "list_open_tickets_for_guild",
-    "list_active_ticket_channel_identities_for_guild",
+    "list_non_deleted_ticket_channel_identities_for_guild",
     "list_tickets_for_owner",
     "insert_ticket",
     "upsert_ticket",
