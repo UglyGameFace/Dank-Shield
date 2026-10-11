@@ -300,18 +300,12 @@ async def open_share_router(
         await _private(interaction, embed=embed, view=view)
 
 
-async def _available_source_ids(guild: discord.Guild, routes: list[dict[str, Any]]) -> set[int]:
-    _ = routes
-    return await available_share_source_ids(guild)
-
-
 async def _open_source_picker(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
         return await _private(interaction, "❌ Use Share Router inside a server.")
 
-    routes = await guild_routes(int(guild.id))
-    source_ids = await _available_source_ids(guild, routes)
+    source_ids = await available_share_source_ids(guild)
     if not source_ids:
         return await _private(
             interaction,
@@ -324,7 +318,7 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
     async def picked(pick_interaction: discord.Interaction, resource: Any) -> None:
         if not await _require_manage(pick_interaction):
             return
-        current = await _available_source_ids(guild, await guild_routes(int(guild.id)))
+        current = await available_share_source_ids(guild)
         if not isinstance(resource, discord.TextChannel) or resource.id not in current:
             return await _private(pick_interaction, "❌ This proxy source is no longer configured.")
         await _open_target_browser(pick_interaction, resource)
@@ -361,7 +355,7 @@ async def _open_target_browser(
     ) -> None:
         if not await _require_manage(pick_interaction):
             return
-        source_ids = await _available_source_ids(guild, await guild_routes(int(guild.id)))
+        source_ids = await available_share_source_ids(guild)
         if int(source.id) not in source_ids:
             return await _private(pick_interaction, "❌ This proxy source is no longer configured.")
         if not isinstance(resource, discord.TextChannel):
