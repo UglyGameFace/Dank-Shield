@@ -72,45 +72,93 @@ def choose_voice(guild: discord.Guild, member: discord.Member, settings: Mapping
     return int(configured.id) if isinstance(configured, (discord.VoiceChannel, discord.StageChannel)) else 0
 
 
-def _display_members(guild: discord.Guild, identifiers: list[int], limit: int = 10) -> str:
-    result = []
-    for member_id in identifiers[:limit]:
-        member = guild.get_member(int(member_id))
-        name = member.display_name if member is not None else f"Member {member_id}"
-        safe_name = discord.utils.escape_markdown(discord.utils.escape_mentions(name))[:55]
-        result.append(f"{safe_name} (<@{int(member_id)}>)")
-    if len(identifiers) > limit:
-        result.append(f"and {len(identifiers) - limit} more (tap Who's Coming)")
-    return ", ".join(result) if result else "Nobody yet"
+def _sesh_people(
+    guild: discord.Guild, session: Mapping[str, Any]
+) -> tuple[list[tuple[int, tuple[str, ...]]], discord.abc.GuildChannel | None, int]:
+    """One row per member, even when they cheered, plan to join and are in VC.
+
+    Resolve the live VC membership separately from the reaction list. We never
+    interpret a Cheers click as evidence that somebody joined voice.
+    """
+    starter_id = int(session.get("starter_id", 0) or 0)
+    cheers = {int(uid) for uid in session.get("cheers_ids", []) if int(uid) > 0}
+    going = {int(uid) for uid in session.get("going_ids", []) if int(uid) > 0}
+    voice = guild.get_channel(int(session.get("voice_channel_id", 0) or 0))
+    is_voice = isinstance(voice, (discord.VoiceChannel, discord.StageChannel))
+    voice_ids = {
+        int(member.id) for member in (getattr(voice, "members", []) or [])
+        if int(getattr(member, "id", 0)) > 0
+    } if is_voice else set()
+
+    ordered: list[int] = []
+    # Include the host first, even before they tap Cheers. Everyone else is
+    # included once, at their first recorded participation or live VC presence.
+    for uid in [starter_id, *session.get("cheers_ids", []), *session.get("going_ids", []), *sorted(voice_ids)]:
+        uid = int(uid)
+        if uid > 0 and uid not in ordered:
+            ordered.append(uid)
+    people: list[tuple[int, tuple[str, ...]]] = []
+    for uid in ordered:
+        labels = []
+        if uid == starter_id:
+            labels.append("Host")
+        if uid in cheers:
+            labels.append("💨 Cheers")
+        if uid in going:
+            labels.append("🙋 Joining")
+        if uid in voice_ids:
+            labels.append("🔊 In VC")
+        people.append((uid, tuple(labels)))
+    return people, voice if is_voice else None, len(voice_ids)
+
+
+def _sesh_member_lines(
+    people: list[tuple[int, tuple[str, ...]]], *,
+    starter_id: int, limit: int = 8, host_named_in_header: bool = False,
+) -> str:
+    """Use exactly one Discord mention per member, never name + mention.
+
+    The public card already names the host in its original description, so
+    its roster line shows 'Host' without printing the same name again.
+    """
+    rendered: list[str] = []
+    for uid, statuses in people[:limit]:
+        subject = "**Host**" if host_named_in_header and uid == starter_id else f"<@{uid}>"
+        parts = tuple(status for status in statuses if status != "Host")
+        suffix = " · ".join(parts)
+        if not suffix:
+            suffix = "Started the sesh" if uid == starter_id else "Here"
+        rendered.append(f"{subject} • {suffix}")
+    if len(people) > limit:
+        rendered.append(f"…and {len(people) - limit} more. Tap **Who's Coming?**")
+    return "\n".join(rendered) if rendered else "Nobody yet"
 
 
 def render_card(guild: discord.Guild, session: Mapping[str, Any], original: discord.Embed) -> discord.Embed:
     embed = original.copy()
     embed.clear_fields()
-    cheers = [int(x) for x in session.get("cheers_ids", [])]
-    going = [int(x) for x in session.get("going_ids", [])]
+    cheers_ids = {int(uid) for uid in session.get("cheers_ids", []) if int(uid) > 0}
+    going_ids = {int(uid) for uid in session.get("going_ids", []) if int(uid) > 0}
+    people, voice, voice_count = _sesh_people(guild, session)
     visible = bool(session.get("show_member_names", True))
+
     embed.add_field(
-        name=f"💨 Cheers • {len(cheers)}",
-        value=_display_members(guild, cheers) if visible else "Participant names are private in this server.",
+        name=f"👥 Sesh crowd • 💨 Cheers {len(cheers_ids)} · 🙋 Joining {len(going_ids)}",
+        value=(
+            _sesh_member_lines(
+                people,
+                starter_id=int(session.get("starter_id", 0)),
+                host_named_in_header=True,
+            )
+            if visible else "Participant names are private in this server."
+        )[:1024],
         inline=False,
     )
     embed.add_field(
-        name=f"🙋 Planning to join • {len(going)}",
-        value=_display_members(guild, going) if visible else "Names hidden by server settings.",
+        name=f"🔊 In voice now • {voice_count}",
+        value=voice.mention if voice is not None else "No voice channel selected yet.",
         inline=False,
     )
-    voice = guild.get_channel(int(session.get("voice_channel_id", 0) or 0))
-    if isinstance(voice, (discord.VoiceChannel, discord.StageChannel)):
-        in_voice = list(getattr(voice, "members", []) or [])
-        listed = [int(member.id) for member in in_voice]
-        embed.add_field(
-            name=f"🔊 In voice now • {len(in_voice)}",
-            value=(f"{voice.mention}\n" + (_display_members(guild, listed) if visible else "Names hidden by server settings."))[:1024],
-            inline=False,
-        )
-    else:
-        embed.add_field(name="🔊 Voice", value="No voice channel selected. Cheers does not mean someone is in VC.", inline=False)
     active = bool(session.get("active", False))
     embed.add_field(
         name="Session",
@@ -153,10 +201,10 @@ class TokeRosterView(discord.ui.View):
         self.guild = guild
         self.session = dict(session)
         self.page = max(0, int(page))
+        people, _, _ = _sesh_people(guild, session)
         self.lines = [
-            f"{i+1}. {discord.utils.escape_markdown(discord.utils.escape_mentions((guild.get_member(int(uid)).display_name if guild.get_member(int(uid)) else 'Member ' + str(uid))))[:80]}"
-            + (" • joining" if int(uid) in set(int(x) for x in session.get("going_ids", [])) else " • cheers")
-            for i, uid in enumerate(session.get("cheers_ids", []))
+            f"{index}. <@{uid}> • " + " · ".join(statuses)
+            for index, (uid, statuses) in enumerate(people, start=1)
         ]
         self.pages = max(1, (len(self.lines) + 14) // 15)
         self.page = min(self.page, self.pages - 1)
@@ -172,7 +220,9 @@ class TokeRosterView(discord.ui.View):
             title="💨 Who's Coming?",
             description="\n".join(self.lines[start:start+15]) or "Nobody has responded yet.",
             color=discord.Color.green(),
-        ).set_footer(text=f"Page {self.page+1}/{self.pages} • People in VC are listed separately on the session card.")
+        ).set_footer(
+            text=f"Page {self.page+1}/{self.pages} • Each person is listed once with their current status."
+        )
 
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, custom_id="dank:toke:roster:prev")
     async def prev(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
