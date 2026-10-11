@@ -1529,7 +1529,7 @@ async def _cleanup_delivered_proxy_post(message: discord.Message, *, enabled: bo
     if not enabled:
         return
     try:
-        await message.delete(reason="Dank Shield Share Router: successfully delivered proxy post")
+        await message.delete()
         return
     except discord.NotFound:
         return
@@ -1603,9 +1603,7 @@ async def _sweep_delivered_cleanup_once(bot: Any) -> int:
         if me is None or not source.permissions_for(me).manage_messages:
             continue
         try:
-            await source.get_partial_message(message_id).delete(
-                reason="Dank Shield Share Router: retry delivered proxy cleanup"
-            )
+            await source.get_partial_message(message_id).delete()
         except discord.NotFound:
             completed.add((guild_id, source_id, message_id))
         except (discord.Forbidden, discord.HTTPException):
