@@ -324,3 +324,45 @@ def test_failed_lifecycle_write_remains_retriable(monkeypatch):
     monkeypatch.setattr(ticket_events, "_mark_deleted_after_external_channel_delete", fail_to_write)
     result = run(ticket_events.reconcile_missing_ticket_channels_for_guild(FakeGuild()))
     assert result["deleted"] == 0 and result["uncertain"] == 1
+
+
+def test_stats_worker_reconciles_before_reading_ticket_counts(monkeypatch):
+    from stoney_verify import security_stats
+
+    calls = []
+    guild = FakeGuild()
+    monkeypatch.setattr(security_stats, "_ACTIVE_DISPLAY_GUILDS", {guild.id})
+    monkeypatch.setattr(
+        security_stats, "bot",
+        SimpleNamespace(get_guild=lambda gid: guild if gid == guild.id else None),
+    )
+
+    async def reconcile(received_guild):
+        assert received_guild is guild
+        calls.append("reconcile")
+        return {"checked": 1, "deleted": 1, "uncertain": 0, "rest_checks": 1}
+
+    async def refresh(received_guild):
+        assert received_guild is guild
+        calls.append("refresh")
+        return True
+
+    monkeypatch.setattr(ticket_events, "reconcile_missing_ticket_channels_for_guild", reconcile)
+    monkeypatch.setattr(security_stats, "refresh_security_stats_display", refresh)
+    run(security_stats.refresh_all_security_stats_displays.coro())
+    assert calls == ["reconcile", "refresh"]
+
+
+def test_deleted_record_not_misrepresented_as_completed_close():
+    from stoney_verify import security_stats
+
+    result = security_stats._ticket_status_counts_from_rows([
+        {"status": "closed"},
+        {"status": "deleted"},
+        {"status": "claimed", "claimed_by": "22"},
+    ])
+    assert result == {
+        "open_tickets": 1,
+        "claimed_tickets": 1,
+        "closed_tickets": 1,
+    }
