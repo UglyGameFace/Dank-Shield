@@ -100,6 +100,8 @@ def _is_direct_media_url(value: str) -> bool:
     parsed = urlsplit(text)
     host = str(parsed.hostname or "").lower()
     path = str(parsed.path or "").lower()
+    if path.endswith((".mp4", ".webm", ".mov", ".m3u8")):
+        return False  # Videos cannot be embedded as an image.
     if path.endswith(_TOKE_MEDIA_EXTENSIONS):
         return True
     if host in {"cdn.discordapp.com", "media.discordapp.net", "media.tenor.com", "i.giphy.com"}:
@@ -113,6 +115,9 @@ def _is_stable_provider_media_url(value: str) -> bool:
     """Avoid embedding short-lived Discord CDN URLs from deleted draft posts."""
     parsed = urlsplit(str(value or ""))
     host = str(parsed.hostname or "").lower()
+    path = str(parsed.path or "").lower()
+    if not path.endswith(_TOKE_MEDIA_EXTENSIONS):
+        return False
     return parsed.scheme.lower() == "https" and (
         host == "media.tenor.com"
         or host == "i.giphy.com"
