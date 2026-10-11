@@ -1,6 +1,29 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — DANK-STATS-NATIVE-TICKET-DELETE-20261011
+## CURRENT ACTIVE TASK — VERIFY-UNVERIFIED-REMINDERS-20261011
+
+**Force switch (Oct 11):** Implement Dank Shield Unverified Member Reminders, starting with existing per-guild Simple Verify and its verified/unverified role truth. No separate verification authority; no unrelated feature work.
+
+**Branch:** `feat/verify-unverified-reminders-20261011`, based on documented Discloud branch `aaa-cinema-pre-pregateway-bind` at `50f5f69dbdc6f99ecc383cf67644e328b1a015bc` after Server Stats PR #509 merged. Discloud's actual deployed revision remains unconfirmed.
+
+**Status:** Implementation and regression candidate on branch; draft PR, exact-head CI and live Discord/Discloud/Supabase acceptance still required. Nothing has been enabled in a server.
+
+**Execution path / source of truth:** Existing `/verify` staff center -> opt-in `Unverified Reminders` manager; `guild_config` CAS per-guild settings -> `verification_modes.basic_verify_allowed_for_guild` -> `role_truth.member_is_pending_verification` -> Discord fresh member role check -> service-role-only Supabase atomic claim -> private DM with saved verify-channel/panel link. Native worker installed once in `app._start_workers_once`; no new verification state model.
+
+**Scope:** Delay (1–720h), repeat (12–720h), max (1–5 per join), optional wording, previews and enable/disable with explicit per-server authorization. Default disabled; configured unverified/verified roles and exact saved verification channel required. Paginated member scans, bounded guild/pass and DM claims, no public pings, no automatic fallback to Voice/ID Verify, and fail-closed on DB/Discord errors.
+
+**Changes:** `stoney_verify/verification_reminders.py`, `commands_ext/public_verify_reminder_ui.py`, app + Verify Center integration, SQL migration `20261011000100_verify_unverified_reminders.sql`, targeted tests.
+
+**Validation / blockers:** Run focused and full GitHub Actions at exact head, review final diff; apply Supabase migration before enabling (RPC + ledger probe fail closed), then verify one overdue pending member receives a DM, already-verified/bot/staff/missing-role members do not, configured link resolves, repeat cooldown/attempt cap work through restart, and disabled/DB-down state sends no message. Actual Discloud SHA, migration and live Discord tests are not yet confirmed. Avoid enabling all servers automatically.
+
+**Next:** Finish focused tests/CI, address failures and diff review; verify live migration and canary only after CI.
+
+### SUSPENDED — Server Stats accuracy (PR #509 merged)
+PR #509 `fix/dank-stats-ticket-reconciliation-20261011` was merged Oct 11 to `aaa-cinema-pre-pregateway-bind` at `50f5f69dbdc6f99ecc383cf67644e328b1a015bc`. It adds safe native-delete reconciliation in ticket repository/events, Server Stats refresh loop/staff actions and regression tests. Prior report: 3,150 tests and relevant checks passed; exact live Discloud runtime branch/SHA and native delete online/offline, Refresh Now, DB failure/recovery still require acceptance. No Server Stats code changed in this task. Preserve original detail below.
+
+---
+
+## PREVIOUS TASK — DANK-STATS-NATIVE-TICKET-DELETE-20261011
 
 **User-approved force switch:** "Fix Dank Shield Server Stats accuracy" because staff can delete ticket channels directly in Discord, missed events or bot downtime can leave stored counters stale, and all displayed counters must remain grounded in authoritative data.
 
