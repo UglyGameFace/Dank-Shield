@@ -201,6 +201,133 @@ def test_selector_rejects_oversize_and_private_progressive_urls() -> None:
     assert resolved.reason == "no_safe_progressive_format"
 
 
+def test_selector_prefers_h264_aac_mp4_over_higher_resolution_hevc_av1() -> None:
+    # A larger HEVC/AV1 file may upload successfully while failing inline on
+    # some clients; prefer the available widely compatible format.
+    for codec in ("hvc1.1.6.L93", "av01.0.08M.08"):
+        info = {"formats": [
+            {
+                "url": "https://cdn.example.com/newer.mp4",
+                "protocol": "https", "ext": "mp4",
+                "vcodec": codec, "acodec": "aac",
+                "height": 2160, "filesize": 9_000_000,
+            },
+            {
+                "url": "https://cdn.example.com/compatible.mp4",
+                "protocol": "https", "ext": "mp4",
+                "vcodec": "avc1.64001f", "acodec": "mp4a.40.2",
+                "height": 720, "filesize": 7_000_000,
+            },
+        ]}
+        result = media.select_media_resolution(
+            info, source_url="https://vimeo.com/123", provider="vimeo",
+            max_bytes=20_000_000,
+        )
+        assert result.delivery == "progressive"
+        assert result.media_url.endswith("/compatible.mp4")
+
+
+def test_selector_prefers_known_sized_candidate_over_uncertain_same_codec() -> None:
+    info = {"formats": [
+        {
+            "url": "https://cdn.example.com/unknown.mp4",
+            "protocol": "https", "ext": "mp4",
+            "vcodec": "h264", "acodec": "aac",
+            "height": 1080,
+        },
+        {
+            "url": "https://cdn.example.com/known.mp4",
+            "protocol": "https", "ext": "mp4",
+            "vcodec": "h264", "acodec": "aac",
+            "height": 720, "filesize": 6_000_000,
+        },
+    ]}
+    result = media.select_media_resolution(
+        info, source_url="https://streamable.com/abc", provider="streamable",
+        max_bytes=20_000_000,
+    )
+    assert result.media_url.endswith("/known.mp4")
+    assert result.known_size == 6_000_000
+
+
+def test_merge_prefers_h264_aac_pair_over_higher_res_unsupported_codecs() -> None:
+    info = {"formats": [
+        {
+            "url": "https://cdn.example.com/hevc-only.mp4",
+            "protocol": "https", "ext": "mp4", "vcodec": "hevc",
+            "acodec": "none", "height": 2160, "filesize": 9_000_000,
+        },
+        {
+            "url": "https://cdn.example.com/h264-only.mp4",
+            "protocol": "https", "ext": "mp4", "vcodec": "h264",
+            "acodec": "none", "height": 720, "filesize": 6_000_000,
+        },
+        {
+            "url": "https://cdn.example.com/opus.webm",
+            "protocol": "https", "ext": "webm", "vcodec": "none",
+            "acodec": "opus", "abr": 190, "filesize": 1_000_000,
+        },
+        {
+            "url": "https://cdn.example.com/aac.m4a",
+            "protocol": "https", "ext": "m4a", "vcodec": "none",
+            "acodec": "aac", "abr": 128, "filesize": 1_000_000,
+        },
+    ]}
+    result = media.select_media_resolution(
+        info, source_url="https://youtu.be/abc123", provider="youtube",
+        max_bytes=20_000_000,
+    )
+    assert result.delivery == "merge"
+    assert result.media_url.endswith("/h264-only.mp4")
+    assert result.audio_url.endswith("/aac.m4a")
+
+
+def test_resolve_first_media_prefers_later_remuxable_over_earlier_link(
+    monkeypatch,
+) -> None:
+    # A social extractor failing must not discard a later legitimate manifest.
+    monkeypatch.setattr(media, "_extract_info_sync", lambda _: None)
+
+    async def scenario():
+        return await media.resolve_first_media(
+            "https://www.youtube.com/watch?v=unknown "
+            "https://cdn.example.com/approved.m3u8?token=xyz",
+            max_bytes=20_000_000,
+        )
+
+    result = asyncio.run(scenario())
+    assert result is not None
+    assert result.delivery == "manifest"
+    assert result.media_url.endswith("approved.m3u8?token=xyz")
+
+
+def test_resolve_first_media_returns_progressive_even_after_manifest() -> None:
+    async def scenario():
+        return await media.resolve_first_media(
+            "https://cdn.example.com/master.mpd "
+            "https://cdn.example.com/final.mp4",
+            max_bytes=20_000_000,
+        )
+
+    result = asyncio.run(scenario())
+    assert result is not None
+    assert result.delivery == "progressive"
+    assert result.media_url.endswith("final.mp4")
+
+
+def test_media_url_normalization_rejects_credential_and_nonstandard_port_links() -> None:
+    for value in (
+        "https://user:password@www.youtube.com/watch?v=abc123",
+        "https://www.youtube.com:8080/watch?v=abc123",
+        "https://127.0.0.1/video.mp4",
+        "https://cdn.example.com:8443/test.mp4",
+    ):
+        assert not media.provider_for_url(value)
+    assert media.canonicalize_media_url("https://cdn.example.com/final.mp4]") == (
+        "https://cdn.example.com/final.mp4"
+    )
+
+
 def test_direct_media_resolves_without_yt_dlp(monkeypatch) -> None:
     def should_not_extract(_url: str):
         raise AssertionError("direct media must not invoke yt-dlp")
