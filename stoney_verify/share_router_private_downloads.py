@@ -17,8 +17,10 @@ import discord
 from .share_router_media_network import is_safe_media_download_url
 from .share_router_media_resolver import (
     MEDIA_URL_RE,
+    MediaResolution,
     canonicalize_media_url,
     provider_for_url,
+    provider_label,
     resolve_first_media,
 )
 from .share_router_media_remux import remux_media_for_discord
@@ -81,6 +83,58 @@ async def _reply_problem(message: discord.Message, text: str) -> None:
         pass
 
 
+_PUBLIC_FAILURE_TEXT = {
+    "extract_failed": "The provider did not return usable video information.",
+    "extractor_unavailable": "The media extractor is not installed or could not start.",
+    "provider_bot_verification": "The provider requested bot verification from the download server.",
+    "provider_private_or_restricted": "The provider has restricted this video.",
+    "provider_login_required": "The provider requires sign-in or verification.",
+    "provider_rate_limited": "The provider is limiting requests from this server.",
+    "provider_forbidden": "The media provider refused the server's request.",
+    "provider_video_unavailable": "The video is unavailable from the provider.",
+    "provider_extract_timeout": "The provider did not return video information before the timeout.",
+    "no_safe_progressive_format": "No supported downloadable format could be selected within the current limits.",
+    "separate_audio_video_requires_merge": "Separate audio and video tracks could not be prepared.",
+    "fragmented_media_requires_controlled_download": "The provider returned fragmented media that could not be prepared.",
+    "live_stream_requires_player": "Live video requires an external player.",
+    "provider_disabled": "This provider is disabled by the bot's media policy.",
+    "unsupported_provider": "This provider is not supported.",
+    "media_transfer_failed": "The selected video could not be fetched within the transfer constraints.",
+    "media_remux_failed": "The selected video could not be assembled into a compatible file.",
+    "ffmpeg_unavailable": "The server's FFmpeg media processor is unavailable.",
+}
+
+
+def download_failure_message(
+    resolution: MediaResolution, *,
+    reason: str,
+    hosting_ready: bool,
+    hosting_reason: str,
+) -> str:
+    """Only stable public reason codes; never expose extractor errors or CDN tokens."""
+    category = reason if reason in _PUBLIC_FAILURE_TEXT else "extract_failed"
+    message = (
+        "⚠️ Dank Shield could not prepare a video file.\n"
+        f"Source: {provider_label(resolution.provider)}\n"
+        f"Reason: {_PUBLIC_FAILURE_TEXT[category]} (`{category}`)\n\n"
+        "No video was downloaded or hosted. "
+        "This is the original source, not a downloadable attachment:\n"
+        + resolution.canonical_url
+    )
+    if not hosting_ready:
+        message += (
+            "\n\nLarge-file hosting is also unavailable: "
+            + (hosting_reason or "Not ready")
+            + ". Staff can check Share Router → Download Settings → Test HTTPS Hosting."
+        )
+    else:
+        message += (
+            "\n\nLarge-file hosting is ready locally, but no media file "
+            "was available to stage. Staff can check Share Router → Test Provider."
+        )
+    return message
+
+
 async def handle_download_message(message: discord.Message) -> bool:
     """Process a request in the chosen download channel. Returns handled flag."""
     if message.guild is None or not isinstance(message.author, discord.Member):
@@ -128,7 +182,7 @@ async def handle_download_message(message: discord.Message) -> bool:
         async with _gate():
             # Only prepare larger media when HTTPS hosting and bounded storage
             # are operational. A disabled host retains the original DM flow.
-            hosting_ready, _ = delivery_status()
+            hosting_ready, hosting_reason = delivery_status()
             download_cap = file_max_bytes() if hosting_ready else DM_ATTACHMENT_BYTES
             resolution = await resolve_first_media(url, max_bytes=download_cap)
             if resolution is None:
@@ -140,13 +194,23 @@ async def handle_download_message(message: discord.Message) -> bool:
             from .share_router_runtime import _download_trusted_video, RoutedVideo
 
             video: Any = None
+            failure_reason = resolution.reason or "extract_failed"
             if resolution.progressive:
                 video = await _download_trusted_video(
                     resolution.media_url,
                     max_bytes=download_cap,
                     request_headers=dict(resolution.request_headers),
                 )
+                if video is None:
+                    failure_reason = "media_transfer_failed"
             elif resolution.delivery in {"manifest", "merge"}:
+                # Distinguish a missing FFmpeg executable from provider metadata
+                # failure; do not speculate about codec restrictions.
+                import shutil
+                failure_reason = (
+                    "ffmpeg_unavailable" if not shutil.which("ffmpeg")
+                    else "media_remux_failed"
+                )
                 staged = await remux_media_for_discord(
                     resolution, max_bytes=download_cap,
                 )
@@ -162,6 +226,7 @@ async def handle_download_message(message: discord.Message) -> bool:
                     except Exception:
                         staged.cleanup()
 
+            delivered_file_or_hosted_link = False
             try:
                 if video is not None:
                     stored_id = ""
@@ -174,6 +239,7 @@ async def handle_download_message(message: discord.Message) -> bool:
                                     file=video.file,
                                     allowed_mentions=discord.AllowedMentions.none(),
                                 )
+                                delivered_file_or_hosted_link = True
                             except discord.HTTPException as exc:
                                 # Discord can reject uploads regardless of the
                                 # advertised maximum; retry as hosted link only
@@ -221,6 +287,7 @@ async def handle_download_message(message: discord.Message) -> bool:
                                         "⏳ Both links expire in 1 hour.",
                                         allowed_mentions=discord.AllowedMentions.none(),
                                     )
+                                    delivered_file_or_hosted_link = True
                                 except Exception:
                                     await revoke_video(stored_id)
                                     raise
@@ -233,16 +300,15 @@ async def handle_download_message(message: discord.Message) -> bool:
                         if path:
                             Path(path).unlink(missing_ok=True)
                 else:
-                    # A DM URL is not a DM attachment. Never imply an oversized
-                    # file was actually uploaded or that a provider link is
-                    # guaranteed to offer direct downloads.
+                    # Nothing was downloaded or staged. Name the actual failure
+                    # stage, not Discord's DM upload limit or hypothetical config.
                     await message.author.send(
-                        "🔗 I couldn't attach this video within Discord's DM "
-                        "size/format limits. You can open the original source "
-                        "in your browser:\n"
-                        + resolution.canonical_url
-                        + "\n\nThis is a link, not a downloaded video file. "
-                        "A private large-file download service isn't configured yet.",
+                        download_failure_message(
+                            resolution,
+                            reason=failure_reason,
+                            hosting_ready=hosting_ready,
+                            hosting_reason=hosting_reason,
+                        ),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
             except discord.Forbidden:
@@ -260,8 +326,11 @@ async def handle_download_message(message: discord.Message) -> bool:
                 )
                 return True
 
-            # Only delete a submission once a DM was actually delivered.
-            # Do not erase it if Manage Messages is unavailable.
+            # Do not delete the original source if only an error/source link
+            # was DMed. The member may need it to retry after a provider outage.
+            # Only actual attachments or staged hosted links count as delivery.
+            if not delivered_file_or_hosted_link:
+                return True
             try:
                 me = message.guild.me
                 if me is not None and channel.permissions_for(me).manage_messages:
