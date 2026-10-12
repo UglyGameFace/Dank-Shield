@@ -256,6 +256,16 @@ async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discor
             if not current.get("active", False):
                 await toke_sessions.mark_closed_synced(int(session["guild_id"]), int(session["message_id"]))
             return False
+    if current.get("media_layout") == "thumbnail_v2":
+        view = TokeThumbnailLayout(
+            guild, current, intro=_thumbnail_intro(message, current),
+        )
+        await message.edit(view=view, allowed_mentions=discord.AllowedMentions.none())
+        if not current.get("active", False):
+            await toke_sessions.mark_closed_synced(
+                int(current["guild_id"]), int(current["message_id"])
+            )
+        return True
     existing = message.embeds or []
     if not existing:
         return False
@@ -274,6 +284,93 @@ async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discor
     if not active:
         await toke_sessions.mark_closed_synced(int(current["guild_id"]), int(current["message_id"]))
     return True
+
+
+def _thumbnail_intro(message: discord.Message, session: Mapping[str, Any]) -> str:
+    """Retain the original member note without putting message text into storage."""
+    def text_displays(node: Any):
+        if getattr(node, "content", None):
+            yield str(node.content)
+        for nested in getattr(node, "children", ()) or ():
+            yield from text_displays(nested)
+
+    for component in getattr(message, "components", ()) or ():
+        for content in text_displays(component):
+            if content.startswith("## 💨 Toke Time"):
+                return content
+    # Only a defensive fallback for a malformed/older Discord component payload.
+    return (
+        "## 💨 Toke Time\n"
+        f"<@&{int(session['notify_role_id'])}>\n"
+        f"<@{int(session['starter_id'])}> is calling the sesh crowd."
+    )
+
+
+class TokeThumbnailLayout(discord.ui.LayoutView):
+    """Compact V2 session with media as a Section thumbnail, not a giant file.
+
+    Using an attachment:// inside an editable *embed* is known to duplicate
+    media on Discord PATCH. V2's native Thumbnail retains the media within
+    the card while the text and controls are edited in the same layout.
+    Older embed cards keep the existing TokeCheersView update path.
+    """
+
+    def __init__(
+        self, guild: discord.Guild, session: Mapping[str, Any], *,
+        intro: str | None = None, allow_pending_controls: bool = False,
+    ) -> None:
+        super().__init__(timeout=None)
+        filename = str(session.get("media_filename", "") or "")
+        if not filename or "/" in filename or "\\\\" in filename:
+            raise ValueError("Toke thumbnail attachment filename is invalid.")
+        intro = intro or (
+            "## 💨 Toke Time\n"
+            f"<@&{int(session['notify_role_id'])}>\n"
+            f"<@{int(session['starter_id'])}> is calling the sesh crowd."
+        )
+        card = render_card(guild, session, discord.Embed(title="💨 Toke Time"))
+        active = bool(session.get("active", False)) and float(session.get("expires_at", 0) or 0) > time.time()
+        if not active:
+            intro = intro.replace("## 💨 Toke Time", "## 💨 Toke Time · Sesh Ended", 1)
+            intro = intro.replace("is calling the sesh crowd.", "hosted this sesh.")
+        container = discord.ui.Container(
+            discord.ui.Section(
+                discord.ui.TextDisplay(intro[:1200]),
+                accessory=discord.ui.Thumbnail(f"attachment://{filename}"),
+            ),
+            discord.ui.TextDisplay(
+                "\n\n".join(f"**{field.name}**\n{field.value}" for field in card.fields)[:2400]
+            ),
+            discord.ui.TextDisplay("Only members with the configured /toke notification role were notified."),
+            accent_color=discord.Color.green() if active else discord.Color.dark_grey(),
+        )
+        if active or allow_pending_controls:
+            actions = TokeCheersView(
+                int(session["starter_id"]), int(session["starter_role_id"]),
+                voice_channel_id=int(session.get("voice_channel_id", 0) or 0),
+                active=True, guild_id=int(session["guild_id"]),
+                message_id=int(session["message_id"]),
+            )
+            controls: list[discord.ui.Button] = []
+            for old in actions.children:
+                if not isinstance(old, discord.ui.Button):
+                    continue
+                if old.style is discord.ButtonStyle.link:
+                    controls.append(discord.ui.Button(
+                        label=old.label, emoji=old.emoji, style=old.style, url=old.url
+                    ))
+                    continue
+                button = discord.ui.Button(
+                    label=old.label, emoji=old.emoji, style=old.style,
+                    custom_id=old.custom_id,
+                )
+                async def callback(interaction: discord.Interaction, source: discord.ui.Button = old) -> None:
+                    await source.callback(interaction)
+                button.callback = callback
+                controls.append(button)
+            container.add_item(discord.ui.ActionRow(*controls[:4]))
+            container.add_item(discord.ui.ActionRow(*controls[4:]))
+        self.add_item(container)
 
 
 class TokeRosterView(discord.ui.View):
@@ -910,14 +1007,17 @@ async def restore_active_views(bot: Any) -> int:
         gid, mid = int(session["guild_id"]), int(session["message_id"])
         if (gid, mid) in _REGISTERED or bot.get_guild(gid) is None:
             continue
-        bot.add_view(
-            TokeCheersView(
+        view = (
+            TokeThumbnailLayout(
+                bot.get_guild(gid), session, allow_pending_controls=True,
+            ) if session.get("media_layout") == "thumbnail_v2"
+            else TokeCheersView(
                 int(session["starter_id"]), int(session["starter_role_id"]),
                 voice_channel_id=int(session.get("voice_channel_id", 0)),
                 guild_id=gid, message_id=mid, active=True,
-            ),
-            message_id=mid,
+            )
         )
+        bot.add_view(view, message_id=mid)
         _REGISTERED.add((gid, mid))
         count += 1
     return count
