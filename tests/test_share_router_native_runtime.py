@@ -709,7 +709,7 @@ def test_facebook_failed_hd_tries_one_sd_before_link_fallback(monkeypatch) -> No
 
 def test_facebook_backup_never_bypasses_host_security(monkeypatch) -> None:
     from stoney_verify.share_router_media_resolver import MediaResolution
-    alt = "https://private.invalid/video.mp4"
+    alt = "http://127.0.0.1/private.mp4"
     resolution = MediaResolution(
         source_url="https://www.facebook.com/reel/1002",
         canonical_url="https://www.facebook.com/reel/1002", identity="fb:1002",
@@ -728,7 +728,7 @@ def test_facebook_backup_never_bypasses_host_security(monkeypatch) -> None:
     assert asyncio.run(
         share_runtime._download_resolved_progressive(resolution, max_bytes=1024)
     ) is None
-    assert calls == [resolution.media_url, alt]
+    assert calls == [resolution.media_url]  # Unsafe alternates are never fetched.
 
 
 def test_runtime_native_video_relay_is_bounded_and_fail_open() -> None:
