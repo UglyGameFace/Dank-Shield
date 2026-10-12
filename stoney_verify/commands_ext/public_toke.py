@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 from stoney_verify import toke_sessions
 from stoney_verify.toke_live_ui import (
-    TokeCheersView, begin_capture, choose_voice, media_url_from_message, pending_for, render_card, settings_from_config,
+    TokeCheersView, TokeThumbnailLayout, begin_capture, choose_voice, media_url_from_message, pending_for, render_card, settings_from_config,
 )
 
 import discord
@@ -329,10 +329,9 @@ async def _publish_toke(
         upload_file: Optional[discord.File] = None
         direct = bool(clean_media and _is_direct_media_url(clean_media))
         if upload is not None:
-            # Discord may display an attachment both as its own preview and as
-            # attachment:// embed media after any message edit (Cheers, VC,
-            # expiry, etc.). Toke cards are edited routinely, so use the
-            # native attachment preview ONCE instead of duplicating it.
+            # Editable attachment:// embeds duplicate after PATCH, but naked
+            # attachments display far too large above the session card.
+            # Components V2 offer an inline thumbnail that can be refreshed.
             upload_file = await upload.to_file()
         elif direct:
             # Provider/CDN URLs do not require a message attachment and remain
@@ -344,33 +343,49 @@ async def _publish_toke(
             # Keep the fallback link clickable inside the card instead.
             embed.description += f"\n\n[Open shared GIF or image]({clean_media})"
 
-        content = notify_role.mention
         voice_id = choose_voice(guild, member, settings)
-        view = TokeCheersView(
-            member.id, starter_role.id, voice_channel_id=voice_id, guild_id=guild.id,
-        )
-        payload: dict[str, Any] = {
-            "content": content,
-            "embed": embed,
-            "view": view,
-            "allowed_mentions": _toke_allowed_mentions(notify_role),
+        session_data: dict[str, Any] = {
+            "guild_id": guild.id,
+            "message_id": 0,
+            "channel_id": channel.id,
+            "starter_id": member.id,
+            "starter_role_id": starter_role.id,
+            "notify_role_id": notify_role.id,
+            "voice_channel_id": voice_id,
+            "max_interested": int(settings["max_interested"]),
+            "show_member_names": bool(settings["show_member_names"]),
+            "expires_at": time.time() + int(settings["session_minutes"]) * 60,
         }
         if upload_file is not None:
-            payload["file"] = upload_file
+            session_data["media_layout"] = "thumbnail_v2"
+            session_data["media_filename"] = upload_file.filename
+            pending_card = {**session_data, "active": True, "cheers_ids": [], "going_ids": []}
+            intro = (
+                "## 💨 Toke Time\n"
+                f"{notify_role.mention}\n"
+                f"**{discord.utils.escape_markdown(member.display_name)}** is calling the sesh crowd."
+                + (f"\n\n> {discord.utils.escape_markdown(_clean_member_message(message_text))}" if message_text else "")
+            )
+            # Discord V2 messages cannot mix content/embeds with layout views.
+            # The single authorized role ping is inside the header TextDisplay.
+            payload: dict[str, Any] = {
+                "view": TokeThumbnailLayout(guild, pending_card, intro=intro),
+                "file": upload_file,
+                "allowed_mentions": _toke_allowed_mentions(notify_role),
+            }
+        else:
+            payload = {
+                "content": notify_role.mention,
+                "embed": embed,
+                "view": TokeCheersView(
+                    member.id, starter_role.id, voice_channel_id=voice_id, guild_id=guild.id,
+                ),
+                "allowed_mentions": _toke_allowed_mentions(notify_role),
+            }
         sent = await channel.send(**payload)
         try:
-            session = await toke_sessions.save_new({
-                "guild_id": guild.id,
-                "message_id": sent.id,
-                "channel_id": channel.id,
-                "starter_id": member.id,
-                "starter_role_id": starter_role.id,
-                "notify_role_id": notify_role.id,
-                "voice_channel_id": voice_id,
-                "max_interested": int(settings["max_interested"]),
-                "show_member_names": bool(settings["show_member_names"]),
-                "expires_at": time.time() + int(settings["session_minutes"]) * 60,
-            })
+            session_data["message_id"] = sent.id
+            session = await toke_sessions.save_new(session_data)
         except Exception:
             # A card that cannot track participants must not remain posted with
             # a broken button. Log and attempt to undo the posted announcement.
@@ -381,13 +396,16 @@ async def _publish_toke(
             raise
         _TOKE_USER_LAST[(int(guild.id), int(member.id))] = monotonic()
         _TOKE_GUILD_LAST[int(guild.id)] = monotonic()
-        try:
-            await sent.edit(embed=render_card(guild, session, embed), view=TokeCheersView(
-                member.id, starter_role.id, guild_id=guild.id, message_id=sent.id,
-                voice_channel_id=voice_id,
-            ))
-        except discord.HTTPException as exc:
-            print(f"[toke] initial card status edit failed guild={guild.id} message={sent.id}: {exc}")
+        if upload_file is None:
+            try:
+                await sent.edit(embed=render_card(guild, session, embed), view=TokeCheersView(
+                    member.id, starter_role.id, guild_id=guild.id, message_id=sent.id,
+                    voice_channel_id=voice_id,
+                ))
+            except discord.HTTPException as exc:
+                print(f"[toke] initial card status edit failed guild={guild.id} message={sent.id}: {exc}")
+        # No first PATCH for uploaded images; the V2 layout already shows
+        # its empty attendance and its controls before the first interaction.
         return sent
 
 
