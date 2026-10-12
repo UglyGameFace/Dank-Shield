@@ -861,7 +861,18 @@ async def _handle_panel_button_core(i: discord.Interaction) -> None:
         return await _ephemeral(i, f"You already have an open ticket: {existing.mention}")
     _parent, _staff, blockers, warnings = await _ticket_setup_preflight(guild)
     if blockers:
-        return await _ephemeral(i, "❌ Ticket setup needs repair before members can open tickets.", embed=_setup_problem_embed(guild, blockers, warnings))
+        # This button is available to unverified members. Do not disclose
+        # staff role/channel IDs, permission gaps, or repair commands to them.
+        if _staff_check(i):
+            return await _ephemeral(
+                i,
+                "❌ Ticket setup needs repair before tickets can be opened.",
+                embed=_setup_problem_embed(guild, blockers, warnings),
+            )
+        return await _ephemeral(
+            i,
+            "❌ Tickets are temporarily unavailable. Please contact server staff.",
+        )
     try:
         rows, warning = await asyncio.wait_for(_load_rows(guild), timeout=6.0)
     except asyncio.TimeoutError:
@@ -870,11 +881,16 @@ async def _handle_panel_button_core(i: discord.Interaction) -> None:
     session_id = _new_menu_session(guild.id, member.id)
     embed = discord.Embed(title="Create Ticket", description="Choose the type of ticket you want to open.", color=discord.Color.blurple())
     embed.set_footer(text="Pick a category. You can review it before anything is created. Newest menu wins.")
-    notices = list(warnings)
-    if warning:
-        notices.append(_short(warning, 900))
-    if notices:
-        embed.add_field(name="Setup Notice", value="\n".join(f"• {x}" for x in dict.fromkeys(notices))[:1024], inline=False)
+    if _staff_check(i):
+        notices = list(warnings)
+        if warning:
+            notices.append(_short(warning, 900))
+        if notices:
+            embed.add_field(
+                name="Setup Notice",
+                value="\n".join(f"• {x}" for x in dict.fromkeys(notices))[:1024],
+                inline=False,
+            )
     await _ephemeral(i, "Choose a ticket type.", embed=embed, view=TicketSelectView(rows, member.id, session_id))
 
 
