@@ -31,6 +31,7 @@ def test_expiring_token_watch_download_range_and_revoke(tmp_path, monkeypatch):
 
     async def scenario():
         content = b"x" * 2048 + b"video" + b"y" * 2048
+        monkeypatch.setattr(links, "link_egress_budget", lambda: len(content) * 2 + 4)
         url_watch, url_download, ident = await links.stage_video(
             io.BytesIO(content), ttl_seconds=3600, ext=".mp4",
         )
@@ -64,6 +65,10 @@ def test_expiring_token_watch_download_range_and_revoke(tmp_path, monkeypatch):
                 async with client.get(prefix + "/watch.mp4", headers={"Range": "bytes=2-5"}) as response:
                     assert response.status == 206
                     assert await response.read() == content[2:6]
+                async with client.get(prefix + "/watch.mp4") as response:
+                    assert response.status == 429  # Signed link cannot exceed egress budget.
+                async with client.head(prefix + "/watch.mp4") as response:
+                    assert response.status == 200  # HEAD does not spend bytes.
                 async with client.get(prefix.replace(token, "1" * 64) + "/watch.mp4") as response:
                     assert response.status == 404
                 async with client.get(prefix + "/not-valid") as response:
