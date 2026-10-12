@@ -103,14 +103,29 @@ def test_uploaded_gif_is_compact_inline_thumbnail_without_editable_embed(monkeyp
     channel = asyncio.run(_run_publish(monkeypatch, upload=Upload()))
     sent = channel.sent_payload
     assert sent is not None
-    assert sent["file"].filename == "sesh.gif"
+    assert sent["file"].filename.startswith("toke-55378-7839-")
+    assert sent["file"].filename.endswith(".gif")
     assert sent["view"].v2 is True
-    assert sent["view"].filename == "sesh.gif"
+    assert sent["view"].filename == sent["file"].filename
     assert "## 💨 Toke Time" in sent["view"].intro
     assert "<@&555>" in sent["view"].intro
     assert "where's the sesh" in sent["view"].intro
     assert "content" not in sent and "embed" not in sent
     assert channel.edited_payload is None  # No first PATCH of embedded media.
+
+
+def test_mobile_filename_is_normalized_but_gif_mime_is_preserved(monkeypatch):
+    class Upload:
+        filename = "mystery 🚀 photo..bin"
+        content_type = "image/gif; charset=binary"
+        async def to_file(self):
+            return SimpleNamespace(filename=self.filename)
+    channel = asyncio.run(_run_publish(monkeypatch, upload=Upload()))
+    filename = channel.sent_payload["file"].filename
+    assert filename.isascii()
+    assert filename.startswith("toke-55378-7839-")
+    assert filename.endswith(".gif")
+    assert channel.sent_payload["view"].filename == filename
 
 
 def test_public_tenor_gif_is_embedded_only_without_native_attachment(monkeypatch):
