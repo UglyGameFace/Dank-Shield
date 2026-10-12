@@ -9,6 +9,7 @@ unrelated command registration failure skips the public ticket command module.
 """
 
 import asyncio
+import copy
 import os
 import time
 from typing import Any, Mapping
@@ -461,7 +462,7 @@ def _public_ticket_embed_without_internal_details(message: Any) -> discord.Embed
     ]
     if not indices:
         return None
-    cleaned = original.copy()
+    cleaned = copy.deepcopy(original)
     for index in reversed(indices):
         cleaned.remove_field(index)
     return cleaned
