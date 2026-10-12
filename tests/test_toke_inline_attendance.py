@@ -46,6 +46,8 @@ def test_planning_stays_until_present_then_departure_retires_it(storage):
         left = await toke_sessions.reconcile_voice(100, 200, set())
         assert left["voice_seen_ids"] == []
         assert left["cheers_ids"] == left["going_ids"] == []
+        assert left["past_cheers_ids"] == [45]
+        assert left["past_going_ids"] == [45]
         other = await toke_sessions.get(101, 200)
         assert other["cheers_ids"] == []
         # A person can RSVP again after attending and leaving.
@@ -53,6 +55,29 @@ def test_planning_stays_until_present_then_departure_retires_it(storage):
         assert not error and again["going_ids"] == [45]
         again = await toke_sessions.reconcile_voice(100, 200, set())
         assert again["going_ids"] == [45]
+        assert again["past_going_ids"] == [45]
+    asyncio.run(run())
+
+
+
+def test_lifetime_response_summary_preserves_departed_member_without_showing_live(storage):
+    async def run():
+        await toke_sessions.save_new(_session())
+        await toke_sessions.react(100, 200, 45, "going")
+        await toke_sessions.reconcile_voice(100, 200, {45})
+        left = await toke_sessions.reconcile_voice(100, 200, set())
+        guild = SimpleNamespace(get_channel=lambda _cid: None)
+        card = live.render_card(guild, left, discord.Embed(title="💨 Toke Time"))
+        assert "Cheers: 0" in card.fields[0].value
+        assert "Joining: 0" in card.fields[0].value
+        assert "<@45>" not in "\n".join(f.value for f in card.fields)
+        await toke_sessions.react(100, 200, 1, "end")
+        ended = await toke_sessions.get(100, 200)
+        closed = live.render_card(guild, ended, discord.Embed(title="💨 Toke Time"))
+        assert "Cheers **1**" in closed.fields[1].value
+        assert "Joining **1**" in closed.fields[1].value
+        # Attending and leaving twice must not inflate lifetime counts.
+        assert len(ended["past_going_ids"]) == 1
     asyncio.run(run())
 
 
@@ -63,6 +88,7 @@ def test_rapid_in_and_out_event_clears_unobserved_rsvp(storage):
         # Join+leave inside debounce can be missed by periodic voice.member reads.
         departed = await toke_sessions.reconcile_voice(100, 200, set(), departed_ids={45})
         assert departed["cheers_ids"] == departed["going_ids"] == []
+        assert departed["past_cheers_ids"] == departed["past_going_ids"] == [45]
         await toke_sessions.react(100, 200, 45, "going")
         # A quick rejoin wins over a queued departure notification.
         rejoined = await toke_sessions.reconcile_voice(100, 200, {45}, departed_ids={45})
