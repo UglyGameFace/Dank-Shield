@@ -182,7 +182,7 @@ class VoiceSafetyConsentView(discord.ui.View):
                 "Your speech in the selected VC may be automatically transcribed by Gemini "
                 "and evaluated for staff-only incident alerts. This is separate from Live Captions consent. "
                 "This agreement remains until you withdraw it, even after you leave the VC. "
-                "Press Opt Out to withdraw. Gemini Free Tier content may be used to improve Google's products.",
+                "Press Opt Out to withdraw. This feature requires an operator-confirmed paid Gemini API project and an adult-only monitored space.",
                 ephemeral=True,
             )
         await interaction.followup.send(
