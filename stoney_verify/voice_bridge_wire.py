@@ -22,7 +22,7 @@ class BridgeRejected(ValueError):
 
 
 def secret_bytes(value: str) -> bytes:
-    if not isinstance(value, str) or len(value.encode("utf-8")) < 32 or len(value) > 512:
+    if not isinstance(value, str) or len(value.encode("utf-8")) < 32 or len(value) > 512 or value != value.strip():
         raise BridgeRejected("missing or weak bridge credential")
     return value.encode("utf-8")
 
@@ -34,7 +34,7 @@ def request_headers(secret: str, *, now: int | None = None, nonce: str | None = 
         c not in "0123456789abcdef" for c in proof
     ):
         raise BridgeRejected("invalid request metadata")
-    message = f"wym-bridge-v1\\nGET\\n{PATH}\\n{at}\\n{proof}".replace("\\n", "\n").encode("ascii")
+    message = "\n".join(("wym-bridge-v1", "GET", PATH, str(at), proof)).encode("ascii")
     signature = hmac.new(secret_bytes(secret), message, hashlib.sha256).hexdigest()
     return {"X-WYM-Time": str(at), "X-WYM-Nonce": proof, "X-WYM-Signature": signature}
 
@@ -79,7 +79,7 @@ def response_signature(secret: str, nonce: str, body: bytes) -> str:
         raise BridgeRejected("invalid response body")
     if type(nonce) is not str or len(nonce) != 32 or any(c not in "0123456789abcdef" for c in nonce):
         raise BridgeRejected("invalid response nonce")
-    signed = b"wym-bridge-v1\\nresponse\\n".replace(b"\\n", b"\n") + nonce.encode("ascii") + b"\n" + body
+    signed = b"\n".join((b"wym-bridge-v1", b"response", nonce.encode("ascii"), body))
     return hmac.new(secret_bytes(secret), signed, hashlib.sha256).hexdigest()
 
 
