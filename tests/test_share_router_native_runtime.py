@@ -629,6 +629,48 @@ def test_dank_design_excludes_share_router_from_batch_and_exact_edit_paths() -> 
     assert "design.protection.reserved" in DESIGN
 
 
+def test_facebook_embed_direct_cdn_can_relay_as_native_video() -> None:
+    # Discord occasionally exposes the real Facebook CDN media URL instead of
+    # an attachment proxy. This should reach the already bounded downloader.
+    fbcdn = "https://video.xx.fbcdn.net/v/t42.1790-2/demo.mp4?oh=signed"
+    facebook_embed = SimpleNamespace(
+        video=SimpleNamespace(url=fbcdn, proxy_url=None),
+    )
+    message = SimpleNamespace(attachments=[], embeds=[facebook_embed])
+    assert _trusted_video_url(fbcdn)
+    assert _video_source_urls(message) == [fbcdn]
+    assert not _trusted_video_url("https://video.xx.fbcdn.net.attacker.com/video.mp4")
+    assert not _trusted_video_url("https://evil-fbcdn.net/video.mp4")
+    assert not _trusted_video_url("https://www.facebook.com/plugins/video.php?href=x")
+
+
+def test_facebook_embedded_cdn_uses_existing_bounded_fetch(monkeypatch) -> None:
+    # No Facebook scraper, new proxy or unrestricted host fetch is installed.
+    # The canonical native-video source path tries actual media before falling
+    # back to yt-dlp Facebook extraction.
+    fbcdn = "https://video.xx.fbcdn.net/o1/v/t2/demo.mp4?oh=short-lived"
+    message, routes, target = _direct_memes_fixture()
+    message.embeds = [SimpleNamespace(video=SimpleNamespace(url=fbcdn, proxy_url=None))]
+    tried = []
+
+    async def fetch_candidate(url: str, *, max_bytes: int, request_headers=None):
+        tried.append((url, max_bytes))
+        return SimpleNamespace(file=SimpleNamespace(close=lambda: None),
+                               size_bytes=16, cleanup_path=None, source_url=url)
+
+    async def must_not_extract(*_args, **_kwargs):
+        raise AssertionError("valid embedded Facebook video must be checked before yt-dlp")
+
+    monkeypatch.setattr(share_runtime, "_download_trusted_video", fetch_candidate)
+    monkeypatch.setattr(share_runtime, "resolve_first_media", must_not_extract)
+    result = asyncio.run(
+        share_runtime._prepare_native_video(message, target, message.content)
+    )
+    assert result is not None
+    assert tried[0][0] == fbcdn
+    assert 0 < tried[0][1] <= 100 * 1024 * 1024
+
+
 def test_runtime_native_video_relay_is_bounded_and_fail_open() -> None:
     assert "DANK_SHARE_ROUTER_MAX_VIDEO_BYTES" in RUNTIME
     assert "DANK_SHARE_ROUTER_VIDEO_TIMEOUT_SECONDS" in RUNTIME
