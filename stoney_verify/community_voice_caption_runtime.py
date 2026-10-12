@@ -964,6 +964,8 @@ class CommunityVoiceCaptionManager:
                     raise VoiceReceiveUnavailable("Voice Safety channels must be existing text channels.")
                 if destination.permissions_for(guild.default_role).view_channel:
                     raise VoiceReceiveUnavailable("The staff alert channel is visible to everyone. Choose a private staff channel.")
+                if not notice_channel.permissions_for(guild.default_role).view_channel:
+                    raise VoiceReceiveUnavailable("The Voice Safety notice must be visible to @everyone.")
                 me = guild.me
                 for channel in (destination, notice_channel):
                     perms = channel.permissions_for(me) if me is not None else None
@@ -1051,7 +1053,7 @@ class CommunityVoiceCaptionManager:
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                 else:
-                        source_line = (
+                    source_line = (
                         f"Voice channel: {voice_channel.mention}\n"
                         if scope_kind == "server"
                         else ""
