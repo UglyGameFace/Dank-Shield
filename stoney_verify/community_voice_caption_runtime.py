@@ -320,9 +320,11 @@ class CommunityVoiceCaptionManager:
             saved = await save_voice_safety_agreement(gid, uid, enabled, source=source)
         except Exception as exc:
             if state is not None:
-                state.safety_consents.discard(uid)
-                await self._disable_user_for_state(state, uid)
-                # A failed opt-out cannot safely rely on persisted stale consent.
+                if enabled:
+                    state.safety_consents.discard(uid)
+                    await self._disable_user_for_state(state, uid)
+                # Opt-out already revoked audio before the attempted write.
+                # Fail closed for the entire guild when revocation cannot persist.
                 if not enabled:
                     await self.stop(state.session_id)
             raise VoiceReceiveUnavailable(
