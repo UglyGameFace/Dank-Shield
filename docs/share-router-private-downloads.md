@@ -92,6 +92,13 @@ extra database. It never provides direct public directory listings.
   and redeploy can have different retention behavior: a 7/30-day URL cannot
   outlive a deleted/ephemeral storage volume. Confirm a persistent disk and
   test reboot/redeploy retention before promising long-term access.
+- Each signed link has a **2 GiB default lifetime transfer budget** across
+  normal GET and partial Range requests, persisted in its metadata and enforced
+  even after restart. This can be adjusted with
+  `DANK_SHARE_DOWNLOAD_LINK_EGRESS_BYTES` up to a hard **16 GiB** safety cap.
+  HEAD requests do not consume transfer bytes. Once exhausted, the link
+  refuses new media requests even if its time-to-live has not ended; aborted
+  transfers may still count to prevent an indefinite retry loophole.
 - The URL contains an unguessable random bearer token, with only its hash
   retained in a small sidecar manifest. **Anyone with the link can access
   it until expiry**. Anyone who receives a forwarded DM or copies the URL can
