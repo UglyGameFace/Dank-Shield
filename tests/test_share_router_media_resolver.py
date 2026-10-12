@@ -328,6 +328,92 @@ def test_media_url_normalization_rejects_credential_and_nonstandard_port_links()
     )
 
 
+def test_share_router_media_health_is_private_aggregate_only(monkeypatch) -> None:
+    from stoney_verify.commands_ext import public_share_router as ui
+
+    monkeypatch.setattr(ui, "media_resolver_snapshot", lambda: {
+        "cache_entries": 1,
+        "inflight": 0,
+        "extract_concurrency": 2,
+        "providers": {
+            "youtube": {
+                "attempts": 3, "progressive": 1, "manifest": 1,
+                "merge": 0, "fallback": 1,
+                "last_reason": "https://secret.example/video?token=private",
+            },
+        },
+    })
+    monkeypatch.setattr(ui, "media_remux_snapshot", lambda: {
+        "success": 1, "failed": 2, "oversize": 0, "timeout": 0,
+    })
+    embed = ui._share_media_health_embed()
+    flattened = str(embed.to_dict())
+    assert "YouTube" in flattened
+    assert "1 classified" not in flattened  # 1 progressive + 1 manifest
+    assert "2 classified" in flattened
+    assert "secret.example" not in flattened
+    assert "token=private" not in flattened
+    assert len(embed.fields) <= 25
+    assert all(len(f.value) <= 1024 for f in embed.fields)
+
+
+def test_staff_provider_probe_does_not_echo_signed_url(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from stoney_verify.commands_ext import public_share_router as ui
+
+    records = []
+    class Response:
+        done = False
+
+        def is_done(self):
+            return self.done
+
+        async def defer(self, **kwargs):
+            self.done = True
+            records.append("defer")
+
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=101),
+        guild=SimpleNamespace(id=55, premium_tier=1),
+        response=Response(),
+    )
+
+    async def authorized(*args):
+        return True
+
+    async def classify(url, *, max_bytes):
+        assert interaction.response.is_done()
+        assert "token=hidden" in url
+        assert max_bytes > 0
+        return media.MediaResolution(
+            source_url=url,
+            canonical_url=url,
+            identity="private",
+            provider="youtube",
+            delivery="link",
+            reason="extract_failed",
+        )
+
+    async def private(*args, **kwargs):
+        records.append(kwargs)
+
+    monkeypatch.setattr(ui, "_require_manage", authorized)
+    monkeypatch.setattr(ui, "resolve_media_url", classify)
+    monkeypatch.setattr(ui, "_private", private)
+
+    async def check():
+        modal = ui.ShareRouterProviderProbeModal(owner_id=101)
+        modal.media_url._value = "https://www.youtube.com/watch?v=abc&token=hidden"
+        await modal.on_submit(interaction)
+
+    asyncio.run(check())
+    assert records[0] == "defer"
+    body = str(records[1]["embed"].to_dict())
+    assert "extract_failed" in body
+    assert "token=hidden" not in body
+    assert "https://www.youtube.com/watch" not in body
+
+
 def test_direct_media_resolves_without_yt_dlp(monkeypatch) -> None:
     def should_not_extract(_url: str):
         raise AssertionError("direct media must not invoke yt-dlp")
