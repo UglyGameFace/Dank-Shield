@@ -15,6 +15,7 @@ from ..community_voice_caption_runtime import (
     ensure_community_voice_caption_manager,
     live_captions_enabled,
     voice_safety_host_enabled,
+    voice_safety_host_checks,
     voice_safety_scope_id,
 )
 from ..community_voice_receive import VoiceReceiveUnavailable, voice_receive_capability
@@ -74,8 +75,16 @@ def _channel(guild: discord.Guild, channel_id: int, expected: type) -> object | 
 
 
 def _readiness(guild: discord.Guild, config: dict) -> tuple[bool, str]:
+    checks = voice_safety_host_checks()
+    missing = tuple(key for key, ready in checks.items() if not ready)
+    if missing:
+        return False, (
+            "Host configuration incomplete: " + ", ".join(missing) + ". "
+            "Enable each only after confirming DAVE receive, paid Gemini API data terms "
+            "and eligible adult-only deployment. API key presence does not prove it works."
+        )
     if not voice_safety_host_enabled() or not live_captions_enabled():
-        return False, "Host is validation-locked. Enable DAVE captions and Voice Safety only after confirming paid Gemini data terms and adult-only use in Discloud."
+        return False, "Voice Safety remains host-locked; review your Discloud environment and restart."
     cap = voice_receive_capability()
     if not cap.available:
         return False, f"Voice receiver unavailable: {cap.reason}"
@@ -126,6 +135,22 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
             f"Private staff alerts: {f'<#{staff}>' if staff else 'Not selected'}\n"
             f"Public notice: {f'<#{notice}>' if notice else 'Not selected'}"
         ),
+        inline=False,
+    )
+    checks = voice_safety_host_checks()
+    labels = (
+        ("DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED", "DAVE captions switch"),
+        ("DANK_VOICE_SAFETY_ENABLED", "Voice Safety switch"),
+        ("DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED", "Gemini paid-project confirmation"),
+        ("DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED", "Adult-only usage confirmation"),
+        ("GEMINI_API_KEY", "Gemini API key configured"),
+    )
+    embed.add_field(
+        name="Host readiness · Discloud",
+        value="\n".join(
+            f"{'✅' if checks.get(key) else '❌'} **{label}**"
+            for key, label in labels
+        ) + "\nThese checks show configuration only, not live DAVE/billing verification.",
         inline=False,
     )
     embed.add_field(
