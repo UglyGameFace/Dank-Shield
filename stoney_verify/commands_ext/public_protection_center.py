@@ -588,6 +588,7 @@ def _protection_embed(
             "**Invite Blocker** = live ON/OFF for Discord invite links.\n"
             "**Block All Links** = stop every URL.\n"
             "**Server Stats** = open the dedicated live counter studio for setup, repair, visibility, labels, layout, and formatting.\n"
+            "**Voice Safety** = optional, consented AI voice conduct review with staff alerts; off by default.\n"
             "**Add Filter / Import Pack / Test** = add one filter, paste a vetted line-delimited pack, or test bypass behavior."
         ),
         inline=False,
@@ -2224,6 +2225,24 @@ class ProtectionCenterView(discord.ui.View):
 
         await _guard_protection_action(interaction, "protection.invite_blocker", action, defer=True)
 
+    @discord.ui.button(label="Voice Safety", emoji="🎙️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:voice_safety", row=1)
+    async def voice_safety_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+
+        async def action() -> None:
+            if not await _require_setup_permission(interaction):
+                return
+            from .public_voice_safety import open_voice_safety_center
+
+            await open_voice_safety_center(interaction)
+
+        await _guard_protection_action(
+            interaction,
+            "protection.voice_safety",
+            action,
+            defer=False,
+        )
+
     @discord.ui.button(label="Invite Settings", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank_protection:invite_settings", row=2)
     async def invite_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -2454,6 +2473,9 @@ def register_public_protection_center_commands(bot: Any, tree: Any) -> None:
     if _ATTACHED:
         return
     _ATTACHED = True
+    from .public_voice_safety import register_voice_safety_consent
+
+    register_voice_safety_consent(bot)
     try:
         print("✅ public_protection_center: attached /dank protection")
     except Exception:
