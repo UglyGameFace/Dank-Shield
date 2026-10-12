@@ -152,6 +152,8 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
     cheer_ids = {int(uid) for uid in session.get("cheers_ids", []) if int(uid) > 0}
     going_ids = {int(uid) for uid in session.get("going_ids", []) if int(uid) > 0}
     active = bool(session.get("active", False))
+    historical_cheers = cheer_ids | {int(uid) for uid in session.get("past_cheers_ids", [])}
+    historical_going = going_ids | {int(uid) for uid in session.get("past_going_ids", [])}
     expiry = float(session.get("expires_at", 0) or 0)
     if not active or expiry <= time.time():
         ended_at = int(session.get("closed_at") or expiry or time.time())
@@ -172,7 +174,7 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
         )
         embed.add_field(
             name="📊 Final responses",
-            value=f"💨 Cheers **{len(cheer_ids)}**  ·  🙋 Joining **{len(going_ids)}**",
+            value=f"💨 Cheers **{len(historical_cheers)}**  ·  🙋 Joining **{len(historical_going)}**",
             inline=False,
         )
         embed.color = discord.Color.dark_grey()
