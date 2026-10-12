@@ -53,6 +53,7 @@ class CaptionRuntimeState:
     notice_channel_id: int = 0
     safety_consents: set[int] = field(default_factory=set)
     safety_consent_epochs: dict[int, int] = field(default_factory=dict)
+    safety_automatic: bool = False
     notice_message_id: int = 0
     soak_test: bool = False
     receive_recoveries: int = 0
@@ -120,6 +121,9 @@ class CommunityVoiceCaptionManager:
         self._auto_opt_in: dict[tuple[int, int], bool] = {}
         self._receive_probe_tasks: dict[tuple[str, int], asyncio.Task[Any]] = {}
         self._receive_recovery_locks: dict[str, asyncio.Lock] = {}
+        self._voice_safety_start_locks: dict[int, asyncio.Lock] = {}
+        self._voice_safety_retry_after: dict[int, float] = {}
+        self._voice_safety_staff_paused: set[int] = set()
         self._lock = asyncio.Lock()
         self.max_active_guilds = _env_int(
             "DANK_COMMUNITY_CAPTION_MAX_ACTIVE_GUILDS", 4, 1, 100
@@ -572,6 +576,86 @@ class CommunityVoiceCaptionManager:
             restored += 1
         return restored
 
+    def pause_voice_safety_auto_start(self, guild_id: int, paused: bool = True) -> None:
+        gid = int(guild_id)
+        if paused:
+            self._voice_safety_staff_paused.add(gid)
+        else:
+            self._voice_safety_staff_paused.discard(gid)
+
+    async def maybe_auto_start_voice_safety(
+        self, guild: discord.Guild, *, joined_voice_id: int = 0
+    ) -> bool:
+        """Start one configured VC only when populated; never add a receiver.
+
+        Startup and join events use the same gate and per-guild lock. Discord
+        connection setup is not instantaneous; monitoring never covers speech
+        before the receiver is ready.
+        """
+        if not (voice_safety_host_enabled() and live_captions_enabled()):
+            return False
+        gid = int(guild.id)
+        if gid in self._voice_safety_staff_paused or gid in self._guild_owner:
+            return False
+        now = time.monotonic()
+        if now < self._voice_safety_retry_after.get(gid, 0):
+            return False
+        lock = self._voice_safety_start_locks.setdefault(gid, asyncio.Lock())
+        async with lock:
+            if gid in self._guild_owner or gid in self._voice_safety_staff_paused:
+                return False
+            if len(self._sessions) >= self.max_active_guilds:
+                return False
+            from .guild_config import get_guild_config
+
+            try:
+                cfg = await get_guild_config(gid)
+                if not bool(cfg.get("voice_safety_enabled", False)):
+                    return False
+                voice_id = int(cfg.get("voice_safety_voice_channel_id") or 0)
+                if voice_id <= 0 or (joined_voice_id and int(joined_voice_id) != voice_id):
+                    return False
+                voice = guild.get_channel(voice_id)
+                if not isinstance(voice, discord.VoiceChannel):
+                    return False
+                if not any(not getattr(m, "bot", False) for m in tuple(voice.members or ())):
+                    return False
+                state = await self.start_voice_safety(
+                    guild_id=gid,
+                    voice_channel_id=voice_id,
+                    staff_alert_channel_id=int(cfg.get("voice_safety_staff_channel_id") or 0),
+                    notice_channel_id=int(cfg.get("voice_safety_notice_channel_id") or 0),
+                    automatic=True,
+                )
+                return bool(state)
+            except Exception as exc:
+                self._voice_safety_retry_after[gid] = time.monotonic() + 45.0
+                log.warning(
+                    "Voice Safety auto-start unavailable guild=%s type=%s",
+                    gid, type(exc).__name__,
+                )
+                return False
+
+    async def restore_voice_safety_after_ready(self) -> None:
+        """Recover previously armed, currently occupied voice rooms after restart.
+
+        Runs as an asynchronous on_ready listener and stops when the process's
+        configured active receiver capacity is filled.
+        """
+        if not (voice_safety_host_enabled() and live_captions_enabled()):
+            return
+        for guild in tuple(getattr(self.bot, "guilds", ()) or ()):
+            if len(self._sessions) >= self.max_active_guilds:
+                break
+            voice_channels = getattr(guild, "voice_channels", ()) or ()
+            if not any(
+                any(not getattr(m, "bot", False) for m in (getattr(vc, "members", ()) or ()))
+                for vc in voice_channels
+            ):
+                continue
+            await self.maybe_auto_start_voice_safety(guild)
+            await asyncio.sleep(0)
+
     async def handle_voice_state_update(
         self,
         member: discord.Member,
@@ -584,6 +668,10 @@ class CommunityVoiceCaptionManager:
         sid = self._guild_owner.get(gid)
         state = self._sessions.get(sid) if sid else None
         if state is None:
+            before_join = int(getattr(getattr(before, "channel", None), "id", 0) or 0)
+            after_join = int(getattr(getattr(after, "channel", None), "id", 0) or 0)
+            if after_join and before_join != after_join:
+                await self.maybe_auto_start_voice_safety(member.guild, joined_voice_id=after_join)
             return
 
         uid = int(member.id)
@@ -601,6 +689,13 @@ class CommunityVoiceCaptionManager:
                 state.safety_consent_epochs[uid] = state.safety_consent_epochs.get(uid, 0) + 1
                 state.safety_consents.discard(uid)
             await self._disable_user_for_state(state, uid)
+            if state.scope_kind == "voice_safety" and state.safety_automatic:
+                voice = member.guild.get_channel(target)
+                if voice is None or not any(
+                    not getattr(m, "bot", False) and int(m.id) != uid
+                    for m in tuple(getattr(voice, "members", ()) or ())
+                ):
+                    await self.stop(state.session_id)
             return
 
         if after_id != target or before_id == target:
@@ -892,6 +987,7 @@ class CommunityVoiceCaptionManager:
         voice_channel_id: int,
         staff_alert_channel_id: int,
         notice_channel_id: int,
+        automatic: bool = False,
     ) -> CaptionRuntimeState:
         return await self.start({
             "id": voice_safety_scope_id(guild_id),
@@ -900,6 +996,7 @@ class CommunityVoiceCaptionManager:
             "panel_channel_id": int(staff_alert_channel_id),
             "notice_channel_id": int(notice_channel_id),
             "caption_scope": "voice_safety",
+            "voice_safety_automatic": bool(automatic),
         })
 
     async def start(self, session: dict[str, Any]) -> CaptionRuntimeState:
@@ -1138,6 +1235,7 @@ class CommunityVoiceCaptionManager:
                 advisor=advisor,
                 notice_channel_id=notice_channel_id,
                 notice_message_id=int(notice_message.id) if safety_mode else 0,
+                safety_automatic=bool(session.get("voice_safety_automatic", False)) if safety_mode else False,
             )
             self._sessions[sid] = state
             self._guild_owner[guild_id] = sid
