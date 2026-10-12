@@ -193,15 +193,14 @@ async def handle_download_message(message: discord.Message) -> bool:
 
             # Reuse the canonical Share Router downloader. No separate media
             # provider implementation and no unbounded torrent download path.
-            from .share_router_runtime import _download_trusted_video, RoutedVideo
+            from .share_router_runtime import _download_resolved_progressive, RoutedVideo
 
             video: Any = None
             failure_reason = resolution.reason or "extract_failed"
             if resolution.progressive:
-                video = await _download_trusted_video(
-                    resolution.media_url,
+                video = await _download_resolved_progressive(
+                    resolution,
                     max_bytes=download_cap,
-                    request_headers=dict(resolution.request_headers),
                 )
                 if video is None:
                     failure_reason = "media_transfer_failed"
