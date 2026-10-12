@@ -152,6 +152,7 @@ def test_worker_rechecks_channel_member_and_message_before_download(monkeypatch)
                 content="https://cdn.example.com/test.mp4",
             )
 
+    monkeypatch.setattr(queue.discord, "Member", Member)
     member = Member()
     channel = Channel()
     guild = SimpleNamespace(
