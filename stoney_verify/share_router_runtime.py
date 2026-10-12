@@ -686,6 +686,29 @@ async def guild_download_channel_id(guild_id: int) -> int:
     return channel_id
 
 
+async def guild_download_expiry_seconds(guild_id: int) -> int:
+    # Reuse the existing Share Router per-guild file, with safe defaults.
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        bucket = data.get(str(int(guild_id))) or {}
+        stored = _safe_int(bucket.get("download_expiry_seconds"), 7 * 86400) if isinstance(bucket, dict) else 7 * 86400
+    return stored if stored in {3600, 86400, 7 * 86400, 30 * 86400} else 7 * 86400
+
+
+async def save_guild_download_expiry_seconds(guild_id: int, expiry_seconds: int) -> None:
+    if int(guild_id) <= 0 or int(expiry_seconds) not in {3600, 86400, 7 * 86400, 30 * 86400}:
+        raise ValueError("Download expiry must be one hour, one day, seven days, or thirty days")
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        key = str(int(guild_id))
+        bucket = data.get(key)
+        if not isinstance(bucket, dict):
+            bucket = {}
+        bucket["download_expiry_seconds"] = int(expiry_seconds)
+        data[key] = bucket
+        _save_all_unlocked(data)
+
+
 async def save_guild_download_channel(guild_id: int, channel_id: int) -> None:
     """One opt-in channel per guild, stored with the existing Share Router routes."""
     if guild_id <= 0 or channel_id < 0:
