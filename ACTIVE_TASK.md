@@ -1,6 +1,22 @@
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — VERIFY-REMINDERS-DISCLOUD-POSTGRES-20261011
+## CURRENT ACTIVE TASK — SHARE-ROUTER-PROVIDER-PLAYBACK-390-20261011
+
+**Explicit FORCE SWITCH (Oct 11):** "Complete Share Router provider compatibility and inline playback under #390." Reason: finish the existing universal resolver, test real providers and fix unsupported-media fallbacks without rebuilding working components. All other work including Server Stats, verification, Cinema, security intelligence and issue #367 is suspended.
+
+**Production base:** `aaa-cinema-pre-pregateway-bind@cf47c10ed3e85b5435179fd9ce5721b4423f37d8` (PR #512 merged). Actual live Discloud deployed SHA and cross-client routing acceptance remain unverified. Work only on `fix/share-router-provider-playback-390-20261011` targeting this production integration branch. Draft PR #513 tracks this slice.
+
+**Existing canonical ownership:** `share_router_media_resolver.py` recognizes providers/canonical URLs, selects progressive/merge/manifest and returns safe metadata. `share_router_media_network.py` guards public-network requests. `share_router_media_remux.py` and `share_router_manifest_proxy.py` own bounded stream-copy remuxing and safe manifest requests. `share_router_runtime.py` remains the only source-to-destination policy/relay/upload owner. Never add another forwarding command, bypass source permissions/NSFW or allow mentions, bypass upload caps, or change unrelated routes.
+
+**First audited defects:** (1) H.264/AAC format could lose to higher resolution HEVC/AV1 or unknown-size formats, reducing inline cross-client success; (2) a first failing provider link masked a later valid manifest or separable A/V candidate; (3) unsafe media hosts could be recognized as "direct"/supported before rejection at download time. Apply codec/known-size ranking, prefer later remux-capable candidate over earlier link-only, reject private/credential-bearing/nonstandard-port media during recognition. Do NOT promise every codec/provider or client plays inline; keep canonical link fallback where upload/playback is unavailable. Add deterministic fixtures and exact-head full CI.
+
+**Acceptance remaining:** check GitHub exact-head CI, unit and provider fixture matrix including X/Twitter, TikTok, Instagram, YouTube/Shorts, Reddit, Twitch, Facebook, Vimeo, Streamable, Imgur, Tumblr, Bluesky, Pinterest and direct media; verify live public sample metadata/extraction and permission boundaries on the actual Discloud deployment (without collecting passwords/links containing private tokens); verify native attachment preview on Discord Android and desktop and link-only fallback on oversized/private/auth-protected/live media. These live external canaries are not proven by mocked CI. Check provider-specific diagnostics and current boost-tier upload caps; keep draft until reliable checks.
+
+**Previously merged and preserved:** Reminder PRs #510, #511 and #512 have landed, and the user confirmed live PostgreSQL migration succeeded via Discloud console. Live reminder canary still unverified; leave untouched under this FORCE SWITCH.
+
+---
+
+## PRIOR TASK — VERIFY-REMINDERS-DISCLOUD-POSTGRES-20261011
 
 **User continuation after PR #510 merge:** DankShield-DB PostgreSQL 16 was provisioned in Discloud (private connection only, reported online with 512 MB RAM / 0.25 CPU and 46 MB used); user saved Dank Shield VLAN enabled with internal hostname `dankbot`. Task remains **Unverified Member Reminders** under Single Active Task Lock. No unrelated fixes.
 
