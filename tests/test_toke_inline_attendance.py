@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+"""Regression tests for compact uploaded Toke cards and truthful attendance."""
+
+import asyncio
+import time
+from types import SimpleNamespace
+
+import discord
+import pytest
+
+from stoney_verify import toke_sessions
+from stoney_verify import toke_live_ui as live
+
+
+@pytest.fixture
+def storage(tmp_path, monkeypatch):
+    monkeypatch.setattr(toke_sessions, "SESSIONS_FILE", tmp_path / "sessions.json")
+    live._VOICE_PENDING.clear()
+    live._VOICE_DEPARTED.clear()
+    live._VOICE_WORKERS.clear()
+    return tmp_path
+
+
+def _session(gid=100, mid=200, vc=300):
+    return {
+        "guild_id": gid, "message_id": mid, "channel_id": 700,
+        "starter_id": 1, "starter_role_id": 9, "notify_role_id": 10,
+        "voice_channel_id": vc, "show_member_names": True,
+        "max_interested": 100, "expires_at": time.time() + 3600,
+    }
+
+
+def test_planning_stays_until_present_then_departure_retires_it(storage):
+    async def run():
+        await toke_sessions.save_new(_session())
+        await toke_sessions.save_new(_session(gid=101, mid=200))
+        await toke_sessions.react(100, 200, 45, "going")
+        # A never-arrived RSVP is an intention, not a detected departure.
+        planned = await toke_sessions.reconcile_voice(100, 200, set())
+        assert planned["going_ids"] == [45] and planned["cheers_ids"] == [45]
+        present = await toke_sessions.reconcile_voice(100, 200, {45})
+        assert present["voice_seen_ids"] == [45]
+        # Persisted observation survives a simulated restart/read.
+        assert (await toke_sessions.get(100, 200))["voice_seen_ids"] == [45]
+        left = await toke_sessions.reconcile_voice(100, 200, set())
+        assert left["voice_seen_ids"] == []
+        assert left["cheers_ids"] == left["going_ids"] == []
+        other = await toke_sessions.get(101, 200)
+        assert other["cheers_ids"] == []
+        # A person can RSVP again after attending and leaving.
+        again, error = await toke_sessions.react(100, 200, 45, "going")
+        assert not error and again["going_ids"] == [45]
+        again = await toke_sessions.reconcile_voice(100, 200, set())
+        assert again["going_ids"] == [45]
+    asyncio.run(run())
+
+
+def test_rapid_in_and_out_event_clears_unobserved_rsvp(storage):
+    async def run():
+        await toke_sessions.save_new(_session())
+        await toke_sessions.react(100, 200, 45, "going")
+        # Join+leave inside debounce can be missed by periodic voice.member reads.
+        departed = await toke_sessions.reconcile_voice(100, 200, set(), departed_ids={45})
+        assert departed["cheers_ids"] == departed["going_ids"] == []
+        await toke_sessions.react(100, 200, 45, "going")
+        # A quick rejoin wins over a queued departure notification.
+        rejoined = await toke_sessions.reconcile_voice(100, 200, {45}, departed_ids={45})
+        assert rejoined["cheers_ids"] == rejoined["going_ids"] == [45]
+        assert rejoined["voice_seen_ids"] == [45]
+        # Withdrawal does not leave any lingering seen/attendance marker.
+        await toke_sessions.react(100, 200, 45, "withdraw")
+        withdrawn = await toke_sessions.get(100, 200)
+        assert withdrawn["voice_seen_ids"] == []
+    asyncio.run(run())
+
+
+def test_reconciliation_is_idempotent_and_not_allowed_to_reopen_ended(storage):
+    async def run():
+        await toke_sessions.save_new(_session())
+        await toke_sessions.react(100, 200, 45, "going")
+        first = await toke_sessions.reconcile_voice(100, 200, {45})
+        second = await toke_sessions.reconcile_voice(100, 200, {45})
+        assert first == second
+        await toke_sessions.react(100, 200, 1, "end")
+        ended = await toke_sessions.reconcile_voice(100, 200, set(), departed_ids={45})
+        assert ended["active"] is False and ended["close_pending"] is True
+        assert ended["going_ids"] == [45]  # Historical final responses remain.
+    asyncio.run(run())
+
+
+def test_inline_uploaded_thumbnail_has_single_compact_v2_card_and_reused_callbacks(monkeypatch):
+    monkeypatch.setattr(live, "_VOICE_DEBOUNCE_SECONDS", 0.001)
+    session = {
+        **_session(), "active": True, "cheers_ids": [], "going_ids": [],
+        "media_layout": "thumbnail_v2", "media_filename": "sesh.gif",
+    }
+    guild = SimpleNamespace(get_channel=lambda cid: None)
+    intro = "## 💨 Toke Time\n<@&10>\n**Test Host** is calling the sesh crowd.\n> Join us"
+    view = live.TokeThumbnailLayout(guild, session, intro=intro)
+    assert isinstance(view, discord.ui.LayoutView)
+    assert view.timeout is None and view.is_persistent()
+    nodes = list(view.walk_children())
+    thumbnails = [item for item in nodes if isinstance(item, discord.ui.Thumbnail)]
+    assert len(thumbnails) == 1
+    assert thumbnails[0].media.url == "attachment://sesh.gif"
+    assert len([x for x in nodes if isinstance(x, discord.ui.Button)]) == 7
+    assert any(isinstance(x, discord.ui.TextDisplay) and "<@&10>" in x.content for x in nodes)
+    assert not any(isinstance(x, discord.ui.MediaGallery) for x in nodes)
+
+    dispatched = []
+    async def fake_respond(self, interaction, action):
+        dispatched.append(action)
+    monkeypatch.setattr(live.TokeCheersView, "_respond", fake_respond)
+    updated = live.TokeThumbnailLayout(guild, session, intro=intro)
+    join = next(x for x in updated.walk_children() if getattr(x, "custom_id", "") == "dank:toke:v2:going")
+    asyncio.run(join.callback(object()))
+    assert dispatched == ["going"]
+    session["active"] = False
+    closed = live.TokeThumbnailLayout(guild, session, intro=intro)
+    assert not any(isinstance(x, discord.ui.Button) for x in closed.walk_children())
+
+
+def test_existing_note_can_be_reused_without_persisting_it(storage):
+    intro = "## 💨 Toke Time\n<@&10>\n**Host** is calling the sesh crowd.\n> Original note"
+    message = SimpleNamespace(components=[
+        SimpleNamespace(children=[SimpleNamespace(children=[SimpleNamespace(content=intro)])])
+    ])
+    assert live._thumbnail_intro(message, _session()) == intro
+    async def run():
+        await toke_sessions.save_new({**_session(), "media_layout": "thumbnail_v2", "media_filename": "sesh.gif"})
+    asyncio.run(run())
+    saved = toke_sessions.SESSIONS_FILE.read_text()
+    assert "Original note" not in saved
+    assert "sesh.gif" in saved
+
+
+def test_voice_unavailable_does_not_make_uncertain_rsvps_disappear(storage):
+    async def run():
+        await toke_sessions.save_new(_session())
+        await toke_sessions.react(100, 200, 45, "going")
+        guild = SimpleNamespace(get_channel=lambda _cid: None)
+        state = await live.reconcile_live_attendance(
+            guild, await toke_sessions.get(100, 200), departed_ids={45},
+        )
+        assert state["going_ids"] == [45]
+    asyncio.run(run())
+
+
+def test_voice_burst_preserves_departure_identity_even_without_seen_cache(storage, monkeypatch):
+    async def run():
+        await toke_sessions.save_new(_session())
+        await toke_sessions.react(100, 200, 45, "going")
+        monkeypatch.setattr(live, "_VOICE_DEBOUNCE_SECONDS", 0.001)
+        class FakeVoice:
+            id = 300
+            members = []
+        monkeypatch.setattr(live.discord, "VoiceChannel", FakeVoice)
+        voice = FakeVoice()
+        guild = SimpleNamespace(id=100, get_channel=lambda cid: voice if cid == 300 else None)
+        async def active(gid):
+            return await toke_sessions.all_active(gid)
+        # Exercise the real debounced worker, storage and an actual refresh path.
+        calls = []
+        async def edited(_bot, session, interaction=None, *, departed_ids=None):
+            calls.append(departed_ids)
+            await live.reconcile_live_attendance(guild, session, departed_ids=departed_ids)
+            return True
+        monkeypatch.setattr(live, "refresh_card", edited)
+        member = SimpleNamespace(id=45, guild=guild)
+        await live._on_toke_voice_state(
+            member, SimpleNamespace(channel=voice),
+            SimpleNamespace(channel=None), bot=object(),
+        )
+        await asyncio.wait_for(live._VOICE_WORKERS[100], timeout=1.0)
+        assert calls == [{45}]
+        assert (await toke_sessions.get(100, 200))["going_ids"] == []
+        assert not live._VOICE_DEPARTED and not live._VOICE_PENDING
+    asyncio.run(run())
