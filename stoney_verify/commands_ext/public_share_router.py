@@ -18,6 +18,7 @@ from stoney_verify.share_router_media_resolver import (
     resolve_media_url,
 )
 from stoney_verify.share_router_media_remux import media_remux_snapshot
+from stoney_verify.share_router_download_queue import queue_snapshot
 from stoney_verify.share_router_external_links import (
     check_public_delivery, delivery_status, file_max_bytes, storage_max_bytes,
     link_egress_budget,
@@ -886,6 +887,17 @@ async def _download_settings_embed(guild: discord.Guild) -> discord.Embed:
                if ready else f"⚠️ Not ready: {reason}. Set DANK_MEDIA_PUBLIC_BASE_URL to your existing HTTPS Discloud site URL, restart, and return here.")[:1024],
         inline=False,
     )
+    try:
+        backlog = await queue_snapshot()
+        queue_status = (
+            f"{backlog['queued']} waiting / {backlog['running']} processing. "
+            f"Maximum {backlog['limit']} jobs across the bot, "
+            f"{backlog['per_guild_limit']} per server; "
+            f"{backlog['workers']} active worker slots."
+        )
+    except Exception:
+        queue_status = "⚠️ Queue unavailable. Download requests will be preserved for retry."
+    embed.add_field(name="Download queue", value=queue_status[:1024], inline=False)
     embed.add_field(
         name="Hosting limits",
         value=f"Up to {file_max_bytes() // (1024 * 1024)} MiB per file, "
