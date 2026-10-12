@@ -492,7 +492,7 @@ async def _download_resolved_progressive(
         candidates.extend(tuple(resolution.alternate_progressive)[:1])
     attempted: set[str] = set()
     for candidate, headers in candidates:
-        if not candidate or candidate in attempted:
+        if not candidate or candidate in attempted or not is_safe_media_download_url(candidate):
             continue
         attempted.add(candidate)
         result = await _download_trusted_video(
