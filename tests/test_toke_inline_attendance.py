@@ -279,3 +279,32 @@ def test_who_is_coming_excludes_departed_joiner_after_fresh_reconciliation(stora
         assert "<@46>" not in body
         assert "🔊" in body
     asyncio.run(run())
+
+
+
+def test_uploaded_thumbnail_view_restores_after_bot_restart(storage):
+    async def run():
+        live._REGISTERED.clear()
+        await toke_sessions.save_new({
+            **_session(), "media_layout": "thumbnail_v2",
+            "media_filename": "toke-100-1-123.gif",
+        })
+        guild = SimpleNamespace(id=100, get_channel=lambda cid: None)
+        registered = []
+        bot = SimpleNamespace(
+            get_guild=lambda gid: guild if gid == 100 else None,
+            add_view=lambda view, *, message_id: registered.append((view, message_id)),
+        )
+        assert await live.restore_active_views(bot) == 1
+        assert len(registered) == 1
+        view, mid = registered[0]
+        assert mid == 200 and view.is_persistent()
+        custom_ids = {
+            button.custom_id for button in view.walk_children()
+            if isinstance(button, discord.ui.Button) and button.custom_id
+        }
+        assert {"dank:toke:v2:roster", "dank:toke:v2:refresh", "dank:toke:v2:going"} <= custom_ids
+        assert await live.restore_active_views(bot) == 0
+        assert len(registered) == 1
+        live._REGISTERED.clear()
+    asyncio.run(run())
