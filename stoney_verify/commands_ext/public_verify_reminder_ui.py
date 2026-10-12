@@ -78,7 +78,7 @@ def _embed(guild: discord.Guild, cfg: Mapping[str, Any], policy: ReminderPolicy)
         inline=False,
     )
     embed.add_field(
-        name="Destination",
+        name="Verification channel",
         value=channel.mention if channel else "Not configured",
         inline=True,
     )
@@ -95,7 +95,7 @@ def _embed(guild: discord.Guild, cfg: Mapping[str, Any], policy: ReminderPolicy)
     )
     if blocker:
         embed.add_field(name="Setup required", value=blocker, inline=False)
-    embed.set_footer(text="Disabled by default • Discloud PostgreSQL ledger required before enabling")
+    embed.set_footer(text="Opt-in per server • Use Check Database for live PostgreSQL status")
     return embed
 
 
