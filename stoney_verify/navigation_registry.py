@@ -269,6 +269,11 @@ FEATURES: tuple[NavigationFeature, ...] = (
             "group streaming",
             "movies",
             "cinema",
+            "dank cinema",
+            "subtitles",
+            "subtitle providers",
+            "watch party sync",
+            "automatic source",
         ),
     ),
     NavigationFeature(
