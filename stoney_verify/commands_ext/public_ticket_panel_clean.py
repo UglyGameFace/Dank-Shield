@@ -34,6 +34,7 @@ _CONFIRM_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
 _MENU_TTL_SECONDS = 900.0
 _INTERACTION_TTL_SECONDS = 90.0
 
+PUBLIC_PANEL_EMBED_VERSION = 2
 PANEL_BUTTON_CUSTOM_ID = "sv:ticket:panel:create:clean:v1"
 LEGACY_PANEL_BUTTON_CUSTOM_IDS = frozenset(
     {
@@ -922,12 +923,19 @@ class PublicCreateTicketPanelView(discord.ui.View):
 
 
 def _panel_embed(guild: discord.Guild) -> discord.Embed:
-    e = discord.Embed(title="🎫 Need help? Open a ticket", description="Press **Create Ticket** below, then pick the ticket type.\n\nNo form first. No guessing. You can confirm the category before anything is created.", color=discord.Color.blurple(), timestamp=discord.utils.utcnow())
-    e.add_field(name="How it works", value="1. Press **Create Ticket**\n2. Pick a ticket type\n3. Confirm or go back\n4. A private ticket channel opens", inline=False)
-    e.add_field(name="Panel lifetime", value=public_panel_lifecycle_text("Create Ticket panel", "Private ticket type menus/confirm screens"), inline=False)
-    e.set_footer(text=f"{guild.name} • Dank Shield ticket panel • choose a category")
-    return e
-
+    """Member-facing copy only; operational health belongs in staff-only views."""
+    embed = discord.Embed(
+        title="🎫 Need help? Open a ticket",
+        description=(
+            "Need assistance? Press **Create Ticket**, choose a category, "
+            "and confirm to open a private support channel. "
+            "Only you and authorized staff can access your ticket."
+        ),
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.set_footer(text=f"{guild.name} • Dank Shield ticket panel • choose a category")
+    return embed
 
 async def persist_public_ticket_panel_identity(
     guild_id: int,
@@ -935,6 +943,7 @@ async def persist_public_ticket_panel_identity(
     message_id: int,
     *,
     application_id: int = 0,
+    presentation_version: int = 0,
 ) -> None:
     try:
         from ..guild_config import upsert_guild_config
@@ -949,6 +958,8 @@ async def persist_public_ticket_panel_identity(
             payload["ticket_panel_application_id"] = str(
                 int(application_id)
             )
+        if int(presentation_version or 0) > 0:
+            payload["ticket_panel_public_embed_version"] = int(presentation_version)
         await upsert_guild_config(
             int(guild_id),
             payload,
@@ -977,6 +988,7 @@ async def post_public_ticket_panel_message(
         application_id=int(
             getattr(getattr(guild, "me", None), "id", 0) or 0
         ),
+        presentation_version=PUBLIC_PANEL_EMBED_VERSION,
     )
     return msg
 
