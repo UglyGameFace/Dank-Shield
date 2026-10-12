@@ -464,7 +464,7 @@ def test_direct_memes_already_inline_never_calls_native_relay(monkeypatch) -> No
 
 
 def test_direct_memes_runtime_reuses_one_listener_and_canonical_upload_owner() -> None:
-    assert "routes = await guild_routes(int(guild.id))" in RUNTIME
+    assert "routes, download_channel_id = await guild_route_state(int(guild.id))" in RUNTIME
     assert "await _relay_direct_memes_video(message, routes)" in RUNTIME
     assert RUNTIME.count('bot.add_listener(route_message, "on_message")') == 1
     assert RUNTIME.count("_relay_native_video_upload(") >= 3
