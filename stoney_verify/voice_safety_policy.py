@@ -137,6 +137,8 @@ class VoiceSafetyAdvisor:
         self._cooldown = max(10.0, float(cooldown_seconds))
         self._segments: dict[int, deque[tuple[float, str]]] = {}
         self._last_alert: dict[tuple[int, str], float] = {}
+        self._last_inspected: dict[int, float] = {}
+        self._request_times: deque[float] = deque(maxlen=30)
         self._generation: dict[int, int] = {}
         self._closed = False
         self._semaphore = asyncio.Semaphore(2)
@@ -151,6 +153,7 @@ class VoiceSafetyAdvisor:
         uid = int(user_id)
         self._generation[uid] = self._generation.get(uid, 0) + 1
         self._segments.pop(uid, None)
+        self._last_inspected.pop(uid, None)
         for key in tuple(self._last_alert):
             if key[0] == uid:
                 self._last_alert.pop(key, None)
@@ -184,6 +187,17 @@ class VoiceSafetyAdvisor:
             history.popleft()
         history.append((now, source[:500]))
         snapshot = "\n".join(chunk for _, chunk in history)[-1200:]
+        # Transcription can emit frequent speech fragments. Reserve an advisory
+        # request synchronously before yielding to cap provider cost and load.
+        recent = self._last_inspected.get(uid)
+        if recent is not None and now - recent < 6.0:
+            return None
+        while self._request_times and now - self._request_times[0] >= 60.0:
+            self._request_times.popleft()
+        if len(self._request_times) >= 30:
+            return None
+        self._last_inspected[uid] = now
+        self._request_times.append(now)
         generation = self._generation.get(uid, 0)
         async with self._semaphore:
             if self._closed or not is_admitted(uid) or self._generation.get(uid, 0) != generation:
