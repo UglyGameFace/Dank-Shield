@@ -689,7 +689,7 @@ class CommunityVoiceCaptionManager:
                 state.safety_consent_epochs[uid] = state.safety_consent_epochs.get(uid, 0) + 1
                 state.safety_consents.discard(uid)
             await self._disable_user_for_state(state, uid)
-            if state.scope_kind == "voice_safety" and state.safety_automatic:
+            if getattr(state, "scope_kind", "server") == "voice_safety" and bool(getattr(state, "safety_automatic", False)):
                 voice = member.guild.get_channel(target)
                 if voice is None or not any(
                     not getattr(m, "bot", False) and int(m.id) != uid
