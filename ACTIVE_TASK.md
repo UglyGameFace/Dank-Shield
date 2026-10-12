@@ -1,5 +1,19 @@
 # Dank Shield Active Task
 
+## CURRENT SUBTASK — SHARE-ROUTER-PRIVATE-DOWNLOAD-20261012
+
+**User continuation inside FORCE SWITCH #390:** Add an actual optional Download channel that recognizes supported video links and DMs the requesting member the resulting video. User also wants large-file delivery beyond normal DM limits.
+
+**Production base:** `aaa-cinema-pre-pregateway-bind@3811d8a3018930a8f9fcdb82c7d30ed0b3189bce`, with Share Router provider-compatibility PR #513 merged and exact-head CI passed. Development in draft PR #514 (`feat/390-download-channel-private-dm-20261012`). Only Share Router #390 remains active; no other projects or PRs.
+
+**Delivery boundary:** Existing Share Router resolver, public-only downloader, remux and single on_message owner are reused. Staff explicitly create one guild-scoped `video-downloads` intake channel; members submit one public supported media URL, capped concurrent processing and cooldown apply. File attachments fit the bot's conservative 19 MiB DM cap. Server Level 3's 100 MiB upload tier applies only *inside the boosted server*, not direct DMs. Oversized/unsupported transfers send an honest original-source link, not a fake attachment or claim of download. No files stored in PostgreSQL/Supabase. DM failure preserves the intake source, while successful DM may clean it if Manage Messages is available.
+
+**Above-limit requirement not complete:** A signed expiring HTTPS delivery endpoint with user access controls, bounded storage/stream bandwidth and cleanup is the technically supported option for actual files above Discord's DM attachment limit. Existing Discloud public ingress, storage and egress quotas must be verified before deployment; this is not provided by first draft PR #514. No hidden boosted-guild media-vault storage without explicit privacy and retention review. See `docs/share-router-private-downloads.md`.
+
+**Acceptance:** exact-head Share Router and full CI, Discord Android+desktop staff UI and video/file canary, blocked-DM behavior, 413 fallback, multi-guild isolation, role/permission safety, request source deletion only after successful DM and transfer concurrency saturation; do not merge or claim actual bigger-than-DM-file delivery until validated.
+
+---
+
 ## CURRENT ACTIVE TASK — SHARE-ROUTER-PROVIDER-PLAYBACK-390-20261011
 
 **Explicit FORCE SWITCH (Oct 11):** "Complete Share Router provider compatibility and inline playback under #390." Reason: finish the existing universal resolver, test real providers and fix unsupported-media fallbacks without rebuilding working components. All other work including Server Stats, verification, Cinema, security intelligence and issue #367 is suspended.
