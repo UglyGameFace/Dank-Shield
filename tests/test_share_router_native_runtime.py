@@ -464,7 +464,7 @@ def test_direct_memes_already_inline_never_calls_native_relay(monkeypatch) -> No
 
 
 def test_direct_memes_runtime_reuses_one_listener_and_canonical_upload_owner() -> None:
-    assert "routes = await guild_routes(int(guild.id))" in RUNTIME
+    assert "routes, download_channel_id = await guild_route_state(int(guild.id))" in RUNTIME
     assert "await _relay_direct_memes_video(message, routes)" in RUNTIME
     assert RUNTIME.count('bot.add_listener(route_message, "on_message")') == 1
     assert RUNTIME.count("_relay_native_video_upload(") >= 3
@@ -770,7 +770,10 @@ def test_proxy_send_failure_preserves_source_and_allows_retry(monkeypatch) -> No
 
     monkeypatch.setattr(share_runtime.discord, "TextChannel", FakeTextChannel)
     monkeypatch.setattr(share_runtime.discord, "Member", FakeMember)
-    monkeypatch.setattr(share_runtime, "guild_routes", configured_routes)
+    async def configured_state(guild_id):
+        return await configured_routes(guild_id), 0
+
+    monkeypatch.setattr(share_runtime, "guild_route_state", configured_state)
     monkeypatch.setattr(share_runtime, "source_age_blocker", lambda _source: "")
     monkeypatch.setattr(share_runtime, "source_privacy_blocker", lambda _source: "")
     monkeypatch.setattr(share_runtime, "route_permission_blockers", lambda *_args, **_kwargs: [])

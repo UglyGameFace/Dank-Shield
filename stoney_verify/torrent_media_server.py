@@ -18,6 +18,7 @@ from stoney_verify.cinema_site import (
     register_cinema_site_routes,
 )
 from stoney_verify.cinema_feed_service import start_cinema_feed_refresh_worker
+from stoney_verify.share_router_external_links import register_share_video_routes
 
 _MEDIA_RUNNER: Optional[web.AppRunner] = None
 _MEDIA_SITE: Optional[web.TCPSite] = None
@@ -146,6 +147,8 @@ async def start_torrent_media_server() -> bool:
     register_torrent_public_routes(app)
     register_movie_night_public_routes(app)
     register_cinema_site_routes(app)
+    # Share Router reuses this existing public listener, never another port.
+    register_share_video_routes(app)
 
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()

@@ -649,13 +649,15 @@ def _save_all_unlocked(data: Mapping[str, Any]) -> None:
     tmp.replace(ROUTES_FILE)
 
 
-async def guild_routes(guild_id: int) -> list[dict[str, Any]]:
+async def guild_route_state(guild_id: int) -> tuple[list[dict[str, Any]], int]:
+    """Read routes and opt-in downloads with one bounded file access."""
     async with _DATA_LOCK:
         data = _load_all_unlocked()
         bucket = data.get(str(int(guild_id))) or {}
+        download_id = _safe_int(bucket.get("download_channel_id"), 0) if isinstance(bucket, dict) else 0
         routes = bucket.get("routes") if isinstance(bucket, dict) else []
         if not isinstance(routes, list):
-            return []
+            routes = []
 
         clean: list[dict[str, Any]] = []
         for raw in routes:
@@ -671,7 +673,55 @@ async def guild_routes(guild_id: int) -> list[dict[str, Any]]:
             item["enabled"] = bool(item.get("enabled", True))
             item["delete_source"] = bool(item.get("delete_source", True))
             clean.append(item)
-        return clean
+        return clean, download_id
+
+
+async def guild_routes(guild_id: int) -> list[dict[str, Any]]:
+    routes, _ = await guild_route_state(guild_id)
+    return routes
+
+
+async def guild_download_channel_id(guild_id: int) -> int:
+    _, channel_id = await guild_route_state(guild_id)
+    return channel_id
+
+
+async def guild_download_expiry_seconds(guild_id: int) -> int:
+    # Reuse the existing Share Router per-guild file, with safe defaults.
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        bucket = data.get(str(int(guild_id))) or {}
+        stored = _safe_int(bucket.get("download_expiry_seconds"), 7 * 86400) if isinstance(bucket, dict) else 7 * 86400
+    return stored if stored in {3600, 86400, 7 * 86400, 30 * 86400} else 7 * 86400
+
+
+async def save_guild_download_expiry_seconds(guild_id: int, expiry_seconds: int) -> None:
+    if int(guild_id) <= 0 or int(expiry_seconds) not in {3600, 86400, 7 * 86400, 30 * 86400}:
+        raise ValueError("Download expiry must be one hour, one day, seven days, or thirty days")
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        key = str(int(guild_id))
+        bucket = data.get(key)
+        if not isinstance(bucket, dict):
+            bucket = {}
+        bucket["download_expiry_seconds"] = int(expiry_seconds)
+        data[key] = bucket
+        _save_all_unlocked(data)
+
+
+async def save_guild_download_channel(guild_id: int, channel_id: int) -> None:
+    """One opt-in channel per guild, stored with the existing Share Router routes."""
+    if guild_id <= 0 or channel_id < 0:
+        raise ValueError("Invalid Share Router download channel scope")
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        key = str(int(guild_id))
+        bucket = data.get(key)
+        if not isinstance(bucket, dict):
+            bucket = {}
+        bucket["download_channel_id"] = str(int(channel_id)) if channel_id else ""
+        data[key] = bucket
+        _save_all_unlocked(data)
 
 
 async def guild_custom_share_sources(guild_id: int) -> list[int]:
@@ -1639,7 +1689,11 @@ async def route_message(message: discord.Message) -> None:
         if getattr(message.author, "bot", False):
             return
 
-        routes = await guild_routes(int(guild.id))
+        routes, download_channel_id = await guild_route_state(int(guild.id))
+        if download_channel_id and int(message.channel.id) == download_channel_id:
+            from .share_router_private_downloads import handle_download_message
+            await handle_download_message(message)
+            return
         route = route_for_source(routes, int(message.channel.id))
         if route is None:
             if is_share_router_design_resource(message.channel):

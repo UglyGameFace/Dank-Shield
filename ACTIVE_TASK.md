@@ -1,5 +1,21 @@
 # Dank Shield Active Task
 
+## CURRENT SUBTASK — SHARE-ROUTER-PRIVATE-DOWNLOAD-20261012
+
+**User continuation inside FORCE SWITCH #390 (Oct 12):** Dedicated opt-in Download channel, private DM delivery, and real above-DM-limit signed HTTPS Watch/Download links with adjustable expiry and easy staff mobile setup.
+
+**Production base:** `aaa-cinema-pre-pregateway-bind@3811d8a3018930a8f9fcdb82c7d30ed0b3189bce` (Share Router #513 merged). Draft PR #514 on `feat/390-download-channel-private-dm-20261012`; still **unmerged/unproven live**. No other feature authorized.
+
+**UI:** Share Router manager → **Create Download Channel** (per guild) → **Download Settings** → choose 1 hour / 24 hours / 7 days (default) / 30 days (max) → **Test HTTPS Hosting**. Disable Downloads preserves channel but does not revoke already-issued links. If site URL not configured, set the already-existing `DANK_MEDIA_PUBLIC_BASE_URL` to public HTTPS Discloud site once in environment and restart. No new database or extra web server. User sees explicit readiness and configurable storage caps. The status test writes a tiny fake video payload, GETs it from the configured HTTPS origin, then revokes it; no link/token is exposed in Discord.
+
+**Delivery:** Existing canonical `share_router_runtime.route_message` dispatches the configured channel only. Reuse existing provider resolver, public-only SSRF guards, bounded HTTP download/remux; DM video attachments <=19MiB. When a larger video is safely staged, DM unguessable **Watch** (inline media extension, byte range) and **Download** (attachment disposition) links with random 256-bit bearer token/hash in sidecar and selected TTL. URL expiry checked on every access. Files are private local temp storage, not Supabase/Postgres; background cleanup every 15min, bounded rotating cleanup, 2 simultaneous ingestion / 4 HTTP transfers; 120sec member cooldown; 128 MiB file / 512MiB total default, hard configurable maximum 256MiB file/2GiB storage, 256 MiB free disk reserve. Fail to original-source link only when hosting unusable, not as fake file delivery. Upload/DM failures preserve source post; if a signed asset was already staged and DM fails, revoke it.
+
+**Privacy / constraints:** Bearer link is transferable by anyone holding it, so it's **not** Discord identity-bound; Discord may cache previews after expiry. Strict storage quota refusal, no indiscriminate cleanup of unexpired files. Discloud's actual disk persistence after redeploy, public Cloudflare ingress, egress and storage quotas **not yet validated**, so cannot promise 7/30-day durability before actual host canary. Discord native inline rendering not guaranteed, only HTTP video playback link and browser fallback. Avoid serving private/copyright-unauthorized data. No startup SQL or duplicate service.
+
+**Acceptance:** scoped exact-head Share Router + full CI and HTTP endpoint tests; staff Android setup/expiry selector, one-file DM and one staged large file, range/expiry/revoke, blocked DM, high concurrency, 413, low disk, Discord link preview and download across Android/desktop, Discloud restart/redeploy storage. Only then remove draft/merge and close #390 if full real provider canary also green. Documentation `docs/share-router-private-downloads.md`.
+
+---
+
 ## CURRENT ACTIVE TASK — SHARE-ROUTER-PROVIDER-PLAYBACK-390-20261011
 
 **Explicit FORCE SWITCH (Oct 11):** "Complete Share Router provider compatibility and inline playback under #390." Reason: finish the existing universal resolver, test real providers and fix unsupported-media fallbacks without rebuilding working components. All other work including Server Stats, verification, Cinema, security intelligence and issue #367 is suspended.

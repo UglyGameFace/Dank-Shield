@@ -18,6 +18,10 @@ from stoney_verify.share_router_media_resolver import (
     resolve_media_url,
 )
 from stoney_verify.share_router_media_remux import media_remux_snapshot
+from stoney_verify.share_router_external_links import (
+    check_public_delivery, delivery_status, file_max_bytes, storage_max_bytes,
+    link_egress_budget,
+)
 from stoney_verify.share_router_resources import (
     DEFAULT_SHARE_CHANNELS,
     SHARE_ROUTER_CATEGORY_NAME,
@@ -35,6 +39,10 @@ from stoney_verify.share_router_runtime import (
     guild_routes,
     guild_custom_share_sources,
     guild_pending_source_cleanup_count,
+    guild_download_channel_id,
+    guild_download_expiry_seconds,
+    save_guild_download_channel,
+    save_guild_download_expiry_seconds,
     prune_missing_custom_share_sources,
     remove_route,
     route_health,
@@ -163,6 +171,32 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
     embed.add_field(name="Proxy hub", value=hub_status[:1024], inline=False)
     live_custom = sum(isinstance(guild.get_channel(source_id), discord.TextChannel) for source_id in custom_ids)
     embed.add_field(name="Custom proxies", value=f"{live_custom} active / {len(custom_ids)} registered in this server. Create Proxy adds another source without replacing the four defaults.", inline=False)
+    download_id = await guild_download_channel_id(int(guild.id))
+    download_expiry = await guild_download_expiry_seconds(int(guild.id))
+    hosting_ready, hosting_reason = delivery_status()
+    download_channel = guild.get_channel(download_id) if download_id else None
+    embed.add_field(
+        name="Private video downloads",
+        value=(
+            f"✅ {download_channel.mention} • Posts send a **private DM** to their author. "
+            "Small videos are DM attachments. Above the DM limit: "
+            + ("expiring Watch + Download links." if hosting_ready else "source-link fallback.")
+            + f" Expiration: {download_expiry // 3600}h."
+            if isinstance(download_channel, discord.TextChannel)
+            else ("⚠️ Download channel missing. Disable it before creating a replacement."
+                  if download_id else "Disabled • Create Download Channel to opt in.")
+        )[:1024],
+        inline=False,
+    )
+    if download_id:
+        embed.add_field(
+            name="Large-file delivery status",
+            value=(
+                "✅ Host configured • Live public reachability must still be tested."
+                if hosting_ready else f"⚠️ {hosting_reason}"
+            )[:1024],
+            inline=False,
+        )
     pending_cleanup = await guild_pending_source_cleanup_count(int(guild.id))
     cleanup_status = (
         f"⚠️ {pending_cleanup} delivered post(s) awaiting deletion. "
@@ -790,6 +824,117 @@ class ShareRouterPruneConfirmView(_OwnedView):
         await open_share_router(interaction, replace_message=True)
 
 
+class DownloadExpirySelect(discord.ui.Select):
+    def __init__(self, current: int) -> None:
+        options = [
+            discord.SelectOption(label="1 hour", value="3600", description="Temporary private delivery"),
+            discord.SelectOption(label="24 hours", value="86400", description="Short-term download"),
+            discord.SelectOption(label="7 days (recommended)", value="604800", description="Default expiration"),
+            discord.SelectOption(label="30 days (maximum)", value="2592000", description="Maximum configurable access"),
+        ]
+        for option in options:
+            option.default = option.value == str(current)
+        super().__init__(
+            placeholder="Choose automatic link expiration",
+            options=options,
+            min_values=1,
+            max_values=1,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_manage(interaction):
+            return
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        try:
+            await save_guild_download_expiry_seconds(
+                int(interaction.guild.id), int(self.values[0]),
+            )
+            await _replace(
+                interaction,
+                embed=await _download_settings_embed(interaction.guild),
+                view=ShareRouterDownloadSettingsView(int(interaction.user.id), int(self.values[0])),
+            )
+        except Exception as exc:
+            await _private(interaction, f"❌ Could not save expiration ({type(exc).__name__}).")
+
+
+async def _download_settings_embed(guild: discord.Guild) -> discord.Embed:
+    ident = await guild_download_channel_id(int(guild.id))
+    expire = await guild_download_expiry_seconds(int(guild.id))
+    ready, reason = delivery_status()
+    channel = guild.get_channel(ident) if ident else None
+    embed = discord.Embed(
+        title="📥 Private Video Downloads",
+        description=(
+            "One-time server setup: **Create Download Channel** on the Share Router menu. "
+            "Members post a public video URL there; the result is sent privately in DM. "
+            "Smaller files arrive as attachments; larger ones use expiring HTTPS Watch and "
+            "Download links when hosting is available."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name="Download channel", value=channel.mention if channel else "Not configured", inline=False)
+    embed.add_field(name="Link expiration", value={
+        3600: "1 hour", 86400: "24 hours", 604800: "7 days (recommended)",
+        2592000: "30 days (maximum)",
+    }.get(expire, "7 days"), inline=True)
+    embed.add_field(
+        name="External link hosting",
+        value=("✅ Storage/public URL configured. Press Test HTTPS Hosting to confirm reachability."
+               if ready else f"⚠️ Not ready: {reason}. Set DANK_MEDIA_PUBLIC_BASE_URL to your existing HTTPS Discloud site URL, restart, and return here.")[:1024],
+        inline=False,
+    )
+    embed.add_field(
+        name="Hosting limits",
+        value=f"Up to {file_max_bytes() // (1024 * 1024)} MiB per file, "
+              f"{storage_max_bytes() // (1024 * 1024)} MiB total configured storage. "
+              f"Up to {link_egress_budget() // (1024 * 1024)} MiB of total public "
+              "transfer per issued link. These are safety limits, not "
+              "guaranteed free disk or bandwidth.",
+        inline=False,
+    )
+    embed.add_field(
+        name="Important: storage durability",
+        value=(
+            "Expiring links rely on the hosting app keeping the staged file. "
+            "A restart/redeploy that removes local storage will invalidate links early. "
+            "Verify persistent storage with Discloud before promising 7- or 30-day availability."
+        ),
+        inline=False,
+    )
+    embed.set_footer(
+        text="Anyone with a private link can use it until expiry; Discord may retain cached previews.",
+    )
+    return embed
+
+
+class ShareRouterDownloadSettingsView(_OwnedView):
+    def __init__(self, owner_id: int, current: int) -> None:
+        super().__init__(owner_id)
+        self.add_item(DownloadExpirySelect(current))
+
+    @discord.ui.button(label="Test HTTPS Hosting", emoji="🩺", style=discord.ButtonStyle.primary, row=1)
+    async def test_hosting(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        ok, message = await check_public_delivery()
+        await _private(
+            interaction,
+            ("✅ " if ok else "❌ ") + message
+            + (". Discord inline playback still requires a real video canary."
+               if ok else ". Check the Download Settings readiness message and the public media URL."),
+        )
+
+    @discord.ui.button(label="Back to Share Router", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_share_router(interaction, replace_message=True)
+
+
 class ShareRouterView(_OwnedView):
     @discord.ui.button(label="Create Proxy", emoji="➕", style=discord.ButtonStyle.primary, row=2)
     async def create_proxy(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -826,6 +971,98 @@ class ShareRouterView(_OwnedView):
         if not await _require_manage(interaction):
             return
         await _open_delete_source_picker(interaction)
+
+    @discord.ui.button(label="Create Download Channel", emoji="📥", style=discord.ButtonStyle.primary, row=3)
+    async def create_download_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        existing_id = await guild_download_channel_id(int(guild.id))
+        if existing_id:
+            await interaction.edit_original_response(
+                content="⚠️ This server already has a configured download channel. "
+                        "Disable the old one first if it was deleted.",
+                embed=None, view=None,
+            )
+            return
+        me = guild.me
+        if me is None or not me.guild_permissions.manage_channels:
+            await interaction.edit_original_response(
+                content="❌ Dank Shield needs Manage Channels to create the video download channel.",
+                embed=None, view=None,
+            )
+            return
+        channel = None
+        try:
+            channel = await guild.create_text_channel(
+                "video-downloads",
+                topic="Post one public video link to receive a private DM. "
+                      "Discord's DM upload limits apply; source links may remain "
+                      "visible if the bot cannot delete messages.",
+                reason="Dank Shield Share Router opt-in private video download channel",
+            )
+            await save_guild_download_channel(int(guild.id), int(channel.id))
+        except Exception as exc:
+            # Best-effort rollback only for a channel created by this click.
+            if channel is not None:
+                try:
+                    await channel.delete(reason="Download configuration save failed")
+                except discord.HTTPException:
+                    pass
+            await interaction.edit_original_response(
+                content=f"❌ Download setup did not finish ({type(exc).__name__}). "
+                        "Check channel permissions and try again.",
+                embed=None, view=None,
+            )
+            return
+        await interaction.edit_original_response(
+            content=(
+                f"✅ Created {channel.mention}. Members can paste one public video URL "
+                "per message; Dank Shield will DM the file when it fits the DM "
+                "limit, otherwise a link. Source posts are deleted only after "
+                "successful DM delivery and only with Manage Messages."
+            ),
+            embed=None, view=None, allowed_mentions=_ALLOWED_MENTIONS,
+        )
+
+    @discord.ui.button(label="Download Settings", emoji="⏳", style=discord.ButtonStyle.secondary, row=3)
+    async def download_settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        expire = await guild_download_expiry_seconds(int(interaction.guild.id))
+        await _replace(
+            interaction,
+            embed=await _download_settings_embed(interaction.guild),
+            view=ShareRouterDownloadSettingsView(self.owner_id, expire),
+        )
+
+    @discord.ui.button(label="Disable Downloads", emoji="⏸️", style=discord.ButtonStyle.secondary, row=3)
+    async def disable_downloads(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            await save_guild_download_channel(int(interaction.guild.id), 0)
+        except Exception as exc:
+            await interaction.edit_original_response(
+                content=f"❌ Could not disable downloads ({type(exc).__name__}).",
+                embed=None, view=None,
+            )
+            return
+        await interaction.edit_original_response(
+            content="✅ Auto-download DMs disabled for this server. "
+                    "The Discord channel was preserved; remove it manually if desired.",
+            embed=None, view=None,
+        )
 
     @discord.ui.button(label="Create / Repair Hub", emoji="🛠️", style=discord.ButtonStyle.primary, row=0)
     async def repair(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
