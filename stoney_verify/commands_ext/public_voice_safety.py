@@ -20,6 +20,7 @@ from ..community_voice_caption_runtime import (
 from ..community_voice_receive import VoiceReceiveUnavailable, voice_receive_capability
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+from ..ui.resource_browser import DankGuildResourceBrowserView
 from .public_owner_authority import (
     interaction_has_administrator_authority,
     interaction_has_manage_guild_authority,
@@ -209,45 +210,142 @@ class VoiceSafetyEndedView(VoiceSafetyConsentView):
         self.opt_in.label = "Review ended"
 
 
-class VoiceSafetyChannelSelect(discord.ui.ChannelSelect):
-    def __init__(self, kind: str) -> None:
-        self.kind = kind
-        key, types, label = {
-            "voice": (VOICE_SAFETY_VC, [discord.ChannelType.voice], "Monitored voice channel"),
-            "staff": (VOICE_SAFETY_STAFF, [discord.ChannelType.text], "Private staff-alert channel"),
-            "notice": (VOICE_SAFETY_NOTICE, [discord.ChannelType.text], "Member-visible notice channel"),
-        }[kind]
-        self.config_key = key
-        super().__init__(
-            placeholder=label,
-            min_values=1,
-            max_values=1,
-            channel_types=types,
-            custom_id=f"dank:voice_safety:select:{kind}:v1",
+_VOICE_SAFETY_CHANNEL_MODES = {
+    "voice": (VOICE_SAFETY_VC, discord.VoiceChannel, "Monitored Voice Channel", ("voice",)),
+    "staff": (VOICE_SAFETY_STAFF, discord.TextChannel, "Private Staff Alerts", ("text",)),
+    "notice": (VOICE_SAFETY_NOTICE, discord.TextChannel, "Public Member Notice", ("text",)),
+}
+
+
+async def _show_voice_safety_staff_panel(interaction: discord.Interaction, *, owner_id: int) -> None:
+    """Return to the canonical manager in the same private Discord message."""
+    payload = {
+        "embed": await _embed(interaction),
+        "view": VoiceSafetyStaffView(owner_id),
+        "allowed_mentions": discord.AllowedMentions.none(),
+    }
+    if interaction.response.is_done():
+        await interaction.edit_original_response(**payload)
+    else:
+        await interaction.response.edit_message(**payload)
+
+
+def _voice_safety_channel_blocker(
+    guild: discord.Guild, channel: object, kind: str, actor: discord.abc.User
+) -> str:
+    """Eligibility is checked on selection, not hidden from Search-Safe browsing."""
+    mode = _VOICE_SAFETY_CHANNEL_MODES.get(kind)
+    if mode is None or not isinstance(channel, mode[1]):
+        return "Select the correct channel type. Voice monitoring requires a normal VC; alerts and notices require text channels."
+    if guild.get_channel(int(channel.id)) is not channel:
+        return "The selected channel is no longer in this server. Search again."
+    me = guild.me
+    if me is None:
+        return "Dank Shield could not resolve its server permissions."
+    bot_permissions = channel.permissions_for(me)
+    if kind == "voice":
+        if not (bot_permissions.view_channel and bot_permissions.connect):
+            return "Dank Shield needs View Channel and Connect in the monitored voice channel."
+        return ""
+    everyone_can_view = bool(channel.permissions_for(guild.default_role).view_channel)
+    if kind == "staff" and everyone_can_view:
+        return "This channel is publicly visible to @everyone. Choose a private staff-only channel."
+    if kind == "notice" and not everyone_can_view:
+        return "This notice channel is hidden from @everyone. Choose a member-visible channel."
+    if not (bot_permissions.view_channel and bot_permissions.send_messages):
+        return "Dank Shield needs View Channel and Send Messages in the selected text channel."
+    if kind == "staff" and not channel.permissions_for(actor).view_channel:
+        return "You cannot view this staff channel. Select a channel accessible to your moderation team."
+    return ""
+
+
+async def _open_voice_safety_channel_browser(
+    interaction: discord.Interaction, *, owner_id: int, kind: str
+) -> None:
+    """Use the shared Search-Safe, paginated channel browser, never ChannelSelect."""
+    if int(getattr(interaction.user, "id", 0) or 0) != int(owner_id) or not _staff(interaction):
+        return await interaction.response.send_message(
+            "Open your own Voice Safety settings with Manage Server access.", ephemeral=True
+        )
+    guild = interaction.guild
+    if guild is None or kind not in _VOICE_SAFETY_CHANNEL_MODES:
+        return await interaction.response.send_message(
+            "Voice Safety channel settings must be opened inside a server.", ephemeral=True
+        )
+    manager = ensure_community_voice_caption_manager(interaction.client)
+    status = manager.status_for_guild(int(guild.id))
+    if status.get("active") and status.get("scope_kind") == "voice_safety":
+        return await interaction.response.send_message(
+            "Stop active Voice Safety before changing its channels.", ephemeral=True
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer()
-        if not _staff(interaction):
-            return await interaction.followup.send("Manage Server is required.", ephemeral=True)
-        manager = ensure_community_voice_caption_manager(interaction.client)
-        status = manager.status_for_guild(int(interaction.guild_id))
-        if status.get("active") and status.get("scope_kind") == "voice_safety":
-            return await interaction.followup.send("Stop active Voice Safety before changing channels.", ephemeral=True)
+    config_key, expected_type, title, kinds = _VOICE_SAFETY_CHANNEL_MODES[kind]
+
+    async def back(back_interaction: discord.Interaction) -> None:
+        await _show_voice_safety_staff_panel(back_interaction, owner_id=owner_id)
+
+    async def picked(pick_interaction: discord.Interaction, resource: object) -> None:
+        if (
+            pick_interaction.guild is None
+            or int(pick_interaction.guild.id) != int(guild.id)
+            or int(pick_interaction.user.id) != int(owner_id)
+            or not _staff(pick_interaction)
+        ):
+            return await pick_interaction.response.send_message(
+                "You no longer have access to these Voice Safety settings.", ephemeral=True
+            )
+        live_status = ensure_community_voice_caption_manager(
+            pick_interaction.client
+        ).status_for_guild(int(guild.id))
+        if live_status.get("active") and live_status.get("scope_kind") == "voice_safety":
+            return await pick_interaction.response.send_message(
+                "Stop the active Voice Safety session before changing channels.", ephemeral=True
+            )
+        blocker = _voice_safety_channel_blocker(guild, resource, kind, pick_interaction.user)
+        if blocker:
+            return await pick_interaction.response.send_message(
+                f"❌ {blocker} No setting was changed.", ephemeral=True
+            )
+        await pick_interaction.response.defer()
         try:
-            await _save(interaction, {self.config_key: int(self.values[0].id)})
-            await interaction.edit_original_response(embed=await _embed(interaction), view=VoiceSafetyStaffView(int(interaction.user.id)))
+            await _save(pick_interaction, {config_key: int(resource.id)})
         except Exception:
-            return await interaction.followup.send("Could not verify the selected channel. No new review was started.", ephemeral=True)
+            return await pick_interaction.followup.send(
+                "❌ Channel selection could not be saved and verified. Try again; monitoring was not started.",
+                ephemeral=True,
+            )
+        await _show_voice_safety_staff_panel(pick_interaction, owner_id=owner_id)
+
+    browser = DankGuildResourceBrowserView(
+        guild=guild,
+        author_id=int(owner_id),
+        resource_kinds=kinds,
+        on_pick=picked,
+        custom_id=f"dank:voice_safety:browse:{kind}:v1",
+        title=f"Voice Safety · {title}",
+        placeholder="Choose a channel or press Search…",
+        on_home=back,
+        home_label="Voice Safety settings",
+        empty_message=(
+            "No channels matched. Try Search using a plain-language or styled name, "
+            "a previous name, channel ID, or channel mention."
+        ),
+    )
+    payload = {
+        "embed": browser.embed(),
+        "view": browser,
+        "allowed_mentions": discord.AllowedMentions.none(),
+    }
+    if interaction.response.is_done():
+        await interaction.edit_original_response(**payload)
+    else:
+        await interaction.response.edit_message(**payload)
 
 
 class VoiceSafetyStaffView(discord.ui.View):
     def __init__(self, owner_id: int) -> None:
         super().__init__(timeout=PRIVATE_MENU_TTL_SECONDS)
         self.owner_id = int(owner_id)
-        self.add_item(VoiceSafetyChannelSelect("voice"))
-        self.add_item(VoiceSafetyChannelSelect("staff"))
-        self.add_item(VoiceSafetyChannelSelect("notice"))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) == self.owner_id and _staff(interaction):
@@ -255,7 +353,19 @@ class VoiceSafetyStaffView(discord.ui.View):
         await interaction.response.send_message("Open your own /dank protection Voice Safety panel.", ephemeral=True)
         return False
 
-    @discord.ui.button(label="Enable / Disable Setup", emoji="⚙️", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="Monitored Voice Channel", emoji="🔊", style=discord.ButtonStyle.secondary, row=0)
+    async def choose_voice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_voice_safety_channel_browser(interaction, owner_id=self.owner_id, kind="voice")
+
+    @discord.ui.button(label="Private Staff Alerts", emoji="🔒", style=discord.ButtonStyle.secondary, row=0)
+    async def choose_staff(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_voice_safety_channel_browser(interaction, owner_id=self.owner_id, kind="staff")
+
+    @discord.ui.button(label="Public Member Notice", emoji="📢", style=discord.ButtonStyle.secondary, row=0)
+    async def choose_notice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _open_voice_safety_channel_browser(interaction, owner_id=self.owner_id, kind="notice")
+
+    @discord.ui.button(label="Enable / Disable Setup", emoji="⚙️", style=discord.ButtonStyle.secondary, row=1)
     async def toggle_enabled(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.defer()
         guild = interaction.guild
@@ -274,7 +384,7 @@ class VoiceSafetyStaffView(discord.ui.View):
             return await interaction.followup.send("Failed to confirm saved setup state.", ephemeral=True)
         await interaction.edit_original_response(embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id))
 
-    @discord.ui.button(label="Start / Stop Review", emoji="🛡️", style=discord.ButtonStyle.primary, row=3)
+    @discord.ui.button(label="Start / Stop Review", emoji="🛡️", style=discord.ButtonStyle.primary, row=1)
     async def control(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.defer()
         guild = interaction.guild
@@ -318,7 +428,7 @@ class VoiceSafetyStaffView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=1)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.defer()
         await interaction.edit_original_response(embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id))
