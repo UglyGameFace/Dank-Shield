@@ -400,7 +400,8 @@ def test_downloads_use_existing_router_listener_not_second_listener() -> None:
     from inspect import getsourcelines
     source = "".join(getsourcelines(router.route_message)[0])
     assert "guild_route_state" in source
-    assert "handle_download_message" in source
+    assert "enqueue_download_request" in source
+    assert "handle_download_message" in Path("stoney_verify/share_router_download_queue.py").read_text()
     assert "ensure_share_router_runtime" in Path("stoney_verify/share_router_runtime.py").read_text()
     assert "bot.add_listener(route_message" in Path("stoney_verify/share_router_runtime.py").read_text()
     assert "add_listener" not in Path("stoney_verify/share_router_private_downloads.py").read_text()
