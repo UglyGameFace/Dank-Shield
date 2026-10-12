@@ -751,7 +751,8 @@ def test_runtime_native_video_relay_is_bounded_and_fail_open() -> None:
     assert "public_tcp_connector(ttl_dns_cache=60)" in RUNTIME
     assert "class PublicOnlyDNSResolver" in NETWORK
     assert "PublicOnlyDNSResolver()" in NETWORK
-    assert "request_headers=dict(resolution.request_headers)" in RUNTIME
+    assert "request_headers=dict(headers)" in RUNTIME
+    assert "_download_resolved_progressive(" in RUNTIME
     assert "_extract_x_video_url" not in RUNTIME
     assert "asyncio.to_thread" in RESOLVER
     assert "yt_dlp.YoutubeDL" in RESOLVER
