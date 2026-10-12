@@ -477,6 +477,34 @@ async def _download_trusted_video(
                 pass
 
 
+async def _download_resolved_progressive(
+    resolution: Any,
+    *,
+    max_bytes: int,
+) -> Optional[RoutedVideo]:
+    """Try one provider-declared Facebook alternate if the first CDN URL fails.
+
+    Both candidates go through the same guarded bounded download. Do not add
+    more yt-dlp extraction, use arbitrary page links, or bypass size limits.
+    """
+    candidates = [(resolution.media_url, resolution.request_headers)]
+    if resolution.provider == "facebook":
+        candidates.extend(tuple(resolution.alternate_progressive)[:1])
+    attempted: set[str] = set()
+    for candidate, headers in candidates:
+        if not candidate or candidate in attempted:
+            continue
+        attempted.add(candidate)
+        result = await _download_trusted_video(
+            candidate,
+            max_bytes=max_bytes,
+            request_headers=dict(headers),
+        )
+        if result is not None:
+            return result
+    return None
+
+
 async def _prepare_native_video(
     message: discord.Message,
     target: discord.TextChannel,
@@ -508,10 +536,9 @@ async def _prepare_native_video(
         return None
 
     if resolution.progressive:
-        routed = await _download_trusted_video(
-            resolution.media_url,
+        routed = await _download_resolved_progressive(
+            resolution,
             max_bytes=max_bytes,
-            request_headers=dict(resolution.request_headers),
         )
         if routed is not None:
             _log(
