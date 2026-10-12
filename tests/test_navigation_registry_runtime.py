@@ -301,3 +301,28 @@ def test_navigation_home_category_descriptions_represent_recent_features() -> No
     for key in ("share_downloads", "toke_settings"):
         assert registry.feature_by_key(key).category == "community"
     assert registry.feature_by_key("verification_reminders").category == "access"
+
+
+def test_merged_voice_safety_navigation_contract_from_pr_522() -> None:
+    import inspect
+
+    cats = {category.key: category for category in registry.CATEGORIES}
+    assert "AI Voice Safety" in cats["voice"].description
+    assert "AI Voice Safety" in cats["safety"].description
+    assert "Share Router" in cats["community"].description
+    assert "Movie Night" in cats["community"].description
+    assert len(registry.CATEGORIES) <= 25
+    assert all(len(c.description) <= 100 for c in registry.CATEGORIES)
+    assert {f.key for f in registry.features_for_category("voice")} == {"live_captions", "voice_safety"}
+    entry = registry.feature_by_key("voice_safety")
+    assert entry is not None and entry.manager_only is True
+    assert "AI Voice Safety" in _labels(surface.FeatureCategoryView(100, "voice"))
+    assert registry.search_features("AI Voice Moderation")[0].key == "voice_safety"
+    assert registry.search_features("voice harassment")[0].key == "voice_safety"
+    assert registry.search_features("voicepatrol")[0].key == "voice_safety"
+    # New direct Download Settings replaces the earlier broader router match.
+    assert registry.search_features("download channel")[0].key == "share_downloads"
+    code = inspect.getsource(surface._route_feature)
+    assert 'if key == "voice_safety":' in code
+    assert "from .public_voice_safety import open_voice_safety_center" in code
+    assert "return await open_voice_safety_center(interaction)" in code
