@@ -246,7 +246,7 @@ async def stage_video(fp, *, ttl_seconds: int, ext: str = ".mp4") -> tuple[str, 
     if not size:
         return None
     prefix = f"{base}/share-video/{ident}/{token}"
-    return (f"{prefix}/watch", f"{prefix}/download", ident)
+    return (f"{prefix}/watch{ext}", f"{prefix}/download", ident)
 
 
 async def check_public_delivery() -> tuple[bool, str]:
@@ -307,13 +307,17 @@ async def _serve_video(request: web.Request) -> web.StreamResponse:
             raise web.HTTPNotFound()
     except OSError:
         raise web.HTTPNotFound()
-    is_download = str(request.match_info["mode"]) == "download"
+    mode = str(request.match_info["mode"])
+    is_download = mode == "download"
+    if not is_download and mode != "watch" + str(meta["ext"]):
+        raise web.HTTPNotFound()
     disposition = "attachment" if is_download else "inline"
     headers = {
         "Content-Disposition": f'{disposition}; filename="DankShield-Video{meta["ext"]}"',
         "Cache-Control": "private, no-store",
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "no-referrer",
+        "X-Robots-Tag": "noindex, nofollow, noarchive",
         "Cross-Origin-Resource-Policy": "cross-origin",
     }
     response = web.FileResponse(video, headers=headers)
@@ -326,7 +330,10 @@ async def _serve_video(request: web.Request) -> web.StreamResponse:
 
 
 def register_share_video_routes(app: web.Application) -> None:
-    app.router.add_get("/share-video/{ident}/{token}/{mode:watch|download}", _serve_video)
+    app.router.add_get(
+        "/share-video/{ident}/{token}/{mode:watch(?:\\.mp4|\\.webm|\\.mov|\\.gif)?|download}",
+        _serve_video,
+    )
     start_cleanup_worker()
 
 
