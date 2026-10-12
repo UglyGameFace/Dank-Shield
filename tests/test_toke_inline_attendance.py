@@ -177,3 +177,88 @@ def test_voice_burst_preserves_departure_identity_even_without_seen_cache(storag
         assert (await toke_sessions.get(100, 200))["going_ids"] == []
         assert not live._VOICE_DEPARTED and not live._VOICE_PENDING
     asyncio.run(run())
+
+
+def test_v2_card_edit_keeps_thumbnail_and_custom_buttons_without_legacy_embed(storage, monkeypatch):
+    class FakeTextChannel:
+        id = 700
+        def __init__(self, message):
+            self.message = message
+        async def fetch_message(self, mid):
+            assert mid == 200
+            return self.message
+
+    class FakeMessage:
+        def __init__(self):
+            self.edits = []
+            self.components = [
+                SimpleNamespace(children=[
+                    SimpleNamespace(children=[
+                        SimpleNamespace(content="## 💨 Toke Time\n<@&10>\n**Host** is calling the sesh crowd.\n> Meet here")
+                    ])
+                ])
+            ]
+            self.embeds = []
+        async def edit(self, **kwargs):
+            self.edits.append(kwargs)
+
+    async def run():
+        await toke_sessions.save_new({
+            **_session(), "media_layout": "thumbnail_v2",
+            "media_filename": "photo.jpg",
+        })
+        message = FakeMessage()
+        channel = FakeTextChannel(message)
+        guild = SimpleNamespace(
+            id=100, get_channel=lambda cid: channel if cid == 700 else None,
+        )
+        bot = SimpleNamespace(get_guild=lambda gid: guild if gid == 100 else None)
+        monkeypatch.setattr(live.discord, "TextChannel", FakeTextChannel)
+        stored = await toke_sessions.get(100, 200)
+        assert await live.refresh_card(bot, stored)
+        assert len(message.edits) == 1
+        assert "embed" not in message.edits[0] and "content" not in message.edits[0]
+        view = message.edits[0]["view"]
+        assert isinstance(view, live.TokeThumbnailLayout)
+        assert any(
+            isinstance(x, discord.ui.Thumbnail) and x.media.url == "attachment://photo.jpg"
+            for x in view.walk_children()
+        )
+        assert any(
+            isinstance(x, discord.ui.TextDisplay) and "Meet here" in x.content
+            for x in view.walk_children()
+        )
+        ended, err = await toke_sessions.react(100, 200, 1, "end")
+        assert not err
+        assert await live.refresh_card(bot, ended)
+        closed = message.edits[-1]["view"]
+        assert not any(isinstance(x, discord.ui.Button) for x in closed.walk_children())
+        assert not (await toke_sessions.get(100, 200))["close_pending"]
+    asyncio.run(run())
+
+
+def test_who_is_coming_excludes_departed_joiner_after_fresh_reconciliation(storage, monkeypatch):
+    class FakeVoice:
+        id = 300
+        mention = "<#300>"
+        members = [SimpleNamespace(id=45)]
+    monkeypatch.setattr(live.discord, "VoiceChannel", FakeVoice)
+    voice = FakeVoice()
+    guild = SimpleNamespace(get_channel=lambda cid: voice if cid == 300 else None)
+
+    async def run():
+        await toke_sessions.save_new(_session())
+        await toke_sessions.react(100, 200, 45, "going")
+        await toke_sessions.react(100, 200, 46, "going")
+        await toke_sessions.reconcile_voice(100, 200, {45, 46})
+        # 46 switched away while bot was down; 45 remains in the sesh VC.
+        snapshot = await live.reconcile_live_attendance(
+            guild, await toke_sessions.get(100, 200)
+        )
+        assert snapshot["going_ids"] == [45]
+        view = live.TokeRosterView(guild, snapshot)
+        body = view.embed().description
+        assert "<@45>" in body
+        assert "<@46>" not in body
+        assert "🔊" in body
+    asyncio.run(run())
