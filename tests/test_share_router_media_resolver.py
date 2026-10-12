@@ -499,6 +499,57 @@ def test_same_media_resolution_is_coalesced_and_cached(monkeypatch) -> None:
     assert snapshot["cache_entries"] == 1
 
 
+def test_signed_media_expiration_limits_cache_lifetime(monkeypatch) -> None:
+    # A provider returning a signed URL with a near-term expiration should not
+    # keep a stale player URL in the successful 15-minute extraction cache.
+    expires = int(time.time()) + 20
+    calls = []
+
+    def extract(_):
+        calls.append(1)
+        return {
+            "formats": [{
+                "url": f"https://cdn.example.com/video.mp4?expire={expires}&token=secret",
+                "protocol": "https", "ext": "mp4",
+                "vcodec": "h264", "acodec": "aac",
+                "filesize": 1_000_000,
+            }]
+        }
+
+    monkeypatch.setattr(media, "_extract_info_sync", extract)
+
+    async def scenario():
+        first = await media.resolve_media_url("https://vimeo.com/91234", max_bytes=20_000_000)
+        second = await media.resolve_media_url("https://vimeo.com/91234", max_bytes=20_000_000)
+        return first, second
+
+    first, second = asyncio.run(scenario())
+    assert first.progressive and second.progressive
+    assert len(calls) == 2
+    assert media.media_resolver_snapshot()["cache_entries"] == 0
+
+    safe = media.MediaResolution(
+        source_url="https://vimeo.com/1",
+        canonical_url="https://vimeo.com/1",
+        identity="vimeo:1",
+        provider="vimeo",
+        delivery="progressive",
+        media_url=f"https://cdn.example.com/video.mp4?expire={int(time.time()) + 120}&token=private",
+    )
+    ttl = media._resolution_cache_ttl(safe)
+    assert 0 < ttl < 120
+
+    no_expiry = media.MediaResolution(
+        source_url=safe.source_url,
+        canonical_url=safe.canonical_url,
+        identity=safe.identity,
+        provider=safe.provider,
+        delivery="progressive",
+        media_url="https://cdn.example.com/video.mp4",
+    )
+    assert media._resolution_cache_ttl(no_expiry) == media._POSITIVE_CACHE_TTL_SECONDS
+
+
 def test_extraction_concurrency_is_bounded(monkeypatch) -> None:
     monkeypatch.setenv("DANK_SHARE_ROUTER_MEDIA_EXTRACT_CONCURRENCY", "1")
     media.reset_media_resolver_state_for_tests()
