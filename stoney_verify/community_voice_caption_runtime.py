@@ -1152,6 +1152,21 @@ class CommunityVoiceCaptionManager:
             disconnect_receive_client(state.voice_client)
 
         guild = self.bot.get_guild(state.guild_id)
+        if state.scope_kind == "voice_safety" and state.notice_message_id and guild is not None:
+            # Do not leave an old public "active" notice behind after staff stop.
+            notice = guild.get_channel(state.notice_channel_id)
+            if isinstance(notice, discord.TextChannel):
+                try:
+                    from .commands_ext.public_voice_safety import VoiceSafetyEndedView
+
+                    await notice.get_partial_message(state.notice_message_id).edit(
+                        content="🛡️ **Voice Safety review ended.** No new audio is admitted. "
+                        "The Opt Out button remains available; staff must start a new session and post a new notice to resume.",
+                        view=VoiceSafetyEndedView(),
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+                    log.warning("Voice Safety notice could not be marked ended guild=%s", state.guild_id)
         destination = None
         if guild is not None:
             destination = (
