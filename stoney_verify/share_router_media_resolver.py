@@ -179,7 +179,7 @@ def _host_matches(host: str, root: str) -> bool:
 
 
 def _clean_input_url(value: str) -> str:
-    return _safe_str(value).rstrip(".,)")
+    return _safe_str(value).rstrip(".,)]}")
 
 
 def _parsed_http_url(value: str):
@@ -193,6 +193,18 @@ def _parsed_http_url(value: str):
     if str(parsed.scheme or "").lower() not in {"http", "https"}:
         return None
     if not parsed.hostname:
+        return None
+    # Avoid even classifying private/LAN media as a supported provider.
+    # The actual outbound media fetch uses a separate public-only DNS resolver.
+    if not is_safe_media_download_url(raw):
+        return None
+    # Never hand credential-bearing or nonstandard-port links to yt-dlp.
+    if parsed.username or parsed.password:
+        return None
+    try:
+        if parsed.port not in {None, 80, 443}:
+            return None
+    except ValueError:
         return None
     return parsed
 
@@ -394,6 +406,45 @@ def _manifest_candidate(fmt: Mapping[str, Any]) -> tuple[str, str, str]:
     return "", "", ""
 
 
+def _playback_format_priority(ext: str, vcodec: str, acodec: str) -> int:
+    """Favor broadly playable *existing* media without promising playback.
+
+    Discord accepts several MP4 codecs, but attachment playback still depends
+    on the device and client. Prefer MP4 H.264/AAC when the provider offers it.
+    This never transcodes or invents a codec from a filename.
+    """
+    video = (vcodec or "").lower()
+    audio = (acodec or "").lower()
+    extension = (ext or "").lower()
+    if extension == "gif":
+        return 6
+    avc = video == "h264" or video.startswith("avc1")
+    aac = audio == "aac" or audio.startswith("mp4a")
+    if extension == "mp4" and avc and aac:
+        return 6
+    if extension == "mp4" and avc and (not audio or audio == "none"):
+        return 5
+    if extension == "webm" and video.startswith(("vp8", "vp9")):
+        return 4
+    if avc:
+        return 3
+    if video.startswith(("hev1", "hvc1", "hevc", "h265", "av01", "av1", "vvc")):
+        return 1
+    return 2
+
+
+def _audio_merge_priority(ext: str, acodec: str) -> int:
+    """MP4-compatible audio should beat WebM/Opus when stream-copy merging."""
+    audio = (acodec or "").lower()
+    if (ext or "").lower() in {"m4a", "mp4", "aac"} and (
+        audio == "aac" or audio.startswith("mp4a")
+    ):
+        return 3
+    if audio in {"mp3", "mp4a"}:
+        return 2
+    return 1
+
+
 def select_media_resolution(
     info: Any,
     *,
@@ -420,7 +471,7 @@ def select_media_resolution(
         )
     progressive: list[
         tuple[
-            tuple[int, int, float, int],
+            tuple[int, int, int, float, int],
             str,
             str,
             str,
@@ -436,7 +487,7 @@ def select_media_resolution(
     ] | None = None
     video_only: list[
         tuple[
-            tuple[int, float, int],
+            tuple[int, int, int, float, int],
             str,
             str,
             str,
@@ -446,7 +497,7 @@ def select_media_resolution(
     ] = []
     audio_only: list[
         tuple[
-            tuple[float, int],
+            tuple[int, float, int],
             str,
             str,
             str,
@@ -510,7 +561,7 @@ def select_media_resolution(
                         size_score = -size if size > 0 else 0
                         audio_only.append(
                             (
-                                (abr, size_score),
+                                (_audio_merge_priority(ext, acodec), abr, size_score),
                                 url,
                                 protocol,
                                 ext,
@@ -533,7 +584,13 @@ def select_media_resolution(
                         size_score = -size if size > 0 else 0
                         video_only.append(
                             (
-                                (height, tbr, size_score),
+                                (
+                                    _playback_format_priority(ext, vcodec, acodec),
+                                    int(size > 0),
+                                    height,
+                                    tbr,
+                                    size_score,
+                                ),
                                 url,
                                 protocol,
                                 ext,
@@ -550,7 +607,13 @@ def select_media_resolution(
                         size_score = -size if size > 0 else 0
                         progressive.append(
                             (
-                                (1, height, tbr, size_score),
+                                (
+                                    _playback_format_priority(ext, vcodec, acodec),
+                                    int(size > 0),
+                                    height,
+                                    tbr,
+                                    size_score,
+                                ),
                                 url,
                                 protocol,
                                 ext,
@@ -690,6 +753,39 @@ def _record(provider: str, field: str, *, reason: str = "") -> None:
     bucket[field] = int(bucket.get(field, 0) or 0) + 1
     if reason:
         bucket["last_reason"] = _safe_str(reason)[:120]
+
+
+def _resolution_cache_ttl(resolution: MediaResolution) -> float:
+    """Never cache a recognized expiring signed media URL past its expiry.
+
+    CDN URLs often expire well before the old fixed 15-minute metadata cache.
+    Treat common Unix-second expiration parameters as bounds; unknown token
+    formats keep the existing TTL and never make authorization claims.
+    """
+    ttl = (
+        _POSITIVE_CACHE_TTL_SECONDS
+        if resolution.delivery in {"progressive", "manifest", "merge"}
+        else _NEGATIVE_CACHE_TTL_SECONDS
+    )
+    if resolution.delivery == "link":
+        return ttl
+    for url in (resolution.media_url, resolution.audio_url):
+        if not url:
+            continue
+        try:
+            query = parse_qsl(urlsplit(url).query, keep_blank_values=False)
+        except (TypeError, ValueError):
+            continue
+        for key, value in query:
+            if key.lower() not in {"expire", "expires", "exp"}:
+                continue
+            # Unix seconds only. An arbitrary short number is not an epoch.
+            if not str(value).isdigit() or not (10 <= len(str(value)) <= 11):
+                continue
+            expiration = int(value)
+            # Leave room for network fetch/Discord upload after extraction.
+            ttl = min(ttl, max(0.0, expiration - time.time() - 30.0))
+    return max(0.0, ttl)
 
 
 def _prune_cache(now: Optional[float] = None) -> None:
@@ -855,18 +951,16 @@ async def resolve_media_url(value: str, *, max_bytes: int) -> MediaResolution:
 
     task.add_done_callback(_cleanup)
     resolution = await asyncio.shield(task)
-    ttl = (
-        _POSITIVE_CACHE_TTL_SECONDS
-        if resolution.delivery in {"progressive", "manifest", "merge"}
-        else _NEGATIVE_CACHE_TTL_SECONDS
-    )
-    _RESOLUTION_CACHE[cache_key] = (time.monotonic() + ttl, resolution)
-    _prune_cache()
+    ttl = _resolution_cache_ttl(resolution)
+    if ttl > 0:
+        _RESOLUTION_CACHE[cache_key] = (time.monotonic() + ttl, resolution)
+        _prune_cache()
     return resolution
 
 
 async def resolve_first_media(text: str, *, max_bytes: int) -> Optional[MediaResolution]:
     fallback: Optional[MediaResolution] = None
+    remux_candidate: Optional[MediaResolution] = None
     seen: set[str] = set()
     for raw in MEDIA_URL_RE.findall(text or ""):
         canonical = canonicalize_media_url(raw)
@@ -879,9 +973,13 @@ async def resolve_first_media(text: str, *, max_bytes: int) -> Optional[MediaRes
         resolution = await resolve_media_url(canonical, max_bytes=max_bytes)
         if resolution.progressive:
             return resolution
-        if fallback is None:
+        if resolution.delivery in {"merge", "manifest"} and remux_candidate is None:
+            remux_candidate = resolution
+        elif fallback is None and resolution.delivery == "link":
             fallback = resolution
-    return fallback
+    # Do not let an earlier inaccessible/provider-blocked link prevent a later
+    # playable HLS/DASH or separate audio/video candidate from being attempted.
+    return remux_candidate or fallback
 
 
 def media_resolver_snapshot() -> dict[str, Any]:

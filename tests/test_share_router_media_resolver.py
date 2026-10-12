@@ -201,6 +201,219 @@ def test_selector_rejects_oversize_and_private_progressive_urls() -> None:
     assert resolved.reason == "no_safe_progressive_format"
 
 
+def test_selector_prefers_h264_aac_mp4_over_higher_resolution_hevc_av1() -> None:
+    # A larger HEVC/AV1 file may upload successfully while failing inline on
+    # some clients; prefer the available widely compatible format.
+    for codec in ("hvc1.1.6.L93", "av01.0.08M.08"):
+        info = {"formats": [
+            {
+                "url": "https://cdn.example.com/newer.mp4",
+                "protocol": "https", "ext": "mp4",
+                "vcodec": codec, "acodec": "aac",
+                "height": 2160, "filesize": 9_000_000,
+            },
+            {
+                "url": "https://cdn.example.com/compatible.mp4",
+                "protocol": "https", "ext": "mp4",
+                "vcodec": "avc1.64001f", "acodec": "mp4a.40.2",
+                "height": 720, "filesize": 7_000_000,
+            },
+        ]}
+        result = media.select_media_resolution(
+            info, source_url="https://vimeo.com/123", provider="vimeo",
+            max_bytes=20_000_000,
+        )
+        assert result.delivery == "progressive"
+        assert result.media_url.endswith("/compatible.mp4")
+
+
+def test_selector_prefers_known_sized_candidate_over_uncertain_same_codec() -> None:
+    info = {"formats": [
+        {
+            "url": "https://cdn.example.com/unknown.mp4",
+            "protocol": "https", "ext": "mp4",
+            "vcodec": "h264", "acodec": "aac",
+            "height": 1080,
+        },
+        {
+            "url": "https://cdn.example.com/known.mp4",
+            "protocol": "https", "ext": "mp4",
+            "vcodec": "h264", "acodec": "aac",
+            "height": 720, "filesize": 6_000_000,
+        },
+    ]}
+    result = media.select_media_resolution(
+        info, source_url="https://streamable.com/abc", provider="streamable",
+        max_bytes=20_000_000,
+    )
+    assert result.media_url.endswith("/known.mp4")
+    assert result.known_size == 6_000_000
+
+
+def test_merge_prefers_h264_aac_pair_over_higher_res_unsupported_codecs() -> None:
+    info = {"formats": [
+        {
+            "url": "https://cdn.example.com/hevc-only.mp4",
+            "protocol": "https", "ext": "mp4", "vcodec": "hevc",
+            "acodec": "none", "height": 2160, "filesize": 9_000_000,
+        },
+        {
+            "url": "https://cdn.example.com/h264-only.mp4",
+            "protocol": "https", "ext": "mp4", "vcodec": "h264",
+            "acodec": "none", "height": 720, "filesize": 6_000_000,
+        },
+        {
+            "url": "https://cdn.example.com/opus.webm",
+            "protocol": "https", "ext": "webm", "vcodec": "none",
+            "acodec": "opus", "abr": 190, "filesize": 1_000_000,
+        },
+        {
+            "url": "https://cdn.example.com/aac.m4a",
+            "protocol": "https", "ext": "m4a", "vcodec": "none",
+            "acodec": "aac", "abr": 128, "filesize": 1_000_000,
+        },
+    ]}
+    result = media.select_media_resolution(
+        info, source_url="https://youtu.be/abc123", provider="youtube",
+        max_bytes=20_000_000,
+    )
+    assert result.delivery == "merge"
+    assert result.media_url.endswith("/h264-only.mp4")
+    assert result.audio_url.endswith("/aac.m4a")
+
+
+def test_resolve_first_media_prefers_later_remuxable_over_earlier_link(
+    monkeypatch,
+) -> None:
+    # A social extractor failing must not discard a later legitimate manifest.
+    monkeypatch.setattr(media, "_extract_info_sync", lambda _: None)
+
+    async def scenario():
+        return await media.resolve_first_media(
+            "https://www.youtube.com/watch?v=unknown "
+            "https://cdn.example.com/approved.m3u8?token=xyz",
+            max_bytes=20_000_000,
+        )
+
+    result = asyncio.run(scenario())
+    assert result is not None
+    assert result.delivery == "manifest"
+    assert result.media_url.endswith("approved.m3u8?token=xyz")
+
+
+def test_resolve_first_media_returns_progressive_even_after_manifest() -> None:
+    async def scenario():
+        return await media.resolve_first_media(
+            "https://cdn.example.com/master.mpd "
+            "https://cdn.example.com/final.mp4",
+            max_bytes=20_000_000,
+        )
+
+    result = asyncio.run(scenario())
+    assert result is not None
+    assert result.delivery == "progressive"
+    assert result.media_url.endswith("final.mp4")
+
+
+def test_media_url_normalization_rejects_credential_and_nonstandard_port_links() -> None:
+    for value in (
+        "https://user:password@www.youtube.com/watch?v=abc123",
+        "https://www.youtube.com:8080/watch?v=abc123",
+        "https://127.0.0.1/video.mp4",
+        "https://cdn.example.com:8443/test.mp4",
+    ):
+        assert not media.provider_for_url(value)
+    assert media.canonicalize_media_url("https://cdn.example.com/final.mp4]") == (
+        "https://cdn.example.com/final.mp4"
+    )
+
+
+def test_share_router_media_health_is_private_aggregate_only(monkeypatch) -> None:
+    from stoney_verify.commands_ext import public_share_router as ui
+
+    monkeypatch.setattr(ui, "media_resolver_snapshot", lambda: {
+        "cache_entries": 1,
+        "inflight": 0,
+        "extract_concurrency": 2,
+        "providers": {
+            "youtube": {
+                "attempts": 3, "progressive": 1, "manifest": 1,
+                "merge": 0, "fallback": 1,
+                "last_reason": "https://secret.example/video?token=private",
+            },
+        },
+    })
+    monkeypatch.setattr(ui, "media_remux_snapshot", lambda: {
+        "success": 1, "failed": 2, "oversize": 0, "timeout": 0,
+    })
+    embed = ui._share_media_health_embed()
+    flattened = str(embed.to_dict())
+    assert "YouTube" in flattened
+    assert "1 classified" not in flattened  # 1 progressive + 1 manifest
+    assert "2 classified" in flattened
+    assert "secret.example" not in flattened
+    assert "token=private" not in flattened
+    assert len(embed.fields) <= 25
+    assert all(len(f.value) <= 1024 for f in embed.fields)
+
+
+def test_staff_provider_probe_does_not_echo_signed_url(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from stoney_verify.commands_ext import public_share_router as ui
+
+    records = []
+    class Response:
+        done = False
+
+        def is_done(self):
+            return self.done
+
+        async def defer(self, **kwargs):
+            self.done = True
+            records.append("defer")
+
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=101),
+        guild=SimpleNamespace(id=55, premium_tier=1),
+        response=Response(),
+    )
+
+    async def authorized(*args):
+        return True
+
+    async def classify(url, *, max_bytes):
+        assert interaction.response.is_done()
+        assert "token=hidden" in url
+        assert max_bytes > 0
+        return media.MediaResolution(
+            source_url=url,
+            canonical_url=url,
+            identity="private",
+            provider="youtube",
+            delivery="link",
+            reason="extract_failed",
+        )
+
+    async def private(*args, **kwargs):
+        records.append(kwargs)
+
+    monkeypatch.setattr(ui, "_require_manage", authorized)
+    monkeypatch.setattr(ui, "resolve_media_url", classify)
+    monkeypatch.setattr(ui, "_private", private)
+
+    async def check():
+        modal = ui.ShareRouterProviderProbeModal(owner_id=101)
+        modal.media_url._value = "https://www.youtube.com/watch?v=abc&token=hidden"
+        await modal.on_submit(interaction)
+
+    asyncio.run(check())
+    assert records[0] == "defer"
+    body = str(records[1]["embed"].to_dict())
+    assert "extract_failed" in body
+    assert "token=hidden" not in body
+    assert "https://www.youtube.com/watch" not in body
+
+
 def test_direct_media_resolves_without_yt_dlp(monkeypatch) -> None:
     def should_not_extract(_url: str):
         raise AssertionError("direct media must not invoke yt-dlp")
@@ -284,6 +497,57 @@ def test_same_media_resolution_is_coalesced_and_cached(monkeypatch) -> None:
     assert snapshot["providers"]["youtube"]["coalesced"] >= 1
     assert snapshot["providers"]["youtube"]["cache_hits"] >= 1
     assert snapshot["cache_entries"] == 1
+
+
+def test_signed_media_expiration_limits_cache_lifetime(monkeypatch) -> None:
+    # A provider returning a signed URL with a near-term expiration should not
+    # keep a stale player URL in the successful 15-minute extraction cache.
+    expires = int(time.time()) + 20
+    calls = []
+
+    def extract(_):
+        calls.append(1)
+        return {
+            "formats": [{
+                "url": f"https://cdn.example.com/video.mp4?expire={expires}&token=secret",
+                "protocol": "https", "ext": "mp4",
+                "vcodec": "h264", "acodec": "aac",
+                "filesize": 1_000_000,
+            }]
+        }
+
+    monkeypatch.setattr(media, "_extract_info_sync", extract)
+
+    async def scenario():
+        first = await media.resolve_media_url("https://vimeo.com/91234", max_bytes=20_000_000)
+        second = await media.resolve_media_url("https://vimeo.com/91234", max_bytes=20_000_000)
+        return first, second
+
+    first, second = asyncio.run(scenario())
+    assert first.progressive and second.progressive
+    assert len(calls) == 2
+    assert media.media_resolver_snapshot()["cache_entries"] == 0
+
+    safe = media.MediaResolution(
+        source_url="https://vimeo.com/1",
+        canonical_url="https://vimeo.com/1",
+        identity="vimeo:1",
+        provider="vimeo",
+        delivery="progressive",
+        media_url=f"https://cdn.example.com/video.mp4?expire={int(time.time()) + 120}&token=private",
+    )
+    ttl = media._resolution_cache_ttl(safe)
+    assert 0 < ttl < 120
+
+    no_expiry = media.MediaResolution(
+        source_url=safe.source_url,
+        canonical_url=safe.canonical_url,
+        identity=safe.identity,
+        provider=safe.provider,
+        delivery="progressive",
+        media_url="https://cdn.example.com/video.mp4",
+    )
+    assert media._resolution_cache_ttl(no_expiry) == media._POSITIVE_CACHE_TTL_SECONDS
 
 
 def test_extraction_concurrency_is_bounded(monkeypatch) -> None:
