@@ -152,6 +152,10 @@ class VoiceSafetyConsentView(discord.ui.View):
         if getattr(interaction.user, "bot", False):
             return await interaction.followup.send("Bots cannot consent to Voice Safety.", ephemeral=True)
         if enabled:
+            manager = ensure_community_voice_caption_manager(interaction.client)
+            live = manager.status_for_guild(int(guild.id))
+            if not live.get("active") or live.get("scope_kind") != "voice_safety":
+                return await interaction.followup.send("This Voice Safety notice is no longer active. Staff must start a new review session.", ephemeral=True)
             cfg = await get_guild_config(int(guild.id), refresh=True)
             if not bool(cfg.get(VOICE_SAFETY_ENABLED)) or _id(cfg, VOICE_SAFETY_NOTICE) != int(interaction.channel_id):
                 return await interaction.followup.send("This Voice Safety notice is inactive. Ask staff to post a new one.", ephemeral=True)
@@ -167,11 +171,12 @@ class VoiceSafetyConsentView(discord.ui.View):
                 "✅ You explicitly opted in to this server's Voice Safety review. "
                 "Only your speech in the selected VC during an active session can be transcribed by Gemini "
                 "and evaluated for staff-only incident alerts. This is separate from Live Captions consent. "
-                "Press Opt Out to revoke consent. Gemini Free Tier content may be used to improve Google's products.",
+                "This consent lasts only for this monitoring session and ends if you leave the VC. "
+                "Press Opt Out to revoke sooner. Gemini Free Tier content may be used to improve Google's products.",
                 ephemeral=True,
             )
         await interaction.followup.send(
-            "✅ Opted out. Your voice admission and queued buffers were revoked if monitoring was active. "
+            "✅ Opted out of the active session. Your voice admission and queued buffers were revoked if monitoring was active. "
             "Any incident alerts already delivered to staff must be handled under server retention policy.",
             ephemeral=True,
         )
@@ -183,6 +188,15 @@ class VoiceSafetyConsentView(discord.ui.View):
     @discord.ui.button(label="Opt Out", style=discord.ButtonStyle.secondary, custom_id="dank:voice_safety:consent_off:v1")
     async def opt_out(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._change(interaction, False)
+
+
+class VoiceSafetyEndedView(VoiceSafetyConsentView):
+    """Old notices keep opt-out available without advertising a live session."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.opt_in.disabled = True
+        self.opt_in.label = "Review ended"
 
 
 class VoiceSafetyChannelSelect(discord.ui.ChannelSelect):
