@@ -429,7 +429,7 @@ class CommunityVoiceCaptionManager:
         uid = int(user_id)
         if state.bridge.is_opted_in(uid):
             return
-        if state.scope_kind == "voice_safety" and not await self.voice_safety_consented(state.guild_id, uid):
+        if getattr(state, "scope_kind", "server") == "voice_safety" and not await self.voice_safety_consented(state.guild_id, uid):
             return
         if len(state.bridge.opted_in_user_ids()) >= self.max_speakers_per_session:
             raise VoiceReceiveUnavailable(
@@ -472,7 +472,7 @@ class CommunityVoiceCaptionManager:
         if not state.bridge.is_opted_in(uid):
             return
         state.bridge.opt_out(uid)
-        if state.advisor is not None:
+        if getattr(state, "advisor", None) is not None:
             state.advisor.revoke(uid)
         await state.engine.revoke_user(uid)
 
@@ -493,7 +493,7 @@ class CommunityVoiceCaptionManager:
 
         sid = self._guild_owner.get(gid)
         state = self._sessions.get(sid) if sid else None
-        if state is None or state.scope_kind == "voice_safety":
+        if state is None or getattr(state, "scope_kind", "server") == "voice_safety":
             return enabled
 
         guild = self.bot.get_guild(gid)
@@ -531,7 +531,7 @@ class CommunityVoiceCaptionManager:
                 continue
             if restored >= self.max_speakers_per_session:
                 break
-            if state.scope_kind == "voice_safety":
+            if getattr(state, "scope_kind", "server") == "voice_safety":
                 consented = await self.voice_safety_consented(state.guild_id, int(member.id))
             else:
                 prefs = await self.preferences_for_user(state.guild_id, int(member.id), refresh=True)
@@ -586,7 +586,7 @@ class CommunityVoiceCaptionManager:
         if after_id != target or before_id == target:
             return
 
-        if state.scope_kind == "voice_safety":
+        if getattr(state, "scope_kind", "server") == "voice_safety":
             consented = await self.voice_safety_consented(gid, uid)
         else:
             prefs = await self.preferences_for_user(gid, uid, refresh=True)
@@ -1180,7 +1180,7 @@ class CommunityVoiceCaptionManager:
                     else ""
                 )
                 await destination.send(
-                    ("🛡️ **Voice Safety stopped.** All active voice admissions cleared; no more speech is reviewed." if state.scope_kind == "voice_safety" else f"📝 **{scope_label} stopped.**{source} Active audio admission and buffered caption audio were cleared. Members who enabled remembered auto-caption stay opted in for future sessions until they turn it off."),
+                    ("🛡️ **Voice Safety stopped.** All active voice admissions cleared; no more speech is reviewed." if getattr(state, "scope_kind", "server") == "voice_safety" else f"📝 **{scope_label} stopped.**{source} Active audio admission and buffered caption audio were cleared. Members who enabled remembered auto-caption stay opted in for future sessions until they turn it off."),
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             except (discord.Forbidden, discord.NotFound, discord.HTTPException):
