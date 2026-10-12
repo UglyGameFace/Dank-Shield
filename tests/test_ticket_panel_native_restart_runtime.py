@@ -66,6 +66,101 @@ def test_public_ticket_panel_footer_is_user_facing() -> None:
     assert "Control Center" not in str(embed.to_dict())
 
 
+
+def test_public_ticket_button_does_not_disclose_staff_setup_problems(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        details = "Confidential staff role and channel permissions"
+        seen: list[tuple[str, dict[str, object]]] = []
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=333),
+            user=SimpleNamespace(id=444),
+        )
+
+        async def defer(_interaction, _ephemeral) -> bool:
+            return True
+
+        async def no_open_ticket(_guild, _member):
+            return None
+
+        async def preflight(_guild):
+            return None, None, [details], ["Staff-only warning"]
+
+        async def respond(_interaction, content: str, **kwargs):
+            seen.append((content, kwargs))
+
+        monkeypatch.setattr(panel, "_defer", defer)
+        monkeypatch.setattr(panel, "_member_from_interaction", lambda _i: interaction.user)
+        monkeypatch.setattr(panel, "_existing_open", no_open_ticket)
+        monkeypatch.setattr(panel, "_ticket_setup_preflight", preflight)
+        monkeypatch.setattr(panel, "_staff_check", lambda _i: False)
+        monkeypatch.setattr(panel, "_ephemeral", respond)
+
+        await panel._handle_panel_button_core(interaction)
+        assert len(seen) == 1
+        assert "temporarily unavailable" in seen[0][0]
+        assert details not in str(seen)
+        assert "embed" not in seen[0][1]
+
+        seen.clear()
+        monkeypatch.setattr(panel, "_staff_check", lambda _i: True)
+        await panel._handle_panel_button_core(interaction)
+        assert len(seen) == 1
+        staff_embed = seen[0][1].get("embed")
+        assert isinstance(staff_embed, discord.Embed)
+        assert details in str(staff_embed.to_dict())
+
+    asyncio.run(scenario())
+
+
+def test_public_ticket_category_menu_hides_staff_warnings(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        private_warning = "Staff-only category permission warning"
+        seen: list[tuple[str, dict[str, object]]] = []
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=333),
+            user=SimpleNamespace(id=444),
+        )
+
+        async def defer(_interaction, _ephemeral) -> bool:
+            return True
+
+        async def no_open_ticket(_guild, _member):
+            return None
+
+        async def preflight(_guild):
+            return None, None, [], [private_warning]
+
+        async def rows(_guild):
+            return ([{"slug": "support", "name": "Support", "description": "Get help"}], "internal fallback state")
+
+        async def respond(_interaction, content: str, **kwargs):
+            seen.append((content, kwargs))
+
+        monkeypatch.setattr(panel, "_defer", defer)
+        monkeypatch.setattr(panel, "_member_from_interaction", lambda _i: interaction.user)
+        monkeypatch.setattr(panel, "_existing_open", no_open_ticket)
+        monkeypatch.setattr(panel, "_ticket_setup_preflight", preflight)
+        monkeypatch.setattr(panel, "_load_rows", rows)
+        monkeypatch.setattr(panel, "_new_menu_session", lambda *_a: "session")
+        monkeypatch.setattr(panel, "_staff_check", lambda _i: False)
+        monkeypatch.setattr(panel, "_ephemeral", respond)
+
+        await panel._handle_panel_button_core(interaction)
+        assert len(seen) == 1
+        embed = seen[0][1]["embed"]
+        assert isinstance(embed, discord.Embed)
+        assert embed.title == "Create Ticket"
+        assert not embed.fields
+        assert private_warning not in str(embed.to_dict())
+        assert isinstance(seen[0][1]["view"], panel.TicketSelectView)
+
+    asyncio.run(scenario())
+
+
 def test_runtime_installs_persistent_view_and_independent_fallback(monkeypatch) -> None:
     fake_bot = FakeBot()
     sentinel_view = object()
