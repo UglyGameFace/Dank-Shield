@@ -286,8 +286,8 @@ def build_basic_verify_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
                 "By pressing **Agree & Verify**, you acknowledge that **selected voice channels may be "
                 "monitored by Dank Shield for safety**. Your audio is processed by Google Gemini "
                 "for transcription and AI conduct review; staff receive private incident alerts. "
-                "Dank Shield does not save raw audio. Google's Free Tier may use submitted content "
-                "to improve its products. You can withdraw via **Opt Out** in the Voice Safety notice. "
+                "Dank Shield does not save raw audio. Voice Safety requires an approved Gemini paid API project so content is not used for model improvement, "
+                "and an adult-only monitored space. You can withdraw via **Opt Out** in the Voice Safety notice. "
                 "Without agreement your voice is not monitored; contact staff for other access options."
             ),
             inline=False,
