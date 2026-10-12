@@ -1404,7 +1404,8 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
 
                     manager = ensure_community_voice_caption_manager(interaction.client)
                     await manager.set_voice_safety_consent(
-                        int(interaction.guild.id), int(interaction.user.id), True
+                        int(interaction.guild.id), int(interaction.user.id), True,
+                        source="basic_verify_v1",
                     )
                     message += " Your one-time Voice Safety agreement was saved; covered VCs can be reviewed automatically when enabled."
                 elif bool(_cfg_value(config, "voice_safety_enabled", False)):
