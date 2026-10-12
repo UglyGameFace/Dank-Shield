@@ -83,8 +83,17 @@ def voice_safety_scope_id(guild_id: int) -> str:
 
 
 def voice_safety_host_enabled() -> bool:
-    # Independent operator kill switch; cannot bypass the existing DAVE soak lock.
-    return os.getenv("DANK_VOICE_SAFETY_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    # Only approved paid Gemini/no-training processing for adult-only deployment.
+    # A guild rules page or Verified role cannot waive API data restrictions.
+    affirmative = {"1", "true", "yes", "on"}
+    return all(
+        os.getenv(key, "").strip().lower() in affirmative
+        for key in (
+            "DANK_VOICE_SAFETY_ENABLED",
+            "DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED",
+            "DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED",
+        )
+    )
 
 
 
@@ -1188,7 +1197,7 @@ class CommunityVoiceCaptionManager:
                         "Members who accepted the disclosed Voice Safety agreement during verification or on this notice may be monitored automatically in the selected VC. "
                         "Consented audio is sent to Google Gemini, and transcript text is sent to Gemini "
                         "for conduct classification. Staff may see an incident notice. "
-                        "This host uses Gemini Free Tier, where submitted data may be used to improve Google products. "
+                        "This operator has confirmed the Gemini project uses paid no-training data terms and the monitored space is restricted to adults. "
                         "Dank Shield does not retain raw audio; moderation incidents remain in the private staff channel. "
                         "Press **Opt Out** at any time to revoke ongoing monitoring. Existing members may press **Agree Once** here.",
                         view=VoiceSafetyConsentView(),
