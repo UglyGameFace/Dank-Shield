@@ -66,7 +66,8 @@ class FakeMessage:
 
 
 @pytest.fixture(autouse=True)
-def reset_state():
+def reset_state(monkeypatch):
+    monkeypatch.setattr(downloads.discord, "Member", FakeMember)
     downloads.reset_download_state_for_tests()
     yield
     downloads.reset_download_state_for_tests()
