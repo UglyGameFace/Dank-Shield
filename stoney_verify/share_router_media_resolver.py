@@ -755,6 +755,39 @@ def _record(provider: str, field: str, *, reason: str = "") -> None:
         bucket["last_reason"] = _safe_str(reason)[:120]
 
 
+def _resolution_cache_ttl(resolution: MediaResolution) -> float:
+    """Never cache a recognized expiring signed media URL past its expiry.
+
+    CDN URLs often expire well before the old fixed 15-minute metadata cache.
+    Treat common Unix-second expiration parameters as bounds; unknown token
+    formats keep the existing TTL and never make authorization claims.
+    """
+    ttl = (
+        _POSITIVE_CACHE_TTL_SECONDS
+        if resolution.delivery in {"progressive", "manifest", "merge"}
+        else _NEGATIVE_CACHE_TTL_SECONDS
+    )
+    if resolution.delivery == "link":
+        return ttl
+    for url in (resolution.media_url, resolution.audio_url):
+        if not url:
+            continue
+        try:
+            query = parse_qsl(urlsplit(url).query, keep_blank_values=False)
+        except (TypeError, ValueError):
+            continue
+        for key, value in query:
+            if key.lower() not in {"expire", "expires", "exp"}:
+                continue
+            # Unix seconds only. An arbitrary short number is not an epoch.
+            if not str(value).isdigit() or not (10 <= len(str(value)) <= 11):
+                continue
+            expiration = int(value)
+            # Leave room for network fetch/Discord upload after extraction.
+            ttl = min(ttl, max(0.0, expiration - time.time() - 30.0))
+    return max(0.0, ttl)
+
+
 def _prune_cache(now: Optional[float] = None) -> None:
     current = time.monotonic() if now is None else float(now)
     for key, (expires_at, _resolution) in list(_RESOLUTION_CACHE.items()):
@@ -918,13 +951,10 @@ async def resolve_media_url(value: str, *, max_bytes: int) -> MediaResolution:
 
     task.add_done_callback(_cleanup)
     resolution = await asyncio.shield(task)
-    ttl = (
-        _POSITIVE_CACHE_TTL_SECONDS
-        if resolution.delivery in {"progressive", "manifest", "merge"}
-        else _NEGATIVE_CACHE_TTL_SECONDS
-    )
-    _RESOLUTION_CACHE[cache_key] = (time.monotonic() + ttl, resolution)
-    _prune_cache()
+    ttl = _resolution_cache_ttl(resolution)
+    if ttl > 0:
+        _RESOLUTION_CACHE[cache_key] = (time.monotonic() + ttl, resolution)
+        _prune_cache()
     return resolution
 
 
