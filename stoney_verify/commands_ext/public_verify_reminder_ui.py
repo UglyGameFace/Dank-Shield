@@ -62,13 +62,14 @@ def _embed(guild: discord.Guild, cfg: Mapping[str, Any], policy: ReminderPolicy)
         title="🔔 Unverified Member Reminders",
         description=(
             "Uses Dank Shield's **existing Simple Verify status and role mapping**, not a separate member list. "
-            "This server controls its own settings. Members who verify stop qualifying automatically."
+            "This server controls its own settings. Members who verify stop qualifying automatically. "
+            "Enabling does not send instantly; reminders begin after the configured delay."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(
         name="Status",
-        value="Enabled" if policy.enabled else "Disabled (no messages are sent)",
+        value="Enabled (delivery requires a healthy database)" if policy.enabled else "Disabled (no messages are sent)",
         inline=True,
     )
     embed.add_field(
@@ -260,6 +261,18 @@ class ReminderSettingsView(_OwnedView):
         if await _save(interaction, cfg, replace(policy, delivery="dm")):
             fresh, current = await _load(interaction.guild)
             await _replace(interaction, embed=_embed(interaction.guild, fresh, current), view=ReminderSettingsView(self.owner_id, current))
+
+    @discord.ui.button(label="Check Database", emoji="🩺", style=discord.ButtonStyle.secondary, row=3)
+    async def check_database(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_staff(interaction):
+            return
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        if await ledger_ready():
+            await _private(interaction, "✅ Private PostgreSQL reminder ledger is reachable and readable. This checks storage only, not whether a member has been sent a reminder.")
+        else:
+            await _private(interaction, "❌ Private PostgreSQL reminder ledger is unavailable. Reminder sending pauses until the connection and table are healthy. Check the private database URL, VLAN and PostgreSQL service.")
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
