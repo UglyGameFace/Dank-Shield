@@ -120,8 +120,43 @@ def test_find_feature_understands_common_names_and_aliases() -> None:
     assert registry.search_features("share router")[0].key == "share_router"
     assert registry.search_features("member setup manager")[0].key == "member_setup_manager"
     assert registry.search_features("captions")[0].key == "live_captions"
+    assert registry.search_features("AI Voice Moderation")[0].key == "voice_safety"
+    assert registry.search_features("voice patrol")[0].key == "voice_safety"
+    assert registry.search_features("voice harassment")[0].key == "voice_safety"
+    assert registry.search_features("download channel")[0].key == "share_router"
     assert registry.search_features("ticket forms")[0].key == "tickets"
     assert registry.search_features("channel fonts")[0].key == "server_design"
+
+
+def test_voice_safety_is_visible_and_routes_to_the_single_protection_owner() -> None:
+    import inspect
+
+    categories = {category.key: category for category in registry.CATEGORIES}
+    assert "AI Voice Safety" in categories["voice"].description
+    assert "Voice Safety" in categories["safety"].description
+    voice_features = registry.features_for_category("voice")
+    assert {feature.key for feature in voice_features} == {"live_captions", "voice_safety"}
+
+    entry = registry.feature_by_key("voice_safety")
+    assert entry is not None
+    assert entry.manager_only
+    assert "AI Voice Safety" in _labels(surface.FeatureCategoryView(100, "voice"))
+    assert entry.key in surface._FEATURE_ROUTE_KEYS
+
+    source = inspect.getsource(surface._route_feature)
+    assert 'if key == "voice_safety":' in source
+    assert "from .public_voice_safety import open_voice_safety_center" in source
+    assert "return await open_voice_safety_center(interaction)" in source
+
+
+def test_home_section_copy_mentions_current_voice_and_share_products() -> None:
+    descriptions = {item.key: item.description for item in registry.CATEGORIES}
+    assert "AI Voice Safety" in descriptions["voice"]
+    assert "Live Captions" in descriptions["voice"]
+    assert "Share Router" in descriptions["community"]
+    assert "Movie Night" in descriptions["community"]
+    assert len(registry.CATEGORIES) <= 25
+    assert all(len(description) <= 100 for description in descriptions.values())
 
 
 def test_manager_features_are_visible_instead_of_permission_hidden() -> None:
