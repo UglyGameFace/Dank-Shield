@@ -59,6 +59,12 @@ async def _run_publish(monkeypatch, *, upload=None, media=""):
     monkeypatch.setattr(toke, "_toke_allowed_mentions", lambda *_args: discord.AllowedMentions.none())
     monkeypatch.setattr(toke, "choose_voice", lambda *_args: 0)
     monkeypatch.setattr(toke, "TokeCheersView", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        toke, "TokeThumbnailLayout",
+        lambda _guild, session, *, intro: SimpleNamespace(
+            filename=session["media_filename"], intro=intro, v2=True,
+        ),
+    )
     monkeypatch.setattr(toke, "render_card", lambda _guild, _session, card: card.copy())
 
     async def no_cooldown(*_args, **_kwargs):
@@ -86,7 +92,7 @@ async def _run_publish(monkeypatch, *, upload=None, media=""):
     return channel
 
 
-def test_uploaded_gif_is_only_native_attachment_not_editable_embed(monkeypatch):
+def test_uploaded_gif_is_compact_inline_thumbnail_without_editable_embed(monkeypatch):
     class Upload:
         filename = "sesh.gif"
         content_type = "image/gif"
@@ -96,16 +102,15 @@ def test_uploaded_gif_is_only_native_attachment_not_editable_embed(monkeypatch):
 
     channel = asyncio.run(_run_publish(monkeypatch, upload=Upload()))
     sent = channel.sent_payload
-    edited = channel.edited_payload
-    assert sent is not None and edited is not None
+    assert sent is not None
     assert sent["file"].filename == "sesh.gif"
-    assert sent["embed"].image.url is None
-    assert edited["embed"].image.url is None
-    assert sent["content"] == "<@&555>"
-    # Both initial publish and later session updates are safe from the
-    # attachment:// PATCH duplicate-media problem.
-    assert "attachment://" not in str(sent["embed"].to_dict())
-    assert "attachment://" not in str(edited["embed"].to_dict())
+    assert sent["view"].v2 is True
+    assert sent["view"].filename == "sesh.gif"
+    assert "## 💨 Toke Time" in sent["view"].intro
+    assert "<@&555>" in sent["view"].intro
+    assert "where's the sesh" in sent["view"].intro
+    assert "content" not in sent and "embed" not in sent
+    assert channel.edited_payload is None  # No first PATCH of embedded media.
 
 
 def test_public_tenor_gif_is_embedded_only_without_native_attachment(monkeypatch):
