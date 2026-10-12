@@ -197,6 +197,116 @@ def test_discord_413_upload_error_falls_back_to_honest_dm_link(monkeypatch):
     assert mentions.everyone is False
 
 
+def test_above_dm_cap_stages_private_links_and_reports_ttl(monkeypatch, tmp_path):
+    import io
+    message = FakeMessage()
+    called = []
+
+    async def resolve(text, *, max_bytes):
+        assert max_bytes == 128 * 1024 * 1024
+        return _resolution(text)
+
+    class LargeFile:
+        filename = "download.mp4"
+        fp = io.BytesIO(b"pretend-large-file")
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    video_file = LargeFile()
+
+    async def download(url, *, max_bytes, request_headers):
+        return SimpleNamespace(
+            file=video_file, source_url=url,
+            size_bytes=downloads.DM_ATTACHMENT_BYTES + 1, cleanup_path=None,
+        )
+
+    async def expiry(guild_id):
+        assert guild_id == 111
+        return 7 * 86400
+
+    async def stage(fp, *, ttl_seconds, ext):
+        called.append((fp, ttl_seconds, ext))
+        return (
+            "https://files.example.com/share-video/secret/watch",
+            "https://files.example.com/share-video/secret/download",
+            "assetone",
+        )
+
+    monkeypatch.setattr(downloads, "delivery_status", lambda: (True, "ready"))
+    monkeypatch.setattr(downloads, "file_max_bytes", lambda: 128 * 1024 * 1024)
+    monkeypatch.setattr(downloads, "resolve_first_media", resolve)
+    monkeypatch.setattr(router, "_download_trusted_video", download)
+    monkeypatch.setattr(router, "guild_download_expiry_seconds", expiry)
+    monkeypatch.setattr(downloads, "stage_video", stage)
+    assert run(downloads.handle_download_message(message))
+    assert message.deleted
+    assert video_file.closed
+    assert called == [(video_file.fp, 7 * 86400, ".mp4")]
+    assert len(message.author.sent) == 1
+    delivered, attachment, mentions = message.author.sent[0]
+    assert attachment is None
+    assert "▶️ Watch" in delivered
+    assert "📥 Download" in delivered
+    assert "expire in 7 day(s)" in delivered
+    assert mentions.everyone is False
+
+
+def test_staged_asset_revoked_when_dm_fails(monkeypatch):
+    import io
+    message = FakeMessage(member=FakeMember(dm_blocked=True))
+    deleted = []
+
+    async def resolve(text, *, max_bytes):
+        return _resolution(text)
+
+    file = SimpleNamespace(
+        filename="clip.mp4",
+        fp=io.BytesIO(b"file"), close=lambda: None,
+    )
+
+    async def download(url, *, max_bytes, request_headers):
+        return SimpleNamespace(
+            file=file, source_url=url,
+            size_bytes=downloads.DM_ATTACHMENT_BYTES + 1, cleanup_path=None,
+        )
+
+    async def stage(fp, *, ttl_seconds, ext):
+        return ("https://host/watch", "https://host/download", "abc123")
+
+    async def revoke(ident):
+        deleted.append(ident)
+
+    monkeypatch.setattr(downloads, "delivery_status", lambda: (True, "ready"))
+    monkeypatch.setattr(downloads, "file_max_bytes", lambda: 128 * 1024 * 1024)
+    monkeypatch.setattr(downloads, "resolve_first_media", resolve)
+    monkeypatch.setattr(router, "_download_trusted_video", download)
+    monkeypatch.setattr(downloads, "stage_video", stage)
+    monkeypatch.setattr(downloads, "revoke_video", revoke)
+    assert run(downloads.handle_download_message(message))
+    assert deleted == ["abc123"]
+    assert not message.deleted
+
+
+def test_per_guild_expiration_configuration_preserves_routes(monkeypatch, tmp_path):
+    monkeypatch.setattr(router, "ROUTES_FILE", tmp_path / "routes.json")
+
+    async def scenario():
+        await router.save_route(11, source_channel_id=12, target_channel_id=13)
+        before = await router.guild_routes(11)
+        assert await router.guild_download_expiry_seconds(11) == 604800
+        await router.save_guild_download_expiry_seconds(11, 3600)
+        assert await router.guild_download_expiry_seconds(11) == 3600
+        assert await router.guild_download_expiry_seconds(22) == 604800
+        assert await router.guild_routes(11) == before
+        with pytest.raises(ValueError):
+            await router.save_guild_download_expiry_seconds(11, 31 * 86400)
+        assert await router.guild_download_expiry_seconds(11) == 3600
+
+    run(scenario())
+
+
 def test_dm_disabled_never_erases_source_and_notifies_without_ping(monkeypatch):
     message = FakeMessage(member=FakeMember(dm_blocked=True))
 
