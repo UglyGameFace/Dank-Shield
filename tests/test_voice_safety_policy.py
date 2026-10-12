@@ -216,3 +216,144 @@ def test_voice_safety_ui_is_accessible_from_existing_protection_and_persistent()
 def test_staff_readiness_fails_when_host_gates_are_disabled(monkeypatch) -> None:
     monkeypatch.delenv("DANK_VOICE_SAFETY_ENABLED", raising=False)
     assert _readiness(SimpleNamespace(), {})[0] is False
+
+
+def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) -> None:
+    """Simulate the canonical receiver path without network or unconsented audio."""
+    async def run() -> None:
+        import stoney_verify.community_voice_caption_runtime as runtime
+        import stoney_verify.guild_config as guild_config
+
+        class FakeVoiceChannel:
+            def __init__(self):
+                self.id = 71
+                self.mention = "<#71>"
+                self.members = []
+            def permissions_for(self, member):
+                return SimpleNamespace(connect=True, view_channel=True)
+
+        class FakeTextChannel:
+            def __init__(self, channel_id):
+                self.id = channel_id
+                self.sent = []
+                self.edits = []
+            def permissions_for(self, member):
+                return SimpleNamespace(
+                    view_channel=member != "everyone" or self.id != 72,
+                    send_messages=True,
+                )
+            async def send(self, content, **kwargs):
+                self.sent.append((content, kwargs))
+                return SimpleNamespace(id=77)
+            def get_partial_message(self, message_id):
+                async def edit(**kwargs):
+                    self.edits.append((message_id, kwargs))
+                return SimpleNamespace(edit=edit)
+
+        voice = FakeVoiceChannel()
+        staff = FakeTextChannel(72)
+        notice = FakeTextChannel(73)
+        member = SimpleNamespace(
+            id=99, bot=False, voice=SimpleNamespace(channel=voice),
+        )
+        voice.members = [member]
+
+        class FakeGuild:
+            id = 5
+            default_role = "everyone"
+            me = "bot"
+            def get_member(self, uid):
+                return member if uid == 99 else None
+            def get_channel(self, cid):
+                return {71: voice, 72: staff, 73: notice}.get(int(cid))
+            def get_thread(self, cid):
+                return None
+
+        guild = FakeGuild()
+        bot = SimpleNamespace(get_guild=lambda gid: guild if gid == 5 else None, get_channel=lambda cid: None)
+        cfg = {
+            "voice_safety_enabled": True,
+            "voice_safety_voice_channel_id": 71,
+            "voice_safety_staff_channel_id": 72,
+            "voice_safety_notice_channel_id": 73,
+        }
+        async def get_config(gid, *, refresh=False):
+            return cfg
+        monkeypatch.setattr(guild_config, "get_guild_config", get_config)
+        monkeypatch.setattr(runtime, "voice_safety_host_enabled", lambda: True)
+        monkeypatch.setattr(runtime, "live_captions_enabled", lambda: True)
+        monkeypatch.setattr(runtime, "voice_receive_capability", lambda: SimpleNamespace(available=True, reason=""))
+        monkeypatch.setattr(runtime.discord, "VoiceChannel", FakeVoiceChannel)
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+
+        class FakeTranscriber:
+            async def prepare_user(self, uid):
+                return None
+            async def close(self):
+                return None
+
+        class FakeEngine:
+            def __init__(self, transcriber, publish, **kwargs):
+                self.transcriber = transcriber
+                self.publish = publish
+                self.allowed = set()
+            def submit(self, frame):
+                pass
+            def start(self):
+                pass
+            def allow_user(self, uid):
+                self.allowed.add(uid)
+            async def revoke_user(self, uid):
+                self.allowed.discard(uid)
+            async def close(self):
+                self.allowed.clear()
+
+        class FakeClient:
+            def is_connected(self):
+                return False
+
+        async def connect(channel, bridge):
+            return FakeClient()
+
+        async def classify(text):
+            if "unwanted explicit remarks" in text:
+                return VoiceSafetyVerdict("unwanted_sexual_comments", "review", "Repeated unwanted remarks")
+            return None
+
+        monkeypatch.setattr(runtime, "gemini_live_transcriber_from_env", lambda **kwargs: FakeTranscriber())
+        monkeypatch.setattr(runtime, "CaptionEngine", FakeEngine)
+        monkeypatch.setattr(runtime, "connect_receive_client", connect)
+        monkeypatch.setattr(runtime, "disconnect_receive_client", lambda client: None)
+        monkeypatch.setattr(runtime, "VoiceSafetyAdvisor", lambda: VoiceSafetyAdvisor(classify=classify))
+        monkeypatch.setenv("GEMINI_API_KEY", "fake-ci-key")
+
+        manager = CommunityVoiceCaptionManager(bot)
+        async def preferences(*args, **kwargs):
+            return {"language_code": ""}
+        manager.preferences_for_user = preferences
+
+        state = await manager.start_voice_safety(
+            guild_id=5, voice_channel_id=71, staff_alert_channel_id=72, notice_channel_id=73
+        )
+        assert state.scope_kind == "voice_safety"
+        assert state.notice_message_id == 77
+        assert len(notice.sent) == 1
+        assert state.bridge.opted_in_user_ids() == ()
+        await state.engine.publish(99, "unwanted explicit remarks directed at a member", 0.98)
+        assert staff.sent == []  # no consent, no alert
+        assert await manager.set_voice_safety_consent(5, 99, True) is True
+        assert state.bridge.is_opted_in(99)
+        await state.engine.publish(99, "unwanted explicit remarks directed at a member", 0.98)
+        assert len(staff.sent) == 1
+        assert "staff review only" in staff.sent[0][0]
+        assert "unwanted_sexual_comments" in staff.sent[0][0]
+        assert staff.sent[0][1]["allowed_mentions"].everyone is False
+        assert await manager.set_voice_safety_consent(5, 99, False) is False
+        assert not state.bridge.is_opted_in(99)
+        await state.engine.publish(99, "unwanted explicit remarks directed at a member", 0.98)
+        assert len(staff.sent) == 1
+        await manager.stop(voice_safety_scope_id(5))
+        assert "review ended" in notice.edits[0][1]["content"]
+        assert state.safety_consents == set()
+
+    asyncio.run(run())
