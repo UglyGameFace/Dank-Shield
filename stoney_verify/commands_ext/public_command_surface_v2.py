@@ -416,6 +416,8 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
         return await open_server_live_captions(interaction, replace_message=True)
 
     if key == "voice_safety":
+        # Voice Safety remains owned by Protection Center; navigation must
+        # never duplicate guild permissions, consent, or receiver management.
         from .public_voice_safety import open_voice_safety_center
         return await open_voice_safety_center(interaction)
 
