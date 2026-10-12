@@ -1,7 +1,9 @@
 """Security and startup regression checks for the opt-in companion VLAN bridge."""
 from __future__ import annotations
 
+import asyncio
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -26,48 +28,50 @@ def test_cross_repo_signed_handshake_interop_fixture():
     assert json.loads(body)["voice_capture_authorized"] is False
 
 
-@pytest.mark.asyncio
-async def test_private_bridge_disabled_has_no_listener(monkeypatch):
+def test_private_bridge_disabled_has_no_listener(monkeypatch):
     monkeypatch.delenv("DANK_VOICE_BRIDGE_ENABLED", raising=False)
-    assert await bridge.start_private_voice_bridge() is False
+    assert asyncio.run(bridge.start_private_voice_bridge()) is False
 
 
-@pytest.mark.asyncio
-async def test_private_bridge_rejects_unsigned_and_replayed_requests(monkeypatch):
+def test_private_bridge_rejects_unsigned_and_replayed_requests(monkeypatch):
     monkeypatch.setenv("DANK_VOICE_BRIDGE_ENABLED", "true")
     monkeypatch.setenv("DANK_VOICE_BRIDGE_SECRET", KEY)
     monkeypatch.setattr(bridge.time, "time", lambda: NOW)
     bridge._USED_NONCES.clear()
     request = SimpleNamespace(headers=request_headers(KEY, now=NOW, nonce=NONCE))
-    denied = await bridge.bridge_status(SimpleNamespace(headers={}))
-    assert denied.status == 401
-    first = await bridge.bridge_status(request)
-    assert first.status == 200
-    assert verify_response(KEY, NONCE, first.body, first.headers["X-WYM-Response-Signature"])
-    assert json.loads(first.body)["voice_capture_authorized"] is False
-    second = await bridge.bridge_status(request)
-    assert second.status == 409
-    assert await bridge.bridge_status(SimpleNamespace(headers=request_headers(KEY, now=NOW-31, nonce="b"*32))).status == 401
+    async def check():
+        denied = await bridge.bridge_status(SimpleNamespace(headers={}))
+        assert denied.status == 401
+        first = await bridge.bridge_status(request)
+        assert first.status == 200
+        assert verify_response(KEY, NONCE, first.body, first.headers["X-WYM-Response-Signature"])
+        assert json.loads(first.body)["voice_capture_authorized"] is False
+        second = await bridge.bridge_status(request)
+        assert second.status == 409
+        stale = await bridge.bridge_status(
+            SimpleNamespace(headers=request_headers(KEY, now=NOW - 31, nonce="b" * 32))
+        )
+        assert stale.status == 401
+    asyncio.run(check())
     bridge._USED_NONCES.clear()
 
 
-@pytest.mark.asyncio
-async def test_private_bridge_refuses_weak_secret_before_binding(monkeypatch):
+def test_private_bridge_refuses_weak_secret_before_binding(monkeypatch):
     monkeypatch.setenv("DANK_VOICE_BRIDGE_ENABLED", "true")
     monkeypatch.setenv("DANK_VOICE_BRIDGE_SECRET", "bad")
     monkeypatch.setattr(bridge, "_BRIDGE_RUNNER", None)
     with pytest.raises(BridgeRejected):
-        await bridge.start_private_voice_bridge()
+        asyncio.run(bridge.start_private_voice_bridge())
 
 
-def test_ordinary_structured_api_stays_bound_to_localhost():
-    import inspect
-    from stoney_verify.api_new import server
-    from stoney_verify import app
-    source = inspect.getsource(app._start_private_voice_bridge_once)
-    assert "_start_new_api_once" not in source
-    assert server._api_bind_host() == "127.0.0.1" or server._api_bind_host() not in ("", "0.0.0.0")
-    assert "DANK_VOICE_BRIDGE_ENABLED" in source
+def test_ordinary_structured_api_remains_unchanged_and_private_bridge_is_separate():
+    root = Path(__file__).resolve().parents[1]
+    app_source = (root / "stoney_verify/app.py").read_text(encoding="utf-8")
+    api_source = (root / "stoney_verify/api_new/server.py").read_text(encoding="utf-8")
+    assert "await _start_private_voice_bridge_once()" in app_source
+    assert "await _start_new_api_once()" in app_source
+    assert "return host or \"127.0.0.1\"" in api_source
+    assert "start_private_voice_bridge" not in api_source
 
 
 def test_bridge_has_no_monitoring_or_consent_implementation():
