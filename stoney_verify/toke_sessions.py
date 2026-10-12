@@ -79,6 +79,7 @@ async def save_new(session: Mapping[str, Any]) -> dict[str, Any]:
     value["created_at"] = time.time()
     value["cheers_ids"], value["going_ids"] = [], []
     value["voice_seen_ids"] = []  # Only RSVP identifiers observed in the session VC.
+    value["past_cheers_ids"], value["past_going_ids"] = [], []
     value["active"] = True
     value["close_pending"] = False
     value["close_synced"] = False
@@ -206,11 +207,20 @@ async def reconcile_voice(
         updated_cheers = [uid for uid in cheers if uid not in leaving]
         updated_going = [uid for uid in going if uid not in leaving]
         updated_seen = sorted((seen | (interested & present)) & present & (set(updated_cheers) | set(updated_going)))
+        past_cheers = {int(uid) for uid in session.get("past_cheers_ids", [])}
+        past_going = {int(uid) for uid in session.get("past_going_ids", [])}
+        new_past_cheers = past_cheers | (leaving & set(cheers))
+        new_past_going = past_going | (leaving & set(going))
         if (updated_cheers != cheers or updated_going != going
-                or updated_seen != sorted(seen)):
+                or updated_seen != sorted(seen)
+                or new_past_cheers != past_cheers or new_past_going != past_going):
             session["cheers_ids"] = updated_cheers
             session["going_ids"] = updated_going
             session["voice_seen_ids"] = updated_seen
+            # Historical participation is recorded only in the same durable
+            # session and never presented as current attendance.
+            session["past_cheers_ids"] = sorted(new_past_cheers)
+            session["past_going_ids"] = sorted(new_past_going)
             _write(data)
         elif expired:
             _write(data)
