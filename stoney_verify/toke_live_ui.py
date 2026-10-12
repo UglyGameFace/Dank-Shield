@@ -28,6 +28,7 @@ _REGISTERED: set[tuple[int, int]] = set()
 # "ignore anything within five seconds" gate loses the *last* update, leaving
 # the card inaccurate until someone manually presses Refresh.
 _VOICE_PENDING: dict[int, set[int]] = {}
+_VOICE_DEPARTED: dict[int, dict[int, set[int]]] = {}
 _VOICE_WORKERS: dict[int, asyncio.Task[None]] = {}
 _VOICE_DEBOUNCE_SECONDS = 2.0
 _STARTED_BOTS: set[int] = set()
@@ -210,7 +211,27 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
     return embed
 
 
-async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discord.Interaction | None = None) -> bool:
+async def reconcile_live_attendance(
+    guild: discord.Guild, session: Mapping[str, Any], *,
+    departed_ids: set[int] | None = None,
+) -> dict[str, Any]:
+    """Use the actual selected VC, not the cached response list, for attendance.
+
+    An unavailable/removed VC is not evidence everybody departed. In that
+    case keep RSVPs, but the card shows no verified VC attendance.
+    """
+    channel = guild.get_channel(int(session.get("voice_channel_id", 0) or 0))
+    if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
+        return dict(session)
+    present = {int(member.id) for member in (getattr(channel, "members", []) or [])}
+    current = await toke_sessions.reconcile_voice(
+        int(session["guild_id"]), int(session["message_id"]),
+        present, departed_ids=departed_ids,
+    )
+    return current if current is not None else dict(session)
+
+
+async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discord.Interaction | None = None, *, departed_ids: set[int] | None = None) -> bool:
     """Reconcile from current store state, then acknowledge terminal delivery.
 
     Never edit Discord using a stale active=True snapshot (the old expiry bug).
@@ -224,6 +245,8 @@ async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discor
     current = await toke_sessions.get(int(session["guild_id"]), int(session["message_id"]))
     if current is None:
         return False
+    if current.get("active", False):
+        current = await reconcile_live_attendance(guild, current, departed_ids=departed_ids)
     if interaction is not None and interaction.message is not None:
         message = interaction.message
     else:
@@ -282,17 +305,26 @@ class TokeRosterView(discord.ui.View):
             text=f"Page {self.page+1}/{self.pages} • 👑 Host · 💨 Cheers · 🙋 Joining · 🔊 In VC"
         )
 
+    async def _turn_page(self, interaction: discord.Interaction, direction: int) -> None:
+        await interaction.response.defer()
+        latest = await toke_sessions.get(
+            int(self.session["guild_id"]), int(self.session["message_id"])
+        )
+        if not latest or not latest.get("active", False):
+            return await interaction.edit_original_response(
+                content="This sesh has ended.", embed=None, view=None
+            )
+        latest = await reconcile_live_attendance(self.guild, latest)
+        view = TokeRosterView(self.guild, latest, self.page + direction)
+        await interaction.edit_original_response(embed=view.embed(), view=view)
+
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, custom_id="dank:toke:roster:prev")
     async def prev(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        view = TokeRosterView(self.guild, self.session, self.page - 1)
-        await interaction.response.edit_message(embed=view.embed(), view=view)
+        await self._turn_page(interaction, -1)
 
     @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, custom_id="dank:toke:roster:next")
     async def next(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        view = TokeRosterView(self.guild, self.session, self.page + 1)
-        await interaction.response.edit_message(embed=view.embed(), view=view)
+        await self._turn_page(interaction, 1)
 
 
 class TokeCheersView(discord.ui.View):
@@ -416,6 +448,7 @@ class TokeCheersView(discord.ui.View):
                 return await interaction.edit_original_response(
                     content="This server keeps participant names private."
                 )
+            session = await reconcile_live_attendance(guild, session)
             view = TokeRosterView(guild, session)
             await interaction.edit_original_response(embed=view.embed(), view=view)
         except (discord.HTTPException, OSError, ValueError) as exc:
@@ -446,6 +479,8 @@ class TokeCheersView(discord.ui.View):
             # embed; this ephemeral interaction gives an authoritative
             # snapshot even when the old card hasn't repainted yet.
             latest = await toke_sessions.get(interaction.guild.id, interaction.message.id)
+            if latest and latest.get("active", False):
+                latest = await reconcile_live_attendance(interaction.guild, latest)
             if not latest or not latest.get("active", False):
                 return await interaction.edit_original_response(
                     content="✅ This sesh has ended. The public card is closing."
@@ -807,13 +842,18 @@ async def _flush_toke_voice_updates(guild: discord.Guild, bot: Any) -> None:
         while _VOICE_PENDING.get(gid):
             await asyncio.sleep(_VOICE_DEBOUNCE_SECONDS)
             affected = _VOICE_PENDING.pop(gid, set())
+            departed = _VOICE_DEPARTED.pop(gid, {})
             if not affected:
                 continue
             for session in await toke_sessions.all_active(gid):
                 if int(session.get("voice_channel_id", 0) or 0) not in affected:
                     continue
                 try:
-                    await refresh_card(bot, session)
+                    departing_members = departed.get(int(session.get("voice_channel_id", 0) or 0), set())
+                    if departing_members:
+                        await refresh_card(bot, session, departed_ids=departing_members)
+                    else:
+                        await refresh_card(bot, session)
                 except (discord.HTTPException, ValueError, OSError) as exc:
                     print(
                         f"[toke] voice refresh error guild={gid} "
@@ -833,6 +873,10 @@ async def _on_toke_voice_state(
         return
     gid = int(member.guild.id)
     _VOICE_PENDING.setdefault(gid, set()).update(affected)
+    previous = getattr(before, "channel", None)
+    current = getattr(after, "channel", None)
+    if previous is not None and (current is None or int(current.id) != int(previous.id)):
+        _VOICE_DEPARTED.setdefault(gid, {}).setdefault(int(previous.id), set()).add(int(member.id))
     worker = _VOICE_WORKERS.get(gid)
     if worker is None or worker.done():
         _VOICE_WORKERS[gid] = asyncio.create_task(_flush_toke_voice_updates(member.guild, bot))
