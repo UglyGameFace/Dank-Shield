@@ -479,3 +479,63 @@ def test_voice_safety_auto_start_fails_closed_on_disabled_host_and_guild(monkeyp
         assert manager._sessions == {}
 
     asyncio.run(run())
+
+
+def test_basic_verify_records_voice_agreement_only_from_disclosed_panel(monkeypatch) -> None:
+    async def run() -> None:
+        import stoney_verify.verification_new.basic_verify as verify
+        import stoney_verify.community_voice_caption_runtime as runtime
+
+        class FakeMember:
+            id = 42
+
+        monkeypatch.setattr(verify.discord, "Member", FakeMember)
+        monkeypatch.setattr(verify, "_claim_basic_verify_interaction", lambda interaction: True)
+
+        async def ack(interaction):
+            return True
+
+        async def apply(member):
+            return True, "Verified successfully"
+
+        replied = []
+        async def reply(interaction, message, *, ok):
+            replied.append((message, ok))
+
+        async def cfg(gid, **kwargs):
+            return {"voice_safety_enabled": True}
+
+        recorded = []
+        class FakeManager:
+            async def set_voice_safety_consent(self, gid, uid, enabled):
+                recorded.append((gid, uid, enabled))
+                return enabled
+
+        monkeypatch.setattr(verify, "_ack", ack)
+        monkeypatch.setattr(verify, "_reply", reply)
+        monkeypatch.setattr(verify, "apply_basic_verification", apply)
+        monkeypatch.setattr(verify, "get_guild_config", cfg)
+        monkeypatch.setattr(runtime, "ensure_community_voice_caption_manager", lambda bot: FakeManager())
+
+        guild = SimpleNamespace(id=8)
+        member = FakeMember()
+        def interaction(message_id, embed):
+            return SimpleNamespace(
+                id=message_id, data={"custom_id": verify.BASIC_VERIFY_CUSTOM_ID},
+                guild=guild, user=member, client=object(),
+                message=SimpleNamespace(embeds=[embed]),
+                channel=SimpleNamespace(id=2),
+            )
+
+        from stoney_verify.verification_new.basic_verify import build_basic_verify_embed
+
+        original = build_basic_verify_embed(SimpleNamespace(get_channel=lambda key: None, text_channels=[]), {})
+        disclosed = build_basic_verify_embed(SimpleNamespace(get_channel=lambda key: None, text_channels=[]), {"voice_safety_enabled": True})
+
+        assert await verify.maybe_handle_basic_verify_interaction(interaction(100, original)) is True
+        assert recorded == []
+        assert await verify.maybe_handle_basic_verify_interaction(interaction(101, disclosed)) is True
+        assert recorded == [(8, 42, True)]
+        assert "one-time Voice Safety agreement" in replied[-1][0]
+
+    asyncio.run(run())
