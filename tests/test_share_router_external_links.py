@@ -34,6 +34,7 @@ def test_expiring_token_watch_download_range_and_revoke(tmp_path, monkeypatch):
         url_watch, url_download, ident = await links.stage_video(
             io.BytesIO(content), ttl_seconds=3600, ext=".mp4",
         )
+        assert url_watch.endswith("/watch.mp4")
         token = url_watch.split("/")[-2]
         assert len(token) == 64
         metadata = json.loads((tmp_path / (ident + ".json")).read_text())
@@ -52,7 +53,7 @@ def test_expiring_token_watch_download_range_and_revoke(tmp_path, monkeypatch):
         prefix = f"http://127.0.0.1:{port}/share-video/{ident}/{token}"
         try:
             async with aiohttp.ClientSession() as client:
-                async with client.get(prefix + "/watch") as response:
+                async with client.get(prefix + "/watch.mp4") as response:
                     assert response.status == 200
                     assert response.headers["Content-Type"].startswith("video/mp4")
                     assert response.headers["Content-Disposition"].startswith("inline")
@@ -60,15 +61,15 @@ def test_expiring_token_watch_download_range_and_revoke(tmp_path, monkeypatch):
                 async with client.get(prefix + "/download") as response:
                     assert response.status == 200
                     assert response.headers["Content-Disposition"].startswith("attachment")
-                async with client.get(prefix + "/watch", headers={"Range": "bytes=2-5"}) as response:
+                async with client.get(prefix + "/watch.mp4", headers={"Range": "bytes=2-5"}) as response:
                     assert response.status == 206
                     assert await response.read() == content[2:6]
-                async with client.get(prefix.replace(token, "1" * 64) + "/watch") as response:
+                async with client.get(prefix.replace(token, "1" * 64) + "/watch.mp4") as response:
                     assert response.status == 404
                 async with client.get(prefix + "/not-valid") as response:
                     assert response.status == 404
                 await links.revoke_video(ident)
-                async with client.get(prefix + "/watch") as response:
+                async with client.get(prefix + "/watch.mp4") as response:
                     assert response.status == 404
         finally:
             await runner.cleanup()
