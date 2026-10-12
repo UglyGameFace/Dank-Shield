@@ -108,6 +108,10 @@ class MediaResolution:
     request_headers: tuple[tuple[str, str], ...] = ()
     audio_request_headers: tuple[tuple[str, str], ...] = ()
     reason: str = ""
+    # Existing provider metadata may expose more than one progressive MP4 URL.
+    # Retain at most one separate safe alternative for a failed Facebook CDN
+    # transfer; this is not an additional extractor request or unbounded retry.
+    alternate_progressive: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
 
     @property
     def progressive(self) -> bool:
@@ -671,6 +675,16 @@ def select_media_resolution(
     if progressive:
         progressive.sort(key=lambda item: item[0], reverse=True)
         _, url, protocol, ext, size, request_headers = progressive[0]
+        alternatives: list[tuple[str, tuple[tuple[str, str], ...]]] = []
+        if provider == "facebook":
+            # A FB CDN HD URL may expire or be unavailable while its SD
+            # representation is valid. Reuse only a distinct progressive URL
+            # from the same extractor response; never invent an endpoint.
+            for candidate in progressive[1:]:
+                if candidate[3] != ext or candidate[1] == url:
+                    continue
+                alternatives.append((candidate[1], candidate[5]))
+                break
         return MediaResolution(
             source_url=source_url,
             canonical_url=canonical,
@@ -682,6 +696,7 @@ def select_media_resolution(
             ext=ext,
             known_size=size,
             request_headers=request_headers,
+            alternate_progressive=tuple(alternatives),
         )
 
     if video_only and audio_only:
