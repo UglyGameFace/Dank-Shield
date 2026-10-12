@@ -20,6 +20,7 @@ from stoney_verify.share_router_media_resolver import (
 from stoney_verify.share_router_media_remux import media_remux_snapshot
 from stoney_verify.share_router_external_links import (
     check_public_delivery, delivery_status, file_max_bytes, storage_max_bytes,
+    link_egress_budget,
 )
 from stoney_verify.share_router_resources import (
     DEFAULT_SHARE_CHANNELS,
@@ -889,7 +890,9 @@ async def _download_settings_embed(guild: discord.Guild) -> discord.Embed:
         name="Hosting limits",
         value=f"Up to {file_max_bytes() // (1024 * 1024)} MiB per file, "
               f"{storage_max_bytes() // (1024 * 1024)} MiB total configured storage. "
-              "These are safety limits, not guaranteed free disk space.",
+              f"Up to {link_egress_budget() // (1024 * 1024)} MiB of total public "
+              "transfer per issued link. These are safety limits, not "
+              "guaranteed free disk or bandwidth.",
         inline=False,
     )
     embed.add_field(
