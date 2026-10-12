@@ -29,6 +29,7 @@ _ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
 _ALLOWED_EXTS = {".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime", ".gif": "image/gif"}
 _DEFAULT_FILE_MAX = 128 * 1024 * 1024
+_HARD_FILE_MAX = 256 * 1024 * 1024
 _DEFAULT_STORE_MAX = 512 * 1024 * 1024
 _DEFAULT_RESERVE = 256 * 1024 * 1024
 _MAX_TTL_SECONDS = 30 * 24 * 3600
@@ -105,7 +106,7 @@ def _valid_meta(value: object) -> bool:
         isinstance(value, dict)
         and isinstance(value.get("expires_at"), (int, float))
         and isinstance(value.get("size"), int)
-        and 0 < value["size"] <= file_max_bytes()
+        and 0 < value["size"] <= _HARD_FILE_MAX
         and value.get("ext") in _ALLOWED_EXTS
         and isinstance(value.get("token_hash"), str)
         and len(value["token_hash"]) == 64
@@ -158,6 +159,10 @@ def _sweep_sync(max_entries: int = 128) -> int:
             if not metadata.is_file() and now - entry.stat().st_mtime > 3600:
                 video.unlink(missing_ok=True)
                 deleted += 1
+        elif suffix == ".part" and now - entry.stat().st_mtime > 3600:
+            # A crash while spooling must not leak temporary disk space.
+            entry.unlink(missing_ok=True)
+            deleted += 1
     return deleted
 
 
