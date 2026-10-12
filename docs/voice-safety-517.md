@@ -59,3 +59,13 @@ voice receive readiness before attempting Start Review.
 ## Known constraints
 
 AI triage is **advisory**, not calibrated legal or factual evidence. Do not automatically mute/ban based on it. Identity, LGBTQ+ status, orientation, and ordinary nonexplicit conversation are not violations. Transcription uses Gemini rather than local Whisper in this pilot. Runtime session limits and Discloud/Google quotas apply, with no guarantee of 10,000 active monitored guilds.
+
+## Separate Watch Yo Mouf Discloud VLAN status link (no monitoring)
+
+The existing Dank Shield site deployment already has `VLAN=true`, `HOSTNAME=dankbot`. Discloud's VLAN permits private container-to-container requests. This paired PR adds `stoney_verify.voice_companion_bridge`, **off by default** and separate from the protected `BOT_API_BIND_HOST=127.0.0.1` structured API. Its only route, `GET /v1/status`, is served on VLAN port `8097` and requires one-time nonce/timestamp/HMAC verification using `DANK_VOICE_BRIDGE_SECRET` (at least 32 random bytes). The response is signed and reports only protocol version and that Dank Shield still owns policy/capture authority, with `voice_capture_authorized=false`. It neither fetches consent nor admits audio.
+
+Paired Watch Yo Mouf deployment uses `VLAN=true`, unique hostname `watchyomouf`, and the corresponding `WATCH_YO_MOUF_BRIDGE_SECRET`; a private staff-only `/watchyo` diagnostic calls `http://dankbot:8097/v1/status` on demand with 1.5-second request timeout and verifies the signed reply.
+
+**Order:** merge and deploy this PR on the actual Discloud integration branch, then merge/deploy its companion Watch Yo Mouf PR. Set the **same** independently generated random secret on both Discloud apps (never in source or chat). Only then explicitly set `DANK_VOICE_BRIDGE_ENABLED=true` and `WATCH_YO_MOUF_BRIDGE_ENABLED=true` and restart. The first public `/watchyo` result proving an authenticated private link is a pending real deployment acceptance test, not an achieved fact. Neither app needs new slash scopes or permissions for this diagnostic; RAM remains 768 MB on Watch Yo Mouf.
+
+**No change to current monitoring:** existing in-process Dank Shield `CommunityVoiceCaptionManager` remains the sole receiver authority. This handshake does not grant policy, consent, lease/fencing, sender identity, DAVE decode, audio buffering, AI triage, or incident delivery. No public Internet endpoint is added by this change, but a live Discloud private-network reachability/exposure check is mandatory. Do not enable listening merely because private connectivity is green.

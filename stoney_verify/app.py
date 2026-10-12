@@ -990,6 +990,22 @@ async def _start_new_api_once() -> None:
         print("❌ New API failed:", repr(e))
 
 
+async def _start_private_voice_bridge_once() -> None:
+    """Start only the narrow, independently authenticated Discloud VLAN probe."""
+    if not _env_true("DANK_VOICE_BRIDGE_ENABLED"):
+        return
+    if not claim_startup_flag("voice_companion_bridge"):
+        return
+    try:
+        from .voice_companion_bridge import start_private_voice_bridge
+
+        await start_private_voice_bridge()
+        print("🔐 Voice companion private status bridge listening on VLAN port 8097")
+    except Exception as exc:
+        # A diagnostic bridge failure never authorizes or changes voice capture.
+        print(f"⚠️ Voice companion private bridge unavailable: {type(exc).__name__}")
+
+
 async def _start_torrent_media_server_once() -> None:
     global _STARTED_TORRENT_MEDIA_SERVER
 
@@ -1164,6 +1180,7 @@ async def on_ready() -> None:
         await _maybe_resume_kick_timers_once()
         await _start_legacy_actions_api_once()
         await _start_new_api_once()
+        await _start_private_voice_bridge_once()
         await _start_torrent_media_server_once()
         await _start_workers_once()
         await _run_permission_self_check_once()

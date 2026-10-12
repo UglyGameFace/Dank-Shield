@@ -42,6 +42,12 @@ jobs:
       - name: Compile Python modules
         run: python -m compileall -q stoney_verify main.py tools
 
+      - name: Verify isolated Voice Safety VLAN bridge security
+        run: python -m pytest tests/test_voice_companion_bridge.py -q --tb=short --disable-warnings
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+
       - name: Run unit test suite
         id: unit_tests
         shell: bash
