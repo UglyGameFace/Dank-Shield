@@ -8,6 +8,16 @@ import discord
 
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 
+from stoney_verify.share_router_media_resolver import (
+    MediaResolution,
+    PROVIDERS,
+    media_provider_policy,
+    media_resolver_snapshot,
+    provider_for_url,
+    provider_label,
+    resolve_media_url,
+)
+from stoney_verify.share_router_media_remux import media_remux_snapshot
 from stoney_verify.share_router_resources import (
     DEFAULT_SHARE_CHANNELS,
     SHARE_ROUTER_CATEGORY_NAME,
@@ -30,6 +40,7 @@ from stoney_verify.share_router_runtime import (
     route_health,
     route_permission_blockers,
     save_managed_share_route,
+    _share_video_limit_bytes,
     source_age_blocker,
     source_privacy_blocker,
 )
@@ -223,6 +234,128 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
     )
     embed.set_footer(text="Share Router proxy channels keep plain names so mobile sharing stays reliable. • Share Router v2")
     return embed
+
+
+def _share_media_health_embed() -> discord.Embed:
+    """Operator-only aggregates. Never expose URL, query, token or user content."""
+    snapshot = media_resolver_snapshot()
+    health = snapshot.get("providers") or {}
+    policy = media_provider_policy()
+    embed = discord.Embed(
+        title="🎞️ Share Router Media Health",
+        description=(
+            "Runtime-only metadata from this bot process. Counts are global across "
+            "servers, reset on restart and do **not** guarantee inline video playback. "
+            "Use **Test Provider** for a fresh metadata-only check of a public URL."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Resolver",
+        value=(
+            f"Cache: {snapshot.get('cache_entries', 0)} • "
+            f"Active extraction: {snapshot.get('inflight', 0)} • "
+            f"Parallelism cap: {snapshot.get('extract_concurrency', 0)}"
+        ),
+        inline=False,
+    )
+    lines: list[str] = []
+    for key in [*(p.key for p in PROVIDERS), "direct"]:
+        state = health.get(key) or {}
+        label = provider_label(key)
+        if not policy.get(key, False):
+            lines.append(f"⏸️ {label}: disabled")
+            continue
+        attempts = int(state.get("attempts") or 0)
+        fallbacks = int(state.get("fallback") or 0)
+        ready = sum(int(state.get(k) or 0) for k in ("progressive", "manifest", "merge"))
+        lines.append(f"• {label}: {ready} classified / {fallbacks} fallback / {attempts} extracted")
+    for start in range(0, len(lines), 7):
+        embed.add_field(
+            name=f"Providers ({start + 1}-{min(start + 7, len(lines))})",
+            value="\n".join(lines[start:start + 7])[:1024],
+            inline=False,
+        )
+    remux = media_remux_snapshot()
+    embed.add_field(
+        name="Controlled remux",
+        value=(
+            f"Successful: {remux.get('success', 0)} • "
+            f"Failed: {remux.get('failed', 0)} • "
+            f"Timed out: {remux.get('timeout', 0)} • "
+            f"Over limit: {remux.get('oversize', 0)} • "
+            f"Unavailable: {remux.get('unavailable', 0)}"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="No member links or private media URLs are stored in this view.")
+    return embed
+
+
+class ShareRouterProviderProbeModal(discord.ui.Modal, title="Test Share Router Provider"):
+    media_url = discord.ui.TextInput(
+        label="Public video URL",
+        placeholder="Paste a public video/clip URL (not an account login link)",
+        max_length=1000,
+    )
+
+    def __init__(self, owner_id: int) -> None:
+        super().__init__(timeout=300)
+        self.owner_id = int(owner_id)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id or not await _require_manage(interaction):
+            return
+        url = str(self.media_url.value or "").strip()
+        # Reject private/invalid URLs before doing any provider resolution work.
+        provider = provider_for_url(url)
+        if not provider:
+            return await _private(
+                interaction,
+                "❌ Not a recognized safe public media URL. Provide a supported "
+                "social video page or direct HTTP(S) media URL.",
+            )
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            result: MediaResolution = await resolve_media_url(
+                url, max_bytes=_share_video_limit_bytes(interaction.guild),
+            )
+        except Exception as exc:
+            return await _private(
+                interaction,
+                f"❌ Metadata check could not complete ({type(exc).__name__}). "
+                "No media was downloaded or sent.",
+            )
+        labels = {
+            "progressive": "✅ Progressive media candidate",
+            "merge": "🧩 Separate video and audio candidate",
+            "manifest": "📺 HLS/DASH manifest candidate",
+            "link": "🔗 Link-only fallback",
+        }
+        embed = discord.Embed(
+            title="🧪 Share Router Provider Test",
+            description=(
+                "This is a **live metadata-only classification**, not an upload or "
+                "proof that a client can play the video inline. The submitted URL "
+                "and any signed query tokens are intentionally not displayed."
+            ),
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(name="Provider", value=provider_label(result.provider), inline=True)
+        embed.add_field(name="Classification", value=labels.get(result.delivery, "Unknown"), inline=True)
+        embed.add_field(
+            name="Declared size",
+            value=f"{result.known_size:,} bytes" if result.known_size else "Unknown (actual upload is still bounded)",
+            inline=False,
+        )
+        embed.add_field(
+            name="Outcome",
+            value=(result.reason or "Candidate found; file transfer and playback not yet verified.")[:256],
+            inline=False,
+        )
+        embed.set_footer(text="No source data is posted to a server channel.")
+        await _private(interaction, embed=embed)
 
 
 class _OwnedView(discord.ui.View):
@@ -762,6 +895,20 @@ class ShareRouterView(_OwnedView):
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_share_router(interaction, replace_message=True)
+
+    @discord.ui.button(label="Media Health", emoji="🎞️", style=discord.ButtonStyle.secondary, row=1)
+    async def media_health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        await _private(interaction, embed=_share_media_health_embed())
+
+    @discord.ui.button(label="Test Provider", emoji="🧪", style=discord.ButtonStyle.secondary, row=1)
+    async def test_provider(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        await interaction.response.send_modal(ShareRouterProviderProbeModal(int(interaction.user.id)))
 
     @discord.ui.button(label="Community Tools", emoji="🧰", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
