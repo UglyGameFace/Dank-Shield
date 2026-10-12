@@ -159,6 +159,44 @@ def test_over_limit_returns_honest_private_source_link_not_fake_file(monkeypatch
     assert message.deleted
 
 
+def test_discord_413_upload_error_falls_back_to_honest_dm_link(monkeypatch):
+    class LargeFile:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    class UploadRejectMember(FakeMember):
+        async def send(self, content, *, allowed_mentions, file=None):
+            if file is not None:
+                raise discord.HTTPException(
+                    SimpleNamespace(status=413, reason="Request Entity Too Large"),
+                    {"code": 40005, "message": "Request entity too large"},
+                )
+            self.sent.append((content, file, allowed_mentions))
+
+    message = FakeMessage(member=UploadRejectMember())
+    f = LargeFile()
+
+    async def resolve(text, *, max_bytes):
+        return _resolution(text)
+
+    async def download(url, *, max_bytes, request_headers):
+        return SimpleNamespace(file=f, source_url=url, size_bytes=100, cleanup_path=None)
+
+    monkeypatch.setattr(downloads, "resolve_first_media", resolve)
+    monkeypatch.setattr(router, "_download_trusted_video", download)
+    assert run(downloads.handle_download_message(message))
+    assert f.closed
+    assert message.deleted
+    assert len(message.author.sent) == 1
+    content, attachment, mentions = message.author.sent[0]
+    assert attachment is None
+    assert "Discord rejected this video attachment" in content
+    assert "not a downloaded file" in content
+    assert mentions.everyone is False
+
+
 def test_dm_disabled_never_erases_source_and_notifies_without_ping(monkeypatch):
     message = FakeMessage(member=FakeMember(dm_blocked=True))
 
