@@ -941,6 +941,13 @@ class ShareRouterDownloadSettingsView(_OwnedView):
                if ok else ". Check the Download Settings readiness message and the public media URL."),
         )
 
+    @discord.ui.button(label="Test Video Source", emoji="🧪", style=discord.ButtonStyle.secondary, row=1)
+    async def test_video_source(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        await interaction.response.send_modal(ShareRouterProviderProbeModal(int(interaction.user.id)))
+
     @discord.ui.button(label="Back to Share Router", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
