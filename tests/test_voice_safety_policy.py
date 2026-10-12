@@ -578,7 +578,7 @@ def test_voice_safety_failed_optout_stops_all_review_and_revokes_immediately(mon
             assert False, "failure must be surfaced"
         except VoiceReceiveUnavailable:
             pass
-        assert revoked == [2, 2]
+        assert revoked == [2]
         assert stopped == [state.session_id]
         assert state.safety_consents == set()
         assert state.safety_consent_epochs[2] == 1
