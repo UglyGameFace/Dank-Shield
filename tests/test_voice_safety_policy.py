@@ -67,6 +67,34 @@ def test_voice_safety_context_isolated_by_speaker_with_bounded_cooldown() -> Non
     asyncio.run(run())
 
 
+def test_voice_safety_model_requests_are_rate_limited_before_network_use() -> None:
+    async def run() -> None:
+        clock = [1_000.0]
+        calls = []
+        async def classify(text):
+            calls.append(text)
+            return VoiceSafetyVerdict("harassment", "review", "Targeted speech")
+        advisor = VoiceSafetyAdvisor(classify=classify, clock=lambda: clock[0])
+        permitted = lambda uid: True
+        await advisor.inspect(1, "Some clearly targeted conduct", 0.99, is_admitted=permitted)
+        assert advisor.requests == 1
+        assert await advisor.inspect(1, "A second fragment just after", 0.99, is_admitted=permitted) is None
+        assert advisor.requests == 1
+        clock[0] += 7
+        await advisor.inspect(1, "Additional context for review", 0.99, is_admitted=permitted)
+        assert advisor.requests == 2
+        for uid in range(2, 40):
+            await advisor.inspect(uid, "Long sentence for a review triage", 0.99, is_admitted=permitted)
+        assert advisor.requests == 30
+        clock[0] += 61
+        await advisor.inspect(40, "Later statement requiring triage", 0.99, is_admitted=permitted)
+        assert advisor.requests == 31
+        advisor.revoke(1)
+        assert 1 not in advisor._last_inspected
+        advisor.close()
+    asyncio.run(run())
+
+
 def test_voice_safety_abstains_on_unclear_and_nonconsented_speech() -> None:
     async def run() -> None:
         calls = []
