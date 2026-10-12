@@ -172,6 +172,7 @@ class CommunityVoiceCaptionManager:
             "voice_channel_id": state.voice_channel_id,
             "destination_channel_id": state.destination_channel_id,
             "opted_in_user_ids": opted_ids,
+            "voice_safety_notice_message_id": int(state.notice_message_id),
             "voice_safety_alerts": int(state.advisor.alerts) if state.advisor else 0,
             "voice_safety_requests": int(state.advisor.requests) if state.advisor else 0,
             "speaker_language_hints": speaker_language_hints,
