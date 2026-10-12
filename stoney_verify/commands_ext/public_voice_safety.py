@@ -74,7 +74,7 @@ def _channel(guild: discord.Guild, channel_id: int, expected: type) -> object | 
 
 def _readiness(guild: discord.Guild, config: dict) -> tuple[bool, str]:
     if not voice_safety_host_enabled() or not live_captions_enabled():
-        return False, "Host is validation-locked. DAVE receive soak and both host feature gates are required."
+        return False, "Host is validation-locked. Enable DAVE captions and Voice Safety only after confirming paid Gemini data terms and adult-only use in Discloud."
     cap = voice_receive_capability()
     if not cap.available:
         return False, f"Voice receiver unavailable: {cap.reason}"
