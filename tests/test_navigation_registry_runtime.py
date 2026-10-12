@@ -86,6 +86,10 @@ def test_registry_preserves_all_previous_home_destinations() -> None:
         "Diagnostics",
         "Card Assets",
         "Live Captions",
+        "AI Voice Safety",
+        "Share Router Downloads",
+        "Toke Sesh Settings",
+        "Verification Reminders",
         "Help",
     } <= labels
 
@@ -122,6 +126,13 @@ def test_find_feature_understands_common_names_and_aliases() -> None:
     assert registry.search_features("captions")[0].key == "live_captions"
     assert registry.search_features("ticket forms")[0].key == "tickets"
     assert registry.search_features("channel fonts")[0].key == "server_design"
+    assert registry.search_features("voice patrol")[0].key == "voice_safety"
+    assert registry.search_features("voice moderation")[0].key == "voice_safety"
+    assert registry.search_features("download channel")[0].key == "share_downloads"
+    assert registry.search_features("facebook download")[0].key == "share_downloads"
+    assert registry.search_features("sesh")[0].key == "toke_settings"
+    assert registry.search_features("unverified reminders")[0].key == "verification_reminders"
+    assert registry.search_features("subtitles")[0].key == "movie_night"
 
 
 def test_manager_features_are_visible_instead_of_permission_hidden() -> None:
@@ -224,7 +235,7 @@ def test_every_registry_feature_has_an_explicit_dispatch_branch() -> None:
 
 def test_home_is_mobile_compact_full_name_section_picker() -> None:
     view = surface.CompactDankHomeView(100)
-    assert len(view.children) == 5
+    assert len(view.children) == 6
 
     section_select = next(
         item
@@ -243,8 +254,8 @@ def test_home_is_mobile_compact_full_name_section_picker() -> None:
         for item in view.children
         if isinstance(item, discord.ui.Button)
     ]
-    assert button_labels == ["Find Feature", "Directory", "Help", "Close"]
-    assert all(int(getattr(item, "row", 0) or 0) == 1 for item in view.children if isinstance(item, discord.ui.Button))
+    assert button_labels == ["Find Feature", "Directory", "Help", "Close", "New & Updated"]
+    assert all(int(getattr(item, "row", 0) or 0) <= 2 for item in view.children if isinstance(item, discord.ui.Button))
 
 
 def test_home_embed_does_not_repeat_the_full_category_directory() -> None:
@@ -256,3 +267,37 @@ def test_home_embed_does_not_repeat_the_full_category_directory() -> None:
     assert f"{len(registry.CATEGORIES)} sections" in str(embed.description)
     assert "Setup & Server Settings" not in str(embed.description)
     assert "Members, Roles & Profiles" not in str(embed.description)
+
+
+def test_new_and_updated_shortcuts_route_to_live_owner_without_duplicate_logic() -> None:
+    recent = registry.recent_features()
+    assert tuple(item.key for item in recent) == registry.RECENT_FEATURE_KEYS
+    assert len(recent) == len(set(item.key for item in recent))
+    view = surface.RecentFeaturesView(123)
+    buttons = [item for item in view.children if isinstance(item, discord.ui.Button)]
+    labels = {item.label for item in buttons}
+    assert {item.label for item in recent} <= labels
+    assert {"Home", "Close"} <= labels
+    assert len(view.children) <= 25
+    assert max(int(getattr(item, "row", 0) or 0) for item in view.children) <= 4
+    embed = surface._recent_embed()
+    assert all(item.label in str(embed.fields[0].value) for item in recent)
+
+    from pathlib import Path
+    source = Path(surface.__file__).read_text(encoding="utf-8")
+    assert 'from .public_voice_safety import open_voice_safety_center' in source
+    assert 'from .public_share_router import open_share_router_download_settings' in source
+    assert 'from stoney_verify.toke_live_ui import open_toke_settings' in source
+    assert 'from .public_verify_reminder_ui import open_reminder_settings' in source
+
+
+def test_navigation_home_category_descriptions_represent_recent_features() -> None:
+    categories = {category.key: category for category in registry.CATEGORIES}
+    assert "voice" in categories["safety"].description.lower()
+    assert "voice safety" in categories["voice"].description.lower()
+    assert "toke" in categories["community"].description.lower()
+    assert "download" in categories["community"].description.lower()
+    assert registry.feature_by_key("voice_safety").category == "voice"
+    for key in ("share_downloads", "toke_settings"):
+        assert registry.feature_by_key(key).category == "community"
+    assert registry.feature_by_key("verification_reminders").category == "access"
