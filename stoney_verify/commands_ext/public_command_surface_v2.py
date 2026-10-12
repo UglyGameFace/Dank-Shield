@@ -298,7 +298,7 @@ def _recent_embed() -> discord.Embed:
     embed = discord.Embed(
         title="✨ New & Updated Dank Shield Features",
         description=(
-            "**Home › New & Updated**\\n"
+            "**Home › New & Updated**\n"
             "These shortcuts reflect existing feature owners, not duplicate controls. "
             "Select a destination to open the current setup or member flow."
         ),
@@ -306,7 +306,7 @@ def _recent_embed() -> discord.Embed:
     )
     embed.add_field(
         name="Updated destinations",
-        value="\\n".join(
+        value="\n".join(
             f"{feature.emoji} **{feature.label}** — {feature.description}"
             for feature in features
         )[:1024],
