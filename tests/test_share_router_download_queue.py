@@ -187,6 +187,42 @@ def test_worker_rechecks_channel_member_and_message_before_download(monkeypatch)
     asyncio.run(scenario())
 
 
+def test_guild_route_read_cache_reuses_snapshot_and_invalidates_on_write(monkeypatch, tmp_path):
+    monkeypatch.setattr(runtime, "ROUTES_FILE", tmp_path / "routes.json")
+    monkeypatch.setattr(runtime, "_ROUTE_STATE_CACHE", None)
+    reads = []
+    original = Path.read_text
+
+    def counted(self, *args, **kwargs):
+        if self == runtime.ROUTES_FILE:
+            reads.append(1)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counted)
+
+    async def scenario():
+        await runtime.save_route(4, source_channel_id=55, target_channel_id=66)
+        before = len(reads)
+        first = await runtime.guild_route_state(4)
+        assert len(reads) == before + 1
+        second = await runtime.guild_route_state(4)
+        assert second == first
+        assert len(reads) == before + 1
+        # An admin change must be visible on the very next message.
+        await runtime.save_route(4, source_channel_id=55, target_channel_id=99)
+        after_write = len(reads)
+        updated = await runtime.guild_route_state(4)
+        assert len(reads) == after_write + 1
+        assert updated[0][0]["target_channel_id"] == "99"
+        assert first[0][0]["target_channel_id"] == "66"
+        assert updated[0] is not first[0]
+        # A changed backing path cannot reuse a previous guild's cache.
+        monkeypatch.setattr(runtime, "ROUTES_FILE", tmp_path / "other.json")
+        assert await runtime.guild_route_state(4) == ([], 0)
+
+    asyncio.run(scenario())
+
+
 def test_download_queue_is_not_a_new_gateway_listener():
     runtime_source = Path("stoney_verify/share_router_runtime.py").read_text()
     queue_source = Path("stoney_verify/share_router_download_queue.py").read_text()
