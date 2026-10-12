@@ -107,8 +107,8 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
     embed = discord.Embed(
         title="🛡️ Voice Safety · Staff Review",
         description=(
-            "Optional, consented AI conduct review for one voice channel. "
-            "Only members who explicitly opt in are transcribed. Google Gemini receives "
+            "Automatic AI conduct review for one configured voice channel. "
+            "Only members with a recorded one-time agreement are transcribed. Google Gemini receives "
             "their voice and text to assess conduct. No automated mutes, kicks or bans. "
             "Staff must verify every finding. Not a guarantee against already-spoken words."
         ),
@@ -175,20 +175,20 @@ class VoiceSafetyConsentView(discord.ui.View):
             return await interaction.followup.send(f"❌ {exc}", ephemeral=True)
         if consented:
             return await interaction.followup.send(
-                "✅ You explicitly opted in to this server's Voice Safety review. "
-                "Only your speech in the selected VC during an active session can be transcribed by Gemini "
+                "✅ Your one-time Voice Safety agreement is saved for this server. "
+                "Your speech in the selected VC may be automatically transcribed by Gemini "
                 "and evaluated for staff-only incident alerts. This is separate from Live Captions consent. "
-                "This consent lasts only for this monitoring session and ends if you leave the VC. "
-                "Press Opt Out to revoke sooner. Gemini Free Tier content may be used to improve Google's products.",
+                "This agreement remains until you withdraw it, even after you leave the VC. "
+                "Press Opt Out to withdraw. Gemini Free Tier content may be used to improve Google's products.",
                 ephemeral=True,
             )
         await interaction.followup.send(
-            "✅ Opted out of the active session. Your voice admission and queued buffers were revoked if monitoring was active. "
+            "✅ Your Voice Safety agreement was withdrawn. Active audio admission and queued buffers were revoked if monitoring was active. "
             "Any incident alerts already delivered to staff must be handled under server retention policy.",
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Opt In: Review My Voice", style=discord.ButtonStyle.success, custom_id="dank:voice_safety:consent_on:v1")
+    @discord.ui.button(label="Agree Once: Voice Safety", style=discord.ButtonStyle.success, custom_id="dank:voice_safety:consent_on:v1")
     async def opt_in(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._change(interaction, True)
 
@@ -295,8 +295,8 @@ class VoiceSafetyStaffView(discord.ui.View):
             return await interaction.followup.send(f"❌ {exc}", ephemeral=True)
         await interaction.edit_original_response(embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id))
         await interaction.followup.send(
-            "✅ Consent-only Voice Safety running. A member notice was posted publicly. "
-            "Only opted-in voices are evaluated; staff alerts are advisory, not automatic punishments.",
+            "✅ Voice Safety running. A notice explains one-time agreement and automatic monitoring. "
+            "Only members with a recorded agreement are evaluated; staff alerts are advisory, not automatic punishments.",
             ephemeral=True,
         )
 
