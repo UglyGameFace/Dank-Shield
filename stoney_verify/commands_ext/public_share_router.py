@@ -35,6 +35,8 @@ from stoney_verify.share_router_runtime import (
     guild_routes,
     guild_custom_share_sources,
     guild_pending_source_cleanup_count,
+    guild_download_channel_id,
+    save_guild_download_channel,
     prune_missing_custom_share_sources,
     remove_route,
     route_health,
@@ -163,6 +165,20 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
     embed.add_field(name="Proxy hub", value=hub_status[:1024], inline=False)
     live_custom = sum(isinstance(guild.get_channel(source_id), discord.TextChannel) for source_id in custom_ids)
     embed.add_field(name="Custom proxies", value=f"{live_custom} active / {len(custom_ids)} registered in this server. Create Proxy adds another source without replacing the four defaults.", inline=False)
+    download_id = await guild_download_channel_id(int(guild.id))
+    download_channel = guild.get_channel(download_id) if download_id else None
+    embed.add_field(
+        name="Private video downloads",
+        value=(
+            f"✅ {download_channel.mention} • Posts send a **private DM** to their author. "
+            "Videos fitting the bot's DM limit arrive as files; larger videos "
+            "receive a source link, not an oversized attachment."
+            if isinstance(download_channel, discord.TextChannel)
+            else ("⚠️ Download channel missing. Disable it before creating a replacement."
+                  if download_id else "Disabled • Create Download Channel to opt in.")
+        )[:1024],
+        inline=False,
+    )
     pending_cleanup = await guild_pending_source_cleanup_count(int(guild.id))
     cleanup_status = (
         f"⚠️ {pending_cleanup} delivered post(s) awaiting deletion. "
@@ -826,6 +842,84 @@ class ShareRouterView(_OwnedView):
         if not await _require_manage(interaction):
             return
         await _open_delete_source_picker(interaction)
+
+    @discord.ui.button(label="Create Download Channel", emoji="📥", style=discord.ButtonStyle.primary, row=3)
+    async def create_download_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        existing_id = await guild_download_channel_id(int(guild.id))
+        if existing_id:
+            await interaction.edit_original_response(
+                content="⚠️ This server already has a configured download channel. "
+                        "Disable the old one first if it was deleted.",
+                embed=None, view=None,
+            )
+            return
+        me = guild.me
+        if me is None or not me.guild_permissions.manage_channels:
+            await interaction.edit_original_response(
+                content="❌ Dank Shield needs Manage Channels to create the video download channel.",
+                embed=None, view=None,
+            )
+            return
+        channel = None
+        try:
+            channel = await guild.create_text_channel(
+                "video-downloads",
+                topic="Post one public video link to receive a private DM. "
+                      "Discord's DM upload limits apply; source links may remain "
+                      "visible if the bot cannot delete messages.",
+                reason="Dank Shield Share Router opt-in private video download channel",
+            )
+            await save_guild_download_channel(int(guild.id), int(channel.id))
+        except Exception as exc:
+            # Best-effort rollback only for a channel created by this click.
+            if channel is not None:
+                try:
+                    await channel.delete(reason="Download configuration save failed")
+                except discord.HTTPException:
+                    pass
+            await interaction.edit_original_response(
+                content=f"❌ Download setup did not finish ({type(exc).__name__}). "
+                        "Check channel permissions and try again.",
+                embed=None, view=None,
+            )
+            return
+        await interaction.edit_original_response(
+            content=(
+                f"✅ Created {channel.mention}. Members can paste one public video URL "
+                "per message; Dank Shield will DM the file when it fits the DM "
+                "limit, otherwise a link. Source posts are deleted only after "
+                "successful DM delivery and only with Manage Messages."
+            ),
+            embed=None, view=None, allowed_mentions=_ALLOWED_MENTIONS,
+        )
+
+    @discord.ui.button(label="Disable Downloads", emoji="⏸️", style=discord.ButtonStyle.secondary, row=3)
+    async def disable_downloads(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            await save_guild_download_channel(int(interaction.guild.id), 0)
+        except Exception as exc:
+            await interaction.edit_original_response(
+                content=f"❌ Could not disable downloads ({type(exc).__name__}).",
+                embed=None, view=None,
+            )
+            return
+        await interaction.edit_original_response(
+            content="✅ Auto-download DMs disabled for this server. "
+                    "The Discord channel was preserved; remove it manually if desired.",
+            embed=None, view=None,
+        )
 
     @discord.ui.button(label="Create / Repair Hub", emoji="🛠️", style=discord.ButtonStyle.primary, row=0)
     async def repair(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
