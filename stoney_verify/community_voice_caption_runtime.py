@@ -794,7 +794,7 @@ class CommunityVoiceCaptionManager:
 
             # Stop, departure, or consent revocation may have run during await
             # connect_receive_client(). Never resurrect a stopped session.
-            if self._sessions.get(sid) is not state or self._guild_owner.get(state.guild_id) != sid:
+            if self._sessions.get(sid) is not state:
                 disconnect_receive_client(new_voice_client)
                 try:
                     await new_voice_client.disconnect(force=True)
