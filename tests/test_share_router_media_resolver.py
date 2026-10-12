@@ -94,6 +94,41 @@ def test_facebook_parser_failure_produces_distinct_safe_fallback(monkeypatch) ->
     )
 
 
+def test_facebook_progressive_format_retains_only_one_safe_declared_alternate() -> None:
+    info = {"formats": [
+        {
+            "url": "https://video.xx.fbcdn.net/hd.mp4?token=short",
+            "protocol": "https", "ext": "mp4", "vcodec": "avc1.64001f",
+            "acodec": "mp4a.40.2", "height": 1080, "filesize": 7_000_000,
+            "http_headers": {"Referer": "https://www.facebook.com/"},
+        },
+        {
+            "url": "https://video.xx.fbcdn.net/sd.mp4?token=short",
+            "protocol": "https", "ext": "mp4", "vcodec": "avc1.64001f",
+            "acodec": "mp4a.40.2", "height": 480, "filesize": 2_000_000,
+        },
+        {
+            "url": "https://video.xx.fbcdn.net/third.mp4",
+            "protocol": "https", "ext": "mp4", "vcodec": "h264",
+            "acodec": "aac", "height": 240, "filesize": 1_000_000,
+        },
+    ]}
+    resolved = media.select_media_resolution(
+        info, source_url="https://www.facebook.com/reel/10000001",
+        provider="facebook", max_bytes=10_000_000,
+    )
+    assert resolved.progressive
+    assert resolved.media_url.endswith("hd.mp4?token=short")
+    assert len(resolved.alternate_progressive) == 1
+    assert resolved.alternate_progressive[0][0].endswith("sd.mp4?token=short")
+    # Do not leak the fallback to other providers without explicit acceptance.
+    vimeo = media.select_media_resolution(
+        info, source_url="https://vimeo.com/10000001",
+        provider="vimeo", max_bytes=10_000_000,
+    )
+    assert vimeo.alternate_progressive == ()
+
+
 def test_live_extractor_adapter_returns_safe_failure_not_raw_error(monkeypatch) -> None:
     from types import SimpleNamespace
     import sys
