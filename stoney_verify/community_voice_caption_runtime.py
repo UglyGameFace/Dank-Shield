@@ -25,6 +25,7 @@ from .community_voice_captions import (
     normalize_caption_output_mode,
 )
 from .voice_safety_policy import VoiceSafetyAdvisor
+from .voice_safety_consent import read_voice_safety_agreement, save_voice_safety_agreement
 from .community_voice_receive import (
     PerSpeakerFrameBridge,
     VoiceReceiveUnavailable,
@@ -288,34 +289,40 @@ class CommunityVoiceCaptionManager:
         }
 
     async def set_voice_safety_consent(self, guild_id: int, user_id: int, enabled: bool) -> bool:
-        """Explicit in-session consent; no durable opt-in or SQL dependence.
+        """Durable one-time choice independent of live session availability.
 
-        Leaving the VC or stopping the session revokes admission. Fresh sessions
-        always require a new click on the public notice.
+        Withdraw admission immediately even if persistence is unavailable.
         """
         gid, uid = int(guild_id), int(user_id)
         sid = self._guild_owner.get(gid)
         state = self._sessions.get(sid) if sid else None
-        if state is None or state.scope_kind != "voice_safety":
-            if not enabled:
-                return False
-            raise VoiceReceiveUnavailable("Voice Safety is not actively reviewing this server.")
-        if not enabled:
+        if state is not None and state.scope_kind != "voice_safety":
+            state = None
+        if not enabled and state is not None:
             state.safety_consents.discard(uid)
             await self._disable_user_for_state(state, uid)
+        try:
+            saved = await save_voice_safety_agreement(gid, uid, enabled)
+        except Exception as exc:
+            if state is not None:
+                state.safety_consents.discard(uid)
+                await self._disable_user_for_state(state, uid)
+                # A failed opt-out cannot safely rely on persisted stale consent.
+                if not enabled:
+                    await self.stop(state.session_id)
+            raise VoiceReceiveUnavailable(
+                "Could not confirm the voice moderation agreement in storage. "
+                "No audio was admitted. If opting out, monitoring was stopped for safety."
+            ) from exc
+        if not saved:
             return False
+        if state is None:
+            return True
         guild = self.bot.get_guild(gid)
         member = guild.get_member(uid) if guild is not None else None
         in_channel = int(getattr(getattr(getattr(member, "voice", None), "channel", None), "id", 0) or 0) == int(state.voice_channel_id)
-        if not in_channel:
-            raise VoiceReceiveUnavailable("Join the monitored voice channel before opting in.")
-        state.safety_consents.add(uid)
-        try:
-            await self._enable_user_for_state(state, uid)
-        except Exception as exc:
-            state.safety_consents.discard(uid)
-            await self._disable_user_for_state(state, uid)
-            raise VoiceReceiveUnavailable("Voice Safety could not admit your audio. No consent was retained.") from exc
+        if in_channel:
+            await self._enable_user_for_state(state, uid, refresh_preferences=True)
         return True
 
     def user_language_hint(self, guild_id: int, user_id: int) -> str:
@@ -420,8 +427,9 @@ class CommunityVoiceCaptionManager:
         uid = int(user_id)
         if state.bridge.is_opted_in(uid):
             return
-        if getattr(state, "scope_kind", "server") == "voice_safety" and uid not in state.safety_consents:
-            return
+        if getattr(state, "scope_kind", "server") == "voice_safety":
+            if not await read_voice_safety_agreement(state.guild_id, uid):
+                return
         if len(state.bridge.opted_in_user_ids()) >= self.max_speakers_per_session:
             raise VoiceReceiveUnavailable(
                 "This session has reached its configured Live Captions speaker limit."
@@ -453,6 +461,8 @@ class CommunityVoiceCaptionManager:
 
         state.engine.allow_user(uid)
         state.bridge.opt_in(uid)
+        if getattr(state, "scope_kind", "server") == "voice_safety":
+            state.safety_consents.add(uid)
 
     async def _disable_user_for_state(
         self,
@@ -523,8 +533,7 @@ class CommunityVoiceCaptionManager:
             if restored >= self.max_speakers_per_session:
                 break
             if getattr(state, "scope_kind", "server") == "voice_safety":
-                # No silent restoration of a previous session's consent.
-                continue
+                consented = await read_voice_safety_agreement(state.guild_id, int(member.id))
             else:
                 prefs = await self.preferences_for_user(state.guild_id, int(member.id), refresh=True)
                 consented = bool(prefs.get("auto_opt_in"))
@@ -570,7 +579,7 @@ class CommunityVoiceCaptionManager:
         target = int(state.voice_channel_id)
 
         if before_id == target and after_id != target:
-            # Voice Safety consent ends on departure. Captions retain their independent preference.
+            # Active audio admission ends on departure; stored agreement persists until withdrawn.
             if getattr(state, "scope_kind", "server") == "voice_safety":
                 state.safety_consents.discard(uid)
             await self._disable_user_for_state(state, uid)
@@ -580,7 +589,7 @@ class CommunityVoiceCaptionManager:
             return
 
         if getattr(state, "scope_kind", "server") == "voice_safety":
-            consented = uid in state.safety_consents
+            consented = await read_voice_safety_agreement(gid, uid)
         else:
             prefs = await self.preferences_for_user(gid, uid, refresh=True)
             consented = bool(prefs.get("auto_opt_in"))
