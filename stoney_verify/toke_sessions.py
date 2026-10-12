@@ -78,6 +78,7 @@ async def save_new(session: Mapping[str, Any]) -> dict[str, Any]:
     value["guild_id"], value["message_id"] = gid, mid
     value["created_at"] = time.time()
     value["cheers_ids"], value["going_ids"] = [], []
+    value["voice_seen_ids"] = []  # Only RSVP identifiers observed in the session VC.
     value["active"] = True
     value["close_pending"] = False
     value["close_synced"] = False
@@ -156,6 +157,7 @@ async def react(
         elif action == "withdraw":
             cheers = [x for x in cheers if x != actor_id]
             going = [x for x in going if x != actor_id]
+            session["voice_seen_ids"] = [x for x in session.get("voice_seen_ids", []) if x != actor_id]
         else:
             if actor_id not in cheers and len(cheers) >= max_interested:
                 return dict(session), "This sesh has reached its participant limit."
@@ -166,6 +168,53 @@ async def react(
         session["cheers_ids"], session["going_ids"] = cheers, going
         _write(data)
         return dict(session), ""
+
+
+async def reconcile_voice(
+    guild_id: int,
+    message_id: int,
+    present_ids: set[int],
+    *,
+    departed_ids: set[int] | None = None,
+) -> dict[str, Any] | None:
+    """Reconcile live attendance atomically with RSVP updates.
+
+    A person who entered this sesh's VC and then left is no longer marked as
+    joining or cheering. A planned RSVP that has *never entered* remains an
+    intention, not proof of presence. Voice events carry departures as well,
+    since someone can join and leave entirely within a debounce window.
+    """
+    present = {int(uid) for uid in present_ids if int(uid) > 0}
+    departed = {int(uid) for uid in (departed_ids or set()) if int(uid) > 0} - present
+    async with _LOCK:
+        data = _read()
+        expired = _expire(data, time.time())
+        session = data.get(_id(guild_id, message_id))
+        if session is None:
+            if expired:
+                _write(data)
+            return None
+        if not session.get("active", False):
+            if expired:
+                _write(data)
+            return dict(session)
+        cheers = [int(uid) for uid in session.get("cheers_ids", [])]
+        going = [int(uid) for uid in session.get("going_ids", [])]
+        interested = set(cheers) | set(going)
+        seen = {int(uid) for uid in session.get("voice_seen_ids", []) if int(uid) > 0}
+        leaving = (seen - present) | (departed & interested)
+        updated_cheers = [uid for uid in cheers if uid not in leaving]
+        updated_going = [uid for uid in going if uid not in leaving]
+        updated_seen = sorted((seen | (interested & present)) & present & (set(updated_cheers) | set(updated_going)))
+        if (updated_cheers != cheers or updated_going != going
+                or updated_seen != sorted(seen)):
+            session["cheers_ids"] = updated_cheers
+            session["going_ids"] = updated_going
+            session["voice_seen_ids"] = updated_seen
+            _write(data)
+        elif expired:
+            _write(data)
+        return dict(session)
 
 
 async def pending_closed(limit: int = 100) -> list[dict[str, Any]]:
