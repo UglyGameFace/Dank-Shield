@@ -50,6 +50,8 @@ class CaptionRuntimeState:
     scope_kind: str = "community_hub"
     advisor: Optional[VoiceSafetyAdvisor] = None
     notice_channel_id: int = 0
+    safety_consents: set[int] = field(default_factory=set)
+    notice_message_id: int = 0
     soak_test: bool = False
     receive_recoveries: int = 0
     receive_recovery_failures: int = 0
@@ -68,7 +70,6 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
 
 SERVER_CAPTION_SCOPE_PREFIX = "server:"
 VOICE_SAFETY_SCOPE_PREFIX = "voice_safety:"
-VOICE_SAFETY_CONSENT_KEY = "voice_safety_explicit_consent_v1"
 
 
 def voice_safety_scope_id(guild_id: int) -> str:
@@ -285,47 +286,36 @@ class CommunityVoiceCaptionManager:
             "storage_available": True,
         }
 
-    async def voice_safety_consented(self, guild_id: int, user_id: int) -> bool:
-        # Fail closed on any read error: never admit from a stale memory cache.
-        from .profile_card_service import get_profile_guild_settings
-
-        try:
-            prefs = await get_profile_guild_settings(int(guild_id), int(user_id), refresh=True)
-            return bool(dict(prefs.get("settings") or {}).get(VOICE_SAFETY_CONSENT_KEY) is True)
-        except Exception:
-            log.warning("Voice safety consent lookup unavailable guild=%s", guild_id)
-            return False
-
     async def set_voice_safety_consent(self, guild_id: int, user_id: int, enabled: bool) -> bool:
-        from .profile_card_service import upsert_profile_guild_namespace
+        """Explicit in-session consent; no durable opt-in or SQL dependence.
 
+        Leaving the VC or stopping the session revokes admission. Fresh sessions
+        always require a new click on the public notice.
+        """
         gid, uid = int(guild_id), int(user_id)
-        try:
-            row = await upsert_profile_guild_namespace(gid, uid, VOICE_SAFETY_CONSENT_KEY, bool(enabled))
-            persisted = bool(dict(row.get("settings") or {}).get(VOICE_SAFETY_CONSENT_KEY) is bool(enabled))
-            if not persisted:
-                raise ValueError("consent save not confirmed")
-        except Exception as exc:
-            raise VoiceReceiveUnavailable("Could not persist your voice safety consent; nothing was changed.") from exc
-
         sid = self._guild_owner.get(gid)
         state = self._sessions.get(sid) if sid else None
         if state is None or state.scope_kind != "voice_safety":
-            return bool(enabled)
-        member_guild = self.bot.get_guild(gid)
-        member = member_guild.get_member(uid) if member_guild is not None else None
-        in_channel = int(getattr(getattr(getattr(member, "voice", None), "channel", None), "id", 0) or 0) == state.voice_channel_id
+            if not enabled:
+                return False
+            raise VoiceReceiveUnavailable("Voice Safety is not actively reviewing this server.")
         if not enabled:
-            # Must revoke before any in-flight review can publish.
+            state.safety_consents.discard(uid)
             await self._disable_user_for_state(state, uid)
-        elif in_channel:
-            try:
-                await self._enable_user_for_state(state, uid, refresh_preferences=True)
-            except Exception as exc:
-                raise VoiceReceiveUnavailable(
-                    "Consent was saved, but voice processing is not available yet. Rejoin when the service is ready."
-                ) from exc
-        return bool(enabled)
+            return False
+        guild = self.bot.get_guild(gid)
+        member = guild.get_member(uid) if guild is not None else None
+        in_channel = int(getattr(getattr(getattr(member, "voice", None), "channel", None), "id", 0) or 0) == int(state.voice_channel_id)
+        if not in_channel:
+            raise VoiceReceiveUnavailable("Join the monitored voice channel before opting in.")
+        state.safety_consents.add(uid)
+        try:
+            await self._enable_user_for_state(state, uid)
+        except Exception as exc:
+            state.safety_consents.discard(uid)
+            await self._disable_user_for_state(state, uid)
+            raise VoiceReceiveUnavailable("Voice Safety could not admit your audio. No consent was retained.") from exc
+        return True
 
     def user_language_hint(self, guild_id: int, user_id: int) -> str:
         key = self._preference_key(guild_id, user_id)
@@ -429,7 +419,7 @@ class CommunityVoiceCaptionManager:
         uid = int(user_id)
         if state.bridge.is_opted_in(uid):
             return
-        if getattr(state, "scope_kind", "server") == "voice_safety" and not await self.voice_safety_consented(state.guild_id, uid):
+        if getattr(state, "scope_kind", "server") == "voice_safety" and uid not in state.safety_consents:
             return
         if len(state.bridge.opted_in_user_ids()) >= self.max_speakers_per_session:
             raise VoiceReceiveUnavailable(
@@ -532,7 +522,8 @@ class CommunityVoiceCaptionManager:
             if restored >= self.max_speakers_per_session:
                 break
             if getattr(state, "scope_kind", "server") == "voice_safety":
-                consented = await self.voice_safety_consented(state.guild_id, int(member.id))
+                # No silent restoration of a previous session's consent.
+                continue
             else:
                 prefs = await self.preferences_for_user(state.guild_id, int(member.id), refresh=True)
                 consented = bool(prefs.get("auto_opt_in"))
@@ -578,8 +569,9 @@ class CommunityVoiceCaptionManager:
         target = int(state.voice_channel_id)
 
         if before_id == target and after_id != target:
-            # Leaving the captioned VC ends this runtime admission immediately,
-            # but does not revoke the member's remembered per-server preference.
+            # Voice Safety consent ends on departure. Captions retain their independent preference.
+            if getattr(state, "scope_kind", "server") == "voice_safety":
+                state.safety_consents.discard(uid)
             await self._disable_user_for_state(state, uid)
             return
 
@@ -587,7 +579,7 @@ class CommunityVoiceCaptionManager:
             return
 
         if getattr(state, "scope_kind", "server") == "voice_safety":
-            consented = await self.voice_safety_consented(gid, uid)
+            consented = uid in state.safety_consents
         else:
             prefs = await self.preferences_for_user(gid, uid, refresh=True)
             consented = bool(prefs.get("auto_opt_in"))
@@ -1040,7 +1032,7 @@ class CommunityVoiceCaptionManager:
                 if safety_mode:
                     from .commands_ext.public_voice_safety import VoiceSafetyConsentView
 
-                    await notice_channel.send(
+                    notice_message = await notice_channel.send(
                         f"🛡️ **Voice Safety review is active for <#{voice_channel_id}>.** "
                         "This is an optional AI-assisted staff-alert feature, not a guaranteed content block. "
                         "Only members who press **Opt In** have their voice transcribed and reviewed. "
@@ -1092,6 +1084,7 @@ class CommunityVoiceCaptionManager:
                 soak_test=soak_test,
                 advisor=advisor,
                 notice_channel_id=notice_channel_id,
+                notice_message_id=int(notice_message.id) if safety_mode else 0,
             )
             self._sessions[sid] = state
             self._guild_owner[guild_id] = sid
@@ -1150,6 +1143,7 @@ class CommunityVoiceCaptionManager:
         self._receive_recovery_locks.pop(sid, None)
         state.bridge.set_speaking_callback(None)
         state.bridge.clear_consent()
+        state.safety_consents.clear()
         if state.advisor is not None:
             state.advisor.close()
         try:
