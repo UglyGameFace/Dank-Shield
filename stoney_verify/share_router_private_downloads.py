@@ -52,7 +52,7 @@ def _valid_request_url(content: str) -> str:
     if len(urls) != 1:
         return ""
     url = canonicalize_media_url(urls[0])
-    if not is_safe_media_download_url(url) or not provider_for_url(url):
+    if len(url) > 1400 or not is_safe_media_download_url(url) or not provider_for_url(url):
         return ""
     return url
 
@@ -104,6 +104,7 @@ async def handle_download_message(message: discord.Message) -> bool:
         return True
 
     key = (int(message.guild.id), int(message.author.id))
+    _gate()  # Initialize per-event-loop limits BEFORE marking this user busy.
     now = time.monotonic()
     _prune_cooldowns(now)
     if key in _BUSY:
@@ -113,7 +114,6 @@ async def handle_download_message(message: discord.Message) -> bool:
         await _reply_problem(message, "Please wait two minutes before another video download.")
         return True
 
-    _gate()
     _BUSY.add(key)
     _LAST_REQUEST[key] = now
     try:
