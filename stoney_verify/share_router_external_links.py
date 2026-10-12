@@ -8,6 +8,7 @@ PostgreSQL, no additional web listener, no unlimited storage promises.
 """
 
 import asyncio
+import io
 import hashlib
 import hmac
 import json
@@ -19,7 +20,10 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import aiohttp
 from aiohttp import web
+
+from .share_router_media_network import public_tcp_connector, public_get
 
 _ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -34,6 +38,7 @@ _IO_LOCK = asyncio.Lock()
 _DOWNLOAD_ACTIVE = 0
 _DELIVERY_MAX_ACTIVE = 4
 _SWEEP_TASK: asyncio.Task | None = None
+_SWEEP_CURSOR = 0
 
 
 def _env_limit(key: str, default: int, low: int, high: int) -> int:
@@ -119,15 +124,23 @@ def _read_metadata(ident: str) -> dict | None:
 
 
 def _sweep_sync(max_entries: int = 128) -> int:
+    global _SWEEP_CURSOR
     root = _storage_dir()
     if not root.is_dir():
         return 0
     deleted = 0
     now = time.time()
-    # Bounded per pass. Repeat sweep in the background, not from requests.
-    for i, entry in enumerate(root.iterdir()):
-        if i >= max_entries:
-            break
+    # Rotate over candidates. Repeated scans must reach late directory entries,
+    # not continually inspect only the first 128 valid/active media files.
+    entries = list(root.iterdir())
+    if not entries:
+        _SWEEP_CURSOR = 0
+        return 0
+    count = min(max(1, max_entries), len(entries))
+    start = _SWEEP_CURSOR % len(entries)
+    _SWEEP_CURSOR = (start + count) % len(entries)
+    for i in range(count):
+        entry = entries[(start + i) % len(entries)]
         if not entry.is_file() or entry.is_symlink():
             continue
         suffix = entry.suffix
@@ -236,6 +249,35 @@ async def stage_video(fp, *, ttl_seconds: int, ext: str = ".mp4") -> tuple[str, 
     return (f"{prefix}/watch", f"{prefix}/download", ident)
 
 
+async def check_public_delivery() -> tuple[bool, str]:
+    """Use a short-lived throwaway token to check real HTTPS reachability.
+
+    Does not publish the probe URL or media bytes to Discord. A 200 response
+    proves the route is reachable, not that Discord will generate a player.
+    """
+    ready, reason = delivery_status()
+    if not ready:
+        return False, reason
+    staged = await stage_video(io.BytesIO(b"dank-share-probe"), ttl_seconds=3600, ext=".mp4")
+    if staged is None:
+        return False, "Hosting could not reserve test storage"
+    watch_url, _download_url, ident = staged
+    try:
+        timeout = aiohttp.ClientTimeout(total=10.0, connect=4.0)
+        async with aiohttp.ClientSession(
+            timeout=timeout, connector=public_tcp_connector(),
+        ) as session:
+            response, _final = await public_get(session, watch_url)
+            async with response:
+                if response.status != 200 or await response.content.read(64) != b"dank-share-probe":
+                    return False, "Public HTTPS route returned an unexpected response"
+        return True, "HTTPS watch endpoint is reachable with a valid private token"
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError):
+        return False, "Public HTTPS route could not be reached from this deployment"
+    finally:
+        await revoke_video(ident)
+
+
 async def revoke_video(ident: str) -> None:
     if not _ID_RE.fullmatch(ident):
         return
@@ -288,5 +330,5 @@ def register_share_video_routes(app: web.Application) -> None:
     start_cleanup_worker()
 
 
-__all__ = ["delivery_status", "file_max_bytes", "register_share_video_routes",
+__all__ = ["check_public_delivery", "delivery_status", "file_max_bytes", "register_share_video_routes",
            "revoke_video", "stage_video", "storage_max_bytes", "_DEFAULT_TTL_SECONDS", "_TTL_PRESETS"]
