@@ -11,6 +11,7 @@ been delivered before the process was interrupted.
 import asyncio
 import os
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,8 @@ _IDLE_POLL_SECONDS = 2.0
 _WORKERS: list[asyncio.Task[None]] = []
 _WORKER_BOT: Any = None
 _LAST_GUILD_ID = ""
+_SCHEMA_LOCK = threading.Lock()
+_SCHEMA_READY_PATH = ""
 
 
 def _db_path() -> Path:
@@ -54,8 +57,11 @@ class DownloadJob:
 
 
 def _connect() -> sqlite3.Connection:
+    global _SCHEMA_READY_PATH
     path = _db_path()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if path.is_symlink():
+        raise OSError("Share Router queue cannot use a symlink")
     if not path.exists():
         try:
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -63,31 +69,38 @@ def _connect() -> sqlite3.Connection:
             pass  # Another queue worker created it after the existence check.
         else:
             os.close(fd)
-    if path.is_symlink():
-        raise OSError("Share Router queue cannot use a symlink")
     conn = sqlite3.connect(str(path), timeout=5, isolation_level=None)
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS download_queue (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            guild_id TEXT NOT NULL,
-            channel_id TEXT NOT NULL,
-            member_id TEXT NOT NULL,
-            message_id TEXT NOT NULL UNIQUE,
-            created_at REAL NOT NULL,
-            status TEXT NOT NULL CHECK (status IN ('queued', 'running'))
-        )
-    """)
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS download_queue_one_member "
-        "ON download_queue (guild_id, member_id)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS download_queue_pick "
-        "ON download_queue (status, created_at)"
-    )
-    return conn
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        # Schema and WAL setup are intentionally one-time operations. Repeating
+        # PRAGMA journal_mode for every 2s idle poll can contend with writers.
+        with _SCHEMA_LOCK:
+            if _SCHEMA_READY_PATH != str(path):
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS download_queue (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id TEXT NOT NULL,
+                        channel_id TEXT NOT NULL,
+                        member_id TEXT NOT NULL,
+                        message_id TEXT NOT NULL UNIQUE,
+                        created_at REAL NOT NULL,
+                        status TEXT NOT NULL CHECK (status IN ('queued', 'running'))
+                    )
+                """)
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS download_queue_one_member "
+                    "ON download_queue (guild_id, member_id)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS download_queue_pick "
+                    "ON download_queue (status, created_at)"
+                )
+                _SCHEMA_READY_PATH = str(path)
+        return conn
+    except Exception:
+        conn.close()
+        raise
 
 
 def _submit(guild_id: int, channel_id: int, member_id: int, message_id: int) -> str:
