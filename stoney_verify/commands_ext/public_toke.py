@@ -333,6 +333,19 @@ async def _publish_toke(
             # attachments display far too large above the session card.
             # Components V2 offer an inline thumbnail that can be refreshed.
             upload_file = await upload.to_file()
+            # Discord's attachment:// component reference must be a bare,
+            # predictable filename. Preserve the true image format (including
+            # animated GIFs) rather than copying unsafe mobile upload names.
+            declared_type = str(getattr(upload, "content_type", "") or "").split(";", 1)[0].lower()
+            content_extensions = {
+                "image/gif": "gif", "image/jpeg": "jpg",
+                "image/png": "png", "image/webp": "webp",
+            }
+            original_suffix = str(getattr(upload, "filename", "") or "").rsplit(".", 1)[-1].lower()
+            suffix = content_extensions.get(declared_type)
+            if suffix is None:
+                suffix = original_suffix if f".{original_suffix}" in _TOKE_MEDIA_EXTENSIONS else "png"
+            upload_file.filename = f"toke-{guild.id}-{member.id}-{time.time_ns()}.{suffix}"
         elif direct:
             # Provider/CDN URLs do not require a message attachment and remain
             # inside the Toke embed through later session edits.
