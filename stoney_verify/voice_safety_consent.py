@@ -6,10 +6,12 @@ Never infer consent from a role, age, server membership, or other feature's
 preferences. Only an explicit currently-disclosed acknowledgement qualifies.
 """
 
+from datetime import datetime, timezone
 from typing import Any
 
 VOICE_SAFETY_AGREEMENT_KEY = "voice_safety_agreement_v1"
 VOICE_SAFETY_DISCLOSURE_MARKER = "Dank Shield Voice Safety Agreement v1"
+_ALLOWED_AGREEMENT_SOURCES = frozenset({"basic_verify_v1", "voice_safety_notice_v1"})
 
 
 async def read_voice_safety_agreement(guild_id: int, user_id: int) -> bool:
@@ -19,16 +21,30 @@ async def read_voice_safety_agreement(guild_id: int, user_id: int) -> bool:
     try:
         row = await get_profile_guild_settings(int(guild_id), int(user_id), refresh=True)
         value = (row.get("settings") or {}).get(VOICE_SAFETY_AGREEMENT_KEY)
-        return isinstance(value, dict) and value.get("accepted") is True and value.get("version") == 1
+        return bool(
+            isinstance(value, dict)
+            and value.get("accepted") is True
+            and value.get("version") == 1
+            and value.get("source") in _ALLOWED_AGREEMENT_SOURCES
+            and isinstance(value.get("acted_at"), str)
+            and bool(value.get("acted_at"))
+        )
     except Exception:
         return False
 
 
-async def save_voice_safety_agreement(guild_id: int, user_id: int, enabled: bool) -> bool:
+async def save_voice_safety_agreement(
+    guild_id: int, user_id: int, enabled: bool, *, source: str = "voice_safety_notice_v1"
+) -> bool:
     """Write + reread, raising if the intended choice cannot be confirmed."""
     from .profile_card_service import upsert_profile_guild_namespace
 
-    value: dict[str, Any] = {"accepted": bool(enabled), "version": 1}
+    if source not in _ALLOWED_AGREEMENT_SOURCES:
+        raise ValueError("Unknown Voice Safety acknowledgement source")
+    value: dict[str, Any] = {
+        "accepted": bool(enabled), "version": 1, "source": source,
+        "acted_at": datetime.now(timezone.utc).isoformat(),
+    }
     result = await upsert_profile_guild_namespace(
         int(guild_id), int(user_id), VOICE_SAFETY_AGREEMENT_KEY, value
     )
