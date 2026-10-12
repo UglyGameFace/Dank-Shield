@@ -227,8 +227,11 @@ def test_voice_safety_ui_is_accessible_from_existing_protection_and_persistent()
     labels = {child.label for child in ProtectionCenterView(author_id=1).children if getattr(child, "label", None)}
     assert "Voice Safety" in labels
     staff = VoiceSafetyStaffView(1)
-    selects = [child for child in staff.children if isinstance(child, discord.ui.ChannelSelect)]
-    assert len(selects) == 3
+    assert not any(isinstance(child, discord.ui.ChannelSelect) for child in staff.children)
+    assert {"Monitored Voice Channel", "Private Staff Alerts", "Public Member Notice"} <= {
+        child.label for child in staff.children if getattr(child, "label", None)
+    }
+    assert all(int(getattr(child, "row", 0) or 0) <= 4 for child in staff.children)
     assert {"Start / Stop Review", "Enable / Disable Setup"}.issubset({
         child.label for child in staff.children if getattr(child, "label", None)
     })
@@ -637,4 +640,161 @@ def test_voice_safety_revocation_during_transcriber_prewarm_cannot_admit_pcm(mon
         assert not state.engine.allowed
         assert state.safety_consents == set()
 
+    asyncio.run(run())
+
+
+def test_voice_safety_uses_search_safe_paged_browser_for_decorated_channel_names(monkeypatch) -> None:
+    async def run() -> None:
+        import stoney_verify.commands_ext.public_voice_safety as ui
+        from stoney_verify.ui.resource_browser import DankGuildResourceBrowserView
+        from stoney_verify.services import naming_identity
+
+        channels = [
+            SimpleNamespace(
+                id=100 + index,
+                name=f"🗨️channel-{index}",
+                type=discord.ChannelType.text,
+                category=None,
+                mention=f"<#{100 + index}>",
+            )
+            for index in range(30)
+        ]
+        channels.append(
+            SimpleNamespace(
+                id=900, name="「📰」𝔾𝕖𝕟𝕖𝕣𝕒𝕝-ℕ𝕖𝕨𝕤",
+                type=discord.ChannelType.text, category=None, mention="<#900>",
+            )
+        )
+        voice = SimpleNamespace(
+            id=901, name="🔊 𝓣𝓱𝓮 𝓗𝓸𝓽𝓫𝓸𝔁",
+            type=discord.ChannelType.voice, category=None, mention="<#901>",
+        )
+        channels.append(voice)
+        guild = SimpleNamespace(id=9, channels=channels)
+        actor = SimpleNamespace(id=42)
+        captured = {}
+
+        class Response:
+            def is_done(self):
+                return False
+            async def edit_message(self, **kwargs):
+                captured.update(kwargs)
+            async def send_message(self, *args, **kwargs):
+                raise AssertionError((args, kwargs))
+
+        interaction = SimpleNamespace(
+            guild=guild, user=actor, client=object(), response=Response(),
+        )
+        monkeypatch.setattr(ui, "_staff", lambda interaction: True)
+        monkeypatch.setattr(
+            ui, "ensure_community_voice_caption_manager",
+            lambda bot: SimpleNamespace(status_for_guild=lambda gid: {"active": False}),
+        )
+        async def no_saved_aliases(guild_id):
+            return {}
+        monkeypatch.setattr(naming_identity, "get_search_alias_index", no_saved_aliases)
+
+        await ui._open_voice_safety_channel_browser(interaction, owner_id=42, kind="staff")
+        browser = captured["view"]
+        assert isinstance(browser, DankGuildResourceBrowserView)
+        assert browser.resource_kinds == ("text",)
+        assert len(browser.candidates) == 31
+        assert browser.page_count == 2
+        found = await browser.search("general news")
+        assert any(item.resource_id == 900 for item in found.candidates)
+        by_id = await browser.search("900")
+        assert [item.resource_id for item in by_id.candidates] == [900]
+        assert all(item.resource_type == "text" for item in browser.candidates)
+
+        captured.clear()
+        await ui._open_voice_safety_channel_browser(interaction, owner_id=42, kind="voice")
+        voice_browser = captured["view"]
+        assert voice_browser.resource_kinds == ("voice",)
+        assert [item.resource_id for item in voice_browser.candidates] == [901]
+
+    asyncio.run(run())
+
+
+def test_voice_safety_picker_rechecks_private_public_and_bot_permissions(monkeypatch) -> None:
+    import stoney_verify.commands_ext.public_voice_safety as ui
+
+    class TextChannel:
+        id = 456
+        def __init__(self, *, everyone=False, bot_can_send=True, staff_can_view=True):
+            self.everyone = everyone
+            self.bot_can_send = bot_can_send
+            self.staff_can_view = staff_can_view
+        def permissions_for(self, member):
+            if member == "everyone":
+                return SimpleNamespace(view_channel=self.everyone)
+            if member == "bot":
+                return SimpleNamespace(view_channel=True, send_messages=self.bot_can_send)
+            return SimpleNamespace(view_channel=self.staff_can_view)
+
+    class VoiceChannel:
+        id = 789
+        def permissions_for(self, member):
+            return SimpleNamespace(view_channel=True, connect=True)
+
+    monkeypatch.setattr(ui, "_VOICE_SAFETY_CHANNEL_MODES", {
+        "voice": ("voice_safety_voice_channel_id", VoiceChannel, "Voice", ("voice",)),
+        "staff": ("voice_safety_staff_channel_id", TextChannel, "Staff", ("text",)),
+        "notice": ("voice_safety_notice_channel_id", TextChannel, "Notice", ("text",)),
+    })
+    guild = SimpleNamespace(default_role="everyone", me="bot")
+    actor = "staff"
+    public = TextChannel(everyone=True)
+    private = TextChannel(everyone=False)
+    guild.get_channel = lambda channel_id: {456: guild.selected, 789: guild.voice}.get(channel_id)
+    guild.voice = VoiceChannel()
+    guild.selected = public
+    assert "publicly visible" in ui._voice_safety_channel_blocker(guild, public, "staff", actor)
+    assert ui._voice_safety_channel_blocker(guild, public, "notice", actor) == ""
+    guild.selected = private
+    assert "hidden from @everyone" in ui._voice_safety_channel_blocker(guild, private, "notice", actor)
+    assert ui._voice_safety_channel_blocker(guild, private, "staff", actor) == ""
+    no_send = TextChannel(everyone=False, bot_can_send=False)
+    guild.selected = no_send
+    assert "Send Messages" in ui._voice_safety_channel_blocker(guild, no_send, "staff", actor)
+    blocked_staff = TextChannel(everyone=False, staff_can_view=False)
+    guild.selected = blocked_staff
+    assert "cannot view" in ui._voice_safety_channel_blocker(guild, blocked_staff, "staff", actor)
+    guild.selected = private
+    assert ui._voice_safety_channel_blocker(guild, guild.voice, "voice", actor) == ""
+    assert "correct channel type" in ui._voice_safety_channel_blocker(guild, private, "voice", actor)
+
+
+def test_voice_safety_picker_rejects_selection_when_session_starts(monkeypatch) -> None:
+    async def run() -> None:
+        import stoney_verify.commands_ext.public_voice_safety as ui
+
+        class Response:
+            def __init__(self):
+                self.items = []
+            def is_done(self):
+                return False
+            async def edit_message(self, **kwargs):
+                self.items.append(("edit", kwargs))
+            async def send_message(self, message, *, ephemeral=False):
+                self.items.append(("error", message, ephemeral))
+
+        owner = SimpleNamespace(id=42)
+        guild = SimpleNamespace(
+            id=1,
+            channels=[SimpleNamespace(id=100, type=discord.ChannelType.text, name="🎯staff", category=None)],
+        )
+        response = Response()
+        interaction = SimpleNamespace(guild=guild, user=owner, client=object(), response=response)
+        active = [False]
+        monkeypatch.setattr(ui, "_staff", lambda _: True)
+        monkeypatch.setattr(ui, "ensure_community_voice_caption_manager", lambda bot: SimpleNamespace(
+            status_for_guild=lambda gid: {"active": active[0], "scope_kind": "voice_safety"},
+        ))
+        await ui._open_voice_safety_channel_browser(interaction, owner_id=42, kind="staff")
+        browser = response.items[0][1]["view"]
+        assert browser.candidates
+        active[0] = True
+        await ui._open_voice_safety_channel_browser(interaction, owner_id=42, kind="staff")
+        assert response.items[-1][0] == "error"
+        assert "Stop active" in response.items[-1][1]
     asyncio.run(run())
