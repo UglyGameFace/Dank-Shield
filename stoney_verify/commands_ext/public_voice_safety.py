@@ -156,12 +156,8 @@ class VoiceSafetyConsentView(discord.ui.View):
             live = manager.status_for_guild(int(guild.id))
             if not live.get("active") or live.get("scope_kind") != "voice_safety":
                 return await interaction.followup.send("This Voice Safety notice is no longer active. Staff must start a new review session.", ephemeral=True)
-            active_sid = voice_safety_scope_id(int(guild.id))
-            active_state = manager._sessions.get(active_sid)
-            if (
-                active_state is None
-                or int(getattr(active_state, "notice_message_id", 0) or 0)
-                   != int(getattr(getattr(interaction, "message", None), "id", 0) or 0)
+            if int(live.get("voice_safety_notice_message_id", 0) or 0) != int(
+                getattr(getattr(interaction, "message", None), "id", 0) or 0
             ):
                 return await interaction.followup.send(
                     "This is an older review notice. Use Opt In on the current Voice Safety notice.",
