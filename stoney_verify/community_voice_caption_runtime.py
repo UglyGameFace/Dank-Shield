@@ -769,6 +769,8 @@ class CommunityVoiceCaptionManager:
                 loop = asyncio.get_running_loop()
                 new_bridge = PerSpeakerFrameBridge(loop, state.engine.submit)
                 for uid in opted_users:
+                    if state.scope_kind == "voice_safety" and uid not in state.safety_consents:
+                        continue
                     new_bridge.opt_in(uid)
                 new_bridge.set_speaking_callback(
                     lambda uid, _sid=sid: self._schedule_receive_probe(_sid, uid)
@@ -789,6 +791,29 @@ class CommunityVoiceCaptionManager:
                     sid,
                 )
                 return False
+
+            # Stop, departure, or consent revocation may have run during await
+            # connect_receive_client(). Never resurrect a stopped session.
+            if self._sessions.get(sid) is not state or self._guild_owner.get(state.guild_id) != sid:
+                disconnect_receive_client(new_voice_client)
+                try:
+                    await new_voice_client.disconnect(force=True)
+                except Exception:
+                    pass
+                return False
+            if state.scope_kind == "voice_safety":
+                guild_now = self.bot.get_guild(state.guild_id)
+                for uid in tuple(new_bridge.opted_in_user_ids()):
+                    member = guild_now.get_member(uid) if guild_now is not None else None
+                    still_in_vc = int(getattr(getattr(getattr(member, "voice", None), "channel", None), "id", 0) or 0) == state.voice_channel_id
+                    if uid not in state.safety_consents or not still_in_vc:
+                        new_bridge.opt_out(uid)
+                # Preserve new explicit opt-ins that happened during reconnect.
+                for uid in tuple(state.safety_consents):
+                    member = guild_now.get_member(uid) if guild_now is not None else None
+                    in_target = int(getattr(getattr(getattr(member, "voice", None), "channel", None), "id", 0) or 0) == state.voice_channel_id
+                    if in_target:
+                        new_bridge.opt_in(uid)
 
             state.bridge = new_bridge
             state.voice_client = new_voice_client
@@ -979,13 +1004,13 @@ class CommunityVoiceCaptionManager:
                     uid = int(user_id)
                     verdict = await advisor.inspect(
                         uid, text, confidence,
-                        is_admitted=lambda value: bridge.is_opted_in(value)
+                        is_admitted=lambda value: state.bridge.is_opted_in(value)
                         and bool(self._sessions.get(sid) is state),
                     )
                     if verdict is None:
                         return
                     # A consent withdrawal or a stopped session must never publish a stale result.
-                    if not bridge.is_opted_in(uid) or self._sessions.get(sid) is not state:
+                    if not state.bridge.is_opted_in(uid) or self._sessions.get(sid) is not state:
                         return
                     safe_reason = discord.utils.escape_markdown(verdict.reason)[:220]
                     await destination.send(
