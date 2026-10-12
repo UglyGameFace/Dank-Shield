@@ -651,6 +651,11 @@ def test_facebook_embedded_cdn_uses_existing_bounded_fetch(monkeypatch) -> None:
     fbcdn = "https://video.xx.fbcdn.net/o1/v/t2/demo.mp4?oh=short-lived"
     message, routes, target = _direct_memes_fixture()
     message.embeds = [SimpleNamespace(video=SimpleNamespace(url=fbcdn, proxy_url=None))]
+    class FakeMember:
+        pass
+    target.guild = SimpleNamespace(me=FakeMember())
+    target.permissions_for = lambda _member: SimpleNamespace(attach_files=True)
+    monkeypatch.setattr(share_runtime.discord, "Member", FakeMember)
     tried = []
 
     async def fetch_candidate(url: str, *, max_bytes: int, request_headers=None):
