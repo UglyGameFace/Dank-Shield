@@ -892,9 +892,17 @@ async def _download_settings_embed(guild: discord.Guild) -> discord.Embed:
               "These are safety limits, not guaranteed free disk space.",
         inline=False,
     )
+    embed.add_field(
+        name="Important: storage durability",
+        value=(
+            "Expiring links rely on the hosting app keeping the staged file. "
+            "A restart/redeploy that removes local storage will invalidate links early. "
+            "Verify persistent storage with Discloud before promising 7- or 30-day availability."
+        ),
+        inline=False,
+    )
     embed.set_footer(
-        text="Expiring a URL stops new requests; Discord may retain cached previews. "
-             "Anyone holding a private link can use it until expiry.",
+        text="Anyone with a private link can use it until expiry; Discord may retain cached previews.",
     )
     return embed
 
