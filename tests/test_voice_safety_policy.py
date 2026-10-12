@@ -14,6 +14,7 @@ from stoney_verify.community_voice_caption_runtime import (
 from stoney_verify.commands_ext.public_protection_center import ProtectionCenterView
 from stoney_verify.commands_ext.public_voice_safety import (
     VoiceSafetyConsentView,
+    VoiceSafetyEndedView,
     VoiceSafetyStaffView,
     _readiness,
 )
@@ -105,7 +106,7 @@ def test_voice_safety_opt_out_invalidates_in_flight_review() -> None:
     asyncio.run(run())
 
 
-def test_voice_safety_never_reuses_caption_consent(monkeypatch) -> None:
+def test_voice_safety_never_reuses_caption_consent_or_restores_from_database(monkeypatch) -> None:
     async def run() -> None:
         import stoney_verify.profile_card_service as profiles
 
@@ -113,10 +114,44 @@ def test_voice_safety_never_reuses_caption_consent(monkeypatch) -> None:
             return {"settings": {"live_captions_auto_opt_in": True}}
         monkeypatch.setattr(profiles, "get_profile_guild_settings", fake_prefs)
         manager = CommunityVoiceCaptionManager(SimpleNamespace())
-        assert await manager.voice_safety_consented(1, 2) is False
-        assert manager._sessions == {}
+        state = SimpleNamespace(guild_id=1, scope_kind="voice_safety", safety_consents=set())
+        channel = SimpleNamespace(members=[SimpleNamespace(id=2, bot=False)])
+        assert await manager._restore_auto_opt_ins(state, channel) == 0
+        assert state.safety_consents == set()
     asyncio.run(run())
 
+
+def test_voice_safety_session_opt_in_and_revocation_do_not_write_to_storage(monkeypatch) -> None:
+    async def run() -> None:
+        from stoney_verify.community_voice_receive import VoiceReceiveUnavailable
+
+        uid, gid, vc = 4, 3, 19
+        member = SimpleNamespace(id=uid, voice=SimpleNamespace(channel=SimpleNamespace(id=vc)))
+        guild = SimpleNamespace(get_member=lambda x: member if x == uid else None)
+        manager = CommunityVoiceCaptionManager(SimpleNamespace(get_guild=lambda x: guild))
+        state = SimpleNamespace(scope_kind="voice_safety", voice_channel_id=vc, safety_consents=set())
+        manager._guild_owner[gid] = "voice_safety:3"
+        manager._sessions["voice_safety:3"] = state
+        admitted = []
+        revoked = []
+        async def enable(*args, **kwargs):
+            admitted.append(args[1])
+        async def disable(*args, **kwargs):
+            revoked.append(args[1])
+        monkeypatch.setattr(manager, "_enable_user_for_state", enable)
+        monkeypatch.setattr(manager, "_disable_user_for_state", disable)
+        assert await manager.set_voice_safety_consent(gid, uid, True) is True
+        assert admitted == [uid] and state.safety_consents == {uid}
+        assert await manager.set_voice_safety_consent(gid, uid, False) is False
+        assert revoked == [uid] and state.safety_consents == set()
+        manager._sessions.clear()
+        try:
+            await manager.set_voice_safety_consent(gid, uid, True)
+            assert False, "must fail closed without an active session"
+        except VoiceReceiveUnavailable:
+            pass
+        assert await manager.set_voice_safety_consent(gid, uid, False) is False
+    asyncio.run(run())
 
 def test_voice_safety_is_separate_gated_scope(monkeypatch) -> None:
     assert voice_safety_scope_id(5) == "voice_safety:5"
@@ -141,6 +176,9 @@ def test_voice_safety_ui_is_accessible_from_existing_protection_and_persistent()
     })
     public = VoiceSafetyConsentView()
     assert public.timeout is None
+    ended = VoiceSafetyEndedView()
+    assert ended.opt_in.disabled is True
+    assert ended.opt_out.disabled is False
     assert {child.custom_id for child in public.children} == {
         "dank:voice_safety:consent_on:v1",
         "dank:voice_safety:consent_off:v1",
