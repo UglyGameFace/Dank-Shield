@@ -32,6 +32,7 @@ _DEFAULT_FILE_MAX = 128 * 1024 * 1024
 _HARD_FILE_MAX = 256 * 1024 * 1024
 _DEFAULT_STORE_MAX = 512 * 1024 * 1024
 _DEFAULT_RESERVE = 256 * 1024 * 1024
+_DEFAULT_LINK_EGRESS_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_TTL_SECONDS = 30 * 24 * 3600
 _DEFAULT_TTL_SECONDS = 7 * 24 * 3600
 _TTL_PRESETS = frozenset({3600, 86400, 7 * 86400, 30 * 86400})
@@ -56,6 +57,15 @@ def file_max_bytes() -> int:
 
 def storage_max_bytes() -> int:
     return _env_limit("DANK_SHARE_DOWNLOAD_STORAGE_MAX_BYTES", _DEFAULT_STORE_MAX, 64 * 1024 * 1024, 2 * 1024 * 1024 * 1024)
+
+
+def link_egress_budget() -> int:
+    return _env_limit(
+        "DANK_SHARE_DOWNLOAD_LINK_EGRESS_BYTES",
+        _DEFAULT_LINK_EGRESS_BYTES,
+        256 * 1024 * 1024,
+        16 * 1024 * 1024 * 1024,
+    )
 
 
 def _storage_dir() -> Path:
@@ -223,6 +233,7 @@ def _stage_sync(source, ident: str, token: str, ttl_seconds: int, ext: str) -> i
             "size": size,
             "ext": ext,
             "token_hash": hashlib.sha256(token.encode("ascii")).hexdigest(),
+            "reserved_bytes": 0,
         }
         # File is not addressable until the metadata exists.
         metadata.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
@@ -292,6 +303,54 @@ async def revoke_video(ident: str) -> None:
         await asyncio.to_thread(meta.unlink, missing_ok=True)
 
 
+def _requested_transfer_size(request: web.Request, size: int) -> int:
+    if request.method == "HEAD":
+        return 0
+    try:
+        requested = request.http_range
+    except ValueError:
+        return size
+    start = requested.start
+    stop = requested.stop
+    if start is None and stop is None:
+        return size
+    if start is None:
+        return min(size, int(stop or size))
+    if start < 0:
+        return min(size, -start)
+    return max(0, min(stop if stop is not None else size, size) - min(start, size))
+
+
+def _reserve_delivery_sync(ident: str, token_digest: str, expected_bytes: int) -> bool:
+    """Atomic under _IO_LOCK; debit advertised HTTP bytes before streaming.
+
+    Overcounts aborted transfers instead of permitting indefinite bearer-link
+    replay. No analytics or remote-user IDs are stored.
+    """
+    record = _read_metadata(ident)
+    if record is None or record["expires_at"] <= time.time():
+        return False
+    if not hmac.compare_digest(str(record["token_hash"]), token_digest):
+        return False
+    debit = max(0, int(expected_bytes))
+    already = max(0, int(record.get("reserved_bytes", 0)))
+    if already + debit > link_egress_budget():
+        return False
+    if not debit:
+        return True
+    _media, metadata = _paths(ident)
+    temporary = metadata.with_suffix(".json.tmp")
+    try:
+        record["reserved_bytes"] = already + debit
+        temporary.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
+        os.replace(temporary, metadata)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 async def _serve_video(request: web.Request) -> web.StreamResponse:
     global _DOWNLOAD_ACTIVE
     ident = str(request.match_info["ident"])
@@ -325,6 +384,15 @@ async def _serve_video(request: web.Request) -> web.StreamResponse:
         "X-Robots-Tag": "noindex, nofollow, noarchive",
         "Cross-Origin-Resource-Policy": "cross-origin",
     }
+    # The copied bearer URL may be fetched repeatedly by Discord previews or
+    # shared by strangers. Bound lifetime egress per asset, even after restart.
+    size_to_reserve = _requested_transfer_size(request, meta["size"])
+    async with _IO_LOCK:
+        if not await asyncio.to_thread(
+            _reserve_delivery_sync, ident, digest, size_to_reserve,
+        ):
+            raise web.HTTPTooManyRequests(text="Private download limit exhausted or link expired")
+
     response = web.FileResponse(video, headers=headers)
     response.content_type = _ALLOWED_EXTS[meta["ext"]]
     _DOWNLOAD_ACTIVE += 1
@@ -343,4 +411,4 @@ def register_share_video_routes(app: web.Application) -> None:
 
 
 __all__ = ["check_public_delivery", "delivery_status", "file_max_bytes", "register_share_video_routes",
-           "revoke_video", "stage_video", "storage_max_bytes", "_DEFAULT_TTL_SECONDS", "_TTL_PRESETS"]
+           "link_egress_budget", "revoke_video", "stage_video", "storage_max_bytes", "_DEFAULT_TTL_SECONDS", "_TTL_PRESETS"]
