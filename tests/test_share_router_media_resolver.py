@@ -50,6 +50,8 @@ def test_provider_matrix(url: str, provider: str) -> None:
         ("Video unavailable", "provider_video_unavailable"),
         ("Connection timed out", "provider_extract_timeout"),
         ("Some new provider issue with signed CDN token=SECRET", "extract_failed"),
+        ("[facebook] 100: Cannot parse data; https://fbcdn.net/?oh=private", "provider_extractor_incompatible"),
+        ("[facebook] 100: No video formats found!", "provider_no_downloadable_formats"),
     ],
 )
 def test_provider_exception_is_categorized_without_leaking_source(
@@ -59,6 +61,37 @@ def test_provider_exception_is_categorized_without_leaking_source(
     assert reason == expected
     assert "token" not in reason
     assert "https://" not in reason
+
+
+def test_facebook_public_link_compatibility_cases() -> None:
+    for url in (
+        "https://www.facebook.com/reel/1591316522498163",
+        "https://www.facebook.com/watch/?v=1591316522498163",
+        "https://www.facebook.com/AssembleeNationale/videos/818149149511725/",
+        "https://fb.watch/SAMPLE456/",
+        "https://www.facebook.com/share/v/SAMPLE456/",
+        "https://m.facebook.com/watch/?v=1591316522498163",
+    ):
+        assert media.provider_for_url(url) == "facebook"
+
+
+def test_facebook_parser_failure_produces_distinct_safe_fallback(monkeypatch) -> None:
+    monkeypatch.setattr(
+        media, "_extract_info_sync",
+        lambda url: media.ExtractionFailure("provider_extractor_incompatible"),
+    )
+    async def scenario():
+        return await media.resolve_media_url(
+            "https://www.facebook.com/reel/1591316522498163",
+            max_bytes=20 * 1024 * 1024,
+        )
+    result = asyncio.run(scenario())
+    assert result.provider == "facebook"
+    assert result.delivery == "link"
+    assert result.reason == "provider_extractor_incompatible"
+    assert media.media_resolver_snapshot()["providers"]["facebook"]["last_reason"] == (
+        "provider_extractor_incompatible"
+    )
 
 
 def test_live_extractor_adapter_returns_safe_failure_not_raw_error(monkeypatch) -> None:
