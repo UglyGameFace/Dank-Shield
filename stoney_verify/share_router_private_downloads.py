@@ -161,11 +161,25 @@ async def handle_download_message(message: discord.Message) -> bool:
             try:
                 if video is not None:
                     try:
-                        await message.author.send(
-                            "🎬 Your video from the Share Router Download channel:",
-                            file=video.file,
-                            allowed_mentions=discord.AllowedMentions.none(),
-                        )
+                        try:
+                            await message.author.send(
+                                "🎬 Your video from the Share Router Download channel:",
+                                file=video.file,
+                                allowed_mentions=discord.AllowedMentions.none(),
+                            )
+                        except discord.HTTPException as exc:
+                            # API-side upload caps can change independently of
+                            # what our installed Discord client library knows.
+                            # Never claim the file was sent if Discord rejects it.
+                            if getattr(exc, "status", None) != 413 and getattr(exc, "code", None) != 40005:
+                                raise
+                            await message.author.send(
+                                "🔗 Discord rejected this video attachment as too large. "
+                                "The original public source is here instead:\n"
+                                + resolution.canonical_url
+                                + "\n\nThis is a link, not a downloaded file.",
+                                allowed_mentions=discord.AllowedMentions.none(),
+                            )
                     finally:
                         try:
                             video.file.close()
@@ -187,11 +201,18 @@ async def handle_download_message(message: discord.Message) -> bool:
                         "A private large-file download service isn't configured yet.",
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
-            except (discord.Forbidden, discord.HTTPException):
+            except discord.Forbidden:
                 await _reply_problem(
                     message,
-                    "I couldn't DM you. Allow messages from the bot and try again; "
-                    "your link has been left here.",
+                    "I couldn't DM you. Allow messages from the bot and retry after "
+                    "the cooldown; your original link has been kept.",
+                )
+                return True
+            except discord.HTTPException:
+                await _reply_problem(
+                    message,
+                    "Discord couldn't deliver this download. The source message "
+                    "was kept so you can retry after the cooldown.",
                 )
                 return True
 
