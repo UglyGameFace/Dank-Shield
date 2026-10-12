@@ -57,6 +57,13 @@ def _classify_extraction_failure(error: BaseException) -> str:
     # yt-dlp errors can embed raw signed URLs, cookies or provider responses.
     # Only return one of these fixed categories, never raw exception text.
     detail = str(error).casefold()
+    # Recent Facebook public Reels have hit parser regressions in the pinned
+    # yt-dlp release. Report that distinct category instead of blaming file
+    # size, a blocked DM or an allegedly unconfigured HTTPS host.
+    if "cannot parse data" in detail:
+        return "provider_extractor_incompatible"
+    if "no video formats found" in detail:
+        return "provider_no_downloadable_formats"
     if "not a bot" in detail or "bot detection" in detail or "captcha" in detail:
         return "provider_bot_verification"
     if "private video" in detail or "members-only" in detail or "members only" in detail:
