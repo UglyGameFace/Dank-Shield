@@ -92,6 +92,8 @@ _PUBLIC_FAILURE_TEXT = {
     "provider_rate_limited": "The provider is limiting requests from this server.",
     "provider_forbidden": "The media provider refused the server's request.",
     "provider_video_unavailable": "The video is unavailable from the provider.",
+    "provider_extractor_incompatible": "The provider changed its page format; the current media extractor could not parse it.",
+    "provider_no_downloadable_formats": "The provider returned no downloadable video formats for this post.",
     "provider_extract_timeout": "The provider did not return video information before the timeout.",
     "no_safe_progressive_format": "No supported downloadable format could be selected within the current limits.",
     "separate_audio_video_requires_merge": "Separate audio and video tracks could not be prepared.",
