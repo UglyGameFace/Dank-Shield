@@ -98,24 +98,31 @@ async def handle_download_message(message: discord.Message) -> bool:
     except Exception:
         return True
 
-    url = _valid_request_url(message.content)
-    if not url:
-        await _reply_problem(message, "Send one safe public video link per message. Private or unsupported links cannot be downloaded.")
-        return True
-
+    _gate()  # Initialize per-event-loop limits BEFORE tracking this user.
     key = (int(message.guild.id), int(message.author.id))
-    _gate()  # Initialize per-event-loop limits BEFORE marking this user busy.
     now = time.monotonic()
     _prune_cooldowns(now)
     if key in _BUSY:
-        await _reply_problem(message, "Your previous download is still processing.")
+        # Silently ignore duplicate active posts instead of spamming the intake.
         return True
     if now - _LAST_REQUEST.get(key, -1e12) < MEMBER_COOLDOWN_SECONDS:
-        await _reply_problem(message, "Please wait two minutes before another video download.")
         return True
-
-    _BUSY.add(key)
+    # Invalid requests count toward the cooldown too, or a malicious member
+    # could make the bot generate an unlimited stream of public error replies.
     _LAST_REQUEST[key] = now
+    url = _valid_request_url(message.content)
+    if not url:
+        await _reply_problem(
+            message,
+            "Send one safe public video link per message. Private or unsupported links cannot be downloaded.",
+        )
+        return True
+    # A semaphore alone queues unlimited waiters. Reject overflow BEFORE
+    # spawning a network transfer to keep bot memory and latency bounded.
+    if len(_BUSY) >= MAX_ACTIVE_DM_DOWNLOADS:
+        await _reply_problem(message, "Download capacity is busy. Try again in two minutes.")
+        return True
+    _BUSY.add(key)
     try:
         async with _gate():
             # Resolve only one URL and never buffer full videos in memory.
@@ -173,11 +180,11 @@ async def handle_download_message(message: discord.Message) -> bool:
                     # guaranteed to offer direct downloads.
                     await message.author.send(
                         "🔗 I couldn't attach this video within Discord's DM "
-                        "size/format limits. You can try the original public "
-                        "source in your browser:\n"
+                        "size/format limits. You can open the original source "
+                        "in your browser:\n"
                         + resolution.canonical_url
-                        + "\n\nFor larger *actual file* downloads, Share Router "
-                        "needs a separate time-limited HTTPS delivery service.",
+                        + "\n\nThis is a link, not a downloaded video file. "
+                        "A private large-file download service isn't configured yet.",
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
             except (discord.Forbidden, discord.HTTPException):
