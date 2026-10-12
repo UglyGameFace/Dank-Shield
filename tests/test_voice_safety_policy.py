@@ -156,7 +156,7 @@ def test_voice_safety_one_time_agreement_persists_without_active_session(monkeyp
         import stoney_verify.community_voice_caption_runtime as runtime
 
         values = {}
-        async def save(gid, uid, enabled):
+        async def save(gid, uid, enabled, *, source="voice_safety_notice_v1"):
             values[(gid, uid)] = enabled
             return enabled
         monkeypatch.setattr(runtime, "save_voice_safety_agreement", save)
@@ -198,7 +198,7 @@ def test_voice_safety_agreement_does_not_infer_from_verified_role(monkeypatch) -
             return state
         monkeypatch.setattr(profiles, "get_profile_guild_settings", read)
         assert not await read_voice_safety_agreement(1, 2)
-        state["settings"]["voice_safety_agreement_v1"] = {"accepted": True, "version": 1}
+        state["settings"]["voice_safety_agreement_v1"] = {"accepted": True, "version": 1, "source": "basic_verify_v1", "acted_at": "2026-10-12T00:00:00+00:00"}
         assert await read_voice_safety_agreement(1, 2)
         state["settings"]["voice_safety_agreement_v1"] = {"accepted": False, "version": 1}
         assert not await read_voice_safety_agreement(1, 2)
@@ -358,7 +358,7 @@ def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) ->
         monkeypatch.setenv("GEMINI_API_KEY", "fake-ci-key")
 
         agreements = {}
-        async def save(gid, uid, enabled):
+        async def save(gid, uid, enabled, *, source="voice_safety_notice_v1"):
             agreements[(gid, uid)] = bool(enabled)
             return bool(enabled)
         async def read(gid, uid):
@@ -511,7 +511,7 @@ def test_basic_verify_records_voice_agreement_only_from_disclosed_panel(monkeypa
 
         recorded = []
         class FakeManager:
-            async def set_voice_safety_consent(self, gid, uid, enabled):
+            async def set_voice_safety_consent(self, gid, uid, enabled, *, source="voice_safety_notice_v1"):
                 recorded.append((gid, uid, enabled))
                 return enabled
 
