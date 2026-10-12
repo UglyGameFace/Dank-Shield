@@ -234,6 +234,8 @@ class ReminderSettingsView(_OwnedView):
         _ = button
         if not await _require_staff(interaction):
             return
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
         cfg, policy = await _load(interaction.guild)
         channel = verification_channel(interaction.guild, cfg)
         if channel is None:
@@ -245,9 +247,15 @@ class ReminderSettingsView(_OwnedView):
         _ = button
         if not await _require_staff(interaction):
             return
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         cfg, policy = await _load(interaction.guild)
-        if delivery_channel(interaction.guild, replace(policy, delivery="channel")) is None:
+        selected_channel = delivery_channel(interaction.guild, replace(policy, delivery="channel"))
+        if selected_channel is None:
             return await _private(interaction, "❌ Select a reminder text channel using the picker below first.")
+        me = interaction.guild.me
+        if me is None or not selected_channel.permissions_for(me).view_channel or not selected_channel.permissions_for(me).send_messages:
+            return await _private(interaction, "❌ Dank Shield needs View Channel and Send Messages in the selected reminder channel.")
         if await _save(interaction, cfg, replace(policy, delivery="channel")):
             fresh, current = await _load(interaction.guild)
             await _replace(interaction, embed=_embed(interaction.guild, fresh, current), view=ReminderSettingsView(self.owner_id, current))
@@ -257,6 +265,8 @@ class ReminderSettingsView(_OwnedView):
         _ = button
         if not await _require_staff(interaction):
             return
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         cfg, policy = await _load(interaction.guild)
         if await _save(interaction, cfg, replace(policy, delivery="dm")):
             fresh, current = await _load(interaction.guild)
@@ -279,6 +289,8 @@ class ReminderSettingsView(_OwnedView):
         _ = button
         if not await _require_staff(interaction):
             return
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         cfg, policy = await _load(interaction.guild)
         await _replace(interaction, embed=_embed(interaction.guild, cfg, policy), view=ReminderSettingsView(self.owner_id, policy))
 
