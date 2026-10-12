@@ -331,7 +331,8 @@ class TokeThumbnailLayout(discord.ui.LayoutView):
         card = render_card(guild, session, discord.Embed(title="💨 Toke Time"))
         active = bool(session.get("active", False)) and float(session.get("expires_at", 0) or 0) > time.time()
         if not active:
-            intro = intro.replace("## 💨 Toke Time", "## 💨 Toke Time · Sesh Ended", 1)
+            if "## 💨 Toke Time · Sesh Ended" not in intro:
+                intro = intro.replace("## 💨 Toke Time", "## 💨 Toke Time · Sesh Ended", 1)
             intro = intro.replace("is calling the sesh crowd.", "hosted this sesh.")
         container = discord.ui.Container(
             discord.ui.Section(
