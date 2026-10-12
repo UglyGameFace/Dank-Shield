@@ -302,7 +302,7 @@ class CommunityVoiceCaptionManager:
             "storage_available": True,
         }
 
-    async def set_voice_safety_consent(self, guild_id: int, user_id: int, enabled: bool) -> bool:
+    async def set_voice_safety_consent(self, guild_id: int, user_id: int, enabled: bool, *, source: str = "voice_safety_notice_v1") -> bool:
         """Durable one-time choice independent of live session availability.
 
         Withdraw admission immediately even if persistence is unavailable.
@@ -317,7 +317,7 @@ class CommunityVoiceCaptionManager:
             state.safety_consents.discard(uid)
             await self._disable_user_for_state(state, uid)
         try:
-            saved = await save_voice_safety_agreement(gid, uid, enabled)
+            saved = await save_voice_safety_agreement(gid, uid, enabled, source=source)
         except Exception as exc:
             if state is not None:
                 state.safety_consents.discard(uid)
