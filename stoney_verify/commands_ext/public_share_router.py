@@ -18,7 +18,9 @@ from stoney_verify.share_router_media_resolver import (
     resolve_media_url,
 )
 from stoney_verify.share_router_media_remux import media_remux_snapshot
-from stoney_verify.share_router_external_links import delivery_status, file_max_bytes, storage_max_bytes
+from stoney_verify.share_router_external_links import (
+    check_public_delivery, delivery_status, file_max_bytes, storage_max_bytes,
+)
 from stoney_verify.share_router_resources import (
     DEFAULT_SHARE_CHANNELS,
     SHARE_ROUTER_CATEGORY_NAME,
@@ -879,8 +881,8 @@ async def _download_settings_embed(guild: discord.Guild) -> discord.Embed:
     }.get(expire, "7 days"), inline=True)
     embed.add_field(
         name="External link hosting",
-        value=("✅ Locally ready. Test HTTPS reachability before relying on links."
-               if ready else f"⚠️ Not ready: {reason}")[:1024],
+        value=("✅ Storage/public URL configured. Press Test HTTPS Hosting to confirm reachability."
+               if ready else f"⚠️ Not ready: {reason}. Set DANK_MEDIA_PUBLIC_BASE_URL to your existing HTTPS Discloud site URL, restart, and return here.")[:1024],
         inline=False,
     )
     embed.add_field(
@@ -901,6 +903,20 @@ class ShareRouterDownloadSettingsView(_OwnedView):
     def __init__(self, owner_id: int, current: int) -> None:
         super().__init__(owner_id)
         self.add_item(DownloadExpirySelect(current))
+
+    @discord.ui.button(label="Test HTTPS Hosting", emoji="🩺", style=discord.ButtonStyle.primary, row=1)
+    async def test_hosting(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        ok, message = await check_public_delivery()
+        await _private(
+            interaction,
+            ("✅ " if ok else "❌ ") + message
+            + (". Discord inline playback still requires a real video canary."
+               if ok else ". Check the Download Settings readiness message and the public media URL."),
+        )
 
     @discord.ui.button(label="Back to Share Router", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
