@@ -56,6 +56,9 @@ from stoney_verify.torrent_streaming import (
 from stoney_verify.torrent_media_server import media_server_ready
 
 _DATA_LOCK = asyncio.Lock()
+# Route reads are on EVERY Discord message. Avoid JSON parsing all guilds for
+# each event; the one immutable read cache is replaced on every route write.
+_ROUTE_STATE_CACHE: Optional[tuple[str, int, int, dict[str, Any]]] = None
 # Only successfully delivered posts are eligible for automatic cleanup retries.
 _SOURCE_CLEANUP_TASK: Optional[asyncio.Task[None]] = None
 SHARE_ROUTER_FEATURE_BUILD = "custom-sources-v2-prod-reconcile"
@@ -642,17 +645,41 @@ def _load_all_unlocked() -> dict[str, Any]:
     return data
 
 
+def _read_route_state_unlocked() -> dict[str, Any]:
+    """Read-only cache for the high-volume Discord gateway path.
+
+    No caller mutates this index. All admin writes retain _load_all_unlocked's
+    fresh standalone dict and invalidate this cache after an atomic save.
+    """
+    global _ROUTE_STATE_CACHE
+    path = ROUTES_FILE
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        _ROUTE_STATE_CACHE = None
+        return {}
+    fingerprint = (str(path), int(stat.st_mtime_ns), int(stat.st_size))
+    previous = _ROUTE_STATE_CACHE
+    if previous is not None and previous[:3] == fingerprint:
+        return previous[3]
+    data = _load_all_unlocked()
+    _ROUTE_STATE_CACHE = (*fingerprint, data)
+    return data
+
+
 def _save_all_unlocked(data: Mapping[str, Any]) -> None:
+    global _ROUTE_STATE_CACHE
     ROUTES_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = ROUTES_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(dict(data), indent=2, sort_keys=True), encoding="utf-8")
     tmp.replace(ROUTES_FILE)
+    _ROUTE_STATE_CACHE = None
 
 
 async def guild_route_state(guild_id: int) -> tuple[list[dict[str, Any]], int]:
-    """Read routes and opt-in downloads with one bounded file access."""
+    """Read one guild's routes from the invalidated-on-write cached snapshot."""
     async with _DATA_LOCK:
-        data = _load_all_unlocked()
+        data = _read_route_state_unlocked()
         bucket = data.get(str(int(guild_id))) or {}
         download_id = _safe_int(bucket.get("download_channel_id"), 0) if isinstance(bucket, dict) else 0
         routes = bucket.get("routes") if isinstance(bucket, dict) else []
@@ -1691,8 +1718,10 @@ async def route_message(message: discord.Message) -> None:
 
         routes, download_channel_id = await guild_route_state(int(guild.id))
         if download_channel_id and int(message.channel.id) == download_channel_id:
-            from .share_router_private_downloads import handle_download_message
-            await handle_download_message(message)
+            # Discord gateway listener stays non-blocking while download workers
+            # process a bounded durable queue. Never create another listener.
+            from .share_router_download_queue import enqueue_download_request
+            await enqueue_download_request(message)
             return
         route = route_for_source(routes, int(message.channel.id))
         if route is None:
@@ -2107,6 +2136,8 @@ def ensure_share_router_runtime(bot: Any) -> bool:
             global _SOURCE_CLEANUP_TASK
             if _SOURCE_CLEANUP_TASK is None or _SOURCE_CLEANUP_TASK.done():
                 _SOURCE_CLEANUP_TASK = asyncio.create_task(_share_router_cleanup_loop(bot))
+            from .share_router_download_queue import start_download_workers
+            await start_download_workers(bot)
 
         bot.add_listener(start_cleanup_worker, "on_ready")
         _log(f"active; private share proxies can route into configured destinations build={SHARE_ROUTER_FEATURE_BUILD}")

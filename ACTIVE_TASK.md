@@ -1,5 +1,21 @@
 # Dank Shield Active Task
 
+## CURRENT SCALING SLICE — SHARE-ROUTER-390-DURABLE-FAIR-DOWNLOAD-QUEUE-20261012
+
+**Authorized continuation:** The user asked whether Download channels would run concurrently for 10,000+ servers, whether upgrading Discloud helps, then directed "ok continue". This is still the explicitly FORCE SWITCHED Share Router #390. No other development task may start.
+
+**Production base:** `aaa-cinema-pre-pregateway-bind@e915dbb419d49b94cd6c235f6f87d0f2ca036cbd`, after PR #514 merged with green GitHub workflows. Actual deployed Discloud SHA and live download/hosting canary remain **unverified**. Draft PR #515 on `feat/share-router-390-fair-durable-download-queue-20261012`.
+
+**First scaling slice:** Keep one canonical `route_message` listener; enqueue per-guild opt-in video download requests into bounded local SQLite with only guild/channel/member/message IDs, no URLs or media bytes. Two existing bounded media workers process jobs, global capacity 256, per guild 10, at most one pending per member and one running per guild; round-robin guild preference. Unstarted jobs expire after 6h, queued work survives a process restart **only when local data persists**, and crash-interrupted running jobs are dropped to avoid duplicate DMs. Worker rechecks current saved download channel, actual message/member and all canonical permissions/limits before delivery. No extra slash commands, media resolver, streaming stack or database migration.
+
+**Additional performance fix:** Reuse cached read-only Share Router config when routing each Discord message; invalidate after writes or file changes to avoid O(total guild config) JSON parse per event. Existing admin writes retain their file format. Staff Download Settings may show queue depth/limits for diagnostics.
+
+**Not a 10k guarantee:** This is a single-instance SQLite queue, not a distributed broker. Other instances won't share a queue or the already-local signed-video files. Four hosted transfers and two download workers remain; truly scalable deployment needs Discord gateway sharding, shared queue/leases, separated workers, durable object storage/CDN, resource/egress accounting and load tests. Upgrading Discloud CPU/RAM alone does not remove these software caps. See `docs/share-router-download-scaling.md`.
+
+**Acceptance pending:** exact-head scoped Share Router/whole bot CI, durable queue fair admission and crash/restart tests, config cache tests, Discloud persistent volume and runtime SHA, guild opt-in/permission DM canary, burst test and sharding plan. PR #515 stays draft until these pass. Do not claim production release or 10k readiness.
+
+---
+
 ## CURRENT SUBTASK — SHARE-ROUTER-PRIVATE-DOWNLOAD-20261012
 
 **User continuation inside FORCE SWITCH #390 (Oct 12):** Dedicated opt-in Download channel, private DM delivery, and real above-DM-limit signed HTTPS Watch/Download links with adjustable expiry and easy staff mobile setup.
