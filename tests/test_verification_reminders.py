@@ -176,6 +176,50 @@ def test_no_reminders_when_role_mapping_missing(monkeypatch):
     assert run(worker.scan_guild(guild, remaining=10)) == 0
 
 
+def test_global_budget_does_not_starve_later_guilds(monkeypatch):
+    guilds = [SimpleNamespace(id=n) for n in range(1, 6)]
+    worker = reminders.ReminderWorker(SimpleNamespace(guilds=guilds))
+    visited = []
+
+    async def fake_scan(guild, *, remaining):
+        visited.append(guild.id)
+        return min(3, remaining)
+
+    async def no_sleep(*args):
+        return None
+
+    monkeypatch.setattr(worker, "scan_guild", fake_scan)
+    monkeypatch.setattr(reminders.asyncio, "sleep", no_sleep)
+    assert run(worker.run_pass()) == reminders.MAX_DELIVERIES_PER_PASS
+    assert visited == [1, 2, 3, 4]
+    assert worker.guild_cursor == 4  # The fifth server was not visited.
+
+    visited.clear()
+    assert run(worker.run_pass()) == reminders.MAX_DELIVERIES_PER_PASS
+    assert visited[0] == 5  # The next pass starts with the previously skipped server.
+
+
+def test_full_sweep_of_small_guild_list_rotates_first_server(monkeypatch):
+    guilds = [SimpleNamespace(id=n) for n in range(1, 4)]
+    worker = reminders.ReminderWorker(SimpleNamespace(guilds=guilds))
+    visited = []
+
+    async def fake_scan(guild, *, remaining):
+        visited.append(guild.id)
+        return 0
+
+    async def no_sleep(*args):
+        return None
+
+    monkeypatch.setattr(worker, "scan_guild", fake_scan)
+    monkeypatch.setattr(reminders.asyncio, "sleep", no_sleep)
+    assert run(worker.run_pass()) == 0
+    assert visited == [1, 2, 3]
+    visited.clear()
+    assert run(worker.run_pass()) == 0
+    assert visited == [2, 3, 1]
+
+
 def test_worker_registration_is_idempotent(monkeypatch):
     # Static contract: worker single-owner startup and saved per-guild config gate.
     from pathlib import Path
