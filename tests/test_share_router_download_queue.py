@@ -203,6 +203,56 @@ def test_worker_rechecks_channel_member_and_message_before_download(monkeypatch)
     asyncio.run(scenario())
 
 
+def test_worker_resolves_uncached_guild_member_before_download(monkeypatch):
+    class User:
+        bot = False
+        id = 200
+
+    class Member(User):
+        pass
+
+    class Channel:
+        id = 500
+
+        async def fetch_message(self, msg_id):
+            return SimpleNamespace(
+                guild=guild, author=User(), channel=self, id=msg_id,
+                content="https://cdn.example.com/video.mp4",
+            )
+
+    channel = Channel()
+    guild = SimpleNamespace(
+        id=400,
+        get_channel=lambda cid: channel if cid == 500 else None,
+        get_member=lambda member_id: None,
+        fetch_member=None,
+    )
+    fetch_calls = []
+
+    async def fetch_member(member_id):
+        fetch_calls.append(member_id)
+        return Member()
+
+    guild.fetch_member = fetch_member
+    bot = SimpleNamespace(get_guild=lambda guild_id: guild if guild_id == 400 else None)
+    monkeypatch.setattr(queue.discord, "Member", Member)
+    monkeypatch.setattr(queue.discord, "TextChannel", Channel)
+
+    async def configured(guild_id):
+        return 500
+
+    seen = []
+
+    async def deliver(msg):
+        seen.append((msg.id, isinstance(msg.author, Member)))
+
+    monkeypatch.setattr(runtime, "guild_download_channel_id", configured)
+    monkeypatch.setattr(queue, "handle_download_message", deliver)
+    asyncio.run(queue._process_job(bot, queue.DownloadJob(1, 400, 500, 200, 600)))
+    assert fetch_calls == [200]
+    assert seen == [(600, True)]
+
+
 def test_route_cache_handles_many_registered_guilds_without_reparsing(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime, "ROUTES_FILE", tmp_path / "routes.json")
     monkeypatch.setattr(runtime, "_ROUTE_STATE_CACHE", None)
