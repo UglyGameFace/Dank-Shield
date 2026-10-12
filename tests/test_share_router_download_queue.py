@@ -78,6 +78,22 @@ def test_capacity_is_global_guild_bounded_and_one_member(monkeypatch):
     assert queue._submit(-1, 11, 20, 900) == "invalid"
 
 
+def test_parallel_admission_respects_global_capacity(monkeypatch):
+    monkeypatch.setattr(queue, "MAX_PENDING_TOTAL", 5)
+    monkeypatch.setattr(queue, "MAX_PENDING_PER_GUILD", 5)
+
+    async def scenario():
+        returns = await asyncio.gather(*[
+            asyncio.to_thread(queue._submit, 100 + i // 4, 500 + i // 4, 1000 + i, 8000 + i)
+            for i in range(16)
+        ])
+        assert returns.count("queued") == 5
+        assert all(v in {"queued", "full"} for v in returns)
+        assert queue._snapshot()["queued"] == 5
+
+    asyncio.run(scenario())
+
+
 def test_recover_running_never_replays_ambiguous_dm_and_preserves_pending():
     assert queue._submit(1, 11, 100, 201) == "queued"
     assert queue._submit(2, 22, 200, 202) == "queued"
@@ -185,6 +201,37 @@ def test_worker_rechecks_channel_member_and_message_before_download(monkeypatch)
         assert calls == [600]
 
     asyncio.run(scenario())
+
+
+def test_route_cache_handles_many_registered_guilds_without_reparsing(monkeypatch, tmp_path):
+    monkeypatch.setattr(runtime, "ROUTES_FILE", tmp_path / "routes.json")
+    monkeypatch.setattr(runtime, "_ROUTE_STATE_CACHE", None)
+    import json
+    store = {
+        str(g): {
+            "routes": [{"source_channel_id": str(g * 10), "target_channel_id": str(g * 10 + 1)}],
+            "download_channel_id": str(g * 10 + 2),
+        }
+        for g in range(1, 10001)
+    }
+    runtime.ROUTES_FILE.write_text(json.dumps(store))
+    reads = []
+    original = Path.read_text
+
+    def tracked(self, *args, **kwargs):
+        if self == runtime.ROUTES_FILE:
+            reads.append(1)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", tracked)
+
+    async def scenario():
+        for guild_id in (1, 5000, 10000, 5001, 1):
+            routes, download_id = await runtime.guild_route_state(guild_id)
+            assert routes[0]["source_channel_id"] == str(guild_id * 10)
+            assert download_id == guild_id * 10 + 2
+    asyncio.run(scenario())
+    assert len(reads) == 1  # one file load, not five full JSON parses
 
 
 def test_guild_route_read_cache_reuses_snapshot_and_invalidates_on_write(monkeypatch, tmp_path):
