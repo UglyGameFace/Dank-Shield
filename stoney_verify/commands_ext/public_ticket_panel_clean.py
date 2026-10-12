@@ -937,6 +937,7 @@ def _panel_embed(guild: discord.Guild) -> discord.Embed:
     embed.set_footer(text=f"{guild.name} • Dank Shield ticket panel • choose a category")
     return embed
 
+
 async def persist_public_ticket_panel_identity(
     guild_id: int,
     channel_id: int,
