@@ -22,6 +22,7 @@ from .share_router_media_resolver import (
     resolve_first_media,
 )
 from .share_router_media_remux import remux_media_for_discord
+from .share_router_external_links import delivery_status, file_max_bytes, stage_video, revoke_video
 
 # The bot's DM is outside any boosted guild: Level 3's 100 MiB limit does NOT apply.
 # Leave headroom below the documented 20 MiB default for API transport overhead.
@@ -125,8 +126,11 @@ async def handle_download_message(message: discord.Message) -> bool:
     _BUSY.add(key)
     try:
         async with _gate():
-            # Resolve only one URL and never buffer full videos in memory.
-            resolution = await resolve_first_media(url, max_bytes=DM_ATTACHMENT_BYTES)
+            # Only prepare larger media when HTTPS hosting and bounded storage
+            # are operational. A disabled host retains the original DM flow.
+            hosting_ready, _ = delivery_status()
+            download_cap = file_max_bytes() if hosting_ready else DM_ATTACHMENT_BYTES
+            resolution = await resolve_first_media(url, max_bytes=download_cap)
             if resolution is None:
                 await _reply_problem(message, "This video source is not currently supported.")
                 return True
@@ -139,12 +143,12 @@ async def handle_download_message(message: discord.Message) -> bool:
             if resolution.progressive:
                 video = await _download_trusted_video(
                     resolution.media_url,
-                    max_bytes=DM_ATTACHMENT_BYTES,
+                    max_bytes=download_cap,
                     request_headers=dict(resolution.request_headers),
                 )
             elif resolution.delivery in {"manifest", "merge"}:
                 staged = await remux_media_for_discord(
-                    resolution, max_bytes=DM_ATTACHMENT_BYTES,
+                    resolution, max_bytes=download_cap,
                 )
                 if staged is not None:
                     try:
@@ -160,26 +164,66 @@ async def handle_download_message(message: discord.Message) -> bool:
 
             try:
                 if video is not None:
+                    stored_id = ""
                     try:
-                        try:
-                            await message.author.send(
-                                "🎬 Your video from the Share Router Download channel:",
-                                file=video.file,
-                                allowed_mentions=discord.AllowedMentions.none(),
+                        use_host = video.size_bytes > DM_ATTACHMENT_BYTES and hosting_ready
+                        if not use_host:
+                            try:
+                                await message.author.send(
+                                    "🎬 Your video from the Share Router Download channel:",
+                                    file=video.file,
+                                    allowed_mentions=discord.AllowedMentions.none(),
+                                )
+                            except discord.HTTPException as exc:
+                                # Discord can reject uploads regardless of the
+                                # advertised maximum; retry as hosted link only
+                                # if an approved public host is operational.
+                                if getattr(exc, "status", None) != 413 and getattr(exc, "code", None) != 40005:
+                                    raise
+                                use_host = hosting_ready
+                                if not use_host:
+                                    await message.author.send(
+                                        "🔗 Discord rejected this video attachment as too large. "
+                                        "The original public source is here instead:\n"
+                                        + resolution.canonical_url
+                                        + "\n\nThis is a link, not a downloaded file.",
+                                        allowed_mentions=discord.AllowedMentions.none(),
+                                    )
+
+                        if use_host:
+                            from .share_router_runtime import guild_download_expiry_seconds
+                            ttl = await guild_download_expiry_seconds(int(message.guild.id))
+                            name = str(getattr(video.file, "filename", "") or "").lower()
+                            ext = next(
+                                (extension for extension in (".mp4", ".webm", ".mov", ".gif") if name.endswith(extension)),
+                                ".mp4",
                             )
-                        except discord.HTTPException as exc:
-                            # API-side upload caps can change independently of
-                            # what our installed Discord client library knows.
-                            # Never claim the file was sent if Discord rejects it.
-                            if getattr(exc, "status", None) != 413 and getattr(exc, "code", None) != 40005:
-                                raise
-                            await message.author.send(
-                                "🔗 Discord rejected this video attachment as too large. "
-                                "The original public source is here instead:\n"
-                                + resolution.canonical_url
-                                + "\n\nThis is a link, not a downloaded file.",
-                                allowed_mentions=discord.AllowedMentions.none(),
-                            )
+                            staged_link = await stage_video(video.file.fp, ttl_seconds=ttl, ext=ext)
+                            if staged_link is None:
+                                await message.author.send(
+                                    "🔗 This video could not be hosted within the storage/size limit. "
+                                    "The original public source is available here:\n"
+                                    + resolution.canonical_url,
+                                    allowed_mentions=discord.AllowedMentions.none(),
+                                )
+                            else:
+                                watch_url, download_url, stored_id = staged_link
+                                try:
+                                    await message.author.send(
+                                        "🎬 Your private video is ready.\n"
+                                        f"▶️ Watch: {watch_url}\n"
+                                        f"📥 Download: {download_url}\n"
+                                        f"⏳ Both links expire in {ttl // 86400} day(s)."
+                                        if ttl >= 86400 else
+                                        "🎬 Your private video is ready.\n"
+                                        f"▶️ Watch: {watch_url}\n"
+                                        f"📥 Download: {download_url}\n"
+                                        "⏳ Both links expire in 1 hour.",
+                                        allowed_mentions=discord.AllowedMentions.none(),
+                                    )
+                                except Exception:
+                                    await revoke_video(stored_id)
+                                    raise
                     finally:
                         try:
                             video.file.close()
