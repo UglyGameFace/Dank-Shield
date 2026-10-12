@@ -155,7 +155,7 @@ def test_over_limit_returns_honest_private_source_link_not_fake_file(monkeypatch
     assert file is None
     assert "couldn't attach" in content
     assert "https://cdn.example.com/movie.mp4" in content
-    assert "separate time-limited HTTPS" in content
+    assert "private large-file download service" in content
     assert message.deleted
 
 
@@ -191,7 +191,43 @@ def test_repeated_request_is_cooled_down_after_success(monkeypatch):
 
     run(scenario())
     assert len(member.sent) == 1
-    assert "wait two minutes" in message_two.channel.problems[0][0]
+    assert not message_two.deleted
+    assert not message_two.channel.problems  # repeated requests do not spam the channel
+
+
+def test_global_download_capacity_rejects_waiters_without_unbounded_queue(monkeypatch):
+    active = asyncio.Event()
+    release = asyncio.Event()
+    count = []
+
+    async def resolve(text, *, max_bytes):
+        count.append(text)
+        active.set()
+        await release.wait()
+        return _resolution(text, delivery="link")
+
+    monkeypatch.setattr(downloads, "resolve_first_media", resolve)
+
+    async def scenario():
+        messages = [FakeMessage(member=FakeMember(i)) for i in (22, 23, 24)]
+        first = asyncio.create_task(downloads.handle_download_message(messages[0]))
+        await active.wait()
+        second = asyncio.create_task(downloads.handle_download_message(messages[1]))
+        # Yield until the second has started its resolver. Both available
+        # transfer slots are now reserved and a third request must fail fast.
+        for _ in range(30):
+            if len(count) >= 2:
+                break
+            await asyncio.sleep(0)
+        assert len(count) == 2
+        assert await downloads.handle_download_message(messages[2])
+        assert len(count) == 2
+        assert not messages[2].author.sent
+        assert "capacity is busy" in messages[2].channel.problems[0][0]
+        release.set()
+        await asyncio.gather(first, second)
+
+    run(scenario())
 
 
 def test_invalid_private_and_multiple_urls_are_not_downloaded(monkeypatch):
