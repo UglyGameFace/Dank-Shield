@@ -153,10 +153,80 @@ def test_over_limit_returns_honest_private_source_link_not_fake_file(monkeypatch
     assert len(message.author.sent) == 1
     content, file, _ = message.author.sent[0]
     assert file is None
-    assert "couldn't attach" in content
+    assert "could not prepare a video file" in content
     assert "https://cdn.example.com/movie.mp4" in content
-    assert "private large-file download service" in content
-    assert message.deleted
+    assert "Large-file hosting is also unavailable" in content
+    assert "extract_failed" in content
+    assert "size/format limits" not in content
+    assert not message.deleted  # Error-only DM must preserve the original source.
+
+
+def test_youtube_extraction_failure_is_reported_without_false_dm_limit_claim(monkeypatch):
+    from stoney_verify.share_router_media_resolver import MediaResolution
+
+    message = FakeMessage(content="https://www.youtube.com/watch?v=tiq6mOEwsow")
+    async def resolve(text, *, max_bytes):
+        return MediaResolution(
+            source_url=text, canonical_url=text, identity="youtube:tiq6mOEwsow",
+            provider="youtube", delivery="link", reason="provider_bot_verification",
+        )
+
+    monkeypatch.setattr(downloads, "delivery_status", lambda: (False, "Public HTTPS media address is not configured"))
+    monkeypatch.setattr(downloads, "resolve_first_media", resolve)
+
+    assert run(downloads.handle_download_message(message))
+    assert len(message.author.sent) == 1
+    content, file, mentions = message.author.sent[0]
+    assert file is None
+    assert "bot verification" in content
+    assert "provider_bot_verification" in content
+    assert "Large-file hosting is also unavailable" in content
+    assert "size/format limits" not in content
+    assert "isn't configured yet" not in content
+    assert "No video was downloaded or hosted" in content
+    assert mentions.everyone is False
+    assert not message.deleted
+
+
+def test_host_ready_but_video_fetch_failed_is_reported_as_transfer_failure(monkeypatch):
+    message = FakeMessage()
+
+    async def resolve(text, *, max_bytes):
+        return _resolution(text)
+
+    async def download(url, *, max_bytes, request_headers):
+        return None
+
+    monkeypatch.setattr(downloads, "delivery_status", lambda: (True, "Large-file links available"))
+    monkeypatch.setattr(downloads, "resolve_first_media", resolve)
+    monkeypatch.setattr(router, "_download_trusted_video", download)
+    assert run(downloads.handle_download_message(message))
+    assert len(message.author.sent) == 1
+    body, file, mentions = message.author.sent[0]
+    assert file is None
+    assert "media_transfer_failed" in body
+    assert "Large-file hosting is ready locally" in body
+    assert "isn't configured yet" not in body
+    assert "Discord's DM size/format limits" not in body
+    assert mentions.everyone is False
+    assert not message.deleted
+
+
+def test_failure_messages_never_contain_raw_extractor_errors_or_access_tokens():
+    from stoney_verify.share_router_media_resolver import MediaResolution
+    result = MediaResolution(
+        source_url="https://youtu.be/demo",
+        canonical_url="https://www.youtube.com/watch?v=demo",
+        identity="youtube:demo", provider="youtube", delivery="link",
+        reason="provider_bot_verification",
+    )
+    body = downloads.download_failure_message(
+        result, reason="unknown provider https://cdn.example.com?token=secret",
+        hosting_ready=True, hosting_reason="",
+    )
+    assert "cdn.example.com" not in body
+    assert "token=secret" not in body
+    assert "extract_failed" in body
 
 
 def test_discord_413_upload_error_falls_back_to_honest_dm_link(monkeypatch):
@@ -188,7 +258,7 @@ def test_discord_413_upload_error_falls_back_to_honest_dm_link(monkeypatch):
     monkeypatch.setattr(router, "_download_trusted_video", download)
     assert run(downloads.handle_download_message(message))
     assert f.closed
-    assert message.deleted
+    assert not message.deleted
     assert len(message.author.sent) == 1
     content, attachment, mentions = message.author.sent[0]
     assert attachment is None

@@ -39,6 +39,140 @@ def test_provider_matrix(url: str, provider: str) -> None:
     assert media.provider_for_url(url) == provider
 
 
+@pytest.mark.parametrize(
+    ("error_text", "expected"),
+    [
+        ("Sign in to confirm you're not a bot. This text might include https://secret.invalid/?token=123", "provider_bot_verification"),
+        ("Private video. Sign in if you've been granted access.", "provider_private_or_restricted"),
+        ("This video is age-restricted", "provider_login_required"),
+        ("HTTP Error 429: Too Many Requests", "provider_rate_limited"),
+        ("HTTP Error 403: Forbidden", "provider_forbidden"),
+        ("Video unavailable", "provider_video_unavailable"),
+        ("Connection timed out", "provider_extract_timeout"),
+        ("Some new provider issue with signed CDN token=SECRET", "extract_failed"),
+        ("[facebook] 100: Cannot parse data; https://fbcdn.net/?oh=private", "provider_extractor_incompatible"),
+        ("[facebook] 100: No video formats found!", "provider_no_downloadable_formats"),
+    ],
+)
+def test_provider_exception_is_categorized_without_leaking_source(
+    error_text: str, expected: str,
+) -> None:
+    reason = media._classify_extraction_failure(RuntimeError(error_text))
+    assert reason == expected
+    assert "token" not in reason
+    assert "https://" not in reason
+
+
+def test_facebook_public_link_compatibility_cases() -> None:
+    for url in (
+        "https://www.facebook.com/reel/1591316522498163",
+        "https://www.facebook.com/watch/?v=1591316522498163",
+        "https://www.facebook.com/AssembleeNationale/videos/818149149511725/",
+        "https://fb.watch/SAMPLE456/",
+        "https://www.facebook.com/share/v/SAMPLE456/",
+        "https://m.facebook.com/watch/?v=1591316522498163",
+    ):
+        assert media.provider_for_url(url) == "facebook"
+
+
+def test_facebook_parser_failure_produces_distinct_safe_fallback(monkeypatch) -> None:
+    monkeypatch.setattr(
+        media, "_extract_info_sync",
+        lambda url: media.ExtractionFailure("provider_extractor_incompatible"),
+    )
+    async def scenario():
+        return await media.resolve_media_url(
+            "https://www.facebook.com/reel/1591316522498163",
+            max_bytes=20 * 1024 * 1024,
+        )
+    result = asyncio.run(scenario())
+    assert result.provider == "facebook"
+    assert result.delivery == "link"
+    assert result.reason == "provider_extractor_incompatible"
+    assert media.media_resolver_snapshot()["providers"]["facebook"]["last_reason"] == (
+        "provider_extractor_incompatible"
+    )
+
+
+def test_facebook_progressive_format_retains_only_one_safe_declared_alternate() -> None:
+    info = {"formats": [
+        {
+            "url": "https://video.xx.fbcdn.net/hd.mp4?token=short",
+            "protocol": "https", "ext": "mp4", "vcodec": "avc1.64001f",
+            "acodec": "mp4a.40.2", "height": 1080, "filesize": 7_000_000,
+            "http_headers": {"Referer": "https://www.facebook.com/"},
+        },
+        {
+            "url": "https://video.xx.fbcdn.net/sd.mp4?token=short",
+            "protocol": "https", "ext": "mp4", "vcodec": "avc1.64001f",
+            "acodec": "mp4a.40.2", "height": 480, "filesize": 2_000_000,
+        },
+        {
+            "url": "https://video.xx.fbcdn.net/third.mp4",
+            "protocol": "https", "ext": "mp4", "vcodec": "h264",
+            "acodec": "aac", "height": 240, "filesize": 1_000_000,
+        },
+    ]}
+    resolved = media.select_media_resolution(
+        info, source_url="https://www.facebook.com/reel/10000001",
+        provider="facebook", max_bytes=10_000_000,
+    )
+    assert resolved.progressive
+    assert resolved.media_url.endswith("hd.mp4?token=short")
+    assert len(resolved.alternate_progressive) == 1
+    assert resolved.alternate_progressive[0][0].endswith("sd.mp4?token=short")
+    # Do not leak the fallback to other providers without explicit acceptance.
+    vimeo = media.select_media_resolution(
+        info, source_url="https://vimeo.com/10000001",
+        provider="vimeo", max_bytes=10_000_000,
+    )
+    assert vimeo.alternate_progressive == ()
+
+
+def test_live_extractor_adapter_returns_safe_failure_not_raw_error(monkeypatch) -> None:
+    from types import SimpleNamespace
+    import sys
+
+    class YoutubeDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def extract_info(self, url, *, download):
+            assert download is False
+            raise RuntimeError("Sign in to confirm you're not a bot. https://cdn.private/video?token=secret")
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", SimpleNamespace(YoutubeDL=YoutubeDL))
+    outcome = media._extract_info_sync("https://www.youtube.com/watch?v=tiq6mOEwsow")
+    assert isinstance(outcome, media.ExtractionFailure)
+    assert outcome.reason == "provider_bot_verification"
+
+
+def test_youtube_uses_distinct_stable_reason_for_provider_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        media,
+        "_extract_info_sync",
+        lambda url: media.ExtractionFailure("provider_bot_verification"),
+    )
+    async def resolve():
+        return await media.resolve_media_url(
+            "https://www.youtube.com/watch?v=tiq6mOEwsow",
+            max_bytes=20 * 1024 * 1024,
+        )
+    result = asyncio.run(resolve())
+    assert result.provider == "youtube"
+    assert result.delivery == "link"
+    assert result.reason == "provider_bot_verification"
+    assert media.media_resolver_snapshot()["providers"]["youtube"]["last_reason"] == (
+        "provider_bot_verification"
+    )
+
+
 def test_canonicalization_and_identity_normalize_provider_aliases() -> None:
     x = media.canonicalize_media_url(
         "https://mobile.twitter.com/Test/status/123456?s=20&utm_source=test"

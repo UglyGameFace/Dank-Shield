@@ -48,6 +48,42 @@ _REDDIT_POST_RE = re.compile(r"/comments/([^/?#]+)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
+class ExtractionFailure:
+    """Safe, stable failure category. Never expose provider error text or URLs."""
+    reason: str
+
+
+def _classify_extraction_failure(error: BaseException) -> str:
+    # yt-dlp errors can embed raw signed URLs, cookies or provider responses.
+    # Only return one of these fixed categories, never raw exception text.
+    detail = str(error).casefold()
+    # Recent Facebook public Reels have hit parser regressions in the pinned
+    # yt-dlp release. Report that distinct category instead of blaming file
+    # size, a blocked DM or an allegedly unconfigured HTTPS host.
+    if "cannot parse data" in detail:
+        return "provider_extractor_incompatible"
+    if "no video formats found" in detail:
+        return "provider_no_downloadable_formats"
+    if "not a bot" in detail or "bot detection" in detail or "captcha" in detail:
+        return "provider_bot_verification"
+    if "private video" in detail or "members-only" in detail or "members only" in detail:
+        return "provider_private_or_restricted"
+    if "age-restricted" in detail or "age restricted" in detail or "login required" in detail:
+        return "provider_login_required"
+    if "sign in" in detail or "log in" in detail or "authentication" in detail:
+        return "provider_login_required"
+    if "http error 429" in detail or "too many requests" in detail or "rate limit" in detail:
+        return "provider_rate_limited"
+    if "http error 403" in detail or "forbidden" in detail:
+        return "provider_forbidden"
+    if "video unavailable" in detail or "not available" in detail or "removed" in detail:
+        return "provider_video_unavailable"
+    if "timed out" in detail or "timeout" in detail:
+        return "provider_extract_timeout"
+    return "extract_failed"
+
+
+@dataclass(frozen=True)
 class MediaProvider:
     key: str
     label: str
@@ -72,6 +108,10 @@ class MediaResolution:
     request_headers: tuple[tuple[str, str], ...] = ()
     audio_request_headers: tuple[tuple[str, str], ...] = ()
     reason: str = ""
+    # Existing provider metadata may expose more than one progressive MP4 URL.
+    # Retain at most one separate safe alternative for a failed Facebook CDN
+    # transfer; this is not an additional extractor request or unbounded retry.
+    alternate_progressive: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
 
     @property
     def progressive(self) -> bool:
@@ -635,6 +675,16 @@ def select_media_resolution(
     if progressive:
         progressive.sort(key=lambda item: item[0], reverse=True)
         _, url, protocol, ext, size, request_headers = progressive[0]
+        alternatives: list[tuple[str, tuple[tuple[str, str], ...]]] = []
+        if provider == "facebook":
+            # A FB CDN HD URL may expire or be unavailable while its SD
+            # representation is valid. Reuse only a distinct progressive URL
+            # from the same extractor response; never invent an endpoint.
+            for candidate in progressive[1:]:
+                if candidate[3] != ext or candidate[1] == url:
+                    continue
+                alternatives.append((candidate[1], candidate[5]))
+                break
         return MediaResolution(
             source_url=source_url,
             canonical_url=canonical,
@@ -646,6 +696,7 @@ def select_media_resolution(
             ext=ext,
             known_size=size,
             request_headers=request_headers,
+            alternate_progressive=tuple(alternatives),
         )
 
     if video_only and audio_only:
@@ -709,7 +760,7 @@ def _extract_info_sync(canonical_url: str) -> Any:
     try:
         import yt_dlp
     except Exception:
-        return None
+        return ExtractionFailure("extractor_unavailable")
 
     options = {
         "quiet": True,
@@ -726,8 +777,8 @@ def _extract_info_sync(canonical_url: str) -> Any:
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
             return ydl.extract_info(canonical_url, download=False)
-    except Exception:
-        return None
+    except Exception as exc:
+        return ExtractionFailure(_classify_extraction_failure(exc))
 
 
 def _health_bucket(provider: str) -> dict[str, Any]:
@@ -828,17 +879,20 @@ async def _resolve_extracted(
                 asyncio.to_thread(_extract_info_sync, canonical),
                 timeout=_extract_timeout_seconds(),
             )
+        except asyncio.TimeoutError:
+            info = ExtractionFailure("provider_extract_timeout")
         except Exception:
-            info = None
+            info = ExtractionFailure("extract_failed")
 
-    if info is None:
+    if info is None or isinstance(info, ExtractionFailure):
+        reason = info.reason if isinstance(info, ExtractionFailure) else "extract_failed"
         resolution = MediaResolution(
             source_url=source_url,
             canonical_url=canonical,
             identity=media_url_identity(canonical),
             provider=provider,
             delivery="link",
-            reason="extract_failed",
+            reason=reason,
         )
     else:
         resolution = select_media_resolution(

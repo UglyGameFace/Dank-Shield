@@ -241,6 +241,13 @@ def _trusted_video_url(value: str) -> bool:
         return False
     if host in _TRUSTED_VIDEO_HOSTS:
         return True
+    # Facebook sometimes supplies an actual video CDN URL to Discord's embed
+    # rather than a Discord-hosted proxy. Only accept the Meta-owned fbcdn.net
+    # hostname boundary, never facebook.com HTML player pages or lookalikes.
+    # _download_trusted_video still validates public DNS, redirects, media
+    # content-type, byte cap and timeout before forwarding to Discord.
+    if host == "fbcdn.net" or host.endswith(".fbcdn.net"):
+        return True
     if host.endswith(".discordapp.net") or host.endswith(".discordapp.com"):
         return True
     if host.endswith(".giphy.com"):
@@ -470,6 +477,34 @@ async def _download_trusted_video(
                 pass
 
 
+async def _download_resolved_progressive(
+    resolution: Any,
+    *,
+    max_bytes: int,
+) -> Optional[RoutedVideo]:
+    """Try one provider-declared Facebook alternate if the first CDN URL fails.
+
+    Both candidates go through the same guarded bounded download. Do not add
+    more yt-dlp extraction, use arbitrary page links, or bypass size limits.
+    """
+    candidates = [(resolution.media_url, resolution.request_headers)]
+    if resolution.provider == "facebook":
+        candidates.extend(tuple(resolution.alternate_progressive)[:1])
+    attempted: set[str] = set()
+    for candidate, headers in candidates:
+        if not candidate or candidate in attempted or not is_safe_media_download_url(candidate):
+            continue
+        attempted.add(candidate)
+        result = await _download_trusted_video(
+            candidate,
+            max_bytes=max_bytes,
+            request_headers=dict(headers),
+        )
+        if result is not None:
+            return result
+    return None
+
+
 async def _prepare_native_video(
     message: discord.Message,
     target: discord.TextChannel,
@@ -501,10 +536,9 @@ async def _prepare_native_video(
         return None
 
     if resolution.progressive:
-        routed = await _download_trusted_video(
-            resolution.media_url,
+        routed = await _download_resolved_progressive(
+            resolution,
             max_bytes=max_bytes,
-            request_headers=dict(resolution.request_headers),
         )
         if routed is not None:
             _log(
