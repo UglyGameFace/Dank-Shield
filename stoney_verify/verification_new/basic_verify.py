@@ -24,7 +24,6 @@ from stoney_verify.globals import get_supabase
 from stoney_verify.voice_safety_consent import (
     VOICE_SAFETY_DISCLOSURE_MARKER,
     verification_message_discloses_voice_safety,
-    save_voice_safety_agreement,
 )
 from stoney_verify.setup_engine.loader import snapshot_from_config
 from stoney_verify.startup_guards.discord_api_safety import fetch_message_with_api_safety
@@ -1401,7 +1400,10 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
                     bool(_cfg_value(config, "voice_safety_enabled", False))
                     and verification_message_discloses_voice_safety(getattr(interaction, "message", None))
                 ):
-                    await save_voice_safety_agreement(
+                    from stoney_verify.community_voice_caption_runtime import ensure_community_voice_caption_manager
+
+                    manager = ensure_community_voice_caption_manager(interaction.client)
+                    await manager.set_voice_safety_consent(
                         int(interaction.guild.id), int(interaction.user.id), True
                     )
                     message += " Your one-time Voice Safety agreement was saved; covered VCs can be reviewed automatically when enabled."
