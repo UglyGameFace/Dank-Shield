@@ -16,6 +16,30 @@ Only consented speakers inside that VC are transcribed. An operator-approved pai
 
 **Important limitation:** a member who declines or has not yet acknowledged voice monitoring is not monitored; this does not prevent spoken words from being heard. The pilot reviews only one selected voice room per guild and shares caption session/resource caps; auto-start cannot provide zero-latency capture immediately on first join. This is **not** complete, server-wide voice moderation. Human moderators must still intervene.
 
+## Diagnosing the "Host is validation-locked" message
+
+The staff-only Voice Safety panel now shows five configuration indicators separately:
+`DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` (DAVE captions operator switch),
+`DANK_VOICE_SAFETY_ENABLED` (Voice Safety operator switch),
+`DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED` (operator reviewed paid API project),
+`DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED` (operator verified adult-only service),
+and `GEMINI_API_KEY` (nonempty, without ever showing its value).
+An unchecked indicator means that exact deployment setting is not true/present.
+These indicators do **not** prove voice reception, paid Google billing, active
+credits, account permissions, or age. Those require separate real-world checks.
+
+Google AI Pro subscriptions and Discloud hosting tiers are not evidence of
+a paid Gemini API project's data-processing terms. Check the API project's
+billing tier in Google AI Studio. Voice Safety intentionally remains blocked on
+the unpaid Gemini API tier for sensitive speech processing. Server rules or a
+Discord Verified role cannot prove all members are adults.
+
+After legitimate validation, set the applicable Discloud variables using its
+secret/env settings and restart the deployed application. Do not post
+`GEMINI_API_KEY` in Discord, GitHub or diagnostics. Then open a fresh
+`/dank protection → Voice Safety` panel and check both the host status and
+voice receive readiness before attempting Start Review.
+
 ## Host activation, only after live DAVE checks
 
 1. Review applicable monitoring/consent law, Discord voice policies, and the Gemini paid API data-processing agreement and adult-only usage restrictions; disclose the service to members. Configure GEMINI_API_KEY securely on Discloud.
