@@ -7,6 +7,8 @@ moderation is a single-guild-session, staff-alert-only use of existing DAVE
 captions infrastructure; no automated punishment is enabled.
 """
 
+import asyncio
+
 import discord
 
 from ..community_voice_caption_runtime import (
@@ -30,6 +32,7 @@ VOICE_SAFETY_VC = "voice_safety_voice_channel_id"
 VOICE_SAFETY_STAFF = "voice_safety_staff_channel_id"
 VOICE_SAFETY_NOTICE = "voice_safety_notice_channel_id"
 _REGISTERED = False
+_RESTORE_TASK: asyncio.Task[None] | None = None
 
 
 def _staff(interaction: discord.Interaction) -> bool:
@@ -71,7 +74,7 @@ def _channel(guild: discord.Guild, channel_id: int, expected: type) -> object | 
 
 def _readiness(guild: discord.Guild, config: dict) -> tuple[bool, str]:
     if not voice_safety_host_enabled() or not live_captions_enabled():
-        return False, "Host is validation-locked. DAVE receive soak and both host feature gates are required."
+        return False, "Host is validation-locked. Enable DAVE captions and Voice Safety only after confirming paid Gemini data terms and adult-only use in Discloud."
     cap = voice_receive_capability()
     if not cap.available:
         return False, f"Voice receiver unavailable: {cap.reason}"
@@ -107,8 +110,8 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
     embed = discord.Embed(
         title="🛡️ Voice Safety · Staff Review",
         description=(
-            "Optional, consented AI conduct review for one voice channel. "
-            "Only members who explicitly opt in are transcribed. Google Gemini receives "
+            "Automatic AI conduct review for one configured voice channel. "
+            "Only members with a recorded one-time agreement are transcribed. Google Gemini receives "
             "their voice and text to assess conduct. No automated mutes, kicks or bans. "
             "Staff must verify every finding. Not a guarantee against already-spoken words."
         ),
@@ -175,20 +178,20 @@ class VoiceSafetyConsentView(discord.ui.View):
             return await interaction.followup.send(f"❌ {exc}", ephemeral=True)
         if consented:
             return await interaction.followup.send(
-                "✅ You explicitly opted in to this server's Voice Safety review. "
-                "Only your speech in the selected VC during an active session can be transcribed by Gemini "
+                "✅ Your one-time Voice Safety agreement is saved for this server. "
+                "Your speech in the selected VC may be automatically transcribed by Gemini "
                 "and evaluated for staff-only incident alerts. This is separate from Live Captions consent. "
-                "This consent lasts only for this monitoring session and ends if you leave the VC. "
-                "Press Opt Out to revoke sooner. Gemini Free Tier content may be used to improve Google's products.",
+                "This agreement remains until you withdraw it, even after you leave the VC. "
+                "Press Opt Out to withdraw. This feature requires an operator-confirmed paid Gemini API project and an adult-only monitored space.",
                 ephemeral=True,
             )
         await interaction.followup.send(
-            "✅ Opted out of the active session. Your voice admission and queued buffers were revoked if monitoring was active. "
+            "✅ Your Voice Safety agreement was withdrawn. Active audio admission and queued buffers were revoked if monitoring was active. "
             "Any incident alerts already delivered to staff must be handled under server retention policy.",
             ephemeral=True,
         )
 
-    @discord.ui.button(label="Opt In: Review My Voice", style=discord.ButtonStyle.success, custom_id="dank:voice_safety:consent_on:v1")
+    @discord.ui.button(label="Agree Once: Voice Safety", style=discord.ButtonStyle.success, custom_id="dank:voice_safety:consent_on:v1")
     async def opt_in(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._change(interaction, True)
 
@@ -258,10 +261,15 @@ class VoiceSafetyStaffView(discord.ui.View):
         guild = interaction.guild
         cfg = await get_guild_config(int(guild.id), refresh=True)
         manager = ensure_community_voice_caption_manager(interaction.client)
+        currently_enabled = bool(cfg.get(VOICE_SAFETY_ENABLED))
+        if currently_enabled:
+            manager.pause_voice_safety_auto_start(int(guild.id))
         if manager.status_for_guild(int(guild.id)).get("scope_kind") == "voice_safety":
             await manager.stop(voice_safety_scope_id(int(guild.id)))
         try:
-            await _save(interaction, {VOICE_SAFETY_ENABLED: not bool(cfg.get(VOICE_SAFETY_ENABLED))})
+            await _save(interaction, {VOICE_SAFETY_ENABLED: not currently_enabled})
+            if not currently_enabled:
+                manager.pause_voice_safety_auto_start(int(guild.id), False)
         except Exception:
             return await interaction.followup.send("Failed to confirm saved setup state.", ephemeral=True)
         await interaction.edit_original_response(embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id))
@@ -275,15 +283,25 @@ class VoiceSafetyStaffView(discord.ui.View):
         if status.get("active"):
             if status.get("scope_kind") != "voice_safety":
                 return await interaction.followup.send("Another voice/captions session owns this receiver. Stop it first.", ephemeral=True)
+            manager.pause_voice_safety_auto_start(int(guild.id))
             await manager.stop(voice_safety_scope_id(int(guild.id)))
+            try:
+                await _save(interaction, {VOICE_SAFETY_ENABLED: False})
+            except Exception:
+                return await interaction.followup.send(
+                    "⚠️ Voice Safety stopped on this process, but the Disable setting could not be saved. "
+                    "Turn off DANK_VOICE_SAFETY_ENABLED on the host before restarting.",
+                    ephemeral=True,
+                )
             await interaction.edit_original_response(embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id))
-            return await interaction.followup.send("✅ Voice Safety stopped. Existing notices cannot start new sessions.", ephemeral=True)
+            return await interaction.followup.send("✅ Voice Safety stopped and automatic restart disabled until setup is enabled again.", ephemeral=True)
         cfg = await get_guild_config(int(guild.id), refresh=True)
         if not bool(cfg.get(VOICE_SAFETY_ENABLED)):
             return await interaction.followup.send("Enable setup first. Monitoring is off by default.", ephemeral=True)
         ready, reason = _readiness(guild, cfg)
         if not ready:
             return await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+        manager.pause_voice_safety_auto_start(int(guild.id), False)
         try:
             await manager.start_voice_safety(
                 guild_id=int(guild.id),
@@ -295,8 +313,8 @@ class VoiceSafetyStaffView(discord.ui.View):
             return await interaction.followup.send(f"❌ {exc}", ephemeral=True)
         await interaction.edit_original_response(embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id))
         await interaction.followup.send(
-            "✅ Consent-only Voice Safety running. A member notice was posted publicly. "
-            "Only opted-in voices are evaluated; staff alerts are advisory, not automatic punishments.",
+            "✅ Voice Safety running. A notice explains one-time agreement and automatic monitoring. "
+            "Only members with a recorded agreement are evaluated; staff alerts are advisory, not automatic punishments.",
             ephemeral=True,
         )
 
@@ -319,9 +337,25 @@ async def open_voice_safety_center(interaction: discord.Interaction) -> None:
     )
 
 
+async def _restore_voice_safety_when_ready(bot: object) -> None:
+    global _RESTORE_TASK
+    if _RESTORE_TASK is not None and not _RESTORE_TASK.done():
+        return
+    manager = ensure_community_voice_caption_manager(bot)
+    _RESTORE_TASK = asyncio.create_task(
+        manager.restore_voice_safety_after_ready(),
+        name="dank-voice-safety-ready-restore",
+    )
+
+
 def register_voice_safety_consent(bot: object) -> None:
     global _REGISTERED
     if _REGISTERED:
         return
     bot.add_view(VoiceSafetyConsentView())
+
+    async def on_ready_voice_safety() -> None:
+        await _restore_voice_safety_when_ready(bot)
+
+    bot.add_listener(on_ready_voice_safety, "on_ready")
     _REGISTERED = True

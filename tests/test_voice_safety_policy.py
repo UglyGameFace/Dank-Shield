@@ -151,43 +151,71 @@ def test_voice_safety_never_reuses_caption_consent_or_restores_from_database(mon
     asyncio.run(run())
 
 
-def test_voice_safety_session_opt_in_and_revocation_do_not_write_to_storage(monkeypatch) -> None:
+def test_voice_safety_one_time_agreement_persists_without_active_session(monkeypatch) -> None:
     async def run() -> None:
-        from stoney_verify.community_voice_receive import VoiceReceiveUnavailable
+        import stoney_verify.community_voice_caption_runtime as runtime
 
-        uid, gid, vc = 4, 3, 19
-        member = SimpleNamespace(id=uid, voice=SimpleNamespace(channel=SimpleNamespace(id=vc)))
-        guild = SimpleNamespace(get_member=lambda x: member if x == uid else None)
-        manager = CommunityVoiceCaptionManager(SimpleNamespace(get_guild=lambda x: guild))
-        state = SimpleNamespace(scope_kind="voice_safety", voice_channel_id=vc, safety_consents=set())
-        manager._guild_owner[gid] = "voice_safety:3"
-        manager._sessions["voice_safety:3"] = state
-        admitted = []
-        revoked = []
-        async def enable(*args, **kwargs):
-            admitted.append(args[1])
-        async def disable(*args, **kwargs):
-            revoked.append(args[1])
-        monkeypatch.setattr(manager, "_enable_user_for_state", enable)
-        monkeypatch.setattr(manager, "_disable_user_for_state", disable)
-        assert await manager.set_voice_safety_consent(gid, uid, True) is True
-        assert admitted == [uid] and state.safety_consents == {uid}
-        assert await manager.set_voice_safety_consent(gid, uid, False) is False
-        assert revoked == [uid] and state.safety_consents == set()
-        manager._sessions.clear()
-        try:
-            await manager.set_voice_safety_consent(gid, uid, True)
-            assert False, "must fail closed without an active session"
-        except VoiceReceiveUnavailable:
-            pass
-        assert await manager.set_voice_safety_consent(gid, uid, False) is False
+        values = {}
+        async def save(gid, uid, enabled, *, source="voice_safety_notice_v1"):
+            values[(gid, uid)] = enabled
+            return enabled
+        monkeypatch.setattr(runtime, "save_voice_safety_agreement", save)
+        manager = CommunityVoiceCaptionManager(SimpleNamespace())
+        assert await manager.set_voice_safety_consent(3, 4, True) is True
+        assert values == {(3, 4): True}
+        assert await manager.set_voice_safety_consent(3, 4, False) is False
+        assert values == {(3, 4): False}
     asyncio.run(run())
+
+
+def test_voice_safety_agreement_requires_explicit_disclosed_action(monkeypatch) -> None:
+    import stoney_verify.voice_safety_consent as consent
+    from stoney_verify.verification_new.basic_verify import (
+        build_basic_verify_embed, BasicVerifyButton, BasicVerifyView,
+    )
+
+    guild = SimpleNamespace(get_channel=lambda key: None, text_channels=[])
+    configured = build_basic_verify_embed(guild, {"voice_safety_enabled": True})
+    regular = build_basic_verify_embed(guild, {})
+    assert consent.verification_message_discloses_voice_safety(
+        SimpleNamespace(embeds=[configured])
+    )
+    assert not consent.verification_message_discloses_voice_safety(
+        SimpleNamespace(embeds=[regular])
+    )
+    assert not consent.verification_message_discloses_voice_safety(None)
+    assert "Agree & Verify" in {child.label for child in BasicVerifyView(voice_safety_agreement=True).children}
+    assert BasicVerifyButton().label == "Verify"
+
+
+def test_voice_safety_agreement_does_not_infer_from_verified_role(monkeypatch) -> None:
+    async def run() -> None:
+        import stoney_verify.profile_card_service as profiles
+        from stoney_verify.voice_safety_consent import read_voice_safety_agreement
+
+        state = {"settings": {"live_captions_auto_opt_in": True, "verified": True}}
+        async def read(*args, **kwargs):
+            return state
+        monkeypatch.setattr(profiles, "get_profile_guild_settings", read)
+        assert not await read_voice_safety_agreement(1, 2)
+        state["settings"]["voice_safety_agreement_v1"] = {"accepted": True, "version": 1, "source": "basic_verify_v1", "acted_at": "2026-10-12T00:00:00+00:00"}
+        assert await read_voice_safety_agreement(1, 2)
+        state["settings"]["voice_safety_agreement_v1"] = {"accepted": False, "version": 1}
+        assert not await read_voice_safety_agreement(1, 2)
+        state["settings"]["voice_safety_agreement_v1"] = {"accepted": True, "version": 2}
+        assert not await read_voice_safety_agreement(1, 2)
+    asyncio.run(run())
+
 
 def test_voice_safety_is_separate_gated_scope(monkeypatch) -> None:
     assert voice_safety_scope_id(5) == "voice_safety:5"
     monkeypatch.delenv("DANK_VOICE_SAFETY_ENABLED", raising=False)
     assert not voice_safety_host_enabled()
     monkeypatch.setenv("DANK_VOICE_SAFETY_ENABLED", "true")
+    assert not voice_safety_host_enabled()
+    monkeypatch.setenv("DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED", "true")
+    assert not voice_safety_host_enabled()
+    monkeypatch.setenv("DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED", "true")
     assert voice_safety_host_enabled()
     source = (ROOT / "stoney_verify" / "community_voice_caption_runtime.py").read_text()
     assert 'not voice_safety_host_enabled() or not live_captions_enabled()' in source
@@ -329,6 +357,14 @@ def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) ->
         monkeypatch.setattr(runtime, "VoiceSafetyAdvisor", lambda: VoiceSafetyAdvisor(classify=classify))
         monkeypatch.setenv("GEMINI_API_KEY", "fake-ci-key")
 
+        agreements = {}
+        async def save(gid, uid, enabled, *, source="voice_safety_notice_v1"):
+            agreements[(gid, uid)] = bool(enabled)
+            return bool(enabled)
+        async def read(gid, uid):
+            return bool(agreements.get((gid, uid), False))
+        monkeypatch.setattr(runtime, "save_voice_safety_agreement", save)
+        monkeypatch.setattr(runtime, "read_voice_safety_agreement", read)
         manager = CommunityVoiceCaptionManager(bot)
         async def preferences(*args, **kwargs):
             return {"language_code": ""}
@@ -356,6 +392,249 @@ def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) ->
         assert len(staff.sent) == 1
         await manager.stop(voice_safety_scope_id(5))
         assert "review ended" in notice.edits[0][1]["content"]
+        assert state.safety_consents == set()
+
+    asyncio.run(run())
+
+
+def test_voice_safety_auto_start_uses_configured_channel_and_single_owner(monkeypatch) -> None:
+    async def run() -> None:
+        import stoney_verify.community_voice_caption_runtime as runtime
+        import stoney_verify.guild_config as config_service
+
+        class FakeVoice:
+            id = 22
+            members = [SimpleNamespace(id=51, bot=False)]
+
+        class FakeGuild:
+            id = 17
+            voice_channels = [FakeVoice()]
+            def get_channel(self, channel_id):
+                return FakeVoice() if channel_id == 22 else None
+
+        guild = FakeGuild()
+        bot = SimpleNamespace(guilds=[guild], get_guild=lambda gid: guild)
+        cfg = {
+            "voice_safety_enabled": True,
+            "voice_safety_voice_channel_id": 22,
+            "voice_safety_staff_channel_id": 23,
+            "voice_safety_notice_channel_id": 24,
+        }
+
+        async def get_config(gid, **kwargs):
+            return cfg
+
+        monkeypatch.setattr(config_service, "get_guild_config", get_config)
+        monkeypatch.setattr(runtime, "voice_safety_host_enabled", lambda: True)
+        monkeypatch.setattr(runtime, "live_captions_enabled", lambda: True)
+        monkeypatch.setattr(runtime.discord, "VoiceChannel", FakeVoice)
+        manager = CommunityVoiceCaptionManager(bot)
+        called = []
+
+        async def begin(**kwargs):
+            called.append(kwargs)
+            state = SimpleNamespace(
+                session_id=voice_safety_scope_id(17),
+                scope_kind="voice_safety",
+            )
+            manager._sessions[state.session_id] = state
+            manager._guild_owner[17] = state.session_id
+            return state
+
+        monkeypatch.setattr(manager, "start_voice_safety", begin)
+        assert await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=999) is False
+        assert await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=22) is True
+        assert len(called) == 1 and called[0]["automatic"] is True
+        assert await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=22) is False
+        manager._sessions.clear()
+        manager._guild_owner.clear()
+        manager.pause_voice_safety_auto_start(17)
+        assert await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=22) is False
+        manager.pause_voice_safety_auto_start(17, False)
+        await manager.restore_voice_safety_after_ready()
+        assert len(called) == 2
+
+    asyncio.run(run())
+
+
+def test_voice_safety_auto_start_fails_closed_on_disabled_host_and_guild(monkeypatch) -> None:
+    async def run() -> None:
+        import stoney_verify.community_voice_caption_runtime as runtime
+        import stoney_verify.guild_config as guild_config
+
+        class FakeVoice:
+            id = 42
+            members = [SimpleNamespace(id=2, bot=False)]
+
+        guild = SimpleNamespace(id=7, voice_channels=[FakeVoice()], get_channel=lambda x: FakeVoice())
+        bot = SimpleNamespace(guilds=[guild])
+        manager = CommunityVoiceCaptionManager(bot)
+        monkeypatch.setattr(runtime.discord, "VoiceChannel", FakeVoice)
+        monkeypatch.setattr(runtime, "voice_safety_host_enabled", lambda: False)
+        monkeypatch.setattr(runtime, "live_captions_enabled", lambda: True)
+        assert not await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=42)
+        monkeypatch.setattr(runtime, "voice_safety_host_enabled", lambda: True)
+
+        async def get_config(gid, **kwargs):
+            return {"voice_safety_enabled": False, "voice_safety_voice_channel_id": 42}
+
+        monkeypatch.setattr(guild_config, "get_guild_config", get_config)
+        assert not await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=42)
+        assert manager._sessions == {}
+
+    asyncio.run(run())
+
+
+def test_basic_verify_records_voice_agreement_only_from_disclosed_panel(monkeypatch) -> None:
+    async def run() -> None:
+        import stoney_verify.verification_new.basic_verify as verify
+        import stoney_verify.community_voice_caption_runtime as runtime
+
+        class FakeMember:
+            id = 42
+
+        monkeypatch.setattr(verify.discord, "Member", FakeMember)
+        monkeypatch.setattr(verify, "_claim_basic_verify_interaction", lambda interaction: True)
+
+        async def ack(interaction):
+            return True
+
+        async def apply(member):
+            return True, "Verified successfully"
+
+        replied = []
+        async def reply(interaction, message, *, ok):
+            replied.append((message, ok))
+
+        async def cfg(gid, **kwargs):
+            return {"voice_safety_enabled": True}
+
+        recorded = []
+        class FakeManager:
+            async def set_voice_safety_consent(self, gid, uid, enabled, *, source="voice_safety_notice_v1"):
+                recorded.append((gid, uid, enabled))
+                return enabled
+
+        monkeypatch.setattr(verify, "_ack", ack)
+        monkeypatch.setattr(verify, "_reply", reply)
+        monkeypatch.setattr(verify, "apply_basic_verification", apply)
+        monkeypatch.setattr(verify, "get_guild_config", cfg)
+        monkeypatch.setattr(runtime, "ensure_community_voice_caption_manager", lambda bot: FakeManager())
+
+        guild = SimpleNamespace(id=8)
+        member = FakeMember()
+        def interaction(message_id, embed):
+            return SimpleNamespace(
+                id=message_id, data={"custom_id": verify.BASIC_VERIFY_CUSTOM_ID},
+                guild=guild, user=member, client=object(),
+                message=SimpleNamespace(embeds=[embed]),
+                channel=SimpleNamespace(id=2),
+            )
+
+        from stoney_verify.verification_new.basic_verify import build_basic_verify_embed
+
+        original = build_basic_verify_embed(SimpleNamespace(get_channel=lambda key: None, text_channels=[]), {})
+        disclosed = build_basic_verify_embed(SimpleNamespace(get_channel=lambda key: None, text_channels=[]), {"voice_safety_enabled": True})
+
+        assert await verify.maybe_handle_basic_verify_interaction(interaction(100, original)) is True
+        assert recorded == []
+        assert await verify.maybe_handle_basic_verify_interaction(interaction(101, disclosed)) is True
+        assert recorded == [(8, 42, True)]
+        assert "one-time Voice Safety agreement" in replied[-1][0]
+
+    asyncio.run(run())
+
+
+
+def test_voice_safety_failed_optout_stops_all_review_and_revokes_immediately(monkeypatch) -> None:
+    async def run() -> None:
+        import stoney_verify.community_voice_caption_runtime as runtime
+        from stoney_verify.community_voice_receive import VoiceReceiveUnavailable
+
+        async def failing_save(*args, **kwargs):
+            raise RuntimeError("consent storage unavailable")
+
+        monkeypatch.setattr(runtime, "save_voice_safety_agreement", failing_save)
+        manager = CommunityVoiceCaptionManager(SimpleNamespace())
+        state = SimpleNamespace(
+            session_id="voice_safety:1", scope_kind="voice_safety",
+            safety_consents={2}, safety_consent_epochs={},
+        )
+        manager._sessions[state.session_id] = state
+        manager._guild_owner[1] = state.session_id
+        revoked, stopped = [], []
+
+        async def disable(st, uid):
+            revoked.append(uid)
+
+        async def stop(sid):
+            stopped.append(sid)
+
+        monkeypatch.setattr(manager, "_disable_user_for_state", disable)
+        monkeypatch.setattr(manager, "stop", stop)
+
+        try:
+            await manager.set_voice_safety_consent(1, 2, False)
+            assert False, "failure must be surfaced"
+        except VoiceReceiveUnavailable:
+            pass
+        assert revoked == [2]
+        assert stopped == [state.session_id]
+        assert state.safety_consents == set()
+        assert state.safety_consent_epochs[2] == 1
+
+    asyncio.run(run())
+
+
+def test_voice_safety_revocation_during_transcriber_prewarm_cannot_admit_pcm(monkeypatch) -> None:
+    async def run() -> None:
+        import stoney_verify.community_voice_caption_runtime as runtime
+
+        uid = 17
+        member = SimpleNamespace(
+            id=uid, voice=SimpleNamespace(channel=SimpleNamespace(id=7)),
+        )
+        guild = SimpleNamespace(get_member=lambda key: member if key == uid else None)
+        manager = CommunityVoiceCaptionManager(
+            SimpleNamespace(get_guild=lambda key: guild)
+        )
+
+        class FakeBridge:
+            opted = False
+            def is_opted_in(self, user_id):
+                return self.opted
+            def opted_in_user_ids(self):
+                return ()
+            def opt_in(self, user_id):
+                self.opted = True
+
+        class FakeTranscriber:
+            async def prepare_user(self, user_id):
+                state.safety_consent_epochs[uid] += 1
+
+        class FakeEngine:
+            transcriber = FakeTranscriber()
+            allowed = False
+            def allow_user(self, user_id):
+                self.allowed = True
+
+        state = SimpleNamespace(
+            session_id="voice_safety:1", guild_id=1, voice_channel_id=7,
+            scope_kind="voice_safety", bridge=FakeBridge(),
+            engine=FakeEngine(), safety_consent_epochs={uid: 0},
+            safety_consents=set(),
+        )
+
+        manager._sessions[state.session_id] = state
+        async def prefs(*args, **kwargs):
+            return {"language_code": ""}
+        async def agreement(*args, **kwargs):
+            return True
+        monkeypatch.setattr(manager, "preferences_for_user", prefs)
+        monkeypatch.setattr(runtime, "read_voice_safety_agreement", agreement)
+        await manager._enable_user_for_state(state, uid)
+        assert not state.bridge.opted
+        assert not state.engine.allowed
         assert state.safety_consents == set()
 
     asyncio.run(run())

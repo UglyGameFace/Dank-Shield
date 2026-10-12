@@ -25,6 +25,7 @@ from .community_voice_captions import (
     normalize_caption_output_mode,
 )
 from .voice_safety_policy import VoiceSafetyAdvisor
+from .voice_safety_consent import read_voice_safety_agreement, save_voice_safety_agreement
 from .community_voice_receive import (
     PerSpeakerFrameBridge,
     VoiceReceiveUnavailable,
@@ -51,6 +52,8 @@ class CaptionRuntimeState:
     advisor: Optional[VoiceSafetyAdvisor] = None
     notice_channel_id: int = 0
     safety_consents: set[int] = field(default_factory=set)
+    safety_consent_epochs: dict[int, int] = field(default_factory=dict)
+    safety_automatic: bool = False
     notice_message_id: int = 0
     soak_test: bool = False
     receive_recoveries: int = 0
@@ -80,8 +83,17 @@ def voice_safety_scope_id(guild_id: int) -> str:
 
 
 def voice_safety_host_enabled() -> bool:
-    # Independent operator kill switch; cannot bypass the existing DAVE soak lock.
-    return os.getenv("DANK_VOICE_SAFETY_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    # Only approved paid Gemini/no-training processing for adult-only deployment.
+    # A guild rules page or Verified role cannot waive API data restrictions.
+    affirmative = {"1", "true", "yes", "on"}
+    return all(
+        os.getenv(key, "").strip().lower() in affirmative
+        for key in (
+            "DANK_VOICE_SAFETY_ENABLED",
+            "DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED",
+            "DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED",
+        )
+    )
 
 
 
@@ -118,6 +130,9 @@ class CommunityVoiceCaptionManager:
         self._auto_opt_in: dict[tuple[int, int], bool] = {}
         self._receive_probe_tasks: dict[tuple[str, int], asyncio.Task[Any]] = {}
         self._receive_recovery_locks: dict[str, asyncio.Lock] = {}
+        self._voice_safety_start_locks: dict[int, asyncio.Lock] = {}
+        self._voice_safety_retry_after: dict[int, float] = {}
+        self._voice_safety_staff_paused: set[int] = set()
         self._lock = asyncio.Lock()
         self.max_active_guilds = _env_int(
             "DANK_COMMUNITY_CAPTION_MAX_ACTIVE_GUILDS", 4, 1, 100
@@ -287,35 +302,44 @@ class CommunityVoiceCaptionManager:
             "storage_available": True,
         }
 
-    async def set_voice_safety_consent(self, guild_id: int, user_id: int, enabled: bool) -> bool:
-        """Explicit in-session consent; no durable opt-in or SQL dependence.
+    async def set_voice_safety_consent(self, guild_id: int, user_id: int, enabled: bool, *, source: str = "voice_safety_notice_v1") -> bool:
+        """Durable one-time choice independent of live session availability.
 
-        Leaving the VC or stopping the session revokes admission. Fresh sessions
-        always require a new click on the public notice.
+        Withdraw admission immediately even if persistence is unavailable.
         """
         gid, uid = int(guild_id), int(user_id)
         sid = self._guild_owner.get(gid)
         state = self._sessions.get(sid) if sid else None
-        if state is None or state.scope_kind != "voice_safety":
-            if not enabled:
-                return False
-            raise VoiceReceiveUnavailable("Voice Safety is not actively reviewing this server.")
-        if not enabled:
+        if state is not None and state.scope_kind != "voice_safety":
+            state = None
+        if not enabled and state is not None:
+            state.safety_consent_epochs[uid] = state.safety_consent_epochs.get(uid, 0) + 1
             state.safety_consents.discard(uid)
             await self._disable_user_for_state(state, uid)
+        try:
+            saved = await save_voice_safety_agreement(gid, uid, enabled, source=source)
+        except Exception as exc:
+            if state is not None:
+                if enabled:
+                    state.safety_consents.discard(uid)
+                    await self._disable_user_for_state(state, uid)
+                # Opt-out already revoked audio before the attempted write.
+                # Fail closed for the entire guild when revocation cannot persist.
+                if not enabled:
+                    await self.stop(state.session_id)
+            raise VoiceReceiveUnavailable(
+                "Could not confirm the voice moderation agreement in storage. "
+                "No audio was admitted. If opting out, monitoring was stopped for safety."
+            ) from exc
+        if not saved:
             return False
+        if state is None:
+            return True
         guild = self.bot.get_guild(gid)
         member = guild.get_member(uid) if guild is not None else None
         in_channel = int(getattr(getattr(getattr(member, "voice", None), "channel", None), "id", 0) or 0) == int(state.voice_channel_id)
-        if not in_channel:
-            raise VoiceReceiveUnavailable("Join the monitored voice channel before opting in.")
-        state.safety_consents.add(uid)
-        try:
-            await self._enable_user_for_state(state, uid)
-        except Exception as exc:
-            state.safety_consents.discard(uid)
-            await self._disable_user_for_state(state, uid)
-            raise VoiceReceiveUnavailable("Voice Safety could not admit your audio. No consent was retained.") from exc
+        if in_channel:
+            await self._enable_user_for_state(state, uid, refresh_preferences=True)
         return True
 
     def user_language_hint(self, guild_id: int, user_id: int) -> str:
@@ -420,7 +444,9 @@ class CommunityVoiceCaptionManager:
         uid = int(user_id)
         if state.bridge.is_opted_in(uid):
             return
-        if getattr(state, "scope_kind", "server") == "voice_safety" and uid not in state.safety_consents:
+        safety = getattr(state, "scope_kind", "server") == "voice_safety"
+        epoch = state.safety_consent_epochs.get(uid, 0) if safety else 0
+        if safety and not await read_voice_safety_agreement(state.guild_id, uid):
             return
         if len(state.bridge.opted_in_user_ids()) >= self.max_speakers_per_session:
             raise VoiceReceiveUnavailable(
@@ -451,8 +477,24 @@ class CommunityVoiceCaptionManager:
         if callable(prepare):
             await prepare(uid)
 
+        if safety:
+            # A user may withdraw consent, leave or stop during Gemini
+            # prewarm. Only the current live owner with fresh agreement
+            # may admit PCM after that await.
+            guild = self.bot.get_guild(state.guild_id)
+            member = guild.get_member(uid) if guild is not None else None
+            in_target = int(getattr(getattr(getattr(member, "voice", None), "channel", None), "id", 0) or 0) == state.voice_channel_id
+            if (
+                self._sessions.get(state.session_id) is not state
+                or epoch != state.safety_consent_epochs.get(uid, 0)
+                or not in_target
+                or not await read_voice_safety_agreement(state.guild_id, uid)
+            ):
+                return
         state.engine.allow_user(uid)
         state.bridge.opt_in(uid)
+        if safety:
+            state.safety_consents.add(uid)
 
     async def _disable_user_for_state(
         self,
@@ -523,8 +565,7 @@ class CommunityVoiceCaptionManager:
             if restored >= self.max_speakers_per_session:
                 break
             if getattr(state, "scope_kind", "server") == "voice_safety":
-                # No silent restoration of a previous session's consent.
-                continue
+                consented = await read_voice_safety_agreement(state.guild_id, int(member.id))
             else:
                 prefs = await self.preferences_for_user(state.guild_id, int(member.id), refresh=True)
                 consented = bool(prefs.get("auto_opt_in"))
@@ -546,6 +587,86 @@ class CommunityVoiceCaptionManager:
             restored += 1
         return restored
 
+    def pause_voice_safety_auto_start(self, guild_id: int, paused: bool = True) -> None:
+        gid = int(guild_id)
+        if paused:
+            self._voice_safety_staff_paused.add(gid)
+        else:
+            self._voice_safety_staff_paused.discard(gid)
+
+    async def maybe_auto_start_voice_safety(
+        self, guild: discord.Guild, *, joined_voice_id: int = 0
+    ) -> bool:
+        """Start one configured VC only when populated; never add a receiver.
+
+        Startup and join events use the same gate and per-guild lock. Discord
+        connection setup is not instantaneous; monitoring never covers speech
+        before the receiver is ready.
+        """
+        if not (voice_safety_host_enabled() and live_captions_enabled()):
+            return False
+        gid = int(guild.id)
+        if gid in self._voice_safety_staff_paused or gid in self._guild_owner:
+            return False
+        now = time.monotonic()
+        if now < self._voice_safety_retry_after.get(gid, 0):
+            return False
+        lock = self._voice_safety_start_locks.setdefault(gid, asyncio.Lock())
+        async with lock:
+            if gid in self._guild_owner or gid in self._voice_safety_staff_paused:
+                return False
+            if len(self._sessions) >= self.max_active_guilds:
+                return False
+            from .guild_config import get_guild_config
+
+            try:
+                cfg = await get_guild_config(gid)
+                if not bool(cfg.get("voice_safety_enabled", False)):
+                    return False
+                voice_id = int(cfg.get("voice_safety_voice_channel_id") or 0)
+                if voice_id <= 0 or (joined_voice_id and int(joined_voice_id) != voice_id):
+                    return False
+                voice = guild.get_channel(voice_id)
+                if not isinstance(voice, discord.VoiceChannel):
+                    return False
+                if not any(not getattr(m, "bot", False) for m in tuple(voice.members or ())):
+                    return False
+                state = await self.start_voice_safety(
+                    guild_id=gid,
+                    voice_channel_id=voice_id,
+                    staff_alert_channel_id=int(cfg.get("voice_safety_staff_channel_id") or 0),
+                    notice_channel_id=int(cfg.get("voice_safety_notice_channel_id") or 0),
+                    automatic=True,
+                )
+                return bool(state)
+            except Exception as exc:
+                self._voice_safety_retry_after[gid] = time.monotonic() + 45.0
+                log.warning(
+                    "Voice Safety auto-start unavailable guild=%s type=%s",
+                    gid, type(exc).__name__,
+                )
+                return False
+
+    async def restore_voice_safety_after_ready(self) -> None:
+        """Recover previously armed, currently occupied voice rooms after restart.
+
+        Runs as an asynchronous on_ready listener and stops when the process's
+        configured active receiver capacity is filled.
+        """
+        if not (voice_safety_host_enabled() and live_captions_enabled()):
+            return
+        for guild in tuple(getattr(self.bot, "guilds", ()) or ()):
+            if len(self._sessions) >= self.max_active_guilds:
+                break
+            voice_channels = getattr(guild, "voice_channels", ()) or ()
+            if not any(
+                any(not getattr(m, "bot", False) for m in (getattr(vc, "members", ()) or ()))
+                for vc in voice_channels
+            ):
+                continue
+            await self.maybe_auto_start_voice_safety(guild)
+            await asyncio.sleep(0)
+
     async def handle_voice_state_update(
         self,
         member: discord.Member,
@@ -558,6 +679,10 @@ class CommunityVoiceCaptionManager:
         sid = self._guild_owner.get(gid)
         state = self._sessions.get(sid) if sid else None
         if state is None:
+            before_join = int(getattr(getattr(before, "channel", None), "id", 0) or 0)
+            after_join = int(getattr(getattr(after, "channel", None), "id", 0) or 0)
+            if after_join and before_join != after_join:
+                await self.maybe_auto_start_voice_safety(member.guild, joined_voice_id=after_join)
             return
 
         uid = int(member.id)
@@ -570,17 +695,25 @@ class CommunityVoiceCaptionManager:
         target = int(state.voice_channel_id)
 
         if before_id == target and after_id != target:
-            # Voice Safety consent ends on departure. Captions retain their independent preference.
+            # Active audio admission ends on departure; stored agreement persists until withdrawn.
             if getattr(state, "scope_kind", "server") == "voice_safety":
+                state.safety_consent_epochs[uid] = state.safety_consent_epochs.get(uid, 0) + 1
                 state.safety_consents.discard(uid)
             await self._disable_user_for_state(state, uid)
+            if getattr(state, "scope_kind", "server") == "voice_safety" and bool(getattr(state, "safety_automatic", False)):
+                voice = member.guild.get_channel(target)
+                if voice is None or not any(
+                    not getattr(m, "bot", False) and int(m.id) != uid
+                    for m in tuple(getattr(voice, "members", ()) or ())
+                ):
+                    await self.stop(state.session_id)
             return
 
         if after_id != target or before_id == target:
             return
 
         if getattr(state, "scope_kind", "server") == "voice_safety":
-            consented = uid in state.safety_consents
+            consented = await read_voice_safety_agreement(gid, uid)
         else:
             prefs = await self.preferences_for_user(gid, uid, refresh=True)
             consented = bool(prefs.get("auto_opt_in"))
@@ -865,6 +998,7 @@ class CommunityVoiceCaptionManager:
         voice_channel_id: int,
         staff_alert_channel_id: int,
         notice_channel_id: int,
+        automatic: bool = False,
     ) -> CaptionRuntimeState:
         return await self.start({
             "id": voice_safety_scope_id(guild_id),
@@ -873,6 +1007,7 @@ class CommunityVoiceCaptionManager:
             "panel_channel_id": int(staff_alert_channel_id),
             "notice_channel_id": int(notice_channel_id),
             "caption_scope": "voice_safety",
+            "voice_safety_automatic": bool(automatic),
         })
 
     async def start(self, session: dict[str, Any]) -> CaptionRuntimeState:
@@ -1061,12 +1196,12 @@ class CommunityVoiceCaptionManager:
                     notice_message = await notice_channel.send(
                         f"🛡️ **Voice Safety review is active for <#{voice_channel_id}>.** "
                         "This is an optional AI-assisted staff-alert feature, not a guaranteed content block. "
-                        "Only members who press **Opt In** have their voice transcribed and reviewed. "
+                        "Members who accepted the disclosed Voice Safety agreement during verification or on this notice may be monitored automatically in the selected VC. "
                         "Consented audio is sent to Google Gemini, and transcript text is sent to Gemini "
                         "for conduct classification. Staff may see an incident notice. "
-                        "This host uses Gemini Free Tier, where submitted data may be used to improve Google products. "
+                        "This operator has confirmed the Gemini project uses paid no-training data terms and the monitored space is restricted to adults. "
                         "Dank Shield does not retain raw audio; moderation incidents remain in the private staff channel. "
-                        "Press **Opt Out** to revoke consent at any time.",
+                        "Press **Opt Out** at any time to revoke ongoing monitoring. Existing members may press **Agree Once** here.",
                         view=VoiceSafetyConsentView(),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
@@ -1111,6 +1246,7 @@ class CommunityVoiceCaptionManager:
                 advisor=advisor,
                 notice_channel_id=notice_channel_id,
                 notice_message_id=int(notice_message.id) if safety_mode else 0,
+                safety_automatic=bool(session.get("voice_safety_automatic", False)) if safety_mode else False,
             )
             self._sessions[sid] = state
             self._guild_owner[guild_id] = sid
@@ -1170,6 +1306,7 @@ class CommunityVoiceCaptionManager:
         state.bridge.set_speaking_callback(None)
         state.bridge.clear_consent()
         state.safety_consents.clear()
+        state.safety_consent_epochs.clear()
         if state.advisor is not None:
             state.advisor.close()
         try:
