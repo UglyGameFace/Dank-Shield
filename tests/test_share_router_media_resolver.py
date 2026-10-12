@@ -39,6 +39,72 @@ def test_provider_matrix(url: str, provider: str) -> None:
     assert media.provider_for_url(url) == provider
 
 
+@pytest.mark.parametrize(
+    ("error_text", "expected"),
+    [
+        ("Sign in to confirm you're not a bot. This text might include https://secret.invalid/?token=123", "provider_bot_verification"),
+        ("Private video. Sign in if you've been granted access.", "provider_private_or_restricted"),
+        ("This video is age-restricted", "provider_login_required"),
+        ("HTTP Error 429: Too Many Requests", "provider_rate_limited"),
+        ("HTTP Error 403: Forbidden", "provider_forbidden"),
+        ("Video unavailable", "provider_video_unavailable"),
+        ("Connection timed out", "provider_extract_timeout"),
+        ("Some new provider issue with signed CDN token=SECRET", "extract_failed"),
+    ],
+)
+def test_provider_exception_is_categorized_without_leaking_source(
+    error_text: str, expected: str,
+) -> None:
+    reason = media._classify_extraction_failure(RuntimeError(error_text))
+    assert reason == expected
+    assert "token" not in reason
+    assert "https://" not in reason
+
+
+def test_live_extractor_adapter_returns_safe_failure_not_raw_error(monkeypatch) -> None:
+    from types import SimpleNamespace
+    import sys
+
+    class YoutubeDL:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def extract_info(self, url, *, download):
+            assert download is False
+            raise RuntimeError("Sign in to confirm you're not a bot. https://cdn.private/video?token=secret")
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", SimpleNamespace(YoutubeDL=YoutubeDL))
+    outcome = media._extract_info_sync("https://www.youtube.com/watch?v=tiq6mOEwsow")
+    assert isinstance(outcome, media.ExtractionFailure)
+    assert outcome.reason == "provider_bot_verification"
+
+
+def test_youtube_uses_distinct_stable_reason_for_provider_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        media,
+        "_extract_info_sync",
+        lambda url: media.ExtractionFailure("provider_bot_verification"),
+    )
+    async def resolve():
+        return await media.resolve_media_url(
+            "https://www.youtube.com/watch?v=tiq6mOEwsow",
+            max_bytes=20 * 1024 * 1024,
+        )
+    result = asyncio.run(resolve())
+    assert result.provider == "youtube"
+    assert result.delivery == "link"
+    assert result.reason == "provider_bot_verification"
+    assert media.media_resolver_snapshot()["providers"]["youtube"]["last_reason"] == (
+        "provider_bot_verification"
+    )
+
+
 def test_canonicalization_and_identity_normalize_provider_aliases() -> None:
     x = media.canonicalize_media_url(
         "https://mobile.twitter.com/Test/status/123456?s=20&utm_source=test"
