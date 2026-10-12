@@ -261,6 +261,9 @@ def _share_media_health_embed() -> discord.Embed:
     )
     lines: list[str] = []
     for key in [*(p.key for p in PROVIDERS), "direct"]:
+        if key == "direct":
+            lines.append("• Direct media: URL-based classification (not extracted)")
+            continue
         state = health.get(key) or {}
         label = provider_label(key)
         if not policy.get(key, False):
@@ -336,9 +339,10 @@ class ShareRouterProviderProbeModal(discord.ui.Modal, title="Test Share Router P
         embed = discord.Embed(
             title="🧪 Share Router Provider Test",
             description=(
-                "This is a **live metadata-only classification**, not an upload or "
-                "proof that a client can play the video inline. The submitted URL "
-                "and any signed query tokens are intentionally not displayed."
+                "Public social providers are checked through metadata extraction. "
+                "Direct files are classified by their URL without a download. "
+                "**Neither result proves upload or inline playback.** The submitted "
+                "URL and any signed tokens are intentionally not displayed."
             ),
             color=discord.Color.blurple(),
         )
@@ -351,7 +355,14 @@ class ShareRouterProviderProbeModal(discord.ui.Modal, title="Test Share Router P
         )
         embed.add_field(
             name="Outcome",
-            value=(result.reason or "Candidate found; file transfer and playback not yet verified.")[:256],
+            value=(
+                result.reason
+                or (
+                    "Direct URL classified only; availability and file format not yet checked."
+                    if result.provider == "direct"
+                    else "Candidate found; file transfer and playback not yet verified."
+                )
+            )[:256],
             inline=False,
         )
         embed.set_footer(text="No source data is posted to a server channel.")
