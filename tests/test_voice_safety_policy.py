@@ -212,6 +212,10 @@ def test_voice_safety_is_separate_gated_scope(monkeypatch) -> None:
     monkeypatch.delenv("DANK_VOICE_SAFETY_ENABLED", raising=False)
     assert not voice_safety_host_enabled()
     monkeypatch.setenv("DANK_VOICE_SAFETY_ENABLED", "true")
+    assert not voice_safety_host_enabled()
+    monkeypatch.setenv("DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED", "true")
+    assert not voice_safety_host_enabled()
+    monkeypatch.setenv("DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED", "true")
     assert voice_safety_host_enabled()
     source = (ROOT / "stoney_verify" / "community_voice_caption_runtime.py").read_text()
     assert 'not voice_safety_host_enabled() or not live_captions_enabled()' in source
