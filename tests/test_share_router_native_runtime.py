@@ -770,7 +770,10 @@ def test_proxy_send_failure_preserves_source_and_allows_retry(monkeypatch) -> No
 
     monkeypatch.setattr(share_runtime.discord, "TextChannel", FakeTextChannel)
     monkeypatch.setattr(share_runtime.discord, "Member", FakeMember)
-    monkeypatch.setattr(share_runtime, "guild_routes", configured_routes)
+    async def configured_state(guild_id):
+        return await configured_routes(guild_id), 0
+
+    monkeypatch.setattr(share_runtime, "guild_route_state", configured_state)
     monkeypatch.setattr(share_runtime, "source_age_blocker", lambda _source: "")
     monkeypatch.setattr(share_runtime, "source_privacy_blocker", lambda _source: "")
     monkeypatch.setattr(share_runtime, "route_permission_blockers", lambda *_args, **_kwargs: [])
