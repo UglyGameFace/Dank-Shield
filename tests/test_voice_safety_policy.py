@@ -391,3 +391,91 @@ def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) ->
         assert state.safety_consents == set()
 
     asyncio.run(run())
+
+
+def test_voice_safety_auto_start_uses_configured_channel_and_single_owner(monkeypatch) -> None:
+    async def run() -> None:
+        import stoney_verify.community_voice_caption_runtime as runtime
+        import stoney_verify.guild_config as config_service
+
+        class FakeVoice:
+            id = 22
+            members = [SimpleNamespace(id=51, bot=False)]
+
+        class FakeGuild:
+            id = 17
+            voice_channels = [FakeVoice()]
+            def get_channel(self, channel_id):
+                return FakeVoice() if channel_id == 22 else None
+
+        guild = FakeGuild()
+        bot = SimpleNamespace(guilds=[guild], get_guild=lambda gid: guild)
+        cfg = {
+            "voice_safety_enabled": True,
+            "voice_safety_voice_channel_id": 22,
+            "voice_safety_staff_channel_id": 23,
+            "voice_safety_notice_channel_id": 24,
+        }
+
+        async def get_config(gid, **kwargs):
+            return cfg
+
+        monkeypatch.setattr(config_service, "get_guild_config", get_config)
+        monkeypatch.setattr(runtime, "voice_safety_host_enabled", lambda: True)
+        monkeypatch.setattr(runtime, "live_captions_enabled", lambda: True)
+        monkeypatch.setattr(runtime.discord, "VoiceChannel", FakeVoice)
+        manager = CommunityVoiceCaptionManager(bot)
+        called = []
+
+        async def begin(**kwargs):
+            called.append(kwargs)
+            state = SimpleNamespace(
+                session_id=voice_safety_scope_id(17),
+                scope_kind="voice_safety",
+            )
+            manager._sessions[state.session_id] = state
+            manager._guild_owner[17] = state.session_id
+            return state
+
+        monkeypatch.setattr(manager, "start_voice_safety", begin)
+        assert await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=999) is False
+        assert await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=22) is True
+        assert len(called) == 1 and called[0]["automatic"] is True
+        assert await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=22) is False
+        manager._sessions.clear()
+        manager._guild_owner.clear()
+        manager.pause_voice_safety_auto_start(17)
+        assert await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=22) is False
+        manager.pause_voice_safety_auto_start(17, False)
+        await manager.restore_voice_safety_after_ready()
+        assert len(called) == 2
+
+    asyncio.run(run())
+
+
+def test_voice_safety_auto_start_fails_closed_on_disabled_host_and_guild(monkeypatch) -> None:
+    async def run() -> None:
+        import stoney_verify.community_voice_caption_runtime as runtime
+        import stoney_verify.guild_config as guild_config
+
+        class FakeVoice:
+            id = 42
+            members = [SimpleNamespace(id=2, bot=False)]
+
+        guild = SimpleNamespace(id=7, voice_channels=[FakeVoice()], get_channel=lambda x: FakeVoice())
+        bot = SimpleNamespace(guilds=[guild])
+        manager = CommunityVoiceCaptionManager(bot)
+        monkeypatch.setattr(runtime.discord, "VoiceChannel", FakeVoice)
+        monkeypatch.setattr(runtime, "voice_safety_host_enabled", lambda: False)
+        monkeypatch.setattr(runtime, "live_captions_enabled", lambda: True)
+        assert not await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=42)
+        monkeypatch.setattr(runtime, "voice_safety_host_enabled", lambda: True)
+
+        async def get_config(gid, **kwargs):
+            return {"voice_safety_enabled": False, "voice_safety_voice_channel_id": 42}
+
+        monkeypatch.setattr(guild_config, "get_guild_config", get_config)
+        assert not await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=42)
+        assert manager._sessions == {}
+
+    asyncio.run(run())
