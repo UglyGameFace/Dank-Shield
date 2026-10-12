@@ -676,6 +676,61 @@ def test_facebook_embedded_cdn_uses_existing_bounded_fetch(monkeypatch) -> None:
     assert 0 < tried[0][1] <= 100 * 1024 * 1024
 
 
+def test_facebook_failed_hd_tries_one_sd_before_link_fallback(monkeypatch) -> None:
+    from stoney_verify.share_router_media_resolver import MediaResolution
+
+    hd = "https://video.xx.fbcdn.net/hd.mp4?token=short"
+    sd = "https://video.xx.fbcdn.net/sd.mp4?token=short"
+    resolution = MediaResolution(
+        source_url="https://www.facebook.com/reel/1001",
+        canonical_url="https://www.facebook.com/reel/1001",
+        identity="facebook:1001",
+        provider="facebook", delivery="progressive",
+        media_url=hd, ext="mp4",
+        alternate_progressive=((sd, (("Referer", "https://www.facebook.com/"),)),),
+    )
+    attempts = []
+
+    async def fake_download(url, *, max_bytes, request_headers=None):
+        attempts.append((url, max_bytes, request_headers))
+        if url == sd:
+            return SimpleNamespace(source_url=url, size_bytes=10, file="video")
+        return None
+
+    monkeypatch.setattr(share_runtime, "_download_trusted_video", fake_download)
+    result = asyncio.run(
+        share_runtime._download_resolved_progressive(resolution, max_bytes=19 * 1024 * 1024)
+    )
+    assert result.source_url == sd
+    assert len(attempts) == 2
+    assert all(a[1] == 19 * 1024 * 1024 for a in attempts)
+    assert attempts[1][2] == {"Referer": "https://www.facebook.com/"}
+
+
+def test_facebook_backup_never_bypasses_host_security(monkeypatch) -> None:
+    from stoney_verify.share_router_media_resolver import MediaResolution
+    alt = "https://private.invalid/video.mp4"
+    resolution = MediaResolution(
+        source_url="https://www.facebook.com/reel/1002",
+        canonical_url="https://www.facebook.com/reel/1002", identity="fb:1002",
+        provider="facebook", delivery="progressive",
+        media_url="https://video.xx.fbcdn.net/video.mp4",
+        alternate_progressive=((alt, ()),),
+    )
+    calls = []
+
+    async def fake_download(url, *, max_bytes, request_headers=None):
+        calls.append(url)
+        # The production guarded downloader validates each URL separately.
+        return None
+
+    monkeypatch.setattr(share_runtime, "_download_trusted_video", fake_download)
+    assert asyncio.run(
+        share_runtime._download_resolved_progressive(resolution, max_bytes=1024)
+    ) is None
+    assert calls == [resolution.media_url, alt]
+
+
 def test_runtime_native_video_relay_is_bounded_and_fail_open() -> None:
     assert "DANK_SHARE_ROUTER_MAX_VIDEO_BYTES" in RUNTIME
     assert "DANK_SHARE_ROUTER_VIDEO_TIMEOUT_SECONDS" in RUNTIME
