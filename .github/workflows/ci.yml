@@ -159,7 +159,9 @@ jobs:
 
     services:
       postgres:
-        image: public.ecr.aws/docker/library/postgres:16
+        # Prefer the upstream official image; public ECR mirror returned
+        # toomanyrequests/Data limit exceeded before tests could start.
+        image: postgres:16
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: postgres
