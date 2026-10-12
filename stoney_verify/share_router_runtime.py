@@ -241,6 +241,13 @@ def _trusted_video_url(value: str) -> bool:
         return False
     if host in _TRUSTED_VIDEO_HOSTS:
         return True
+    # Facebook sometimes supplies an actual video CDN URL to Discord's embed
+    # rather than a Discord-hosted proxy. Only accept the Meta-owned fbcdn.net
+    # hostname boundary, never facebook.com HTML player pages or lookalikes.
+    # _download_trusted_video still validates public DNS, redirects, media
+    # content-type, byte cap and timeout before forwarding to Discord.
+    if host == "fbcdn.net" or host.endswith(".fbcdn.net"):
+        return True
     if host.endswith(".discordapp.net") or host.endswith(".discordapp.com"):
         return True
     if host.endswith(".giphy.com"):
