@@ -47,23 +47,73 @@ It is not a general-purpose unlimited downloading or public file host.
   disabled by recipients.
 - Never auto-enable this in all guilds or scrape/private-login media.
 
-## True above-limit private file downloads: separate acceptance gate
+## Expiring private HTTPS links: implementation and easy setup
 
-A private **signed temporary HTTPS link hosted by an owner-controlled storage/
-streaming service** is the recommended option when a file exceeds Discord's
-DM attachment cap. Implementing this requires a confirmed **publicly reachable**
-host/download route, bounded storage or safe passthrough, per-request token
-expiry, authentication/authorization and abuse controls, accurate size caps,
-bandwidth accounting, and cleanup. A query-token URL alone is a bearer secret,
-not the same as Discord OAuth binding to the intended recipient.
+The public download endpoint reuses **the existing media site** from
+`stoney_verify/torrent_media_server.py`, no new ports, bot API route or
+extra database. It never provides direct public directory listings.
 
-Neither public HTTPS ingress capacity nor egress/storage limits of the current
-Discloud application have been verified for this use, so the larger-file
-service is **not** installed by this slice and may not be promised as unlimited.
-A hidden boosted-server attachment with a Discord CDN link may allow a limited
-download workflow up to a guild cap, but this also needs explicit review for
-signed-URL privacy, link expiry and deletion semantics. Do not silently use a
-server message as private storage or imply it lifts the DM attachment limit.
+1. Make sure the existing Discloud **TYPE=site** media app is publicly
+   reachable over HTTPS. In the application's Discloud environment, reuse the
+   existing `DANK_MEDIA_PUBLIC_BASE_URL=https://YOUR-SITE.discloud.app`
+   if already configured for Cinema. Do not use the database private VLAN host.
+   That environment variable is required once **only if** missing, because
+   guessing the public site address or accepting an untrusted request Host
+   would create unsafe signed links.
+2. Restart the running bot/site after an environment change.
+3. In Discord, open `/dank home` → Share Router → **Create Download Channel**.
+   The feature is per guild; existing Share Router proxy routing is untouched.
+4. Press **Download Settings**, choose **1 hour**, **24 hours**, **7 days**
+   (default), or **30 days** (maximum), then **Test HTTPS Hosting**. A passing
+   test creates a tiny temporary private token, reads it through the configured
+   HTTPS origin, and revokes it; the URL never appears in Discord.
+5. Post one safe **public** video URL in the created channel. A small file
+   arrives as a normal DM video attachment. If hosting is online and size/storage
+   budgets permit, a larger file is staged privately and delivered in a DM as
+   separate **Watch** (inline HTTP video) and **Download** (attachment HTTP)
+   links. When hosting is not ready or budgets are exceeded, the bot sends an
+   honest original-source link rather than claiming a file is hosted.
+6. **Disable Downloads** stops the member workflow without deleting the
+   Discord channel or already-created links. Existing links continue until
+   their own expiry; if immediate revocation is required, remove the staged
+   object or stop the service and invalidate storage.
+
+### Actual limits and confidentiality
+
+- Default per hosted file: **128 MiB**, configurable via
+  `DANK_SHARE_DOWNLOAD_FILE_MAX_BYTES` up to the **256 MiB hard safety cap**.
+- Default total staged storage: **512 MiB**, configurable via
+  `DANK_SHARE_DOWNLOAD_STORAGE_MAX_BYTES` up to **2 GiB**, with a
+  **256 MiB free-disk reserve**. Storage-full conditions block *new* staged
+  files, rather than deleting other members' unexpired videos.
+- Default staging directory: `data/share_downloads`, configurable via
+  `DANK_SHARE_DOWNLOAD_STORAGE_DIR` on the same public bot/site container.
+  **The current Discloud disk persistence and quota are unverified.** Restart
+  and redeploy can have different retention behavior: a 7/30-day URL cannot
+  outlive a deleted/ephemeral storage volume. Confirm a persistent disk and
+  test reboot/redeploy retention before promising long-term access.
+- The URL contains an unguessable random bearer token, with only its hash
+  retained in a small sidecar manifest. **Anyone with the link can access
+  it until expiry**. Anyone who receives a forwarded DM or copies the URL can
+  therefore watch/download without Discord login. Do not use for private,
+  restricted, illegal or rights-unlicensed material.
+- The media endpoint serves only pre-staged local video with safe filename
+  identifiers; credentials or source-provider URLs are not embedded in the
+  token/manifest. GET and HEAD support byte ranges for browser seeking;
+  the Watch route uses inline media type, Download uses attachment disposition.
+- Every request checks expiration and the token again. Background cleanup
+  runs every 15 minutes (bounded, rotating scan); no valid request can open
+  a link after its configured expiration, even before physical cleanup.
+  CDN/Discord previews cached before expiry cannot always be recalled.
+- The endpoint limits concurrent active transfers; capacity and egress are
+  host-account dependent. A signed URL is **not an unlimited-file-size hack**,
+  and Discord-native previews remain best-effort across clients.
+- Temp media is removed on failed staging, failed DM, and after expiry.
+  The live public-host canary is still required to verify actual ingress,
+  storage persistence, bandwidth and watch/download accessibility.
+
+Do **not** repoint `DANK_VERIFY_REMINDER_DATABASE_URL` or change PostgreSQL
+for this feature; staged media never belongs in the reminder database.
 
 ## Live tests required before enabling
 
@@ -76,6 +126,13 @@ server message as private storage or imply it lifts the DM attachment limit.
 - A file over cap, failed downloader, failed DM (50007), API 413, no
   Attach/Manage Messages, disabled feature, repeated posts and concurrent
   requests preserve expected data and state.
+- Expiration presets are saved per guild; token does not disclose source URL.
+- HTTPS Test Hosting verifies the same external public origin that Discord
+  and a user would reach. Check DM Watch and Download links with the member,
+  then test Android and desktop Discord clients. Never interpret a passing
+  HTTP test as guaranteed Discord inline preview.
+- Test storage retention across a real Discloud restart/redeploy, outbound
+  egress quota, concurrent streams, disk quota, and file/manifest expiry.
 - Staff UI creation/disable is accessible on Android and does not interfere
   with regular Share Router proxy routes.
 - Live Discloud CPU/RAM/egress and storage quotas are measured, not guessed.
