@@ -166,7 +166,8 @@ def test_toke_media_send_path_keeps_one_canonical_post() -> None:
     assert "embed.set_image(url=clean_media)" in source
     assert 'embed.description += f"\\n\\n[Open shared GIF or image]({clean_media})"' in source
     assert 'content += f"\\n{clean_media}"' not in source
-    assert 'payload["file"] = upload_file' in source
+    assert '"file": upload_file' in source
+    assert 'TokeThumbnailLayout(guild, pending_card, intro=intro)' in source
     assert "await channel.send(**payload)" in source
     assert "await toke_sessions.save_new(" in source
     assert "aiohttp" not in source
