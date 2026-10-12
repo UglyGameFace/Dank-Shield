@@ -1691,8 +1691,10 @@ async def route_message(message: discord.Message) -> None:
 
         routes, download_channel_id = await guild_route_state(int(guild.id))
         if download_channel_id and int(message.channel.id) == download_channel_id:
-            from .share_router_private_downloads import handle_download_message
-            await handle_download_message(message)
+            # Discord gateway listener stays non-blocking while download workers
+            # process a bounded durable queue. Never create another listener.
+            from .share_router_download_queue import enqueue_download_request
+            await enqueue_download_request(message)
             return
         route = route_for_source(routes, int(message.channel.id))
         if route is None:
@@ -2107,6 +2109,8 @@ def ensure_share_router_runtime(bot: Any) -> bool:
             global _SOURCE_CLEANUP_TASK
             if _SOURCE_CLEANUP_TASK is None or _SOURCE_CLEANUP_TASK.done():
                 _SOURCE_CLEANUP_TASK = asyncio.create_task(_share_router_cleanup_loop(bot))
+            from .share_router_download_queue import start_download_workers
+            await start_download_workers(bot)
 
         bot.add_listener(start_cleanup_worker, "on_ready")
         _log(f"active; private share proxies can route into configured destinations build={SHARE_ROUTER_FEATURE_BUILD}")
