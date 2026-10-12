@@ -798,3 +798,83 @@ def test_voice_safety_picker_rejects_selection_when_session_starts(monkeypatch) 
         assert response.items[-1][0] == "error"
         assert "Stop active" in response.items[-1][1]
     asyncio.run(run())
+
+
+def test_voice_safety_host_checks_explain_missing_flags_without_exposing_key(monkeypatch) -> None:
+    from stoney_verify.community_voice_caption_runtime import (
+        voice_safety_host_checks, voice_safety_host_enabled,
+    )
+    from stoney_verify.commands_ext.public_voice_safety import _readiness
+
+    names = (
+        "DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED",
+        "DANK_VOICE_SAFETY_ENABLED",
+        "DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED",
+        "DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED",
+        "GEMINI_API_KEY",
+    )
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+    status = voice_safety_host_checks()
+    assert set(status) == set(names)
+    assert all(value is False for value in status.values())
+    assert not voice_safety_host_enabled()
+    ready, explanation = _readiness(SimpleNamespace(), {})
+    assert not ready
+    assert all(name in explanation for name in names)
+
+    for name in names[:-1]:
+        monkeypatch.setenv(name, "true")
+    monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-secret-do-not-output")
+    status = voice_safety_host_checks()
+    assert all(status.values())
+    assert voice_safety_host_enabled()
+    assert "not-a-real-secret" not in str(status)
+    monkeypatch.setenv("DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED", "false")
+    ready, explanation = _readiness(SimpleNamespace(), {})
+    assert not ready
+    assert "DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED" in explanation
+    assert "DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED" not in explanation
+
+
+def test_voice_safety_staff_panel_displays_readiness_without_key(monkeypatch) -> None:
+    async def run() -> None:
+        import stoney_verify.commands_ext.public_voice_safety as ui
+
+        class FakeGuild:
+            id = 51
+
+        async def config(gid, *, refresh=False):
+            return {
+                "voice_safety_voice_channel_id": 88,
+                "voice_safety_staff_channel_id": 89,
+                "voice_safety_notice_channel_id": 90,
+            }
+
+        bot = object()
+        monkeypatch.setattr(ui, "get_guild_config", config)
+        monkeypatch.setattr(
+            ui, "ensure_community_voice_caption_manager",
+            lambda value: SimpleNamespace(
+                status_for_guild=lambda gid: {"active": False}
+            ),
+        )
+        monkeypatch.setattr(ui, "_readiness", lambda guild, config: (False, "Host configuration incomplete"))
+        monkeypatch.setattr(ui, "voice_safety_host_checks", lambda: {
+            "DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED": True,
+            "DANK_VOICE_SAFETY_ENABLED": True,
+            "DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED": False,
+            "DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED": False,
+            "GEMINI_API_KEY": True,
+        })
+        embed = await ui._embed(SimpleNamespace(guild=FakeGuild(), client=bot))
+        fields = {field.name: field.value for field in embed.fields}
+        assert "Host readiness" in next(k for k in fields if "Host readiness" in k)
+        status = next(v for k, v in fields.items() if "Host readiness" in k)
+        assert "❌ **Gemini paid-project confirmation**" in status
+        assert "❌ **Adult-only usage confirmation**" in status
+        assert "✅ **DAVE captions switch**" in status
+        assert "Gemini API key configured" in status
+        assert "not-a-real-secret" not in str(embed.to_dict())
+
+    asyncio.run(run())
