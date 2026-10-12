@@ -52,6 +52,7 @@ class CaptionRuntimeState:
     advisor: Optional[VoiceSafetyAdvisor] = None
     notice_channel_id: int = 0
     safety_consents: set[int] = field(default_factory=set)
+    safety_consent_epochs: dict[int, int] = field(default_factory=dict)
     notice_message_id: int = 0
     soak_test: bool = False
     receive_recoveries: int = 0
@@ -299,6 +300,7 @@ class CommunityVoiceCaptionManager:
         if state is not None and state.scope_kind != "voice_safety":
             state = None
         if not enabled and state is not None:
+            state.safety_consent_epochs[uid] = state.safety_consent_epochs.get(uid, 0) + 1
             state.safety_consents.discard(uid)
             await self._disable_user_for_state(state, uid)
         try:
@@ -427,9 +429,10 @@ class CommunityVoiceCaptionManager:
         uid = int(user_id)
         if state.bridge.is_opted_in(uid):
             return
-        if getattr(state, "scope_kind", "server") == "voice_safety":
-            if not await read_voice_safety_agreement(state.guild_id, uid):
-                return
+        safety = getattr(state, "scope_kind", "server") == "voice_safety"
+        epoch = state.safety_consent_epochs.get(uid, 0) if safety else 0
+        if safety and not await read_voice_safety_agreement(state.guild_id, uid):
+            return
         if len(state.bridge.opted_in_user_ids()) >= self.max_speakers_per_session:
             raise VoiceReceiveUnavailable(
                 "This session has reached its configured Live Captions speaker limit."
@@ -459,9 +462,23 @@ class CommunityVoiceCaptionManager:
         if callable(prepare):
             await prepare(uid)
 
+        if safety:
+            # A user may withdraw consent, leave or stop during Gemini
+            # prewarm. Only the current live owner with fresh agreement
+            # may admit PCM after that await.
+            guild = self.bot.get_guild(state.guild_id)
+            member = guild.get_member(uid) if guild is not None else None
+            in_target = int(getattr(getattr(getattr(member, "voice", None), "channel", None), "id", 0) or 0) == state.voice_channel_id
+            if (
+                self._sessions.get(state.session_id) is not state
+                or epoch != state.safety_consent_epochs.get(uid, 0)
+                or not in_target
+                or not await read_voice_safety_agreement(state.guild_id, uid)
+            ):
+                return
         state.engine.allow_user(uid)
         state.bridge.opt_in(uid)
-        if getattr(state, "scope_kind", "server") == "voice_safety":
+        if safety:
             state.safety_consents.add(uid)
 
     async def _disable_user_for_state(
@@ -581,6 +598,7 @@ class CommunityVoiceCaptionManager:
         if before_id == target and after_id != target:
             # Active audio admission ends on departure; stored agreement persists until withdrawn.
             if getattr(state, "scope_kind", "server") == "voice_safety":
+                state.safety_consent_epochs[uid] = state.safety_consent_epochs.get(uid, 0) + 1
                 state.safety_consents.discard(uid)
             await self._disable_user_for_state(state, uid)
             return
@@ -1070,12 +1088,12 @@ class CommunityVoiceCaptionManager:
                     notice_message = await notice_channel.send(
                         f"🛡️ **Voice Safety review is active for <#{voice_channel_id}>.** "
                         "This is an optional AI-assisted staff-alert feature, not a guaranteed content block. "
-                        "Only members who press **Opt In** have their voice transcribed and reviewed. "
+                        "Members who accepted the disclosed Voice Safety agreement during verification or on this notice may be monitored automatically in the selected VC. "
                         "Consented audio is sent to Google Gemini, and transcript text is sent to Gemini "
                         "for conduct classification. Staff may see an incident notice. "
                         "This host uses Gemini Free Tier, where submitted data may be used to improve Google products. "
                         "Dank Shield does not retain raw audio; moderation incidents remain in the private staff channel. "
-                        "Press **Opt Out** to revoke consent at any time.",
+                        "Press **Opt Out** at any time to revoke ongoing monitoring. Existing members may press **Agree Once** here.",
                         view=VoiceSafetyConsentView(),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
@@ -1179,6 +1197,7 @@ class CommunityVoiceCaptionManager:
         state.bridge.set_speaking_callback(None)
         state.bridge.clear_consent()
         state.safety_consents.clear()
+        state.safety_consent_epochs.clear()
         if state.advisor is not None:
             state.advisor.close()
         try:
