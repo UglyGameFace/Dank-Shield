@@ -24,6 +24,7 @@ from .community_voice_captions import (
     gemini_text_translator_from_env,
     normalize_caption_output_mode,
 )
+from .voice_safety_policy import VoiceSafetyAdvisor
 from .community_voice_receive import (
     PerSpeakerFrameBridge,
     VoiceReceiveUnavailable,
@@ -47,6 +48,8 @@ class CaptionRuntimeState:
     bridge: PerSpeakerFrameBridge
     engine: CaptionEngine
     scope_kind: str = "community_hub"
+    advisor: Optional[VoiceSafetyAdvisor] = None
+    notice_channel_id: int = 0
     soak_test: bool = False
     receive_recoveries: int = 0
     receive_recovery_failures: int = 0
@@ -64,6 +67,21 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
 
 
 SERVER_CAPTION_SCOPE_PREFIX = "server:"
+VOICE_SAFETY_SCOPE_PREFIX = "voice_safety:"
+VOICE_SAFETY_CONSENT_KEY = "voice_safety_explicit_consent_v1"
+
+
+def voice_safety_scope_id(guild_id: int) -> str:
+    gid = int(guild_id)
+    if gid <= 0:
+        raise ValueError("guild_id must be positive")
+    return f"{VOICE_SAFETY_SCOPE_PREFIX}{gid}"
+
+
+def voice_safety_host_enabled() -> bool:
+    # Independent operator kill switch; cannot bypass the existing DAVE soak lock.
+    return os.getenv("DANK_VOICE_SAFETY_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
 
 
 def server_caption_scope_id(guild_id: int) -> str:
@@ -153,6 +171,8 @@ class CommunityVoiceCaptionManager:
             "voice_channel_id": state.voice_channel_id,
             "destination_channel_id": state.destination_channel_id,
             "opted_in_user_ids": opted_ids,
+            "voice_safety_alerts": int(state.advisor.alerts) if state.advisor else 0,
+            "voice_safety_requests": int(state.advisor.requests) if state.advisor else 0,
             "speaker_language_hints": speaker_language_hints,
             "speaker_audio_rms_dbfs": speaker_audio_rms_dbfs,
             "speaker_detected_languages": speaker_detected_languages,
@@ -265,6 +285,48 @@ class CommunityVoiceCaptionManager:
             "storage_available": True,
         }
 
+    async def voice_safety_consented(self, guild_id: int, user_id: int) -> bool:
+        # Fail closed on any read error: never admit from a stale memory cache.
+        from .profile_card_service import get_profile_guild_settings
+
+        try:
+            prefs = await get_profile_guild_settings(int(guild_id), int(user_id), refresh=True)
+            return bool(dict(prefs.get("settings") or {}).get(VOICE_SAFETY_CONSENT_KEY) is True)
+        except Exception:
+            log.warning("Voice safety consent lookup unavailable guild=%s", guild_id)
+            return False
+
+    async def set_voice_safety_consent(self, guild_id: int, user_id: int, enabled: bool) -> bool:
+        from .profile_card_service import upsert_profile_guild_namespace
+
+        gid, uid = int(guild_id), int(user_id)
+        try:
+            row = await upsert_profile_guild_namespace(gid, uid, VOICE_SAFETY_CONSENT_KEY, bool(enabled))
+            persisted = bool(dict(row.get("settings") or {}).get(VOICE_SAFETY_CONSENT_KEY) is bool(enabled))
+            if not persisted:
+                raise ValueError("consent save not confirmed")
+        except Exception as exc:
+            raise VoiceReceiveUnavailable("Could not persist your voice safety consent; nothing was changed.") from exc
+
+        sid = self._guild_owner.get(gid)
+        state = self._sessions.get(sid) if sid else None
+        if state is None or state.scope_kind != "voice_safety":
+            return bool(enabled)
+        member_guild = self.bot.get_guild(gid)
+        member = member_guild.get_member(uid) if member_guild is not None else None
+        in_channel = int(getattr(getattr(getattr(member, "voice", None), "channel", None), "id", 0) or 0) == state.voice_channel_id
+        if not enabled:
+            # Must revoke before any in-flight review can publish.
+            await self._disable_user_for_state(state, uid)
+        elif in_channel:
+            try:
+                await self._enable_user_for_state(state, uid, refresh_preferences=True)
+            except Exception as exc:
+                raise VoiceReceiveUnavailable(
+                    "Consent was saved, but voice processing is not available yet. Rejoin when the service is ready."
+                ) from exc
+        return bool(enabled)
+
     def user_language_hint(self, guild_id: int, user_id: int) -> str:
         key = self._preference_key(guild_id, user_id)
         return str(self._user_language_hints.get(key, "") or "")
@@ -367,6 +429,8 @@ class CommunityVoiceCaptionManager:
         uid = int(user_id)
         if state.bridge.is_opted_in(uid):
             return
+        if state.scope_kind == "voice_safety" and not await self.voice_safety_consented(state.guild_id, uid):
+            return
         if len(state.bridge.opted_in_user_ids()) >= self.max_speakers_per_session:
             raise VoiceReceiveUnavailable(
                 "This session has reached its configured Live Captions speaker limit."
@@ -408,6 +472,8 @@ class CommunityVoiceCaptionManager:
         if not state.bridge.is_opted_in(uid):
             return
         state.bridge.opt_out(uid)
+        if state.advisor is not None:
+            state.advisor.revoke(uid)
         await state.engine.revoke_user(uid)
 
     async def set_auto_caption_preference(
@@ -427,7 +493,7 @@ class CommunityVoiceCaptionManager:
 
         sid = self._guild_owner.get(gid)
         state = self._sessions.get(sid) if sid else None
-        if state is None:
+        if state is None or state.scope_kind == "voice_safety":
             return enabled
 
         guild = self.bot.get_guild(gid)
@@ -465,12 +531,12 @@ class CommunityVoiceCaptionManager:
                 continue
             if restored >= self.max_speakers_per_session:
                 break
-            prefs = await self.preferences_for_user(
-                state.guild_id,
-                int(member.id),
-                refresh=True,
-            )
-            if not bool(prefs.get("auto_opt_in")):
+            if state.scope_kind == "voice_safety":
+                consented = await self.voice_safety_consented(state.guild_id, int(member.id))
+            else:
+                prefs = await self.preferences_for_user(state.guild_id, int(member.id), refresh=True)
+                consented = bool(prefs.get("auto_opt_in"))
+            if not consented:
                 continue
             try:
                 await self._enable_user_for_state(
@@ -520,12 +586,12 @@ class CommunityVoiceCaptionManager:
         if after_id != target or before_id == target:
             return
 
-        prefs = await self.preferences_for_user(
-            gid,
-            uid,
-            refresh=True,
-        )
-        if not bool(prefs.get("auto_opt_in")):
+        if state.scope_kind == "voice_safety":
+            consented = await self.voice_safety_consented(gid, uid)
+        else:
+            prefs = await self.preferences_for_user(gid, uid, refresh=True)
+            consented = bool(prefs.get("auto_opt_in"))
+        if not consented:
             return
         try:
             await self._enable_user_for_state(
@@ -774,6 +840,23 @@ class CommunityVoiceCaptionManager:
             }
         )
 
+    async def start_voice_safety(
+        self,
+        *,
+        guild_id: int,
+        voice_channel_id: int,
+        staff_alert_channel_id: int,
+        notice_channel_id: int,
+    ) -> CaptionRuntimeState:
+        return await self.start({
+            "id": voice_safety_scope_id(guild_id),
+            "guild_id": int(guild_id),
+            "voice_channel_id": int(voice_channel_id),
+            "panel_channel_id": int(staff_alert_channel_id),
+            "notice_channel_id": int(notice_channel_id),
+            "caption_scope": "voice_safety",
+        })
+
     async def start(self, session: dict[str, Any]) -> CaptionRuntimeState:
         sid = str(session.get("id") or "").strip()
         guild_id = int(session.get("guild_id") or 0)
@@ -783,11 +866,9 @@ class CommunityVoiceCaptionManager:
             or session.get("panel_channel_id")
             or 0
         )
-        scope_kind = (
-            "server"
-            if str(session.get("caption_scope") or "").strip().lower() == "server"
-            else "community_hub"
-        )
+        requested_scope = str(session.get("caption_scope") or "").strip().lower()
+        scope_kind = requested_scope if requested_scope in {"server", "voice_safety"} else "community_hub"
+        safety_mode = scope_kind == "voice_safety"
         requested_soak = bool(session.get("soak_test"))
         soak_test = bool(
             not live_captions_enabled()
@@ -800,6 +881,8 @@ class CommunityVoiceCaptionManager:
             if scope_kind == "server"
             else "Community Hub Live Captions"
         )
+        if safety_mode and (not voice_safety_host_enabled() or not live_captions_enabled()):
+            raise VoiceReceiveUnavailable("Voice Safety is disabled until this host passes the existing DAVE receive soak and is explicitly enabled.")
         if not live_captions_start_allowed(scope_kind=scope_kind, soak_test=requested_soak):
             raise VoiceReceiveUnavailable(
                 "Live Captions are disabled on this host until the DAVE receive soak test is completed."
@@ -811,9 +894,10 @@ class CommunityVoiceCaptionManager:
                 "This Live Captions session does not have a voice room to caption."
             )
         if destination_channel_id <= 0:
-            raise VoiceReceiveUnavailable(
-                "This Live Captions session has nowhere to publish captions."
-            )
+            raise VoiceReceiveUnavailable("A staff alert / Live Captions destination is required.")
+        notice_channel_id = int(session.get("notice_channel_id") or 0) if safety_mode else 0
+        if safety_mode and notice_channel_id <= 0:
+            raise VoiceReceiveUnavailable("Voice Safety requires a public notice channel.")
         if not os.getenv("GEMINI_API_KEY", "").strip():
             raise VoiceReceiveUnavailable(
                 "Live Captions need GEMINI_API_KEY configured on the Dank Shield host."
@@ -824,7 +908,13 @@ class CommunityVoiceCaptionManager:
         from .guild_config import get_guild_config
 
         caption_cfg = await get_guild_config(guild_id, refresh=True)
-        output_mode = normalize_caption_output_mode(
+        if safety_mode:
+            if not bool(caption_cfg.get("voice_safety_enabled", False)):
+                raise VoiceReceiveUnavailable("Voice Safety has not been enabled by this server.")
+            for key, actual in (("voice_safety_voice_channel_id", voice_channel_id), ("voice_safety_staff_channel_id", destination_channel_id), ("voice_safety_notice_channel_id", notice_channel_id)):
+                if int(caption_cfg.get(key) or 0) != int(actual):
+                    raise VoiceReceiveUnavailable("Voice Safety channel configuration changed; refresh setup.")
+        output_mode = "original" if safety_mode else normalize_caption_output_mode(
             caption_cfg.get("live_captions_output_mode", "original")
         )
         language_codes = caption_cfg.get("live_captions_language_codes") or []
@@ -868,6 +958,18 @@ class CommunityVoiceCaptionManager:
                     "The Live Captions text destination no longer exists."
                 )
 
+            notice_channel = guild.get_channel(notice_channel_id) if safety_mode else None
+            if safety_mode:
+                if not isinstance(destination, discord.TextChannel) or not isinstance(notice_channel, discord.TextChannel):
+                    raise VoiceReceiveUnavailable("Voice Safety channels must be existing text channels.")
+                if destination.permissions_for(guild.default_role).view_channel:
+                    raise VoiceReceiveUnavailable("The staff alert channel is visible to everyone. Choose a private staff channel.")
+                me = guild.me
+                for channel in (destination, notice_channel):
+                    perms = channel.permissions_for(me) if me is not None else None
+                    if perms is None or not (perms.view_channel and perms.send_messages):
+                        raise VoiceReceiveUnavailable("Dank Shield needs View Channel and Send Messages in both Voice Safety channels.")
+
             transcriber = gemini_live_transcriber_from_env(
                 language_codes=language_codes,
             )
@@ -876,8 +978,31 @@ class CommunityVoiceCaptionManager:
                 if output_mode in {"english", "bilingual"}
                 else None
             )
+            advisor = VoiceSafetyAdvisor() if safety_mode else None
 
             async def _publish(user_id: int, text: str, confidence: Optional[float]) -> None:
+                if advisor is not None:
+                    uid = int(user_id)
+                    verdict = await advisor.inspect(
+                        uid, text, confidence,
+                        is_admitted=lambda value: bridge.is_opted_in(value)
+                        and bool(self._sessions.get(sid) is state),
+                    )
+                    if verdict is None:
+                        return
+                    # A consent withdrawal or a stopped session must never publish a stale result.
+                    if not bridge.is_opted_in(uid) or self._sessions.get(sid) is not state:
+                        return
+                    safe_reason = discord.utils.escape_markdown(verdict.reason)[:220]
+                    await destination.send(
+                        f"🛡️ **Voice Safety · staff review only**\n"
+                        f"Member: <@{uid}> (`{uid}`) · VC: <#{voice_channel_id}>\n"
+                        f"Category: `{verdict.category}` · Urgency: `{verdict.severity}`\n"
+                        f"AI triage (unverified): {safe_reason}\n"
+                        "No automatic disciplinary action was taken. Check context and speak with members.",
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    return
                 member = guild.get_member(int(user_id))
                 display = (
                     getattr(member, "display_name", None)
@@ -910,22 +1035,38 @@ class CommunityVoiceCaptionManager:
             voice_client = await connect_receive_client(voice_channel, bridge)
 
             try:
-                source_line = (
-                    f"Voice channel: {voice_channel.mention}\n"
-                    if scope_kind == "server"
-                    else ""
-                )
-                await destination.send(
-                    f"📝 **{scope_label} started.**\n"
-                    f"{source_line}"
-                    "Dank Shield keeps each opted-in Discord speaker isolated before transcription. "
-                    "Only members who explicitly choose **Caption My Voice** are transcribed. "
-                    "Opted-in audio is sent to **Google Gemini's transcription API** for speech-to-text. "
-                    "Gemini automatically detects its supported languages and can handle code-switching; this server may optionally display English translation of finalized text. "
-                    "This deployment uses Gemini's **Free Tier**; Google states Free Tier submitted content may be used to improve its products. "
-                    "Dank Shield keeps audio only in bounded memory while processing it and does not save the audio.",
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
+                if safety_mode:
+                    from .commands_ext.public_voice_safety import VoiceSafetyConsentView
+
+                    await notice_channel.send(
+                        f"🛡️ **Voice Safety review is active for <#{voice_channel_id}>.** "
+                        "This is an optional AI-assisted staff-alert feature, not a guaranteed content block. "
+                        "Only members who press **Opt In** have their voice transcribed and reviewed. "
+                        "Consented audio is sent to Google Gemini, and transcript text is sent to Gemini "
+                        "for conduct classification. Staff may see an incident notice. "
+                        "This host uses Gemini Free Tier, where submitted data may be used to improve Google products. "
+                        "Dank Shield does not retain raw audio; moderation incidents remain in the private staff channel. "
+                        "Press **Opt Out** to revoke consent at any time.",
+                        view=VoiceSafetyConsentView(),
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                else:
+                        source_line = (
+                        f"Voice channel: {voice_channel.mention}\n"
+                        if scope_kind == "server"
+                        else ""
+                    )
+                    await destination.send(
+                        f"📝 **{scope_label} started.**\n"
+                        f"{source_line}"
+                        "Dank Shield keeps each opted-in Discord speaker isolated before transcription. "
+                        "Only members who explicitly choose **Caption My Voice** are transcribed. "
+                        "Opted-in audio is sent to **Google Gemini's transcription API** for speech-to-text. "
+                        "Gemini automatically detects its supported languages and can handle code-switching; this server may optionally display English translation of finalized text. "
+                        "This deployment uses Gemini's **Free Tier**; Google states Free Tier submitted content may be used to improve its products. "
+                        "Dank Shield keeps audio only in bounded memory while processing it and does not save the audio.",
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
             except (discord.Forbidden, discord.NotFound, discord.HTTPException) as exc:
                 disconnect_receive_client(voice_client)
                 try:
@@ -947,6 +1088,8 @@ class CommunityVoiceCaptionManager:
                 engine=engine,
                 scope_kind=scope_kind,
                 soak_test=soak_test,
+                advisor=advisor,
+                notice_channel_id=notice_channel_id,
             )
             self._sessions[sid] = state
             self._guild_owner[guild_id] = sid
@@ -1005,6 +1148,8 @@ class CommunityVoiceCaptionManager:
         self._receive_recovery_locks.pop(sid, None)
         state.bridge.set_speaking_callback(None)
         state.bridge.clear_consent()
+        if state.advisor is not None:
+            state.advisor.close()
         try:
             await state.engine.close()
         finally:
@@ -1033,7 +1178,7 @@ class CommunityVoiceCaptionManager:
                     else ""
                 )
                 await destination.send(
-                    f"📝 **{scope_label} stopped.**{source} Active audio admission and buffered caption audio were cleared. Members who enabled remembered auto-caption stay opted in for future sessions until they turn it off.",
+                    ("🛡️ **Voice Safety stopped.** All active voice admissions cleared; no more speech is reviewed." if state.scope_kind == "voice_safety" else f"📝 **{scope_label} stopped.**{source} Active audio admission and buffered caption audio were cleared. Members who enabled remembered auto-caption stay opted in for future sessions until they turn it off."),
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             except (discord.Forbidden, discord.NotFound, discord.HTTPException):
@@ -1068,6 +1213,8 @@ __all__ = [
     "CaptionRuntimeState",
     "CommunityVoiceCaptionManager",
     "SERVER_CAPTION_SCOPE_PREFIX",
+    "voice_safety_scope_id",
+    "voice_safety_host_enabled",
     "ensure_community_voice_caption_manager",
     "live_captions_enabled",
     "live_captions_start_allowed",
