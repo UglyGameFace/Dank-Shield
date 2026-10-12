@@ -57,8 +57,14 @@ def _connect() -> sqlite3.Connection:
     path = _db_path()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if not path.exists():
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.close(fd)
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            pass  # Another queue worker created it after the existence check.
+        else:
+            os.close(fd)
+    if path.is_symlink():
+        raise OSError("Share Router queue cannot use a symlink")
     conn = sqlite3.connect(str(path), timeout=5, isolation_level=None)
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA journal_mode=WAL")
@@ -274,6 +280,18 @@ async def _process_job(bot: Any, job: DownloadJob) -> None:
         or getattr(message.author, "bot", False)
     ):
         return
+    # REST message fetches can return a User even for an existing guild member.
+    # The canonical sender-permission gate requires an actual discord.Member.
+    if not isinstance(message.author, discord.Member):
+        member = guild.get_member(job.member_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(job.member_id)
+            except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+                return
+        if not isinstance(member, discord.Member) or member.bot:
+            return
+        message.author = member
     # Preserve the existing size, SSRF, cooldown, per-guild permissions, DM
     # delivery and successful-source-cleanup ownership.
     await handle_download_message(message)
