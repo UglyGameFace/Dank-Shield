@@ -56,7 +56,9 @@ def test_voice_safety_context_isolated_by_speaker_with_bounded_cooldown() -> Non
         assert await advisor.inspect(11, "Stop saying that to them again", 0.95, is_admitted=check) is None
         other = await advisor.inspect(22, "Separate speaker's aggressive remarks", 0.95, is_admitted=check)
         assert other is not None
-        assert "Separate speaker" not in seen[1]
+        assert "Separate speaker" in seen[1]
+        assert "Stop saying that" not in seen[1]
+        assert "Separate speaker" not in seen[0]
         clock[0] += 100
         assert await advisor.inspect(11, "Stop targeting the same member now", 0.95, is_admitted=check)
         assert advisor.alerts == 3
