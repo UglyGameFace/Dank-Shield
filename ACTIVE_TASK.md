@@ -1,3 +1,19 @@
+# Active Task Lock — Voice Conduct Moderation #517 (FORCE SWITCH 2026-10-12)
+
+**Active task:** Build a safe, opt-in AI voice moderation feature for Dank Shield Protection Center (#517), using the single existing DAVE-capable receive/captions pipeline. User FORCE SWITCH: `FORCE SWITCH: Build Dank Shield AI Voice Moderation #517`, reason voice chat safety takes priority. Original reason text ended at "over"; interpreted as priority over the previous Share Router active task.
+
+**Branch/base:** `feat/517-voice-conduct-moderation-20261012` from Discloud integration branch `aaa-cinema-pre-pregateway-bind@ff81b7cbd1aceb60e9bcc405c23009b841118e5a` (post PR #519). **Do not merge or deploy until exact-head tests and opt-in Discord/Discloud canaries succeed.**
+
+**Initial finding:** One existing receiver `community_voice_receive.py` and `CommunityVoiceCaptionManager` own DAVE receive, SSRC mapping, Gemini transcription, explicit per-speaker remembered caption consent. Existing captions are gated by `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` until DAVE soak passes. Do not add a parallel receiver, silently reuse caption consent as voice-moderation consent, or bypass gate. Voice moderation must fail closed and be testable.
+
+**Suspended task (preserve full older record below):** Share Router issue #390, branch `feat/share-router-390-fair-durable-download-queue-20261012`, merged PRs #513, #514, #515. #515 head `c1afb61a5621f7acb47fbe8230589bd75578c5cf`, merge `32b70218361344efdb3d08a2edae6e3a956b346f`; five exact-head workflows reported success. Canonical resolver/queue and local signed-video hosting must not change under #517. **Incomplete:** Discloud running SHA, persistence of local files, private DM/large video/watch-link/public HTTPS Range/expiry, Android/desktop inline previews, Facebook/provider live canaries, burst tests, 10k guild distributed architecture. PR #515 closed merged but production acceptance is not established. Resume from original notes, inspect branch/runtime and verify real canaries; no additional #390 implementation now.
+
+**Scope for #517:** one consented voice-moderation configuration and staff review surface, context-aware advisory alerts, reliable speaker attribution, safeguards against repeated/low-confidence alerts, tests/docs; avoid automatic punitive action before field validation. Respect caps, privacy and existing voice owner.
+
+**Status:** IN PROGRESS; not deployed. Root cause/design traced in existing receive stack; implementation and validation pending. **Backlog:** remaining VoicePatrol comparison and advanced sanctions; no unrelated code changes.
+
+---
+
 # Dank Shield Active Task
 
 ## CURRENT SCALING SLICE — SHARE-ROUTER-390-DURABLE-FAIR-DOWNLOAD-QUEUE-20261012
