@@ -10,7 +10,9 @@
 
 **Scope for #517:** one consented voice-moderation configuration and staff review surface, context-aware advisory alerts, reliable speaker attribution, safeguards against repeated/low-confidence alerts, tests/docs; avoid automatic punitive action before field validation. Respect caps, privacy and existing voice owner.
 
-**Status:** IN PROGRESS; not deployed. Root cause/design traced in existing receive stack; implementation and validation pending. **Backlog:** remaining VoicePatrol comparison and advanced sanctions; no unrelated code changes.
+**Status / work in progress:** Draft PR #520 on this branch. Existing single DAVE receive owner now supports a separate, configured `voice_safety` session with Google Gemini advisory classification, explicit **in-memory per-session** consent (never reuse captions consent), public notice and private staff alert channel, revocation on VC leave/Stop, stale-notice rejection, reconnect/stop-race safeguards, and 30 classifier calls/minute + 6-second per-speaker request pacing. Both operator gates remain OFF by default; no automatic sanctions, no DB/recording. Test `tests/test_voice_safety_policy.py` is in fast Community Hub CI. Four tests suites green on earlier SHA `ca763c9b...`; latest exact-head full CI pending as of update. Real Discord/DAVE/Discloud multiuser test, Google quota/legal review, live false-positive evaluation, 10k-scale load/VoicePatrol comparison remain **unverified**. Only a volunteer opt-in single-VC pilot, not unrestricted server-wide prevention or a completed production release.
+
+**Validation / cleanup:** Run targeted and existing receive/captions regression matrix, GitHub exact-head CI, diff/whitespace checks, persistent notice checks, member opt-out during in-flight review and DAVE recovery checks. No unrelated changes. **Next step:** Review last exact-head CI, correct in-scope failures, keep PR draft until consented Discloud canary. **Backlog:** advanced sanctions, scale-out worker/service isolation, benchmarking; no parallel work.
 
 ---
 
