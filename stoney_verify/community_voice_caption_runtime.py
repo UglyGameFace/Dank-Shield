@@ -82,18 +82,33 @@ def voice_safety_scope_id(guild_id: int) -> str:
     return f"{VOICE_SAFETY_SCOPE_PREFIX}{gid}"
 
 
-def voice_safety_host_enabled() -> bool:
-    # Only approved paid Gemini/no-training processing for adult-only deployment.
-    # A guild rules page or Verified role cannot waive API data restrictions.
+def voice_safety_host_checks() -> dict[str, bool]:
+    """Operator-readable booleans. Never include secret values or imply attestation was verified."""
     affirmative = {"1", "true", "yes", "on"}
-    return all(
-        os.getenv(key, "").strip().lower() in affirmative
-        for key in (
-            "DANK_VOICE_SAFETY_ENABLED",
-            "DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED",
-            "DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED",
-        )
+    flags = (
+        "DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED",
+        "DANK_VOICE_SAFETY_ENABLED",
+        "DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED",
+        "DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED",
     )
+    checks = {
+        name: os.getenv(name, "").strip().lower() in affirmative
+        for name in flags
+    }
+    # A configured key is not proof of valid credentials, billing or model access.
+    checks["GEMINI_API_KEY"] = bool(os.getenv("GEMINI_API_KEY", "").strip())
+    return checks
+
+
+def voice_safety_host_enabled() -> bool:
+    # The Gemini billing/adult-only values are explicit operator attestations,
+    # not checks against Google's billing or user age systems.
+    checks = voice_safety_host_checks()
+    return all(checks.get(key, False) for key in (
+        "DANK_VOICE_SAFETY_ENABLED",
+        "DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED",
+        "DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED",
+    ))
 
 
 
