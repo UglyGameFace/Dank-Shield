@@ -28,6 +28,7 @@ _REGISTERED: set[tuple[int, int]] = set()
 # "ignore anything within five seconds" gate loses the *last* update, leaving
 # the card inaccurate until someone manually presses Refresh.
 _VOICE_PENDING: dict[int, set[int]] = {}
+_VOICE_DEPARTED: dict[int, dict[int, set[int]]] = {}
 _VOICE_WORKERS: dict[int, asyncio.Task[None]] = {}
 _VOICE_DEBOUNCE_SECONDS = 2.0
 _STARTED_BOTS: set[int] = set()
@@ -151,6 +152,8 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
     cheer_ids = {int(uid) for uid in session.get("cheers_ids", []) if int(uid) > 0}
     going_ids = {int(uid) for uid in session.get("going_ids", []) if int(uid) > 0}
     active = bool(session.get("active", False))
+    historical_cheers = cheer_ids | {int(uid) for uid in session.get("past_cheers_ids", [])}
+    historical_going = going_ids | {int(uid) for uid in session.get("past_going_ids", [])}
     expiry = float(session.get("expires_at", 0) or 0)
     if not active or expiry <= time.time():
         ended_at = int(session.get("closed_at") or expiry or time.time())
@@ -171,7 +174,7 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
         )
         embed.add_field(
             name="📊 Final responses",
-            value=f"💨 Cheers **{len(cheer_ids)}**  ·  🙋 Joining **{len(going_ids)}**",
+            value=f"💨 Cheers **{len(historical_cheers)}**  ·  🙋 Joining **{len(historical_going)}**",
             inline=False,
         )
         embed.color = discord.Color.dark_grey()
@@ -210,7 +213,27 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
     return embed
 
 
-async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discord.Interaction | None = None) -> bool:
+async def reconcile_live_attendance(
+    guild: discord.Guild, session: Mapping[str, Any], *,
+    departed_ids: set[int] | None = None,
+) -> dict[str, Any]:
+    """Use the actual selected VC, not the cached response list, for attendance.
+
+    An unavailable/removed VC is not evidence everybody departed. In that
+    case keep RSVPs, but the card shows no verified VC attendance.
+    """
+    channel = guild.get_channel(int(session.get("voice_channel_id", 0) or 0))
+    if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
+        return dict(session)
+    present = {int(member.id) for member in (getattr(channel, "members", []) or [])}
+    current = await toke_sessions.reconcile_voice(
+        int(session["guild_id"]), int(session["message_id"]),
+        present, departed_ids=departed_ids,
+    )
+    return current if current is not None else dict(session)
+
+
+async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discord.Interaction | None = None, *, departed_ids: set[int] | None = None) -> bool:
     """Reconcile from current store state, then acknowledge terminal delivery.
 
     Never edit Discord using a stale active=True snapshot (the old expiry bug).
@@ -224,6 +247,8 @@ async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discor
     current = await toke_sessions.get(int(session["guild_id"]), int(session["message_id"]))
     if current is None:
         return False
+    if current.get("active", False):
+        current = await reconcile_live_attendance(guild, current, departed_ids=departed_ids)
     if interaction is not None and interaction.message is not None:
         message = interaction.message
     else:
@@ -233,6 +258,16 @@ async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discor
             if not current.get("active", False):
                 await toke_sessions.mark_closed_synced(int(session["guild_id"]), int(session["message_id"]))
             return False
+    if current.get("media_layout") == "thumbnail_v2":
+        view = TokeThumbnailLayout(
+            guild, current, intro=_thumbnail_intro(message, current),
+        )
+        await message.edit(view=view, allowed_mentions=discord.AllowedMentions.none())
+        if not current.get("active", False):
+            await toke_sessions.mark_closed_synced(
+                int(current["guild_id"]), int(current["message_id"])
+            )
+        return True
     existing = message.embeds or []
     if not existing:
         return False
@@ -251,6 +286,94 @@ async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discor
     if not active:
         await toke_sessions.mark_closed_synced(int(current["guild_id"]), int(current["message_id"]))
     return True
+
+
+def _thumbnail_intro(message: discord.Message, session: Mapping[str, Any]) -> str:
+    """Retain the original member note without putting message text into storage."""
+    def text_displays(node: Any):
+        if getattr(node, "content", None):
+            yield str(node.content)
+        for nested in getattr(node, "children", ()) or ():
+            yield from text_displays(nested)
+
+    for component in getattr(message, "components", ()) or ():
+        for content in text_displays(component):
+            if content.startswith("## 💨 Toke Time"):
+                return content
+    # Only a defensive fallback for a malformed/older Discord component payload.
+    return (
+        "## 💨 Toke Time\n"
+        f"<@&{int(session['notify_role_id'])}>\n"
+        f"<@{int(session['starter_id'])}> is calling the sesh crowd."
+    )
+
+
+class TokeThumbnailLayout(discord.ui.LayoutView):
+    """Compact V2 session with media as a Section thumbnail, not a giant file.
+
+    Using an attachment:// inside an editable *embed* is known to duplicate
+    media on Discord PATCH. V2's native Thumbnail retains the media within
+    the card while the text and controls are edited in the same layout.
+    Older embed cards keep the existing TokeCheersView update path.
+    """
+
+    def __init__(
+        self, guild: discord.Guild, session: Mapping[str, Any], *,
+        intro: str | None = None, allow_pending_controls: bool = False,
+    ) -> None:
+        super().__init__(timeout=None)
+        filename = str(session.get("media_filename", "") or "")
+        if not filename or "/" in filename or "\\\\" in filename:
+            raise ValueError("Toke thumbnail attachment filename is invalid.")
+        intro = intro or (
+            "## 💨 Toke Time\n"
+            f"<@&{int(session['notify_role_id'])}>\n"
+            f"<@{int(session['starter_id'])}> is calling the sesh crowd."
+        )
+        card = render_card(guild, session, discord.Embed(title="💨 Toke Time"))
+        active = bool(session.get("active", False)) and float(session.get("expires_at", 0) or 0) > time.time()
+        if not active:
+            if "## 💨 Toke Time · Sesh Ended" not in intro:
+                intro = intro.replace("## 💨 Toke Time", "## 💨 Toke Time · Sesh Ended", 1)
+            intro = intro.replace("is calling the sesh crowd.", "hosted this sesh.")
+        container = discord.ui.Container(
+            discord.ui.Section(
+                discord.ui.TextDisplay(intro[:1200]),
+                accessory=discord.ui.Thumbnail(f"attachment://{filename}"),
+            ),
+            discord.ui.TextDisplay(
+                "\n\n".join(f"**{field.name}**\n{field.value}" for field in card.fields)[:2400]
+            ),
+            discord.ui.TextDisplay("Only members with the configured /toke notification role were notified."),
+            accent_color=discord.Color.green() if active else discord.Color.dark_grey(),
+        )
+        if active or allow_pending_controls:
+            actions = TokeCheersView(
+                int(session["starter_id"]), int(session["starter_role_id"]),
+                voice_channel_id=int(session.get("voice_channel_id", 0) or 0),
+                active=True, guild_id=int(session["guild_id"]),
+                message_id=int(session["message_id"]),
+            )
+            controls: list[discord.ui.Button] = []
+            for old in actions.children:
+                if not isinstance(old, discord.ui.Button):
+                    continue
+                if old.style is discord.ButtonStyle.link:
+                    controls.append(discord.ui.Button(
+                        label=old.label, emoji=old.emoji, style=old.style, url=old.url
+                    ))
+                    continue
+                button = discord.ui.Button(
+                    label=old.label, emoji=old.emoji, style=old.style,
+                    custom_id=old.custom_id,
+                )
+                async def callback(interaction: discord.Interaction, source: discord.ui.Button = old) -> None:
+                    await source.callback(interaction)
+                button.callback = callback
+                controls.append(button)
+            container.add_item(discord.ui.ActionRow(*controls[:4]))
+            container.add_item(discord.ui.ActionRow(*controls[4:]))
+        self.add_item(container)
 
 
 class TokeRosterView(discord.ui.View):
@@ -282,17 +405,26 @@ class TokeRosterView(discord.ui.View):
             text=f"Page {self.page+1}/{self.pages} • 👑 Host · 💨 Cheers · 🙋 Joining · 🔊 In VC"
         )
 
+    async def _turn_page(self, interaction: discord.Interaction, direction: int) -> None:
+        await interaction.response.defer()
+        latest = await toke_sessions.get(
+            int(self.session["guild_id"]), int(self.session["message_id"])
+        )
+        if not latest or not latest.get("active", False):
+            return await interaction.edit_original_response(
+                content="This sesh has ended.", embed=None, view=None
+            )
+        latest = await reconcile_live_attendance(self.guild, latest)
+        view = TokeRosterView(self.guild, latest, self.page + direction)
+        await interaction.edit_original_response(embed=view.embed(), view=view)
+
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, custom_id="dank:toke:roster:prev")
     async def prev(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        view = TokeRosterView(self.guild, self.session, self.page - 1)
-        await interaction.response.edit_message(embed=view.embed(), view=view)
+        await self._turn_page(interaction, -1)
 
     @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, custom_id="dank:toke:roster:next")
     async def next(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        view = TokeRosterView(self.guild, self.session, self.page + 1)
-        await interaction.response.edit_message(embed=view.embed(), view=view)
+        await self._turn_page(interaction, 1)
 
 
 class TokeCheersView(discord.ui.View):
@@ -416,6 +548,7 @@ class TokeCheersView(discord.ui.View):
                 return await interaction.edit_original_response(
                     content="This server keeps participant names private."
                 )
+            session = await reconcile_live_attendance(guild, session)
             view = TokeRosterView(guild, session)
             await interaction.edit_original_response(embed=view.embed(), view=view)
         except (discord.HTTPException, OSError, ValueError) as exc:
@@ -446,6 +579,8 @@ class TokeCheersView(discord.ui.View):
             # embed; this ephemeral interaction gives an authoritative
             # snapshot even when the old card hasn't repainted yet.
             latest = await toke_sessions.get(interaction.guild.id, interaction.message.id)
+            if latest and latest.get("active", False):
+                latest = await reconcile_live_attendance(interaction.guild, latest)
             if not latest or not latest.get("active", False):
                 return await interaction.edit_original_response(
                     content="✅ This sesh has ended. The public card is closing."
@@ -807,13 +942,18 @@ async def _flush_toke_voice_updates(guild: discord.Guild, bot: Any) -> None:
         while _VOICE_PENDING.get(gid):
             await asyncio.sleep(_VOICE_DEBOUNCE_SECONDS)
             affected = _VOICE_PENDING.pop(gid, set())
+            departed = _VOICE_DEPARTED.pop(gid, {})
             if not affected:
                 continue
             for session in await toke_sessions.all_active(gid):
                 if int(session.get("voice_channel_id", 0) or 0) not in affected:
                     continue
                 try:
-                    await refresh_card(bot, session)
+                    departing_members = departed.get(int(session.get("voice_channel_id", 0) or 0), set())
+                    if departing_members:
+                        await refresh_card(bot, session, departed_ids=departing_members)
+                    else:
+                        await refresh_card(bot, session)
                 except (discord.HTTPException, ValueError, OSError) as exc:
                     print(
                         f"[toke] voice refresh error guild={gid} "
@@ -833,6 +973,10 @@ async def _on_toke_voice_state(
         return
     gid = int(member.guild.id)
     _VOICE_PENDING.setdefault(gid, set()).update(affected)
+    previous = getattr(before, "channel", None)
+    current = getattr(after, "channel", None)
+    if previous is not None and (current is None or int(current.id) != int(previous.id)):
+        _VOICE_DEPARTED.setdefault(gid, {}).setdefault(int(previous.id), set()).add(int(member.id))
     worker = _VOICE_WORKERS.get(gid)
     if worker is None or worker.done():
         _VOICE_WORKERS[gid] = asyncio.create_task(_flush_toke_voice_updates(member.guild, bot))
@@ -866,14 +1010,17 @@ async def restore_active_views(bot: Any) -> int:
         gid, mid = int(session["guild_id"]), int(session["message_id"])
         if (gid, mid) in _REGISTERED or bot.get_guild(gid) is None:
             continue
-        bot.add_view(
-            TokeCheersView(
+        view = (
+            TokeThumbnailLayout(
+                bot.get_guild(gid), session, allow_pending_controls=True,
+            ) if session.get("media_layout") == "thumbnail_v2"
+            else TokeCheersView(
                 int(session["starter_id"]), int(session["starter_role_id"]),
                 voice_channel_id=int(session.get("voice_channel_id", 0)),
                 guild_id=gid, message_id=mid, active=True,
-            ),
-            message_id=mid,
+            )
         )
+        bot.add_view(view, message_id=mid)
         _REGISTERED.add((gid, mid))
         count += 1
     return count
