@@ -21,6 +21,11 @@ from stoney_verify.guild_config import (
     upsert_guild_config,
 )
 from stoney_verify.globals import get_supabase
+from stoney_verify.voice_safety_consent import (
+    VOICE_SAFETY_DISCLOSURE_MARKER,
+    verification_message_discloses_voice_safety,
+    save_voice_safety_agreement,
+)
 from stoney_verify.setup_engine.loader import snapshot_from_config
 from stoney_verify.startup_guards.discord_api_safety import fetch_message_with_api_safety
 from stoney_verify.setup_engine.verification_modes import (
@@ -275,6 +280,19 @@ def build_basic_verify_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
         ),
         inline=False,
     )
+    if bool(_cfg_value(cfg, "voice_safety_enabled", False)):
+        embed.add_field(
+            name=VOICE_SAFETY_DISCLOSURE_MARKER,
+            value=(
+                "By pressing **Agree & Verify**, you acknowledge that **selected voice channels may be "
+                "monitored by Dank Shield for safety**. Your audio is processed by Google Gemini "
+                "for transcription and AI conduct review; staff receive private incident alerts. "
+                "Dank Shield does not save raw audio. Google's Free Tier may use submitted content "
+                "to improve its products. You can withdraw via **Opt Out** in the Voice Safety notice. "
+                "Without agreement your voice is not monitored; contact staff for other access options."
+            ),
+            inline=False,
+        )
     embed.add_field(
         name="Need help?",
         value=f"If the button does not work, go to {support_text} and open a ticket.",
@@ -355,8 +373,9 @@ async def _reply(interaction: discord.Interaction, message: str, *, ok: bool) ->
 
 
 class BasicVerifyButton(discord.ui.Button):
-    def __init__(self) -> None:
-        super().__init__(label="Verify", emoji="✅", style=discord.ButtonStyle.success, custom_id=BASIC_VERIFY_CUSTOM_ID)
+    def __init__(self, *, voice_safety_agreement: bool = False) -> None:
+        label = "Agree & Verify" if voice_safety_agreement else "Verify"
+        super().__init__(label=label, emoji="✅", style=discord.ButtonStyle.success, custom_id=BASIC_VERIFY_CUSTOM_ID)
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         # The raw on_interaction listener is the canonical live owner because it
@@ -369,9 +388,9 @@ class BasicVerifyButton(discord.ui.Button):
 
 
 class BasicVerifyView(discord.ui.View):
-    def __init__(self) -> None:
+    def __init__(self, *, voice_safety_agreement: bool = False) -> None:
         super().__init__(timeout=None)
-        self.add_item(BasicVerifyButton())
+        self.add_item(BasicVerifyButton(voice_safety_agreement=voice_safety_agreement))
 
 
 async def _basic_verify_fallback_listener(
@@ -764,7 +783,7 @@ async def post_basic_verify_panel(
     if not basic_verify_allowed_for_guild(channel.guild, cfg):
         return "disabled"
     embed = build_basic_verify_embed(channel.guild, cfg)
-    view = BasicVerifyView()
+    view = BasicVerifyView(voice_safety_agreement=bool(_cfg_value(cfg, "voice_safety_enabled", False)))
 
     history_scan_completed = False
     current_panels: list[Any] = []
@@ -1372,6 +1391,24 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
             await _reply(interaction, "This only works inside the server.", ok=False)
             return True
         ok, message = await apply_basic_verification(interaction.user)
+        if ok:
+            # Verified role alone is never permission to process voice. Accept
+            # only after the member clicks a panel that visibly disclosed this
+            # exact version of the Voice Safety agreement.
+            try:
+                config = await get_guild_config(int(interaction.guild.id), refresh=True)
+                if (
+                    bool(_cfg_value(config, "voice_safety_enabled", False))
+                    and verification_message_discloses_voice_safety(getattr(interaction, "message", None))
+                ):
+                    await save_voice_safety_agreement(
+                        int(interaction.guild.id), int(interaction.user.id), True
+                    )
+                    message += " Your one-time Voice Safety agreement was saved; covered VCs can be reviewed automatically when enabled."
+                elif bool(_cfg_value(config, "voice_safety_enabled", False)):
+                    message += " Voice Safety agreement not recorded from this older verification panel. Use the public Voice Safety notice once to acknowledge it."
+            except Exception:
+                message += " Voice Safety agreement could not be confirmed; your audio is not automatically admitted. Ask staff to check Voice Safety setup."
         await _reply(interaction, message, ok=ok)
         return True
     except Exception as exc:
