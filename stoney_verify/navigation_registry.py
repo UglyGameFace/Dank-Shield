@@ -41,7 +41,7 @@ CATEGORIES: tuple[NavigationCategory, ...] = (
         "access",
         "Onboarding & Access",
         "🚪",
-        "Verification, Member Setup, welcome flows, and access requirements.",
+        "Verification, consent, reminders, Member Setup, welcome, and access.",
     ),
     NavigationCategory(
         "safety",
@@ -59,7 +59,7 @@ CATEGORIES: tuple[NavigationCategory, ...] = (
         "community",
         "Community & Engagement",
         "🌿",
-        "Community & Pings, Share Router, Movie Night, /toke sessions, Hub, and tools.",
+        "Community & Pings, Share Router downloads, Movie Night, /toke, and Hub.",
     ),
     NavigationCategory(
         "tickets",
@@ -77,13 +77,13 @@ CATEGORIES: tuple[NavigationCategory, ...] = (
         "voice",
         "Voice & Accessibility",
         "🔊",
-        "AI Voice Safety monitoring, staff alerts, consent, and Live Captions.",
+        "AI Voice Safety, Live Captions, consent, and voice accessibility.",
     ),
     NavigationCategory(
         "ops",
         "Logs, Stats & Diagnostics",
         "📊",
-        "Logs, activity, live counters, health, status, and diagnostics.",
+        "Logs, activity, ticket-aware live counters, status, and diagnostics.",
     ),
     NavigationCategory(
         "my",
@@ -115,8 +115,17 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Verification",
         "✅",
         "access",
-        "Manage verification status, panels, repair, and role mappings.",
+        "Manage verification, one-time agreements, access roles, panels, and repair.",
         ("verify", "unverified", "verified", "verification setup", "role mapping", "verify panel"),
+        True,
+    ),
+    NavigationFeature(
+        "verification_reminders",
+        "Verification Reminders",
+        "📩",
+        "access",
+        "Manage opt-in reminders for unverified members and delivery health.",
+        ("verify reminders", "unverified reminders", "verification notices", "verification database", "pending members"),
         True,
     ),
     NavigationFeature(
@@ -150,7 +159,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Protection",
         "🛡️",
         "safety",
-        "Configure Spam Guard, Invite Shield, AntiNuke, automod, and Voice Safety policies.",
+        "Manage Spam Guard, Invite Shield, AntiNuke, filters, and AI Voice Safety.",
         ("spam guard", "spamguard", "invite shield", "antinuke", "anti nuke", "automod", "link shield", "filters", "voice safety protection"),
         True,
     ),
@@ -186,7 +195,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Community & Pings Manager",
         "🌿",
         "community",
-        "Configure the server's member-selectable community and notification roles.",
+        "Configure community, session starter, and notification ping roles.",
         ("community pings", "ping roles", "notification roles", "stoner", "sesh pings", "toke setup"),
         True,
     ),
@@ -215,8 +224,26 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Share Router",
         "🔗",
         "community",
-        "Manage media sharing, private download channels, and destination routing.",
-        ("share", "share route", "share router", "memes", "share sheet", "proxy channel", "download channel", "facebook videos", "private video downloads", "inline media"),
+        "Configure share proxies, supported social videos, and inline delivery.",
+        ("share", "share route", "share router", "memes", "share sheet", "proxy channel", "facebook videos", "inline media"),
+        True,
+    ),
+    NavigationFeature(
+        "share_downloads",
+        "Share Router Downloads",
+        "📥",
+        "community",
+        "Set up private video downloads, expiring Watch links, and delivery tests.",
+        ("downloads", "download channel", "download settings", "watch link", "download link", "facebook download", "video hosting", "download expiry", "share router download"),
+        True,
+    ),
+    NavigationFeature(
+        "toke_settings",
+        "Toke Sesh Settings",
+        "🍃",
+        "community",
+        "Configure meetup cards, live voice presence, session limits, and timing.",
+        ("toke", "toke settings", "toke session", "sesh", "sesh card", "cheers", "who's coming", "meetup", "live attendance"),
         True,
     ),
     NavigationFeature(
@@ -229,10 +256,10 @@ FEATURES: tuple[NavigationFeature, ...] = (
     ),
     NavigationFeature(
         "movie_night",
-        "Movie Night",
+        "Dank Cinema & Movie Night",
         "🎬",
         "community",
-        "Start or join synchronized group streaming, search/vote on movies, manage sources, queue releases, and configure Movie Night.",
+        "Open Dank Cinema watch parties, source providers, subtitles, and synced viewing.",
         (
             "movie",
             "movie night",
@@ -242,6 +269,11 @@ FEATURES: tuple[NavigationFeature, ...] = (
             "group streaming",
             "movies",
             "cinema",
+            "dank cinema",
+            "subtitles",
+            "subtitle providers",
+            "watch party sync",
+            "automatic source",
         ),
     ),
     NavigationFeature(
@@ -282,21 +314,10 @@ FEATURES: tuple[NavigationFeature, ...] = (
     NavigationFeature(
         "voice_safety",
         "AI Voice Safety",
-        "🛡️",
+        "🎙️",
         "voice",
-        "Manage configured VC monitoring, member consent, and private staff alerts.",
-        (
-            "voice safety",
-            "ai voice moderation",
-            "voice moderation",
-            "voice patrol",
-            "voicepatrol",
-            "voice monitor",
-            "voice harassment",
-            "sexual harassment in voice",
-            "voice chat protection",
-            "moderate voice",
-        ),
+        "Configure disclosed AI voice moderation, monitored VCs, and private staff alerts.",
+        ("voice safety", "voice moderation", "ai voice moderation", "voice patrol", "voicepatrol", "sexual talk in voice", "sexual content", "sexual harassment in voice", "voice harassment", "voice chat protection", "voice protection", "voice monitor", "voice consent", "safety voice", "moderate voice"),
         True,
     ),
     NavigationFeature(
@@ -313,7 +334,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Server Stats",
         "📊",
         "ops",
-        "Manage live server counter channels, labels, layout, and refresh behavior.",
+        "Manage live counters with deleted-ticket reconciliation and fresh member counts.",
         ("stats", "server stats", "counters", "member count", "ticket count"),
         True,
     ),
@@ -381,6 +402,22 @@ _CATEGORY_BY_KEY = {item.key: item for item in CATEGORIES}
 _FEATURE_BY_KEY = {item.key: item for item in FEATURES}
 
 
+
+# Curated entry points updated when a public feature ships. These are registry
+# references, not a second router or permission mechanism.
+RECENT_FEATURE_KEYS: tuple[str, ...] = (
+    "voice_safety",
+    "share_downloads",
+    "toke_settings",
+    "verification_reminders",
+    "server_stats",
+    "movie_night",
+)
+
+
+def recent_features() -> tuple[NavigationFeature, ...]:
+    return tuple(_FEATURE_BY_KEY[key] for key in RECENT_FEATURE_KEYS)
+
 def _normalized(value: str) -> str:
     text = str(value or "").lower().strip()
     text = re.sub(r"[^a-z0-9]+", " ", text)
@@ -446,6 +483,11 @@ def validate_registry() -> list[str]:
         errors.append("duplicate navigation feature key")
 
     known_categories = set(category_keys)
+    if len(RECENT_FEATURE_KEYS) != len(set(RECENT_FEATURE_KEYS)):
+        errors.append("duplicate recent feature destination")
+    for key in RECENT_FEATURE_KEYS:
+        if key not in set(feature_keys):
+            errors.append(f"recent destination not registered: {key}")
     for feature in FEATURES:
         if feature.category not in known_categories:
             errors.append(f"{feature.key}: unknown category {feature.category}")
@@ -472,6 +514,8 @@ __all__ = [
     "NavigationCategory",
     "NavigationFeature",
     "REGISTRY_ERRORS",
+    "RECENT_FEATURE_KEYS",
+    "recent_features",
     "category_by_key",
     "feature_by_key",
     "features_for_category",

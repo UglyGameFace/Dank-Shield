@@ -1536,7 +1536,9 @@ def test_movie_night_is_reachable_from_home_registry_and_normal_search_words() -
     feature = feature_by_key("movie_night")
     assert feature is not None
     assert feature.category == "community"
-    assert feature.label == "Movie Night"
+    assert feature.label == "Dank Cinema & Movie Night"
+    assert search_features("dank cinema")[0].key == "movie_night"
+    assert search_features("subtitles")[0].key == "movie_night"
 
     for query in ("movie night", "watch party", "group streaming", "torrent streaming"):
         matches = search_features(query)

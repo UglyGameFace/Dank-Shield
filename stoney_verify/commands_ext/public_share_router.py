@@ -496,6 +496,20 @@ async def open_share_router(
         await _private(interaction, embed=embed, view=view)
 
 
+async def open_share_router_download_settings(interaction: discord.Interaction) -> None:
+    """One canonical entry for Home navigation and the Share Router button."""
+    if not await _require_manage(interaction):
+        return
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    current = await guild_download_expiry_seconds(int(interaction.guild.id))
+    await _replace(
+        interaction,
+        embed=await _download_settings_embed(interaction.guild),
+        view=ShareRouterDownloadSettingsView(int(interaction.user.id), current),
+    )
+
+
 async def _open_source_picker(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
@@ -1051,16 +1065,7 @@ class ShareRouterView(_OwnedView):
     @discord.ui.button(label="Download Settings", emoji="⏳", style=discord.ButtonStyle.secondary, row=3)
     async def download_settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        if not await _require_manage(interaction):
-            return
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-        expire = await guild_download_expiry_seconds(int(interaction.guild.id))
-        await _replace(
-            interaction,
-            embed=await _download_settings_embed(interaction.guild),
-            view=ShareRouterDownloadSettingsView(self.owner_id, expire),
-        )
+        await open_share_router_download_settings(interaction)
 
     @discord.ui.button(label="Disable Downloads", emoji="⏸️", style=discord.ButtonStyle.secondary, row=3)
     async def disable_downloads(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
