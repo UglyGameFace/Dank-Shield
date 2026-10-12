@@ -13,7 +13,9 @@ jobs:
   python-compile:
     name: Python compile check
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The 3,215-test suite now takes ~14m30s alone. The previous 15m
+    # limit cancelled the job after passing tests and public audits.
+    timeout-minutes: 25
 
     steps:
       - name: Check out repository
