@@ -5,11 +5,14 @@ on:
     paths:
       - "stoney_verify/share_router_runtime.py"
       - "stoney_verify/share_router_private_downloads.py"
+      - "stoney_verify/share_router_external_links.py"
+      - "stoney_verify/torrent_media_server.py"
       - "stoney_verify/share_router_resources.py"
       - "stoney_verify/commands_ext/public_share_router.py"
       - "tests/test_share_router_custom_sources.py"
       - "tests/test_share_router_native_runtime.py"
       - "tests/test_share_router_private_downloads.py"
+      - "tests/test_share_router_external_links.py"
       - "tests/test_user_facing_footer_cleanup.py"
       - "tests/test_share_router_media_resolver.py"
       - ".github/workflows/share-router-production-reconcile.yml"
@@ -33,9 +36,9 @@ jobs:
           python -m pip install -q -r requirements.txt
           python -m pip install -q pytest
       - name: Compile canonical Share Router modules
-        run: python -m py_compile stoney_verify/share_router_runtime.py stoney_verify/share_router_private_downloads.py stoney_verify/share_router_resources.py stoney_verify/commands_ext/public_share_router.py
+        run: python -m py_compile stoney_verify/share_router_runtime.py stoney_verify/share_router_private_downloads.py stoney_verify/share_router_external_links.py stoney_verify/share_router_resources.py stoney_verify/commands_ext/public_share_router.py
       - name: Test per-guild routes, cleanup, media compatibility and menus
-        run: python -m pytest tests/test_share_router_custom_sources.py tests/test_share_router_native_runtime.py tests/test_share_router_private_downloads.py tests/test_share_router_media_resolver.py tests/test_share_router_manifest_proxy.py tests/test_user_facing_footer_cleanup.py -q --tb=short --disable-warnings
+        run: python -m pytest tests/test_share_router_custom_sources.py tests/test_share_router_native_runtime.py tests/test_share_router_private_downloads.py tests/test_share_router_external_links.py tests/test_share_router_media_resolver.py tests/test_share_router_manifest_proxy.py tests/test_user_facing_footer_cleanup.py -q --tb=short --disable-warnings
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
