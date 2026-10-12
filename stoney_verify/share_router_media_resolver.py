@@ -194,6 +194,10 @@ def _parsed_http_url(value: str):
         return None
     if not parsed.hostname:
         return None
+    # Avoid even classifying private/LAN media as a supported provider.
+    # The actual outbound media fetch uses a separate public-only DNS resolver.
+    if not is_safe_media_download_url(raw):
+        return None
     # Never hand credential-bearing or nonstandard-port links to yt-dlp.
     if parsed.username or parsed.password:
         return None
