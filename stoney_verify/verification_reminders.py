@@ -270,13 +270,19 @@ class ReminderWorker:
         index = self.guild_cursor % len(guilds)
         count = min(GUILDS_PER_PASS, len(guilds))
         batch = [guilds[(index + i) % len(guilds)] for i in range(count)]
-        self.guild_cursor = (index + count) % len(guilds)
         claimed = 0
+        visited = 0
         for guild in batch:
             if claimed >= MAX_DELIVERIES_PER_PASS:
                 break
+            visited += 1
             claimed += await self.scan_guild(guild, remaining=MAX_DELIVERIES_PER_PASS - claimed)
             await asyncio.sleep(0)
+        # Resume at the first guild we could not scan when the global budget
+        # was exhausted. Otherwise advance the normal batch window. A complete
+        # sweep of a small guild set also rotates its first guild, so one busy
+        # server cannot permanently keep less-active servers at the end.
+        self.guild_cursor = (index + (1 if visited == len(guilds) else visited)) % len(guilds)
         return claimed
 
     async def cleanup_stale_history(self) -> int:

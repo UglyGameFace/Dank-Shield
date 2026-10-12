@@ -176,6 +176,155 @@ def test_no_reminders_when_role_mapping_missing(monkeypatch):
     assert run(worker.scan_guild(guild, remaining=10)) == 0
 
 
+def test_global_budget_does_not_starve_later_guilds(monkeypatch):
+    guilds = [SimpleNamespace(id=n) for n in range(1, 6)]
+    worker = reminders.ReminderWorker(SimpleNamespace(guilds=guilds))
+    visited = []
+
+    async def fake_scan(guild, *, remaining):
+        visited.append(guild.id)
+        return min(3, remaining)
+
+    async def no_sleep(*args):
+        return None
+
+    monkeypatch.setattr(worker, "scan_guild", fake_scan)
+    monkeypatch.setattr(reminders.asyncio, "sleep", no_sleep)
+    assert run(worker.run_pass()) == reminders.MAX_DELIVERIES_PER_PASS
+    assert visited == [1, 2, 3, 4]
+    assert worker.guild_cursor == 4  # The fifth server was not visited.
+
+    visited.clear()
+    assert run(worker.run_pass()) == reminders.MAX_DELIVERIES_PER_PASS
+    assert visited[0] == 5  # The next pass starts with the previously skipped server.
+
+
+def test_full_sweep_of_small_guild_list_rotates_first_server(monkeypatch):
+    guilds = [SimpleNamespace(id=n) for n in range(1, 4)]
+    worker = reminders.ReminderWorker(SimpleNamespace(guilds=guilds))
+    visited = []
+
+    async def fake_scan(guild, *, remaining):
+        visited.append(guild.id)
+        return 0
+
+    async def no_sleep(*args):
+        return None
+
+    monkeypatch.setattr(worker, "scan_guild", fake_scan)
+    monkeypatch.setattr(reminders.asyncio, "sleep", no_sleep)
+    assert run(worker.run_pass()) == 0
+    assert visited == [1, 2, 3]
+    visited.clear()
+    assert run(worker.run_pass()) == 0
+    assert visited == [2, 3, 1]
+
+
+def test_settings_buttons_acknowledge_before_remote_config(monkeypatch):
+    from stoney_verify.commands_ext import public_verify_reminder_ui as ui
+
+    async def require_staff(interaction):
+        return True
+
+    monkeypatch.setattr(ui, "_require_staff", require_staff)
+
+    for label in ("Refresh", "Preview", "Use DMs", "Use Channel"):
+        events = []
+        class FakeResponse:
+            done = False
+
+            def is_done(self):
+                return self.done
+
+            async def defer(self, **kwargs):
+                self.done = True
+                events.append("defer")
+
+        guild = SimpleNamespace(
+            id=123, name="Demo", me=SimpleNamespace(id=456),
+        )
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(id=456), guild=guild, response=FakeResponse(),
+        )
+
+        async def load(guild):
+            assert interaction.response.is_done(), f"{label} fetched config before ack"
+            events.append("load")
+            return {}, reminders.ReminderPolicy(reminder_channel_id=77)
+
+        async def private(*args, **kwargs):
+            events.append("private")
+
+        async def replace(*args, **kwargs):
+            events.append("replace")
+
+        async def save(*args, **kwargs):
+            events.append("save")
+            return True
+
+        channel = SimpleNamespace(
+            id=77, permissions_for=lambda member: SimpleNamespace(
+                view_channel=True, send_messages=True,
+            ),
+        )
+        monkeypatch.setattr(ui, "_load", load)
+        monkeypatch.setattr(ui, "_private", private)
+        monkeypatch.setattr(ui, "_replace", replace)
+        monkeypatch.setattr(ui, "_save", save)
+        monkeypatch.setattr(ui, "_embed", lambda *a: discord.Embed(title="Test"))
+        monkeypatch.setattr(ui, "verification_channel", lambda *a: channel)
+        monkeypatch.setattr(ui, "delivery_channel", lambda *a: channel)
+
+        async def invoke():
+            view = ui.ReminderSettingsView(456, reminders.ReminderPolicy(reminder_channel_id=77))
+            control = next(item for item in view.children if getattr(item, "label", None) == label)
+            await control.callback(interaction)
+
+        run(invoke())
+        assert events[0] == "defer", label
+        assert "load" in events, label
+
+
+def test_reminder_database_check_is_staff_only_and_live(monkeypatch):
+    from stoney_verify.commands_ext import public_verify_reminder_ui as ui
+
+    events = []
+    class FakeResponse:
+        done = False
+
+        def is_done(self):
+            return self.done
+
+        async def defer(self, **kwargs):
+            self.done = True
+            events.append("defer")
+
+    interaction = SimpleNamespace(user=SimpleNamespace(id=456), response=FakeResponse())
+
+    async def staff(interaction):
+        return True
+
+    async def status():
+        assert interaction.response.is_done()
+        return False
+
+    async def private(interaction, message):
+        events.append(message)
+
+    monkeypatch.setattr(ui, "_require_staff", staff)
+    monkeypatch.setattr(ui, "ledger_ready", status)
+    monkeypatch.setattr(ui, "_private", private)
+
+    async def invoke():
+        view = ui.ReminderSettingsView(456, reminders.ReminderPolicy())
+        control = next(item for item in view.children if getattr(item, "label", None) == "Check Database")
+        await control.callback(interaction)
+
+    run(invoke())
+    assert events[0] == "defer"
+    assert any("unavailable" in event for event in events[1:])
+
+
 def test_worker_registration_is_idempotent(monkeypatch):
     # Static contract: worker single-owner startup and saved per-guild config gate.
     from pathlib import Path
