@@ -121,6 +121,23 @@ def test_inline_uploaded_thumbnail_has_single_compact_v2_card_and_reused_callbac
     assert not any(isinstance(x, discord.ui.Button) for x in closed.walk_children())
 
 
+
+def test_closed_toke_thumbnail_title_is_idempotent_on_repeated_edits():
+    data = {
+        **_session(), "active": False, "media_layout": "thumbnail_v2",
+        "media_filename": "sesh.gif", "cheers_ids": [], "going_ids": [],
+    }
+    guild = SimpleNamespace(get_channel=lambda _cid: None)
+    intro = "## 💨 Toke Time\n<@&10>\nHost is calling the sesh crowd."
+    once = live.TokeThumbnailLayout(guild, data, intro=intro)
+    display = next(x.content for x in once.walk_children() if isinstance(x, discord.ui.TextDisplay))
+    twice = live.TokeThumbnailLayout(guild, data, intro=display)
+    repeated = next(x.content for x in twice.walk_children() if isinstance(x, discord.ui.TextDisplay))
+    assert display.count("Sesh Ended") == 1
+    assert repeated.count("Sesh Ended") == 1
+    assert "hosted this sesh" in repeated
+
+
 def test_existing_note_can_be_reused_without_persisting_it(storage):
     intro = "## 💨 Toke Time\n<@&10>\n**Host** is calling the sesh crowd.\n> Original note"
     message = SimpleNamespace(components=[
