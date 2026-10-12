@@ -47,7 +47,7 @@ CATEGORIES: tuple[NavigationCategory, ...] = (
         "safety",
         "Safety & Moderation",
         "🛡️",
-        "Protection, AI voice safety, moderation, spam, invites, and recovery.",
+        "Protection Center, AI Voice Safety, AntiNuke, spam, invites, and moderation.",
     ),
     NavigationCategory(
         "people",
@@ -59,7 +59,7 @@ CATEGORIES: tuple[NavigationCategory, ...] = (
         "community",
         "Community & Engagement",
         "🌿",
-        "Toke sessions, Share Router downloads, community roles, Hub, and tools.",
+        "Community & Pings, Share Router downloads, Movie Night, /toke, and Hub.",
     ),
     NavigationCategory(
         "tickets",
@@ -160,7 +160,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "🛡️",
         "safety",
         "Manage Spam Guard, Invite Shield, AntiNuke, filters, and AI Voice Safety.",
-        ("spam guard", "spamguard", "invite shield", "antinuke", "anti nuke", "automod", "link shield", "filters"),
+        ("spam guard", "spamguard", "invite shield", "antinuke", "anti nuke", "automod", "link shield", "filters", "voice safety protection"),
         True,
     ),
     NavigationFeature(
@@ -225,7 +225,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "🔗",
         "community",
         "Configure share proxies, supported social videos, and inline delivery.",
-        ("share", "share route", "share router", "memes", "share sheet", "proxy channel"),
+        ("share", "share route", "share router", "memes", "share sheet", "proxy channel", "facebook videos", "inline media"),
         True,
     ),
     NavigationFeature(
@@ -317,7 +317,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "🎙️",
         "voice",
         "Configure disclosed AI voice moderation, monitored VCs, and private staff alerts.",
-        ("voice safety", "voice moderation", "ai voice moderation", "voice patrol", "sexual talk in voice", "sexual content", "voice harassment", "voice protection", "voice monitor", "voice consent", "safety voice"),
+        ("voice safety", "voice moderation", "ai voice moderation", "voice patrol", "voicepatrol", "sexual talk in voice", "sexual content", "sexual harassment in voice", "voice harassment", "voice chat protection", "voice protection", "voice monitor", "voice consent", "safety voice", "moderate voice"),
         True,
     ),
     NavigationFeature(
