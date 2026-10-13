@@ -208,13 +208,20 @@ async def _resolve_toke_media_url(value: str) -> str:
                     raise ValueError("The media sharing page is unavailable.")
                 content_type = response.headers.get("Content-Type", "").lower()
                 if content_type.split(";", 1)[0].strip() in _TOKE_MEDIA_CONTENT_TYPES:
-                    # An extensionless redirect may itself end at an image.
-                    if _is_stable_provider_media_url(final_url):
+                    # A public image endpoint can be extensionless. Its verified
+                    # response MIME makes it embeddable even without .gif/.jpg.
+                    destination = urlsplit(final_url)
+                    if (destination.scheme.lower() == "https"
+                            and is_safe_media_download_url(final_url)
+                            and destination.hostname not in {"cdn.discordapp.com", "media.discordapp.net"}):
                         return final_url
                     raise ValueError("The image URL is not stable or publicly embeddable.")
                 if "text/html" not in content_type:
                     raise ValueError("The shared URL did not return a GIF/image page.")
-                if int(response.headers.get("Content-Length", "0") or "0") > 256 * 1024:
+                length = str(response.headers.get("Content-Length", "")).strip()
+                if length.isascii() and length.isdecimal() and (
+                    len(length) > 9 or int(length) > 256 * 1024
+                ):
                     raise ValueError("The media sharing page is too large to inspect.")
                 raw = await response.content.read(256 * 1024 + 1)
                 if len(raw) > 256 * 1024:
