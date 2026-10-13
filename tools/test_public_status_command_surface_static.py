@@ -44,7 +44,7 @@ if __name__ == "__main__":
     for test in (
         test_status_reporter_is_public_core,
         test_status_implementation_remains_loaded,
-        test_status_is_reached_from_registry_navigation_not_a_direct_dank_child,
+        test_status_is_reached_from_registry_navigation_and_restored_shortcut,
         test_setup_status_implementation_can_remain_loaded_but_final_tree_hides_it,
         test_status_on_ready_logs_task_start,
     ):
