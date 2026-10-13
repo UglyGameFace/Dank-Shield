@@ -149,12 +149,12 @@ def test_expected_null_means_missing_or_json_null():
 def test_protected_discord_ids_cannot_be_replaced_by_background_discovery():
     r, _db = repo()
     result = r.patch(
-        123, {"verify_channel_id": "222", "welcome_message": "safe"},
+        123, {"verify_channel_id": "222", "new_discovery_key": "safe"},
         mode="runtime_discovery", timestamp=T0,
     )
     assert result.blocked == ("verify_channel_id",)
-    assert result.changed == ()
-    assert result.reason == "no_change"
+    assert result.changed == ("new_discovery_key",)
+    assert result.applied is True
     assert r.read(123).row["verify_channel_id"] == "111"
     explicit = r.patch(
         123, {"verify_channel_id": "222"}, mode="setup_builder", timestamp=T0
