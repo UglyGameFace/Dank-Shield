@@ -115,7 +115,7 @@ def test_reconciliation_is_idempotent_and_not_allowed_to_reopen_ended(storage):
     asyncio.run(run())
 
 
-def test_inline_uploaded_thumbnail_has_single_compact_v2_card_and_reused_callbacks(monkeypatch):
+def test_inline_uploaded_gallery_has_single_full_width_media_and_reused_callbacks(monkeypatch):
     monkeypatch.setattr(live, "_VOICE_DEBOUNCE_SECONDS", 0.001)
     session = {
         **_session(), "active": True, "cheers_ids": [], "going_ids": [],
@@ -123,41 +123,42 @@ def test_inline_uploaded_thumbnail_has_single_compact_v2_card_and_reused_callbac
     }
     guild = SimpleNamespace(get_channel=lambda cid: None)
     intro = "## 💨 Toke Time\n<@&10>\n**Test Host** is calling the sesh crowd.\n> Join us"
-    view = live.TokeThumbnailLayout(guild, session, intro=intro)
+    view = live.TokeMediaLayout(guild, session, intro=intro)
     assert isinstance(view, discord.ui.LayoutView)
     assert view.timeout is None and view.is_persistent()
     nodes = list(view.walk_children())
-    thumbnails = [item for item in nodes if isinstance(item, discord.ui.Thumbnail)]
-    assert len(thumbnails) == 1
-    assert thumbnails[0].media.url == "attachment://sesh.gif"
+    assert not any(isinstance(item, discord.ui.Thumbnail) for item in nodes)
+    galleries = [item for item in nodes if isinstance(item, discord.ui.MediaGallery)]
+    assert len(galleries) == 1
+    assert len(galleries[0].items) == 1
+    assert galleries[0].items[0].media.url == "attachment://sesh.gif"
     assert len([x for x in nodes if isinstance(x, discord.ui.Button)]) == 7
     assert any(isinstance(x, discord.ui.TextDisplay) and "<@&10>" in x.content for x in nodes)
-    assert not any(isinstance(x, discord.ui.MediaGallery) for x in nodes)
 
     dispatched = []
     async def fake_respond(self, interaction, action):
         dispatched.append(action)
     monkeypatch.setattr(live.TokeCheersView, "_respond", fake_respond)
-    updated = live.TokeThumbnailLayout(guild, session, intro=intro)
+    updated = live.TokeMediaLayout(guild, session, intro=intro)
     join = next(x for x in updated.walk_children() if getattr(x, "custom_id", "") == "dank:toke:v2:going")
     asyncio.run(join.callback(object()))
     assert dispatched == ["going"]
     session["active"] = False
-    closed = live.TokeThumbnailLayout(guild, session, intro=intro)
+    closed = live.TokeMediaLayout(guild, session, intro=intro)
     assert not any(isinstance(x, discord.ui.Button) for x in closed.walk_children())
 
 
 
-def test_closed_toke_thumbnail_title_is_idempotent_on_repeated_edits():
+def test_closed_toke_gallery_title_is_idempotent_on_repeated_edits():
     data = {
         **_session(), "active": False, "media_layout": "thumbnail_v2",
         "media_filename": "sesh.gif", "cheers_ids": [], "going_ids": [],
     }
     guild = SimpleNamespace(get_channel=lambda _cid: None)
     intro = "## 💨 Toke Time\n<@&10>\nHost is calling the sesh crowd."
-    once = live.TokeThumbnailLayout(guild, data, intro=intro)
+    once = live.TokeMediaLayout(guild, data, intro=intro)
     display = next(x.content for x in once.walk_children() if isinstance(x, discord.ui.TextDisplay))
-    twice = live.TokeThumbnailLayout(guild, data, intro=display)
+    twice = live.TokeMediaLayout(guild, data, intro=display)
     repeated = next(x.content for x in twice.walk_children() if isinstance(x, discord.ui.TextDisplay))
     assert display.count("Sesh Ended") == 1
     assert repeated.count("Sesh Ended") == 1
@@ -222,7 +223,7 @@ def test_voice_burst_preserves_departure_identity_even_without_seen_cache(storag
     asyncio.run(run())
 
 
-def test_v2_card_edit_keeps_thumbnail_and_custom_buttons_without_legacy_embed(storage, monkeypatch):
+def test_v2_card_edit_keeps_full_width_gallery_and_custom_buttons(storage, monkeypatch):
     class FakeTextChannel:
         id = 700
         def __init__(self, message):
@@ -262,9 +263,9 @@ def test_v2_card_edit_keeps_thumbnail_and_custom_buttons_without_legacy_embed(st
         assert len(message.edits) == 1
         assert "embed" not in message.edits[0] and "content" not in message.edits[0]
         view = message.edits[0]["view"]
-        assert isinstance(view, live.TokeThumbnailLayout)
+        assert isinstance(view, live.TokeMediaLayout)
         assert any(
-            isinstance(x, discord.ui.Thumbnail) and x.media.url == "attachment://photo.jpg"
+            isinstance(x, discord.ui.MediaGallery) and x.items[0].media.url == "attachment://photo.jpg"
             for x in view.walk_children()
         )
         assert any(
@@ -308,11 +309,12 @@ def test_who_is_coming_excludes_departed_joiner_after_fresh_reconciliation(stora
 
 
 
-def test_uploaded_thumbnail_view_restores_after_bot_restart(storage):
+@pytest.mark.parametrize("layout", ["thumbnail_v2", "gallery_v2"])
+def test_uploaded_media_view_restores_after_bot_restart(storage, layout):
     async def run():
         live._REGISTERED.clear()
         await toke_sessions.save_new({
-            **_session(), "media_layout": "thumbnail_v2",
+            **_session(), "media_layout": layout,
             "media_filename": "toke-100-1-123.gif",
         })
         guild = SimpleNamespace(id=100, get_channel=lambda cid: None)
@@ -325,6 +327,7 @@ def test_uploaded_thumbnail_view_restores_after_bot_restart(storage):
         assert len(registered) == 1
         view, mid = registered[0]
         assert mid == 200 and view.is_persistent()
+        assert any(isinstance(item, discord.ui.MediaGallery) for item in view.walk_children())
         custom_ids = {
             button.custom_id for button in view.walk_children()
             if isinstance(button, discord.ui.Button) and button.custom_id
