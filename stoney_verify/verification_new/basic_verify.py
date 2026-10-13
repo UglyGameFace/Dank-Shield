@@ -1330,6 +1330,9 @@ async def apply_basic_verification(member: discord.Member) -> tuple[bool, str]:
             return False, why
 
     async with _lock_for(int(guild.id), int(member.id)):
+        from stoney_verify.verification_new.decline_exit import exit_pending
+        if exit_pending(int(guild.id), int(member.id)):
+            return False, "Exit is pending. Use Agree & Stay on your private grace-period notice."
         try:
             fresh = guild.get_member(member.id) or await guild.fetch_member(member.id)
         except Exception:
