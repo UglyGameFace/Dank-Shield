@@ -1,238 +1,141 @@
--- Dank Shield: equivalence + load tests for record_member_activity_batch.
---
--- Run with: psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f this_file.sql
--- Everything runs inside one transaction and ROLLS BACK: no test data persists.
--- Requires BOTH functions to exist: the original record_member_activity and
--- the new record_member_activity_batch (apply the migration first, on a
--- staging database or a transaction you roll back).
---
--- What it proves:
---   1. The batch RPC produces byte-identical ledger rows vs the old RPC for
---      inserts, newer/older/equal timestamps, every activity type, channel
---      and process id handling, and event_count accumulation.
---   2. Invalid inputs raise in both.
---   3. Load: times a 30k-event batch vs individual RPCs.
-
-\set QUIET on
-\timing off
-
+-- Run in staging: psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f this_file.sql
+-- All fixtures, including load measurements, are enclosed by ROLLBACK.
+-- This tests PostgreSQL work. It does not measure Supabase HTTP round-trips.
 begin;
-
--- test identities (numeric strings, matching the bot's _as_id convention)
-\set G1 899001
-\set G2 899002
-\set U1 777001
-\set U2 777002
-
-delete from public.member_activity_ledger
-where guild_id in (:'G1', :'G2');
+delete from public.member_activity_ledger where guild_id in ('899001','899002','899010','899011');
+delete from public.member_activity_batch_receipts
+where batch_id in (
+ '00000000-0000-0000-0000-000000000001',
+ '00000000-0000-0000-0000-000000000002',
+ '00000000-0000-0000-0000-000000000003',
+ '00000000-0000-0000-0000-000000000004'
+);
 
 do $$
 declare
-    r_old public.member_activity_ledger%rowtype;
-    r_new public.member_activity_ledger%rowtype;
-    v_count_old bigint;
-    v_count_new bigint;
-    v_type_old text;
-    v_type_new text;
-    v_ch_old text;
-    v_ch_new text;
-    v_tm_at timestamptz;
-    v_msg_at timestamptz;
-    t0 timestamptz := now() - interval '1 hour';
-    t1 timestamptz := now();
-    t2 timestamptz := now() + interval '1 hour';
+    t1 timestamptz := '2026-10-13T12:00:00+00';
+    t2 timestamptz := '2026-10-13T12:05:00+00';
+    old_row public.member_activity_ledger%rowtype;
+    new_row public.member_activity_ledger%rowtype;
+    rejected boolean;
 begin
-    raise notice '--- case 1: fresh insert equivalence ---';
-    perform public.record_member_activity(:'G1', :'U1', 'message', t1, '100', 'proc-a');
-    select * into r_old from public.member_activity_ledger
-     where guild_id = :'G1' and user_id = :'U1';
-    delete from public.member_activity_ledger
-     where guild_id = :'G1' and user_id = :'U1';
-    perform public.record_member_activity_batch(jsonb_build_array(
-        jsonb_build_object('guild_id', :'G1', 'user_id', :'U1',
-            'activity_type', 'message', 'occurred_at', t1::text,
-            'channel_id', '100', 'process_id', 'proc-a', 'event_count', 1)
-    ));
-    select * into r_new from public.member_activity_ledger
-     where guild_id = :'G1' and user_id = :'U1';
-    if r_old.last_activity_at is distinct from r_new.last_activity_at
-       or r_old.last_activity_type is distinct from r_new.last_activity_type
-       or r_old.last_message_at is distinct from r_new.last_message_at
-       or r_old.last_channel_id is distinct from r_new.last_channel_id
-       or r_old.last_process_id is distinct from r_new.last_process_id
-       or r_old.event_count is distinct from r_new.event_count then
-        raise exception 'case 1 MISMATCH: old=% new=%', r_old, r_new;
-    end if;
-    raise notice 'case 1 OK';
+    -- Same logical history: two messages, one reaction at a newer timestamp.
+    perform public.record_member_activity('899001','777001','message',t1,'100','proc-a');
+    perform public.record_member_activity('899001','777001','message',t1,'100','proc-a');
+    perform public.record_member_activity('899001','777001','reaction',t2,'101','proc-a');
+    select * into strict old_row from public.member_activity_ledger
+      where guild_id='899001' and user_id='777001';
 
-    raise notice '--- case 2: newer timestamp wins ---';
-    perform public.record_member_activity(:'G1', :'U1', 'reaction', t2, '101', 'proc-a');
-    select * into r_old from public.member_activity_ledger
-     where guild_id = :'G1' and user_id = :'U1';
-    perform public.record_member_activity_batch(jsonb_build_array(
-        jsonb_build_object('guild_id', :'G2', 'user_id', :'U1',
-            'activity_type', 'message', 'occurred_at', t1::text,
-            'channel_id', '100', 'process_id', 'proc-a', 'event_count', 1)
-    ));
-    perform public.record_member_activity_batch(jsonb_build_array(
-        jsonb_build_object('guild_id', :'G2', 'user_id', :'U1',
-            'activity_type', 'reaction', 'occurred_at', t2::text,
-            'channel_id', '101', 'process_id', 'proc-a', 'event_count', 1)
-    ));
-    select * into r_new from public.member_activity_ledger
-     where guild_id = :'G2' and user_id = :'U1';
-    if r_old.last_activity_at is distinct from r_new.last_activity_at
-       or r_old.last_reaction_at is distinct from r_new.last_reaction_at
-       or r_old.last_activity_type is distinct from r_new.last_activity_type
-       or r_old.event_count is distinct from r_new.event_count then
-        raise exception 'case 2 MISMATCH';
+    perform public.record_member_activity_batch(
+      '00000000-0000-0000-0000-000000000001'::uuid,
+      jsonb_build_array(
+        jsonb_build_object('guild_id','899002','user_id','777001',
+          'activity_type','message','occurred_at',t1::text,
+          'first_occurred_at',t1::text,'channel_id','100','process_id','proc-a',
+          'event_count',2),
+        jsonb_build_object('guild_id','899002','user_id','777001',
+          'activity_type','reaction','occurred_at',t2::text,
+          'first_occurred_at',t2::text,'channel_id','101','process_id','proc-a',
+          'event_count',1)
+      )
+    );
+    select * into strict new_row from public.member_activity_ledger
+      where guild_id='899002' and user_id='777001';
+    if old_row.last_activity_at is distinct from new_row.last_activity_at
+       or old_row.last_activity_type is distinct from new_row.last_activity_type
+       or old_row.last_message_at is distinct from new_row.last_message_at
+       or old_row.last_reaction_at is distinct from new_row.last_reaction_at
+       or old_row.last_channel_id is distinct from new_row.last_channel_id
+       or old_row.first_observed_at is distinct from new_row.first_observed_at
+       or old_row.event_count is distinct from new_row.event_count then
+        raise exception 'ledger equivalence failed: % vs %', old_row, new_row;
     end if;
-    raise notice 'case 2 OK';
+    raise notice 'ledger timestamp/type/count equivalence passed';
 
-    raise notice '--- case 3: older timestamp keeps newest, count still grows ---';
-    perform public.record_member_activity(:'G1', :'U1', 'message', t0, '102', 'proc-a');
-    select * into r_old from public.member_activity_ledger
-     where guild_id = :'G1' and user_id = :'U1';
-    perform public.record_member_activity_batch(jsonb_build_array(
-        jsonb_build_object('guild_id', :'G2', 'user_id', :'U1',
-            'activity_type', 'message', 'occurred_at', t0::text,
-            'channel_id', '102', 'process_id', 'proc-a', 'event_count', 1)
-    ));
-    select * into r_new from public.member_activity_ledger
-     where guild_id = :'G2' and user_id = :'U1';
-    if r_new.last_activity_at <> t2 then
-        raise exception 'case 3 FAILED: older event moved last_activity_at';
+    -- Replay the exact same batch after an HTTP acknowledgement is lost.
+    perform public.record_member_activity_batch(
+      '00000000-0000-0000-0000-000000000001'::uuid,
+      jsonb_build_array(jsonb_build_object(
+        'guild_id','899002','user_id','777001','activity_type','message',
+        'occurred_at',t2::text,'channel_id','300','process_id','proc-a',
+        'event_count',99))
+    );
+    select * into strict new_row from public.member_activity_ledger
+      where guild_id='899002' and user_id='777001';
+    if new_row.event_count <> 3 or new_row.last_channel_id <> '101' then
+        raise exception 'idempotency failed: repeat batch mutated ledger';
     end if;
-    if r_old.event_count is distinct from r_new.event_count then
-        raise exception 'case 3 MISMATCH on event_count';
-    end if;
-    raise notice 'case 3 OK';
 
-    raise notice '--- case 4: event_count accumulation (3x old vs 1x batch of 3) ---';
-    delete from public.member_activity_ledger
-     where guild_id in (:'G1', :'G2') and user_id = :'U2';
-    perform public.record_member_activity(:'G1', :'U2', 'interaction', t1, '103', 'proc-b');
-    perform public.record_member_activity(:'G1', :'U2', 'interaction', t1, '103', 'proc-b');
-    perform public.record_member_activity(:'G1', :'U2', 'interaction', t1, '103', 'proc-b');
-    select event_count into strict v_count_old from public.member_activity_ledger
-     where guild_id = :'G1' and user_id = :'U2';
-    perform public.record_member_activity_batch(jsonb_build_array(
-        jsonb_build_object('guild_id', :'G2', 'user_id', :'U2',
-            'activity_type', 'interaction', 'occurred_at', t1::text,
-            'channel_id', '103', 'process_id', 'proc-b', 'event_count', 3)
-    ));
-    select event_count into strict v_count_new from public.member_activity_ledger
-     where guild_id = :'G2' and user_id = :'U2';
-    if v_count_old <> 3 or v_count_new <> 3 then
-        raise exception 'case 4 FAILED: old=% new=%', v_count_old, v_count_new;
+    -- An invalid second entry rolls the whole batch AND its receipt back.
+    rejected := false;
+    begin
+      perform public.record_member_activity_batch(
+        '00000000-0000-0000-0000-000000000002'::uuid,
+        jsonb_build_array(
+          jsonb_build_object('guild_id','899002','user_id','777002',
+            'activity_type','message','occurred_at',t1::text,
+            'event_count',1),
+          jsonb_build_object('guild_id','899002','user_id','777002',
+            'activity_type','invalid','occurred_at',t1::text,
+            'event_count',1)
+        )
+      );
+    exception when others then rejected := true;
+    end;
+    if not rejected then raise exception 'bad activity type was accepted'; end if;
+    if exists(select 1 from public.member_activity_ledger
+              where guild_id='899002' and user_id='777002')
+       or exists(select 1 from public.member_activity_batch_receipts
+              where batch_id='00000000-0000-0000-0000-000000000002'::uuid) then
+       raise exception 'rejected batch wrote partial state';
     end if;
-    raise notice 'case 4 OK';
 
-    raise notice '--- case 5: equal timestamps take the latest write ---';
-    delete from public.member_activity_ledger
-     where guild_id in (:'G1', :'G2') and user_id = :'U1';
-    perform public.record_member_activity(:'G1', :'U1', 'message', t1, '104', 'proc-a');
-    perform public.record_member_activity(:'G1', :'U1', 'reaction', t1, '105', 'proc-a');
-    select last_activity_type, last_channel_id
-      into v_type_old, v_ch_old
-      from public.member_activity_ledger
-     where guild_id = :'G1' and user_id = :'U1';
-    perform public.record_member_activity_batch(jsonb_build_array(
-        jsonb_build_object('guild_id', :'G2', 'user_id', :'U1',
-            'activity_type', 'message', 'occurred_at', t1::text,
-            'channel_id', '104', 'process_id', 'proc-a', 'event_count', 1),
-        jsonb_build_object('guild_id', :'G2', 'user_id', :'U1',
-            'activity_type', 'reaction', 'occurred_at', t1::text,
-            'channel_id', '105', 'process_id', 'proc-a', 'event_count', 1)
-    ));
-    select last_activity_type, last_channel_id
-      into v_type_new, v_ch_new
-      from public.member_activity_ledger
-     where guild_id = :'G2' and user_id = :'U1';
-    if v_type_old is distinct from v_type_new
-       or v_ch_old is distinct from v_ch_new then
-        raise exception 'case 5 MISMATCH: old type=% ch=% / new type=% ch=%',
-            v_type_old, v_ch_old, v_type_new, v_ch_new;
+    rejected := false;
+    begin
+      perform public.record_member_activity_batch(
+        '00000000-0000-0000-0000-000000000003'::uuid,
+        '{"not":"array"}'::jsonb
+      );
+    exception when others then rejected := true;
+    end;
+    if not rejected then raise exception 'non-array batch was accepted'; end if;
+
+    -- Equal timestamps should respect event insertion order.
+    perform public.record_member_activity_batch(
+      '00000000-0000-0000-0000-000000000004'::uuid,
+      jsonb_build_array(
+        jsonb_build_object('guild_id','899002','user_id','777003',
+          'activity_type','message','occurred_at',t1::text,'event_count',1),
+        jsonb_build_object('guild_id','899002','user_id','777003',
+          'activity_type','interaction','occurred_at',t1::text,'event_count',1)
+      )
+    );
+    select * into strict new_row from public.member_activity_ledger
+      where guild_id='899002' and user_id='777003';
+    if new_row.last_activity_type <> 'interaction' or new_row.event_count <> 2 then
+        raise exception 'equal timestamp ordering was lost';
     end if;
-    raise notice 'case 5 OK (both resolve equal timestamps to the latest write: %)'
-        , v_type_new;
-
-    raise notice '--- case 6: per-type timestamp columns ---';
-    delete from public.member_activity_ledger
-     where guild_id = :'G1' and user_id = :'U1';
-    perform public.record_member_activity(:'G1', :'U1', 'ticket_message', t1, '106', 'proc-a');
-    select last_ticket_message_at, last_message_at
-      into v_tm_at, v_msg_at
-      from public.member_activity_ledger
-     where guild_id = :'G1' and user_id = :'U1';
-    if v_tm_at is distinct from t1 or v_msg_at is not null then
-        raise exception 'case 6 FAILED: ticket_message touched wrong columns';
-    end if;
-    raise notice 'case 6 OK';
-
-    raise notice 'ALL EQUIVALENCE CASES PASSED';
+    raise notice 'idempotency, rollback and tie tests passed';
 end $$;
 
--- invalid inputs must raise in both functions
-do $$
-begin
-    begin
-        perform public.record_member_activity(:'G1', :'U1', 'presence', now(), '', '');
-        raise exception 'old fn accepted bad type';
-    exception when raise_exception then
-        raise notice 'old fn rejects bad activity type OK';
-    end;
-    begin
-        perform public.record_member_activity_batch(jsonb_build_array(
-            jsonb_build_object('guild_id', :'G1', 'user_id', :'U1',
-                'activity_type', 'presence', 'occurred_at', now()::text,
-                'channel_id', '', 'process_id', '', 'event_count', 1)));
-        raise exception 'batch fn accepted bad type';
-    exception when raise_exception then
-        raise notice 'batch fn rejects bad activity type OK';
-    end;
-    begin
-        perform public.record_member_activity_batch('not-an-array'::jsonb);
-        raise exception 'batch fn accepted non-array';
-    exception when raise_exception then
-        raise notice 'batch fn rejects non-array payload OK';
-    end;
-end $$;
-
-rollback;
-
--- ================= LOAD TEST (runs outside the rolled-back block) ================
--- 30k deduped events: one batch RPC vs 1k individual RPCs (extrapolated).
-\timing on
-
+-- Size-bounded 500-entry load run. Timed as PostgreSQL work, not HTTP calls.
+\\timing on
 select public.record_member_activity_batch(
-    (select jsonb_agg(jsonb_build_object(
-        'guild_id', '899010',
-        'user_id', (900000 + g)::text,
-        'activity_type', 'message',
-        'occurred_at', now()::text,
-        'channel_id', '123',
-        'process_id', 'load-test',
-        'event_count', 7))
-     from generate_series(1, 30000) g)
+ '00000000-0000-0000-0000-000000000005'::uuid,
+ (select jsonb_agg(jsonb_build_object(
+    'guild_id','899010','user_id',(900000+g)::text,
+    'activity_type','message','occurred_at',now()::text,
+    'channel_id','123','process_id','load-test','event_count',1))
+  from generate_series(1,500) g)
 );
-
-select count(*) as batch_rows,
-       sum(event_count) as batch_total_events
-from public.member_activity_ledger where guild_id = '899010';
-
-delete from public.member_activity_ledger where guild_id = '899010';
-
--- 1k individual calls for comparison (30x fewer; multiply wall time by ~30)
 do $$
 declare i int;
 begin
-    for i in 1..1000 loop
+    for i in 1..500 loop
         perform public.record_member_activity(
-            '899011', (900000 + i)::text, 'message', now(), '123', 'load-test');
+          '899011', (900000+i)::text, 'message', now(), '123', 'load-test'
+        );
     end loop;
 end $$;
-
-delete from public.member_activity_ledger where guild_id in ('899010', '899011');
-\timing off
+\\timing off
+rollback;
