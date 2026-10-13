@@ -83,6 +83,7 @@ _PENDING_BATCH: Optional[dict[str, Any]] = None
 _FLUSH_LOCK = asyncio.Lock()
 _ACTIVITY_SEQUENCE = 0
 _LOST_COVERAGE_GUILDS: set[int] = set()
+_ACKED_BATCH_IDS: list[str] = []
 # Consecutive DB-RPC failures across flush AND heartbeat paths. When this
 # reaches the threshold the breaker opens and ALL DB write attempts pause.
 _CONSECUTIVE_DB_FAILURES = 0
@@ -725,6 +726,10 @@ def _flush_batch_sync(batch: dict[str, Any]) -> None:
     })
 
 
+def _ack_batch_receipts_sync(batch_ids: list[str]) -> None:
+    _rpc_sync("ack_member_activity_batches", {"p_batch_ids": batch_ids})
+
+
 def _guild_has_unflushed_activity(guild_id: int) -> bool:
     return (
         any(key[0] == guild_id for key in _ACTIVITY_BUFFER)
@@ -773,8 +778,22 @@ async def _flush_once() -> bool:
                 return False
             completed_guilds.update(k[0] for k in batch["snapshot"])
             _PENDING_BATCH = None
+            _ACKED_BATCH_IDS.append(batch["id"])
             _record_db_success()
             progress = True
+
+        # Deletion of acknowledged receipts is optional for correctness but
+        # critical to bound long-term Supabase storage. Retry without ever
+        # treating a receipt-maintenance failure as a failed activity write.
+        if _ACKED_BATCH_IDS and (len(_ACKED_BATCH_IDS) >= 64
+                                 or not _ACTIVITY_BUFFER):
+            ack_ids = list(_ACKED_BATCH_IDS[:128])
+            try:
+                await asyncio.to_thread(_ack_batch_receipts_sync, ack_ids)
+            except Exception as exc:
+                print(f"⚠️ activity receipt cleanup pending: {type(exc).__name__}")
+            else:
+                del _ACKED_BATCH_IDS[:len(ack_ids)]
 
         # A recovery report restarts the durable coverage clock even when
         # buffered events replay. Never clear a failure on heartbeat alone.
