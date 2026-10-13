@@ -28,6 +28,7 @@ import discord
 
 from stoney_verify.globals import get_supabase
 from stoney_verify.startup_recovery_coordinator import startup_recovery_slot
+from stoney_verify.guild_sweep import run_bounded_guild_sweep
 from stoney_verify.members_new.activity_reconciliation import (
     audit_guild_activity_scope,
     max_reconcile_gap_seconds,
@@ -1271,54 +1272,66 @@ def _schedule_guild_tracking(
     return task
 
 
-async def _heartbeat_loop(
-    bot: discord.Client,
-) -> None:
-    while not bot.is_closed():
-        await asyncio.sleep(
-            _HEARTBEAT_INTERVAL_SECONDS
+def _heartbeat_concurrency() -> int:
+    """Bound Supabase fan-out, even if a deployment env is misconfigured."""
+    return max(1, min(_safe_int(os.getenv("DANK_HEARTBEAT_GUILD_CONCURRENCY"), 8), 20))
+
+
+async def _heartbeat_one_guild(guild: discord.Guild) -> bool:
+    gid = int(guild.id)
+    pending = _STARTUP_TASKS.get(gid)
+    if pending is not None and not pending.done():
+        return True
+    if gid not in _STARTED_GUILDS:
+        _schedule_guild_tracking(guild, delay_seconds=0)
+        return True
+    if _db_breaker_open():
+        return False
+
+    # Scope changes can require an additional durable reset RPC. Check the
+    # shared activity breaker again before sending a heartbeat.
+    await _refresh_scope_status(guild)
+    if _db_breaker_open():
+        return False
+    try:
+        await asyncio.to_thread(_heartbeat_sync, gid)
+        _record_db_success()
+        if (gid not in _LOST_COVERAGE_GUILDS
+                and gid not in _PENDING_FAIL_REPORTS):
+            _LOCAL_ERRORS.pop(gid, None)
+        return True
+    except Exception as exc:
+        await _mark_failure(
+            gid,
+            "heartbeat failed: "
+            f"{type(exc).__name__}: {str(exc)[:350]}",
         )
+        return False
 
-        for guild in list(
-            getattr(bot, "guilds", []) or []
-        ):
-            gid = int(guild.id)
-            pending = _STARTUP_TASKS.get(gid)
 
-            if (
-                pending is not None
-                and not pending.done()
-            ):
-                continue
-
-            if gid not in _STARTED_GUILDS:
-                _schedule_guild_tracking(
-                    guild,
-                    delay_seconds=0,
-                )
-                continue
-
-            # Stop scope-reset writes and heartbeats while the DB breaker is
-            # open. Previously scope handling could still trigger a fail storm.
-            if _db_breaker_open():
-                continue
-            await _refresh_scope_status(guild)
-
-            try:
-                await asyncio.to_thread(
-                    _heartbeat_sync,
-                    gid,
-                )
-                _record_db_success()
-                if (gid not in _LOST_COVERAGE_GUILDS
-                        and gid not in _PENDING_FAIL_REPORTS):
-                    _LOCAL_ERRORS.pop(gid, None)
-            except Exception as exc:
-                await _mark_failure(
-                    gid,
-                    "heartbeat failed: "
-                    f"{type(exc).__name__}: {str(exc)[:350]}",
-                )
+async def _heartbeat_loop(bot: discord.Client) -> None:
+    """One bounded cycle per process; shards share the same tracker state."""
+    while not bot.is_closed():
+        await asyncio.sleep(_HEARTBEAT_INTERVAL_SECONDS)
+        if bot.is_closed():
+            break
+        result = await run_bounded_guild_sweep(
+            list(getattr(bot, "guilds", []) or []),
+            _heartbeat_one_guild,
+            concurrency=_heartbeat_concurrency(),
+            on_error=lambda guild, exc: print(
+                "⚠️ activity heartbeat guild exception "
+                f"guild={getattr(guild, 'id', '?')} error={type(exc).__name__}"
+            ),
+        )
+        print(
+            "📡 activity heartbeat cycle "
+            f"guilds={result.total} ok={result.succeeded} "
+            f"failed_or_breaker={result.failed} "
+            f"concurrency={result.concurrency} elapsed_s={result.seconds:.2f} "
+            f"target_s={_HEARTBEAT_INTERVAL_SECONDS} "
+            f"overrun={result.seconds > _HEARTBEAT_INTERVAL_SECONDS}"
+        )
 
 
 async def _on_ready(
