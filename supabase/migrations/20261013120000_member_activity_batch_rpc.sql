@@ -195,10 +195,10 @@ from public, anon, authenticated;
 grant execute on function public.record_member_activity_batch(uuid, jsonb)
 to service_role;
 
--- Confirmed batches no longer need receipts. Keep an indexed expiry path for
--- abandoned receipts from process death without forcing an extra write per event.
-create index if not exists idx_member_activity_batch_receipts_applied_at
-    on public.member_activity_batch_receipts(applied_at);
+-- Only positively acknowledged receipts are removed. Do not expire a
+-- receipt by age: a long outage could replay a committed-but-unacknowledged
+-- batch and double event counts if the receipt had been purged. Crash-orphaned
+-- receipts can be reviewed for manual cleanup after process retirement.
 
 create or replace function public.ack_member_activity_batches(
     p_batch_ids uuid[]
@@ -212,8 +212,7 @@ begin
         raise exception 'expected up to 128 acknowledged batch IDs';
     end if;
     delete from public.member_activity_batch_receipts
-    where batch_id = any(p_batch_ids)
-       or applied_at < now() - interval '7 days';
+    where batch_id = any(p_batch_ids);
 end;
 $;
 revoke execute on function public.ack_member_activity_batches(uuid[])
