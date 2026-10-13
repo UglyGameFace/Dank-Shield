@@ -274,8 +274,9 @@ def build_basic_verify_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
                 "Audio is processed using **Google Gemini**. Staff may receive private "
                 "safety alerts, but Dank Shield does not store raw audio.\n\n"
                 "By selecting **Agree & Verify**, you consent to monitoring in designated "
-                "channels. You may **Opt Out** in the Voice Safety notice and contact "
-                "staff about alternative access."
+                "channels. If you decline, press **Decline & Exit Server**. Your access roles "
+                "will be removed, Unverified assigned, and a 10-second grace period offered "
+                "to change your mind before removal."
             ),
             inline=False,
         )
@@ -367,10 +368,27 @@ class BasicVerifyButton(discord.ui.Button):
         await maybe_handle_basic_verify_interaction(interaction)
 
 
+class BasicVerifyDeclineButton(discord.ui.Button):
+    def __init__(self) -> None:
+        from stoney_verify.verification_new.decline_exit import DECLINE_CUSTOM_ID
+        super().__init__(
+            label="Decline & Exit Server", emoji="🚪",
+            style=discord.ButtonStyle.secondary, custom_id=DECLINE_CUSTOM_ID,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if _RUNTIME_FALLBACK_LISTENER_REGISTERED:
+            return
+        from stoney_verify.verification_new.decline_exit import decline_and_exit
+        await decline_and_exit(interaction, from_verify=True)
+
+
 class BasicVerifyView(discord.ui.View):
     def __init__(self, *, voice_safety_agreement: bool = False) -> None:
         super().__init__(timeout=None)
         self.add_item(BasicVerifyButton(voice_safety_agreement=voice_safety_agreement))
+        if voice_safety_agreement:
+            self.add_item(BasicVerifyDeclineButton())
 
 
 async def _basic_verify_fallback_listener(
@@ -393,6 +411,11 @@ async def _basic_verify_fallback_listener(
             else {}
         )
         custom_id = str(data.get("custom_id") or "")
+        from stoney_verify.verification_new.decline_exit import DECLINE_CUSTOM_ID, decline_and_exit
+        if custom_id == DECLINE_CUSTOM_ID:
+            if not interaction.response.is_done():
+                await decline_and_exit(interaction, from_verify=True)
+            return
         if custom_id != BASIC_VERIFY_CUSTOM_ID:
             return
 
@@ -1348,6 +1371,12 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
     try:
         data = getattr(interaction, "data", None) or {}
         custom_id = str(data.get("custom_id") or "")
+        from stoney_verify.verification_new.decline_exit import DECLINE_CUSTOM_ID, decline_and_exit
+        if custom_id == DECLINE_CUSTOM_ID:
+            if not _claim_basic_verify_interaction(interaction):
+                return True
+            await decline_and_exit(interaction, from_verify=True)
+            return True
         if custom_id != BASIC_VERIFY_CUSTOM_ID:
             return False
         if not _claim_basic_verify_interaction(interaction):
@@ -1377,6 +1406,15 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
             return True
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             await _reply(interaction, "This only works inside the server.", ok=False)
+            return True
+        from stoney_verify.verification_new.decline_exit import exit_pending
+        if exit_pending(int(interaction.guild.id), int(interaction.user.id)):
+            await _reply(
+                interaction,
+                "An exit countdown is active. Use **Agree & Stay** on your private 10-second notice; "
+                "the regular Verify button cannot bypass a pending exit.",
+                ok=False,
+            )
             return True
         ok, message = await apply_basic_verification(interaction.user)
         if ok:
