@@ -5,7 +5,21 @@
 -- RPC per event. The upsert body mirrors public.record_member_activity exactly
 -- (greatest()-based), plus p_event_count so batched windows keep exact counts.
 
-create or replace function public.record_member_activity_batch(p_events jsonb)
+-- Receipt and ledger updates are atomic. Replaying a stable batch ID after a
+-- lost HTTP acknowledgement must not duplicate event_count.
+create table if not exists public.member_activity_batch_receipts (
+    batch_id uuid primary key,
+    applied_at timestamptz not null default now()
+);
+alter table public.member_activity_batch_receipts enable row level security;
+revoke all on table public.member_activity_batch_receipts
+    from public, anon, authenticated;
+grant select, insert on table public.member_activity_batch_receipts to service_role;
+
+drop function if exists public.record_member_activity_batch(jsonb);
+create or replace function public.record_member_activity_batch(
+    p_batch_id uuid, p_events jsonb
+)
 returns void
 language plpgsql
 security definer
@@ -21,8 +35,21 @@ declare
     v_process_id text;
     v_event_count bigint;
 begin
+    if p_batch_id is null then
+        raise exception 'p_batch_id is required';
+    end if;
     if p_events is null or jsonb_typeof(p_events) != 'array' then
         raise exception 'p_events must be a JSON array';
+    end if;
+    if jsonb_array_length(p_events) < 1
+        or jsonb_array_length(p_events) > 500 then
+        raise exception 'p_events must contain between 1 and 500 entries';
+    end if;
+
+    insert into public.member_activity_batch_receipts(batch_id)
+    values (p_batch_id) on conflict do nothing;
+    if not found then
+        return;
     end if;
 
     for e in select * from jsonb_array_elements(p_events)
@@ -83,7 +110,7 @@ begin
             v_channel_id,
             v_process_id,
             v_event_count,
-            v_occurred_at,
+            coalesce((e->>'first_occurred_at')::timestamptz, v_occurred_at),
             v_occurred_at
         )
         on conflict (guild_id, user_id)
@@ -151,6 +178,10 @@ begin
             last_process_id = excluded.last_process_id,
             event_count = public.member_activity_ledger.event_count
                 + v_event_count,
+            first_observed_at = least(
+                public.member_activity_ledger.first_observed_at,
+                excluded.first_observed_at
+            ),
             updated_at = greatest(
                 public.member_activity_ledger.updated_at,
                 excluded.updated_at
@@ -159,5 +190,7 @@ begin
 end;
 $$;
 
-grant execute on function public.record_member_activity_batch(jsonb)
+revoke execute on function public.record_member_activity_batch(uuid, jsonb)
+from public, anon, authenticated;
+grant execute on function public.record_member_activity_batch(uuid, jsonb)
 to service_role;
