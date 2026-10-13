@@ -104,7 +104,7 @@ def test_disposable_real_pg17_custom_dump_restore_and_voice_canary(
          "-e", "PGPASSWORD=postgres", "postgres:17",
          "pg_restore", "-h", "127.0.0.1", "-U", "postgres",
          "-d", "dank_backup_restore_check", "--no-owner",
-         "--no-privileges", "--exit-on-error", "-"],
+         "--no-privileges", "--exit-on-error"],
         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
