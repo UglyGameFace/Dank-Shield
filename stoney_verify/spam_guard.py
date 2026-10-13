@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import random
 import re
 import secrets
 import time
@@ -13,6 +15,7 @@ from discord import app_commands
 from discord.ext import tasks
 
 from .globals import *  # noqa: F401,F403
+from .guild_sweep import run_bounded_guild_sweep
 from .settings_registry import (
     normalize_spam_guard_settings as _registry_normalize_spam_guard_settings,
     spam_guard_defaults as _registry_spam_guard_defaults,
@@ -68,6 +71,7 @@ _SETTINGS_TABLE_AVAILABLE: Optional[bool] = None
 _CASES_TABLE_AVAILABLE: Optional[bool] = None
 _SPAM_GUARD_COMMANDS_REGISTERED = False
 _SPAM_GUARD_VIEWS_REGISTERED = False
+_SPAM_GUARD_WARM_TASK: Optional[asyncio.Task] = None
 _SPAM_GUARD_REGISTERED_VIEW_KEYS: Set[str] = set()
 
 _RUNTIME_SETTINGS: Dict[int, Dict[str, Any]] = {}
@@ -3685,36 +3689,83 @@ async def _spam_guard_on_message(message: discord.Message):
     await handle_incoming_spam_message(message)
 
 
+def _spam_warm_concurrency() -> int:
+    try:
+        requested = int(os.getenv("DANK_SPAM_WARM_GUILD_CONCURRENCY", "3"))
+    except (ValueError, TypeError):
+        requested = 3
+    return max(1, min(requested, 8))
+
+
+async def _run_spam_guard_warm() -> None:
+    # Normal message handlers load settings on demand; warm is an optimization,
+    # not a prerequisite for enforcement. Do not block Discord's ready event.
+    await asyncio.sleep(random.uniform(0.0, 8.0))
+    guilds = [
+        guild for guild in list(bot.guilds)
+        if not _cache_persisted(_cached_runtime_settings(guild.id) or {})
+    ]
+    enabled_count = 0
+    runtime_only_enabled = 0
+    unpersisted_count = 0
+    error_samples = 0
+    stop_early = False
+
+    async def warm_one(guild: discord.Guild) -> bool:
+        nonlocal enabled_count, runtime_only_enabled
+        nonlocal unpersisted_count, error_samples, stop_early
+        if stop_early:
+            return False
+        settings = await get_spam_settings(guild.id)
+        cached = _cached_runtime_settings(guild.id) or {}
+        persisted = bool(cached.get("__meta_persisted"))
+        enabled = bool(settings.get("enabled"))
+        if enabled:
+            enabled_count += 1
+            if not persisted:
+                runtime_only_enabled += 1
+        if not persisted:
+            unpersisted_count += 1
+            # If durable reads/bootstrap are failing repeatedly, stop a
+            # startup-wide 3000+ guild outage storm. Each guild remains
+            # lazily loadable on its next message/interaction.
+            if unpersisted_count >= 5:
+                stop_early = True
+            if error_samples < 5:
+                _debug(
+                    f"startup settings issue guild={guild.id} "
+                    f"diag={_settings_diag_brief(guild.id)}"
+                )
+                error_samples += 1
+        return persisted
+
+    result = await run_bounded_guild_sweep(
+        guilds,
+        warm_one,
+        concurrency=_spam_warm_concurrency(),
+        on_error=lambda guild, exc: _debug(
+            f"startup settings warm exception guild={getattr(guild, 'id', '?')} "
+            f"error={type(exc).__name__}"
+        ),
+    )
+    _debug(
+        f"startup settings guilds_total={len(bot.guilds)} "
+        f"scheduled={result.total} persisted={result.succeeded} "
+        f"unpersisted_or_skipped={result.failed} enabled={enabled_count} "
+        f"runtime_only_enabled={runtime_only_enabled} "
+        f"halted_on_db_errors={stop_early} "
+        f"concurrency={result.concurrency} elapsed_s={result.seconds:.2f}"
+    )
+
+
 @bot.listen("on_ready")
 async def _spam_guard_warm_settings_cache():
-    try:
-        guilds = list(bot.guilds)
-        enabled_count = 0
-        runtime_only_enabled = 0
-
-        for guild in guilds:
-            settings = await get_spam_settings(guild.id)
-            cached = _cached_runtime_settings(guild.id) or {}
-            persisted = bool(cached.get("__meta_persisted"))
-            enabled = bool(settings.get("enabled"))
-            if enabled:
-                enabled_count += 1
-                if not persisted:
-                    runtime_only_enabled += 1
-
-            diag_payload = _SETTINGS_LAST_DIAG_BY_GUILD.get(int(guild.id)) or {}
-            diag = _settings_diag_brief(guild.id)
-            row_found = bool(diag_payload.get("row_found"))
-            if (not persisted) or (not row_found):
-                _debug(
-                    f"startup settings issue guild={guild.id} enabled={enabled} persisted={persisted} row_found={row_found} diag={diag}"
-                )
-
-        _debug(
-            f"startup settings guilds={len(guilds)} enabled={enabled_count} runtime_only_enabled={runtime_only_enabled}"
-        )
-    except Exception as e:
-        _debug(f"warm settings cache failed error={repr(e)}")
+    global _SPAM_GUARD_WARM_TASK
+    if _SPAM_GUARD_WARM_TASK is not None and not _SPAM_GUARD_WARM_TASK.done():
+        return
+    _SPAM_GUARD_WARM_TASK = asyncio.create_task(
+        _run_spam_guard_warm(), name="spam_guard_warm_settings"
+    )
 
 
 def register_spam_guard_persistent_views(bot_instance: Any = None) -> bool:
