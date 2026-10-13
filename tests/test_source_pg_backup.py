@@ -126,3 +126,73 @@ def test_plan_only_command_does_not_open_database(capsys, monkeypatch):
     assert "plan_only" in output
     assert "No database contacted" in output
     assert "neverexpose" not in output
+
+
+@pytest.mark.parametrize("stderr,expected", [
+    (b'pg_dump: error: connection to server failed: FATAL: password authentication failed for user "postgres"',
+     "database_authentication_rejected"),
+    (b'FATAL: Tenant or user not found', "pooler_project_or_user_rejected"),
+    (b'could not translate host name "db.sample.supabase.co" to address',
+     "database_dns_lookup_failed"),
+    (b'connection to server failed: Network is unreachable',
+     "database_network_unreachable"),
+    (b'connection refused', "database_connection_refused"),
+    (b'ssl error: certificate verify failed', "database_tls_failed"),
+    (b'remaining connection slots are reserved', "database_connection_limit"),
+    (b'permission denied for schema auth', "database_dump_permission_denied"),
+    (b'server version mismatch', "pg_client_server_version_mismatch"),
+    (b'server closed the connection unexpectedly', "database_connection_dropped"),
+    (b'connection to server at "host" failed for unknown reason',
+     "database_connection_failed_unclassified"),
+    (b'pg_dump: unrecognized failure', "pg_dump_failed_unclassified"),
+])
+def test_backup_errors_are_classified_without_untrusted_stderr(stderr, expected):
+    code = backup.classify_pg_dump_failure(stderr + b' secret-database-password')
+    assert code == expected
+    assert "password" not in code
+    assert "db.sample" not in code
+
+
+def test_actual_pg_dump_failure_reports_safe_code_without_leaking_secrets(tmp_path, monkeypatch, capsys):
+    """One CLI run with fake pg_dump that simulates a rejected login.
+
+    Source credentials are test data. The fake process must never attempt
+    network access. It verifies the prior generic RuntimeError is replaced
+    by an actionable, fixed code while partial archives are erased.
+    """
+    from tools.backup_dankshield_supabase_source import main
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    for tool in ("pg_dump", "pg_restore"):
+        script = fake_bin / tool
+        script.write_text(
+            "#!/usr/bin/env bash\n"
+            "if [[ \"$1\" == '--version' ]]; then\n"
+            f"  echo '{tool} (PostgreSQL) 17.11'\n"
+            "  exit 0\n"
+            "fi\n"
+            "echo 'pg_dump: error: password authentication failed for user demo "
+            "private-password-is-never-printed' >&2\n"
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        script.chmod(0o700)
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ.get('PATH', '')}")
+    monkeypatch.setenv(
+        "DANK_SOURCE_DATABASE_URL",
+        f"postgresql://postgres:verySecretTestPassword@db.{REF}.supabase.co:5432/postgres",
+    )
+    monkeypatch.setenv("DANK_MIGRATION_SOURCE_REF", REF)
+    monkeypatch.setenv("DANK_BACKUP_PASSPHRASE", PASSPHRASE)
+    monkeypatch.setattr("sys.argv", [
+        "backup_dankshield_supabase_source", "--create", "--output-dir", str(private)
+    ])
+    assert main() == 2
+    line = capsys.readouterr().out
+    assert '"failure_code": "database_authentication_rejected"' in line
+    assert "verySecretTestPassword" not in line
+    assert "private-password-is-never-printed" not in line
+    assert "postgresql://" not in line
+    assert list(private.iterdir()) == []
