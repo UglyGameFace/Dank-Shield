@@ -140,11 +140,18 @@ def test_attachment_doorways_are_limited_to_card_upload_and_toke_media() -> None
     }
 
 
-def test_lifecycle_studios_remain_reachable_from_home_not_subcommands() -> None:
+def test_lifecycle_studios_keep_home_access_and_flat_welcome_shortcut() -> None:
     _final_imported_tree()
     home = dank_group.get_command("home")
     assert isinstance(home, app_commands.Command)
     assert getattr(home.callback, "__module__", "") == (
         "stoney_verify.commands_ext.public_command_surface_v2"
     )
-    assert dank_group.get_command("welcome") is None
+    # The old nested /dank welcome group stays retired. The curated direct
+    # shortcut is a single command dispatching to the existing Welcome UI.
+    welcome = dank_group.get_command("welcome")
+    assert isinstance(welcome, app_commands.Command)
+    assert not isinstance(welcome, app_commands.Group)
+    assert getattr(welcome.callback, "__module__", "") == (
+        "stoney_verify.commands_ext.public_command_surface_v2"
+    )
