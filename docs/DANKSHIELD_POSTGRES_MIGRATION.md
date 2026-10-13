@@ -276,8 +276,16 @@ on every settings update.
   backup. The current Discloud service's disk allowance and private runner
   are still unverified, so no live seed/apply has been performed.
 
-**Still required before any live cutover:** true PG17 integration and
-concurrency tests, setup/role permission validation across the actual guild
+A separate, opt-in real PostgreSQL 17 integration test now lives in
+`tests/test_postgres_guild_config_pg17_integration.py`. It accepts only a
+local `postgres` database, checks the server is PG17, runs the versioned
+migration in that disposable test environment and exercises two concurrent
+CAS writers. It is **skipped** in ordinary CI without the explicit
+`RUN_PG_GUILD_CONFIG_INTEGRATION=1` and `DANK_TEST_DATABASE_URL`
+localhost settings. Authoring the test is not evidence that it has run.
+
+**Still required before any live cutover:** a successful isolated PG17
+integration/concurrency run, setup/role permission validation across the actual guild
 config API, revision/history/restore parity, operational secret provisioning,
 remaining tickets/community/Cinema/member/moderation repositories, full source
 backup and restore tests, size/load soak, and a reversible switch. Do not
