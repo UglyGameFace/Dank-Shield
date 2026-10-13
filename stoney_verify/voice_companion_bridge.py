@@ -14,6 +14,7 @@ from .voice_bridge_wire import BridgeRejected, PATH, response_body, response_sig
 from .voice_member_wire import (
     CHECK_PATH, MAX_CHECK_BYTES, MemberCheckRejected, check_response_body,
     sign_check_response, verify_check_request,
+    REVOKE_PATH, revoke_response_body, sign_revoke_response, verify_revoke_request,
 )
 
 _BRIDGE_RUNNER: web.AppRunner | None = None
@@ -106,6 +107,64 @@ async def member_eligibility(request: web.Request) -> web.Response:
     )
 
 
+async def member_revoke(request: web.Request) -> web.Response:
+    """Withdraw one member's agreement, never grant capture or create consent.
+
+    Only the trusted Watch Yo Mouf service may call this route, after its
+    member-initiated Discord interaction. Shares the HMAC nonce replay cache
+    with diagnostics. A storage error NEVER claims a successful withdrawal.
+    """
+    if not _enabled():
+        return web.Response(status=503, text="Unavailable")
+    if request.content_length is not None and request.content_length > MAX_CHECK_BYTES:
+        return web.Response(status=413)
+    try:
+        body = await request.read()
+    except web.HTTPRequestEntityTooLarge:
+        return web.Response(status=413)
+    if len(body) > MAX_CHECK_BYTES:
+        return web.Response(status=413)
+    now = int(time.time())
+    key = _bridge_secret()
+    try:
+        guild_id, member_id, nonce = verify_revoke_request(
+            request.headers, key, body, now=now,
+        )
+    except MemberCheckRejected:
+        return web.Response(status=401, text="Unauthorized")
+    if not _claim_nonce(nonce, now):
+        return web.Response(status=409, text="Request rejected")
+
+    from .globals import bot
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return web.Response(status=404, text="Not found")
+
+    try:
+        from .community_voice_caption_runtime import ensure_community_voice_caption_manager
+        from .voice_safety_consent import read_voice_safety_agreement
+
+        manager = ensure_community_voice_caption_manager(bot)
+        # This canonical method immediately revokes any in-process audio
+        # admission BEFORE persisting the change; on storage failure it
+        # stops the receiver fail-closed.
+        await manager.set_voice_safety_consent(guild_id, member_id, False)
+        if await read_voice_safety_agreement(guild_id, member_id):
+            # Do not return success if a different writer restored consent.
+            return web.Response(status=503, text="Could not confirm withdrawal")
+    except Exception:
+        return web.Response(status=503, text="Could not confirm withdrawal")
+
+    payload = revoke_response_body()
+    return web.Response(
+        body=payload, content_type="application/json",
+        headers={
+            "X-WYM-Response-Signature": sign_revoke_response(key, nonce, body, payload),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 async def bridge_status(request: web.Request) -> web.Response:
     """The only route; no guild/member IDs or policy actions are accepted."""
     if not _enabled():
@@ -136,6 +195,7 @@ async def start_private_voice_bridge() -> bool:
     app = web.Application(client_max_size=1024)
     app.router.add_get(PATH, bridge_status)
     app.router.add_post(CHECK_PATH, member_eligibility)
+    app.router.add_post(REVOKE_PATH, member_revoke)
     runner = web.AppRunner(app)
     await runner.setup()
     try:
