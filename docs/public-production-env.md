@@ -112,7 +112,7 @@ public_server_env_id_guard public mode active; deployment-level Discord IDs are 
 globals: startup summary: {'guild': 0, ...}
 globals: supabase status: state=ready ... service_role_present=True
 commands_ext registration complete. ... profile=public
-public_command_surface_v2 compact UI installed roots=['View Dank Profile', 'captions', 'cinema', 'dank', 'mod', 'movie', 'role', 'ticket', 'tickets', 'toke', 'verify'] dank_children=['home', 'purge', 'setup', 'upload'] ...
+public_command_surface_v2 compact UI installed roots=['View Dank Profile', 'captions', 'cinema', 'dank', 'mod', 'movie', 'role', 'ticket', 'tickets', 'toke', 'verify'] dank_children=[...curated direct shortcuts, purge, setup, upload] ...
 ```
 
 The intentional **final** public global application-command surface is exactly **11** commands/items:
@@ -129,11 +129,25 @@ The intentional **final** public global application-command surface is exactly *
 10. `/verify` — one verification status/repair doorway
 11. `View Dank Profile` user context menu
 
-`/dank` intentionally exposes only four direct children:
+`/dank` exposes a curated set of short, discoverable direct children; the underlying Home UI remains the complete feature catalog:
 
 - `/dank home` — the categorized Dank Shield control center. It exposes Setup & Server Settings, Onboarding & Access, Safety & Moderation, Members/Roles/Profiles, Community & Engagement, Tickets & Support, Design & Branding, Voice & Accessibility, Logs/Stats/Diagnostics, My Dank Shield, Utilities & Help, plus Find a Feature and All Features.
 - `/dank purge` — the compact destructive-cleanup entrypoint that remains a direct command for explicit targeting and confirmation.
 - `/dank setup` — the guided onboarding/setup entrypoint restored for discoverability while advanced setup tools stay inside the UI. Its **Live Captions** section can select/create the ordinary-server caption output, allow all VCs or selected VCs/categories/exclusions, and choose **Original**, **English**, or **Original + English** caption text. Gemini Live input defaults to automatic detection across its supported languages and code-switching.
+- `/dank protection` — protected server safety center (AntiNuke, Spam Guard, invite/Automod).
+- `/dank voice-safety` — staff configuration of disclosed AI voice monitoring; **not** a member opt-out command or an activation bypass.
+- `/dank welcome` — canonical Welcome, Join & Exit manager.
+- `/dank design` — canonical server/channel design studio.
+- `/dank share` — Share Router and inline-media manager.
+- `/dank pings` — community and notification ping-role manager.
+- `/dank community` — Community Hub and LFG.
+- `/dank logs` — logging and activity setup.
+- `/dank stats` — live server-stats center.
+- `/dank status` — live bot service status.
+- `/dank diagnostics` — read-only health and configuration diagnostics.
+- `/dank profile` — personal profile studio.
+- `/dank help` — built-in feature guide.
+
 - `/dank upload` — the compact **card-asset** attachment command for a Join Card background, Exit Card background, or custom card font. The only other approved attachment doorways are `/toke upload:` for optional Toke image/GIF media and `/movie torrent:` for Movie Night torrent metadata. Discord buttons still cannot provide attachment fields.
 
 
@@ -155,7 +169,7 @@ The branded `/cinema` group is a thin command facade over the same canonical Mov
 
 `/movie` remains available for compatibility and for its optional magnet/.torrent attachment fields.
 
-Former roots such as `/ticket-intake`, `/ticket-category`, and `/ticket-panel` are not public autocomplete commands anymore. Their implementation modules remain loaded and their actions are available inside `/tickets`. Likewise, former `/dank` shortcuts such as status/diagnostics/welcome are reached through `/dank home` rather than separate autocomplete entries.
+Former roots such as `/ticket-intake`, `/ticket-category`, and `/ticket-panel` are not public autocomplete commands anymore. Their implementation modules remain loaded and their actions are available inside `/tickets`. Advanced and obsolete `/dank` shortcuts remain hidden. The curated shortcuts above and `/dank home` both open the same canonical features.
 
 Advanced repair/setup aliases such as direct `/dank setup-review`, `/dank db-check`, and `/dank setup-access` are also not part of the normal public profile. Their functionality belongs inside the guided mega-menu/diagnostics surfaces unless an explicit admin/development profile selects an advanced registrar.
 
