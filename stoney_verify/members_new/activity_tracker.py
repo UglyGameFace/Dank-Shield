@@ -241,6 +241,8 @@ def _combined_local_error(guild_id: int) -> str:
         parts.append("Unreported activity-write failure; coverage is unverified.")
     if gid in _LOST_COVERAGE_GUILDS:
         parts.append("Activity events were dropped; a new proof window is required.")
+    if _db_breaker_open():
+        parts.append("Activity database circuit breaker is open; coverage unverified.")
     return " | ".join(part for part in parts if part)
 
 
@@ -1290,10 +1292,10 @@ async def _heartbeat_one_guild(guild: discord.Guild) -> bool:
 
     # Scope changes can require an additional durable reset RPC. Check the
     # shared activity breaker again before sending a heartbeat.
-    await _refresh_scope_status(guild)
-    if _db_breaker_open():
-        return False
     try:
+        await _refresh_scope_status(guild)
+        if _db_breaker_open():
+            return False
         await asyncio.to_thread(_heartbeat_sync, gid)
         _record_db_success()
         if (gid not in _LOST_COVERAGE_GUILDS
