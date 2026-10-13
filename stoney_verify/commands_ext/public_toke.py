@@ -559,7 +559,7 @@ async def publish_toke_from_draft(
     clean_media = ""
     upload = None
     if media_message is not None:
-        found = media_url_from_message(media_message)
+        found = media_url_from_message(media_message, allow_public_page=True)
         # Prefer a provider-hosted public image when Discord's GIF picker
         # supplied one; it can stay *inside* the embed without a local upload
         # and without leaving a duplicate native attachment on edits.
