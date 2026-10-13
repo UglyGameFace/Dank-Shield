@@ -42,7 +42,7 @@ def main() -> int:
         )
     if PUBLIC_GLOBAL_COMMAND_NAMES != expected:
         errors.append(f"public global command names drifted: {PUBLIC_GLOBAL_COMMAND_NAMES!r}")
-    if PUBLIC_DANK_CHILDREN != frozenset({"home", "purge", "setup", "upload"}):
+    if not {"home", "purge", "setup", "upload", "protection", "voice-safety", "diagnostics", "help"} <= PUBLIC_DANK_CHILDREN or len(PUBLIC_DANK_CHILDREN) != 17:
         errors.append(f"final /dank children drifted: {sorted(PUBLIC_DANK_CHILDREN)!r}")
 
     access = _read("stoney_verify/commands_ext/public_access_control.py")
@@ -76,7 +76,7 @@ def main() -> int:
     required_surface_markers = (
         "install_compact_public_surface_v2",
         'for retired_root in ("ticket-intake", "ticket-category", "ticket-panel")',
-        'dank_children != ["home", "setup", "upload"]',
+        'expected_children = sorted(["home", "setup", "upload"] + [name for name, _, _ in DANK_SHORTCUTS])',
         'expected_roots = {"captions", "cinema", "dank", "mod", "movie", "role", "ticket", "tickets", "toke", "verify"}',
     )
     for marker in required_surface_markers:
@@ -88,7 +88,7 @@ def main() -> int:
         "compact_surface.install_compact_public_surface_v2(bot, tree)",
         "install_lifecycle_menu_compat()",
         "install_direct_purge_group()",
-        'expected_children = ["home", "purge", "setup", "upload"]',
+        'expected_children = sorted(PUBLIC_DANK_CHILDREN)',
     )
     for marker in required_exit_markers:
         if marker not in exit_surface:
@@ -106,7 +106,7 @@ def main() -> int:
     for name in expected:
         if name not in docs:
             errors.append(f"public production docs do not list {name!r}")
-    for retired in ("/ticket-intake", "/ticket-category", "/ticket-panel", "/dank welcome"):
+    for retired in ("/ticket-intake", "/ticket-category", "/ticket-panel"):
         if f"{retired} —" in docs or f"{retired}` —" in docs:
             errors.append(f"public production docs still advertise retired command root {retired}")
 
