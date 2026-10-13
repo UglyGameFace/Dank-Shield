@@ -11,6 +11,7 @@ import time
 from aiohttp import web
 
 from .voice_bridge_wire import BridgeRejected, PATH, response_body, response_signature, secret_bytes, verify_request
+from .voice_safety_coverage import channel_in_scope
 from .voice_member_wire import (
     CHECK_PATH, MAX_CHECK_BYTES, MemberCheckRejected, check_response_body,
     sign_check_response, verify_check_request,
@@ -53,7 +54,7 @@ async def _member_policy_and_consent(guild_id: int, member_id: int, channel_id: 
     cfg = await get_guild_config(guild_id, refresh=True)
     policy_matches = bool(
         cfg.get("voice_safety_enabled") is True
-        and int(cfg.get("voice_safety_voice_channel_id") or 0) == channel_id
+        and channel_in_scope(guild, cfg, guild.get_channel(channel_id))
         and int(cfg.get("voice_safety_staff_channel_id") or 0) > 0
         and int(cfg.get("voice_safety_notice_channel_id") or 0) > 0
     )

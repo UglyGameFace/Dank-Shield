@@ -26,6 +26,10 @@ from .community_voice_captions import (
 )
 from .voice_safety_policy import VoiceSafetyAdvisor
 from .voice_safety_consent import read_voice_safety_agreement, save_voice_safety_agreement
+from .voice_safety_coverage import (
+    SINGLE, MIN_HUMANS, channel_in_scope, coverage_mode,
+    human_count, qualifying_channels,
+)
 from .community_voice_receive import (
     PerSpeakerFrameBridge,
     VoiceReceiveUnavailable,
@@ -612,7 +616,7 @@ class CommunityVoiceCaptionManager:
     async def maybe_auto_start_voice_safety(
         self, guild: discord.Guild, *, joined_voice_id: int = 0
     ) -> bool:
-        """Start one configured VC only when populated; never add a receiver.
+        """Start one qualifying VC with at least two humans; never add a receiver.
 
         Startup and join events use the same gate and per-guild lock. Discord
         connection setup is not instantaneous; monitoring never covers speech
@@ -638,17 +642,16 @@ class CommunityVoiceCaptionManager:
                 cfg = await get_guild_config(gid)
                 if not bool(cfg.get("voice_safety_enabled", False)):
                     return False
-                voice_id = int(cfg.get("voice_safety_voice_channel_id") or 0)
-                if voice_id <= 0 or (joined_voice_id and int(joined_voice_id) != voice_id):
-                    return False
-                voice = guild.get_channel(voice_id)
-                if not isinstance(voice, discord.VoiceChannel):
-                    return False
-                if not any(not getattr(m, "bot", False) for m in tuple(voice.members or ())):
+                candidates = qualifying_channels(guild, cfg)
+                if joined_voice_id:
+                    candidates = [
+                        vc for vc in candidates if int(vc.id) == int(joined_voice_id)
+                    ]
+                if not candidates:
                     return False
                 state = await self.start_voice_safety(
                     guild_id=gid,
-                    voice_channel_id=voice_id,
+                    voice_channel_id=int(candidates[0].id),
                     staff_alert_channel_id=int(cfg.get("voice_safety_staff_channel_id") or 0),
                     notice_channel_id=int(cfg.get("voice_safety_notice_channel_id") or 0),
                     automatic=True,
@@ -674,10 +677,7 @@ class CommunityVoiceCaptionManager:
             if len(self._sessions) >= self.max_active_guilds:
                 break
             voice_channels = getattr(guild, "voice_channels", ()) or ()
-            if not any(
-                any(not getattr(m, "bot", False) for m in (getattr(vc, "members", ()) or ()))
-                for vc in voice_channels
-            ):
+            if not any(human_count(vc) >= MIN_HUMANS for vc in voice_channels):
                 continue
             await self.maybe_auto_start_voice_safety(guild)
             await asyncio.sleep(0)
@@ -715,13 +715,17 @@ class CommunityVoiceCaptionManager:
                 state.safety_consent_epochs[uid] = state.safety_consent_epochs.get(uid, 0) + 1
                 state.safety_consents.discard(uid)
             await self._disable_user_for_state(state, uid)
-            if getattr(state, "scope_kind", "server") == "voice_safety" and bool(getattr(state, "safety_automatic", False)):
+            if getattr(state, "scope_kind", "server") == "voice_safety":
                 voice = member.guild.get_channel(target)
-                if voice is None or not any(
+                remaining = sum(
                     not getattr(m, "bot", False) and int(m.id) != uid
                     for m in tuple(getattr(voice, "members", ()) or ())
-                ):
+                )
+                if remaining < MIN_HUMANS:
                     await self.stop(state.session_id)
+                    # The same identity may now serve another qualifying room,
+                    # but never two VCs simultaneously in one guild.
+                    await self.maybe_auto_start_voice_safety(member.guild)
             return
 
         if after_id != target or before_id == target:
@@ -1079,9 +1083,13 @@ class CommunityVoiceCaptionManager:
         if safety_mode:
             if not bool(caption_cfg.get("voice_safety_enabled", False)):
                 raise VoiceReceiveUnavailable("Voice Safety has not been enabled by this server.")
-            for key, actual in (("voice_safety_voice_channel_id", voice_channel_id), ("voice_safety_staff_channel_id", destination_channel_id), ("voice_safety_notice_channel_id", notice_channel_id)):
+            for key, actual in (("voice_safety_staff_channel_id", destination_channel_id), ("voice_safety_notice_channel_id", notice_channel_id)):
                 if int(caption_cfg.get(key) or 0) != int(actual):
                     raise VoiceReceiveUnavailable("Voice Safety channel configuration changed; refresh setup.")
+            if coverage_mode(caption_cfg) == SINGLE and int(
+                caption_cfg.get("voice_safety_voice_channel_id") or 0
+            ) != voice_channel_id:
+                raise VoiceReceiveUnavailable("Voice Safety channel configuration changed; refresh setup.")
         output_mode = "original" if safety_mode else normalize_caption_output_mode(
             caption_cfg.get("live_captions_output_mode", "original")
         )
@@ -1114,6 +1122,13 @@ class CommunityVoiceCaptionManager:
             if not isinstance(voice_channel, discord.VoiceChannel):
                 raise VoiceReceiveUnavailable(
                     "The Live Captions voice room no longer exists."
+                )
+            if safety_mode and (
+                not channel_in_scope(guild, caption_cfg, voice_channel)
+                or human_count(voice_channel) < MIN_HUMANS
+            ):
+                raise VoiceReceiveUnavailable(
+                    "Voice Safety requires an eligible, accessible VC with at least two humans."
                 )
 
             destination = (
