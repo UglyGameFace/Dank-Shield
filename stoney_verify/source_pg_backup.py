@@ -14,6 +14,7 @@ import re
 import shutil
 import stat
 import subprocess
+import threading
 from typing import Any, BinaryIO, Iterable
 from urllib.parse import unquote, urlsplit
 
@@ -24,6 +25,64 @@ TAG_LEN = 16
 CHUNK_BYTES = 1024 * 1024
 MAX_ARCHIVE_BYTES = 2048 * 1024 * 1024
 MIN_PASSPHRASE_LEN = 24
+
+# These are fixed, public diagnostic codes. NEVER include raw subprocess
+# stderr in exceptions or CI output: pg_dump can echo a source hostname,
+# role, and in rare cases a sensitive connection string.
+class BackupFailure(RuntimeError):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def classify_pg_dump_failure(stderr: bytes) -> str:
+    """Return an actionable but credential-free pg_dump failure category."""
+    msg = stderr[:32768].decode("utf-8", "replace").lower()
+    if any(s in msg for s in (
+        "password authentication failed", "no password supplied",
+        "authentication failed", "invalid password", "invalid_password",
+    )):
+        return "database_authentication_rejected"
+    if any(s in msg for s in ("tenant or user not found", "unknown tenant")):
+        return "pooler_project_or_user_rejected"
+    if any(s in msg for s in (
+        "could not translate host name", "name or service not known",
+        "temporary failure in name resolution", "nodename nor servname",
+    )):
+        return "database_dns_lookup_failed"
+    if any(s in msg for s in (
+        "network is unreachable", "no route to host", "connection timed out",
+        "operation timed out", "timeout expired",
+    )):
+        return "database_network_unreachable"
+    if "connection refused" in msg:
+        return "database_connection_refused"
+    if any(s in msg for s in (
+        "server does not support ssl", "certificate verify failed",
+        "ssl error", "tls handshake",
+    )):
+        return "database_tls_failed"
+    if any(s in msg for s in (
+        "too many connections", "too many clients already",
+        "remaining connection slots are reserved",
+    )):
+        return "database_connection_limit"
+    if any(s in msg for s in (
+        "permission denied", "must be owner of", "must be member of role",
+    )):
+        return "database_dump_permission_denied"
+    if any(s in msg for s in (
+        "server version mismatch", "aborting because of server version",
+    )):
+        return "pg_client_server_version_mismatch"
+    if any(s in msg for s in (
+        "server closed the connection unexpectedly", "connection to server was lost",
+    )):
+        return "database_connection_dropped"
+    if any(s in msg for s in ("could not connect", "connection to server")):
+        return "database_connection_failed_unclassified"
+    return "pg_dump_failed_unclassified"
+
 
 
 def _derive_key(passphrase: str, salt: bytes) -> bytes:
@@ -235,18 +294,57 @@ def create_backup(
             ["pg_dump", "--format=custom", "--compress=6",
              "--no-owner", "--no-privileges"],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, env=_sanitized_pg_environment(pg_vars)
+            stderr=subprocess.PIPE, env=_sanitized_pg_environment(pg_vars)
         )
+        # Drain stderr concurrently. Capture only a bounded prefix in memory,
+        # never write raw pg_dump errors (which may contain a DSN) to disk.
+        pg_errors = bytearray()
+        def _drain_stderr() -> None:
+            assert proc is not None and proc.stderr is not None
+            while True:
+                chunk = proc.stderr.read(4096)
+                if not chunk:
+                    break
+                room = max(0, 32768 - len(pg_errors))
+                if room:
+                    pg_errors.extend(chunk[:room])
+
+        stderr_reader = threading.Thread(
+            target=_drain_stderr, name="pg-dump-stderr", daemon=True
+        )
+        stderr_reader.start()
         with os.fdopen(fd, "wb") as encrypted_file:
             fd = -1
             assert proc.stdout is not None
-            info = encrypt_stream_to_file(proc.stdout, encrypted_file, passphrase)
-            proc.stdout.close()
-            if proc.wait(timeout=180) != 0:
-                raise RuntimeError("pg_dump failed; encrypted partial output discarded")
+            try:
+                info = encrypt_stream_to_file(
+                    proc.stdout, encrypted_file, passphrase
+                )
+            except RuntimeError as exc:
+                # A failed login/host check produces zero stdout, which used
+                # to hide the useful pg_dump error behind "too small".
+                if str(exc) == "pg_dump produced an unexpectedly small archive":
+                    status = proc.wait(timeout=30)
+                    stderr_reader.join(timeout=5)
+                    if status:
+                        raise BackupFailure(
+                            classify_pg_dump_failure(bytes(pg_errors))
+                        ) from None
+                raise
+            finally:
+                proc.stdout.close()
+            status = proc.wait(timeout=180)
+            stderr_reader.join(timeout=5)
+            if status != 0:
+                raise BackupFailure(
+                    classify_pg_dump_failure(bytes(pg_errors))
+                )
             encrypted_file.flush()
             os.fsync(encrypted_file.fileno())
-        _ = verify_archive_toc(pending, passphrase)
+        try:
+            _ = verify_archive_toc(pending, passphrase)
+        except RuntimeError:
+            raise BackupFailure("encrypted_archive_verification_failed") from None
         os.replace(pending, destination)
         return {
             "status": "encrypted_archive_toc_verified",
