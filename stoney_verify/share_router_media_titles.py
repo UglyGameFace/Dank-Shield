@@ -15,7 +15,7 @@ from urllib.parse import unquote, urlsplit
 
 _EMPTY_TITLES = {
     "video", "reel", "reels", "clip", "download", "media",
-    "untitled", "facebook", "instagram", "tiktok", "youtube",
+    "untitled", "share router video", "facebook", "instagram", "tiktok", "youtube",
     "reddit", "twitter", "x", "streamable", "vimeo",
 }
 _VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".gif", ".m4v"}
@@ -72,6 +72,32 @@ def title_from_filename(filename: Any) -> str:
             re.fullmatch(r"\d{5,}", stem)):
         return ""
     return clean_video_title(stem)
+
+
+def title_from_media_url(url: Any) -> str:
+    """Derive a *descriptive* direct-file title from its path, never its query."""
+    if not isinstance(url, str):
+        return ""
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return ""
+    if parsed.scheme not in {"https", "http"}:
+        return ""
+    return title_from_filename(parsed.path)
+
+
+def title_from_matching_attachment(message: Any, media_url: str) -> str:
+    """Do not borrow filenames from unrelated user attachments."""
+    for attachment in tuple(getattr(message, "attachments", ()) or ()):
+        if media_url in (
+            str(getattr(attachment, "url", "") or ""),
+            str(getattr(attachment, "proxy_url", "") or ""),
+        ):
+            title = title_from_filename(getattr(attachment, "filename", ""))
+            if title:
+                return title
+    return ""
 
 
 def title_from_embeds(message: Any, source_url: str) -> str:
