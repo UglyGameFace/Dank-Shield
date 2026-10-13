@@ -1,3 +1,54 @@
+# Active Task — Voice Safety #517: broader VC coverage
+
+**Active outcome:** Expand server-level Voice Safety VC selection to any eligible
+normal VC with two or more humans; keep the receiver and consent architecture
+fail-closed, and report capacity honestly. This is a scope/policy slice, not a
+working Watch Yo Mouf audio receiver or unlimited simultaneous VC monitoring.
+
+**Branch:** `feat/517-voice-coverage-policy-two-humans-20261013` from
+`main@dd136911`. Main remains canonical, with production mirrored to
+`aaa-cinema-pre-pregateway-bind@148a175` after merged PR #536.
+Do not modify the production branch as part of this draft.
+
+**Execution path:** Staff `/dank protection` -> `public_voice_safety` stores
+`voice_safety_coverage_mode`; canonical `community_voice_caption_runtime`
+handles voice state/start/stop/restore; `voice_companion_bridge` provides
+read-only signed member eligibility to Watch Yo Mouf. The central
+`voice_safety_coverage` policy applies to all three, preserving old `single`
+mode when unset.
+
+**Findings:** Old config hardcoded one VC and launched even with one human.
+One Discord application identity still owns at most one VC per guild, and
+Watch Yo Mouf's audio worker is not implemented. No new audio admission,
+third-party provider usage or extra bot identity is enabled in this change.
+
+**Changes:** Add All/Single scope control, require two humans excluding bots,
+choose busiest eligible normal VC, stop below threshold, hand off the released
+receiver to another eligible room, expose truthful waiting-room counts, and
+align read-only companion policy. Keep prior single-VC config and safety gates.
+
+**Validation status:** Pending exact-head focused and whole-repository CI,
+Python syntax, regression checks, diff/cleanup review. Live Discloud, DAVE
+receive, Gemini, concurrent guild operation and Android UI tests unavailable
+from static CI and remain required before audio activation.
+
+**Cleanup/conflicts:** Reuse one existing CommunityVoiceCaptionManager;
+do not add additional receivers, compatibility routes or bypass any consent
+checks. Previously drafted permanent-opt-out branches are out of scope and
+must not be merged as-is after branch reunification.
+
+**Risks/blockers:** Other qualifying rooms must wait until that bot identity
+releases its current room. True multi-VC concurrency needs additional
+authorized Discord bot identities and durable cross-process fencing plus
+revocation. Bot permissions, channel changes, staff confirmation of paid
+Gemini processing and adult-use eligibility remain operator requirements.
+
+**Next:** Open draft PR, run exact-head CI, repair any failures in this slice.
+Only after validation, follow with the separate receiver-pool coordination
+work *within #517*, never claim comprehensive coverage early.
+
+---
+
 # Active Task Lock — Main/Production Reunification (2026-10-13)
 
 **Active task:** Safely reconcile `main` and `aaa-cinema-pre-pregateway-bind` into one real merge commit, with a draft PR targeting `main`. Do not deploy or switch Discloud yet.
