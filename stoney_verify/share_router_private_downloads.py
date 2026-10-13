@@ -186,25 +186,51 @@ async def handle_download_message(message: discord.Message) -> bool:
             # are operational. A disabled host retains the original DM flow.
             hosting_ready, hosting_reason = delivery_status()
             download_cap = file_max_bytes() if hosting_ready else DM_ATTACHMENT_BYTES
-            resolution = await resolve_first_media(url, max_bytes=download_cap)
-            if resolution is None:
-                await _reply_problem(message, "This video source is not currently supported.")
-                return True
-
-            # Reuse the canonical Share Router downloader. No separate media
-            # provider implementation and no unbounded torrent download path.
-            from .share_router_runtime import _download_resolved_progressive, RoutedVideo
+            # Facebook may expose direct media in Discord's embed even if the
+            # pinned page extractor cannot parse this public Reel/Watch post.
+            # Reuse the existing guarded and size-bounded routing download path.
+            from .share_router_runtime import (
+                _download_resolved_progressive,
+                _download_trusted_video,
+                _video_source_urls,
+                RoutedVideo,
+            )
 
             video: Any = None
+            resolution: MediaResolution | None = None
+            if provider_for_url(url) == "facebook":
+                # Try at most the Discord proxy and original CDN media URL.
+                # Unrelated attachments must never substitute for this post.
+                for embedded_url in _video_source_urls(message, embeds_only=True)[:2]:
+                    video = await _download_trusted_video(
+                        embedded_url, max_bytes=download_cap,
+                    )
+                    if video is not None:
+                        resolution = MediaResolution(
+                            source_url=url,
+                            canonical_url=url,
+                            identity=f"facebook:{url}",
+                            provider="facebook",
+                            delivery="progressive",
+                            media_url=embedded_url,
+                        )
+                        break
+
+            if resolution is None:
+                resolution = await resolve_first_media(url, max_bytes=download_cap)
+                if resolution is None:
+                    await _reply_problem(message, "This video source is not currently supported.")
+                    return True
+
             failure_reason = resolution.reason or "extract_failed"
-            if resolution.progressive:
+            if video is None and resolution.progressive:
                 video = await _download_resolved_progressive(
                     resolution,
                     max_bytes=download_cap,
                 )
                 if video is None:
                     failure_reason = "media_transfer_failed"
-            elif resolution.delivery in {"manifest", "merge"}:
+            elif video is None and resolution.delivery in {"manifest", "merge"}:
                 # Distinguish a missing FFmpeg executable from provider metadata
                 # failure; do not speculate about codec restrictions.
                 import shutil
