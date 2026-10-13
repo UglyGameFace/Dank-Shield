@@ -21,6 +21,7 @@ GUILD, MEMBER, CHANNEL = 123456789123456789, 222222222222222222, 333333333333333
 def _request(body: bytes, headers: dict[str, str]):
     return SimpleNamespace(
         content_length=len(body), headers=headers,
+        read=AsyncMock(return_value=body),
         content=SimpleNamespace(read=AsyncMock(return_value=body)),
     )
 
@@ -81,6 +82,10 @@ def test_member_route_replay_optout_and_storage_failures_fail_closed(monkeypatch
     monkeypatch.setattr(bridge, "_member_policy_and_consent", state)
 
     async def check():
+        # Chunked requests with no Content-Length still enforce the byte cap.
+        oversized = _request(body + b"x" * 300, good)
+        oversized.content_length = None
+        assert (await bridge.member_eligibility(oversized)).status == 413
         denied = await bridge.member_eligibility(_request(body, {}))
         assert denied.status == 401
         first = await bridge.member_eligibility(_request(body, good))
