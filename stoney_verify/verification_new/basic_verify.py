@@ -1419,29 +1419,32 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
                 ok=False,
             )
             return True
-        ok, message = await apply_basic_verification(interaction.user)
-        if ok:
-            # Verified role alone is never permission to process voice. Accept
-            # only after the member clicks a panel that visibly disclosed this
-            # exact version of the Voice Safety agreement.
+        # In a server that requires Voice Safety, the role grant cannot come
+        # before consent. Previously a storage failure left members verified
+        # without an agreement. Never infer permission from membership.
+        try:
+            config = await get_guild_config(int(interaction.guild.id), refresh=True)
+        except Exception:
+            await _reply(interaction, "Could not confirm Voice Safety policy; no access was granted. Try again later.", ok=False)
+            return True
+        required = bool(_cfg_value(config, "voice_safety_enabled", False))
+        if required:
+            if not verification_message_discloses_voice_safety(getattr(interaction, "message", None)):
+                await _reply(interaction, "This is an older Verify panel without the current Voice Safety agreement. Ask staff to refresh it. No access was granted.", ok=False)
+                return True
             try:
-                config = await get_guild_config(int(interaction.guild.id), refresh=True)
-                if (
-                    bool(_cfg_value(config, "voice_safety_enabled", False))
-                    and verification_message_discloses_voice_safety(getattr(interaction, "message", None))
-                ):
-                    from stoney_verify.community_voice_caption_runtime import ensure_community_voice_caption_manager
-
-                    manager = ensure_community_voice_caption_manager(interaction.client)
-                    await manager.set_voice_safety_consent(
-                        int(interaction.guild.id), int(interaction.user.id), True,
-                        source="basic_verify_v1",
-                    )
-                    message += " Your one-time Voice Safety agreement was saved; covered VCs can be reviewed automatically when enabled."
-                elif bool(_cfg_value(config, "voice_safety_enabled", False)):
-                    message += " Voice Safety agreement not recorded from this older verification panel. Use the public Voice Safety notice once to acknowledge it."
+                from stoney_verify.community_voice_caption_runtime import ensure_community_voice_caption_manager
+                manager = ensure_community_voice_caption_manager(interaction.client)
+                await manager.set_voice_safety_consent(
+                    int(interaction.guild.id), int(interaction.user.id), True,
+                    source="basic_verify_v1",
+                )
             except Exception:
-                message += " Voice Safety agreement could not be confirmed; your audio is not automatically admitted. Ask staff to check Voice Safety setup."
+                await _reply(interaction, "Could not save the disclosed Voice Safety agreement. Verification was not granted; try again later.", ok=False)
+                return True
+        ok, message = await apply_basic_verification(interaction.user)
+        if ok and required:
+            message += " Your one-time Voice Safety agreement was saved."
         await _reply(interaction, message, ok=ok)
         return True
     except Exception as exc:
