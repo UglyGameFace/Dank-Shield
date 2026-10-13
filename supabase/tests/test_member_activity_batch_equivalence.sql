@@ -116,7 +116,23 @@ begin
         raise exception 'equal timestamp ordering was lost';
     end if;
     raise notice 'idempotency, rollback and tie tests passed';
-end $$;
+
+    -- SECURITY DEFINER functions must not inherit PUBLIC executable rights.
+    if has_function_privilege(
+        'anon', 'public.record_member_activity_batch(uuid,jsonb)', 'EXECUTE'
+    ) or has_function_privilege(
+        'authenticated', 'public.record_member_activity_batch(uuid,jsonb)',
+        'EXECUTE'
+    ) then
+        raise exception 'batch RPC leaked execute privilege to public API roles';
+    end if;
+    if not has_function_privilege(
+        'service_role', 'public.record_member_activity_batch(uuid,jsonb)',
+        'EXECUTE'
+    ) then
+        raise exception 'service_role cannot execute batch RPC';
+    end if;
+end $;
 
 -- Size-bounded 500-entry load run. Timed as PostgreSQL work, not HTTP calls.
 \timing on
