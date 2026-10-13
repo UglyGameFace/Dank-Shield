@@ -201,6 +201,44 @@ tickets, moderation/security history or consent/activity evidence. Database
 corruption cannot be declared automatically repaired without verification.
 An undersized disk is not fixed by deleting valuable evidence.
 
+## Phase 2: guild-configuration shadow repository (NOT live)
+
+The first direct PostgreSQL repository is deliberately limited to a
+**read-verified shadow of `guild_configs`**. It does not intercept or replace
+`stoney_verify.guild_config`, does not patch any Supabase/discord.py methods,
+and does not create a second live configuration authority. Configuration
+writes, compare-and-swap, revision history, and protected key semantics remain
+on the existing backend until independently implemented and proven equivalent.
+
+- An explicit PostgreSQL 17 migration creates
+  `dank_core.guild_config_shadow` in an isolated schema, with a primary key
+  for each guild, the complete original JSON payload, the original primary
+  key and a canonical SHA-256 digest. Voice-bot/reminder tables are untouched.
+- `stoney_verify.postgres_guild_config_shadow` provides a typed, explicit
+  `inspect_staged_config`, `import_config_shadow`, and
+  `read_shadow_config` path. The import validates the staged record hash,
+  payload byte count, guild/source PK, duplicate guilds, existing target
+  rows, destination identity and real disk headroom. It is all-or-nothing.
+- `python -m tools.materialize_dankshield_pg_config` is **read-only by
+  default**. The private operator must explicitly request `--apply`,
+  supply the known DB identity and verified DISK capacity, and have
+  previously installed both migration SQL files in order. It prints counts
+  and digests, not passwords or configuration contents.
+- The first import has an explicit maximum of 500 guilds and 12 MiB.
+  These are first-slice safety ceilings, **not** 10,000-guild production
+  throughput limits; lifting them requires a bounded keyset/streaming
+  implementation and 10,000+ guild load tests.
+- Its tests currently include injected fake transactions and tampered-record
+  cases. Those are legitimate **test doubles**, not production monkey
+  patches. **Real PostgreSQL 17 integration remains unverified** until the
+  isolated SQL migration and import/replay tests actually execute on a
+  PostgreSQL service with the expected privileges.
+
+Do not put the shadow table on the bot's live read/write path. The next
+slice is an explicitly versioned PostgreSQL `guild_configs` repository
+with one transactionally correct compare-and-swap/patch mechanism and
+tested parity for sensitive permissions, verification, roles, and setup.
+
 ## Deployment sequence
 
 1. Confirm the real disk limit/backups for the existing Discloud DB and the
