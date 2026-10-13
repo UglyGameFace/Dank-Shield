@@ -1550,8 +1550,10 @@ def note_ticket_channel_lookup(channel_id: Any, is_ticket: bool) -> None:
         for key, exp in list(_TICKET_CHANNEL_NEGATIVE.items()):
             if exp <= now:
                 _TICKET_CHANNEL_NEGATIVE.pop(key, None)
-            if len(_TICKET_CHANNEL_NEGATIVE) <= 10000:
-                break
+        for key in list(_TICKET_CHANNEL_NEGATIVE)[:max(
+            0, len(_TICKET_CHANNEL_NEGATIVE) - 10000
+        )]:
+            _TICKET_CHANNEL_NEGATIVE.pop(key, None)
 
 
 async def _find_ticket_row_by_channel_id(channel_id: int | str) -> Optional[Dict[str, Any]]:
@@ -2117,6 +2119,7 @@ async def mark_ticket_deleted(
 ) -> bool:
     existing = await get_ticket_by_any_channel_id(channel_id)
     if existing and _ticket_status(existing) == "deleted":
+        note_ticket_channel_deleted(channel_id)
         return True
     if existing and _ticket_status(existing) not in {"closed", "deleted"}:
         return False
@@ -2338,6 +2341,7 @@ async def delete_ticket_row(channel_id: int | str) -> bool:
         row = await get_ticket_by_any_channel_id(cid)
         if row and row.get("id") is not None:
             await _delete_ticket_row_by_id_async(str(row["id"]))
+            note_ticket_channel_deleted(cid)
             return True
         return False
     except Exception as e:
