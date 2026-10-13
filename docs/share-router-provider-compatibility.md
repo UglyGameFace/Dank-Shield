@@ -14,6 +14,18 @@ currently allows extraction or Discord-native playback.
 - `share_router_runtime.py` alone owns Discord source permissions, native
   upload, fallback link, cleanup, live destination boost-tier cap and dedupe.
 
+## Video title presentation
+
+Successful native Share Router video uploads and private Download-channel DMs
+show the actual post/video title **when** provider extraction or an associated
+Discord embed supplies one. The bounded resolver caches title alongside the
+chosen media format; no extra provider request is made just for a title.
+Meaningful uploaded filenames are a last fallback. Generic names, URLs, signed
+query strings, controls and Discord mention injections are not used as titles.
+If nothing trustworthy exists, the caption stays neutral instead of inventing
+one. Hosted private Watch/Download links show the same label. Link-only
+provider failures must never be represented as a downloaded attachment.
+
 There is **no guaranteed inline player** for arbitrary provider links in
 Discord. A native uploaded attachment, supported Discord embed, or intentional
 link-only fallback is the supported outcome. Playback also depends on the
