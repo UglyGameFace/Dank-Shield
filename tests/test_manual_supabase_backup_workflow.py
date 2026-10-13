@@ -78,7 +78,7 @@ def test_operator_pg17_wrappers_are_executable_and_preserve_arguments(tmp_path):
     docker_bin = tmp_path / "bin"
     docker_bin.mkdir()
     fake = docker_bin / "docker"
-    fake.write_text('#!/usr/bin/env bash\\nprintf \'%s\\\\n\' "$@"\\n')
+    fake.write_text("#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\n")
     fake.chmod(0o700)
     env = dict(os.environ, PATH=f"{docker_bin}:{os.environ.get('PATH','')}")
     for executable in ("pg_dump", "pg_restore"):
