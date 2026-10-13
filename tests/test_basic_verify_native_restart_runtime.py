@@ -332,6 +332,7 @@ def test_saved_current_application_panel_binds_exact_message_without_rest(
                 runtime._BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: "123456",
                 runtime._BASIC_VERIFY_PANEL_APPLICATION_ID_KEY: "42",
                 runtime._BASIC_VERIFY_PANEL_COMPONENT_ID_KEY: runtime.BASIC_VERIFY_CUSTOM_ID,
+                runtime._BASIC_VERIFY_PANEL_EMBED_VERSION_KEY: runtime._BASIC_VERIFY_PANEL_EMBED_VERSION,
                 "verify_channel_id": "999",
             },
         )
@@ -383,6 +384,7 @@ def test_saved_panel_without_application_identity_fetches_and_migrates(
             message_id: int,
             *,
             application_id: int = 0,
+            presentation_version: int = 0,
         ) -> None:
             writes.append((guild_id, message_id, application_id))
 
@@ -399,6 +401,7 @@ def test_saved_panel_without_application_identity_fetches_and_migrates(
             {
                 runtime._BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: "123456",
                 "verify_channel_id": "99",
+                runtime._BASIC_VERIFY_PANEL_EMBED_VERSION_KEY: runtime._BASIC_VERIFY_PANEL_EMBED_VERSION,
             },
             allow_legacy_rest=True,
         )
@@ -455,6 +458,7 @@ def test_saved_current_application_with_unproven_component_is_repaired_in_place(
             message_id: int,
             *,
             application_id: int = 0,
+            presentation_version: int = 0,
         ) -> None:
             writes.append((guild_id, message_id, application_id))
 
@@ -532,6 +536,7 @@ def test_saved_current_application_with_current_component_migrates_without_edit(
             message_id: int,
             *,
             application_id: int = 0,
+            presentation_version: int = 0,
         ) -> None:
             writes.append((guild_id, message_id, application_id))
 
@@ -547,6 +552,7 @@ def test_saved_current_application_with_current_component_migrates_without_edit(
                 runtime._BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: "123456",
                 runtime._BASIC_VERIFY_PANEL_APPLICATION_ID_KEY: "42",
                 "verify_channel_id": "99",
+                runtime._BASIC_VERIFY_PANEL_EMBED_VERSION_KEY: runtime._BASIC_VERIFY_PANEL_EMBED_VERSION,
             },
             allow_legacy_rest=True,
         )
@@ -862,6 +868,7 @@ def test_legacy_current_bot_panel_is_updated_persisted_and_bound(
             message_id: int,
             *,
             application_id: int = 0,
+            presentation_version: int = 0,
         ) -> None:
             _ = application_id
             writes.append((guild_id, message_id))
@@ -950,6 +957,7 @@ def test_foreign_legacy_panel_causes_fresh_current_bot_panel(
             message_id: int,
             *,
             application_id: int = 0,
+            presentation_version: int = 0,
         ) -> None:
             _ = application_id
             writes.append((guild_id, message_id))
@@ -1033,6 +1041,7 @@ def test_disabled_legacy_panel_repairs_component_before_binding(
             message_id: int,
             *,
             application_id: int = 0,
+            presentation_version: int = 0,
         ) -> None:
             writes.append((guild_id, message_id, application_id))
 
@@ -1211,6 +1220,7 @@ def test_legacy_foreign_panel_is_removed_after_current_replacement_posts(
             message_id: int,
             *,
             application_id: int = 0,
+            presentation_version: int = 0,
         ) -> None:
             writes.append((guild_id, message_id, application_id))
 
@@ -1415,4 +1425,6 @@ def test_basic_verify_persists_component_contract_with_panel_identity() -> None:
     reconcile = source[reconcile_start:reconcile_end]
     assert "saved_component_id == BASIC_VERIFY_CUSTOM_ID" in reconcile
     assert "BASIC_VERIFY_CUSTOM_ID not in custom_ids" in reconcile
-    assert "repaired legacy component contract" in reconcile
+    assert "needs_component_repair" in reconcile
+    assert "needs_copy_refresh" in reconcile
+    assert "refreshed_copy" in reconcile
