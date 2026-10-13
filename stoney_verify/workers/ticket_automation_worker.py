@@ -250,6 +250,39 @@ def _get_automation_settings_sync(guild_id: int) -> Dict[str, Any]:
         return dict(_DEFAULT_SETTINGS)
 
 
+def _list_enabled_ticket_automation_guild_ids_sync() -> set[int]:
+    """Use the existing indexed enabled flag instead of one read per guild.
+
+    PostgREST paginates results; do not silently omit an enabled guild after
+    the default 1,000-row limit. Failure aborts the whole scheduled pass,
+    leaving ticket state untouched until the next healthy poll.
+    """
+    enabled: set[int] = set()
+    page_size = 1000
+    for page in range(100):
+        start = page * page_size
+
+        def _read_page():
+            response = (
+                _settings_table()
+                .select("guild_id")
+                .eq("enabled", True)
+                .order("guild_id")
+                .range(start, start + page_size - 1)
+                .execute()
+            )
+            return getattr(response, "data", None) or []
+
+        rows = _execute_db("ticket automation enabled-guild scan", _read_page)
+        for row in rows:
+            gid = _safe_int(row.get("guild_id"), 0)
+            if gid > 0:
+                enabled.add(gid)
+        if len(rows) < page_size:
+            return enabled
+    raise RuntimeError("ticket enabled-guild scan exceeded 100 pages")
+
+
 async def get_ticket_automation_settings(guild_id: int) -> Dict[str, Any]:
     return await asyncio.to_thread(_get_automation_settings_sync, guild_id)
 
@@ -859,7 +892,16 @@ async def run_ticket_automation_pass(*, guild_id: Optional[int] = None) -> Dict[
         if guild is not None:
             guilds = [guild]
     else:
-        guilds = list(bot.guilds)
+        # The default is disabled, so do not issue thousands of SELECTs for
+        # inactive guilds on every sweep. Each enabled guild still receives
+        # an authoritative, fresh settings read before ticket mutations.
+        enabled_ids = await asyncio.to_thread(
+            _list_enabled_ticket_automation_guild_ids_sync
+        )
+        guilds = [
+            guild for guild in list(bot.guilds)
+            if int(guild.id) in enabled_ids
+        ]
 
     overall = {
         "guilds_checked": 0,
