@@ -223,9 +223,20 @@ async def _resolve_toke_media_url(value: str) -> str:
                     len(length) > 9 or int(length) > 256 * 1024
                 ):
                     raise ValueError("The media sharing page is too large to inspect.")
-                raw = await response.content.read(256 * 1024 + 1)
-                if len(raw) > 256 * 1024:
+                chunks: list[bytes] = []
+                remaining = 256 * 1024 + 1
+                while remaining > 0:
+                    # StreamReader.read(n) may return a partial chunk before EOF.
+                    # Keep reading within the deadline/cap so later OG tags
+                    # aren't incorrectly treated as a missing image.
+                    chunk = await response.content.read(min(16 * 1024, remaining))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    remaining -= len(chunk)
+                if remaining == 0:
                     raise ValueError("The media sharing page is too large to inspect.")
+                raw = b"".join(chunks)
             finally:
                 response.release()
         found = _provider_page_image(raw.decode("utf-8", errors="replace"))
