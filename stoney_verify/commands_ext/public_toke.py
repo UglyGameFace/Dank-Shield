@@ -3,6 +3,7 @@ from __future__ import annotations
 """Self-selectable Stoner/Sesh roles plus the member-facing /toke flow."""
 
 import asyncio
+from html.parser import HTMLParser
 import re
 import time
 import weakref
@@ -16,8 +17,10 @@ from stoney_verify.toke_live_ui import (
     TokeCheersView, TokeMediaLayout, begin_capture, choose_voice, media_url_from_message, pending_for, render_card, settings_from_config,
 )
 
+import aiohttp
 import discord
 from discord import app_commands
+from stoney_verify.share_router_media_network import public_tcp_connector
 
 from stoney_verify.community_pings_service import (
     COMMUNITY_PINGS_KEY,
@@ -119,9 +122,82 @@ def _is_stable_provider_media_url(value: str) -> bool:
     if not path.endswith(_TOKE_MEDIA_EXTENSIONS):
         return False
     return parsed.scheme.lower() == "https" and (
-        host == "media.tenor.com"
+        host in {"media.tenor.com", "media1.tenor.com", "c.tenor.com"}
         or host == "i.giphy.com"
         or (host.startswith("media") and host.endswith(".giphy.com"))
+    )
+
+
+class _TokeMediaMetaParser(HTMLParser):
+    """Read provider-owned image URLs, never arbitrary HTML or iframe embeds."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.images: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "meta":
+            return
+        meta = dict(attrs)
+        label = str(meta.get("property") or meta.get("name") or "").lower()
+        if label in {"og:image", "og:image:secure_url", "twitter:image"}:
+            self.images.append(str(meta.get("content") or ""))
+
+
+def _provider_page_image(html: str) -> str:
+    parser = _TokeMediaMetaParser()
+    parser.feed(html)
+    # Prefer animated GIF over a static social-media preview.
+    candidates = [url for url in parser.images if _is_stable_provider_media_url(url)]
+    return next((url for url in candidates if urlsplit(url).path.lower().endswith(".gif")), candidates[0] if candidates else "")
+
+
+async def _resolve_toke_media_url(value: str) -> str:
+    """Resolve supported sharing pages *before* posting; never publish link-only media."""
+    if _is_direct_media_url(value):
+        return value
+    parsed = urlsplit(value)
+    host, path = str(parsed.hostname or "").lower(), str(parsed.path or "")
+    if parsed.scheme.lower() != "https" or parsed.username or parsed.password:
+        raise ValueError("Use a direct HTTPS image/GIF URL, or upload the file to /toke.")
+    try:
+        if parsed.port not in (None, 443):
+            raise ValueError("Media sharing links must use standard HTTPS.")
+    except ValueError as exc:
+        raise ValueError("Media sharing links must use standard HTTPS.") from exc
+
+    # GIPHY's public GIF CDN has a canonical animated asset for its page ID.
+    if host in {"giphy.com", "www.giphy.com"} and path.startswith("/gifs/"):
+        slug = path[len("/gifs/"):].strip("/")
+        if "/" not in slug:
+            gif_id = slug.rsplit("-", 1)[-1]
+            if re.fullmatch(r"[A-Za-z0-9]{6,}", gif_id):
+                return f"https://media.giphy.com/media/{gif_id}/giphy.gif"
+
+    # Tenor page IDs cannot be safely converted to CDN filenames. Inspect only
+    # the allowlisted provider's bounded public HTML metadata. No API key, no
+    # arbitrary-URL scraping, no redirects, and no internal-network lookups.
+    if host in {"tenor.com", "www.tenor.com"} and path.startswith("/view/"):
+        try:
+            timeout = aiohttp.ClientTimeout(total=5, connect=3)
+            async with aiohttp.ClientSession(
+                connector=public_tcp_connector(limit=2), timeout=timeout,
+            ) as session:
+                async with session.get(value, allow_redirects=False) as response:
+                    if response.status != 200 or "text/html" not in response.headers.get("Content-Type", "").lower():
+                        raise ValueError("Tenor did not return a readable GIF page.")
+                    raw = await response.content.read(256 * 1024 + 1)
+                    if len(raw) > 256 * 1024:
+                        raise ValueError("Tenor GIF page was too large to inspect.")
+            found = _provider_page_image(raw.decode("utf-8", errors="replace"))
+            if found:
+                return found
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+            raise ValueError("Could not retrieve the Tenor GIF image. Upload the GIF or use its direct image link.") from exc
+
+    raise ValueError(
+        "This sharing link did not provide a playable inline GIF/image. "
+        "Upload the GIF/photo or use a direct image URL instead."
     )
 
 
@@ -327,7 +403,8 @@ async def _publish_toke(
         )
         embed.set_footer(text="Only members with the configured /toke notification role were notified.")
         upload_file: Optional[discord.File] = None
-        direct = bool(clean_media and _is_direct_media_url(clean_media))
+        if clean_media:
+            clean_media = await _resolve_toke_media_url(clean_media)
         if upload is not None:
             # Editable attachment:// embeds duplicate after PATCH, but naked
             # attachments display far too large above the session card.
@@ -346,15 +423,10 @@ async def _publish_toke(
             if suffix is None:
                 suffix = original_suffix if f".{original_suffix}" in _TOKE_MEDIA_EXTENSIONS else "png"
             upload_file.filename = f"toke-{guild.id}-{member.id}-{time.time_ns()}.{suffix}"
-        elif direct:
-            # Provider/CDN URLs do not require a message attachment and remain
-            # inside the Toke embed through later session edits.
-            embed.set_image(url=clean_media)
         elif clean_media:
-            # Putting a Tenor/Giphy page URL in message.content lets Discord
-            # unfurl a SECOND standalone preview above the Toke card.
-            # Keep the fallback link clickable inside the card instead.
-            embed.description += f"\n\n[Open shared GIF or image]({clean_media})"
+            # A verified direct image URL remains inline during Cheers,
+            # Refresh, VC updates and terminal card edits.
+            embed.set_image(url=clean_media)
 
         voice_id = choose_voice(guild, member, settings)
         session_data: dict[str, Any] = {
