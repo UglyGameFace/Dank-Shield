@@ -119,7 +119,7 @@ begin
 end $$;
 
 -- Size-bounded 500-entry load run. Timed as PostgreSQL work, not HTTP calls.
-\\timing on
+\timing on
 select public.record_member_activity_batch(
  '00000000-0000-0000-0000-000000000005'::uuid,
  (select jsonb_agg(jsonb_build_object(
@@ -137,5 +137,5 @@ begin
         );
     end loop;
 end $$;
-\\timing off
+\timing off
 rollback;
