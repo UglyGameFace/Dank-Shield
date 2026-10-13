@@ -23,8 +23,8 @@ create or replace function public.record_member_activity_batch(
 returns void
 language plpgsql
 security definer
-set search_path = public
-as $$
+set search_path = pg_catalog, public
+as $
 declare
     e jsonb;
     v_guild_id text;
@@ -193,4 +193,30 @@ $$;
 revoke execute on function public.record_member_activity_batch(uuid, jsonb)
 from public, anon, authenticated;
 grant execute on function public.record_member_activity_batch(uuid, jsonb)
+to service_role;
+
+-- Confirmed batches no longer need receipts. Keep an indexed expiry path for
+-- abandoned receipts from process death without forcing an extra write per event.
+create index if not exists idx_member_activity_batch_receipts_applied_at
+    on public.member_activity_batch_receipts(applied_at);
+
+create or replace function public.ack_member_activity_batches(
+    p_batch_ids uuid[]
+) returns void
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $
+begin
+    if p_batch_ids is null or array_length(p_batch_ids, 1) > 128 then
+        raise exception 'expected up to 128 acknowledged batch IDs';
+    end if;
+    delete from public.member_activity_batch_receipts
+    where batch_id = any(p_batch_ids)
+       or applied_at < now() - interval '7 days';
+end;
+$;
+revoke execute on function public.ack_member_activity_batches(uuid[])
+from public, anon, authenticated;
+grant execute on function public.ack_member_activity_batches(uuid[])
 to service_role;
