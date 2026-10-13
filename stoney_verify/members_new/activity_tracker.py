@@ -820,8 +820,8 @@ async def _flush_once() -> bool:
             progress = True
         # Records dropped under memory pressure cannot be reconstructed.
         for gid in list(_LOST_COVERAGE_GUILDS)[:10]:
-            if _guild_has_unflushed_activity(gid):
-                continue
+            # Reset immediately after DB recovery. Continuously active guilds
+            # must not be starved just because more events are being staged.
             try:
                 await asyncio.to_thread(_start_tracker_sync, gid)
             except Exception:
@@ -833,8 +833,7 @@ async def _flush_once() -> bool:
             progress = True
         for gid in completed_guilds:
             if (gid not in _LOST_COVERAGE_GUILDS
-                    and gid not in _PENDING_FAIL_REPORTS
-                    and not _guild_has_unflushed_activity(gid)):
+                    and gid not in _PENDING_FAIL_REPORTS):
                 _LOCAL_ERRORS.pop(gid, None)
         return progress
 
@@ -1260,8 +1259,7 @@ async def _heartbeat_loop(
                 )
                 _record_db_success()
                 if (gid not in _LOST_COVERAGE_GUILDS
-                        and gid not in _PENDING_FAIL_REPORTS
-                        and not _guild_has_unflushed_activity(gid)):
+                        and gid not in _PENDING_FAIL_REPORTS):
                     _LOCAL_ERRORS.pop(gid, None)
             except Exception as exc:
                 await _mark_failure(
