@@ -34,6 +34,7 @@ _CONFIRM_LOCKS: Dict[Tuple[int, int], asyncio.Lock] = {}
 _MENU_TTL_SECONDS = 900.0
 _INTERACTION_TTL_SECONDS = 90.0
 
+PUBLIC_PANEL_EMBED_VERSION = 2
 PANEL_BUTTON_CUSTOM_ID = "sv:ticket:panel:create:clean:v1"
 LEGACY_PANEL_BUTTON_CUSTOM_IDS = frozenset(
     {
@@ -860,7 +861,18 @@ async def _handle_panel_button_core(i: discord.Interaction) -> None:
         return await _ephemeral(i, f"You already have an open ticket: {existing.mention}")
     _parent, _staff, blockers, warnings = await _ticket_setup_preflight(guild)
     if blockers:
-        return await _ephemeral(i, "❌ Ticket setup needs repair before members can open tickets.", embed=_setup_problem_embed(guild, blockers, warnings))
+        # This button is available to unverified members. Do not disclose
+        # staff role/channel IDs, permission gaps, or repair commands to them.
+        if _staff_check(i):
+            return await _ephemeral(
+                i,
+                "❌ Ticket setup needs repair before tickets can be opened.",
+                embed=_setup_problem_embed(guild, blockers, warnings),
+            )
+        return await _ephemeral(
+            i,
+            "❌ Tickets are temporarily unavailable. Please contact server staff.",
+        )
     try:
         rows, warning = await asyncio.wait_for(_load_rows(guild), timeout=6.0)
     except asyncio.TimeoutError:
@@ -869,11 +881,16 @@ async def _handle_panel_button_core(i: discord.Interaction) -> None:
     session_id = _new_menu_session(guild.id, member.id)
     embed = discord.Embed(title="Create Ticket", description="Choose the type of ticket you want to open.", color=discord.Color.blurple())
     embed.set_footer(text="Pick a category. You can review it before anything is created. Newest menu wins.")
-    notices = list(warnings)
-    if warning:
-        notices.append(_short(warning, 900))
-    if notices:
-        embed.add_field(name="Setup Notice", value="\n".join(f"• {x}" for x in dict.fromkeys(notices))[:1024], inline=False)
+    if _staff_check(i):
+        notices = list(warnings)
+        if warning:
+            notices.append(_short(warning, 900))
+        if notices:
+            embed.add_field(
+                name="Setup Notice",
+                value="\n".join(f"• {x}" for x in dict.fromkeys(notices))[:1024],
+                inline=False,
+            )
     await _ephemeral(i, "Choose a ticket type.", embed=embed, view=TicketSelectView(rows, member.id, session_id))
 
 
@@ -922,11 +939,19 @@ class PublicCreateTicketPanelView(discord.ui.View):
 
 
 def _panel_embed(guild: discord.Guild) -> discord.Embed:
-    e = discord.Embed(title="🎫 Need help? Open a ticket", description="Press **Create Ticket** below, then pick the ticket type.\n\nNo form first. No guessing. You can confirm the category before anything is created.", color=discord.Color.blurple(), timestamp=discord.utils.utcnow())
-    e.add_field(name="How it works", value="1. Press **Create Ticket**\n2. Pick a ticket type\n3. Confirm or go back\n4. A private ticket channel opens", inline=False)
-    e.add_field(name="Panel lifetime", value=public_panel_lifecycle_text("Create Ticket panel", "Private ticket type menus/confirm screens"), inline=False)
-    e.set_footer(text=f"{guild.name} • Dank Shield ticket panel • choose a category")
-    return e
+    """Member-facing copy only; operational health belongs in staff-only views."""
+    embed = discord.Embed(
+        title="🎫 Need help? Open a ticket",
+        description=(
+            "Need assistance? Press **Create Ticket**, choose a category, "
+            "and confirm to open a private support channel. "
+            "Only you and authorized staff can access your ticket."
+        ),
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.set_footer(text=f"{guild.name} • Dank Shield ticket panel • choose a category")
+    return embed
 
 
 async def persist_public_ticket_panel_identity(
@@ -935,6 +960,7 @@ async def persist_public_ticket_panel_identity(
     message_id: int,
     *,
     application_id: int = 0,
+    presentation_version: int = 0,
 ) -> None:
     try:
         from ..guild_config import upsert_guild_config
@@ -949,6 +975,8 @@ async def persist_public_ticket_panel_identity(
             payload["ticket_panel_application_id"] = str(
                 int(application_id)
             )
+        if int(presentation_version or 0) > 0:
+            payload["ticket_panel_public_embed_version"] = int(presentation_version)
         await upsert_guild_config(
             int(guild_id),
             payload,
@@ -977,6 +1005,7 @@ async def post_public_ticket_panel_message(
         application_id=int(
             getattr(getattr(guild, "me", None), "id", 0) or 0
         ),
+        presentation_version=PUBLIC_PANEL_EMBED_VERSION,
     )
     return msg
 
