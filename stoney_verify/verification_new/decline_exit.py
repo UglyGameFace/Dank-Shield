@@ -246,12 +246,12 @@ async def decline_and_exit(interaction: discord.Interaction, *, from_verify: boo
             "Voice monitoring does not start from this action.",
             ephemeral=True, view=ExitGraceView(entry),
         )
-    except (discord.HTTPException, discord.Forbidden):
+    except Exception as exc:
         # Consent was withdrawn and roles were restricted. Never kick when
         # the ten-second cancellation affordance could not be delivered.
         entry.completed = True
         _PENDING.pop(key, None)
-        print(f"⚠️ voice_decline grace_notice_failed guild={guild.id}; restricted, no scheduled kick")
+        print(f"⚠️ voice_decline grace_notice_failed guild={guild.id} error={type(exc).__name__}; restricted, no kick")
         return
     # Give the member the entire 10-second window after Discord accepts the
     # ephemeral interaction response, not during slow role/REST operations.
