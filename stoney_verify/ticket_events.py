@@ -682,6 +682,15 @@ async def _handle_channel_delete(channel: discord.abc.GuildChannel) -> None:
         tracked = _matches_ticket_name(channel.name) or _topic_looks_ticketish(_safe_topic(channel))
 
     if not tracked:
+        # Deletes are rare: bypass a potentially stale negative identity cache
+        # rather than missing authoritative manual ticket deletions.
+        try:
+            tracked = isinstance(
+                await _find_ticket_row_by_channel_id(channel.id), dict
+            )
+        except Exception:
+            tracked = False
+    if not tracked:
         _forget_channel_runtime_state(channel.id)
         return
 
