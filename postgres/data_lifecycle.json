@@ -50,6 +50,29 @@
       "retention_class": "support_record",
       "historical_reuse": "Restore original server configurations and access/ticket states during staged repository conversion; never authorize activity cleanup from copied unverified data",
       "review_interval_days": 30
+    },
+    "dank_core.guild_config_shadow": {
+      "feature": "Isolated, verified PostgreSQL 17 shadow of canonical guild settings; not live",
+      "owner": "stoney_verify.postgres_guild_config_shadow; private manual migration operator",
+      "purpose": "Verify original guild configuration rows and stable per-row hashes before building the new live repository",
+      "stored_fields": [
+        "guild_id",
+        "source_pk",
+        "raw_row",
+        "source_sha256",
+        "imported_at"
+      ],
+      "contains_message_content": false,
+      "retention_rule": "No timed expiry or automatic deletion. Preserve the source payload until independently verified PostgreSQL runtime parity, backup/restore and controlled rollout; never modify current Supabase or voice-bot state.",
+      "cleanup_interval_seconds": 86400,
+      "max_candidates_per_cleanup": 100,
+      "expiry_index": "primary key (guild_id); no TTL index",
+      "preserve_when": "Any source row hash differs, migrations or data parity are incomplete, rollback is still required, database/storage budget is unknown, or voice-bot isolation is unverified",
+      "backup_class": "configuration_shadow_data_pending_cutover",
+      "migration": "postgres/migrations/202610130003_guild_config_shadow.sql",
+      "retention_class": "guild_configuration",
+      "historical_reuse": "Full-fidelity comparison and recovery of original guild settings, including roles, channels, setup/verification, and ticket choices; no automatic member cleanup",
+      "review_interval_days": 30
     }
   }
 }
