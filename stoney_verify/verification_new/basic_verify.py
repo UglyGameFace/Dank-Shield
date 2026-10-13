@@ -45,6 +45,8 @@ _RUNTIME_REGISTRATION_ERROR: str = ""
 _BASIC_VERIFY_PANEL_MESSAGE_ID_KEY = "basic_verify_panel_message_id"
 _BASIC_VERIFY_PANEL_APPLICATION_ID_KEY = "basic_verify_panel_application_id"
 _BASIC_VERIFY_PANEL_COMPONENT_ID_KEY = "basic_verify_panel_component_id"
+_BASIC_VERIFY_PANEL_EMBED_VERSION_KEY = "basic_verify_panel_embed_version"
+_BASIC_VERIFY_PANEL_EMBED_VERSION = 2
 _RUNTIME_READY_RECONCILER_REGISTERED = False
 _RUNTIME_READY_RECONCILE_STARTED = False
 _BOUND_PANEL_MESSAGE_IDS: set[int] = set()
@@ -561,6 +563,7 @@ async def _persist_basic_verify_panel_message_id(
     message_id: int,
     *,
     application_id: int = 0,
+    presentation_version: int = 0,
 ) -> None:
     gid = _safe_int(guild_id, 0)
     mid = _safe_int(message_id, 0)
@@ -575,6 +578,8 @@ async def _persist_basic_verify_panel_message_id(
     }
     if aid > 0:
         patch[_BASIC_VERIFY_PANEL_APPLICATION_ID_KEY] = str(aid)
+    if int(presentation_version or 0) > 0:
+        patch[_BASIC_VERIFY_PANEL_EMBED_VERSION_KEY] = int(presentation_version)
     try:
         await upsert_guild_config(gid, patch)
     except Exception as exc:
@@ -798,6 +803,7 @@ async def post_basic_verify_panel(
             int(channel.guild.id),
             int(msg.id),
             application_id=me_id,
+            presentation_version=_BASIC_VERIFY_PANEL_EMBED_VERSION,
         )
         if target_bot is not None:
             _bind_basic_verify_panel_message(target_bot, int(msg.id))
@@ -826,6 +832,7 @@ async def post_basic_verify_panel(
             getattr(getattr(msg, "author", None), "id", 0),
             _safe_int(getattr(getattr(channel.guild, "me", None), "id", 0), 0),
         ),
+        presentation_version=_BASIC_VERIFY_PANEL_EMBED_VERSION,
     )
     if target_bot is not None:
         _bind_basic_verify_panel_message(target_bot, int(msg.id))
@@ -940,6 +947,7 @@ async def _reconcile_one_basic_verify_panel(
         and saved_application_id > 0
         and saved_application_id == current_application_id
         and saved_component_id == BASIC_VERIFY_CUSTOM_ID
+        and _safe_int(_cfg_value(cfg, _BASIC_VERIFY_PANEL_EMBED_VERSION_KEY, 0)) >= _BASIC_VERIFY_PANEL_EMBED_VERSION
     ):
         return (
             "bound"
@@ -987,66 +995,67 @@ async def _reconcile_one_basic_verify_panel(
         )
         if author_id == current_application_id and current_application_id > 0:
             custom_ids = _message_custom_ids(message)
-            if BASIC_VERIFY_CUSTOM_ID not in custom_ids:
+            needs_component_repair = BASIC_VERIFY_CUSTOM_ID not in custom_ids
+            needs_copy_refresh = (
+                _safe_int(_cfg_value(cfg, _BASIC_VERIFY_PANEL_EMBED_VERSION_KEY, 0))
+                < _BASIC_VERIFY_PANEL_EMBED_VERSION
+            )
+            if needs_component_repair or needs_copy_refresh:
+                # Refresh the existing bot-owned panel instead of posting another.
+                # Preserve the versioned disclosure and matching button label.
+                refreshed_view = BasicVerifyView(
+                    voice_safety_agreement=bool(_cfg_value(cfg, "voice_safety_enabled", False))
+                )
                 try:
                     await message.edit(
                         embed=build_basic_verify_embed(guild, cfg),
-                        view=BasicVerifyView(),
+                        view=refreshed_view,
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                 except TypeError:
-                    # Compatibility with lightweight test doubles and Discord
-                    # message implementations that do not expose
-                    # allowed_mentions on edit().
                     try:
                         await message.edit(
                             embed=build_basic_verify_embed(guild, cfg),
-                            view=BasicVerifyView(),
+                            view=refreshed_view,
                         )
                     except Exception as exc:
                         try:
                             print(
-                                "⚠️ basic_verify component contract repair failed "
+                                "⚠️ basic_verify panel refresh failed "
                                 f"guild={guild.id} channel={channel.id} message={message.id} "
-                                f"found={sorted(custom_ids)} expected={BASIC_VERIFY_CUSTOM_ID!r} "
                                 f"error={type(exc).__name__}: {exc}"
                             )
                         except Exception:
                             pass
-                        return "component_repair_failed"
+                        return "panel_refresh_failed"
                 except Exception as exc:
                     try:
                         print(
-                            "⚠️ basic_verify component contract repair failed "
+                            "⚠️ basic_verify panel refresh failed "
                             f"guild={guild.id} channel={channel.id} message={message.id} "
-                            f"found={sorted(custom_ids)} expected={BASIC_VERIFY_CUSTOM_ID!r} "
                             f"error={type(exc).__name__}: {exc}"
                         )
                     except Exception:
                         pass
-                    return "component_repair_failed"
+                    return "panel_refresh_failed"
 
                 await _persist_basic_verify_panel_message_id(
                     int(guild.id),
                     int(message.id),
                     application_id=current_application_id,
+                    presentation_version=_BASIC_VERIFY_PANEL_EMBED_VERSION,
                 )
                 bound = _bind_basic_verify_panel_message(bot, int(message.id))
-                try:
-                    print(
-                        "♻️ basic_verify repaired legacy component contract "
-                        f"guild={guild.id} channel={channel.id} message={message.id} "
-                        f"old_ids={sorted(custom_ids)} new_id={BASIC_VERIFY_CUSTOM_ID!r} "
-                        f"bound={bound}"
-                    )
-                except Exception:
-                    pass
-                return "repaired_component" if bound else "repair_bind_failed"
+                return (
+                    ("repaired_component" if needs_component_repair else "refreshed_copy")
+                    if bound else "repair_bind_failed"
+                )
 
             await _persist_basic_verify_panel_message_id(
                 int(guild.id),
                 int(message.id),
                 application_id=current_application_id,
+                presentation_version=_BASIC_VERIFY_PANEL_EMBED_VERSION,
             )
             return (
                 "migrated_current"
@@ -1190,6 +1199,7 @@ async def _reconcile_basic_verify_panels_after_ready(bot: Any) -> None:
                 and saved_application_id > 0
                 and saved_application_id == current_application_id
                 and saved_component_id == BASIC_VERIFY_CUSTOM_ID
+                and _safe_int(_cfg_value(cfg, _BASIC_VERIFY_PANEL_EMBED_VERSION_KEY, 0)) >= _BASIC_VERIFY_PANEL_EMBED_VERSION
             )
             target = current_rows if proven_current else legacy_rows
             target.append((int(gid), cfg))
