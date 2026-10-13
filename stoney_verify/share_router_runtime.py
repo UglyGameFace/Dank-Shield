@@ -17,7 +17,7 @@ import os
 import re
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -30,6 +30,11 @@ from stoney_verify.share_router_media_network import (
     public_tcp_connector,
 )
 from stoney_verify.share_router_media_remux import remux_media_for_discord
+from stoney_verify.share_router_media_titles import (
+    title_from_embeds,
+    title_from_filename,
+    title_prefix,
+)
 from stoney_verify.share_router_media_resolver import (
     canonicalize_media_url,
     media_url_identity,
@@ -137,6 +142,12 @@ class RoutedVideo:
     source_url: str
     size_bytes: int
     cleanup_path: Optional[Path] = None
+    title: str = ""
+
+
+def _video_with_title(video: RoutedVideo, title: str) -> RoutedVideo:
+    # Preserve the original file/cleanup owner; attach display metadata only.
+    return replace(video, title=title) if title and isinstance(video, RoutedVideo) else video
 
 
 def _log(message: str) -> None:
@@ -527,7 +538,10 @@ async def _prepare_native_video(
     for candidate in _video_source_urls(message):
         routed = await _download_trusted_video(candidate, max_bytes=max_bytes)
         if routed is not None:
-            return routed
+            source = next(iter(URL_RE.findall(getattr(message, "content", "") or "")), candidate)
+            title = (title_from_embeds(message, source)
+                     or title_from_filename(getattr(routed.file, "filename", "")))
+            return _video_with_title(routed, title)
 
     # Provider-neutral path: one resolver owns social/direct URL recognition,
     # canonical identity, yt-dlp extraction, cache/concurrency and manifest
@@ -547,7 +561,10 @@ async def _prepare_native_video(
                 f"provider={provider_label(resolution.provider)} "
                 f"delivery=progressive protocol={resolution.protocol or 'unknown'}"
             )
-            return routed
+            title = (resolution.title
+                     or title_from_embeds(message, resolution.canonical_url)
+                     or title_from_filename(getattr(routed.file, "filename", "")))
+            return _video_with_title(routed, title)
         _log(
             "media fallback "
             f"provider={provider_label(resolution.provider)} "
@@ -580,6 +597,8 @@ async def _prepare_native_video(
                     source_url=resolution.canonical_url or resolution.source_url,
                     size_bytes=staged.size_bytes,
                     cleanup_path=staged.path,
+                    title=(resolution.title or title_from_embeds(message, resolution.canonical_url)
+                           or title_from_filename(staged.filename)),
                 )
 
     _log(
@@ -611,7 +630,7 @@ async def _relay_native_video_upload(
         return False
 
     send_payload: dict[str, Any] = {
-        "content": content[:2000],
+        "content": (title_prefix(getattr(native_video, "title", "")) + content)[:2000],
         "file": native_video.file,
         "allowed_mentions": discord.AllowedMentions.none(),
     }
