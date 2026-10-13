@@ -169,3 +169,53 @@ def test_canary_defaults_are_not_activated_in_code() -> None:
     assert 'return _env_bool("DISCORD_AUTO_SHARD", False)' in src
     assert "DankAutoShardedBot" in src
     assert "chunk_guilds_at_startup" in src
+
+
+def test_ticket_enabled_scan_is_paginated_and_no_default_guilds_are_fetched(monkeypatch):
+    from types import SimpleNamespace
+    from stoney_verify.workers import ticket_automation_worker as worker
+
+    calls = []
+    data = [{"guild_id": str(i)} for i in range(1, 1252)]
+
+    class Query:
+        def select(self, *a):
+            return self
+
+        def eq(self, key, value):
+            assert key == "enabled" and value is True
+            return self
+
+        def order(self, key):
+            assert key == "guild_id"
+            return self
+
+        def range(self, start, end):
+            self.start, self.end = start, end
+            calls.append((start, end))
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=data[self.start:self.end + 1])
+
+    monkeypatch.setattr(worker, "_settings_table", lambda: Query())
+    monkeypatch.setattr(worker, "_execute_db", lambda _label, executor: executor())
+    assert worker._list_enabled_ticket_automation_guild_ids_sync() == set(
+        range(1, 1252)
+    )
+    assert calls == [(0, 999), (1000, 1999)]
+
+
+def test_ticket_enabled_scan_db_failure_aborts_without_fallback(monkeypatch):
+    from stoney_verify.workers import ticket_automation_worker as worker
+
+    def unavailable(*a):
+        raise RuntimeError("Supabase unavailable")
+
+    monkeypatch.setattr(worker, "_execute_db", unavailable)
+    try:
+        worker._list_enabled_ticket_automation_guild_ids_sync()
+    except RuntimeError as exc:
+        assert "Supabase unavailable" in str(exc)
+    else:
+        raise AssertionError("ticket scan must fail closed on DB errors")
