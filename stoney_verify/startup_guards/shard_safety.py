@@ -135,7 +135,14 @@ def _log_snapshot(bot: Any, *, reason: str, force: bool = False) -> None:
 
     if guild_count >= critical_at:
         _LAST_LOG_MONOTONIC = now
-        _warn(message + " status=critical; migrate to AutoShardedBot/multi-process shards before adding more servers")
+        if bot_class == "DankAutoShardedBot":
+            _warn(
+                message
+                + " status=sharded_capacity_pressure; inspect guilds per shard, "
+                "maintenance cycle durations, RAM and gateway latency"
+            )
+        else:
+            _warn(message + " status=critical; enable the existing AutoShardedBot before adding more servers")
     elif guild_count >= warn_at:
         _LAST_LOG_MONOTONIC = now
         _warn(message + " status=warning; start AutoShardedBot testing and command consolidation now")
