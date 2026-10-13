@@ -121,8 +121,19 @@ def test_authoritative_policy_consent_query_is_fail_closed(monkeypatch):
     import stoney_verify.globals as global_state
     import stoney_verify.guild_config as guild_config
     import stoney_verify.voice_safety_consent as consent
+    import stoney_verify.voice_safety_coverage as coverage
+
+    class FakeVoice:
+        def __init__(self, cid):
+            self.id = cid
+        def permissions_for(self, member):
+            return SimpleNamespace(view_channel=True, connect=True)
+
+    monkeypatch.setattr(coverage.discord, "VoiceChannel", FakeVoice)
+    channels = {CHANNEL: FakeVoice(CHANNEL), CHANNEL + 2: FakeVoice(CHANNEL + 2)}
+    guild = SimpleNamespace(me="bot", get_channel=lambda cid: channels.get(cid))
     monkeypatch.setattr(global_state, "bot", SimpleNamespace(
-        get_guild=lambda gid: SimpleNamespace(get_channel=lambda cid: object()) if gid == GUILD else None,
+        get_guild=lambda gid: guild if gid == GUILD else None,
     ))
     config = {"voice_safety_enabled": True, "voice_safety_voice_channel_id": str(CHANNEL),
               "voice_safety_staff_channel_id": "111", "voice_safety_notice_channel_id": "222"}
@@ -142,6 +153,11 @@ def test_authoritative_policy_consent_query_is_fail_closed(monkeypatch):
         assert await bridge._member_policy_and_consent(GUILD, MEMBER, CHANNEL) == (False, False)
         config["voice_safety_enabled"] = True
         assert await bridge._member_policy_and_consent(GUILD, MEMBER, CHANNEL + 1) == (False, False)
+        # All-scope must accept any accessible normal VC without granting audio.
+        config["voice_safety_coverage_mode"] = "all"
+        assert await bridge._member_policy_and_consent(GUILD, MEMBER, CHANNEL + 2) == (True, True)
+        config["voice_safety_coverage_mode"] = "single"
+        assert await bridge._member_policy_and_consent(GUILD, MEMBER, CHANNEL + 2) == (False, False)
     asyncio.run(check())
 
 
