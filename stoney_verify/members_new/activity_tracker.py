@@ -683,6 +683,16 @@ def _stage_event(
                 "Activity buffer overflow: records were lost; "
                 "continuous coverage must restart before cleanup."
             )
+        # Surface a loss even while the breaker is open. Rate-limit logs so
+        # a long DB outage does not become a separate console-output storm.
+        global _LAST_DROP_LOG_COUNT
+        if (_LAST_DROP_LOG_COUNT == 0
+                or _DROPPED_EVENT_COUNT - _LAST_DROP_LOG_COUNT >= 1000):
+            print(
+                "⚠️ activity buffer overflow during outage: "
+                f"total_dropped_events={_DROPPED_EVENT_COUNT}"
+            )
+            _LAST_DROP_LOG_COUNT = _DROPPED_EVENT_COUNT
 
 
 async def record_direct_member_activity(
