@@ -77,7 +77,7 @@ After a live Discord screenshot confirmed the status bridge authenticated, a pai
 
 This is **not audio admission**. Reply authority is explicitly `voice_capture_authorized=false`. Consent can be withdrawn immediately after any read; polling is not a real-time revocation guarantee. Dank Shield remains the single receiver. A durable shared fenced lease, push revocation or equivalent strict fail-closed continuous checks, provider/legal gates and live DAVE decode must still be implemented and tested. Keep the 8097 listener VLAN-only and the general API unchanged. Deploy this change to `aaa-cinema-pre-pregateway-bind` before the corresponding Watch Yo Mouf branch, only after exact-head CI.
 
- 
+
 ## 2026-10-13: membership-policy decline and ten-second exit (draft)
 
 **Changed owner requirement:** Voice Safety is a membership rule in a guild that has explicitly enabled it. Rather than presenting a standalone ongoing opt-out while staying verified, the disclosed Basic Verify panel offers **Agree & Verify** or **Decline & Exit Server**; Voice Safety notice presents the same decline-and-exit option. All removals require that member's explicit button click. A bot cannot press Discord's native Leave Server menu on their behalf; a successful operation uses a bot kick.
