@@ -60,7 +60,7 @@ async def _run_publish(monkeypatch, *, upload=None, media=""):
     monkeypatch.setattr(toke, "choose_voice", lambda *_args: 0)
     monkeypatch.setattr(toke, "TokeCheersView", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(
-        toke, "TokeThumbnailLayout",
+        toke, "TokeMediaLayout",
         lambda _guild, session, *, intro: SimpleNamespace(
             filename=session["media_filename"], intro=intro, v2=True,
         ),
@@ -92,7 +92,7 @@ async def _run_publish(monkeypatch, *, upload=None, media=""):
     return channel
 
 
-def test_uploaded_gif_is_compact_inline_thumbnail_without_editable_embed(monkeypatch):
+def test_uploaded_gif_is_full_width_inline_gallery_without_editable_embed(monkeypatch):
     class Upload:
         filename = "sesh.gif"
         content_type = "image/gif"
