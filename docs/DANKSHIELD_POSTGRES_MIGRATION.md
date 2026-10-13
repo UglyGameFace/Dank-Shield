@@ -325,6 +325,71 @@ Supabase-only. No monkey patches, automatic DB client switching, hidden
 fallback writes or startup schema updates were introduced. The test suite
 includes an isolated real PostgreSQL 17 check detecting JSONB drift.
 
+## Phase 5: verified encrypted source backup before any live transfer
+
+`tools/backup_dankshield_supabase_source.py` introduces an **explicit-only**
+PostgreSQL 17 `pg_dump` archive of the *confirmed shared Supabase source
+project*. This step is higher priority than an actual Discloud migration.
+The command's default mode merely prints prerequisites; it never runs on
+Discord startup, reads the database, changes server settings, or connects to
+the existing voice-bot/PostgreSQL destination.
+
+- Requires a direct Supabase PostgreSQL **session** endpoint at
+  `db.<SOURCE_REF>.supabase.co:5432` using `postgres`, or an official
+  session pooler `*.pooler.supabase.com:5432` with username
+  `postgres.<SOURCE_REF>`. Transaction pool port 6543, unrelated hosts
+  and mismatched source refs are rejected. Use a password-authenticated
+  PostgreSQL URL in `DANK_SOURCE_DATABASE_URL`, supplied privately.
+- Uses PostgreSQL **17** `pg_dump --format=custom`, with encrypted output
+  through a constant-memory stream. An AES-256-GCM encrypted `.dsbak`
+  file is written directly, without a plaintext dump file. The strong
+  passphrase from `DANK_BACKUP_PASSPHRASE` must be managed separately.
+  A local directory with owner-only permissions (0700) and explicit free
+  space is required; no GitHub artifact or Discord attachment is created.
+- On success verifies AES authentication and checks that `pg_restore 17`
+  can read the archive's table of contents. Tampered, wrong-key, truncated,
+  oversized and failed dumps are rejected. Only a verified archive is moved
+  to its final filename. Backup creation reads source data, **never writes
+  or deletes source tables**.
+- The backup contains the complete database objects visible to its PostgreSQL
+  backup role, potentially including non-Dank-Shield tables from the shared
+  project. Treat the encrypted output as sensitive and confidential.
+  Supabase-managed or excluded roles/privileged objects may not be covered.
+  `--no-owner --no-privileges` means server-wide roles and grants are
+  **not** backed up. Independent recovery of roles, policies, external
+  Storage objects, secrets and platform configuration requires additional
+  verified exports.
+- A passing TOC check **does not demonstrate a complete restore**. A
+  source-independent encrypted copy and full restore drill are required
+  before the source can be retired. The isolated PostgreSQL 17 CI test
+  exercises a full dump/decrypt/restore of a disposable local database,
+  **not** a restore of the live shared Supabase project.
+- Never store the sole copy in an ephemeral Discloud application directory,
+  inside the existing database's limited disk, in a public Git repository,
+  or in bot log output. Retain Supabase source access until all tables,
+  dependent functions and remaining feature histories are recovered and
+  per-guild parity is verified.
+
+Private operator commands (only after provisioning a secure durable target;
+do **not** paste database credentials or passphrases into the chat):
+
+```text
+python -m tools.backup_dankshield_supabase_source
+# Requirements include isolated: pip install -r requirements-backup.txt
+# Existing private environment must provide:
+#   DANK_SOURCE_DATABASE_URL    (direct PostgreSQL URL, not SUPABASE_URL)
+#   DANK_MIGRATION_SOURCE_REF   (confirmed 20-character project ID)
+#   DANK_BACKUP_PASSPHRASE      (unique strong passphrase, kept separately)
+# Backup directory must exist with mode 0700 and durable off-host storage.
+python -m tools.backup_dankshield_supabase_source --create --output-dir /path/to/private/durable
+python -m tools.backup_dankshield_supabase_source --verify /path/to/private/durable/created.dsbak
+```
+
+No live backup has been run through this chat: there is no authenticated
+execution route into the Discloud VLAN or private source PostgreSQL server.
+Do not claim migrated, backed up or cutover-ready until the real backup,
+independent restore and source/destination checks pass.
+
 ## Deployment sequence
 
 1. Confirm the real disk limit/backups for the existing Discloud DB and the
