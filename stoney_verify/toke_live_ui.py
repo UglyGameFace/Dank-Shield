@@ -449,16 +449,21 @@ class TokeCheersView(discord.ui.View):
                 if isinstance(item, discord.ui.Button) and item.style is not discord.ButtonStyle.link:
                     item.disabled = True
 
-    async def _respond(self, interaction: discord.Interaction, action: str) -> None:
+    async def _respond(self, interaction: discord.Interaction, action: str, *, session_message_id: int | None = None, already_deferred: bool = False) -> None:
         guild = interaction.guild
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
-        if guild is None or member is None or interaction.message is None:
+        message_id = int(session_message_id or getattr(interaction.message, "id", 0) or 0)
+        if guild is None or member is None or not message_id:
+            if already_deferred:
+                return await interaction.edit_original_response(content="This sesh is no longer available.")
             return await interaction.response.send_message("This sesh is no longer available.", ephemeral=True)
         # Acknowledge before file I/O or Discord edits: avoids the dreaded
         # "Dank Shield didn't respond in time" on busy Discloud instances.
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        if not already_deferred:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        card_interaction = None if session_message_id is not None else interaction
         try:
-            session = await toke_sessions.get(guild.id, interaction.message.id)
+            session = await toke_sessions.get(guild.id, message_id)
             if not session:
                 return await interaction.edit_original_response(
                     content="This sesh is no longer available. Use /toke to start another."
@@ -467,7 +472,7 @@ class TokeCheersView(discord.ui.View):
                 # A previously expired card may still show old buttons while a
                 # background Discord edit was delayed. Fix the public card now.
                 try:
-                    await refresh_card(interaction.client, session, interaction)
+                    await refresh_card(interaction.client, session, card_interaction)
                 except (discord.HTTPException, ValueError, OSError) as exc:
                     print(f"[toke] closed-card click sync failed guild={guild.id}: {type(exc).__name__}: {exc}")
                 return await interaction.edit_original_response(
@@ -485,22 +490,22 @@ class TokeCheersView(discord.ui.View):
                         content="Join the server's configured Toke community or notification role first."
                     )
             updated, error = await toke_sessions.react(
-                guild.id, interaction.message.id, member.id, action,
+                guild.id, message_id, member.id, action,
                 max_interested=int(session.get("max_interested", 100)),
             )
             if error:
                 if updated is None:
-                    closed = await toke_sessions.get(guild.id, interaction.message.id)
+                    closed = await toke_sessions.get(guild.id, message_id)
                     if closed and not closed.get("active", False):
                         try:
-                            await refresh_card(interaction.client, closed, interaction)
+                            await refresh_card(interaction.client, closed, card_interaction)
                         except (discord.HTTPException, ValueError, OSError):
                             pass
                 return await interaction.edit_original_response(content=f"⚠️ {error}")
             try:
-                await refresh_card(interaction.client, updated, interaction)
+                await refresh_card(interaction.client, updated, card_interaction)
             except (discord.HTTPException, ValueError, OSError) as exc:
-                print(f"[toke] card edit retry queued guild={guild.id} message={interaction.message.id} error={type(exc).__name__}")
+                print(f"[toke] card edit retry queued guild={guild.id} message={message_id} error={type(exc).__name__}")
                 if action == "end":
                     return await interaction.edit_original_response(
                         content="✅ Sesh ended. The public card will update when Discord accepts the edit."
