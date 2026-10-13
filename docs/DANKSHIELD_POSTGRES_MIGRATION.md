@@ -170,6 +170,37 @@ claimed as executed. The PostgreSQL 17 integration check must pass against an
 isolated test instance before touching `DankShield-DB`. This phase does not
 create a finalized backup or switch the live bot to PostgreSQL.
 
+## Non-negotiable: no monkey patches or hidden repair shortcuts
+
+The owner explicitly requires a maintainable architecture, **not monkey
+patches**. The production implementation must use a typed, intentionally
+selected data-access interface and explicit PostgreSQL repositories with
+versioned SQL migrations. Do not modify imported Supabase/discord.py/psycopg
+functions or module globals at runtime, replace methods behind callers'
+backs, wrap errors in a way that conceals failed writes, or create competing
+fallback persistence paths. Mocking via fixtures in tests is not production
+monkey-patching.
+
+All source and destination changes must be reviewable as normal commits,
+tested against isolated PostgreSQL 17 and source-contract fixtures, and
+validated for ticket/voice-bot isolation, idempotency, restart recovery,
+counts, read/write parity, and rollback. Migration schema is **never**
+auto-repaired or upgraded on bot startup.
+
+Self-maintenance must distinguish:
+- PostgreSQL native autovacuum/analyze and approved bounded cleanup of
+  genuinely temporary data;
+- bounded connection recovery and backpressure, health checks, disk usage,
+  safe index/statistics diagnostics, and independently tested backup restore;
+- anything destructive or potentially locking, such as `VACUUM FULL`,
+  `REINDEX`, orphan deletion, role/schema rewrites, or restoring corrupted
+  rows, **requires explicit controlled maintenance and verified backups**.
+
+Storage alerts and safety caps must never silently drop server configuration,
+tickets, moderation/security history or consent/activity evidence. Database
+corruption cannot be declared automatically repaired without verification.
+An undersized disk is not fixed by deleting valuable evidence.
+
 ## Deployment sequence
 
 1. Confirm the real disk limit/backups for the existing Discloud DB and the
