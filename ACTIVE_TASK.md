@@ -1,3 +1,39 @@
+# Active Task Lock — Discloud PostgreSQL guild settings parity (2026-10-13)
+
+**Current task:** After merged PR #547, implement an explicit standalone
+PostgreSQL 17 guild-configuration repository for **shadow read parity only**.
+Do not monkey-patch the runtime Supabase client, `guild_config` methods or
+any Discord library. No live storage routing or deployment change yet.
+
+**Base:** `main@a67d5b1f8dd96a1cdace47ca3c0f58104e6e473e`, including merged
+PR #546 storage audit and #547 bounded first-slice staged transfer.
+All five of PR #547's exact-head GitHub workflows completed successfully,
+but an isolated PG17 integration test was not run.
+
+**Implementation on `feat/discloud-core-config-shadow-20261013`:**
+`postgres/migrations/202610130003_guild_config_shadow.sql` explicitly creates
+`dank_core.guild_config_shadow`, separate from voice-bot/reminder schema.
+`stoney_verify/postgres_guild_config_shadow.py` verifies complete JSON
+payloads against canonical SHA256 from phase-1 `dank_migration.staged_records`,
+enforces unique guild identities and matching source IDs, detects tampering
+and conflicts, imports atomically, and refuses unknown destination DB or
+insufficient verified disk headroom. Separate operator tool defaults to a
+read-only inspection. Maximum 500 guilds and 12 MiB in this first slice;
+never advertise that limit as a 10,000-guild implementation.
+
+**Required gates:** Existing database current disk quota/backup capability,
+independent recoverable source backup, isolated real PostgreSQL 17 schema
+and integration run, staged row parity, source-to-target read/write/CAS
+semantics, shared DB user/schema isolation, voice-bot data invariants and
+actual rollback are not verified. The shadow repository must never be
+wired into live Discord config reads before all those pass.
+
+**Next:** Complete exact-head CI for this PR; separately test against a
+controlled PG17 DB and implement the canonical transactional read/write/CAS
+repository and config-history/storage optimization without monkey patches.
+
+---
+
 # Active Task Lock — DankShield-DB critical-data staging phase 1 (2026-10-13)
 
 **Non-negotiable architecture instruction from owner (2026-10-13): NO MONKEY PATCHES.**
