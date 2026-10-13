@@ -390,6 +390,67 @@ execution route into the Discloud VLAN or private source PostgreSQL server.
 Do not claim migrated, backed up or cutover-ready until the real backup,
 independent restore and source/destination checks pass.
 
+## Mobile-only source backup handoff: GitHub Actions (manual)
+
+To make a real backup practical for a repository owner working from
+**Android only**, the first party
+`.github/workflows/manual-encrypted-supabase-backup.yml` adds a
+`workflow_dispatch` action. This is a **manual backup**, not a recurring
+worker, a database migration, a direct write to DankShield-DB or permission
+to retire the shared Supabase project. It can run only from `main`.
+
+### Owner setup in GitHub's mobile browser
+
+1. On `UglyGameFace/Dank-Shield`, open **Settings → Secrets and variables
+   → Actions → New repository secret**. Add
+   `DANK_SOURCE_DATABASE_URL`: the private PostgreSQL **session** connection
+   URL obtained from the existing *IdleGrowOp* Supabase project's Connect /
+   Database connection details. Use the **session pooler port 5432** if
+   GitHub runners lack IPv6 access to the direct database address. This is
+   **not** `SUPABASE_URL` and not the service-role API key.
+2. Create another repository secret `DANK_BACKUP_PASSPHRASE`: a unique,
+   randomly generated passphrase at least 24 characters. Keep the only
+   recovery passphrase safely **outside GitHub** as well (a password manager
+   or secure offline record). Losing it makes the archive unrecoverable.
+3. Under the repo's **Actions** tab select
+   **Manual Encrypted Supabase Backup → Run workflow** on branch `main`.
+   Enter the actual 20-character Supabase project reference for *IdleGrowOp*
+   and choose `BACKUP_ONLY_NO_DELETE`. No raw passwords or connection
+   strings belong in any workflow input, issue, chat or screenshot.
+4. Wait for a successful workflow, then download the
+   **dankshield-encrypted-supabase-source** artifact from the workflow
+   run's **Artifacts** section. It contains only a `.dsbak` ciphertext
+   inside the artifact ZIP. On Android extract the `.dsbak` to private
+   durable storage, retain the archive's SHA-256 reported by the backup
+   command, and keep an independent copy. **Github deletes the artifact
+   after three days**, so leaving it in Actions is NOT a backup strategy.
+5. A green run authenticates the encrypted dump and makes `pg_restore`
+   read its table of contents. It does **not** prove that the actual
+   production source is restorable. Before cutover run a controlled
+   independent restoration and verify the source manifests and important
+   Dank Shield records. Keep the shared source unchanged until signed off.
+
+### Preserved boundaries and warnings
+
+The project currently has **87 public tables**, and a separate `idle`
+schema with five tables, alongside Supabase-managed `auth` and other
+schemas. The SQL `storage.buckets` and `storage.objects` tables currently
+have **zero rows** (2026-10-13 read-only inventory), but this does not
+guarantee that external file/blob storage or platform secrets are covered
+by `pg_dump`. Those require their own inventory/export if used. Because
+the source project is shared, treat the archive as sensitive to **other
+apps**, and **never restore the entire dump directly into the existing
+Discloud database**. Use a separate disposable recovery environment,
+then selectively import only verified Dank Shield-owned data into isolated
+target schemas.
+
+The workflow does not take or publish a backup without the owner's manual
+action and the two GitHub Secrets. It does not read the existing Discloud
+database or the voice bot's records. The temporary GitHub runner performs
+the export and produces an AES-256-GCM encrypted artifact only, using
+PostgreSQL 17 clients in ephemeral Docker. Production bot dependencies,
+RAM, Discloud branch, Supabase API secrets and SQL records remain unchanged.
+
 ## Deployment sequence
 
 1. Confirm the real disk limit/backups for the existing Discloud DB and the

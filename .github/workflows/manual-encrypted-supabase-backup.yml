@@ -1,0 +1,105 @@
+# MANUAL ONLY. Source database backup, NOT a live Discloud data cutover.
+# Requires owner-managed GitHub Actions repository secrets:
+#   DANK_SOURCE_DATABASE_URL: exact Supabase PostgreSQL connection string
+#   DANK_BACKUP_PASSPHRASE: long, unique passphrase, kept OFF GitHub separately
+name: Manual Encrypted Supabase Backup
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_project_ref:
+        description: "Confirmed shared Supabase project ref (20 lowercase characters)"
+        required: true
+        type: string
+      confirmation:
+        description: "Confirm manual encrypted backup of shared source (no writes/deletes)"
+        type: choice
+        required: true
+        options:
+          - BACKUP_ONLY_NO_DELETE
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-encrypted-source-backup
+  cancel-in-progress: false
+
+jobs:
+  encrypted-source-archive:
+    name: Backup shared source without any production writes
+    if: github.ref == 'refs/heads/main' && inputs.confirmation == 'BACKUP_ONLY_NO_DELETE'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      DANK_SOURCE_DATABASE_URL: ${{ secrets.DANK_SOURCE_DATABASE_URL }}
+      DANK_BACKUP_PASSPHRASE: ${{ secrets.DANK_BACKUP_PASSPHRASE }}
+      DANK_MIGRATION_SOURCE_REF: ${{ inputs.source_project_ref }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Check out default branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up isolated backup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate required secrets without displaying them
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${DANK_SOURCE_DATABASE_URL}" || -z "${DANK_BACKUP_PASSPHRASE}" ]]; then
+            echo "::error::Backup source connection and backup passphrase must be added as GitHub Actions secrets."
+            exit 2
+          fi
+          if [[ ! "${DANK_MIGRATION_SOURCE_REF}" =~ ^[a-z0-9]{20}$ ]]; then
+            echo "::error::Provide the exact 20-character Supabase source project reference."
+            exit 2
+          fi
+          if [[ ${#DANK_BACKUP_PASSPHRASE} -lt 24 ]]; then
+            echo "::error::Backup passphrase is too short."
+            exit 2
+          fi
+
+      - name: Install only backup encryption dependency
+        run: python -m pip install -q -r requirements-backup.txt
+
+      - name: Provide PostgreSQL 17 dump and restore clients in isolated Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/setup_pg17_backup_clients.sh "$RUNNER_TEMP/pg17-client"
+          echo "$RUNNER_TEMP/pg17-client" >> "$GITHUB_PATH"
+          docker pull postgres:17 >/dev/null
+          "$RUNNER_TEMP/pg17-client/pg_dump" --version
+          "$RUNNER_TEMP/pg17-client/pg_restore" --version
+
+      - name: Create authenticated, encrypted source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          install -d -m 0700 "$RUNNER_TEMP/dank-shield-source-backup"
+          python -m tools.backup_dankshield_supabase_source \
+            --create --output-dir "$RUNNER_TEMP/dank-shield-source-backup"
+          test "$(find "$RUNNER_TEMP/dank-shield-source-backup" -maxdepth 1 -type f -name '*.dsbak' | wc -l)" -eq 1
+
+      - name: Upload encrypted archive only (short-lived handoff)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dankshield-encrypted-supabase-source
+          path: ${{ runner.temp }}/dank-shield-source-backup/*.dsbak
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
+      - name: Report required independent preservation steps
+        shell: bash
+        run: |
+          echo "Encrypted source archive uploaded for manual owner download."
+          echo "Keep the passphrase separately and copy the archive to independently durable private storage."
+          echo "Verify its SHA-256 checksum and perform a real off-host restore before approving any cutover."
+          echo "This archive includes other shared-project schemas; never import it wholesale into DankShield-DB."
