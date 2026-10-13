@@ -22,6 +22,7 @@ class PendingExit:
     user_id: int
     original_role_ids: tuple[int, ...]
     unverified_role_id: int
+    source: str
     expires: float
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     task: asyncio.Task[None] | None = None
@@ -107,7 +108,7 @@ class ExitGraceView(discord.ui.View):
                 # A visible Agree & Stay click is a new explicit agreement
                 # to the policy displayed on the verification/notice panel.
                 await manager.set_voice_safety_consent(
-                    entry.guild.id, entry.user_id, True, source="basic_verify_v1"
+                    entry.guild.id, entry.user_id, True, source=entry.source
                 )
                 if not await read_voice_safety_agreement(entry.guild.id, entry.user_id):
                     raise RuntimeError("Agreement write not verified")
@@ -224,6 +225,7 @@ async def decline_and_exit(interaction: discord.Interaction, *, from_verify: boo
         entry = PendingExit(
             guild=guild, user_id=user.id, original_role_ids=original_role_ids,
             unverified_role_id=unverified.id,
+            source="basic_verify_v1" if from_verify else "voice_safety_notice_v1",
             expires=time.monotonic() + GRACE_SECONDS,
         )
         _PENDING[key] = entry
@@ -238,4 +240,5 @@ async def decline_and_exit(interaction: discord.Interaction, *, from_verify: boo
         )
     finally:
         # Still schedule exit when Discord refuses to deliver the followup.
-        entry.task = asyncio.create_task(_kick_later(entry))
+        if not entry.completed:
+            entry.task = asyncio.create_task(_kick_later(entry))
