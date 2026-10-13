@@ -73,7 +73,6 @@ _DEFAULT_FLUSH_SECONDS = 15.0
 _DEFAULT_BUFFER_MAX_ENTRIES = 50000
 _DEFAULT_BREAKER_THRESHOLD = 3
 _DEFAULT_BREAKER_COOLDOWN_SECONDS = 120.0
-_DEFAULT_FLUSH_RPC_WORKERS = 8
 
 # (guild_id, user_id, activity_type) -> {"occurred_at", "channel_id", "count"}
 _ACTIVITY_BUFFER: dict[tuple[int, int, str], dict[str, Any]] = {}
@@ -642,8 +641,8 @@ def _stage_event(
     count: int = 1,
 ) -> None:
     """Buffer one event. Latest timestamp wins per (guild, user, type);
-    counts accumulate. The ledger upsert is greatest()-based, so flushing
-    only the latest entry converges to the identical row state."""
+    counts accumulate. The ledger upsert is greatest()-based; the batch
+    payload also carries first-observed timestamps and stable retry IDs."""
     global _ACTIVITY_SEQUENCE
     key = (int(guild_id), int(user_id), activity_type)
     existing = _ACTIVITY_BUFFER.get(key)
@@ -757,20 +756,6 @@ def _is_deterministic_batch_rejection(exc: Exception) -> bool:
         "invalid input syntax for type timestamp",
         "invalid input syntax for type bigint",
     ))
-
-
-def _guild_has_unflushed_activity(guild_id: int) -> bool:
-    return (
-        any(key[0] == guild_id for key in _ACTIVITY_BUFFER)
-        or any(
-            key[0] == guild_id
-            for batch in _PENDING_SPLITS
-            for key in batch["snapshot"]
-        )
-        or bool(_PENDING_BATCH and any(
-            key[0] == guild_id for key in _PENDING_BATCH["snapshot"]
-        ))
-    )
 
 
 async def _flush_once() -> bool:
