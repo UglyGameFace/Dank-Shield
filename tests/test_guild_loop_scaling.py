@@ -219,3 +219,70 @@ def test_ticket_enabled_scan_db_failure_aborts_without_fallback(monkeypatch):
         assert "Supabase unavailable" in str(exc)
     else:
         raise AssertionError("ticket scan must fail closed on DB errors")
+
+
+def test_heartbeat_breaker_blocks_every_guild_before_an_rpc(monkeypatch):
+    from types import SimpleNamespace
+    from stoney_verify.members_new import activity_tracker as tracker
+
+    monkeypatch.setattr(tracker, "_STARTED_GUILDS", {101})
+    monkeypatch.setattr(tracker, "_STARTUP_TASKS", {})
+    monkeypatch.setattr(tracker, "_db_breaker_open", lambda: True)
+
+    async def prohibited(*a, **kw):
+        raise AssertionError("breaker must prevent DB traffic")
+    monkeypatch.setattr(tracker, "_refresh_scope_status", prohibited)
+    assert asyncio.run(tracker._heartbeat_one_guild(SimpleNamespace(id=101))) is False
+    assert "circuit breaker" in tracker._combined_local_error(202)
+
+
+def test_heartbeat_scope_exception_fails_closed(monkeypatch):
+    from types import SimpleNamespace
+    from stoney_verify.members_new import activity_tracker as tracker
+
+    monkeypatch.setattr(tracker, "_STARTED_GUILDS", {101})
+    monkeypatch.setattr(tracker, "_STARTUP_TASKS", {})
+    monkeypatch.setattr(tracker, "_db_breaker_open", lambda: False)
+    errors = []
+
+    async def fail_scope(_guild):
+        raise RuntimeError("scope audit exception")
+
+    async def record_error(guild_id, message):
+        errors.append((guild_id, message))
+
+    monkeypatch.setattr(tracker, "_refresh_scope_status", fail_scope)
+    monkeypatch.setattr(tracker, "_mark_failure", record_error)
+    assert asyncio.run(tracker._heartbeat_one_guild(SimpleNamespace(id=101))) is False
+    assert len(errors) == 1 and errors[0][0] == 101
+    assert "heartbeat failed" in errors[0][1]
+
+
+def test_ticket_automation_same_guild_lock_is_shared(monkeypatch):
+    from stoney_verify.workers import ticket_automation_worker as worker
+
+    monkeypatch.setattr(worker, "_AUTOMATION_GUILD_LOCKS", worker.WeakValueDictionary())
+
+    async def scenario():
+        first_entered = asyncio.Event()
+        release = asyncio.Event()
+        second_entered = asyncio.Event()
+
+        async def first():
+            async with worker._automation_guild_lock(11):
+                first_entered.set()
+                await release.wait()
+
+        async def second():
+            async with worker._automation_guild_lock(11):
+                second_entered.set()
+
+        a = asyncio.create_task(first())
+        await first_entered.wait()
+        b = asyncio.create_task(second())
+        await asyncio.sleep(0)
+        assert not second_entered.is_set()
+        release.set()
+        await asyncio.gather(a, b)
+        assert second_entered.is_set()
+    asyncio.run(scenario())
