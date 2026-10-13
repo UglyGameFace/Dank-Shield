@@ -239,6 +239,58 @@ slice is an explicitly versioned PostgreSQL `guild_configs` repository
 with one transactionally correct compare-and-swap/patch mechanism and
 tested parity for sensitive permissions, verification, roles, and setup.
 
+## Phase 3: atomic PG17 guild settings writes (offline repository only)
+
+`stoney_verify.postgres_guild_config_repo.GuildConfigPgRepository`
+provides explicit `read` and row-lock-serialized `patch` operations over
+`dank_core.guild_config_state`. Its versioned schema is
+`postgres/migrations/202610130004_guild_config_atomic_state.sql`, with one
+current JSON row and monotonic revision per server, not a bulky new snapshot
+on every settings update.
+
+- The repository accepts an existing private PostgreSQL connection; there
+  is **no global client replacement, monkey patch, startup schema DDL, or
+  automatic production routing**. The existing Supabase `guild_config.py`
+  remains the current runtime authority.
+- A patch uses `SELECT ... FOR UPDATE` inside the same transaction as its
+  `UPDATE ... WHERE revision=old_revision RETURNING revision`. Concurrent
+  workers cannot overwrite sibling keys from stale reads; optional revision
+  and per-key compare-and-swap expectations fail closed.
+- Existing protected roles, channels, setup-sensitive keys and fill-only
+  modes have explicit tests against the canonical key list.
+  Unknown modes, reserved/base columns, oversized JSON or missing seeded
+  guilds abort. Explicit clears are distinct from a JSON null patch.
+- Only changed settings trigger a write and revision increment; unchanged
+  input does not write another full row or create configuration-history
+  churn. This slice **does not add an automatic full-snapshot trigger**.
+- `seed_from_verified_shadow` requires explicit manual execution after
+  the phase-2 shadow is independently verified. It checks source SHA-256,
+  target DB identity, configured disk budget, row identity, existing state
+  conflicts, memory limits and final exact row parity. It rejects missing or
+  already-modified live state rather than resetting configuration values.
+- The first seed is intentionally limited to 500 guilds/12 MiB. Full-scale
+  migration will need bounded streaming and measured PG17 capacity tests.
+  Nothing here proves 10,000-guild runtime readiness.
+- A separate complete, restorable source backup and cutover delta strategy
+  remain **mandatory**. A staged REST scan is not a transactional source
+  backup. The current Discloud service's disk allowance and private runner
+  are still unverified, so no live seed/apply has been performed.
+
+A separate, opt-in real PostgreSQL 17 integration test now lives in
+`tests/test_postgres_guild_config_pg17_integration.py`. It accepts only a
+local `postgres` database, checks the server is PG17, runs the versioned
+migration in that disposable test environment and exercises two concurrent
+CAS writers. It is **skipped** in ordinary CI without the explicit
+`RUN_PG_GUILD_CONFIG_INTEGRATION=1` and `DANK_TEST_DATABASE_URL`
+localhost settings. Authoring the test is not evidence that it has run.
+
+**Still required before any live cutover:** a successful isolated PG17
+integration/concurrency run, setup/role permission validation across the actual guild
+config API, revision/history/restore parity, operational secret provisioning,
+remaining tickets/community/Cinema/member/moderation repositories, full source
+backup and restore tests, size/load soak, and a reversible switch. Do not
+update bot routing, remove Supabase secrets, or redeploy Discloud on main yet.
+
 ## Deployment sequence
 
 1. Confirm the real disk limit/backups for the existing Discloud DB and the
