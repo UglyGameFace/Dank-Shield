@@ -934,6 +934,7 @@ async def run_ticket_automation_pass(*, guild_id: Optional[int] = None) -> Dict[
                 "skipped_closed_drift": 0,
             }
 
+            guild_had_error = False
             for row in rows:
                 try:
                     result = await _process_ticket(guild, row, settings)
@@ -945,6 +946,7 @@ async def run_ticket_automation_pass(*, guild_id: Optional[int] = None) -> Dict[
                     guild_summary["missing_channels"] += result.get("missing_channels", 0)
                     guild_summary["skipped_closed_drift"] += result.get("skipped_closed_drift", 0)
                 except Exception as e:
+                    guild_had_error = True
                     print("⚠️ Ticket automation process error:", repr(e))
 
             _LAST_AUTOMATION_SUMMARY[int(guild.id)] = guild_summary
@@ -967,8 +969,7 @@ async def run_ticket_automation_pass(*, guild_id: Optional[int] = None) -> Dict[
                 f"missing_channels={guild_summary['missing_channels']}",
             )
 
-
-        return True
+        return not guild_had_error
 
     sweep = await run_bounded_guild_sweep(
         guilds,
