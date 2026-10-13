@@ -1,3 +1,47 @@
+# Active Task Lock — Existing Discloud PostgreSQL migration and capacity safety (2026-10-13)
+
+**Active outcome:** Reuse already-provisioned `DankShield-DB` on the same Discloud
+private network as the bot/voice service. Preserve voice-bot records and migrate
+the important Dank Shield data **without importing unbounded Supabase history
+or exhausting a small PostgreSQL instance**. Do not create a second database
+or replace the live Supabase client by an environment-variable swap.
+
+**Verified infrastructure:** owner screenshot confirmed PostgreSQL 17,
+private VLAN, 0.25 vCPU, 512 MB RAM and 47 MB storage used. The total disk
+allowance, backups and current voice-bot table/role ownership remain unknown.
+The connected source is the shared IdleGrowOp Supabase project.
+
+**Read-only source evidence:** 87 public tables, roughly 107 MB allocated;
+~40 MB `activity_feed_events` (including 14 MB indexes) and ~38 MB
+`guild_config_versions` (including ~37 MB TOAST). The latter has ~17,525
+cumulative inserts and ~16,297 deletes. Source data has not been modified.
+Supabase billing-cycle quota type remains unverified; allocated database
+bytes alone do not prove its cause.
+
+**Current deliverable:** On
+`feat/discloud-postgres-storage-preflight-20261013`, prepare a read-only
+Postgres size/bloat diagnostic with explicit optional true disk quota
+thresholds; migration runbook preserving all valuable primary and audit
+records with a verified archive of bulky history before any selective import;
+CI tests and documented config. No live Discloud connection, backup/restore,
+data copy, DDL or deletion has occurred. Do not claim storage cannot
+fill or that main is ready for Discloud redeployment.
+
+**Main continuity:** Main/production reunification PR #545 was merged at
+`a3474387d12daa8bdb401db4833e2984a12202b9` and branch history
+is preserved. PR #540's Supabase batch-RPC migration is still missing the
+two RPC functions on the source database and its committed SQL contains
+invalid dollar-quote delimiters. Do not redeploy main while the database
+compatibility/rollout gate is unresolved.
+
+**Next:** Confirm actual Discloud **disk** allowance and its existing schema
+ownership, build and test the direct PostgreSQL repositories/migrations,
+verify source backup and selective restore, then perform controlled main
+cutover with measured latency, disk and activity fail-closed behavior.
+The production cutover watch must stay blocked until verified.
+
+---
+
 # Active Task Lock — Main/Production Reunification for Discloud (2026-10-13)
 
 **Active outcome:** Merge the current Discloud-connected `aaa-cinema-pre-pregateway-bind`
