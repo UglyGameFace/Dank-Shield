@@ -31,6 +31,21 @@ estimated live rows across public tables. This is not a complete backup.
 | `guild_configs` | ~2 MB | 12 live rows, >41,000 updates in cumulative stats |
 | `member_activity_ledger` | ~200 kB | 288 aggregated member rows, ~9,300 historical updates |
 
+**Measured payloads:** The 920 retained config snapshots average ~30,953
+bytes and reach ~443,571 bytes each (none is flagged `is_manual=true`).
+The 4,710 activity-feed JSON records average ~11,636 bytes.
+
+**Verified duplicate audit projection:** Exactly 3,369
+`activity_feed_events` rows with `event_family='moderation'` point to
+`related_table='staff_action_logs'`; all 3,369 have unique
+`related_id` values and all join to an existing staff-action record.
+Do **not** blindly import each as a second full event payload. A future
+PostgreSQL feed adapter can display these actions through a constrained,
+indexed join/view from the canonical `staff_action_logs` table. Archive the
+entire original feed first; verify field and UI parity because a linked row
+may contain additional display-only fields. Other feed families must be
+classified individually and must not be discarded by this optimization.
+
 Stats are **estimates and PostgreSQL allocated size**, not proof of disk
 capacity, missing data, or Supabase billing root cause. The Supabase banner
 said that an organization exceeded a previous billing-cycle quota; the
@@ -74,7 +89,10 @@ quota category is unverified. Do not guess it was database disk usage.
 - **Small activity history.** Keep authoritative per-member last activity and
   per-type counts in upserted/aggregated rows. For analytics, roll up
   low-value repeated events by guild/date/type rather than persisting every
-  event forever. Preserve moderation/ticket evidence separately.
+  event forever. Preserve moderation/ticket evidence separately. In the
+  migration source all 3,369 moderation-feed entries already reference
+  `staff_action_logs`; use one canonical physical record and a derived
+  activity-feed projection after verifying field-level parity.
 - **Bound DB writes and memory.** Limit connection-pool size, concurrency,
   RPC/transaction batches and retry budgets. Retry idempotently. When an
   outage occurs, never turn missing activity history into permission for
