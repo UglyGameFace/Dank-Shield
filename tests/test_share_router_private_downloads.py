@@ -142,6 +142,122 @@ def test_bounded_download_success_dms_video_and_deletes_source(monkeypatch):
     assert message.deleted
 
 
+
+def test_facebook_embed_download_dms_without_broken_page_extractor(monkeypatch):
+    facebook = "https://www.facebook.com/reel/1591316522498163"
+    cdn = "https://video.xx.fbcdn.net/media/reel.mp4?oh=private"
+    message = FakeMessage(content=facebook)
+    message.embeds = [SimpleNamespace(video=SimpleNamespace(url=cdn, proxy_url=None))]
+    message.attachments = [SimpleNamespace(
+        content_type="video/mp4", filename="unrelated.mp4",
+        url="https://cdn.discordapp.com/attachments/unrelated.mp4", proxy_url=None,
+    )]
+    class File:
+        closed = False
+        def close(self):
+            self.closed = True
+    file = File()
+    calls = []
+
+    async def fetch(url, *, max_bytes, request_headers=None):
+        calls.append((url, max_bytes))
+        return SimpleNamespace(file=file, size_bytes=1234, source_url=url, cleanup_path=None)
+
+    async def no_extraction(*args, **kwargs):
+        raise AssertionError("Trusted embedded Facebook media should avoid the broken extractor")
+
+    monkeypatch.setattr(router, "_download_trusted_video", fetch)
+    monkeypatch.setattr(downloads, "resolve_first_media", no_extraction)
+    assert run(downloads.handle_download_message(message))
+    assert calls == [(cdn, downloads.DM_ATTACHMENT_BYTES)]
+    assert message.author.sent[0][1] is file
+    assert message.author.sent[0][2].everyone is False
+    assert file.closed and message.deleted
+
+
+def test_facebook_failed_embed_uses_existing_progressive_fallback(monkeypatch):
+    facebook = "https://www.facebook.com/watch/?v=1591316522498163"
+    cdn = "https://video.xx.fbcdn.net/fail.mp4"
+    playable = "https://video.xx.fbcdn.net/working.mp4"
+    message = FakeMessage(content=facebook)
+    message.embeds = [SimpleNamespace(video=SimpleNamespace(url=cdn, proxy_url=None))]
+    attempts = []
+    class File:
+        closed = False
+        def close(self):
+            self.closed = True
+    file = File()
+
+    async def fetch(url, *, max_bytes, request_headers=None):
+        attempts.append(url)
+        if url == playable:
+            return SimpleNamespace(file=file, size_bytes=500, source_url=url, cleanup_path=None)
+        return None
+
+    async def resolve(url, *, max_bytes):
+        assert url == facebook
+        return MediaResolution(
+            source_url=url, canonical_url=url, identity="facebook:1591316522498163",
+            provider="facebook", delivery="progressive", media_url=playable,
+        )
+
+    monkeypatch.setattr(router, "_download_trusted_video", fetch)
+    monkeypatch.setattr(downloads, "resolve_first_media", resolve)
+    assert run(downloads.handle_download_message(message))
+    assert attempts == [cdn, playable]
+    assert file.closed and message.deleted
+    assert message.author.sent[0][1] is file
+
+
+def test_facebook_download_ignores_unrelated_attachment_and_preserves_failure(monkeypatch):
+    facebook = "https://www.facebook.com/reel/1591316522498163"
+    message = FakeMessage(content=facebook)
+    message.embeds = []
+    message.attachments = [SimpleNamespace(
+        content_type="video/mp4", filename="unrelated.mp4",
+        url="https://cdn.discordapp.com/attachments/unrelated.mp4", proxy_url=None,
+    )]
+
+    async def no_fetch(*args, **kwargs):
+        raise AssertionError("An unrelated attachment must not become the Facebook video")
+
+    async def failed_extract(url, *, max_bytes):
+        return MediaResolution(
+            source_url=url, canonical_url=url, identity="facebook:1591316522498163",
+            provider="facebook", delivery="link", reason="provider_extractor_incompatible",
+        )
+
+    monkeypatch.setattr(router, "_download_trusted_video", no_fetch)
+    monkeypatch.setattr(downloads, "resolve_first_media", failed_extract)
+    assert run(downloads.handle_download_message(message))
+    assert not message.deleted
+    assert "provider_extractor_incompatible" in message.author.sent[0][0]
+    assert message.author.sent[0][1] is None
+
+
+def test_nonfacebook_download_does_not_use_facebook_embed_path(monkeypatch):
+    youtube = "https://www.youtube.com/watch?v=tiq6mOEwsow"
+    message = FakeMessage(content=youtube)
+    message.embeds = [SimpleNamespace(video=SimpleNamespace(
+        url="https://video.xx.fbcdn.net/should-not-be-tried.mp4", proxy_url=None,
+    ))]
+
+    async def no_fetch(*args, **kwargs):
+        raise AssertionError("Facebook fast path must not run for another provider")
+
+    async def failed_extract(url, *, max_bytes):
+        return MediaResolution(
+            source_url=url, canonical_url=url, identity="youtube:tiq6mOEwsow",
+            provider="youtube", delivery="link", reason="provider_bot_verification",
+        )
+
+    monkeypatch.setattr(router, "_download_trusted_video", no_fetch)
+    monkeypatch.setattr(downloads, "resolve_first_media", failed_extract)
+    assert run(downloads.handle_download_message(message))
+    assert not message.deleted
+    assert "provider_bot_verification" in message.author.sent[0][0]
+
+
 def test_over_limit_returns_honest_private_source_link_not_fake_file(monkeypatch):
     message = FakeMessage()
 
