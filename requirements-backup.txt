@@ -1,0 +1,6 @@
+"""Optional dependencies for manual encrypted source database backups only.
+
+Do not add these to the 10,000+ guild runtime or require a restart just to
+make a backup. Install only in a private, isolated backup operator job.
+"""
+cryptography>=44.0.0,<47.0.0
