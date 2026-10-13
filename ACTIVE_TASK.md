@@ -1,3 +1,65 @@
+# Active Task Lock — Single-process sharding scalability (2026-10-13)
+
+**Active task/outcome:** Enable safe future two-shard Discloud canary by
+replacing the four sequential all-guild maintenance loops with bounded,
+measured worker pools while reusing the existing `DankAutoShardedBot`.
+A production shard flip is NOT part of this code PR.
+
+**Scope:** `activity_tracker._heartbeat_loop`, `metrics_sync_worker`,
+`ticket_automation_worker`, `spam_guard` startup warming, one shared
+bounded guild-sweep helper, regression tests and canary runbook. No migration,
+new bot identity, second process, voice/media changes or unrelated cleanup.
+
+**Execution path and findings:** `command_runtime.create_discord_bot`
+already selects `DankAutoShardedBot` using `DISCORD_AUTO_SHARD` and
+optional `DISCORD_SHARD_COUNT`. Four process-wide loops still iterate the
+aggregated `bot.guilds`; the activity worker originally slept 60s before
+each serial cycle, metrics ran all guilds sequentially per interval, ticket
+sweeps could overlap manual invocations, and SpamGuard performed startup
+settings reads serially inside `on_ready`.
+
+**Changes:** Fixed-size async workers, heartbeat elapsed/overrun logging,
+global breaker fail-closed coverage and start-to-start pacing; role-before-staff
+metrics sync with honest DB failure and per-cycle outage short-circuit; paginated
+indexed enabled-guild ticket discovery (avoids a per-guild disabled SELECT),
+per-guild ticket automation locks plus sweep jitter; nonblocking, bounded
+SpamGuard warming with stop-on-repeated-persistence-failure behavior.
+`docs/SHARDING_CANARY.md` specifies 2-shard settings, measurements and
+rollback. Production sharding env is unchanged.
+
+**Validation/status:** Implementation is on
+`feat/shard-guild-loop-scaling-20261013`. Targeted concurrency/cancellation
+tests and existing full CI must pass on the exact PR head; integration,
+long-duration heartbeat timing at 3k+ guilds, and a live two-shard Discloud
+canary cannot be certified by code review alone.
+
+**Cleanup/conflicts:** Existing guild caches, startup recovery coordinator,
+ticket policy and Discord REST limiter stay authoritative. The new helper
+only schedules local periodic work; it does not bypass protection rules.
+Check the final diff, branch drift and user changes before merging.
+
+**Suspended task:** Member activity batching PR #540 merged into `main`
+(commit `5cec09aed4e7221055b4c25d3fb9275b0e1261e2`) with exact-head
+GitHub CI green. The Dank Shield **production** Supabase batch RPC migration,
+receipt/storage verification and live Discloud failure/restart acceptance
+remain unvalidated. Do not assume this work is deployed or safe to enable;
+the only connected Supabase project observed was unrelated IdleGrowOp.
+
+**Blockers/risks:** Global Supabase capacity remains shared across loops;
+bounded guild concurrency is not a throughput guarantee. Real 60s heartbeat
+acceptance, RAM per 1,000 guilds, shard-ready behavior, command sync and
+Discloud rate-limit validation require a controlled operator canary.
+
+**Backlog:** None added beyond suspended PR #540 validation and the planned
+auto-shard count step after the two-shard canary.
+
+**Next:** Open draft PR, inspect exact-head CI/test failures, repair only
+in-scope regressions, review diff. After staging and DB preconditions,
+canary with `DISCORD_AUTO_SHARD=true` and `DISCORD_SHARD_COUNT=2`; then
+remove count pin only after healthy measurements.
+
+---
+
 # Active Task — Voice Safety #517: broader VC coverage
 
 **Active outcome:** Expand server-level Voice Safety VC selection to any eligible

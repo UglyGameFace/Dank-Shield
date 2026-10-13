@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import time
+from weakref import WeakValueDictionary
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -15,6 +17,7 @@ from ..globals import (
     claim_startup_flag,
     now_utc,
 )
+from ..guild_sweep import run_bounded_guild_sweep
 from ..commands_ext.common import TICKET_LAST_ACTIVITY
 
 try:
@@ -36,6 +39,31 @@ DB_MAX_ATTEMPTS = 5
 _TICKET_AUTOMATION_TASK: asyncio.Task | None = None
 _LAST_AUTOMATION_SUMMARY: Dict[int, Dict[str, Any]] = {}
 _LAST_AUTOMATION_RUN_AT: Optional[datetime] = None
+
+# Overlapping manual and scheduled passes must never run the same guild's
+# reminder/close actions simultaneously. Weak values avoid retaining an
+# unbounded lock per guild across guild leaves.
+_AUTOMATION_GUILD_LOCKS: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
+
+
+def _automation_guild_lock(guild_id: int) -> asyncio.Lock:
+    gid = int(guild_id)
+    lock = _AUTOMATION_GUILD_LOCKS.get(gid)
+    if lock is None:
+        lock = asyncio.Lock()
+        _AUTOMATION_GUILD_LOCKS[gid] = lock
+    return lock
+
+
+def _ticket_sweep_concurrency() -> int:
+    try:
+        requested = int(os.getenv("DANK_TICKET_SWEEP_GUILD_CONCURRENCY", "3"))
+    except (ValueError, TypeError):
+        requested = 3
+    # Ticket sweep includes Discord REST mutations. Keep this lower than
+    # DB-only maintenance workers.
+    return max(1, min(requested, 8))
+
 
 _DEFAULT_SETTINGS: Dict[str, Any] = {
     "enabled": False,
@@ -220,6 +248,39 @@ def _get_automation_settings_sync(guild_id: int) -> Dict[str, Any]:
         return _normalize_settings(_execute_db(f"ticket automation settings read ({guild_id})", _read) or {})
     except Exception:
         return dict(_DEFAULT_SETTINGS)
+
+
+def _list_enabled_ticket_automation_guild_ids_sync() -> set[int]:
+    """Use the existing indexed enabled flag instead of one read per guild.
+
+    PostgREST paginates results; do not silently omit an enabled guild after
+    the default 1,000-row limit. Failure aborts the whole scheduled pass,
+    leaving ticket state untouched until the next healthy poll.
+    """
+    enabled: set[int] = set()
+    page_size = 1000
+    for page in range(100):
+        start = page * page_size
+
+        def _read_page():
+            response = (
+                _settings_table()
+                .select("guild_id")
+                .eq("enabled", True)
+                .order("guild_id")
+                .range(start, start + page_size - 1)
+                .execute()
+            )
+            return getattr(response, "data", None) or []
+
+        rows = _execute_db("ticket automation enabled-guild scan", _read_page)
+        for row in rows:
+            gid = _safe_int(row.get("guild_id"), 0)
+            if gid > 0:
+                enabled.add(gid)
+        if len(rows) < page_size:
+            return enabled
+    raise RuntimeError("ticket enabled-guild scan exceeded 100 pages")
 
 
 async def get_ticket_automation_settings(guild_id: int) -> Dict[str, Any]:
@@ -831,7 +892,16 @@ async def run_ticket_automation_pass(*, guild_id: Optional[int] = None) -> Dict[
         if guild is not None:
             guilds = [guild]
     else:
-        guilds = list(bot.guilds)
+        # The default is disabled, so do not issue thousands of SELECTs for
+        # inactive guilds on every sweep. Each enabled guild still receives
+        # an authoritative, fresh settings read before ticket mutations.
+        enabled_ids = await asyncio.to_thread(
+            _list_enabled_ticket_automation_guild_ids_sync
+        )
+        guilds = [
+            guild for guild in list(bot.guilds)
+            if int(guild.id) in enabled_ids
+        ]
 
     overall = {
         "guilds_checked": 0,
@@ -844,57 +914,82 @@ async def run_ticket_automation_pass(*, guild_id: Optional[int] = None) -> Dict[
         "skipped_closed_drift": 0,
     }
 
-    for guild in guilds:
-        settings = await get_ticket_automation_settings(int(guild.id))
-        if not _safe_bool(settings.get("enabled"), False):
-            continue
+    async def _process_guild(guild: discord.Guild) -> bool:
+        async with _automation_guild_lock(int(guild.id)):
+            settings = await get_ticket_automation_settings(int(guild.id))
+            if not _safe_bool(settings.get("enabled"), False):
+                return True
 
-        overall["guilds_checked"] += 1
-        rows = await asyncio.to_thread(_list_active_tickets_sync, int(guild.id))
+            overall["guilds_checked"] += 1
+            rows = await asyncio.to_thread(_list_active_tickets_sync, int(guild.id))
 
-        guild_summary = {
-            "guild_id": int(guild.id),
-            "tickets_checked": 0,
-            "sla_breach_alerts": 0,
-            "inactivity_reminders": 0,
-            "auto_closed": 0,
-            "state_repairs": 0,
-            "missing_channels": 0,
-            "skipped_closed_drift": 0,
-        }
+            guild_summary = {
+                "guild_id": int(guild.id),
+                "tickets_checked": 0,
+                "sla_breach_alerts": 0,
+                "inactivity_reminders": 0,
+                "auto_closed": 0,
+                "state_repairs": 0,
+                "missing_channels": 0,
+                "skipped_closed_drift": 0,
+            }
 
-        for row in rows:
-            try:
-                result = await _process_ticket(guild, row, settings)
-                guild_summary["tickets_checked"] += result.get("checked", 0)
-                guild_summary["sla_breach_alerts"] += result.get("sla_breach_alerts", 0)
-                guild_summary["inactivity_reminders"] += result.get("inactivity_reminders", 0)
-                guild_summary["auto_closed"] += result.get("auto_closed", 0)
-                guild_summary["state_repairs"] += result.get("state_repairs", 0)
-                guild_summary["missing_channels"] += result.get("missing_channels", 0)
-                guild_summary["skipped_closed_drift"] += result.get("skipped_closed_drift", 0)
-            except Exception as e:
-                print("⚠️ Ticket automation process error:", repr(e))
+            guild_had_error = False
+            for row in rows:
+                try:
+                    result = await _process_ticket(guild, row, settings)
+                    guild_summary["tickets_checked"] += result.get("checked", 0)
+                    guild_summary["sla_breach_alerts"] += result.get("sla_breach_alerts", 0)
+                    guild_summary["inactivity_reminders"] += result.get("inactivity_reminders", 0)
+                    guild_summary["auto_closed"] += result.get("auto_closed", 0)
+                    guild_summary["state_repairs"] += result.get("state_repairs", 0)
+                    guild_summary["missing_channels"] += result.get("missing_channels", 0)
+                    guild_summary["skipped_closed_drift"] += result.get("skipped_closed_drift", 0)
+                except Exception as e:
+                    guild_had_error = True
+                    print("⚠️ Ticket automation process error:", repr(e))
 
-        _LAST_AUTOMATION_SUMMARY[int(guild.id)] = guild_summary
-        overall["tickets_checked"] += guild_summary["tickets_checked"]
-        overall["sla_breach_alerts"] += guild_summary["sla_breach_alerts"]
-        overall["inactivity_reminders"] += guild_summary["inactivity_reminders"]
-        overall["auto_closed"] += guild_summary["auto_closed"]
-        overall["state_repairs"] += guild_summary["state_repairs"]
-        overall["missing_channels"] += guild_summary["missing_channels"]
-        overall["skipped_closed_drift"] += guild_summary["skipped_closed_drift"]
+            _LAST_AUTOMATION_SUMMARY[int(guild.id)] = guild_summary
+            overall["tickets_checked"] += guild_summary["tickets_checked"]
+            overall["sla_breach_alerts"] += guild_summary["sla_breach_alerts"]
+            overall["inactivity_reminders"] += guild_summary["inactivity_reminders"]
+            overall["auto_closed"] += guild_summary["auto_closed"]
+            overall["state_repairs"] += guild_summary["state_repairs"]
+            overall["missing_channels"] += guild_summary["missing_channels"]
+            overall["skipped_closed_drift"] += guild_summary["skipped_closed_drift"]
 
-        print(
-            "🤖 ticket_automation:",
-            f"guild={guild.id}",
-            f"checked={guild_summary['tickets_checked']}",
-            f"sla_alerts={guild_summary['sla_breach_alerts']}",
-            f"reminders={guild_summary['inactivity_reminders']}",
-            f"auto_closed={guild_summary['auto_closed']}",
-            f"state_repairs={guild_summary['state_repairs']}",
-            f"missing_channels={guild_summary['missing_channels']}",
-        )
+            print(
+                "🤖 ticket_automation:",
+                f"guild={guild.id}",
+                f"checked={guild_summary['tickets_checked']}",
+                f"sla_alerts={guild_summary['sla_breach_alerts']}",
+                f"reminders={guild_summary['inactivity_reminders']}",
+                f"auto_closed={guild_summary['auto_closed']}",
+                f"state_repairs={guild_summary['state_repairs']}",
+                f"missing_channels={guild_summary['missing_channels']}",
+            )
+
+        return not guild_had_error
+
+    sweep = await run_bounded_guild_sweep(
+        guilds,
+        _process_guild,
+        concurrency=_ticket_sweep_concurrency(),
+        on_error=lambda guild, exc: print(
+            "⚠️ Ticket automation guild sweep failed "
+            f"guild={getattr(guild, 'id', '?')} "
+            f"error={type(exc).__name__}: {exc}"
+        ),
+    )
+    overall["guilds_total"] = sweep.total
+    overall["guilds_failed"] = sweep.failed
+    overall["cycle_seconds"] = round(sweep.seconds, 2)
+    print(
+        "🤖 ticket automation cycle "
+        f"guilds={sweep.total} enabled={overall['guilds_checked']} "
+        f"failed={sweep.failed} concurrency={sweep.concurrency} "
+        f"elapsed_s={sweep.seconds:.2f}"
+    )
 
     _LAST_AUTOMATION_RUN_AT = now_utc()
     return overall
@@ -903,14 +998,24 @@ async def run_ticket_automation_pass(*, guild_id: Optional[int] = None) -> Dict[
 async def ticket_automation_loop() -> None:
     await bot.wait_until_ready()
     print("🤖 Ticket automation worker started")
+    await asyncio.sleep(random.uniform(0.0, 15.0))
 
     while not bot.is_closed():
+        started = time.monotonic()
         try:
             await run_ticket_automation_pass()
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             print("❌ Ticket automation loop error:", repr(e))
 
-        await asyncio.sleep(AUTOMATION_POLL_SECONDS)
+        elapsed = time.monotonic() - started
+        # Jitter and a minimum rest prevent immediate full-fleet re-scans
+        # when the configured polling interval is shorter than the sweep.
+        await asyncio.sleep(
+            max(10.0, AUTOMATION_POLL_SECONDS - elapsed)
+            + random.uniform(0.0, 10.0)
+        )
 
 
 def start_ticket_automation_worker() -> None:
