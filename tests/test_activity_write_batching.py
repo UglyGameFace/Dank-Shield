@@ -12,6 +12,7 @@ from stoney_verify.members_new import activity_tracker as t
 def reset_tracker(monkeypatch):
     t._ACTIVITY_BUFFER.clear()
     t._PENDING_BATCH = None
+    t._PENDING_SPLITS.clear()
     t._PENDING_FAIL_REPORTS.clear()
     t._ACKED_BATCH_IDS.clear()
     t._LOCAL_ERRORS.clear()
@@ -26,6 +27,7 @@ def reset_tracker(monkeypatch):
     yield
     t._ACTIVITY_BUFFER.clear()
     t._PENDING_BATCH = None
+    t._PENDING_SPLITS.clear()
     t._PENDING_FAIL_REPORTS.clear()
     t._ACKED_BATCH_IDS.clear()
     t._LOCAL_ERRORS.clear()
@@ -194,3 +196,29 @@ def test_fail_reports_are_bounded_per_flush(monkeypatch):
     assert len(t._PENDING_FAIL_REPORTS) == 15
     assert asyncio.run(t._flush_once())
     assert len(t._PENDING_FAIL_REPORTS) == 5
+
+
+def test_sql_poison_isolated_without_replaying_valid_events(monkeypatch):
+    class InvalidActivity(Exception):
+        code = "P0001"
+    persisted = []
+    def rpc(name, args):
+        if name == "ack_member_activity_batches":
+            return
+        assert name == "record_member_activity_batch"
+        if any(e["user_id"] == "2" for e in args["p_events"]):
+            raise InvalidActivity("unsupported direct activity type")
+        persisted.extend(e["user_id"] for e in args["p_events"])
+    resets = []
+    monkeypatch.setattr(t, "_rpc_sync", rpc)
+    monkeypatch.setattr(t, "_fail_tracker_sync", lambda *a: None)
+    monkeypatch.setattr(t, "_start_tracker_sync", lambda gid: resets.append(gid))
+    add(user=2)
+    add(user=3)
+    assert asyncio.run(t._flush_once())  # rejects parent, bisects
+    assert asyncio.run(t._flush_once())  # quarantines bad singleton
+    assert asyncio.run(t._flush_once())  # commits good singleton
+    assert persisted == ["3"]
+    assert t._DROPPED_EVENT_COUNT == 1
+    assert resets == [1]
+    assert t._PENDING_BATCH is None and not t._PENDING_SPLITS
