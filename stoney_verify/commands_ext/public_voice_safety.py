@@ -19,6 +19,9 @@ from ..community_voice_caption_runtime import (
     voice_safety_scope_id,
 )
 from ..community_voice_receive import VoiceReceiveUnavailable, voice_receive_capability
+from ..voice_safety_coverage import (
+    ALL, SINGLE, COVERAGE_KEY, channel_in_scope, coverage_mode, qualifying_channels,
+)
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from ..ui.resource_browser import DankGuildResourceBrowserView
@@ -88,11 +91,18 @@ def _readiness(guild: discord.Guild, config: dict) -> tuple[bool, str]:
     cap = voice_receive_capability()
     if not cap.available:
         return False, f"Voice receiver unavailable: {cap.reason}"
-    voice = _channel(guild, _id(config, VOICE_SAFETY_VC), discord.VoiceChannel)
+    if coverage_mode(config) == ALL:
+        voice = next(
+            (vc for vc in tuple(getattr(guild, "voice_channels", ()) or ())
+             if channel_in_scope(guild, config, vc)),
+            None,
+        )
+    else:
+        voice = _channel(guild, _id(config, VOICE_SAFETY_VC), discord.VoiceChannel)
     staff = _channel(guild, _id(config, VOICE_SAFETY_STAFF), discord.TextChannel)
     notice = _channel(guild, _id(config, VOICE_SAFETY_NOTICE), discord.TextChannel)
     if voice is None or staff is None or notice is None:
-        return False, "Select a VC, a private staff-alert text channel, and a member-visible notice text channel."
+        return False, "Select accessible VC coverage, a private staff-alert channel, and a member-visible notice channel."
     if staff.permissions_for(guild.default_role).view_channel:
         return False, "Staff alerts are publicly visible. Select a channel hidden from @everyone."
     if not notice.permissions_for(guild.default_role).view_channel:
@@ -115,13 +125,17 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
     ready, reason = _readiness(guild, cfg)
     running = status.get("active") and status.get("scope_kind") == "voice_safety"
     voice = _id(cfg, VOICE_SAFETY_VC)
+    scope = coverage_mode(cfg)
+    eligible = qualifying_channels(guild, cfg)
     staff = _id(cfg, VOICE_SAFETY_STAFF)
     notice = _id(cfg, VOICE_SAFETY_NOTICE)
     embed = discord.Embed(
         title="🛡️ Voice Safety · Staff Review",
         description=(
-            "Automatic AI conduct review for one configured voice channel. "
-            "Only members with a recorded one-time agreement are transcribed. Google Gemini receives "
+            "AI conduct review of eligible voice channels once two humans join. "
+            "One receiver identity covers only one VC per server at a time; other "
+            "qualifying rooms wait for capacity. Only members with a recorded "
+            "agreement are transcribed. Google Gemini receives "
             "their voice and text to assess conduct. No automated mutes, kicks or bans. "
             "Staff must verify every finding. Not a guarantee against already-spoken words."
         ),
@@ -131,7 +145,8 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
         name="Configuration",
         value=(
             f"Configured: {'Yes' if cfg.get(VOICE_SAFETY_ENABLED) else 'No'}\n"
-            f"Voice: {f'<#{voice}>' if voice else 'Not selected'}\n"
+            f"Voice scope: {'All eligible VCs' if scope == ALL else 'One selected VC'}\n"
+            f"Voice: {'Every accessible VC (2+ humans)' if scope == ALL else f'<#{voice}>' if voice else 'Not selected'}\n"
             f"Private staff alerts: {f'<#{staff}>' if staff else 'Not selected'}\n"
             f"Public notice: {f'<#{notice}>' if notice else 'Not selected'}"
         ),
@@ -159,6 +174,7 @@ async def _embed(interaction: discord.Interaction) -> discord.Embed:
             f"{'🟢 Reviewing opted-in speakers' if running else '⚪ Not running'}\n"
             f"{'Another session owns this server receiver.' if status.get('active') and not running else reason}\n"
             f"Active consented speakers: {len(status.get('opted_in_user_ids') or []) if running else 0}\n"
+            f"Qualifying VCs: {len(eligible)}; waiting: {max(0, len(eligible) - (1 if running else 0))}\n"
             f"Advisory alerts: {status.get('voice_safety_alerts', 0) if running else 0}"
         ),
         inline=False,
@@ -386,6 +402,27 @@ class VoiceSafetyStaffView(discord.ui.View):
     async def choose_voice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_voice_safety_channel_browser(interaction, owner_id=self.owner_id, kind="voice")
 
+    @discord.ui.button(label="VC Coverage: Single / All", emoji="🌐", style=discord.ButtonStyle.secondary, row=2)
+    async def toggle_coverage(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.defer()
+        guild = interaction.guild
+        manager = ensure_community_voice_caption_manager(interaction.client)
+        if manager.status_for_guild(int(guild.id)).get("active"):
+            return await interaction.followup.send(
+                "Stop the active voice receiver before changing VC coverage.", ephemeral=True
+            )
+        cfg = await get_guild_config(int(guild.id), refresh=True)
+        new_mode = SINGLE if coverage_mode(cfg) == ALL else ALL
+        try:
+            await _save(interaction, {COVERAGE_KEY: new_mode})
+        except Exception:
+            return await interaction.followup.send(
+                "Could not verify saved VC coverage. No setting was changed.", ephemeral=True
+            )
+        await interaction.edit_original_response(
+            embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id)
+        )
+
     @discord.ui.button(label="Private Staff Alerts", emoji="🔒", style=discord.ButtonStyle.secondary, row=0)
     async def choose_staff(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await _open_voice_safety_channel_browser(interaction, owner_id=self.owner_id, kind="staff")
@@ -440,11 +477,17 @@ class VoiceSafetyStaffView(discord.ui.View):
         ready, reason = _readiness(guild, cfg)
         if not ready:
             return await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+        candidates = qualifying_channels(guild, cfg)
+        if not candidates:
+            return await interaction.followup.send(
+                "No eligible VC currently has at least two humans and bot Connect access.",
+                ephemeral=True,
+            )
         manager.pause_voice_safety_auto_start(int(guild.id), False)
         try:
             await manager.start_voice_safety(
                 guild_id=int(guild.id),
-                voice_channel_id=_id(cfg, VOICE_SAFETY_VC),
+                voice_channel_id=int(candidates[0].id),
                 staff_alert_channel_id=_id(cfg, VOICE_SAFETY_STAFF),
                 notice_channel_id=_id(cfg, VOICE_SAFETY_NOTICE),
             )
@@ -452,8 +495,10 @@ class VoiceSafetyStaffView(discord.ui.View):
             return await interaction.followup.send(f"❌ {exc}", ephemeral=True)
         await interaction.edit_original_response(embed=await _embed(interaction), view=VoiceSafetyStaffView(self.owner_id))
         await interaction.followup.send(
-            "✅ Voice Safety running. A notice explains one-time agreement and automatic monitoring. "
-            "Only members with a recorded agreement are evaluated; staff alerts are advisory, not automatic punishments.",
+            f"✅ Voice Safety reviewing <#{int(candidates[0].id)}>. "
+            "Only this VC is receiving audio from this bot identity; other qualifying rooms "
+            "are waiting, not monitored. Agreements and host safety gates still apply. "
+            "Staff alerts are advisory only.",
             ephemeral=True,
         )
 
