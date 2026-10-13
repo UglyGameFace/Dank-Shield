@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import re
 import time
@@ -1444,6 +1445,117 @@ async def get_ticket_by_any_channel_id(channel_id: int | str) -> Optional[Dict[s
     return None
 
 
+# --- Ticket-channel identity cache --------------------------------------
+# _is_ticket_channel and claim-first enforcement run on EVERY message. The DB
+# lookup for channels that are not tickets is pure overhead, so an in-memory
+# positive set plus a TTL negative cache sits in front of it.
+#
+# Design notes for review:
+# - The positive set is ADDITIVE: a channel confirmed as a ticket channel
+#   stays until the ticket is deleted. Closing does NOT evict, because closed
+#   ticket channels still count as ticket channels for message-activity and
+#   timer-cancel purposes (and usually still match the ticket-name heuristic).
+# - INVALIDATION: opened on create/reopen/reconcile-sync; evicted on delete,
+#   including external Discord channel deletion and raw thread deletion
+#   (both funnel through repository.mark_ticket_deleted). Deleted-channel IDs
+#   can linger only if deletion bypasses the repository layer entirely.
+# - The negative cache has a TTL (default 300s). A channel that becomes a
+#   ticket outside the tracked flow (manual setup, created while the bot was
+#   down) is picked up when the ticket-create hook fires or, at worst, when
+#   the TTL expires.
+# - AUTHORIZATION BOUNDARY: this cache serves _is_ticket_channel only, which
+#   makes no authorization decisions (timer cancel + sync scheduling).
+#   _enforce_claim_first_staff_message ALWAYS does a live DB lookup: a stale
+#   "not a ticket" verdict must never skip a moderation check.
+_DEFAULT_TICKET_CHANNEL_NEGATIVE_TTL_SECONDS = 300.0
+_TICKET_CHANNEL_IDS: Set[int] = set()
+_TICKET_CHANNEL_NEGATIVE: Dict[int, float] = {}  # channel_id -> monotonic expiry
+
+
+def _ticket_channel_negative_ttl_seconds() -> float:
+    try:
+        raw = float(
+            str(
+                os.getenv(
+                    "DANK_TICKET_CHANNEL_NEGATIVE_TTL_SECONDS",
+                    str(_DEFAULT_TICKET_CHANNEL_NEGATIVE_TTL_SECONDS),
+                )
+                or _DEFAULT_TICKET_CHANNEL_NEGATIVE_TTL_SECONDS
+            ).strip()
+        )
+    except Exception:
+        raw = _DEFAULT_TICKET_CHANNEL_NEGATIVE_TTL_SECONDS
+    return max(30.0, min(raw, 3600.0))
+
+
+def note_ticket_channel_opened(channel_id: Any) -> None:
+    """Lifecycle hook: call when a ticket channel is created or reopened."""
+    try:
+        cid = int(channel_id)
+    except Exception:
+        return
+    if cid <= 0:
+        return
+    _TICKET_CHANNEL_IDS.add(cid)
+    _TICKET_CHANNEL_NEGATIVE.pop(cid, None)
+
+
+def note_ticket_channel_deleted(channel_id: Any) -> None:
+    """Lifecycle hook: call when a ticket (and its channel record) is deleted."""
+    try:
+        cid = int(channel_id)
+    except Exception:
+        return
+    _TICKET_CHANNEL_IDS.discard(cid)
+    _TICKET_CHANNEL_NEGATIVE.pop(cid, None)
+
+
+def ticket_channel_cached_state(channel_id: Any) -> Optional[bool]:
+    """True = known ticket channel; False = known non-ticket (within TTL);
+    None = unknown, a DB lookup is required."""
+    try:
+        cid = int(channel_id)
+    except Exception:
+        return None
+    if cid <= 0:
+        return None
+    if cid in _TICKET_CHANNEL_IDS:
+        return True
+    expiry = _TICKET_CHANNEL_NEGATIVE.get(cid)
+    if expiry is not None:
+        if expiry > time.monotonic():
+            return False
+        _TICKET_CHANNEL_NEGATIVE.pop(cid, None)
+    return None
+
+
+def note_ticket_channel_lookup(channel_id: Any, is_ticket: bool) -> None:
+    """Feed a DB lookup result back into the cache."""
+    try:
+        cid = int(channel_id)
+    except Exception:
+        return
+    if cid <= 0:
+        return
+    if is_ticket:
+        _TICKET_CHANNEL_IDS.add(cid)
+        _TICKET_CHANNEL_NEGATIVE.pop(cid, None)
+    else:
+        _TICKET_CHANNEL_IDS.discard(cid)
+        _TICKET_CHANNEL_NEGATIVE[cid] = (
+            time.monotonic() + _ticket_channel_negative_ttl_seconds()
+        )
+    if len(_TICKET_CHANNEL_NEGATIVE) > 20000:
+        now = time.monotonic()
+        for key, exp in list(_TICKET_CHANNEL_NEGATIVE.items()):
+            if exp <= now:
+                _TICKET_CHANNEL_NEGATIVE.pop(key, None)
+        for key in list(_TICKET_CHANNEL_NEGATIVE)[:max(
+            0, len(_TICKET_CHANNEL_NEGATIVE) - 10000
+        )]:
+            _TICKET_CHANNEL_NEGATIVE.pop(key, None)
+
+
 async def _find_ticket_row_by_channel_id(channel_id: int | str) -> Optional[Dict[str, Any]]:
     return await get_ticket_by_any_channel_id(channel_id)
 
@@ -2007,6 +2119,7 @@ async def mark_ticket_deleted(
 ) -> bool:
     existing = await get_ticket_by_any_channel_id(channel_id)
     if existing and _ticket_status(existing) == "deleted":
+        note_ticket_channel_deleted(channel_id)
         return True
     if existing and _ticket_status(existing) not in {"closed", "deleted"}:
         return False
@@ -2035,7 +2148,10 @@ async def mark_ticket_deleted(
         payload.update(dict(extra_payload))
 
     row = await update_ticket_by_channel_id(channel_id, payload, allow_thread_fallback=True)
-    return row is not None
+    ok = row is not None
+    if ok:
+        note_ticket_channel_deleted(channel_id)
+    return ok
 
 
 async def reopen_ticket(
@@ -2093,7 +2209,10 @@ async def reopen_ticket(
         payload.update(dict(extra_payload))
 
     row = await update_ticket_by_channel_id(channel_id, payload, allow_thread_fallback=True)
-    return row is not None
+    ok = row is not None
+    if ok:
+        note_ticket_channel_opened(channel_id)
+    return ok
 
 
 async def assign_ticket(
@@ -2222,6 +2341,7 @@ async def delete_ticket_row(channel_id: int | str) -> bool:
         row = await get_ticket_by_any_channel_id(cid)
         if row and row.get("id") is not None:
             await _delete_ticket_row_by_id_async(str(row["id"]))
+            note_ticket_channel_deleted(cid)
             return True
         return False
     except Exception as e:

@@ -22,7 +22,9 @@ from .tickets_new.sync_service import sync_one_ticket_channel
 from .tickets_new.repository import (
     _find_ticket_row_by_channel_id,
     list_non_deleted_ticket_channel_identities_for_guild,
+    note_ticket_channel_lookup,
     safe_optional_update_by_channel_id,
+    ticket_channel_cached_state,
     mark_ticket_closed as repo_mark_ticket_closed,
     mark_ticket_deleted as repo_mark_ticket_deleted,
 )
@@ -310,37 +312,26 @@ async def _resolve_ticket_owner_id_for_channel(channel: discord.TextChannel) -> 
 async def _is_ticket_channel(channel: discord.TextChannel) -> bool:
     if not isinstance(channel, discord.TextChannel):
         return False
-
     try:
         if int(getattr(channel, "id", 0) or 0) == int(TRANSCRIPTS_CHANNEL_ID or 0):
             return False
     except Exception:
         pass
-
-    name_match = _matches_ticket_name(channel.name)
-    topic_match = _topic_looks_ticketish(_safe_topic(channel))
-
-    if name_match or topic_match:
+    # A renamed/manual ticket must override a stale negative cache immediately.
+    if _matches_ticket_name(channel.name) or _topic_looks_ticketish(_safe_topic(channel)):
+        note_ticket_channel_lookup(channel.id, True)
         return True
-
-    row = None
+    cached = ticket_channel_cached_state(channel.id)
+    if cached is not None:
+        return cached
     try:
         row = await _find_ticket_row_by_channel_id(channel.id)
-        if row is not None:
-            return True
     except Exception:
-        row = None
-
-    # Category alone is too broad. Only accept category-based detection when
-    # there is another ticket signal too.
-    if _looks_like_ticket_category(channel):
-        if name_match or topic_match:
-            return True
-        if isinstance(row, dict):
-            return True
-
-    return False
-
+        # A failed SELECT is NOT evidence that the channel is not a ticket.
+        return False
+    is_ticket = isinstance(row, dict)
+    note_ticket_channel_lookup(channel.id, is_ticket)
+    return is_ticket
 
 # ============================================================
 # Timer cancel bridge
@@ -691,6 +682,15 @@ async def _handle_channel_delete(channel: discord.abc.GuildChannel) -> None:
         tracked = _matches_ticket_name(channel.name) or _topic_looks_ticketish(_safe_topic(channel))
 
     if not tracked:
+        # Deletes are rare: bypass a potentially stale negative identity cache
+        # rather than missing authoritative manual ticket deletions.
+        try:
+            tracked = isinstance(
+                await _find_ticket_row_by_channel_id(channel.id), dict
+            )
+        except Exception:
+            tracked = False
+    if not tracked:
         _forget_channel_runtime_state(channel.id)
         return
 
@@ -885,21 +885,29 @@ async def _enforce_claim_first_staff_message(message: discord.Message) -> bool:
     if not isinstance(channel, discord.TextChannel) or not isinstance(author, discord.Member):
         return True
 
-    try:
-        row = await _find_ticket_row_by_channel_id(channel.id)
-    except Exception:
-        row = None
-    if not isinstance(row, dict):
-        return True
-
-    owner_id = claim_policy_ticket_owner_id(row)
-    if owner_id > 0 and int(author.id) == owner_id:
-        return True
-
+    # AUTHORIZATION PATH: always a live DB lookup. A cached "not a ticket"
+    # verdict must never skip this check — a channel that became a ticket
+    # through an untracked flow (manual setup, created while the bot was
+    # down) would otherwise let staff messages through that claim-first
+    # policy should block. The cache only serves _is_ticket_channel, which
+    # makes no authorization decisions.
+    # Only staff need the expensive, authoritative per-message ticket lookup.
+    # Non-staff were already allowed by claim-first and need no DB query.
     staff_ids = tuple(
         role_id for role_id in (_safe_int(STAFF_ROLE_ID, 0),) if role_id > 0
     )
     if not claim_policy_is_staff_member(author, staff_role_ids=staff_ids):
+        return True
+    try:
+        row = await _find_ticket_row_by_channel_id(channel.id)
+    except Exception:
+        # Preserve existing failure behavior, but do not poison identity cache.
+        return True
+    note_ticket_channel_lookup(channel.id, isinstance(row, dict))
+    if not isinstance(row, dict):
+        return True
+    owner_id = claim_policy_ticket_owner_id(row)
+    if owner_id > 0 and int(author.id) == owner_id:
         return True
 
     decision = evaluate_ticket_action(

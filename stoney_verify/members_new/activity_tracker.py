@@ -19,6 +19,8 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import math
+import os
+import time
 from typing import Any, Mapping, Optional
 import uuid
 
@@ -55,6 +57,129 @@ _STARTUP_RECONCILE_LOCK = asyncio.Lock()
 _STARTUP_RECOVERY_HEARTBEATS: dict[int, datetime] = {}
 _LOCAL_ERRORS: dict[int, str] = {}
 _LOCAL_SCOPE_ERRORS: dict[int, str] = {}
+
+# --- Write batching (scales the per-event ledger RPC) ---------------------
+# One RPC per message/interaction/reaction does not scale: at 1k guilds x
+# 2 msg/s the ledger absorbs 2000+ writes/sec, and every failed write used
+# to fire a second failing RPC (fail storm -> thread-pool saturation ->
+# missed heartbeats -> gateway disconnects). Events are now deduplicated in
+# memory and flushed periodically. This reduces Supabase ROUND-TRIPS, not
+# PostgreSQL work: the batch RPC still performs one upsert per deduplicated
+# entry server-side. The ledger upsert is greatest()-based, so flushing only
+# the latest event per (guild, user, type) converges to the identical row
+# state; per-window counts are preserved via p_event_count. Exact flush cost
+# is ceil(deduped_entries / 500) RPCs per window — measure, don't assume.
+_DEFAULT_FLUSH_SECONDS = 15.0
+_DEFAULT_BUFFER_MAX_ENTRIES = 50000
+_DEFAULT_BREAKER_THRESHOLD = 3
+_DEFAULT_BREAKER_COOLDOWN_SECONDS = 120.0
+
+# (guild_id, user_id, activity_type) -> {"occurred_at", "channel_id", "count"}
+_ACTIVITY_BUFFER: dict[tuple[int, int, str], dict[str, Any]] = {}
+_FLUSH_TASK: Optional[asyncio.Task] = None
+# In-flight snapshot is immutable until PostgreSQL acknowledges its batch ID.
+_PENDING_BATCH: Optional[dict[str, Any]] = None
+_PENDING_SPLITS: list[dict[str, Any]] = []
+_FLUSH_LOCK = asyncio.Lock()
+_ACTIVITY_SEQUENCE = 0
+_LOST_COVERAGE_GUILDS: set[int] = set()
+_ACKED_BATCH_IDS: list[str] = []
+# Consecutive DB-RPC failures across flush AND heartbeat paths. When this
+# reaches the threshold, activity flush and heartbeat/scope writes pause.
+_CONSECUTIVE_DB_FAILURES = 0
+_BREAKER_OPEN_UNTIL = 0.0  # time.monotonic()
+# guild_id -> latest failure message awaiting its (single, per-cycle) report.
+_PENDING_FAIL_REPORTS: dict[int, str] = {}
+# Explicit loss accounting: events dropped when the bounded buffer overflows
+# during a prolonged outage. Counts cannot be reconstructed later, so drops
+# are counted and logged, never silent.
+_DROPPED_EVENT_COUNT = 0
+_LAST_DROP_LOG_COUNT = 0
+# Max entries per batch RPC call (PostgREST payload limits).
+_BATCH_CHUNK_SIZE = 500
+
+
+def _flush_seconds() -> float:
+    try:
+        raw = float(
+            str(
+                os.getenv(
+                    "DANK_ACTIVITY_FLUSH_SECONDS",
+                    str(_DEFAULT_FLUSH_SECONDS),
+                )
+                or _DEFAULT_FLUSH_SECONDS
+            ).strip()
+        )
+    except Exception:
+        raw = _DEFAULT_FLUSH_SECONDS
+    return max(5.0, min(raw, 120.0))
+
+
+def _buffer_max_entries() -> int:
+    return max(
+        1000,
+        _safe_int(
+            os.getenv(
+                "DANK_ACTIVITY_BUFFER_MAX_ENTRIES",
+                str(_DEFAULT_BUFFER_MAX_ENTRIES),
+            ),
+            _DEFAULT_BUFFER_MAX_ENTRIES,
+        ),
+    )
+
+
+def _breaker_threshold() -> int:
+    return max(
+        1,
+        _safe_int(
+            os.getenv(
+                "DANK_ACTIVITY_BREAKER_THRESHOLD",
+                str(_DEFAULT_BREAKER_THRESHOLD),
+            ),
+            _DEFAULT_BREAKER_THRESHOLD,
+        ),
+    )
+
+
+def _breaker_cooldown_seconds() -> float:
+    try:
+        raw = float(
+            str(
+                os.getenv(
+                    "DANK_ACTIVITY_BREAKER_COOLDOWN_SECONDS",
+                    str(_DEFAULT_BREAKER_COOLDOWN_SECONDS),
+                )
+                or _DEFAULT_BREAKER_COOLDOWN_SECONDS
+            ).strip()
+        )
+    except Exception:
+        raw = _DEFAULT_BREAKER_COOLDOWN_SECONDS
+    return max(10.0, min(raw, 900.0))
+
+
+def _db_breaker_open() -> bool:
+    return time.monotonic() < _BREAKER_OPEN_UNTIL
+
+
+def _record_db_success() -> None:
+    global _CONSECUTIVE_DB_FAILURES
+    _CONSECUTIVE_DB_FAILURES = 0
+
+
+def _record_db_failure() -> None:
+    """Feed any DB-RPC failure (flush, heartbeat, scope sync) into the shared
+    breaker. Consecutive failures mean the DB is down, not one bad guild:
+    successes interleave and reset the count."""
+    global _CONSECUTIVE_DB_FAILURES, _BREAKER_OPEN_UNTIL
+    _CONSECUTIVE_DB_FAILURES += 1
+    if (_CONSECUTIVE_DB_FAILURES >= _breaker_threshold()
+            and not _db_breaker_open()):
+        _BREAKER_OPEN_UNTIL = time.monotonic() + _breaker_cooldown_seconds()
+        print(
+            "⛔ activity DB circuit breaker OPEN "
+            f"consecutive_failures={_CONSECUTIVE_DB_FAILURES} "
+            f"cooldown={_breaker_cooldown_seconds():.0f}s"
+        )
 
 
 @dataclass(frozen=True)
@@ -111,6 +236,10 @@ def _combined_local_error(guild_id: int) -> str:
         str(_LOCAL_ERRORS.get(gid, "") or "").strip(),
         str(_LOCAL_SCOPE_ERRORS.get(gid, "") or "").strip(),
     ]
+    if gid in _PENDING_FAIL_REPORTS:
+        parts.append("Unreported activity-write failure; coverage is unverified.")
+    if gid in _LOST_COVERAGE_GUILDS:
+        parts.append("Activity events were dropped; a new proof window is required.")
     return " | ".join(part for part in parts if part)
 
 
@@ -486,20 +615,84 @@ async def _mark_failure(guild_id: int, error: str) -> None:
     gid = int(guild_id)
     message = str(error or "unknown tracker error")[:500]
     _LOCAL_ERRORS[gid] = message
-
-    try:
-        await asyncio.to_thread(
-            _fail_tracker_sync,
-            gid,
-            message,
-        )
-    except Exception:
-        pass
+    # Fail-storm guard: NEVER fire an RPC per failure. The old code called
+    # fail_member_activity_tracker here, so one failing RPC produced a second
+    # failing RPC per message — saturating the thread pool during an outage.
+    # Failures are now reported at most once per guild per flush cycle, and
+    # the circuit breaker can suppress even those while the DB is down.
+    _PENDING_FAIL_REPORTS[gid] = message
+    # Every _mark_failure call site follows a failed DB RPC: feed the shared
+    # breaker so heartbeat/scope failures also pause write attempts.
+    _record_db_failure()
 
     print(
         "⚠️ authoritative activity tracker fail-closed "
         f"guild={gid} error={message}"
     )
+
+
+def _stage_event(
+    *,
+    guild_id: int,
+    user_id: int,
+    activity_type: str,
+    occurred_at: datetime,
+    channel_id: Optional[int],
+    count: int = 1,
+) -> None:
+    """Buffer one event. Latest timestamp wins per (guild, user, type);
+    counts accumulate. The ledger upsert is greatest()-based; the batch
+    payload also carries first-observed timestamps and stable retry IDs."""
+    global _ACTIVITY_SEQUENCE
+    key = (int(guild_id), int(user_id), activity_type)
+    existing = _ACTIVITY_BUFFER.get(key)
+    _ACTIVITY_SEQUENCE += 1
+    if existing is not None and existing["occurred_at"] > occurred_at:
+        existing["count"] += int(count)
+        existing["first_occurred_at"] = min(
+            existing["first_occurred_at"], occurred_at
+        )
+        # Refresh insertion recency in O(1) so oldest-drop really evicts
+        # the least recently staged key, not a frequently used older key.
+        _ACTIVITY_BUFFER.pop(key)
+        _ACTIVITY_BUFFER[key] = existing
+        return
+    if existing is not None:
+        _ACTIVITY_BUFFER.pop(key)
+    _ACTIVITY_BUFFER[key] = {
+        "occurred_at": occurred_at,
+        "first_occurred_at": min(existing["first_occurred_at"], occurred_at)
+            if existing else occurred_at,
+        "channel_id": int(channel_id) if channel_id else None,
+        "count": int(existing["count"]) + int(count) if existing else int(count),
+        "order": _ACTIVITY_SEQUENCE,
+    }
+    limit = _buffer_max_entries()
+    if len(_ACTIVITY_BUFFER) > limit:
+        # Bounded memory during a prolonged outage. Drops are counted and
+        # reported (see _flush_once); event counts dropped here cannot be
+        # reconstructed later, so this must stay visible, never silent.
+        global _DROPPED_EVENT_COUNT
+        while len(_ACTIVITY_BUFFER) > limit:
+            _oldest_key = next(iter(_ACTIVITY_BUFFER))
+            _dropped = _ACTIVITY_BUFFER.pop(_oldest_key)
+            _DROPPED_EVENT_COUNT += int(_dropped.get("count", 1))
+            lost_guild = int(_oldest_key[0])
+            _LOST_COVERAGE_GUILDS.add(lost_guild)
+            _LOCAL_ERRORS[lost_guild] = (
+                "Activity buffer overflow: records were lost; "
+                "continuous coverage must restart before cleanup."
+            )
+        # Surface a loss even while the breaker is open. Rate-limit logs so
+        # a long DB outage does not become a separate console-output storm.
+        global _LAST_DROP_LOG_COUNT
+        if (_LAST_DROP_LOG_COUNT == 0
+                or _DROPPED_EVENT_COUNT - _LAST_DROP_LOG_COUNT >= 1000):
+            print(
+                "⚠️ activity buffer overflow during outage: "
+                f"total_dropped_events={_DROPPED_EVENT_COUNT}"
+            )
+            _LAST_DROP_LOG_COUNT = _DROPPED_EVENT_COUNT
 
 
 async def record_direct_member_activity(
@@ -522,24 +715,206 @@ async def record_direct_member_activity(
         return False
 
     timestamp = _safe_dt(occurred_at) or _utcnow()
+    # No I/O here: stage in memory; the flush loop persists periodically.
+    _stage_event(
+        guild_id=int(guild_id),
+        user_id=int(user_id),
+        activity_type=activity_type,
+        occurred_at=timestamp,
+        channel_id=channel_id,
+    )
+    return True
 
-    try:
-        await asyncio.to_thread(
-            _record_activity_sync,
-            guild_id=int(guild_id),
-            user_id=int(user_id),
-            activity_type=activity_type,
-            occurred_at=timestamp,
-            channel_id=channel_id,
-        )
-        _LOCAL_ERRORS.pop(int(guild_id), None)
+
+def _flush_batch_sync(batch: dict[str, Any]) -> None:
+    """Retry the same immutable batch ID; SQL dedupes acknowledged commits."""
+    events = [
+        {
+            "guild_id": str(gid),
+            "user_id": str(uid),
+            "activity_type": atype,
+            "occurred_at": entry["occurred_at"].isoformat(),
+            "first_occurred_at": entry["first_occurred_at"].isoformat(),
+            "channel_id": str(entry["channel_id"]) if entry.get("channel_id") else "",
+            "process_id": _PROCESS_ID,
+            "event_count": int(entry["count"]),
+        }
+        for (gid, uid, atype), entry in batch["snapshot"].items()
+    ]
+    _rpc_sync("record_member_activity_batch", {
+        "p_batch_id": batch["id"],
+        "p_events": events,
+    })
+
+
+def _ack_batch_receipts_sync(batch_ids: list[str]) -> None:
+    _rpc_sync("ack_member_activity_batches", {"p_batch_ids": batch_ids})
+
+
+def _is_deterministic_batch_rejection(exc: Exception) -> bool:
+    """Only known SQL validation failures may trigger batch bisection.
+
+    Network, authentication, timeout and unknown PostgreSQL failures must
+    preserve the original batch ID for exactly-once retry.
+    """
+    code = str(getattr(exc, "code", "") or "").upper()
+    if code in {"22P02", "22007", "22003", "23514", "P0001"}:
         return True
-    except Exception as exc:
-        await _mark_failure(
-            int(guild_id),
-            f"{type(exc).__name__}: {str(exc)[:400]}",
+    detail = str(exc).lower()
+    return any(part in detail for part in (
+        "unsupported direct activity type",
+        "invalid input syntax for type timestamp",
+        "invalid input syntax for type bigint",
+    ))
+
+
+async def _flush_once() -> bool:
+    """Commit one chunk; on failure keep its ID and all entries for retry."""
+    global _PENDING_BATCH, _LAST_DROP_LOG_COUNT, _DROPPED_EVENT_COUNT
+    async with _FLUSH_LOCK:
+        if _db_breaker_open():
+            return False
+        if _DROPPED_EVENT_COUNT != _LAST_DROP_LOG_COUNT:
+            print(
+                "⚠️ activity buffer overflow: "
+                f"{_DROPPED_EVENT_COUNT - _LAST_DROP_LOG_COUNT} newly dropped events "
+                f"(total={_DROPPED_EVENT_COUNT}); guild coverage fail-closed"
+            )
+            _LAST_DROP_LOG_COUNT = _DROPPED_EVENT_COUNT
+        completed_guilds: set[int] = set()
+        progress = False
+        if _PENDING_BATCH is None and _PENDING_SPLITS:
+            _PENDING_BATCH = _PENDING_SPLITS.pop(0)
+        if _PENDING_BATCH is None and _ACTIVITY_BUFFER:
+            items = sorted(
+                _ACTIVITY_BUFFER.items(), key=lambda pair: pair[1]["order"]
+            )[:_BATCH_CHUNK_SIZE]
+            snapshot = dict(items)
+            for key, _ in items:
+                _ACTIVITY_BUFFER.pop(key, None)
+            _PENDING_BATCH = {"id": str(uuid.uuid4()), "snapshot": snapshot}
+        if _PENDING_BATCH is not None:
+            batch = _PENDING_BATCH
+            try:
+                await asyncio.to_thread(_flush_batch_sync, batch)
+            except Exception as exc:
+                if _is_deterministic_batch_rejection(exc):
+                    entries = list(batch["snapshot"].items())
+                    if len(entries) > 1:
+                        midpoint = len(entries) // 2
+                        # The rejected SQL transaction committed neither its
+                        # receipt nor any ledger entries; fresh child IDs are safe.
+                        _PENDING_BATCH = {
+                            "id": str(uuid.uuid4()),
+                            "snapshot": dict(entries[:midpoint]),
+                        }
+                        _PENDING_SPLITS.insert(0, {
+                            "id": str(uuid.uuid4()),
+                            "snapshot": dict(entries[midpoint:]),
+                        })
+                        return True
+                    (gid, _uid, atype), invalid = entries[0]
+                    # Explicitly quarantine irreparable data. Never silently
+                    # treat its missing count as a successful write.
+                    _DROPPED_EVENT_COUNT += int(invalid["count"])
+                    _LOST_COVERAGE_GUILDS.add(gid)
+                    _LOCAL_ERRORS[gid] = (
+                        "Invalid activity record quarantined; "
+                        "coverage must restart before inactivity cleanup."
+                    )
+                    _PENDING_FAIL_REPORTS[gid] = _LOCAL_ERRORS[gid]
+                    _PENDING_BATCH = None
+                    print(
+                        "⚠️ activity entry quarantined after SQL validation "
+                        f"guild={gid} type={atype} error={type(exc).__name__}"
+                    )
+                    return True
+                _record_db_failure()
+                error = (
+                    f"Activity batch pending retry: {type(exc).__name__}: "
+                    f"{str(exc)[:180]}"
+                )
+                for gid, _uid, _atype in batch["snapshot"]:
+                    _LOCAL_ERRORS[gid] = error
+                    _PENDING_FAIL_REPORTS[gid] = error
+                return False
+            completed_guilds.update(k[0] for k in batch["snapshot"])
+            _PENDING_BATCH = None
+            _ACKED_BATCH_IDS.append(batch["id"])
+            _record_db_success()
+            progress = True
+
+        # Deletion of acknowledged receipts is optional for correctness but
+        # critical to bound long-term Supabase storage. Retry without ever
+        # treating a receipt-maintenance failure as a failed activity write.
+        if _ACKED_BATCH_IDS and (len(_ACKED_BATCH_IDS) >= 64
+                                 or not _ACTIVITY_BUFFER):
+            ack_ids = list(_ACKED_BATCH_IDS[:128])
+            try:
+                await asyncio.to_thread(_ack_batch_receipts_sync, ack_ids)
+            except Exception as exc:
+                print(f"⚠️ activity receipt cleanup pending: {type(exc).__name__}")
+            else:
+                del _ACKED_BATCH_IDS[:len(ack_ids)]
+
+        # A recovery report restarts the durable coverage clock even when
+        # buffered events replay. Never clear a failure on heartbeat alone.
+        for gid, message in list(_PENDING_FAIL_REPORTS.items())[:10]:
+            try:
+                await asyncio.to_thread(_fail_tracker_sync, gid, message)
+            except Exception:
+                _record_db_failure()
+                return progress
+            _PENDING_FAIL_REPORTS.pop(gid, None)
+            completed_guilds.add(gid)
+            _record_db_success()
+            progress = True
+        # Records dropped under memory pressure cannot be reconstructed.
+        for gid in list(_LOST_COVERAGE_GUILDS)[:10]:
+            # Reset immediately after DB recovery. Continuously active guilds
+            # must not be starved just because more events are being staged.
+            try:
+                await asyncio.to_thread(_start_tracker_sync, gid)
+            except Exception:
+                _record_db_failure()
+                return progress
+            _LOST_COVERAGE_GUILDS.discard(gid)
+            completed_guilds.add(gid)
+            _record_db_success()
+            progress = True
+        for gid in completed_guilds:
+            if (gid not in _LOST_COVERAGE_GUILDS
+                    and gid not in _PENDING_FAIL_REPORTS):
+                _LOCAL_ERRORS.pop(gid, None)
+        return progress
+
+
+async def _flush_loop() -> None:
+    while True:
+        await asyncio.sleep(_flush_seconds())
+        for _ in range(128):
+            try:
+                if not await _flush_once():
+                    break
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"⚠️ activity flush loop error: {type(exc).__name__}")
+                break
+
+
+async def flush_activity_buffer() -> None:
+    """Best-effort bounded shutdown drain (SIGKILL/OOM still loses RAM)."""
+    for _ in range(128):
+        if not await _flush_once():
+            break
+    if _PENDING_BATCH or _PENDING_SPLITS or _ACTIVITY_BUFFER:
+        print(
+            "⚠️ activity shutdown unflushed "
+            f"pending_batch={bool(_PENDING_BATCH)} "
+            f"pending_split_chunks={len(_PENDING_SPLITS)} "
+            f"buffered_keys={len(_ACTIVITY_BUFFER)}"
         )
-        return False
 
 
 async def _refresh_scope_status(
@@ -923,6 +1298,10 @@ async def _heartbeat_loop(
                 )
                 continue
 
+            # Stop scope-reset writes and heartbeats while the DB breaker is
+            # open. Previously scope handling could still trigger a fail storm.
+            if _db_breaker_open():
+                continue
             await _refresh_scope_status(guild)
 
             try:
@@ -930,7 +1309,10 @@ async def _heartbeat_loop(
                     _heartbeat_sync,
                     gid,
                 )
-                _LOCAL_ERRORS.pop(gid, None)
+                _record_db_success()
+                if (gid not in _LOST_COVERAGE_GUILDS
+                        and gid not in _PENDING_FAIL_REPORTS):
+                    _LOCAL_ERRORS.pop(gid, None)
             except Exception as exc:
                 await _mark_failure(
                     gid,
@@ -943,6 +1325,7 @@ async def _on_ready(
     bot: discord.Client,
 ) -> None:
     global _HEARTBEAT_TASK
+    global _FLUSH_TASK
 
     # Never await full Discord history repair inside on_ready. Queue it after
     # Discord is responsive so slash commands and persistent panels can answer.
@@ -965,6 +1348,12 @@ async def _on_ready(
             name=(
                 "authoritative_member_activity_heartbeat"
             ),
+        )
+
+    if _FLUSH_TASK is None or _FLUSH_TASK.done():
+        _FLUSH_TASK = asyncio.create_task(
+            _flush_loop(),
+            name="authoritative_member_activity_flush",
         )
 
 
@@ -1080,6 +1469,23 @@ def install_activity_tracker(bot: discord.Client) -> bool:
     )
     bot.add_listener(_on_interaction, "on_interaction")
 
+    # Best-effort shutdown flush: discord.py closes the gateway on SIGTERM /
+    # SIGINT via bot.close(). Flushing first (bounded 10s) means a graceful
+    # restart loses at most the in-flight window, not the whole buffer.
+    # SIGKILL / OOM kills cannot be caught: those lose the buffer, and the
+    # drop accounting in _flush_once keeps that visible.
+    _original_close = bot.close
+
+    async def _close_with_activity_flush(*args: Any, **kwargs: Any) -> None:
+        try:
+            await asyncio.wait_for(flush_activity_buffer(), timeout=10)
+        except Exception:
+            pass
+        await _original_close(*args, **kwargs)
+
+    if getattr(bot.close, "__name__", "") != "_close_with_activity_flush":
+        bot.close = _close_with_activity_flush  # type: ignore[assignment]
+
     setattr(bot, marker, True)
     _INSTALLED = True
 
@@ -1095,6 +1501,7 @@ def install_activity_tracker(bot: discord.Client) -> bool:
 __all__ = [
     "ActivityCoverageStatus",
     "evaluate_coverage_state",
+    "flush_activity_buffer",
     "get_activity_coverage_status",
     "persisted_last_heartbeat_at",
     "install_activity_tracker",
