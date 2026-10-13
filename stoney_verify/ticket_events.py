@@ -22,7 +22,9 @@ from .tickets_new.sync_service import sync_one_ticket_channel
 from .tickets_new.repository import (
     _find_ticket_row_by_channel_id,
     list_non_deleted_ticket_channel_identities_for_guild,
+    note_ticket_channel_lookup,
     safe_optional_update_by_channel_id,
+    ticket_channel_cached_state,
     mark_ticket_closed as repo_mark_ticket_closed,
     mark_ticket_deleted as repo_mark_ticket_deleted,
 )
@@ -317,19 +319,29 @@ async def _is_ticket_channel(channel: discord.TextChannel) -> bool:
     except Exception:
         pass
 
+    # In-memory identity cache first: this runs on every message.
+    cached = ticket_channel_cached_state(channel.id)
+    if cached is True:
+        return True
+    if cached is False:
+        return False
+
     name_match = _matches_ticket_name(channel.name)
     topic_match = _topic_looks_ticketish(_safe_topic(channel))
 
     if name_match or topic_match:
+        note_ticket_channel_lookup(channel.id, True)
         return True
 
     row = None
     try:
         row = await _find_ticket_row_by_channel_id(channel.id)
         if row is not None:
+            note_ticket_channel_lookup(channel.id, True)
             return True
     except Exception:
         row = None
+    note_ticket_channel_lookup(channel.id, False)
 
     # Category alone is too broad. Only accept category-based detection when
     # there is another ticket signal too.
@@ -885,10 +897,17 @@ async def _enforce_claim_first_staff_message(message: discord.Message) -> bool:
     if not isinstance(channel, discord.TextChannel) or not isinstance(author, discord.Member):
         return True
 
+    # AUTHORIZATION PATH: always a live DB lookup. A cached "not a ticket"
+    # verdict must never skip this check — a channel that became a ticket
+    # through an untracked flow (manual setup, created while the bot was
+    # down) would otherwise let staff messages through that claim-first
+    # policy should block. The cache only serves _is_ticket_channel, which
+    # makes no authorization decisions.
     try:
         row = await _find_ticket_row_by_channel_id(channel.id)
     except Exception:
         row = None
+    note_ticket_channel_lookup(channel.id, isinstance(row, dict))
     if not isinstance(row, dict):
         return True
 
