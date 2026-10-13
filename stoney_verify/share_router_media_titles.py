@@ -60,8 +60,10 @@ def title_from_extraction(info: Any) -> str:
 def title_from_filename(filename: Any) -> str:
     if not isinstance(filename, str) or not filename:
         return ""
-    # Filename is not a URL; basename only, with no query or path leaking.
-    name = PurePosixPath(unquote(urlsplit(filename).path).replace("\\", "/")).name
+    # Filename must not be a URL or carry query/fragment tokens.
+    if "://" in filename or "?" in filename or "#" in filename:
+        return ""
+    name = PurePosixPath(unquote(filename).replace("\\", "/")).name
     stem, dot, suffix = name.rpartition(".")
     if not dot or ("." + suffix.casefold()) not in _VIDEO_SUFFIXES:
         return ""
