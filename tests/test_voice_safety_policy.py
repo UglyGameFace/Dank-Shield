@@ -186,7 +186,7 @@ def test_voice_safety_agreement_requires_explicit_disclosed_action(monkeypatch) 
         for phrase in (
             "inappropriate", "hateful", "harassing", "lewd", "sexually explicit",
             "offensive", "Google Gemini", "private safety alerts", "raw audio",
-            "Opt Out", "alternative access",
+            "Decline & Exit Server", "10-second",
         )
     )
     assert "Gemini paid API" not in str(configured.to_dict())

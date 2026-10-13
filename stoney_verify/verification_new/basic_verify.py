@@ -274,8 +274,9 @@ def build_basic_verify_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
                 "Audio is processed using **Google Gemini**. Staff may receive private "
                 "safety alerts, but Dank Shield does not store raw audio.\n\n"
                 "By selecting **Agree & Verify**, you consent to monitoring in designated "
-                "channels. You may **Opt Out** in the Voice Safety notice and contact "
-                "staff about alternative access."
+                "channels. If you decline, press **Decline & Exit Server**. Your access roles "
+                "will be removed, Unverified assigned, and a 10-second grace period offered "
+                "to change your mind before removal."
             ),
             inline=False,
         )
@@ -367,10 +368,27 @@ class BasicVerifyButton(discord.ui.Button):
         await maybe_handle_basic_verify_interaction(interaction)
 
 
+class BasicVerifyDeclineButton(discord.ui.Button):
+    def __init__(self) -> None:
+        from stoney_verify.verification_new.decline_exit import DECLINE_CUSTOM_ID
+        super().__init__(
+            label="Decline & Exit Server", emoji="🚪",
+            style=discord.ButtonStyle.secondary, custom_id=DECLINE_CUSTOM_ID,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if _RUNTIME_FALLBACK_LISTENER_REGISTERED:
+            return
+        from stoney_verify.verification_new.decline_exit import decline_and_exit
+        await decline_and_exit(interaction, from_verify=True)
+
+
 class BasicVerifyView(discord.ui.View):
     def __init__(self, *, voice_safety_agreement: bool = False) -> None:
         super().__init__(timeout=None)
         self.add_item(BasicVerifyButton(voice_safety_agreement=voice_safety_agreement))
+        if voice_safety_agreement:
+            self.add_item(BasicVerifyDeclineButton())
 
 
 async def _basic_verify_fallback_listener(
@@ -393,6 +411,11 @@ async def _basic_verify_fallback_listener(
             else {}
         )
         custom_id = str(data.get("custom_id") or "")
+        from stoney_verify.verification_new.decline_exit import DECLINE_CUSTOM_ID, decline_and_exit
+        if custom_id == DECLINE_CUSTOM_ID:
+            if not interaction.response.is_done():
+                await decline_and_exit(interaction, from_verify=True)
+            return
         if custom_id != BASIC_VERIFY_CUSTOM_ID:
             return
 
@@ -1307,6 +1330,9 @@ async def apply_basic_verification(member: discord.Member) -> tuple[bool, str]:
             return False, why
 
     async with _lock_for(int(guild.id), int(member.id)):
+        from stoney_verify.verification_new.decline_exit import exit_pending
+        if exit_pending(int(guild.id), int(member.id)):
+            return False, "Exit is pending. Use Agree & Stay on your private grace-period notice."
         try:
             fresh = guild.get_member(member.id) or await guild.fetch_member(member.id)
         except Exception:
@@ -1348,6 +1374,12 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
     try:
         data = getattr(interaction, "data", None) or {}
         custom_id = str(data.get("custom_id") or "")
+        from stoney_verify.verification_new.decline_exit import DECLINE_CUSTOM_ID, decline_and_exit
+        if custom_id == DECLINE_CUSTOM_ID:
+            if not _claim_basic_verify_interaction(interaction):
+                return True
+            await decline_and_exit(interaction, from_verify=True)
+            return True
         if custom_id != BASIC_VERIFY_CUSTOM_ID:
             return False
         if not _claim_basic_verify_interaction(interaction):
@@ -1378,29 +1410,41 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             await _reply(interaction, "This only works inside the server.", ok=False)
             return True
-        ok, message = await apply_basic_verification(interaction.user)
-        if ok:
-            # Verified role alone is never permission to process voice. Accept
-            # only after the member clicks a panel that visibly disclosed this
-            # exact version of the Voice Safety agreement.
+        from stoney_verify.verification_new.decline_exit import exit_pending
+        if exit_pending(int(interaction.guild.id), int(interaction.user.id)):
+            await _reply(
+                interaction,
+                "An exit countdown is active. Use **Agree & Stay** on your private 10-second notice; "
+                "the regular Verify button cannot bypass a pending exit.",
+                ok=False,
+            )
+            return True
+        # In a server that requires Voice Safety, the role grant cannot come
+        # before consent. Previously a storage failure left members verified
+        # without an agreement. Never infer permission from membership.
+        try:
+            config = await get_guild_config(int(interaction.guild.id), refresh=True)
+        except Exception:
+            await _reply(interaction, "Could not confirm Voice Safety policy; no access was granted. Try again later.", ok=False)
+            return True
+        required = bool(_cfg_value(config, "voice_safety_enabled", False))
+        if required:
+            if not verification_message_discloses_voice_safety(getattr(interaction, "message", None)):
+                await _reply(interaction, "This is an older Verify panel without the current Voice Safety agreement. Ask staff to refresh it. No access was granted.", ok=False)
+                return True
             try:
-                config = await get_guild_config(int(interaction.guild.id), refresh=True)
-                if (
-                    bool(_cfg_value(config, "voice_safety_enabled", False))
-                    and verification_message_discloses_voice_safety(getattr(interaction, "message", None))
-                ):
-                    from stoney_verify.community_voice_caption_runtime import ensure_community_voice_caption_manager
-
-                    manager = ensure_community_voice_caption_manager(interaction.client)
-                    await manager.set_voice_safety_consent(
-                        int(interaction.guild.id), int(interaction.user.id), True,
-                        source="basic_verify_v1",
-                    )
-                    message += " Your one-time Voice Safety agreement was saved; covered VCs can be reviewed automatically when enabled."
-                elif bool(_cfg_value(config, "voice_safety_enabled", False)):
-                    message += " Voice Safety agreement not recorded from this older verification panel. Use the public Voice Safety notice once to acknowledge it."
+                from stoney_verify.community_voice_caption_runtime import ensure_community_voice_caption_manager
+                manager = ensure_community_voice_caption_manager(interaction.client)
+                await manager.set_voice_safety_consent(
+                    int(interaction.guild.id), int(interaction.user.id), True,
+                    source="basic_verify_v1",
+                )
             except Exception:
-                message += " Voice Safety agreement could not be confirmed; your audio is not automatically admitted. Ask staff to check Voice Safety setup."
+                await _reply(interaction, "Could not save the disclosed Voice Safety agreement. Verification was not granted; try again later.", ok=False)
+                return True
+        ok, message = await apply_basic_verification(interaction.user)
+        if ok and required:
+            message += " Your one-time Voice Safety agreement was saved."
         await _reply(interaction, message, ok=ok)
         return True
     except Exception as exc:
