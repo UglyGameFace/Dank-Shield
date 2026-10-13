@@ -114,7 +114,7 @@ def test_heartbeat_uses_single_bounded_process_cycle_and_preserves_fail_closed()
     assert "elapsed_s=" in block and "overrun=" in block
     assert "_db_breaker_open()" in guild
     assert "_PENDING_FAIL_REPORTS" in guild
-    assert guild.index("try:\\n        await _refresh_scope_status(guild)") < guild.index(
+    assert guild.index("try:\n        await _refresh_scope_status(guild)") < guild.index(
         "await asyncio.to_thread(_heartbeat_sync, gid)"
     )
     error_block = src.split("def _combined_local_error(", 1)[1].split(
