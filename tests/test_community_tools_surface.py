@@ -30,8 +30,9 @@ def test_community_navigation_exposes_tools_without_new_slash_child() -> None:
 
     surface = (ROOT / "stoney_verify/commands_ext/public_command_surface_v2.py").read_text(encoding="utf-8")
     contract = (ROOT / "stoney_verify/command_surface_contract.py").read_text(encoding="utf-8")
-    assert 'dank_children != ["home", "setup", "upload"]' in surface
-    assert 'PUBLIC_DANK_CHILDREN: frozenset[str] = frozenset({"home", "purge", "setup", "upload"})' in contract
+    assert 'expected_children = sorted(["home", "setup", "upload"] + [name for name, _, _ in DANK_SHORTCUTS])' in surface
+    assert '"voice-safety"' in contract
+    assert '("community", "Open the community hub' in surface
 
 
 def test_community_center_keeps_core_tools_without_command_sprawl() -> None:
