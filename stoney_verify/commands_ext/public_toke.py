@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 from stoney_verify import toke_sessions
 from stoney_verify.toke_live_ui import (
-    TokeCheersView, TokeThumbnailLayout, begin_capture, choose_voice, media_url_from_message, pending_for, render_card, settings_from_config,
+    TokeCheersView, TokeMediaLayout, begin_capture, choose_voice, media_url_from_message, pending_for, render_card, settings_from_config,
 )
 
 import discord
@@ -331,7 +331,7 @@ async def _publish_toke(
         if upload is not None:
             # Editable attachment:// embeds duplicate after PATCH, but naked
             # attachments display far too large above the session card.
-            # Components V2 offer an inline thumbnail that can be refreshed.
+            # Components V2 MediaGallery renders one full-width inline image through edits.
             upload_file = await upload.to_file()
             # Discord's attachment:// component reference must be a bare,
             # predictable filename. Preserve the true image format (including
@@ -370,7 +370,7 @@ async def _publish_toke(
             "expires_at": time.time() + int(settings["session_minutes"]) * 60,
         }
         if upload_file is not None:
-            session_data["media_layout"] = "thumbnail_v2"
+            session_data["media_layout"] = "gallery_v2"
             session_data["media_filename"] = upload_file.filename
             pending_card = {**session_data, "active": True, "cheers_ids": [], "going_ids": []}
             intro = (
@@ -382,7 +382,7 @@ async def _publish_toke(
             # Discord V2 messages cannot mix content/embeds with layout views.
             # The single authorized role ping is inside the header TextDisplay.
             payload: dict[str, Any] = {
-                "view": TokeThumbnailLayout(guild, pending_card, intro=intro),
+                "view": TokeMediaLayout(guild, pending_card, intro=intro),
                 "file": upload_file,
                 "allowed_mentions": _toke_allowed_mentions(notify_role),
             }
