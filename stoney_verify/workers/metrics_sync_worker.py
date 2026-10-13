@@ -206,9 +206,28 @@ async def metrics_loop() -> None:
     await asyncio.sleep(random.uniform(0.0, 10.0))
 
     while not bot.is_closed():
+        consecutive_failures = 0
+        halted_on_failures = False
+
+        async def _sync_one(guild: discord.Guild) -> bool:
+            nonlocal consecutive_failures, halted_on_failures
+            if halted_on_failures:
+                return False
+            ok = await _sync_metrics_for_guild(guild)
+            if ok:
+                consecutive_failures = 0
+            else:
+                consecutive_failures += 1
+                if consecutive_failures >= 5:
+                    # An unavailable database should not generate thousands
+                    # of per-guild retries every five minutes. Next cycle
+                    # probes again; no metrics are marked persisted.
+                    halted_on_failures = True
+            return ok
+
         result = await run_bounded_guild_sweep(
             list(bot.guilds),
-            _sync_metrics_for_guild,
+            _sync_one,
             concurrency=_metrics_guild_concurrency(),
             on_error=lambda guild, exc: print(
                 "❌ Metrics guild sync failed "
@@ -218,7 +237,8 @@ async def metrics_loop() -> None:
         print(
             "📊 metrics sync cycle "
             f"guilds={result.total} ok={result.succeeded} failed={result.failed} "
-            f"concurrency={result.concurrency} elapsed_s={result.seconds:.2f}"
+            f"concurrency={result.concurrency} elapsed_s={result.seconds:.2f} "
+            f"halted_on_failures={halted_on_failures}"
         )
         # No overlapping passes or zero-delay retry loops after an overrun.
         await asyncio.sleep(
