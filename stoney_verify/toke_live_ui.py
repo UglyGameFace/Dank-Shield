@@ -11,6 +11,7 @@ from typing import Any, Mapping
 import discord
 
 from stoney_verify import toke_sessions
+from stoney_verify.share_router_media_network import is_safe_media_download_url
 
 SETTINGS_KEY = "toke_meetup_settings_v1"
 CAPTURE_SECONDS = 90
@@ -924,8 +925,8 @@ def _is_gif_like_url(value: Any) -> bool:
     )
 
 
-def media_url_from_message(message: discord.Message) -> str:
-    """Prefer GIF-picker CDN media over the Tenor/Giphy page that unfurls."""
+def media_url_from_message(message: discord.Message, *, allow_public_page: bool = False) -> str:
+    """Prefer durable embedded media; accept a sole HTTPS link during /toke capture."""
     from stoney_verify.commands_ext.public_toke import _is_stable_provider_media_url
 
     candidates: list[str] = []
@@ -949,14 +950,23 @@ def media_url_from_message(message: discord.Message) -> str:
     for candidate in candidates:
         if _is_stable_provider_media_url(candidate):
             return candidate
-    return candidates[0] if candidates else ""
+    if candidates:
+        return candidates[0]
+    if allow_public_page:
+        # A pending /toke composer expects an image. A single public HTTPS URL
+        # can be resolved by the canonical publisher, even for a new site
+        # without a familiar GIF suffix. Other chat is never intercepted.
+        text = str(message.content or "").strip().strip("<>")
+        if text.startswith("https://") and is_safe_media_download_url(text):
+            return text
+    return ""
 
 
-def _has_gif_media(message: discord.Message) -> bool:
+def _has_gif_media(message: discord.Message, *, allow_public_page: bool = False) -> bool:
     from stoney_verify.commands_ext.public_toke import _attachment_is_supported_media
     if any(_attachment_is_supported_media(a) for a in (message.attachments or [])):
         return True
-    return bool(media_url_from_message(message))
+    return bool(media_url_from_message(message, allow_public_page=allow_public_page))
 
 
 async def _on_toke_media_message(message: discord.Message) -> None:
@@ -965,7 +975,7 @@ async def _on_toke_media_message(message: discord.Message) -> None:
     pending = pending_for(message.guild.id, message.author.id)
     if pending is None or pending.claimed or message.channel.id != pending.channel_id:
         return
-    if not _has_gif_media(message):
+    if not _has_gif_media(message, allow_public_page=True):
         return  # Don't steal unrelated regular chat while a draft is pending.
     pending.claimed = True
     try:
