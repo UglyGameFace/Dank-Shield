@@ -76,7 +76,7 @@ jobs:
             {
               echo '#!/usr/bin/env bash'
               echo 'set -euo pipefail'
-              printf 'exec docker run --rm -i -e PGHOST -e PGPORT -e PGUSER -e PGPASSWORD -e PGDATABASE -e PGSSLMODE -e PGCONNECT_TIMEOUT postgres:17 %s "$@"\\n' "$cmd"
+              printf '%s\n' "exec docker run --rm -i -e PGHOST -e PGPORT -e PGUSER -e PGPASSWORD -e PGDATABASE -e PGSSLMODE -e PGCONNECT_TIMEOUT postgres:17 $cmd \"\$@\""
             } > "$RUNNER_TEMP/pg17-client/$cmd"
             chmod 0700 "$RUNNER_TEMP/pg17-client/$cmd"
           done
