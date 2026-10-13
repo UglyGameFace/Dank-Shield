@@ -16,7 +16,7 @@ HARDENING = (ROOT / "supabase/migrations/20260905121500_community_tools_hardenin
 QUIET_CLEAR = (ROOT / "supabase/migrations/20260921042000_quiet_notice_atomic_delivery_clear.sql").read_text(encoding="utf-8")
 
 
-def test_navigation_routes_to_community_tools_without_expanding_dank_children() -> None:
+def test_navigation_keeps_community_tools_under_home_not_as_new_direct_child() -> None:
     assert '"community_tools"' in REGISTRY
     assert '"Community Tools"' in REGISTRY
     assert 'if key == "community_tools":' in SURFACE
