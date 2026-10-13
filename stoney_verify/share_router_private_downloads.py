@@ -15,6 +15,7 @@ from typing import Any
 import discord
 
 from .share_router_media_network import is_safe_media_download_url
+from .share_router_media_titles import title_from_embeds, title_from_filename, title_prefix
 from .share_router_media_resolver import (
     MEDIA_URL_RE,
     MediaResolution,
@@ -256,13 +257,19 @@ async def handle_download_message(message: discord.Message) -> bool:
             delivered_file_or_hosted_link = False
             try:
                 if video is not None:
+                    video_title = (
+                        resolution.title
+                        or title_from_embeds(message, url)
+                        or title_from_filename(getattr(video.file, "filename", ""))
+                    )
+                    prefix = title_prefix(video_title)
                     stored_id = ""
                     try:
                         use_host = video.size_bytes > DM_ATTACHMENT_BYTES and hosting_ready
                         if not use_host:
                             try:
                                 await message.author.send(
-                                    "🎬 Your video from the Share Router Download channel:",
+                                    prefix + "🎬 Your video from the Share Router Download channel:",
                                     file=video.file,
                                     allowed_mentions=discord.AllowedMentions.none(),
                                 )
@@ -303,12 +310,12 @@ async def handle_download_message(message: discord.Message) -> bool:
                                 watch_url, download_url, stored_id = staged_link
                                 try:
                                     await message.author.send(
-                                        "🎬 Your private video is ready.\n"
+                                        prefix + "🎬 Your private video is ready.\n"
                                         f"▶️ Watch: {watch_url}\n"
                                         f"📥 Download: {download_url}\n"
                                         f"⏳ Both links expire in {ttl // 86400} day(s)."
                                         if ttl >= 86400 else
-                                        "🎬 Your private video is ready.\n"
+                                        prefix + "🎬 Your private video is ready.\n"
                                         f"▶️ Watch: {watch_url}\n"
                                         f"📥 Download: {download_url}\n"
                                         "⏳ Both links expire in 1 hour.",
