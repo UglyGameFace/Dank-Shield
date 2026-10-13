@@ -73,6 +73,28 @@
       "retention_class": "guild_configuration",
       "historical_reuse": "Full-fidelity comparison and recovery of original guild settings, including roles, channels, setup/verification, and ticket choices; no automatic member cleanup",
       "review_interval_days": 30
+    },
+    "dank_core.guild_config_state": {
+      "feature": "Future atomic PostgreSQL guild configuration, disabled on live runtime until tested cutover",
+      "owner": "stoney_verify.postgres_guild_config_repo.GuildConfigPgRepository",
+      "purpose": "One authoritative current per-guild JSON row with lock-serialized sparse updates, revision CAS and no-op write suppression",
+      "stored_fields": [
+        "guild_id",
+        "row_payload",
+        "revision",
+        "changed_at"
+      ],
+      "contains_message_content": false,
+      "retention_rule": "Never expire or automatically delete configured guild records; archive only after authoritative offboarding, verified backup and explicit owner-approved data retention review",
+      "cleanup_interval_seconds": 86400,
+      "max_candidates_per_cleanup": 100,
+      "expiry_index": "primary key (guild_id); no automatic expiry because guild configuration is durable",
+      "preserve_when": "Bot offline, guild membership unavailable, database errors, backup/restore unverified, any active server, any unconfirmed ownership or retention status",
+      "backup_class": "critical_guild_configuration",
+      "migration": "postgres/migrations/202610130004_guild_config_atomic_state.sql",
+      "retention_class": "guild_configuration",
+      "historical_reuse": "Durable current settings, setup, verification and protected role/channel choices; monotonically increasing revision for CAS and safe rollback",
+      "review_interval_days": 180
     }
   }
 }
