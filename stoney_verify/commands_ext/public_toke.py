@@ -124,6 +124,18 @@ def _is_direct_media_url(value: str) -> bool:
     return False
 
 
+def _is_temporary_discord_media_url(value: str) -> bool:
+    """Draft-message CDN/proxy URLs are not durable after source deletion."""
+    try:
+        host = str(urlsplit(value).hostname or "").lower()
+    except ValueError:
+        return False
+    return (
+        host in {"cdn.discordapp.com", "media.discordapp.net"}
+        or (host.startswith("images-ext-") and host.endswith(".discordapp.net"))
+    )
+
+
 def _is_stable_provider_media_url(value: str) -> bool:
     """Accept durable public image URLs from any host, excluding draft CDN assets."""
     try:
@@ -135,8 +147,7 @@ def _is_stable_provider_media_url(value: str) -> bool:
         return False
     # The temporary composer message is deleted on success. Its Discord CDN
     # attachment URL is not a safe source for future refreshes or restarts.
-    if host in {"cdn.discordapp.com", "media.discordapp.net", "images-ext-1.discordapp.net",
-                "images-ext-2.discordapp.net"}:
+    if _is_temporary_discord_media_url(value):
         return False
     return _is_direct_media_url(value)
 
@@ -582,6 +593,11 @@ async def publish_toke_from_draft(
                     upload = attachment
                     break
             if upload is None and found:
+                if _is_temporary_discord_media_url(found):
+                    raise ValueError(
+                        "Discord's temporary media preview cannot survive deleting your draft. "
+                        "Upload the GIF/image or share its original public URL."
+                    )
                 clean_media = _clean_media_url(found)
         if upload is None and not clean_media:
             raise ValueError("No supported GIF or picture could be read. Check Message Content Intent.")
