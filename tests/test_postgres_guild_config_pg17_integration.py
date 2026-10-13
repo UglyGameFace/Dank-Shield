@@ -177,3 +177,57 @@ def test_pg17_full_staging_shadow_seed_and_voice_isolation():
             "where name='sentinel'"
         ).fetchone()[0] == "untouched"
         assert read_shadow_config(conn, int(guild)) == data[0]
+
+
+def test_pg17_parity_auditor_matches_and_detects_drift_without_writing():
+    """Local disposable PostgreSQL 17 only, never live Discloud."""
+    import psycopg
+    from psycopg.types.json import Jsonb
+    from stoney_verify.postgres_guild_config_parity import (
+        compare_guild_config_sources, postgres_page_reader,
+    )
+
+    dsn = os.environ["DANK_TEST_DATABASE_URL"]
+    parsed = urlparse(dsn)
+    assert parsed.hostname in ("127.0.0.1", "localhost")
+    assert parsed.path == "/postgres"
+    gid = str(900000000000000000 + uuid.uuid4().int % 1000000000)
+    raw = {
+        "id": str(uuid.uuid4()),
+        "guild_id": gid,
+        "settings": {"verification_mode": "simple", "verify_channel_id": "222"},
+        "config": {}, "metadata": {}, "meta": {},
+        "verify_channel_id": "222",
+    }
+    def source(offset, size):
+        return [raw][offset:offset+size]
+
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        assert conn.execute("show server_version_num").fetchone()[0].startswith("17")
+        # This CI database is disposable and never a user-owned database.
+        conn.execute("delete from dank_core.guild_config_state")
+        conn.execute(
+            "insert into dank_core.guild_config_state(guild_id,row_payload) "
+            "values (%s,%s)", (gid, Jsonb(raw)),
+        )
+        with conn.transaction():
+            conn.execute("set transaction isolation level repeatable read, read only")
+            good = compare_guild_config_sources(
+                source, postgres_page_reader(conn),
+            )
+        assert good.matching
+        assert good.public_summary()["cutover_authorized"] is False
+
+        conn.execute(
+            "update dank_core.guild_config_state set "
+            "row_payload=jsonb_set(row_payload, '{settings,verification_mode}', "
+            "'\"changed\"'::jsonb) where guild_id=%s", (gid,),
+        )
+        with conn.transaction():
+            conn.execute("set transaction isolation level repeatable read, read only")
+            mismatch = compare_guild_config_sources(
+                source, postgres_page_reader(conn),
+            )
+        assert not mismatch.matching
+        assert mismatch.source_rows == mismatch.postgres_rows == 1
+        assert mismatch.source_digest != mismatch.postgres_digest
