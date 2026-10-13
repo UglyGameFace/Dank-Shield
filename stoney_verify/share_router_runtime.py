@@ -255,7 +255,7 @@ def _trusted_video_url(value: str) -> bool:
     return False
 
 
-def _video_source_urls(message: discord.Message) -> list[str]:
+def _video_source_urls(message: discord.Message, *, embeds_only: bool = False) -> list[str]:
     urls: list[str] = []
     seen: set[str] = set()
 
@@ -268,15 +268,16 @@ def _video_source_urls(message: discord.Message) -> list[str]:
             seen.add(key)
             urls.append(url)
 
-    try:
-        for attachment in list(getattr(message, "attachments", []) or []):
-            content_type = _safe_str(getattr(attachment, "content_type", "")).lower()
-            filename = _safe_str(getattr(attachment, "filename", "")).lower()
-            if content_type.startswith("video/") or filename.endswith(_VIDEO_EXTENSIONS):
-                add(getattr(attachment, "proxy_url", None))
-                add(getattr(attachment, "url", None))
-    except Exception:
-        pass
+    if not embeds_only:
+        try:
+            for attachment in list(getattr(message, "attachments", []) or []):
+                content_type = _safe_str(getattr(attachment, "content_type", "")).lower()
+                filename = _safe_str(getattr(attachment, "filename", "")).lower()
+                if content_type.startswith("video/") or filename.endswith(_VIDEO_EXTENSIONS):
+                    add(getattr(attachment, "proxy_url", None))
+                    add(getattr(attachment, "url", None))
+        except Exception:
+            pass
 
     try:
         for embed in list(getattr(message, "embeds", []) or []):
