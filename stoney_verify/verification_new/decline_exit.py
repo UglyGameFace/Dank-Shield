@@ -21,6 +21,7 @@ class PendingExit:
     guild: discord.Guild
     user_id: int
     original_role_ids: tuple[int, ...]
+    unverified_role_id: int
     expires: float
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     task: asyncio.Task[None] | None = None
@@ -111,6 +112,9 @@ class ExitGraceView(discord.ui.View):
                 if not await read_voice_safety_agreement(entry.guild.id, entry.user_id):
                     raise RuntimeError("Agreement write not verified")
                 member = await entry.guild.fetch_member(entry.user_id)
+                live_ids = {r.id for r in member.roles if not r.is_default()}
+                if live_ids != {entry.unverified_role_id}:
+                    raise RuntimeError("Member roles changed during exit grace")
                 me = entry.guild.me
                 if me is None:
                     raise RuntimeError("Bot member missing")
@@ -136,6 +140,8 @@ class ExitGraceView(discord.ui.View):
                 )
             entry.completed = True
             _PENDING.pop(entry.key, None)
+            if entry.task is not None:
+                entry.task.cancel()
             self.stop()
             await interaction.followup.send(
                 "✅ You agreed to the disclosed Voice Safety policy. Your previous manageable roles were restored. Exit canceled.",
@@ -217,6 +223,7 @@ async def decline_and_exit(interaction: discord.Interaction, *, from_verify: boo
             )
         entry = PendingExit(
             guild=guild, user_id=user.id, original_role_ids=original_role_ids,
+            unverified_role_id=unverified.id,
             expires=time.monotonic() + GRACE_SECONDS,
         )
         _PENDING[key] = entry
