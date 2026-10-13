@@ -182,12 +182,14 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
 
     people, voice, voice_count = _sesh_people(guild, session)
     visible = bool(session.get("show_member_names", True))
-    channel_text = voice.mention if voice is not None else "No VC selected"
+    voice_id = int(session.get("voice_channel_id", 0) or 0)
+    channel_text = voice.mention if voice is not None else ("No VC selected" if not voice_id else "VC unavailable")
+    voice_status = str(voice_count) if voice is not None else ("Not selected" if not voice_id else "Unavailable")
     embed.add_field(
         name="📊 Sesh activity",
         value=(
             f"💨 **Cheers: {len(cheer_ids)}**   ·   🙋 **Joining: {len(going_ids)}**\n"
-            f"🔊 **In VC: {voice_count}**   ·   {channel_text}"
+            f"🔊 **In VC: {voice_status}**   ·   {channel_text}"
         )[:1024],
         inline=False,
     )
@@ -258,9 +260,9 @@ async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discor
             if not current.get("active", False):
                 await toke_sessions.mark_closed_synced(int(session["guild_id"]), int(session["message_id"]))
             return False
-    if current.get("media_layout") == "thumbnail_v2":
-        view = TokeThumbnailLayout(
-            guild, current, intro=_thumbnail_intro(message, current),
+    if current.get("media_layout") in ("thumbnail_v2", "gallery_v2"):
+        view = TokeMediaLayout(
+            guild, current, intro=_media_intro(message, current),
         )
         await message.edit(view=view, allowed_mentions=discord.AllowedMentions.none())
         if not current.get("active", False):
@@ -288,7 +290,7 @@ async def refresh_card(bot: Any, session: Mapping[str, Any], interaction: discor
     return True
 
 
-def _thumbnail_intro(message: discord.Message, session: Mapping[str, Any]) -> str:
+def _media_intro(message: discord.Message, session: Mapping[str, Any]) -> str:
     """Retain the original member note without putting message text into storage."""
     def text_displays(node: Any):
         if getattr(node, "content", None):
@@ -308,13 +310,12 @@ def _thumbnail_intro(message: discord.Message, session: Mapping[str, Any]) -> st
     )
 
 
-class TokeThumbnailLayout(discord.ui.LayoutView):
-    """Compact V2 session with media as a Section thumbnail, not a giant file.
+class TokeMediaLayout(discord.ui.LayoutView):
+    """One full-width inline media item in the editable V2 session card.
 
-    Using an attachment:// inside an editable *embed* is known to duplicate
-    media on Discord PATCH. V2's native Thumbnail retains the media within
-    the card while the text and controls are edited in the same layout.
-    Older embed cards keep the existing TokeCheersView update path.
+    V2 MediaGallery keeps the uploaded GIF or photo inside the same container
+    during attendance updates. It avoids the duplicate native attachment that
+    occurred when patching attachment:// embeds. Legacy embed cards are unchanged.
     """
 
     def __init__(
@@ -324,7 +325,7 @@ class TokeThumbnailLayout(discord.ui.LayoutView):
         super().__init__(timeout=None)
         filename = str(session.get("media_filename", "") or "")
         if not filename or "/" in filename or "\\\\" in filename:
-            raise ValueError("Toke thumbnail attachment filename is invalid.")
+            raise ValueError("Toke media attachment filename is invalid.")
         intro = intro or (
             "## 💨 Toke Time\n"
             f"<@&{int(session['notify_role_id'])}>\n"
@@ -337,14 +338,13 @@ class TokeThumbnailLayout(discord.ui.LayoutView):
                 intro = intro.replace("## 💨 Toke Time", "## 💨 Toke Time · Sesh Ended", 1)
             intro = intro.replace("is calling the sesh crowd.", "hosted this sesh.")
         container = discord.ui.Container(
-            discord.ui.Section(
-                discord.ui.TextDisplay(intro[:1200]),
-                accessory=discord.ui.Thumbnail(f"attachment://{filename}"),
+            discord.ui.TextDisplay(intro[:1200]),
+            discord.ui.MediaGallery(
+                discord.MediaGalleryItem(f"attachment://{filename}", description="Toke session artwork")
             ),
             discord.ui.TextDisplay(
                 "\n\n".join(f"**{field.name}**\n{field.value}" for field in card.fields)[:2400]
             ),
-            discord.ui.TextDisplay("Only members with the configured /toke notification role were notified."),
             accent_color=discord.Color.green() if active else discord.Color.dark_grey(),
         )
         if active or allow_pending_controls:
@@ -589,11 +589,13 @@ class TokeCheersView(discord.ui.View):
             cheers = len({int(uid) for uid in latest.get("cheers_ids", [])})
             joining = len({int(uid) for uid in latest.get("going_ids", [])})
             clock = int(time.time())
+            voice_id = int(latest.get("voice_channel_id", 0) or 0)
+            voice_status = str(voice_count) if voice is not None else ("Not selected" if not voice_id else "Unavailable")
             await interaction.edit_original_response(
                 content=(
                     f"✅ **Sesh status checked <t:{clock}:t>**\n"
                     f"💨 Cheers: **{cheers}** · 🙋 Joining: **{joining}** · "
-                    f"🔊 In VC: **{voice_count}**\n"
+                    f"🔊 In VC: **{voice_status}**\n"
                     f"Scheduled end: <t:{int(latest['expires_at'])}:f>"
                     + (f" · {voice.mention}" if voice is not None else "")
                 ),
@@ -1011,9 +1013,9 @@ async def restore_active_views(bot: Any) -> int:
         if (gid, mid) in _REGISTERED or bot.get_guild(gid) is None:
             continue
         view = (
-            TokeThumbnailLayout(
+            TokeMediaLayout(
                 bot.get_guild(gid), session, allow_pending_controls=True,
-            ) if session.get("media_layout") == "thumbnail_v2"
+            ) if session.get("media_layout") in ("thumbnail_v2", "gallery_v2")
             else TokeCheersView(
                 int(session["starter_id"]), int(session["starter_role_id"]),
                 voice_channel_id=int(session.get("voice_channel_id", 0)),
