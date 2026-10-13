@@ -41,7 +41,7 @@ def _install_final_layers(bot: Any, tree: Any) -> dict[str, Any]:
     install_cleanup_menu_compat()
 
     # The compact-v2 installer retains the curated /dank shortcuts.
-    # Restore the approved direct destructive-action doorway *after* that
+    # Restore the direct destructive-action doorway *after* that
     # cleanup, using thin wrappers that delegate to the canonical purge engines.
     install_direct_purge_group()
 
