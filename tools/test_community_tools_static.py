@@ -21,7 +21,7 @@ def test_navigation_routes_to_community_tools_without_expanding_dank_children() 
     assert '"Community Tools"' in REGISTRY
     assert 'if key == "community_tools":' in SURFACE
     assert "open_community_tools(interaction, replace_message=True)" in SURFACE
-    assert 'dank_children != ["home", "setup", "upload"]' in SURFACE
+    assert 'expected_children = sorted(["home", "setup", "upload"] + [name for name, _, _ in DANK_SHORTCUTS])' in SURFACE
 
 
 def test_runtime_registration_is_idempotent_and_single_owner() -> None:
