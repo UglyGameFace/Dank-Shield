@@ -23,7 +23,6 @@ from .repository import (
     list_open_tickets_for_guild as repo_list_open_tickets_for_guild,
     mark_ticket_closed as repo_mark_ticket_closed,
     mark_ticket_deleted as repo_mark_ticket_deleted,
-    note_ticket_channel_deleted as repo_note_ticket_channel_deleted,
     note_ticket_channel_opened as repo_note_ticket_channel_opened,
     reopen_ticket as repo_reopen_ticket,
     safe_optional_update_by_channel_id as repo_safe_optional_update_by_channel_id,
