@@ -221,9 +221,13 @@ def test_generic_metadata_prefers_gif_and_rejects_private_or_insecure_assets():
 def _fake_page(monkeypatch, *, html="", status=200, headers=None, destination=None):
     """Stub only the network boundary; production still uses public_get."""
     page = SimpleNamespace(status=status, headers=headers or {"Content-Type": "text/html"})
+    chunks = [html.encode("utf-8")]
     async def read(max_bytes):
-        assert max_bytes == 256 * 1024 + 1
-        return html.encode("utf-8")
+        assert 0 < max_bytes <= 16 * 1024
+        body = chunks.pop(0) if chunks else b""
+        if len(body) > max_bytes:
+            chunks.insert(0, body[max_bytes:])
+        return body[:max_bytes]
     page.content = SimpleNamespace(read=read)
     page.released = False
     def release():
@@ -265,6 +269,16 @@ def test_any_public_image_sharing_page_can_use_metadata(monkeypatch, share_page,
     assert "Open shared GIF or image" not in channel.sent_payload["embed"].description
     assert calls == [(share_page, 3)]
     assert page.released
+
+
+def test_public_page_metadata_after_first_network_chunk_is_detected(monkeypatch):
+    html = ("x" * (20 * 1024)) + (
+        '<meta property="og:image" content="https://cdn.example.net/late.gif">'
+    )
+    _fake_page(monkeypatch, html=html)
+    assert asyncio.run(toke._resolve_toke_media_url(
+        "https://other-site.example/late-media"
+    )) == "https://cdn.example.net/late.gif"
 
 
 def test_other_hosts_are_accepted_for_stable_gifs_from_discord_composer():
