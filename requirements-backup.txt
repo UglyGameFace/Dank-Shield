@@ -1,0 +1,3 @@
+# Dependencies for explicit encrypted source backup jobs ONLY.
+# Keep them out of the live Discord bot runtime.
+cryptography>=44.0.0,<47.0.0
