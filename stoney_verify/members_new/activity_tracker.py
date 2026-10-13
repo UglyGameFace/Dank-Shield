@@ -1311,10 +1311,8 @@ async def _heartbeat_one_guild(guild: discord.Guild) -> bool:
 
 async def _heartbeat_loop(bot: discord.Client) -> None:
     """One bounded cycle per process; shards share the same tracker state."""
+    await asyncio.sleep(_HEARTBEAT_INTERVAL_SECONDS)
     while not bot.is_closed():
-        await asyncio.sleep(_HEARTBEAT_INTERVAL_SECONDS)
-        if bot.is_closed():
-            break
         result = await run_bounded_guild_sweep(
             list(getattr(bot, "guilds", []) or []),
             _heartbeat_one_guild,
@@ -1331,6 +1329,11 @@ async def _heartbeat_loop(bot: discord.Client) -> None:
             f"concurrency={result.concurrency} elapsed_s={result.seconds:.2f} "
             f"target_s={_HEARTBEAT_INTERVAL_SECONDS} "
             f"overrun={result.seconds > _HEARTBEAT_INTERVAL_SECONDS}"
+        )
+        # Target a 60s start-to-start cadence. Always leave a short
+        # recovery gap after an overrun instead of saturating Supabase.
+        await asyncio.sleep(
+            max(5.0, _HEARTBEAT_INTERVAL_SECONDS - result.seconds)
         )
 
 
