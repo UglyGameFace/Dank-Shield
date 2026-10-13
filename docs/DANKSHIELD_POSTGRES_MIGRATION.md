@@ -451,6 +451,41 @@ the export and produces an AES-256-GCM encrypted artifact only, using
 PostgreSQL 17 clients in ephemeral Docker. Production bot dependencies,
 RAM, Discloud branch, Supabase API secrets and SQL records remain unchanged.
 
+## Manual backup failure diagnosis (no credentials in logs)
+
+In the manual GitHub Actions workflow `Create authenticated, encrypted
+source archive`, failing PostgreSQL 17 `pg_dump` previously emitted only
+the generic `RuntimeError` class and dropped the underlying error. A
+failed login could appear as an empty archive before its real cause was
+reported. The diagnostic implementation now categorizes `pg_dump` stderr
+into **fixed safe codes** only and never outputs the raw connection string,
+hostname, username, password, error traceback or SQL payload.
+
+A failed backup may now report one of:
+
+- `database_authentication_rejected`: Verify the password in the
+  `DANK_SOURCE_DATABASE_URL` GitHub secret privately. Remember to URL-
+  encode reserved password characters. Do **not** reset the shared Supabase
+  database password just because this workflow failed.
+- `pooler_project_or_user_rejected`: Re-copy this project's **Session
+  pooler** PostgreSQL URI with the `postgres.<project-ref>` user.
+- `database_dns_lookup_failed` / `database_network_unreachable`:
+  Use the project's IPv4-compatible session pooler, port 5432, rather than
+  the direct Supabase IPv6-only hostname where unsupported.
+- `database_dump_permission_denied`: Do not escalate to an unrelated
+  database superuser or skip tables silently. Review shared-project role
+  access and perform a separate planned export for restricted objects.
+- `encrypted_archive_verification_failed`: Keep source unchanged;
+  investigate source dump, encryption/TOC verification, and restore contract.
+- `pg_dump_failed_unclassified`: Operator must review the private source
+  connection or an isolated repro; do not echo unsanitized stderr to Actions.
+
+The classifications describe **failures**, not a successful backup or
+permission to switch Discloud. Pending/corrupt encrypted files are erased
+on failure; only an authenticated archive with verified TOC can be uploaded.
+The GitHub Actions workflow remains manual, read-only on Supabase, and has
+no connection to the live voice bot or existing Discloud database.
+
 ## Deployment sequence
 
 1. Confirm the real disk limit/backups for the existing Discloud DB and the
