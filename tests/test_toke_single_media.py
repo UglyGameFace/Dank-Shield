@@ -346,6 +346,40 @@ def test_bad_provider_responses_do_not_post_broken_card(
     assert calls and page.released
 
 
+def test_composer_rejects_discord_draft_cdn_when_no_upload_is_available(monkeypatch):
+    class Role:
+        def __init__(self, role_id):
+            self.id = role_id
+            self.mention = f"<@&{role_id}>"
+
+    guild = SimpleNamespace(
+        id=55378,
+        get_role=lambda rid: Role(rid),
+        get_channel=lambda _rid: _FakeChannel(),
+    )
+    draft = SimpleNamespace(guild_id=55378, destination_id=99981, note="")
+    media = SimpleNamespace(
+        content="", attachments=[],
+        embeds=[SimpleNamespace(
+            image=SimpleNamespace(url="https://cdn.discordapp.com/attachments/1/2/temp.gif?ex=123"),
+            video=None, thumbnail=None, url=None,
+        )],
+    )
+    async def cfg(_guild):
+        return {}
+    monkeypatch.setattr(toke.discord, "Member", _FakeMember)
+    monkeypatch.setattr(toke.discord, "Role", Role)
+    monkeypatch.setattr(toke.discord, "TextChannel", _FakeChannel)
+    monkeypatch.setattr(toke, "_config", cfg)
+    monkeypatch.setattr(toke, "toke_role_ids", lambda *_args: (776, 555))
+    monkeypatch.setattr(toke, "_member_has_role_id", lambda *_args: True)
+    with pytest.raises(ValueError, match="temporary media preview"):
+        asyncio.run(toke.publish_toke_from_draft(guild, _FakeMember(), draft, media))
+    assert toke._is_temporary_discord_media_url(
+        "https://images-ext-6.discordapp.net/external/a/b.gif"
+    )
+
+
 def test_no_suppress_embeds_flag_hides_interactive_toke_embed():
     # Discord's suppress_embeds flag also suppresses bot-authored custom
     # embeds. Do not use it as a workaround for duplicate GIF previews.
