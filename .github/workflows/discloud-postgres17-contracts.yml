@@ -10,6 +10,9 @@ on:
       - "stoney_verify/core_data_stage.py"
       - "stoney_verify/postgres_guild_config_repo.py"
       - "stoney_verify/postgres_guild_config_shadow.py"
+      - "stoney_verify/postgres_guild_config_parity.py"
+      - "tools/audit_dankshield_guild_config_parity.py"
+      - "tests/test_postgres_guild_config_parity.py"
       - "tests/test_core_data_stage.py"
       - "tests/test_postgres_guild_config_repo.py"
       - "tests/test_postgres_guild_config_pg17_integration.py"
@@ -20,6 +23,7 @@ on:
       - ".github/workflows/discloud-postgres17-contracts.yml"
       - "postgres/migrations/**"
       - "stoney_verify/postgres_guild_config_repo.py"
+      - "stoney_verify/postgres_guild_config_parity.py"
       - "tests/test_postgres_guild_config_pg17_integration.py"
   workflow_dispatch:
 
@@ -80,5 +84,6 @@ jobs:
           python -m pytest -q --tb=short \
             tests/test_core_data_stage.py \
             tests/test_postgres_guild_config_repo.py \
+            tests/test_postgres_guild_config_parity.py \
             tests/test_postgres_guild_config_pg17_integration.py \
             tests/test_postgres_data_lifecycle.py
