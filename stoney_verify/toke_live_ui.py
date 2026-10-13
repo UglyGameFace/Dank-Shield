@@ -613,7 +613,58 @@ class TokeCheersView(discord.ui.View):
 
     @discord.ui.button(label="End Sesh", emoji="🛑", style=discord.ButtonStyle.danger, custom_id="dank:toke:v2:end", row=1)
     async def end(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await self._respond(interaction, "end")
+        _ = button
+        if interaction.guild is None or interaction.message is None:
+            return await interaction.response.send_message("This sesh is no longer available.", ephemeral=True)
+        member = interaction.user
+        if member.id != self.starter_id and not getattr(member.guild_permissions, "manage_guild", False):
+            return await interaction.response.send_message(
+                "Only the starter or server managers can end this sesh.", ephemeral=True,
+            )
+        await interaction.response.send_message(
+            "End this sesh for everyone? Responses will close immediately.",
+            view=TokeEndConfirmView(self, member.id, interaction.message.id),
+            ephemeral=True,
+        )
+
+
+class TokeEndConfirmView(discord.ui.View):
+    """Owner-only confirmation, with authorization rechecked on submission."""
+
+    def __init__(self, source: TokeCheersView, actor_id: int, message_id: int) -> None:
+        super().__init__(timeout=60)
+        self.source = source
+        self.actor_id = int(actor_id)
+        self.message_id = int(message_id)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.actor_id:
+            await interaction.response.send_message("This is not your confirmation.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Yes, End Sesh", emoji="🛑", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.defer()
+        try:
+            await self.source._respond(
+                interaction, "end", session_message_id=self.message_id, already_deferred=True,
+            )
+        except (discord.HTTPException, OSError, ValueError) as exc:
+            await interaction.edit_original_response(
+                content=f"⚠️ Could not end the sesh: {type(exc).__name__}.", view=None,
+            )
+        else:
+            await interaction.edit_original_response(view=None)
+        finally:
+            self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        self.stop()
+        await interaction.response.edit_message(content="Sesh stays active.", view=None)
 
 
 async def save_toke_settings(guild_id: int, user_id: int, settings: Mapping[str, Any]) -> dict[str, Any]:
