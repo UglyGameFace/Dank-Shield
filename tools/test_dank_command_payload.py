@@ -8,6 +8,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from stoney_verify.command_surface_contract import (
+    PUBLIC_DANK_CHILDREN,
+    PUBLIC_GLOBAL_COMMAND_NAMES,
+    hidden_public_dank_children,
+)
 from stoney_verify.globals import bot
 import stoney_verify.commands  # noqa: F401
 from stoney_verify.commands_ext.public_command_hub import (
@@ -35,7 +40,16 @@ print(
 )
 if size > DANK_PAYLOAD_SAFETY_LIMIT:
     raise SystemExit(f"/dank payload is too large: {size}/{DANK_PAYLOAD_SAFETY_LIMIT}")
-if children != ["home", "purge", "setup", "upload"]:
-    raise SystemExit(f"unexpected final /dank children: {children}")
-if roots != ["captions", "cinema", "dank", "mod", "movie", "role", "ticket", "tickets", "toke", "verify"]:
-    raise SystemExit(f"unexpected compact-v2 global roots: {roots}")
+expected_children = sorted(PUBLIC_DANK_CHILDREN)
+if children != expected_children:
+    raise SystemExit(
+        f"unexpected final /dank children: expected={expected_children} actual={children}"
+    )
+hidden = hidden_public_dank_children(set(children))
+if hidden:
+    raise SystemExit(f"hidden /dank aliases leaked into the public surface: {hidden}")
+expected_roots = sorted(name for name in PUBLIC_GLOBAL_COMMAND_NAMES if name != "View Dank Profile")
+if roots != expected_roots:
+    raise SystemExit(
+        f"unexpected compact-v2 global roots: expected={expected_roots} actual={roots}"
+    )
