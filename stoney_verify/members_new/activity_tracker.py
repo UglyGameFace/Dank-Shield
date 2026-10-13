@@ -78,14 +78,14 @@ _DEFAULT_FLUSH_RPC_WORKERS = 8
 # (guild_id, user_id, activity_type) -> {"occurred_at", "channel_id", "count"}
 _ACTIVITY_BUFFER: dict[tuple[int, int, str], dict[str, Any]] = {}
 _FLUSH_TASK: Optional[asyncio.Task] = None
-# None = batch RPC not yet probed; True/False = cached probe result.
+# In-flight snapshot is immutable until PostgreSQL acknowledges its batch ID.
 _PENDING_BATCH: Optional[dict[str, Any]] = None
 _FLUSH_LOCK = asyncio.Lock()
 _ACTIVITY_SEQUENCE = 0
 _LOST_COVERAGE_GUILDS: set[int] = set()
 _ACKED_BATCH_IDS: list[str] = []
 # Consecutive DB-RPC failures across flush AND heartbeat paths. When this
-# reaches the threshold the breaker opens and ALL DB write attempts pause.
+# reaches the threshold, activity flush and heartbeat/scope writes pause.
 _CONSECUTIVE_DB_FAILURES = 0
 _BREAKER_OPEN_UNTIL = 0.0  # time.monotonic()
 # guild_id -> latest failure message awaiting its (single, per-cycle) report.
@@ -652,7 +652,13 @@ def _stage_event(
         existing["first_occurred_at"] = min(
             existing["first_occurred_at"], occurred_at
         )
+        # Refresh insertion recency in O(1) so oldest-drop really evicts
+        # the least recently staged key, not a frequently used older key.
+        _ACTIVITY_BUFFER.pop(key)
+        _ACTIVITY_BUFFER[key] = existing
         return
+    if existing is not None:
+        _ACTIVITY_BUFFER.pop(key)
     _ACTIVITY_BUFFER[key] = {
         "occurred_at": occurred_at,
         "first_occurred_at": min(existing["first_occurred_at"], occurred_at)
