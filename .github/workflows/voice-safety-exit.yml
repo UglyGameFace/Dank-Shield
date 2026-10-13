@@ -40,7 +40,7 @@ jobs:
           pip install -q pytest
       - name: Verify diff and syntax
         run: |
-          git diff --check "$(git merge-base origin/aaa-cinema-pre-pregateway-bind HEAD)"..HEAD
+          git diff --check "$(git merge-base origin/main HEAD)"..HEAD
           python -m py_compile stoney_verify/verification_new/basic_verify.py stoney_verify/verification_new/decline_exit.py stoney_verify/commands_ext/public_voice_safety.py stoney_verify/voice_safety_consent.py stoney_verify/voice_safety_membership_sync_runtime.py main.py
       - name: Run #517 focused regression
         run: python -m pytest -q --tb=short --disable-warnings tests/test_voice_safety_decline_exit.py tests/test_voice_safety_membership_sync.py tests/test_voice_safety_policy.py tests/test_basic_verify_native_restart_runtime.py

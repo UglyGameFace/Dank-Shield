@@ -2,7 +2,7 @@ name: Verification Reminder PostgreSQL
 
 on:
   pull_request:
-    branches: [aaa-cinema-pre-pregateway-bind]
+    branches: [main]
     paths:
       - ".github/workflows/verification-reminder-postgres.yml"
       - "postgres/migrations/202610110001_verify_unverified_reminders.sql"

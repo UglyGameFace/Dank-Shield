@@ -967,7 +967,6 @@ class ShareRouterDownloadSettingsView(_OwnedView):
         _ = button
         await open_share_router(interaction, replace_message=True)
 
-
 class ShareRouterView(_OwnedView):
     @discord.ui.button(label="Create Proxy", emoji="➕", style=discord.ButtonStyle.primary, row=2)
     async def create_proxy(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:

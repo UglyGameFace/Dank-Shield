@@ -1030,6 +1030,251 @@ async def delete_custom_share_source(guild: discord.Guild, source_id: int) -> No
                 _log(f"overflow category cleanup failed guild={guild.id} category={overflow_category.id}")
 
 
+async def guild_custom_share_sources(guild_id: int) -> list[int]:
+    """Explicit custom proxy IDs scoped to one guild, using the existing route file."""
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        bucket = data.get(str(int(guild_id))) or {}
+        raw = bucket.get("custom_sources", []) if isinstance(bucket, dict) else []
+        if not isinstance(raw, list):
+            return []
+        return list(dict.fromkeys(
+            source_id for item in raw if (source_id := _safe_int(item, 0)) > 0
+        ))
+
+
+def _guild_source_lock(guild_id: int) -> asyncio.Lock:
+    return _GUILD_SOURCE_LOCKS.setdefault(int(guild_id), asyncio.Lock())
+
+
+async def available_share_source_ids(guild: discord.Guild) -> set[int]:
+    """One authority for visible defaults, registered custom IDs and legacy routes."""
+    category = find_share_router_category(guild)
+    ids: set[int] = set(await guild_custom_share_sources(int(guild.id)))
+    if category is not None:
+        ids.update(
+            int(source.id) for name in DEFAULT_SHARE_CHANNELS
+            if (source := find_share_source_channel(category, name)) is not None
+        )
+    ids.update(
+        _safe_int(route.get("source_channel_id"), 0)
+        for route in await guild_routes(int(guild.id))
+    )
+    return {
+        source_id for source_id in ids
+        if isinstance(guild.get_channel(source_id), discord.TextChannel)
+    }
+
+
+async def save_managed_share_route(
+    guild: discord.Guild,
+    *,
+    source_channel_id: int,
+    target_channel_id: int,
+    created_by_id: int,
+) -> None:
+    """Revalidate selection under the same per-guild lock as proxy deletion."""
+    async with _guild_source_lock(int(guild.id)):
+        if int(source_channel_id) not in await available_share_source_ids(guild):
+            raise ValueError("The proxy source no longer exists or is no longer configured.")
+        await save_route(
+            int(guild.id),
+            source_channel_id=int(source_channel_id),
+            target_channel_id=int(target_channel_id),
+            delete_source=True,
+            created_by_id=int(created_by_id),
+        )
+
+
+async def prune_missing_custom_share_sources(guild: discord.Guild) -> int:
+    """Admin-triggered cleanup, using Discord's live channel listing as authority."""
+    async with _guild_source_lock(int(guild.id)):
+        # Never infer deletion solely from an incomplete gateway channel cache.
+        live_ids = {
+            int(channel.id) for channel in await guild.fetch_channels()
+        }
+        async with _DATA_LOCK:
+            data = _load_all_unlocked()
+            key = str(int(guild.id))
+            bucket = data.get(key)
+            if not isinstance(bucket, dict):
+                return 0
+            raw = bucket.get("custom_sources", [])
+            if not isinstance(raw, list):
+                return 0
+            stale = {
+                source_id for item in raw
+                if (source_id := _safe_int(item, 0)) > 0 and source_id not in live_ids
+            }
+            if not stale:
+                return 0
+            bucket["custom_sources"] = [
+                item for item in raw if _safe_int(item, 0) not in stale
+            ]
+            bucket["routes"] = [
+                route for route in bucket.get("routes", [])
+                if not (
+                    isinstance(route, dict)
+                    and _safe_int(route.get("source_channel_id"), 0) in stale
+                )
+            ]
+            data[key] = bucket
+            _save_all_unlocked(data)
+            return len(stale)
+
+
+async def create_custom_share_source(
+    guild: discord.Guild,
+    actor: discord.abc.User,
+    requested_name: str,
+) -> discord.TextChannel:
+    """Create a private, non-NSFW proxy and persist its identity within this guild."""
+    name = custom_share_source_name(requested_name)
+    async with _guild_source_lock(int(guild.id)):
+        hub = find_share_router_category(guild)
+        if hub is None:
+            raise ValueError("Run Create / Repair Hub before creating a custom proxy.")
+
+        managed = [
+            category for category in guild.categories
+            if is_share_router_managed_category_name(category.name)
+        ]
+        # Never reuse a name already present in a managed hub: duplicates make
+        # Android share-sheet selection ambiguous.
+        if any(
+            channel.name == name
+            for category in managed for channel in category.text_channels
+        ):
+            raise ValueError(f"#{name} already exists. Choose a different name.")
+
+        category = next(
+            (item for item in [hub, *[c for c in managed if c.id != hub.id]]
+             if len(item.channels) < _DISCORD_CATEGORY_CHANNEL_LIMIT),
+            None,
+        )
+        created_overflow_category = None
+        if category is None:
+            indices = {
+                int(key.split("-")[-1])
+                for item in managed
+                if (key := normalize_share_router_name(item.name)).rsplit("-", 1)[-1].isdigit()
+            }
+            index = next(n for n in range(2, 1000) if n not in indices)
+            category_name = f"🔗 SHARE ROUTES {index}"
+            overwrites = _permission_overwrite_map(guild, actor)
+            overwrites = await _add_configured_staff_overwrites(guild, overwrites)
+            category = await guild.create_category(
+                category_name, overwrites=overwrites,
+                reason="Dank Shield Share Router additional proxy hub",
+            )
+            created_overflow_category = category
+
+        overwrites = _permission_overwrite_map(guild, actor)
+        overwrites = await _add_configured_staff_overwrites(guild, overwrites)
+        try:
+            source = await guild.create_text_channel(
+                name, category=category, nsfw=False, overwrites=overwrites,
+                reason="Dank Shield custom Share Router proxy",
+            )
+        except Exception:
+            # Creating an overflow category must not leave an empty orphan when
+            # the channel API rejects a guild at its server-wide channel limit.
+            if created_overflow_category is not None:
+                try:
+                    await created_overflow_category.delete(reason="Share Router proxy creation failed")
+                except Exception:
+                    _log(f"overflow category cleanup failed guild={guild.id} category={category.id}")
+            raise
+        try:
+            async with _DATA_LOCK:
+                data = _load_all_unlocked()
+                key = str(int(guild.id))
+                bucket = data.get(key)
+                if not isinstance(bucket, dict):
+                    bucket = {}
+                sources = [
+                    _safe_int(value, 0)
+                    for value in bucket.get("custom_sources", [])
+                ]
+                bucket["custom_sources"] = [
+                    str(value) for value in dict.fromkeys([*sources, int(source.id)])
+                    if value > 0
+                ]
+                data[key] = bucket
+                _save_all_unlocked(data)
+        except Exception:
+            # An unregistered proxy would accept posts without routing them.
+            try:
+                await source.delete(reason="Share Router registration failed; rollback")
+            except Exception:
+                _log(f"CRITICAL: failed to rollback unregistered source guild={guild.id} source={source.id}")
+            if created_overflow_category is not None and not any(
+                int(getattr(child, "id", 0)) != int(source.id)
+                for child in created_overflow_category.channels
+            ):
+                try:
+                    await created_overflow_category.delete(reason="Share Router registration failed")
+                except Exception:
+                    _log(f"overflow category cleanup failed guild={guild.id} category={category.id}")
+            raise
+        return source
+
+
+async def delete_custom_share_source(guild: discord.Guild, source_id: int) -> None:
+    """Delete only an explicitly registered custom proxy, then its saved route."""
+    async with _guild_source_lock(int(guild.id)):
+        async with _DATA_LOCK:
+            data = _load_all_unlocked()
+            bucket = data.get(str(int(guild.id)))
+            sources = bucket.get("custom_sources", []) if isinstance(bucket, dict) else []
+            if not isinstance(sources, list) or int(source_id) not in {
+                _safe_int(value, 0) for value in sources
+            }:
+                raise ValueError("This is not a registered custom proxy in this server.")
+
+        source = guild.get_channel(int(source_id))
+        overflow_category = None
+        if source is not None:
+            if (
+                not isinstance(source, discord.TextChannel)
+                or source.category is None
+                or not is_share_router_managed_category_name(source.category.name)
+            ):
+                raise ValueError("Proxy was moved outside Share Routes; restore it before deleting.")
+            if not is_share_router_category_name(source.category.name):
+                overflow_category = source.category
+            await source.delete(reason="Dank Shield custom Share Router proxy removed")
+
+        async with _DATA_LOCK:
+            data = _load_all_unlocked()
+            key = str(int(guild.id))
+            bucket = data.get(key)
+            if not isinstance(bucket, dict):
+                return
+            bucket["custom_sources"] = [
+                value for value in bucket.get("custom_sources", [])
+                if _safe_int(value, 0) != int(source_id)
+            ]
+            bucket["routes"] = [
+                route for route in bucket.get("routes", [])
+                if not (
+                    isinstance(route, dict)
+                    and _safe_int(route.get("source_channel_id"), 0) == int(source_id)
+                )
+            ]
+            data[key] = bucket
+            _save_all_unlocked(data)
+
+        if overflow_category is not None and not any(
+            int(getattr(child, "id", 0)) != int(source_id)
+            for child in overflow_category.channels
+        ):
+            try:
+                await overflow_category.delete(reason="Dank Shield empty overflow proxy hub cleanup")
+            except Exception:
+                _log(f"overflow category cleanup failed guild={guild.id} category={overflow_category.id}")
+
+
 async def save_route(
     guild_id: int,
     *,

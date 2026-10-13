@@ -1,4 +1,20 @@
-# Active Task Lock — Voice Conduct Moderation #517 (FORCE SWITCH 2026-10-12)
+# Active Task Lock — Main/Production Reunification (2026-10-13)
+
+**Active task:** Safely reconcile `main` and `aaa-cinema-pre-pregateway-bind` into one real merge commit, with a draft PR targeting `main`. Do not deploy or switch Discloud yet.
+
+**Baseline:** `main@8e4bf66`; production branch `92f1a14` (including merged #534). Both are parents of the merge candidate. Preserve all production features and valid main changes without resets or force-pushes.
+
+**Findings:** The supplied patch's intended tree is byte-identical to production for 123 of 134 changed files. Eleven files need conflict resolution; verify changed content and CI on the exact candidate. Reconcile GitHub Actions branch filters/diff checks; use consistent PostgreSQL image sourcing.
+
+**Status:** Integration candidate only. Requires exact-head CI, diff/cleanup review, Discloud isolated canary, and live Discord/Cinema/Share Router/verification acceptance. Do not claim complete or redirect production until these pass.
+
+**Suspended task:** Voice Safety #517, including merged #534, remains suspended engineering work until branch reunification's full Definition of Done; #534 is explicitly incorporated in this candidate.
+
+**Next step:** Inspect exact-head GitHub checks, repair only failures inside this reconciliation scope, validate live behavior on an isolated instance, then coordinate a controlled main-branch production cutover with rollback to `584e655`.
+
+---
+
+# Suspended Task Record — Voice Conduct Moderation #517 (FORCE SWITCH 2026-10-12)
 
 **Active task:** Build a verified, privacy-conscious AI voice conduct moderation mode using one existing DAVE/SSRC caption receive pipeline. User force-switched from Share Router #390 to #517. This work remains active and has NOT met production Definition of Done.
 
@@ -19,6 +35,20 @@
 ---
 
 # Dank Shield Active Task
+
+## REUNIFICATION RECORD — MAIN/PROD BRANCH MERGE 20261013
+
+**Branch:** `reconcile/main-reunification-20261013` (based on `main@8e4bf66`), merging production `aaa-cinema-pre-pregateway-bind@584e655`. Goal: return Discloud production to `main` as the single authoritative branch. No reset, no force-push, no discarded work.
+
+**Pre-merge verification (all four historical regressions):** the mitigations that caused production to leave `main` were verified present and correct in `main` before merging — Discloud REST recovery budgets (`discord_api_safety.py`, 40 req/30s + 120s quiet window), pre-gateway `:8080` site bind in `setup_hook` (PR #468), lazy libtorrent init with side-effect-free route registration (PRs #471/#472), and the composite interaction-timeout mitigations (`chunk_guilds_at_startup=False`, global-sync budgets, event-loop lag watchdog). The 9 safety-critical startup/lifecycle files were byte-identical or purely additive on the prod side; zero conflicting logic.
+
+**Main-side work integrated (103 commits):** ticketing public-panel privacy (#527); Toke per-guild live sesh + GIF composer (#503 — note: prod had already absorbed #503 via `01955af` and evolved it, prod side taken everywhere); Share Router custom proxy sources (#502), dynamic upload caps (#497), TikTok shortlinks (#494), forwarding isolation (#493); Cinema playback HTML handling (#486), episode search year fallback (#485), Nyaa RSS size validation (#484).
+
+**Conflict resolution (15 files):** Toke (`toke_live_ui.py`, `toke_sessions.py`, `public_toke.py` + tests + workflow), Share Router (`share_router_runtime.py`, `public_share_router.py` + tests), Cinema (`cinema_site.py`, `cinema_site.js` + tests). Every resolution keeps both sides' features; prod side taken where it was a strict superset of main's. Full per-file resolution notes live in the merge commit message.
+
+**Rollback point:** production `584e655`, main `8e4bf66`. The reconciled branch must pass exact-head CI and a controlled Discloud canary before production switches branches. Do not declare the migration complete on merge alone.
+
+---
 
 ## CURRENT SCALING SLICE — SHARE-ROUTER-390-DURABLE-FAIR-DOWNLOAD-QUEUE-20261012
 
@@ -566,6 +596,45 @@ No codec transcode changes, permissions, torrent, host/viewer, source/ranking, s
 
 ---
 
+
+## HISTORICAL CHECKPOINT — DANK-CINEMA-PROVIDER-COMPAT-20261008
+
+**Outcome:** Validate the existing Nyaa/structured-provider pipeline without duplicate adapters and repair demonstrated episode-query incompatibility, while preserving canonical media identity and all existing playback/Discord behavior.
+
+**Active continuation branch:** `fix/cinema-episode-search-year-fallback-20261009` (from `main@a6aa8d4b02e0720f50a8b80fc232136b5b522960`).
+
+**Status:** PR #484 (Nyaa RSS size parsing) merged to main; its PR-head workflows passed. Production deployment of that size change is not verified. User screenshot confirms live Nyaa and ThePirateBay results for a Bleach movie, not universal TV episode availability. This branch adds a single episode-query fallback plus three regression tests. Exact-head CI and Discloud/browser acceptance are pending.
+
+### Scope / execution path / root cause
+
+- Existing Admin Add Search Provider → `prepare_example_search_url` → guild config registry → `search_movie_sources` → safe provider HTTP/RSS/JSON resolver → `search_exact_episode_sources` → `filter_outcome_for_catalog` → canonical room playback.
+- Nyaa RSS reports human-readable sizes (e.g. `1.1 GiB`); the shared parser now normalizes them following PR #484 without a Nyaa-only duplicate parser.
+- For TV episodes, `episode_search_query` adds the series premiere year, while `episode_release_matches` already allows correctly identified episodes whose release names omit that year. Search providers and RSS title matching can therefore return zero before the canonical matcher sees otherwise-valid candidates.
+- A year-free retry is attempted only after the year-qualified exact search yields no accepted releases, and only when a premiere year exists. The canonical series/season/episode/adult filter is retained. No change to movie search, direct playback, provider credentials, torrent speed, streaming runtime, or storage.
+
+### Changes / validation
+
+- `stoney_verify/cinema_playback_service.py`: bounded yearless episode-provider retry; do not mask an original no-source result if the optional second request raises.
+- `tests/test_cinema_full_platform.py`: coverage for recovery of yearless SxxExx, avoiding a second request on a successful first query, and rejecting a wrong episode after a broader search.
+- Current branch vs main: exactly these two runtime/test files plus this active task record. No automatic Discloud deployment.
+- Static execution path reviewed; CI tests, full suite, cross-browser live playback, network reachability and Discloud exact-head acceptance still pending.
+
+### Cleanup / conflicts / limitations
+
+- No competing source resolver, new provider type, alternative session model, database migration, startup change or auth workaround.
+- This addresses a deterministic query inconsistency; it does not prove why every title reported unavailable in production. Pending live logs could reveal additional provider failures.
+- Name/year ambiguity for identically named series, anime numbering conventions, native-script release titles, artwork gaps, and mobile size/codec ranking require separate carefully scoped work after this active task finishes.
+- Do not merge into the existing Discloud Auto Deploy branch until reviewed and tested. Do not reset configured sources.
+
+### Suspended work / backlog
+
+- Prior Cinema task: misleading resumed/ready state at low torrent completion and unexpectedly low actual download throughput despite seeds. Preserve its checkpoint; resume only after this task reaches its Definition of Done or authorized FORCE SWITCH.
+- Anime metadata/poster source matching (TMDB + identity-verified anime catalog), bounded cached artwork, feed placeholder handling, and mobile-aware automatic source ranking remain backlog, not mixed into this patch.
+- Other provider formats surveyed: AniRena/Tokyo Toshokan RSS; Torznab (Jackett/Prowlarr); YTS, EZTV IMDb lookup, APIBay; external/private indexers requiring auth or non-structured HTML are not assumed compatible.
+
+**Next step:** Open draft PR, run exact-head CI and inspect the final diff. After successful validation, arrange controlled promotion to the existing Discloud branch, then test an authorized exact TV episode and verify both first-frame playback and the live no-source diagnostics.
+
+---
 
 ## HISTORICAL CHECKPOINT — DANK-SHIELD-GLOBAL-INTERACTION-OUTAGE
 

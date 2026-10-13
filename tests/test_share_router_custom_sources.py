@@ -497,6 +497,7 @@ def test_failure_paths_preserve_proxy_messages_and_report_rejection():
     assert "await _route_rejection_log(" in section
     assert "Your original post was kept" in runtime
 
+
 def test_repair_post_defer_render_failure_reports_explicit_error():
     """Guard against the user's infinite 'Dank Shield is thinking' UI."""
     source = (

@@ -2485,6 +2485,14 @@ async def cinema_play_api(request: web.Request) -> web.Response:
     requested_room_id = str(payload.get("room_id") or "").strip()
     requested_source_choice = str(payload.get("source_choice") or "").strip()[:64]
     media_type = str(payload.get("media_type") or "").strip().lower()
+    # A browser can receive an HTML response from a proxy before this handler
+    # ever runs. This low-cardinality ingress marker distinguishes that case
+    # from a source-search or torrent-start failure inside Cinema itself.
+    print(
+        "🎞️ cinema_site play ingress "
+        f"guild={int(guild_id)} user={int(user_id)} media={media_type} "
+        f"room={'existing' if requested_room_id else 'standalone'}"
+    )
     manager = get_movie_night_manager()
 
     room = None
@@ -2722,6 +2730,11 @@ async def cinema_play_api(request: web.Request) -> web.Response:
                 guild_id=int(guild_id),
             )
     except Exception as exc:
+        print(
+            "⚠️ cinema_site playback start failed "
+            f"guild={int(guild_id)} user={int(user_id)} media={media_type} "
+            f"error_type={type(exc).__name__}"
+        )
         raise web.HTTPBadGateway(
             text="Cinema could not start a compatible source. Try a manual release or search again."
         ) from exc
