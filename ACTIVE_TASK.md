@@ -1,5 +1,20 @@
 # Active Task Lock — DankShield-DB critical-data staging phase 1 (2026-10-13)
 
+**Non-negotiable architecture instruction from owner (2026-10-13): NO MONKEY PATCHES.**
+Implement the Discloud PostgreSQL transition and ongoing optimization as real,
+reviewable source changes with explicit interfaces, a stable repository/storage
+abstraction, schema-versioned migrations and integration tests. Do not modify
+third-party library classes, functions, module globals or bot runtime methods
+through monkey-patching; do not add hidden interceptors, copy-pasted fallback
+paths or startup-time SQL repairs. Test-only mocking through pytest fixtures is
+permitted and does not authorize runtime monkey-patching. Preserve all voice
+bot and Dank Shield data, require verified rollback, and distinguish safe
+automatic housekeeping (autovacuum, bounded retries, health checks, idempotent
+recovery, approved retention jobs) from destructive/locking operations
+(VACUUM FULL, REINDEX, unknown corruption repair, deleting audit records).
+Never claim the database automatically repairs corruption or cannot fill.
+Enforce this rule in PR reviews and tests before any production redeploy.
+
 **Active task:** Build a bounded and verifiable, explicit-only first transfer from
 the shared source Supabase project into the owner's existing private Discloud
 PostgreSQL 17 `DankShield-DB`. No second database, no concurrent production bot
