@@ -33,11 +33,14 @@ from stoney_verify.share_router_media_remux import remux_media_for_discord
 from stoney_verify.share_router_media_titles import (
     title_from_embeds,
     title_from_filename,
+    title_from_matching_attachment,
+    title_from_media_url,
     title_prefix,
 )
 from stoney_verify.share_router_media_resolver import (
     canonicalize_media_url,
     media_url_identity,
+    provider_for_url,
     provider_label,
     resolve_first_media,
     select_media_resolution,
@@ -540,6 +543,8 @@ async def _prepare_native_video(
         if routed is not None:
             source = next(iter(URL_RE.findall(getattr(message, "content", "") or "")), candidate)
             title = (title_from_embeds(message, source)
+                     or title_from_matching_attachment(message, candidate)
+                     or (title_from_media_url(source) if provider_for_url(source) == "direct" else "")
                      or title_from_filename(getattr(routed.file, "filename", "")))
             return _video_with_title(routed, title)
 
@@ -563,6 +568,7 @@ async def _prepare_native_video(
             )
             title = (resolution.title
                      or title_from_embeds(message, resolution.canonical_url)
+                     or (title_from_media_url(resolution.source_url) if resolution.provider == "direct" else "")
                      or title_from_filename(getattr(routed.file, "filename", "")))
             return _video_with_title(routed, title)
         _log(
@@ -598,6 +604,7 @@ async def _prepare_native_video(
                     size_bytes=staged.size_bytes,
                     cleanup_path=staged.path,
                     title=(resolution.title or title_from_embeds(message, resolution.canonical_url)
+                           or (title_from_media_url(resolution.source_url) if resolution.provider == "direct" else "")
                            or title_from_filename(staged.filename)),
                 )
 
