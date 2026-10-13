@@ -17,8 +17,9 @@ merge it**: Discloud's Auto Deploy makes a production-branch merge consequential
 non-blocking SpamGuard warmup, paced metrics and enabled-only ticket sweeps
 with per-guild locks. Backport heartbeat concurrency to the *legacy* per-event
 activity tracker, preserving `record_member_activity`; first failed heartbeat
-temporarily stops the fleet's DB writes, fails all guilds closed, and after
-cooldown requires a durable new proof window per guild. Preserve legacy
+temporarily stops subsequent **heartbeat** RPCs, fails all guilds closed,
+and after cooldown requires a durable new proof window per guild. This is
+not a breaker for independent per-message activity DB writes. Preserve legacy
 startup history reconciliation and public permissions behavior.
 
 **Validation and canary:** Run exact-head GitHub CI and backport-specific
