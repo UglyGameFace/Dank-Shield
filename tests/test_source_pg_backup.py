@@ -86,7 +86,7 @@ def test_unknown_version_truncated_and_oversized_rejected(tmp_path):
     archive.write_bytes(b"x" * 120)
     with pytest.raises(RuntimeError, match="unknown"):
         b"".join(backup._iter_verified_plaintext(archive, PASSPHRASE))
-    with pytest.raises(RuntimeError, match="size limit"):
+    with pytest.raises(RuntimeError, match="safety ceiling"):
         backup.encrypt_stream_to_file(
             BytesIO(b"PGDMP" + b"x" * 99), BytesIO(),
             PASSPHRASE, max_archive_bytes=80,
