@@ -19,6 +19,8 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import math
+import os
+import time
 from typing import Any, Mapping, Optional
 import uuid
 
@@ -26,6 +28,7 @@ import discord
 
 from stoney_verify.globals import get_supabase
 from stoney_verify.startup_recovery_coordinator import startup_recovery_slot
+from stoney_verify.guild_sweep import run_bounded_guild_sweep
 from stoney_verify.members_new.activity_reconciliation import (
     audit_guild_activity_scope,
     max_reconcile_gap_seconds,
@@ -55,6 +58,46 @@ _STARTUP_RECONCILE_LOCK = asyncio.Lock()
 _STARTUP_RECOVERY_HEARTBEATS: dict[int, datetime] = {}
 _LOCAL_ERRORS: dict[int, str] = {}
 _LOCAL_SCOPE_ERRORS: dict[int, str] = {}
+
+# Production-branch heartbeat protection. Keep this independent of the
+# unrelated member-activity batch RPC migration in PR #540.
+_HEARTBEAT_BREAKER_UNTIL = 0.0
+_HEARTBEAT_UNVERIFIED_GUILDS: set[int] = set()
+_HEARTBEAT_CURRENT_GUILDS: set[int] = set()
+
+
+def _heartbeat_breaker_open() -> bool:
+    return time.monotonic() < _HEARTBEAT_BREAKER_UNTIL
+
+
+def _heartbeat_concurrency() -> int:
+    try:
+        value = int(os.getenv("DANK_HEARTBEAT_GUILD_CONCURRENCY", "8"))
+    except (TypeError, ValueError):
+        value = 8
+    return max(1, min(value, 20))
+
+
+def _heartbeat_mark_outage(guild_id: int, error: Exception) -> None:
+    global _HEARTBEAT_BREAKER_UNTIL
+    # In a shared database outage all guild proofs become uncertain, even
+    # guilds not yet visited in this sweep. Keep them fail-closed until
+    # each has a new durably persisted continuous-coverage window.
+    first_outage = not _heartbeat_breaker_open()
+    _HEARTBEAT_UNVERIFIED_GUILDS.update(_HEARTBEAT_CURRENT_GUILDS)
+    _HEARTBEAT_UNVERIFIED_GUILDS.add(int(guild_id))
+    _HEARTBEAT_BREAKER_UNTIL = max(
+        _HEARTBEAT_BREAKER_UNTIL,
+        time.monotonic() + 120.0,
+    )
+    _LOCAL_ERRORS[int(guild_id)] = (
+        f"heartbeat DB failure: {type(error).__name__}: {str(error)[:240]}"
+    )
+    if first_outage:
+        print(
+            "⛔ activity heartbeat DB breaker opened; "
+            f"guilds_fail_closed={len(_HEARTBEAT_UNVERIFIED_GUILDS)}"
+        )
 
 
 @dataclass(frozen=True)
@@ -111,6 +154,11 @@ def _combined_local_error(guild_id: int) -> str:
         str(_LOCAL_ERRORS.get(gid, "") or "").strip(),
         str(_LOCAL_SCOPE_ERRORS.get(gid, "") or "").strip(),
     ]
+    if _heartbeat_breaker_open() or gid in _HEARTBEAT_UNVERIFIED_GUILDS:
+        parts.append(
+            "Heartbeat database coverage unverified after a failed cycle; "
+            "inactivity actions remain review-only until a durable reset."
+        )
     return " | ".join(part for part in parts if part)
 
 
@@ -896,47 +944,79 @@ def _schedule_guild_tracking(
     return task
 
 
-async def _heartbeat_loop(
-    bot: discord.Client,
-) -> None:
-    while not bot.is_closed():
-        await asyncio.sleep(
-            _HEARTBEAT_INTERVAL_SECONDS
+async def _heartbeat_one_guild(guild: discord.Guild) -> bool:
+    gid = int(guild.id)
+    pending = _STARTUP_TASKS.get(gid)
+    if pending is not None and not pending.done():
+        return True
+    if gid not in _STARTED_GUILDS:
+        _schedule_guild_tracking(guild, delay_seconds=0)
+        return True
+    if _heartbeat_breaker_open():
+        return False
+
+    try:
+        await _refresh_scope_status(guild)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # Local scope failures cannot authorize inactivity cleanup.
+        _HEARTBEAT_UNVERIFIED_GUILDS.add(gid)
+        _LOCAL_ERRORS[gid] = (
+            f"heartbeat scope failed: {type(exc).__name__}: {str(exc)[:250]}"
         )
+        return False
 
-        for guild in list(
-            getattr(bot, "guilds", []) or []
-        ):
-            gid = int(guild.id)
-            pending = _STARTUP_TASKS.get(gid)
+    if _heartbeat_breaker_open():
+        return False
+    try:
+        if gid in _HEARTBEAT_UNVERIFIED_GUILDS:
+            # A recovered RPC is not enough to restore an interrupted proof
+            # window. Restart continuous_since explicitly before clearing
+            # the fail-closed marker for this guild.
+            await asyncio.to_thread(_start_tracker_sync, gid)
+            _HEARTBEAT_UNVERIFIED_GUILDS.discard(gid)
+        else:
+            await asyncio.to_thread(_heartbeat_sync, gid)
+        _LOCAL_ERRORS.pop(gid, None)
+        return True
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _heartbeat_mark_outage(gid, exc)
+        return False
 
-            if (
-                pending is not None
-                and not pending.done()
-            ):
-                continue
 
-            if gid not in _STARTED_GUILDS:
-                _schedule_guild_tracking(
-                    guild,
-                    delay_seconds=0,
-                )
-                continue
-
-            await _refresh_scope_status(guild)
-
-            try:
-                await asyncio.to_thread(
-                    _heartbeat_sync,
-                    gid,
-                )
-                _LOCAL_ERRORS.pop(gid, None)
-            except Exception as exc:
-                await _mark_failure(
-                    gid,
-                    "heartbeat failed: "
-                    f"{type(exc).__name__}: {str(exc)[:350]}",
-                )
+async def _heartbeat_loop(bot: discord.Client) -> None:
+    await asyncio.sleep(_HEARTBEAT_INTERVAL_SECONDS)
+    while not bot.is_closed():
+        guilds = list(getattr(bot, "guilds", []) or [])
+        _HEARTBEAT_CURRENT_GUILDS.clear()
+        _HEARTBEAT_CURRENT_GUILDS.update(int(g.id) for g in guilds)
+        _HEARTBEAT_UNVERIFIED_GUILDS.intersection_update(
+            _HEARTBEAT_CURRENT_GUILDS
+        )
+        result = await run_bounded_guild_sweep(
+            guilds,
+            _heartbeat_one_guild,
+            concurrency=_heartbeat_concurrency(),
+            on_error=lambda guild, exc: print(
+                "⚠️ activity heartbeat unexpected guild exception "
+                f"guild={getattr(guild, 'id', '?')} error={type(exc).__name__}"
+            ),
+        )
+        print(
+            "📡 activity heartbeat cycle "
+            f"guilds={result.total} ok={result.succeeded} "
+            f"failed_or_breaker={result.failed} "
+            f"unverified={len(_HEARTBEAT_UNVERIFIED_GUILDS)} "
+            f"concurrency={result.concurrency} elapsed_s={result.seconds:.2f} "
+            f"target_s={_HEARTBEAT_INTERVAL_SECONDS} "
+            f"overrun={result.seconds > _HEARTBEAT_INTERVAL_SECONDS}"
+        )
+        await asyncio.sleep(
+            max(5.0, _HEARTBEAT_INTERVAL_SECONDS - result.seconds)
+        )
 
 
 async def _on_ready(
