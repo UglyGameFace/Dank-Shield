@@ -6,10 +6,12 @@ new Discord command-sync owner.
 
 ## Preflight (no production flip until these are satisfied)
 
-1. Verify the **separate** member-activity batching migration from merged PR
-   #540 on the Dank Shield Supabase project. A merged Python change does not
-   guarantee a deployed SQL function. Activity write failures must remain
-   fail-closed; do not use the unrelated Supabase project.
+1. This production-targeted PR deliberately retains the legacy per-event
+   `record_member_activity` function and does not import PR #540's batch RPC.
+   **No new Supabase migration is required for this specific PR.** Avoid
+   merging all of `main` here until PR #540's database functions are verified
+   on the actual Dank Shield Supabase project. Existing fail-closed activity
+   behavior and startup recovery remain mandatory.
 2. Check exact-head CI on the sharding PR, and verify the four new workers
    are observable by log: `activity heartbeat cycle`, `metrics sync cycle`,
    `ticket automation cycle`, `startup settings guilds_total`.
@@ -77,5 +79,8 @@ inspect the saved logs. Keep member inactivity actions fail-closed until
 durable history/reconciliation is verified. Do not silently increase
 concurrency or reset Supabase state to hide a failing canary.
 
-No canary has been executed by this PR. Live Discloud access and production
-Supabase migration acceptance must be supplied by the operator.
+No canary has been executed by this PR. The production-named GitHub
+branch includes server-specific `/toke` commits not present in `main`;
+this PR preserves them. Actual Discloud rebuilding and RAM/gateway measurements
+require the operator. PR #540 database migration acceptance is a separate,
+suspended work item, not a prerequisite to this legacy-DB backport.
