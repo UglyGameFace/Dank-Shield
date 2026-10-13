@@ -1,7 +1,10 @@
 """Voluntary Voice Safety decline, ten-second exit grace, and safe cancellation.
 
-Only an explicitly clicked Decline & Exit control can begin removal. Revocation
-precedes role changes. The original member can accept again within ten seconds.
+Voice Safety is a membership rule: agreement is required to be in the server,
+and leaving the server is the opt-out. Only an explicitly clicked Decline &
+Exit control can begin removal. Revocation precedes role changes. The original
+member can accept again within ten seconds. A native Leave Server also
+withdraws the agreement through the membership sync runtime.
 """
 from __future__ import annotations
 
@@ -69,6 +72,8 @@ async def _kick_later(entry: PendingExit) -> None:
                 await member.kick(
                     reason="Member declined Voice Safety policy; ten-second grace expired"
                 )
+                # The on_member_remove membership-sync listener withdraws the
+                # agreement record, completing the leave-is-opt-out path.
             except discord.NotFound:
                 pass  # Already left the server.
             except (discord.Forbidden, discord.HTTPException) as exc:
