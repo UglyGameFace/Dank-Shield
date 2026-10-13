@@ -170,13 +170,26 @@ def test_existing_note_can_be_reused_without_persisting_it(storage):
     message = SimpleNamespace(components=[
         SimpleNamespace(children=[SimpleNamespace(children=[SimpleNamespace(content=intro)])])
     ])
-    assert live._thumbnail_intro(message, _session()) == intro
+    assert live._media_intro(message, _session()) == intro
     async def run():
         await toke_sessions.save_new({**_session(), "media_layout": "thumbnail_v2", "media_filename": "sesh.gif"})
     asyncio.run(run())
     saved = toke_sessions.SESSIONS_FILE.read_text()
     assert "Original note" not in saved
     assert "sesh.gif" in saved
+
+
+def test_inaccessible_vc_reports_unknown_instead_of_false_zero():
+    session = {
+        **_session(), "active": True, "cheers_ids": [45], "going_ids": [45],
+    }
+    guild = SimpleNamespace(get_channel=lambda _cid: None)
+    card = live.render_card(guild, session, discord.Embed(title="Toke Time"))
+    assert "In VC: Unavailable" in card.fields[0].value
+    assert "VC unavailable" in card.fields[0].value
+    session["voice_channel_id"] = 0
+    no_voice = live.render_card(guild, session, discord.Embed(title="Toke Time"))
+    assert "In VC: Not selected" in no_voice.fields[0].value
 
 
 def test_voice_unavailable_does_not_make_uncertain_rsvps_disappear(storage):
