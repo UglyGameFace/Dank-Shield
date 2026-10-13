@@ -109,6 +109,98 @@ quota category is unverified. Do not guess it was database disk usage.
   Protect required writes by reclaiming only previously authorized ephemeral
   records; preserve evidence and fail closed when DB is unavailable.
 
+## Phase 1 implementation: isolated, strictly bounded source staging
+
+The one-shot `tools/stage_dankshield_core_data.py` command is now available
+in the current implementation candidate. It is **NOT** a replacement for the
+Supabase live repositories, a complete source backup or an automatic migration.
+
+- Whitelist: 16 primary-keyed tables for live guild config, security
+  settings, role rules, member activity state, ticket setup and ticket history,
+  and community hub settings. Ambiguous `users`, `world`, old `/toke`
+  sessions, all unrestricted event history, and voice-bot data are excluded.
+- Default mode is source **dry-run only**, with at most 100 rows per REST
+  page and a total 12 MiB source payload budget. It prints counts and
+  SHA-256 digests, **not** source rows, secrets, or connection strings.
+  It aborts on missing/duplicate keys, changed source data, bad source
+  responses, size overruns or unexpected source project identity.
+- The `--apply` mode is **explicit only**. It requires a known Supabase
+  project reference, a confirmed private destination database name, and
+  the **real Discloud disk storage allowance**. If storage budget is unknown,
+  the transfer refuses to write. The current 512 MB RAM figure is not a disk
+  allowance and must never be entered as such.
+- PostgreSQL staging is in `dank_migration.staged_records`, not `public`
+  or any voice-bot schema. Its migration is
+  `postgres/migrations/202610130002_core_staging.sql` and must be
+  explicitly applied by an approved private-network deployment command.
+  No startup schema repair or automatic cleanup has been introduced.
+- Every record is keyed by a hash of the source PK and has a canonical JSON
+  payload hash. Conflicting old copies are rejected instead of overwritten.
+  The stage transaction validates counts/hashes, rescans the source for drift,
+  and rolls back on any discrepancy. This guards against common transfer
+  mistakes, but paginated HTTP reads **cannot** guarantee a single
+  repeatable-read Supabase snapshot while live writes continue.
+- Before `--apply`, the tool checks allocated PostgreSQL bytes and reserves
+  four times its estimated payload against a 70%-of-confirmed-disk threshold.
+  It never assumes that `pg_database_size()` reports host free disk space.
+  If the DB plan's disk allowance is unknown, leave staging unexecuted.
+
+Private operator sequence, when Discloud can execute migration commands in
+its VLAN (no passwords in GitHub, chat, screenshots, command history or logs):
+
+```text
+# Supabase bot environment already provides SUPABASE_URL and service-role key.
+# Set DANK_MIGRATION_SOURCE_REF to the confirmed project's hostname prefix.
+# Set DANK_MIGRATION_EXPECTED_DB to the existing Discloud DB's name.
+# Set DANK_PG_STORAGE_BUDGET_MB to the VERIFIED disk storage allowance.
+# Reuse the private PostgreSQL connection via DANK_CORE_POSTGRES_DATABASE_URL,
+# or the already-established DANK_VERIFY_REMINDER_DATABASE_URL.
+
+python -m tools.stage_dankshield_core_data
+# Review only row counts and digest summary; dry-run changes nothing.
+
+# After a full source backup, CI, DB privilege checks, and the storage preflight:
+# psql -v ON_ERROR_STOP=1 -f postgres/migrations/202610130002_core_staging.sql
+# python -m tools.stage_dankshield_core_data --apply
+```
+
+**There is no supported remote execution path into the Discloud private VLAN
+in this chat.** The commands are staged for an authorized private runtime, not
+claimed as executed. The PostgreSQL 17 integration check must pass against an
+isolated test instance before touching `DankShield-DB`. This phase does not
+create a finalized backup or switch the live bot to PostgreSQL.
+
+## Non-negotiable: no monkey patches or hidden repair shortcuts
+
+The owner explicitly requires a maintainable architecture, **not monkey
+patches**. The production implementation must use a typed, intentionally
+selected data-access interface and explicit PostgreSQL repositories with
+versioned SQL migrations. Do not modify imported Supabase/discord.py/psycopg
+functions or module globals at runtime, replace methods behind callers'
+backs, wrap errors in a way that conceals failed writes, or create competing
+fallback persistence paths. Mocking via fixtures in tests is not production
+monkey-patching.
+
+All source and destination changes must be reviewable as normal commits,
+tested against isolated PostgreSQL 17 and source-contract fixtures, and
+validated for ticket/voice-bot isolation, idempotency, restart recovery,
+counts, read/write parity, and rollback. Migration schema is **never**
+auto-repaired or upgraded on bot startup.
+
+Self-maintenance must distinguish:
+- PostgreSQL native autovacuum/analyze and approved bounded cleanup of
+  genuinely temporary data;
+- bounded connection recovery and backpressure, health checks, disk usage,
+  safe index/statistics diagnostics, and independently tested backup restore;
+- anything destructive or potentially locking, such as `VACUUM FULL`,
+  `REINDEX`, orphan deletion, role/schema rewrites, or restoring corrupted
+  rows, **requires explicit controlled maintenance and verified backups**.
+
+Storage alerts and safety caps must never silently drop server configuration,
+tickets, moderation/security history or consent/activity evidence. Database
+corruption cannot be declared automatically repaired without verification.
+An undersized disk is not fixed by deleting valuable evidence.
+
 ## Deployment sequence
 
 1. Confirm the real disk limit/backups for the existing Discloud DB and the

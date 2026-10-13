@@ -1,3 +1,65 @@
+# Active Task Lock — DankShield-DB critical-data staging phase 1 (2026-10-13)
+
+**Non-negotiable architecture instruction from owner (2026-10-13): NO MONKEY PATCHES.**
+Implement the Discloud PostgreSQL transition and ongoing optimization as real,
+reviewable source changes with explicit interfaces, a stable repository/storage
+abstraction, schema-versioned migrations and integration tests. Do not modify
+third-party library classes, functions, module globals or bot runtime methods
+through monkey-patching; do not add hidden interceptors, copy-pasted fallback
+paths or startup-time SQL repairs. Test-only mocking through pytest fixtures is
+permitted and does not authorize runtime monkey-patching. Preserve all voice
+bot and Dank Shield data, require verified rollback, and distinguish safe
+automatic housekeeping (autovacuum, bounded retries, health checks, idempotent
+recovery, approved retention jobs) from destructive/locking operations
+(VACUUM FULL, REINDEX, unknown corruption repair, deleting audit records).
+Never claim the database automatically repairs corruption or cannot fill.
+Enforce this rule in PR reviews and tests before any production redeploy.
+
+**Active task:** Build a bounded and verifiable, explicit-only first transfer from
+the shared source Supabase project into the owner's existing private Discloud
+PostgreSQL 17 `DankShield-DB`. No second database, no concurrent production bot
+instance, no rewrites of voice-bot tables, no deletion, and no switchover yet.
+
+**Base:** merged PR #546 added capacity auditing, with all GitHub checks green.
+`main` remains at `e74fb818ecaf08cf901b48b6257f2d9a677f92f2`
+at task start. PR #545 had previously reconciled production-only /toke history.
+
+**Phase-1 implementation:** An isolated `dank_migration.staged_records`
+PostgreSQL schema, the explicit `tools/stage_dankshield_core_data.py` operator
+command and `stoney_verify/core_data_stage.py`, an audited whitelist of
+16 core tables with verified PKs, bounded source REST pagination (100 rows
+per page by default), default 12 MiB / hard 32 MiB source staging budget,
+per-row and table SHA256, idempotency, source re-read and PostgreSQL parity
+checks in an atomic transaction, and 70%-of-verified-disk budget guard with
+4x overhead allowance. No apply action runs on import, bot startup or CI.
+The tool keeps the original `record_member_activity` or Supabase repositories
+untouched; stage records are **not** live records or a complete source backup.
+
+**Validation:** Python dry-run and isolated Postgres 17 regression tests are
+authored. A dedicated PostgreSQL 17 Actions workflow could not be created
+through the available GitHub integration; therefore regular CI alone cannot
+validate the SQL integration. The `RUN_CORE_PG_INTEGRATION` test remains
+skipped in ordinary CI and must pass in an isolated PG17 environment before
+any live staging. No Discloud private-VLAN connection or DB writes have been
+attempted.
+
+**Release blockers:** Actual Discloud disk allowance unknown (512 MiB in
+screenshot is RAM); source immutable/full backup and restore test not yet
+performed; 16-table stage does not cover all sensitive/legacy/Cinema data;
+Supabase REST paging is not an atomic source snapshot; PostgreSQL runtime
+repositories and precise concurrency/SQL-RPC parity not implemented.
+The code in `main` must not be redeployed until the *full* supported core
+migration and live health/canary checks pass.
+
+**Next:** Run exact-head CI and PG17 integration; confirm disk allowance and
+private-runner availability; create encrypted/recoverable source backup, then
+stage first tranche and verify hashes under an approved deployment action.
+Subsequent slices must port runtime repositories, ticket and moderation
+policies, counters, activity fail-closed, community, Cinema and historical
+archives before any `main` cutover.
+
+---
+
 # Active Task Lock — Existing Discloud PostgreSQL migration and capacity safety (2026-10-13)
 
 **Active outcome:** Reuse already-provisioned `DankShield-DB` on the same Discloud

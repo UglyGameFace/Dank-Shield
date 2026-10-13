@@ -24,6 +24,32 @@
       "retention_class": "operational_control",
       "historical_reuse": "Enforce this member's per-join reminder cap after restarts; never infer hostile behavior from an incomplete verification alone",
       "review_interval_days": 180
+    },
+    "dank_migration.staged_records": {
+      "feature": "One-shot verified Supabase-to-Discloud transfer staging; not live bot data",
+      "owner": "tools.stage_dankshield_core_data; explicitly invoked private deployment operator",
+      "purpose": "Temporarily hold copied critical Dank Shield configuration, access and ticket records while PG17 repository parity and cutover are verified",
+      "stored_fields": [
+        "source_table",
+        "record_key",
+        "source_pk",
+        "guild_id",
+        "row_payload",
+        "payload_sha256",
+        "payload_bytes",
+        "copied_at"
+      ],
+      "contains_message_content": true,
+      "retention_rule": "No automatic expiry or deletion. Preserve until an independently verified encrypted export, source/target row parity and successful rollback/cutover test; then delete only after explicit authorized operator approval.",
+      "cleanup_interval_seconds": 86400,
+      "max_candidates_per_cleanup": 100,
+      "expiry_index": "primary key (source_table, record_key); no TTL index because data cannot be expired automatically",
+      "preserve_when": "Source data changes during copy; verification incomplete; Discloud storage headroom insufficient; rollback still required; private database unavailable",
+      "backup_class": "sensitive_migration_backup_pending_validation",
+      "migration": "postgres/migrations/202610130002_core_staging.sql",
+      "retention_class": "support_record",
+      "historical_reuse": "Restore original server configurations and access/ticket states during staged repository conversion; never authorize activity cleanup from copied unverified data",
+      "review_interval_days": 30
     }
   }
 }
