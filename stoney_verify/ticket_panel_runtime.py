@@ -9,6 +9,7 @@ unrelated command registration failure skips the public ticket command module.
 """
 
 import asyncio
+import copy
 import os
 import time
 from typing import Any, Mapping
@@ -26,6 +27,7 @@ _RUNTIME_REGISTRATION_ERROR = ""
 _BOUND_PANEL_MESSAGE_IDS: set[int] = set()
 
 _TICKET_PANEL_APPLICATION_ID_KEY = "ticket_panel_application_id"
+_PUBLIC_PANEL_EMBED_VERSION_KEY = "ticket_panel_public_embed_version"
 
 _TICKET_SELECT_COMPONENT_TYPE = 3
 _TICKET_PICKER_CONTENT = "Choose a ticket type."
@@ -447,6 +449,25 @@ def _message_looks_like_ticket_panel(message: Any) -> bool:
     return False
 
 
+def _public_ticket_embed_without_internal_details(message: Any) -> discord.Embed | None:
+    """Preserve existing public copy while removing legacy operational fields."""
+    embeds = list(getattr(message, "embeds", None) or [])
+    if len(embeds) != 1 or not isinstance(embeds[0], discord.Embed):
+        return None
+    original = embeds[0]
+    indices = [
+        index
+        for index, field in enumerate(original.fields)
+        if str(getattr(field, "name", "") or "").strip().casefold() == "panel lifetime"
+    ]
+    if not indices:
+        return None
+    cleaned = copy.deepcopy(original)
+    for index in reversed(indices):
+        cleaned.remove_field(index)
+    return cleaned
+
+
 async def _reserve_recovery_requests(
     weight: int,
     *,
@@ -476,6 +497,7 @@ async def _persist_ticket_panel_identity(
         application_id=_safe_id(
             getattr(getattr(guild, "me", None), "id", 0)
         ),
+        presentation_version=panel.PUBLIC_PANEL_EMBED_VERSION,
     )
 
 
@@ -557,6 +579,7 @@ async def _reconcile_saved_ticket_panel(
     if message_id > 0 and (
         saved_application_id > 0
         and saved_application_id == current_application_id
+        and _safe_id(cfg.get(_PUBLIC_PANEL_EMBED_VERSION_KEY)) >= panel.PUBLIC_PANEL_EMBED_VERSION
     ):
         return (
             "bound"
@@ -614,24 +637,30 @@ async def _reconcile_saved_ticket_panel(
     )
 
     if author_id == current_application_id and current_application_id > 0:
+        if not _message_looks_like_ticket_panel(message):
+            return "saved_message_not_ticket_panel"
         ids = _message_custom_ids(message)
-        # Historical IDs remain accepted by the fallback so old panels never
-        # dead-end, but once we have the real message in hand migrate it to the
-        # single canonical button ID. Compatibility is an entry alias, not a
-        # second permanent panel generation.
-        if panel.PANEL_BUTTON_CUSTOM_ID not in ids:
+        needs_button_upgrade = panel.PANEL_BUTTON_CUSTOM_ID not in ids
+        cleaned_embed = _public_ticket_embed_without_internal_details(message)
+        if needs_button_upgrade or cleaned_embed is not None:
+            # Existing panels can already have the canonical button ID but still
+            # expose old staff diagnostics. Refresh their copy once, then record
+            # the version so large installations do not refetch each restart.
             try:
                 await _reserve_recovery_requests(
                     1,
                     label=(
-                        "ticket panel legacy refresh "
+                        "ticket panel public copy refresh "
                         f"guild={int(guild.id)} channel={int(channel.id)}"
                     ),
                 )
-                await message.edit(
-                    embed=panel._panel_embed(guild),
-                    view=panel.PublicCreateTicketPanelView(),
-                )
+                kwargs: dict[str, Any] = {}
+                if needs_button_upgrade:
+                    kwargs["embed"] = panel._panel_embed(guild)
+                    kwargs["view"] = panel.PublicCreateTicketPanelView()
+                else:
+                    kwargs["embed"] = cleaned_embed
+                await message.edit(**kwargs)
             except Exception:
                 return "refresh_failed"
 
