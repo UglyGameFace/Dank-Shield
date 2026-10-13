@@ -13,6 +13,7 @@ def reset_tracker(monkeypatch):
     t._ACTIVITY_BUFFER.clear()
     t._PENDING_BATCH = None
     t._PENDING_FAIL_REPORTS.clear()
+    t._ACKED_BATCH_IDS.clear()
     t._LOCAL_ERRORS.clear()
     t._LOST_COVERAGE_GUILDS.clear()
     t._CONSECUTIVE_DB_FAILURES = 0
@@ -26,6 +27,7 @@ def reset_tracker(monkeypatch):
     t._ACTIVITY_BUFFER.clear()
     t._PENDING_BATCH = None
     t._PENDING_FAIL_REPORTS.clear()
+    t._ACKED_BATCH_IDS.clear()
     t._LOCAL_ERRORS.clear()
     t._LOST_COVERAGE_GUILDS.clear()
 
@@ -85,8 +87,10 @@ def test_batch_payload_counts_and_id(monkeypatch):
     monkeypatch.setattr(t, "_rpc_sync", lambda name, args: requests.append((name, args)))
     add(count=5)
     assert asyncio.run(t._flush_once())
-    assert len(requests) == 1
-    name, args = requests[0]
+    batches = [(name, args) for name, args in requests
+               if name == "record_member_activity_batch"]
+    assert len(batches) == 1
+    name, args = batches[0]
     assert name == "record_member_activity_batch"
     assert args["p_batch_id"]
     assert args["p_events"][0]["event_count"] == 5
@@ -97,6 +101,8 @@ def test_batch_payload_counts_and_id(monkeypatch):
 def test_uncertain_ack_retries_same_batch_not_old_single_rpc(monkeypatch):
     requests, applied = [], set()
     def rpc(name, args):
+        if name == "ack_member_activity_batches":
+            return
         requests.append((name, args["p_batch_id"]))
         if args["p_batch_id"] not in applied:
             applied.add(args["p_batch_id"])
@@ -134,7 +140,11 @@ def test_db_outage_does_not_fallback_to_per_event_storm(monkeypatch):
 
 def test_chunk_cap_and_sequential_drain(monkeypatch):
     calls = []
-    monkeypatch.setattr(t, "_rpc_sync", lambda name, args: calls.append(args))
+    monkeypatch.setattr(
+        t, "_rpc_sync",
+        lambda name, args: calls.append(args)
+        if name == "record_member_activity_batch" else None,
+    )
     for uid in range(1, 503):
         add(user=uid)
     assert asyncio.run(t._flush_once())
@@ -166,9 +176,9 @@ def test_overflow_fails_closed_and_resets_durable_window(monkeypatch):
     resets = []
     monkeypatch.setattr(t, "_rpc_sync", lambda name, args: None)
     monkeypatch.setattr(t, "_start_tracker_sync", lambda gid: resets.append(gid))
-    # Two chunks remain, and a reset happens only after both commit.
+    # Proof resets immediately after DB recovery, even for a busy guild.
     assert asyncio.run(t._flush_once())
-    assert not resets
+    assert resets == [1]
     assert asyncio.run(t._flush_once())
     assert resets == [1]
     assert 1 not in t._LOST_COVERAGE_GUILDS
