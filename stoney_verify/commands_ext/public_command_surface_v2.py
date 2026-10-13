@@ -139,7 +139,7 @@ def _help_embed() -> discord.Embed:
         name="Direct /dank shortcuts",
         value=(
             "`/dank protection` • `/dank voice-safety` • `/dank diagnostics` • "
-            "`/dank stats` • `/dank status` • `/dank logs`\\n"
+            "`/dank stats` • `/dank status` • `/dank logs`\n"
             "`/dank welcome` • `/dank design` • `/dank share` • "
             "`/dank pings` • `/dank community` • `/dank profile` • `/dank help`"
         ),
