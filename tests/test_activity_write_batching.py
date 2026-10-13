@@ -5,220 +5,182 @@ import time
 from datetime import datetime, timezone
 
 import pytest
-
-from stoney_verify.members_new import activity_tracker as tracker
+from stoney_verify.members_new import activity_tracker as t
 
 
 @pytest.fixture(autouse=True)
-def _reset_tracker_state(monkeypatch):
-    tracker._ACTIVITY_BUFFER.clear()
-    tracker._PENDING_FAIL_REPORTS.clear()
-    tracker._LOCAL_ERRORS.clear()
-    tracker._CONSECUTIVE_DB_FAILURES = 0
-    tracker._BREAKER_OPEN_UNTIL = 0.0
-    tracker._BATCH_RPC_AVAILABLE = None
-    tracker._DROPPED_EVENT_COUNT = 0
-    tracker._LAST_DROP_LOG_COUNT = 0
-    monkeypatch.delenv("DANK_ACTIVITY_FLUSH_SECONDS", raising=False)
-    monkeypatch.delenv("DANK_ACTIVITY_BUFFER_MAX_ENTRIES", raising=False)
+def reset_tracker(monkeypatch):
+    t._ACTIVITY_BUFFER.clear()
+    t._PENDING_BATCH = None
+    t._PENDING_FAIL_REPORTS.clear()
+    t._LOCAL_ERRORS.clear()
+    t._LOST_COVERAGE_GUILDS.clear()
+    t._CONSECUTIVE_DB_FAILURES = 0
+    t._BREAKER_OPEN_UNTIL = 0.0
+    t._DROPPED_EVENT_COUNT = 0
+    t._LAST_DROP_LOG_COUNT = 0
+    t._ACTIVITY_SEQUENCE = 0
     monkeypatch.delenv("DANK_ACTIVITY_BREAKER_THRESHOLD", raising=False)
-    monkeypatch.delenv("DANK_ACTIVITY_BREAKER_COOLDOWN_SECONDS", raising=False)
+    monkeypatch.delenv("DANK_ACTIVITY_BUFFER_MAX_ENTRIES", raising=False)
     yield
-    tracker._ACTIVITY_BUFFER.clear()
-    tracker._PENDING_FAIL_REPORTS.clear()
-    tracker._LOCAL_ERRORS.clear()
-    tracker._CONSECUTIVE_DB_FAILURES = 0
-    tracker._BREAKER_OPEN_UNTIL = 0.0
-    tracker._BATCH_RPC_AVAILABLE = None
-    tracker._DROPPED_EVENT_COUNT = 0
-    tracker._LAST_DROP_LOG_COUNT = 0
+    t._ACTIVITY_BUFFER.clear()
+    t._PENDING_BATCH = None
+    t._PENDING_FAIL_REPORTS.clear()
+    t._LOCAL_ERRORS.clear()
+    t._LOST_COVERAGE_GUILDS.clear()
 
 
-def _ts(year=2026, month=10, day=13, hour=12, minute=0):
-    return datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+def ts(minute=0):
+    return datetime(2026, 10, 13, 12, minute, tzinfo=timezone.utc)
 
 
-def test_stage_event_dedupes_to_latest_with_count():
-    tracker._stage_event(
-        guild_id=1, user_id=2, activity_type="message",
-        occurred_at=_ts(minute=0), channel_id=10,
+def add(user=2, minute=0, typ="message", count=1, channel=10):
+    t._stage_event(
+        guild_id=1, user_id=user, activity_type=typ,
+        occurred_at=ts(minute), channel_id=channel, count=count,
     )
-    tracker._stage_event(
-        guild_id=1, user_id=2, activity_type="message",
-        occurred_at=_ts(minute=5), channel_id=11,
-    )
-    assert len(tracker._ACTIVITY_BUFFER) == 1
-    entry = tracker._ACTIVITY_BUFFER[(1, 2, "message")]
-    assert entry["occurred_at"] == _ts(minute=5)
-    assert entry["channel_id"] == 11
-    assert entry["count"] == 2
 
 
-def test_stage_event_older_arrival_keeps_newer_but_counts():
-    tracker._stage_event(
-        guild_id=1, user_id=2, activity_type="message",
-        occurred_at=_ts(minute=5), channel_id=11,
-    )
-    tracker._stage_event(
-        guild_id=1, user_id=2, activity_type="message",
-        occurred_at=_ts(minute=0), channel_id=10,
-    )
-    entry = tracker._ACTIVITY_BUFFER[(1, 2, "message")]
-    assert entry["occurred_at"] == _ts(minute=5)
-    assert entry["channel_id"] == 11
-    assert entry["count"] == 2
+def test_stage_tracks_oldest_newest_and_counts():
+    add(minute=5, channel=11)
+    add(minute=0, channel=10)
+    add(minute=5, channel=12)
+    e = t._ACTIVITY_BUFFER[(1, 2, "message")]
+    assert e["count"] == 3
+    assert e["first_occurred_at"] == ts(0)
+    assert e["occurred_at"] == ts(5)
+    assert e["channel_id"] == 12
 
 
-def test_stage_event_separates_activity_types():
-    tracker._stage_event(
-        guild_id=1, user_id=2, activity_type="message",
-        occurred_at=_ts(), channel_id=10,
-    )
-    tracker._stage_event(
-        guild_id=1, user_id=2, activity_type="reaction",
-        occurred_at=_ts(), channel_id=10,
-    )
-    assert len(tracker._ACTIVITY_BUFFER) == 2
+def test_stage_separates_types_and_records_last_arrival_order():
+    add(typ="message")
+    add(typ="reaction")
+    add(typ="message", channel=20)
+    a = t._ACTIVITY_BUFFER
+    assert len(a) == 2
+    assert a[(1, 2, "message")]["order"] > a[(1, 2, "reaction")]["order"]
 
 
-def test_stage_event_enforces_buffer_cap(monkeypatch):
-    monkeypatch.setenv("DANK_ACTIVITY_BUFFER_MAX_ENTRIES", "3")
-    for uid in range(10):
-        tracker._stage_event(
-            guild_id=1, user_id=uid, activity_type="message",
-            occurred_at=_ts(), channel_id=10,
-        )
-    assert len(tracker._ACTIVITY_BUFFER) == 3
-
-
-def test_record_direct_member_activity_buffers_without_io(monkeypatch):
+def test_record_direct_stages_without_rpc(monkeypatch):
     calls = []
-    monkeypatch.setattr(tracker, "_rpc_sync", lambda *a, **k: calls.append((a, k)))
-    ok = asyncio.run(
-        tracker.record_direct_member_activity(
-            guild_id=1, user_id=2, activity_type="message",
-            occurred_at=_ts(), channel_id=10,
-        )
-    )
-    assert ok is True
-    assert calls == []
-    assert len(tracker._ACTIVITY_BUFFER) == 1
-
-
-def test_record_direct_member_activity_rejects_invalid():
-    assert asyncio.run(
-        tracker.record_direct_member_activity(
-            guild_id=0, user_id=2, activity_type="message"
-        )
-    ) is False
-    assert asyncio.run(
-        tracker.record_direct_member_activity(
-            guild_id=1, user_id=2, activity_type="presence"
-        )
-    ) is False
-    assert tracker._ACTIVITY_BUFFER == {}
-
-
-def test_mark_failure_records_locally_without_rpc(monkeypatch):
-    calls = []
-    monkeypatch.setattr(tracker, "_rpc_sync", lambda *a, **k: calls.append((a, k)))
-    asyncio.run(tracker._mark_failure(7, "boom"))
-    assert calls == []
-    assert tracker._LOCAL_ERRORS[7] == "boom"
-    assert tracker._PENDING_FAIL_REPORTS[7] == "boom"
-
-
-def test_flush_uses_batch_rpc_when_available(monkeypatch):
-    rpc_calls = []
-    monkeypatch.setattr(tracker, "_BATCH_RPC_AVAILABLE", True)
-
-    def fake_rpc(name, params):
-        rpc_calls.append((name, params))
-
-    monkeypatch.setattr(tracker, "_rpc_sync", fake_rpc)
-    tracker._stage_event(
+    monkeypatch.setattr(t, "_rpc_sync", lambda *a, **kw: calls.append(a))
+    ok = asyncio.run(t.record_direct_member_activity(
         guild_id=1, user_id=2, activity_type="message",
-        occurred_at=_ts(), channel_id=10, count=3,
-    )
-    asyncio.run(tracker._flush_once())
-    assert len(rpc_calls) == 1
-    name, params = rpc_calls[0]
+        occurred_at=ts(), channel_id=10,
+    ))
+    assert ok and calls == [] and len(t._ACTIVITY_BUFFER) == 1
+
+
+def test_invalid_direct_event_rejected():
+    assert not asyncio.run(t.record_direct_member_activity(
+        guild_id=0, user_id=2, activity_type="message",
+    ))
+    assert not asyncio.run(t.record_direct_member_activity(
+        guild_id=1, user_id=2, activity_type="presence",
+    ))
+
+
+def test_batch_payload_counts_and_id(monkeypatch):
+    requests = []
+    monkeypatch.setattr(t, "_rpc_sync", lambda name, args: requests.append((name, args)))
+    add(count=5)
+    assert asyncio.run(t._flush_once())
+    assert len(requests) == 1
+    name, args = requests[0]
     assert name == "record_member_activity_batch"
-    assert params["p_events"][0]["event_count"] == 3
-    assert tracker._ACTIVITY_BUFFER == {}
+    assert args["p_batch_id"]
+    assert args["p_events"][0]["event_count"] == 5
+    assert args["p_events"][0]["first_occurred_at"] == ts().isoformat()
+    assert t._PENDING_BATCH is None and not t._ACTIVITY_BUFFER
 
 
-def test_flush_circuit_breaker_opens_after_threshold(monkeypatch):
+def test_uncertain_ack_retries_same_batch_not_old_single_rpc(monkeypatch):
+    requests, applied = [], set()
+    def rpc(name, args):
+        requests.append((name, args["p_batch_id"]))
+        if args["p_batch_id"] not in applied:
+            applied.add(args["p_batch_id"])
+            raise TimeoutError("commit succeeded, HTTP reply lost")
+    monkeypatch.setattr(t, "_rpc_sync", rpc)
+    monkeypatch.setattr(t, "_fail_tracker_sync", lambda gid, message: None)
+    add(count=9)
+    assert not asyncio.run(t._flush_once())
+    assert t._PENDING_BATCH is not None
+    assert 1 in t._LOCAL_ERRORS
+    assert asyncio.run(t._flush_once())
+    assert requests[0][1] == requests[1][1]
+    assert all(name == "record_member_activity_batch" for name, _ in requests)
+    assert len(applied) == 1
+    assert t._PENDING_BATCH is None
+    assert 1 not in t._LOCAL_ERRORS
+
+
+def test_db_outage_does_not_fallback_to_per_event_storm(monkeypatch):
+    seen = []
+    def rpc(name, args):
+        seen.append(name)
+        raise RuntimeError("supabase unavailable")
+    monkeypatch.setattr(t, "_rpc_sync", rpc)
     monkeypatch.setenv("DANK_ACTIVITY_BREAKER_THRESHOLD", "2")
-    monkeypatch.setenv("DANK_ACTIVITY_BREAKER_COOLDOWN_SECONDS", "120")
-
-    def boom(name, params):
-        raise RuntimeError("db down")
-
-    monkeypatch.setattr(tracker, "_rpc_sync", boom)
-    tracker._stage_event(
-        guild_id=1, user_id=2, activity_type="message",
-        occurred_at=_ts(), channel_id=10,
-    )
-    asyncio.run(tracker._flush_once())
-    assert tracker._CONSECUTIVE_DB_FAILURES == 1
-    assert tracker._BREAKER_OPEN_UNTIL == 0.0
-    # Fail-closed: the failed flush marks the guild's coverage incomplete.
-    assert 1 in tracker._LOCAL_ERRORS
-    asyncio.run(tracker._flush_once())
-    assert tracker._CONSECUTIVE_DB_FAILURES == 2
-    assert tracker._BREAKER_OPEN_UNTIL > time.monotonic()
-    # Buffer is re-queued, not lost.
-    assert len(tracker._ACTIVITY_BUFFER) == 1
-    # While open, flush is a no-op (no additional RPC attempts).
-    asyncio.run(tracker._flush_once())
-    assert tracker._CONSECUTIVE_DB_FAILURES == 2
+    add(count=400)
+    assert not asyncio.run(t._flush_once())
+    assert not asyncio.run(t._flush_once())
+    assert t._BREAKER_OPEN_UNTIL > time.monotonic()
+    assert t._PENDING_BATCH is not None
+    assert seen == ["record_member_activity_batch"] * 2
+    assert not asyncio.run(t._flush_once())
+    assert len(seen) == 2
 
 
-def test_flush_success_resets_breaker_and_clears_guild_errors(monkeypatch):
-    monkeypatch.setattr(tracker, "_BATCH_RPC_AVAILABLE", True)
-    monkeypatch.setattr(tracker, "_rpc_sync", lambda *a, **k: None)
-    tracker._CONSECUTIVE_DB_FAILURES = 2
-    tracker._LOCAL_ERRORS[1] = "old"
-    tracker._stage_event(
-        guild_id=1, user_id=2, activity_type="message",
-        occurred_at=_ts(), channel_id=10,
-    )
-    asyncio.run(tracker._flush_once())
-    assert tracker._CONSECUTIVE_DB_FAILURES == 0
-    assert 1 not in tracker._LOCAL_ERRORS
+def test_chunk_cap_and_sequential_drain(monkeypatch):
+    calls = []
+    monkeypatch.setattr(t, "_rpc_sync", lambda name, args: calls.append(args))
+    for uid in range(1, 503):
+        add(user=uid)
+    assert asyncio.run(t._flush_once())
+    assert asyncio.run(t._flush_once())
+    assert [len(x["p_events"]) for x in calls] == [500, 2]
+    assert all(len(x["p_events"]) <= 500 for x in calls)
 
 
-def test_poison_entry_does_not_block_valid_entries(monkeypatch, capsys):
-    """One rejected record is logged and skipped; valid records still land."""
-    monkeypatch.setattr(tracker, "_BATCH_RPC_AVAILABLE", True)
-    landed = []
-
-    def fake_rpc(name, params):
-        if name == "record_member_activity_batch":
-            raise RuntimeError("batch rejected: bad row")
-        landed.append(params["p_guild_id"])
-
-    monkeypatch.setattr(tracker, "_rpc_sync", fake_rpc)
-    for uid in (2, 3):
-        tracker._stage_event(
-            guild_id=1, user_id=uid, activity_type="message",
-            occurred_at=_ts(), channel_id=10,
-        )
-    asyncio.run(tracker._flush_once())
-    out = capsys.readouterr().out
-    assert "isolating per-entry" in out
-    # Per-entry fallback also uses the failing fake for batch name only...
-    # individual RPCs succeed, so both entries land.
-    assert sorted(landed) == ["1", "1"]
+def test_report_failure_keeps_cleanup_blocked(monkeypatch):
+    monkeypatch.setattr(t, "_rpc_sync", lambda name, args: None)
+    def fail(*args):
+        raise RuntimeError("tracker state cannot be persisted")
+    monkeypatch.setattr(t, "_fail_tracker_sync", fail)
+    add()
+    t._PENDING_FAIL_REPORTS[1] = "failed activity previously"
+    t._LOCAL_ERRORS[1] = "failed activity previously"
+    assert asyncio.run(t._flush_once())
+    assert t._LOCAL_ERRORS[1]
+    assert 1 in t._PENDING_FAIL_REPORTS
 
 
-def test_buffer_overflow_counts_drops(monkeypatch):
+def test_overflow_fails_closed_and_resets_durable_window(monkeypatch):
     monkeypatch.setenv("DANK_ACTIVITY_BUFFER_MAX_ENTRIES", "1000")
-    for uid in range(1005):
-        tracker._stage_event(
-            guild_id=1, user_id=uid, activity_type="message",
-            occurred_at=_ts(), channel_id=10,
-        )
-    assert len(tracker._ACTIVITY_BUFFER) == 1000
-    assert tracker._DROPPED_EVENT_COUNT == 5
+    for uid in range(1, 1003):
+        add(user=uid)
+    assert t._DROPPED_EVENT_COUNT == 2
+    assert t._LOST_COVERAGE_GUILDS == {1}
+    assert 1 in t._LOCAL_ERRORS
+    resets = []
+    monkeypatch.setattr(t, "_rpc_sync", lambda name, args: None)
+    monkeypatch.setattr(t, "_start_tracker_sync", lambda gid: resets.append(gid))
+    # Two chunks remain, and a reset happens only after both commit.
+    assert asyncio.run(t._flush_once())
+    assert not resets
+    assert asyncio.run(t._flush_once())
+    assert resets == [1]
+    assert 1 not in t._LOST_COVERAGE_GUILDS
+    assert 1 not in t._LOCAL_ERRORS
+
+
+def test_fail_reports_are_bounded_per_flush(monkeypatch):
+    monkeypatch.setattr(t, "_fail_tracker_sync", lambda gid, message: None)
+    for gid in range(25):
+        t._PENDING_FAIL_REPORTS[gid] = "error"
+        t._LOCAL_ERRORS[gid] = "error"
+    assert asyncio.run(t._flush_once())
+    assert len(t._PENDING_FAIL_REPORTS) == 15
+    assert asyncio.run(t._flush_once())
+    assert len(t._PENDING_FAIL_REPORTS) == 5
