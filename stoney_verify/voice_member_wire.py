@@ -172,3 +172,91 @@ def verify_check_response(secret: str, nonce: str, request_body: bytes,
         raise MemberCheckRejected("invalid reply authority or schema")
     return {"consent_current": result["consent_current"],
             "policy_matches": result["policy_matches"]}
+
+
+# Signed withdrawal is a distinct action and route. A read-only member-check
+# signature MUST NOT be replayable as a change of consent.
+REVOKE_PATH = "/v1/member-revoke"
+_REVOKE_FIELDS = {"version", "guild_id", "member_id", "action"}
+_REVOKE_REPLY_FIELDS = {"version", "withdrawn", "voice_capture_authorized"}
+
+
+def revoke_request_body(guild_id: int, member_id: int) -> bytes:
+    return _canonical({
+        "version": VERSION, "guild_id": str(_id(guild_id)),
+        "member_id": str(_id(member_id)), "action": "withdraw",
+    })
+
+
+def _parse_revoke_request(body: bytes) -> tuple[int, int]:
+    data = _object(body, MAX_CHECK_BYTES)
+    if (set(data) != _REVOKE_FIELDS
+            or type(data["version"]) is not int or data["version"] != VERSION
+            or data["action"] != "withdraw"):
+        raise MemberCheckRejected("invalid revoke schema")
+    return _id(data["guild_id"]), _id(data["member_id"])
+
+
+def _revoke_request_signature(secret: str, issued: int, nonce: str, body: bytes) -> str:
+    signed = ("wym-member-revoke-v1\\nPOST\\n" + REVOKE_PATH + "\\n" + str(issued)
+              + "\\n" + nonce + "\\n" + hashlib.sha256(body).hexdigest()).encode("ascii")
+    return hmac.new(_key(secret), signed, hashlib.sha256).hexdigest()
+
+
+def sign_revoke_request(secret: str, body: bytes, *, now: int | None = None,
+                        nonce: str | None = None) -> dict[str, str]:
+    _parse_revoke_request(body)
+    issued = int(time.time()) if now is None else now
+    if type(issued) is not int or issued <= 0:
+        raise MemberCheckRejected("invalid timestamp")
+    proof = _nonce(nonce if nonce is not None else secrets.token_hex(16))
+    return {"X-WYM-Time": str(issued), "X-WYM-Nonce": proof,
+            "X-WYM-Signature": _revoke_request_signature(secret, issued, proof, body)}
+
+
+def verify_revoke_request(headers: Any, secret: str, body: bytes, *,
+                          now: int | None = None) -> tuple[int, int, str]:
+    at = int(time.time()) if now is None else now
+    issued, nonce, signature = _time(headers, at)
+    expected = _revoke_request_signature(secret, issued, nonce, body)
+    if not hmac.compare_digest(signature, expected):
+        raise MemberCheckRejected("invalid revoke signature")
+    return (*_parse_revoke_request(body), nonce)
+
+
+def revoke_response_body() -> bytes:
+    # No guild/member IDs or other private data are returned.
+    return _canonical({"version": VERSION, "withdrawn": True, "voice_capture_authorized": False})
+
+
+def _revoke_response_signature(secret: str, nonce: str, request_body: bytes,
+                               response: bytes) -> str:
+    _nonce(nonce)
+    _parse_revoke_request(request_body)
+    if type(response) is not bytes or not 0 < len(response) <= MAX_REPLY_BYTES:
+        raise MemberCheckRejected("invalid revoke reply")
+    signed = (b"wym-member-revoke-v1\\nresponse\\n" + nonce.encode("ascii") + b"\\n"
+              + hashlib.sha256(request_body).hexdigest().encode("ascii") + b"\\n" + response)
+    return hmac.new(_key(secret), signed, hashlib.sha256).hexdigest()
+
+
+def sign_revoke_response(secret: str, nonce: str, request_body: bytes,
+                         response: bytes) -> str:
+    return _revoke_response_signature(secret, nonce, request_body, response)
+
+
+def verify_revoke_response(secret: str, nonce: str, request_body: bytes,
+                           response: bytes, signature: str) -> bool:
+    if (type(signature) is not str or len(signature) != 64
+            or any(c not in "0123456789abcdef" for c in signature)):
+        raise MemberCheckRejected("invalid revoke reply signature")
+    expected = _revoke_response_signature(secret, nonce, request_body, response)
+    if not hmac.compare_digest(signature, expected):
+        raise MemberCheckRejected("invalid revoke reply signature")
+    result = _object(response, MAX_REPLY_BYTES)
+    if (set(result) != _REVOKE_REPLY_FIELDS
+            or type(result["version"]) is not int or result["version"] != VERSION
+            or result["withdrawn"] is not True
+            or result["voice_capture_authorized"] is not False):
+        raise MemberCheckRejected("revoke was not confirmed")
+    return True
