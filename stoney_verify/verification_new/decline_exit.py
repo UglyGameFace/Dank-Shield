@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import discord
 
@@ -23,6 +24,7 @@ class PendingExit:
     original_role_ids: tuple[int, ...]
     unverified_role_id: int
     source: str
+    joined_at: datetime | None
     expires: float
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     task: asyncio.Task[None] | None = None
@@ -59,6 +61,11 @@ async def _kick_later(entry: PendingExit) -> None:
                 return
             try:
                 member = await entry.guild.fetch_member(entry.user_id)
+                if (entry.joined_at is not None
+                        and getattr(member, "joined_at", None) != entry.joined_at):
+                    # Do not kick a different membership after a voluntary
+                    # leave and fresh server join.
+                    return
                 await member.kick(
                     reason="Member declined Voice Safety policy; ten-second grace expired"
                 )
@@ -226,6 +233,7 @@ async def decline_and_exit(interaction: discord.Interaction, *, from_verify: boo
             guild=guild, user_id=user.id, original_role_ids=original_role_ids,
             unverified_role_id=unverified.id,
             source="basic_verify_v1" if from_verify else "voice_safety_notice_v1",
+            joined_at=getattr(member, "joined_at", None),
             expires=time.monotonic() + GRACE_SECONDS,
         )
         _PENDING[key] = entry
@@ -238,7 +246,15 @@ async def decline_and_exit(interaction: discord.Interaction, *, from_verify: boo
             "Voice monitoring does not start from this action.",
             ephemeral=True, view=ExitGraceView(entry),
         )
-    finally:
-        # Still schedule exit when Discord refuses to deliver the followup.
-        if not entry.completed:
-            entry.task = asyncio.create_task(_kick_later(entry))
+    except (discord.HTTPException, discord.Forbidden):
+        # Consent was withdrawn and roles were restricted. Never kick when
+        # the ten-second cancellation affordance could not be delivered.
+        entry.completed = True
+        _PENDING.pop(key, None)
+        print(f"⚠️ voice_decline grace_notice_failed guild={guild.id}; restricted, no scheduled kick")
+        return
+    # Give the member the entire 10-second window after Discord accepts the
+    # ephemeral interaction response, not during slow role/REST operations.
+    entry.expires = time.monotonic() + GRACE_SECONDS
+    if not entry.completed:
+        entry.task = asyncio.create_task(_kick_later(entry))
