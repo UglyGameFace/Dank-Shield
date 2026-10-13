@@ -115,7 +115,7 @@ def test_reconciliation_is_idempotent_and_not_allowed_to_reopen_ended(storage):
     asyncio.run(run())
 
 
-def test_inline_uploaded_thumbnail_has_single_compact_v2_card_and_reused_callbacks(monkeypatch):
+def test_inline_uploaded_gallery_has_single_full_width_media_and_reused_callbacks(monkeypatch):
     monkeypatch.setattr(live, "_VOICE_DEBOUNCE_SECONDS", 0.001)
     session = {
         **_session(), "active": True, "cheers_ids": [], "going_ids": [],
@@ -123,41 +123,42 @@ def test_inline_uploaded_thumbnail_has_single_compact_v2_card_and_reused_callbac
     }
     guild = SimpleNamespace(get_channel=lambda cid: None)
     intro = "## 💨 Toke Time\n<@&10>\n**Test Host** is calling the sesh crowd.\n> Join us"
-    view = live.TokeThumbnailLayout(guild, session, intro=intro)
+    view = live.TokeMediaLayout(guild, session, intro=intro)
     assert isinstance(view, discord.ui.LayoutView)
     assert view.timeout is None and view.is_persistent()
     nodes = list(view.walk_children())
-    thumbnails = [item for item in nodes if isinstance(item, discord.ui.Thumbnail)]
-    assert len(thumbnails) == 1
-    assert thumbnails[0].media.url == "attachment://sesh.gif"
+    assert not any(isinstance(item, discord.ui.Thumbnail) for item in nodes)
+    galleries = [item for item in nodes if isinstance(item, discord.ui.MediaGallery)]
+    assert len(galleries) == 1
+    assert len(galleries[0].items) == 1
+    assert galleries[0].items[0].media.url == "attachment://sesh.gif"
     assert len([x for x in nodes if isinstance(x, discord.ui.Button)]) == 7
     assert any(isinstance(x, discord.ui.TextDisplay) and "<@&10>" in x.content for x in nodes)
-    assert not any(isinstance(x, discord.ui.MediaGallery) for x in nodes)
 
     dispatched = []
     async def fake_respond(self, interaction, action):
         dispatched.append(action)
     monkeypatch.setattr(live.TokeCheersView, "_respond", fake_respond)
-    updated = live.TokeThumbnailLayout(guild, session, intro=intro)
+    updated = live.TokeMediaLayout(guild, session, intro=intro)
     join = next(x for x in updated.walk_children() if getattr(x, "custom_id", "") == "dank:toke:v2:going")
     asyncio.run(join.callback(object()))
     assert dispatched == ["going"]
     session["active"] = False
-    closed = live.TokeThumbnailLayout(guild, session, intro=intro)
+    closed = live.TokeMediaLayout(guild, session, intro=intro)
     assert not any(isinstance(x, discord.ui.Button) for x in closed.walk_children())
 
 
 
-def test_closed_toke_thumbnail_title_is_idempotent_on_repeated_edits():
+def test_closed_toke_gallery_title_is_idempotent_on_repeated_edits():
     data = {
         **_session(), "active": False, "media_layout": "thumbnail_v2",
         "media_filename": "sesh.gif", "cheers_ids": [], "going_ids": [],
     }
     guild = SimpleNamespace(get_channel=lambda _cid: None)
     intro = "## 💨 Toke Time\n<@&10>\nHost is calling the sesh crowd."
-    once = live.TokeThumbnailLayout(guild, data, intro=intro)
+    once = live.TokeMediaLayout(guild, data, intro=intro)
     display = next(x.content for x in once.walk_children() if isinstance(x, discord.ui.TextDisplay))
-    twice = live.TokeThumbnailLayout(guild, data, intro=display)
+    twice = live.TokeMediaLayout(guild, data, intro=display)
     repeated = next(x.content for x in twice.walk_children() if isinstance(x, discord.ui.TextDisplay))
     assert display.count("Sesh Ended") == 1
     assert repeated.count("Sesh Ended") == 1
@@ -169,13 +170,26 @@ def test_existing_note_can_be_reused_without_persisting_it(storage):
     message = SimpleNamespace(components=[
         SimpleNamespace(children=[SimpleNamespace(children=[SimpleNamespace(content=intro)])])
     ])
-    assert live._thumbnail_intro(message, _session()) == intro
+    assert live._media_intro(message, _session()) == intro
     async def run():
         await toke_sessions.save_new({**_session(), "media_layout": "thumbnail_v2", "media_filename": "sesh.gif"})
     asyncio.run(run())
     saved = toke_sessions.SESSIONS_FILE.read_text()
     assert "Original note" not in saved
     assert "sesh.gif" in saved
+
+
+def test_inaccessible_vc_reports_unknown_instead_of_false_zero():
+    session = {
+        **_session(), "active": True, "cheers_ids": [45], "going_ids": [45],
+    }
+    guild = SimpleNamespace(get_channel=lambda _cid: None)
+    card = live.render_card(guild, session, discord.Embed(title="Toke Time"))
+    assert "In VC: Unavailable" in card.fields[0].value
+    assert "VC unavailable" in card.fields[0].value
+    session["voice_channel_id"] = 0
+    no_voice = live.render_card(guild, session, discord.Embed(title="Toke Time"))
+    assert "In VC: Not selected" in no_voice.fields[0].value
 
 
 def test_voice_unavailable_does_not_make_uncertain_rsvps_disappear(storage):
@@ -222,7 +236,7 @@ def test_voice_burst_preserves_departure_identity_even_without_seen_cache(storag
     asyncio.run(run())
 
 
-def test_v2_card_edit_keeps_thumbnail_and_custom_buttons_without_legacy_embed(storage, monkeypatch):
+def test_v2_card_edit_keeps_full_width_gallery_and_custom_buttons(storage, monkeypatch):
     class FakeTextChannel:
         id = 700
         def __init__(self, message):
@@ -262,9 +276,9 @@ def test_v2_card_edit_keeps_thumbnail_and_custom_buttons_without_legacy_embed(st
         assert len(message.edits) == 1
         assert "embed" not in message.edits[0] and "content" not in message.edits[0]
         view = message.edits[0]["view"]
-        assert isinstance(view, live.TokeThumbnailLayout)
+        assert isinstance(view, live.TokeMediaLayout)
         assert any(
-            isinstance(x, discord.ui.Thumbnail) and x.media.url == "attachment://photo.jpg"
+            isinstance(x, discord.ui.MediaGallery) and x.items[0].media.url == "attachment://photo.jpg"
             for x in view.walk_children()
         )
         assert any(
@@ -308,11 +322,12 @@ def test_who_is_coming_excludes_departed_joiner_after_fresh_reconciliation(stora
 
 
 
-def test_uploaded_thumbnail_view_restores_after_bot_restart(storage):
+@pytest.mark.parametrize("layout", ["thumbnail_v2", "gallery_v2"])
+def test_uploaded_media_view_restores_after_bot_restart(storage, layout):
     async def run():
         live._REGISTERED.clear()
         await toke_sessions.save_new({
-            **_session(), "media_layout": "thumbnail_v2",
+            **_session(), "media_layout": layout,
             "media_filename": "toke-100-1-123.gif",
         })
         guild = SimpleNamespace(id=100, get_channel=lambda cid: None)
@@ -325,6 +340,7 @@ def test_uploaded_thumbnail_view_restores_after_bot_restart(storage):
         assert len(registered) == 1
         view, mid = registered[0]
         assert mid == 200 and view.is_persistent()
+        assert any(isinstance(item, discord.ui.MediaGallery) for item in view.walk_children())
         custom_ids = {
             button.custom_id for button in view.walk_children()
             if isinstance(button, discord.ui.Button) and button.custom_id
@@ -333,4 +349,101 @@ def test_uploaded_thumbnail_view_restores_after_bot_restart(storage):
         assert await live.restore_active_views(bot) == 0
         assert len(registered) == 1
         live._REGISTERED.clear()
+    asyncio.run(run())
+
+def test_end_sesh_requires_private_confirm_and_cancel_does_not_end():
+    async def run():
+        source = live.TokeCheersView(1, 9, guild_id=100, message_id=200)
+        sent = []
+        async def send_message(*args, **kwargs):
+            sent.append((args, kwargs))
+        guild = SimpleNamespace(id=100)
+        message = SimpleNamespace(id=200)
+        owner = SimpleNamespace(id=1, guild_permissions=SimpleNamespace(manage_guild=False))
+        interaction = SimpleNamespace(
+            guild=guild, message=message, user=owner,
+            response=SimpleNamespace(send_message=send_message),
+        )
+        await source.end.callback(interaction)
+        assert len(sent) == 1
+        assert sent[0][1]["ephemeral"] is True
+        confirmation = sent[0][1]["view"]
+        assert isinstance(confirmation, live.TokeEndConfirmView)
+        assert confirmation.message_id == 200 and confirmation.actor_id == 1
+
+        cancelled = []
+        async def edit_message(**kwargs):
+            cancelled.append(kwargs)
+        cancel_click = SimpleNamespace(
+            user=owner, response=SimpleNamespace(edit_message=edit_message),
+        )
+        await confirmation.cancel.callback(cancel_click)
+        assert cancelled == [{"content": "Sesh stays active.", "view": None}]
+
+        sent.clear()
+        non_host = SimpleNamespace(id=99, guild_permissions=SimpleNamespace(manage_guild=False))
+        interaction.user = non_host
+        await source.end.callback(interaction)
+        assert len(sent) == 1
+        assert "Only the starter or server managers" in sent[0][0][0]
+        assert "view" not in sent[0][1]
+    asyncio.run(run())
+
+
+def test_end_confirmation_routes_to_original_card_not_ephemeral_message(monkeypatch):
+    async def run():
+        source = live.TokeCheersView(1, 9, guild_id=100, message_id=200)
+        confirmation = live.TokeEndConfirmView(source, 1, 200)
+        calls = []
+        async def fake_commit(self, interaction, action, **kwargs):
+            calls.append((action, kwargs))
+        monkeypatch.setattr(live.TokeCheersView, "_respond", fake_commit)
+        async def defer(**kwargs):
+            calls.append(("defer", kwargs))
+        async def edit_original_response(**kwargs):
+            calls.append(("edit", kwargs))
+        click = SimpleNamespace(
+            user=SimpleNamespace(id=1), message=SimpleNamespace(id=999),
+            response=SimpleNamespace(defer=defer),
+            edit_original_response=edit_original_response,
+        )
+        await confirmation.confirm.callback(click)
+        assert calls == [
+            ("defer", {}),
+            ("end", {"session_message_id": 200, "already_deferred": True}),
+            ("edit", {"view": None}),
+        ]
+    asyncio.run(run())
+
+
+def test_confirmed_end_rechecks_persisted_permissions_and_target(storage, monkeypatch):
+    class FakeMember:
+        id = 1
+        guild_permissions = SimpleNamespace(manage_guild=False)
+    async def run():
+        await toke_sessions.save_new(_session())
+        monkeypatch.setattr(live.discord, "Member", FakeMember)
+        refreshes = []
+        async def refresh(_bot, session, interaction=None, **_kwargs):
+            refreshes.append((session["message_id"], interaction))
+            return True
+        monkeypatch.setattr(live, "refresh_card", refresh)
+        edits = []
+        async def edit_original_response(**kwargs):
+            edits.append(kwargs)
+        async def wrong_defer(**_kwargs):
+            raise AssertionError("Already deferred confirmation must not defer twice")
+        click = SimpleNamespace(
+            guild=SimpleNamespace(id=100), user=FakeMember(),
+            message=SimpleNamespace(id=999),
+            response=SimpleNamespace(defer=wrong_defer),
+            edit_original_response=edit_original_response,
+            client=object(),
+        )
+        source = live.TokeCheersView(1, 9, guild_id=100, message_id=200)
+        await source._respond(click, "end", session_message_id=200, already_deferred=True)
+        stored = await toke_sessions.get(100, 200)
+        assert stored["active"] is False
+        assert refreshes == [(200, None)]
+        assert "Sesh ended" in edits[-1]["content"]
     asyncio.run(run())
