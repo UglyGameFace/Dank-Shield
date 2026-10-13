@@ -61,7 +61,31 @@ def test_private_output_dir_and_failure_gate():
     assert "set -euo pipefail" in text
     assert "find \"$RUNNER_TEMP/dank-shield-source-backup\"" in text
     assert "test \"$(find" in text
-    # Shell printf builds pg_dump and pg_restore wrapper with the same
-    # validated 17.x client version, and preserves user args as literal $@.
-    assert "printf '%s\\n'" in text
-    assert 'postgres:17 $cmd \\"\\$@\\"' in text
+    assert "bash tools/setup_pg17_backup_clients.sh" in text
+    wrapper = (ROOT / "tools/setup_pg17_backup_clients.sh").read_text()
+    assert 'postgres:17 %s "$@"' in wrapper
+    assert "for cmd in pg_dump pg_restore" in wrapper
+
+
+def test_operator_pg17_wrappers_are_executable_and_preserve_arguments(tmp_path):
+    import os
+    import subprocess
+
+    scripts = tmp_path / "private"
+    helper = ROOT / "tools/setup_pg17_backup_clients.sh"
+    subprocess.run(["bash", str(helper), str(scripts)], check=True)
+    assert not (scripts.stat().st_mode & 0o077)
+    docker_bin = tmp_path / "bin"
+    docker_bin.mkdir()
+    fake = docker_bin / "docker"
+    fake.write_text('#!/usr/bin/env bash\\nprintf \'%s\\\\n\' "$@"\\n')
+    fake.chmod(0o700)
+    env = dict(os.environ, PATH=f"{docker_bin}:{os.environ.get('PATH','')}")
+    for executable in ("pg_dump", "pg_restore"):
+        command = subprocess.run(
+            [str(scripts / executable), "--version"], check=True,
+            capture_output=True, text=True, env=env,
+        )
+        assert "postgres:17" in command.stdout
+        assert executable in command.stdout
+        assert "--version" in command.stdout
