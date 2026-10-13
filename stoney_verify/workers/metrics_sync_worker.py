@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import time
 from typing import Any, Dict, List
 
 import discord
+
+from ..guild_sweep import run_bounded_guild_sweep
 
 from ..globals import (
     bot,
@@ -174,18 +177,50 @@ async def update_staff_metrics(guild: discord.Guild) -> None:
         print("❌ Staff metrics sync failed:", repr(e))
 
 
+def _metrics_guild_concurrency() -> int:
+    try:
+        value = int(os.getenv("DANK_METRICS_GUILD_CONCURRENCY", "4"))
+    except (TypeError, ValueError):
+        value = 4
+    return max(1, min(value, 12))
+
+
+async def _sync_metrics_for_guild(guild: discord.Guild) -> bool:
+    if bot.is_closed():
+        return False
+    # Maintain role-before-staff ordering for a guild; only independent
+    # guilds run concurrently. Existing retry and chunking logic is reused.
+    await update_role_metrics(guild)
+    await update_staff_metrics(guild)
+    return True
+
+
 async def metrics_loop() -> None:
     await bot.wait_until_ready()
     print("📡 Metrics sync worker started")
+    # Avoid the startup stampede with ticket automation and activity recovery.
+    await asyncio.sleep(random.uniform(0.0, 10.0))
 
     while not bot.is_closed():
-        for guild in list(bot.guilds):
-            try:
-                await update_role_metrics(guild)
-                await update_staff_metrics(guild)
-            except Exception as e:
-                print("❌ Metrics loop error:", repr(e))
-        await asyncio.sleep(SYNC_INTERVAL)
+        result = await run_bounded_guild_sweep(
+            list(bot.guilds),
+            _sync_metrics_for_guild,
+            concurrency=_metrics_guild_concurrency(),
+            on_error=lambda guild, exc: print(
+                "❌ Metrics guild sync failed "
+                f"guild={getattr(guild, 'id', '?')}: {type(exc).__name__}: {exc}"
+            ),
+        )
+        print(
+            "📊 metrics sync cycle "
+            f"guilds={result.total} ok={result.succeeded} failed={result.failed} "
+            f"concurrency={result.concurrency} elapsed_s={result.seconds:.2f}"
+        )
+        # No overlapping passes or zero-delay retry loops after an overrun.
+        await asyncio.sleep(
+            max(10.0, SYNC_INTERVAL - result.seconds)
+            + random.uniform(0.0, 10.0)
+        )
 
 
 def start_metrics_worker() -> None:
