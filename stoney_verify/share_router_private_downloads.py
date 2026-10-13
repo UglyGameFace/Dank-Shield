@@ -15,7 +15,7 @@ from typing import Any
 import discord
 
 from .share_router_media_network import is_safe_media_download_url
-from .share_router_media_titles import title_from_embeds, title_from_filename, title_prefix
+from .share_router_media_titles import title_from_embeds, title_from_filename, title_from_media_url, title_prefix
 from .share_router_media_resolver import (
     MEDIA_URL_RE,
     MediaResolution,
@@ -260,6 +260,7 @@ async def handle_download_message(message: discord.Message) -> bool:
                     video_title = (
                         resolution.title
                         or title_from_embeds(message, url)
+                        or (title_from_media_url(resolution.source_url) if resolution.provider == "direct" else "")
                         or title_from_filename(getattr(video.file, "filename", ""))
                     )
                     prefix = title_prefix(video_title)
