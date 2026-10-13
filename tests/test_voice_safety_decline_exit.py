@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime, timezone
 from functools import wraps
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -43,6 +44,7 @@ class Member:
         self.roles = list(roles)
         self.edits = []
         self.kicks = []
+        self.joined_at = datetime(2026, 10, 12, tzinfo=timezone.utc)
 
     async def edit(self, *, roles, reason):
         self.roles = list(roles)
@@ -209,3 +211,48 @@ def test_new_verify_panel_only_offers_exit_when_disclosed():
     }
     assert "Decline & Exit Server" in {child.label for child in VoiceSafetyConsentView().children}
     assert any(c.custom_id == decline_exit.DECLINE_CUSTOM_ID for c in disclosed.children)
+
+
+@sync_async
+async def test_rejoined_member_is_not_kicked_by_stale_ten_second_job(environment):
+    guild = Guild()
+    await decline_exit.decline_and_exit(Interaction(guild), from_verify=True)
+    entry = decline_exit._PENDING[(71, 24)]
+    assert entry.joined_at == guild.member.joined_at
+    entry.task.cancel()
+    guild.member.joined_at = datetime(2026, 10, 13, tzinfo=timezone.utc)
+    entry.expires = time.monotonic() - 1
+    await decline_exit._kick_later(entry)
+    assert not guild.member.kicks
+    assert not decline_exit.exit_pending(71, 24)
+
+
+@sync_async
+async def test_undeliverable_grace_message_keeps_restricted_without_unseen_kick(environment):
+    guild = Guild()
+    interaction = Interaction(guild)
+    interaction.followup.send.side_effect = RuntimeError("simulated Discord followup failure")
+    await decline_exit.decline_and_exit(interaction, from_verify=True)
+    assert not environment["value"]
+    assert [r.id for r in guild.member.roles] == [103]
+    assert not guild.member.kicks
+    assert not decline_exit.exit_pending(71, 24)
+
+
+@sync_async
+async def test_failed_role_restoration_reverts_consent_and_preserves_exit(environment):
+    guild = Guild()
+    interaction = Interaction(guild)
+    await decline_exit.decline_and_exit(interaction, from_verify=True)
+    entry = decline_exit._PENDING[(71, 24)]
+    view = interaction.followup.send.await_args.kwargs["view"]
+    guild.member.roles = [guild.default, guild.unverified, guild.special]  # An external role mutation.
+    await view.children[0].callback(Interaction(guild))
+    assert environment["updates"][-2][2] is True
+    assert environment["updates"][-1][2] is False
+    assert decline_exit.exit_pending(71, 24)
+    assert not guild.member.kicks
+    entry.task.cancel()
+    entry.expires = time.monotonic() - 1
+    await decline_exit._kick_later(entry)
+    assert len(guild.member.kicks) == 1
