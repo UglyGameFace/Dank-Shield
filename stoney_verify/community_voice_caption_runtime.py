@@ -725,8 +725,7 @@ class CommunityVoiceCaptionManager:
                     await self.stop(state.session_id)
                     # The same identity may now serve another qualifying room,
                     # but never two VCs simultaneously in one guild.
-                    if bool(getattr(state, "safety_automatic", False)):
-                        await self.maybe_auto_start_voice_safety(member.guild)
+                    await self.maybe_auto_start_voice_safety(member.guild)
             return
 
         if after_id != target or before_id == target:
