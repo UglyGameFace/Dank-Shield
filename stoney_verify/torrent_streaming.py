@@ -1516,6 +1516,7 @@ class TorrentMediaManager:
         end: int = 0,
         elapsed_ms: float = 0.0,
         ready: Optional[bool] = None,
+        http_status: int = 0,
     ) -> None:
         """Record numeric startup timings for one signed stream consumer.
 
@@ -1547,11 +1548,15 @@ class TorrentMediaManager:
 
         if name == "request":
             state["request_count"] = int(state.get("request_count", 0) or 0) + 1
+            # Record status class only, never signed URLs, user agents or tokens.
+            safe_status = int(http_status) if http_status in (200, 206) else 0
+            state["last_http_status"] = safe_status
             state["last_range_start"] = max(0, int(start))
             state["last_range_end"] = max(int(start), int(end))
             state["last_request_from_start_ms"] = from_start_ms
             if "first_request_from_start_ms" not in state:
                 state["first_request_from_start_ms"] = from_start_ms
+                state["first_http_status"] = safe_status
                 state["first_range_start"] = max(0, int(start))
                 state["first_range_end"] = max(int(start), int(end))
         elif name == "wait":
@@ -1610,6 +1615,8 @@ class TorrentMediaManager:
             "metadata_ms": metadata_ms,
             "session_ready_ms": finalize_ms,
             "request_count": max(0, int(state.get("request_count", 0) or 0)),
+            "first_http_status": int(state.get("first_http_status", 0) or 0),
+            "last_http_status": int(state.get("last_http_status", 0) or 0),
             "first_request_ms": _ms("first_request_from_start_ms"),
             "first_range_start": max(0, int(state.get("first_range_start", 0) or 0)),
             "first_range_end": max(0, int(state.get("first_range_end", 0) or 0)),

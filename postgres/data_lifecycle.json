@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "scope": "Discloud PostgreSQL schema only; pre-existing Supabase data is not modified by this registry",
+  "tables": {
+    "public.dank_verify_reminder_delivery": {
+      "feature": "Simple Verify per-guild reminder attempt counters",
+      "owner": "stoney_verify.verification_reminders.ReminderWorker.cleanup_stale_history",
+      "purpose": "Prevent duplicate pings and enforce per-member limits across restarts",
+      "stored_fields": [
+        "guild_id",
+        "user_id",
+        "joined_at",
+        "last_claimed_at",
+        "attempts"
+      ],
+      "contains_message_content": false,
+      "retention_rule": "Retain while Discord membership remains; after at least 90 days idle delete only on authoritative Discord Unknown Member (10007), with joined_at and last_claimed_at guards",
+      "cleanup_interval_seconds": 3600,
+      "max_candidates_per_cleanup": 12,
+      "expiry_index": "idx_dank_verify_reminders_idle_scan",
+      "preserve_when": "Member still in guild; guild unavailable; Discord cannot definitively prove departure; database/query error",
+      "backup_class": "operational_counters",
+      "migration": "postgres/migrations/202610110001_verify_unverified_reminders.sql",
+      "retention_class": "operational_control",
+      "historical_reuse": "Enforce this member's per-join reminder cap after restarts; never infer hostile behavior from an incomplete verification alone",
+      "review_interval_days": 180
+    }
+  }
+}

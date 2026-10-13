@@ -13,7 +13,9 @@ jobs:
   python-compile:
     name: Python compile check
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The 3,215-test suite now takes ~14m30s alone. The previous 15m
+    # limit cancelled the job after passing tests and public audits.
+    timeout-minutes: 25
 
     steps:
       - name: Check out repository
@@ -39,6 +41,12 @@ jobs:
 
       - name: Compile Python modules
         run: python -m compileall -q stoney_verify main.py tools
+
+      - name: Verify isolated Voice Safety VLAN bridge security
+        run: python -m pytest tests/test_voice_companion_bridge.py -q --tb=short --disable-warnings
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
 
       - name: Run unit test suite
         id: unit_tests
@@ -157,6 +165,8 @@ jobs:
 
     services:
       postgres:
+        # Prefer the upstream official image; public ECR mirror returned
+        # toomanyrequests/Data limit exceeded before tests could start.
         image: postgres:16
         env:
           POSTGRES_PASSWORD: postgres

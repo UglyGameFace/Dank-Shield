@@ -21,6 +21,7 @@ from ..navigation_registry import (
     category_by_key,
     feature_by_key,
     features_for_category,
+    recent_features,
     search_features,
 )
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
@@ -135,6 +136,16 @@ def _help_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
+        name="Direct /dank shortcuts",
+        value=(
+            "`/dank protection` • `/dank voice-safety` • `/dank diagnostics` • "
+            "`/dank stats` • `/dank status` • `/dank logs`\n"
+            "`/dank welcome` • `/dank design` • `/dank share` • "
+            "`/dank pings` • `/dank community` • `/dank profile` • `/dank help`"
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="Uploads",
         value=(
             "`/dank upload` — choose **Join Card Background**, **Exit Card Background**, or **Custom Card Font**, "
@@ -176,6 +187,7 @@ _FEATURE_ROUTE_KEYS = frozenset(
     {
         "setup_center",
         "verification",
+        "verification_reminders",
         "welcome",
         "member_setup_manager",
         "protection",
@@ -185,12 +197,15 @@ _FEATURE_ROUTE_KEYS = frozenset(
         "community_pings_manager",
         "community_tools",
         "share_router",
+        "share_downloads",
+        "toke_settings",
         "community_hub",
         "movie_night",
         "tickets",
         "server_design",
         "card_assets",
         "live_captions",
+        "voice_safety",
         "logs_activity",
         "server_stats",
         "status",
@@ -267,7 +282,7 @@ def _search_embed(query: str, results: list[NavigationFeature]) -> discord.Embed
         description=(
             f"Search: **{query or 'all features'}**\n"
             "Choose a result below. Search understands common names such as "
-            "`invite shield`, `ping roles`, `member setup`, `captions`, and `share router`."
+            "`voice safety`, `download channel`, `sesh`, `captions`, and `share router`."
         ),
         color=discord.Color.blurple(),
     )
@@ -288,6 +303,29 @@ def _search_embed(query: str, results: list[NavigationFeature]) -> discord.Embed
     return embed
 
 
+def _recent_embed() -> discord.Embed:
+    features = recent_features()
+    embed = discord.Embed(
+        title="✨ New & Updated Dank Shield Features",
+        description=(
+            "**Home › New & Updated**\n"
+            "These shortcuts reflect existing feature owners, not duplicate controls. "
+            "Select a destination to open the current setup or member flow."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Updated destinations",
+        value="\n".join(
+            f"{feature.emoji} **{feature.label}** — {feature.description}"
+            for feature in features
+        )[:1024],
+        inline=False,
+    )
+    embed.set_footer(text="Dank Shield • Feature availability depends on server configuration and permissions")
+    return embed
+
+
 async def _route_feature(interaction: discord.Interaction, feature_key: str) -> None:
     key = str(feature_key or "").strip()
     if key not in _FEATURE_ROUTE_KEYS:
@@ -300,6 +338,10 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
     if key == "verification":
         from .public_verify_command_center import open_verify_command_center
         return await open_verify_command_center(interaction)
+
+    if key == "verification_reminders":
+        from .public_verify_reminder_ui import open_reminder_settings
+        return await open_reminder_settings(interaction, int(interaction.user.id))
 
     if key == "welcome":
         from stoney_verify.welcome_setup_ui import open_welcome_setup
@@ -348,6 +390,14 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
         from .public_share_router import open_share_router
         return await open_share_router(interaction, replace_message=True)
 
+    if key == "share_downloads":
+        from .public_share_router import open_share_router_download_settings
+        return await open_share_router_download_settings(interaction)
+
+    if key == "toke_settings":
+        from stoney_verify.toke_live_ui import open_toke_settings
+        return await open_toke_settings(interaction, replace=True)
+
     if key == "community_hub":
         from .public_community_hub import open_community_hub
         return await open_community_hub(interaction, replace_message=True)
@@ -374,6 +424,12 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
     if key == "live_captions":
         from .public_live_captions import open_server_live_captions
         return await open_server_live_captions(interaction, replace_message=True)
+
+    if key == "voice_safety":
+        # Voice Safety remains owned by Protection Center; navigation must
+        # never duplicate guild permissions, consent, or receiver management.
+        from .public_voice_safety import open_voice_safety_center
+        return await open_voice_safety_center(interaction)
 
     if key == "logs_activity":
         from .public_setup_group import _require_setup_permission
@@ -443,6 +499,14 @@ async def _open_category(interaction: discord.Interaction, category_key: str) ->
         interaction,
         embed=_category_embed(category),
         view=FeatureCategoryView(int(interaction.user.id), category.key),
+    )
+
+
+async def _open_recent(interaction: discord.Interaction) -> None:
+    await _replace_panel(
+        interaction,
+        embed=_recent_embed(),
+        view=RecentFeaturesView(int(interaction.user.id)),
     )
 
 
@@ -562,6 +626,20 @@ class _FindFeatureButton(discord.ui.Button):
         await interaction.response.send_modal(FeatureSearchModal(int(interaction.user.id)))
 
 
+class _RecentFeaturesButton(discord.ui.Button):
+    def __init__(self, *, row: int = 2) -> None:
+        super().__init__(
+            label="New & Updated",
+            emoji="✨",
+            style=discord.ButtonStyle.primary,
+            custom_id="dank:navigation:recent:v1",
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _open_recent(interaction)
+
+
 class _AllFeaturesButton(discord.ui.Button):
     def __init__(self, *, row: int = 3) -> None:
         super().__init__(
@@ -651,6 +729,7 @@ class CompactDankHomeView(_OwnedView):
         self.add_item(_AllFeaturesButton(row=1))
         self.add_item(_HelpNavigationButton(row=1))
         self.add_item(_CloseNavigationButton(row=1))
+        self.add_item(_RecentFeaturesButton(row=2))
 
 
 class FeatureCategoryView(_OwnedView):
@@ -670,6 +749,19 @@ class FeatureCategoryView(_OwnedView):
         self.add_item(_CategoryNavButton(category_key=self.category_key, action="home", row=nav_row))
         self.add_item(_CategoryNavButton(category_key=self.category_key, action="refresh", row=nav_row))
         self.add_item(_CloseNavigationButton(row=nav_row))
+
+
+class RecentFeaturesView(_OwnedView):
+    def __init__(self, owner_id: int) -> None:
+        super().__init__(owner_id)
+        features = recent_features()
+        for index, feature in enumerate(features):
+            self.add_item(_FeatureButton(feature, row=index // 5))
+        row = max(1, (len(features) + 4) // 5)
+        if row > 4:
+            raise RuntimeError("Recent features exceed mobile Discord component limit")
+        self.add_item(_HomeButton(row=row))
+        self.add_item(_CloseNavigationButton(row=row))
 
 
 class FeatureDirectoryView(_OwnedView):
@@ -799,6 +891,50 @@ def _standalone(name: str, description: str, callback: Any) -> app_commands.Comm
     return app_commands.Command(name=name, description=description, callback=resolved)
 
 
+# A small set of discoverable direct commands, each delegating to its existing
+# Home feature owner. Keep this short enough for Discord's 25 subcommand limit,
+# with extra payload headroom for future command schema changes.
+DANK_SHORTCUTS: tuple[tuple[str, str, str], ...] = (
+    ("community", "Open the community hub, LFG and activities.", "community_hub"),
+    ("design", "Open channel naming and server design settings.", "server_design"),
+    ("diagnostics", "Check setup, startup and operational health.", "diagnostics"),
+    ("help", "See the Dank Shield feature guide and navigation.", "help"),
+    ("logs", "Configure logging destinations and activity tracking.", "logs_activity"),
+    ("pings", "Manage community and notification ping roles.", "community_pings_manager"),
+    ("profile", "Open your member profile and privacy settings.", "my_profile"),
+    ("protection", "Open AntiNuke, Spam Guard, invites and Automod.", "protection"),
+    ("share", "Open Share Router and inline media settings.", "share_router"),
+    ("stats", "Manage live server stats and accurate counters.", "server_stats"),
+    ("status", "View the bot's service and runtime status.", "status"),
+    ("voice-safety", "Configure disclosed AI voice safety and alerts.", "voice_safety"),
+    ("welcome", "Manage welcome, join and exit messages and cards.", "welcome"),
+)
+
+
+def _shortcut_callback(feature_key: str) -> Any:
+    """Use the existing owner; do not create alternative command/business logic."""
+
+    async def open_shortcut(interaction: discord.Interaction) -> None:
+        # These UI owners use component edit-message when reached through Home.
+        # Fresh slash interactions must receive a new private response instead.
+        if feature_key == "community_hub":
+            from .public_community_hub import open_community_hub
+            return await open_community_hub(interaction, replace_message=False)
+        if feature_key == "share_router":
+            from .public_share_router import open_share_router
+            return await open_share_router(interaction, replace_message=False)
+        if feature_key == "community_pings_manager":
+            from .public_toke import open_community_ping_setup
+            return await open_community_ping_setup(interaction, replace_message=False)
+        if feature_key == "server_stats" and not interaction.response.is_done():
+            # Canonical stats editor switches to edit_original_response once
+            # deferred, instead of edit_message (invalid for slash commands).
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        await _route_feature(interaction, feature_key)
+
+    return open_shortcut
+
+
 def _compact_dank_children(tree: Any) -> int:
     setup_command = dank_group.get_command("setup")
     if not isinstance(setup_command, app_commands.Command):
@@ -820,6 +956,11 @@ def _compact_dank_children(tree: Any) -> int:
         callback=consolidated_asset_upload,
     )
     dank_group.add_command(upload)
+
+    for name, description, feature_key in DANK_SHORTCUTS:
+        if feature_key not in _FEATURE_ROUTE_KEYS:
+            raise RuntimeError(f"shortcut {name} has no canonical registered feature owner")
+        dank_group.add_command(_standalone(name, description, _shortcut_callback(feature_key)))
 
     from .public_command_hub import DANK_PAYLOAD_SAFETY_LIMIT, dank_payload_size
     size = dank_payload_size(tree)
@@ -886,7 +1027,8 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
         )
 
     dank_children = sorted(str(getattr(item, "name", "")) for item in dank_group.commands)
-    if dank_children != ["home", "setup", "upload"]:
+    expected_children = sorted(["home", "setup", "upload"] + [name for name, _, _ in DANK_SHORTCUTS])
+    if dank_children != expected_children:
         raise RuntimeError(f"compact v2 /dank children mismatch: {dank_children}")
 
     _INSTALLED = True

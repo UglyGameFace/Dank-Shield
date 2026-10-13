@@ -20,7 +20,7 @@ def test_commands_install_final_compactor_after_all_additive_registrars() -> Non
     assert "install_compact_public_surface_v2(bot, tree)" in exit_surface
 
 
-def test_ui_first_surface_has_tiny_explicit_entry_set() -> None:
+def test_ui_first_surface_has_curated_shortcuts_and_setup() -> None:
     source = (ROOT / "stoney_verify/commands_ext/public_command_surface_v2.py").read_text(
         encoding="utf-8"
     )
@@ -32,7 +32,7 @@ def test_ui_first_surface_has_tiny_explicit_entry_set() -> None:
         'dank_group.add_command(setup_command)',
         'name="upload",',
         'expected_roots = {"captions", "cinema", "dank", "mod", "movie", "role", "ticket", "tickets", "toke", "verify"}',
-        'dank_children != ["home", "setup", "upload"]',
+        'expected_children = sorted(["home", "setup", "upload"] + [name for name, _, _ in DANK_SHORTCUTS])',
         "DANK_PAYLOAD_SAFETY_LIMIT",
         "dank_payload_size(tree)",
     ):

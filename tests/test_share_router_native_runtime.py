@@ -464,7 +464,7 @@ def test_direct_memes_already_inline_never_calls_native_relay(monkeypatch) -> No
 
 
 def test_direct_memes_runtime_reuses_one_listener_and_canonical_upload_owner() -> None:
-    assert "routes = await guild_routes(int(guild.id))" in RUNTIME
+    assert "routes, download_channel_id = await guild_route_state(int(guild.id))" in RUNTIME
     assert "await _relay_direct_memes_video(message, routes)" in RUNTIME
     assert RUNTIME.count('bot.add_listener(route_message, "on_message")') == 1
     assert RUNTIME.count("_relay_native_video_upload(") >= 3
@@ -629,6 +629,108 @@ def test_dank_design_excludes_share_router_from_batch_and_exact_edit_paths() -> 
     assert "design.protection.reserved" in DESIGN
 
 
+def test_facebook_embed_direct_cdn_can_relay_as_native_video() -> None:
+    # Discord occasionally exposes the real Facebook CDN media URL instead of
+    # an attachment proxy. This should reach the already bounded downloader.
+    fbcdn = "https://video.xx.fbcdn.net/v/t42.1790-2/demo.mp4?oh=signed"
+    facebook_embed = SimpleNamespace(
+        video=SimpleNamespace(url=fbcdn, proxy_url=None),
+    )
+    message = SimpleNamespace(attachments=[], embeds=[facebook_embed])
+    assert _trusted_video_url(fbcdn)
+    assert _video_source_urls(message) == [fbcdn]
+    assert not _trusted_video_url("https://video.xx.fbcdn.net.attacker.com/video.mp4")
+    assert not _trusted_video_url("https://evil-fbcdn.net/video.mp4")
+    assert not _trusted_video_url("https://www.facebook.com/plugins/video.php?href=x")
+
+
+def test_facebook_embedded_cdn_uses_existing_bounded_fetch(monkeypatch) -> None:
+    # No Facebook scraper, new proxy or unrestricted host fetch is installed.
+    # The canonical native-video source path tries actual media before falling
+    # back to yt-dlp Facebook extraction.
+    fbcdn = "https://video.xx.fbcdn.net/o1/v/t2/demo.mp4?oh=short-lived"
+    message, routes, target = _direct_memes_fixture()
+    message.embeds = [SimpleNamespace(video=SimpleNamespace(url=fbcdn, proxy_url=None))]
+    class FakeMember:
+        pass
+    target.guild = SimpleNamespace(me=FakeMember())
+    target.permissions_for = lambda _member: SimpleNamespace(attach_files=True)
+    monkeypatch.setattr(share_runtime.discord, "Member", FakeMember)
+    tried = []
+
+    async def fetch_candidate(url: str, *, max_bytes: int, request_headers=None):
+        tried.append((url, max_bytes))
+        return SimpleNamespace(file=SimpleNamespace(close=lambda: None),
+                               size_bytes=16, cleanup_path=None, source_url=url)
+
+    async def must_not_extract(*_args, **_kwargs):
+        raise AssertionError("valid embedded Facebook video must be checked before yt-dlp")
+
+    monkeypatch.setattr(share_runtime, "_download_trusted_video", fetch_candidate)
+    monkeypatch.setattr(share_runtime, "resolve_first_media", must_not_extract)
+    result = asyncio.run(
+        share_runtime._prepare_native_video(message, target, message.content)
+    )
+    assert result is not None
+    assert tried[0][0] == fbcdn
+    assert 0 < tried[0][1] <= 100 * 1024 * 1024
+
+
+def test_facebook_failed_hd_tries_one_sd_before_link_fallback(monkeypatch) -> None:
+    from stoney_verify.share_router_media_resolver import MediaResolution
+
+    hd = "https://video.xx.fbcdn.net/hd.mp4?token=short"
+    sd = "https://video.xx.fbcdn.net/sd.mp4?token=short"
+    resolution = MediaResolution(
+        source_url="https://www.facebook.com/reel/1001",
+        canonical_url="https://www.facebook.com/reel/1001",
+        identity="facebook:1001",
+        provider="facebook", delivery="progressive",
+        media_url=hd, ext="mp4",
+        alternate_progressive=((sd, (("Referer", "https://www.facebook.com/"),)),),
+    )
+    attempts = []
+
+    async def fake_download(url, *, max_bytes, request_headers=None):
+        attempts.append((url, max_bytes, request_headers))
+        if url == sd:
+            return SimpleNamespace(source_url=url, size_bytes=10, file="video")
+        return None
+
+    monkeypatch.setattr(share_runtime, "_download_trusted_video", fake_download)
+    result = asyncio.run(
+        share_runtime._download_resolved_progressive(resolution, max_bytes=19 * 1024 * 1024)
+    )
+    assert result.source_url == sd
+    assert len(attempts) == 2
+    assert all(a[1] == 19 * 1024 * 1024 for a in attempts)
+    assert attempts[1][2] == {"Referer": "https://www.facebook.com/"}
+
+
+def test_facebook_backup_never_bypasses_host_security(monkeypatch) -> None:
+    from stoney_verify.share_router_media_resolver import MediaResolution
+    alt = "http://127.0.0.1/private.mp4"
+    resolution = MediaResolution(
+        source_url="https://www.facebook.com/reel/1002",
+        canonical_url="https://www.facebook.com/reel/1002", identity="fb:1002",
+        provider="facebook", delivery="progressive",
+        media_url="https://video.xx.fbcdn.net/video.mp4",
+        alternate_progressive=((alt, ()),),
+    )
+    calls = []
+
+    async def fake_download(url, *, max_bytes, request_headers=None):
+        calls.append(url)
+        # The production guarded downloader validates each URL separately.
+        return None
+
+    monkeypatch.setattr(share_runtime, "_download_trusted_video", fake_download)
+    assert asyncio.run(
+        share_runtime._download_resolved_progressive(resolution, max_bytes=1024)
+    ) is None
+    assert calls == [resolution.media_url]  # Unsafe alternates are never fetched.
+
+
 def test_runtime_native_video_relay_is_bounded_and_fail_open() -> None:
     assert "DANK_SHARE_ROUTER_MAX_VIDEO_BYTES" in RUNTIME
     assert "DANK_SHARE_ROUTER_VIDEO_TIMEOUT_SECONDS" in RUNTIME
@@ -649,7 +751,8 @@ def test_runtime_native_video_relay_is_bounded_and_fail_open() -> None:
     assert "public_tcp_connector(ttl_dns_cache=60)" in RUNTIME
     assert "class PublicOnlyDNSResolver" in NETWORK
     assert "PublicOnlyDNSResolver()" in NETWORK
-    assert "request_headers=dict(resolution.request_headers)" in RUNTIME
+    assert "request_headers=dict(headers)" in RUNTIME
+    assert "_download_resolved_progressive(" in RUNTIME
     assert "_extract_x_video_url" not in RUNTIME
     assert "asyncio.to_thread" in RESOLVER
     assert "yt_dlp.YoutubeDL" in RESOLVER
@@ -770,7 +873,10 @@ def test_proxy_send_failure_preserves_source_and_allows_retry(monkeypatch) -> No
 
     monkeypatch.setattr(share_runtime.discord, "TextChannel", FakeTextChannel)
     monkeypatch.setattr(share_runtime.discord, "Member", FakeMember)
-    monkeypatch.setattr(share_runtime, "guild_routes", configured_routes)
+    async def configured_state(guild_id):
+        return await configured_routes(guild_id), 0
+
+    monkeypatch.setattr(share_runtime, "guild_route_state", configured_state)
     monkeypatch.setattr(share_runtime, "source_age_blocker", lambda _source: "")
     monkeypatch.setattr(share_runtime, "source_privacy_blocker", lambda _source: "")
     monkeypatch.setattr(share_runtime, "route_permission_blockers", lambda *_args, **_kwargs: [])

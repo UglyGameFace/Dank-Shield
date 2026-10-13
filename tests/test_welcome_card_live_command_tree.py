@@ -6,6 +6,7 @@ import discord
 from discord import app_commands
 
 from stoney_verify import commands as commands_module
+from stoney_verify.command_surface_contract import PUBLIC_DANK_CHILDREN
 from stoney_verify.commands_ext.public_command_hub import (
     DANK_PAYLOAD_SAFETY_LIMIT,
     dank_payload_size,
@@ -16,7 +17,7 @@ from stoney_verify.commands_ext.public_exit_compact_surface import (
 from stoney_verify.commands_ext.public_setup_group import dank_group
 
 
-EXPECTED_DANK_CHILDREN = {"home", "purge", "setup", "upload"}
+EXPECTED_DANK_CHILDREN = PUBLIC_DANK_CHILDREN
 EXPECTED_GLOBAL_ROOTS = {"captions", "cinema", "dank", "mod", "movie", "role", "ticket", "tickets", "toke", "verify"}
 
 
@@ -32,7 +33,8 @@ def _final_imported_tree() -> int:
     # commands.py performs canonical registration, the legacy compact pass, Exit
     # compatibility registration, and finally DS-COMMAND-UX-024 compaction.
     # Re-running the Exit registrar proves the final surface is idempotent and
-    # cannot resurrect /dank welcome after it has been intentionally retired.
+    # cannot resurrect the obsolete nested welcome subgroup. The curated
+    # direct welcome shortcut must remain a single flat command.
     return register_compact_exit_card_commands(
         commands_module.bot,
         commands_module.bot.tree,
@@ -42,7 +44,8 @@ def _final_imported_tree() -> int:
 def test_final_compacted_tree_is_small_and_idempotent() -> None:
     size = _final_imported_tree()
 
-    assert dank_group.get_command("welcome") is None
+    assert isinstance(dank_group.get_command("welcome"), app_commands.Command)
+    assert not isinstance(dank_group.get_command("welcome"), app_commands.Group)
     assert _child_names(dank_group) == EXPECTED_DANK_CHILDREN
     assert size == dank_payload_size(commands_module.bot.tree)
     assert size <= DANK_PAYLOAD_SAFETY_LIMIT
@@ -137,11 +140,18 @@ def test_attachment_doorways_are_limited_to_card_upload_and_toke_media() -> None
     }
 
 
-def test_lifecycle_studios_remain_reachable_from_home_not_subcommands() -> None:
+def test_lifecycle_studios_keep_home_access_and_flat_welcome_shortcut() -> None:
     _final_imported_tree()
     home = dank_group.get_command("home")
     assert isinstance(home, app_commands.Command)
     assert getattr(home.callback, "__module__", "") == (
         "stoney_verify.commands_ext.public_command_surface_v2"
     )
-    assert dank_group.get_command("welcome") is None
+    # The old nested /dank welcome group stays retired. The curated direct
+    # shortcut is a single command dispatching to the existing Welcome UI.
+    welcome = dank_group.get_command("welcome")
+    assert isinstance(welcome, app_commands.Command)
+    assert not isinstance(welcome, app_commands.Group)
+    assert getattr(welcome.callback, "__module__", "") == (
+        "stoney_verify.commands_ext.public_command_surface_v2"
+    )

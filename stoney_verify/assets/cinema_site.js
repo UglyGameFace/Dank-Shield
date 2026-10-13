@@ -147,6 +147,14 @@
       },
       ...options,
     });
+    // Report the API pathname, never URL query parameters or signed tokens.
+    const method = String(options.method || "GET").toUpperCase();
+    let requestPath = String(path || "").split("?")[0].split("#")[0];
+    try {
+      requestPath = new URL(API_BASE + path, window.location.href).pathname;
+    } catch (_error) {
+      // Preserve only the query-stripped relative path if URL parsing fails.
+    }
     const contentType = String(response.headers.get("content-type") || "").toLowerCase();
     const isJson = /\b(?:application\/json|[a-z0-9.+-]+\+json)\b/.test(contentType);
     let finalPath = "";
@@ -157,7 +165,8 @@
     }
     if (response.redirected) {
       console.error("cinema_api_unexpected_redirect", {
-        path, method: options.method || "GET", status: response.status, finalPath,
+        path: requestPath, method, status: response.status,
+        contentType: contentType || "missing", finalPath,
       });
       throw new Error(
         `Cinema request was redirected to ${finalPath || "another page"} (HTTP ${response.status}). Reopen Cinema and retry. If it continues, check site routing and sign-in.`,
@@ -180,22 +189,33 @@
           message = body.slice(0, 500) || message;
         }
       }
+      if (contentType.includes("text/html") || response.status >= 500) {
+        console.error("cinema_api_http_error", {
+          path: requestPath, method, status: response.status,
+          contentType: contentType || "missing", finalPath,
+        });
+        message += ` Request: ${method} ${requestPath}. Response: ${contentType || "unknown type"}.`;
+      }
       const diagnostic = authDiagnosticText(await authDiagnostics());
       throw new Error(diagnostic ? `${message}\n\n${diagnostic}` : message);
     }
     if (!isJson) {
       console.error("cinema_api_non_json_success", {
-        path, method: options.method || "GET", status: response.status,
+        path: requestPath, method, status: response.status,
         contentType: contentType || "missing", finalPath,
       });
       throw new Error(
-        `Cinema API returned ${contentType || "an unknown response type"} (HTTP ${response.status}) instead of JSON for ${path}. Check the site origin and routing before retrying.`,
+        `Cinema API returned ${contentType || "an unknown response type"} (HTTP ${response.status}) instead of JSON for ${requestPath}. Check the site origin and routing before retrying.`,
       );
     }
     try {
       return await response.json();
     } catch (_error) {
-      throw new Error(`Cinema API returned invalid JSON (HTTP ${response.status}) for ${path}. Check the site logs before retrying.`);
+      console.error("cinema_api_invalid_json", {
+        path: requestPath, method, status: response.status,
+        contentType: contentType || "missing", finalPath,
+      });
+      throw new Error(`Cinema API returned invalid JSON (HTTP ${response.status}) for ${requestPath}. Check the site logs before retrying.`);
     }
   }
 
@@ -1425,6 +1445,88 @@
       });
       stateEl.appendChild(play);
 
+      // Keep normal Play/Resume automatic. Source lookup is opt-in per episode,
+      // avoiding eight or more provider calls simply to load a season.
+      const sourcePanel = node("div", "episode-source-panel");
+      sourcePanel.hidden = true;
+      sourcePanel.addEventListener("click", (event) => event.stopPropagation());
+      const chooseRelease = button("Choose Release", "btn secondary episode-choose-source");
+      chooseRelease.setAttribute("aria-expanded", "false");
+      chooseRelease.setAttribute("aria-label", `Choose release for season ${seasonNumber} episode ${episodeNumber}`);
+      const panelId = `episode-sources-${seriesId}-${seasonNumber}-${episodeNumber}`;
+      sourcePanel.id = panelId;
+      chooseRelease.setAttribute("aria-controls", panelId);
+      let sourcesLoaded = false;
+      chooseRelease.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        const opening = sourcePanel.hidden;
+        sourcePanel.hidden = !opening;
+        chooseRelease.setAttribute("aria-expanded", opening ? "true" : "false");
+        if (!opening || sourcesLoaded) return;
+
+        sourcePanel.textContent = "";
+        sourcePanel.appendChild(node("div", "section-sub", "Searching releases for this exact episode…"));
+        chooseRelease.disabled = true;
+        try {
+          const data = await api(
+            `/episode-sources/${seriesId}/${seasonNumber}/${episodeNumber}?tmdb_id=${Number(ep.tmdb_id || 0)}`,
+          );
+          const sources = Array.isArray(data.sources) ? data.sources : [];
+          sourcePanel.textContent = "";
+          sourcePanel.appendChild(node("h3", "", `S${seasonNumber} E${episodeNumber} • Release Options`));
+          if (!sources.length) {
+            sourcePanel.appendChild(node(
+              "p", "section-sub",
+              "No matching releases were found for this exact episode. Close and reopen to search again.",
+            ));
+            return;
+          }
+          sourcePanel.appendChild(node(
+            "p", "section-sub",
+            "Automatic prefers releases without known browser-format warnings. Manual choices may still need codec verification.",
+          ));
+          const automatic = button("▶ Play Automatically", "btn secondary");
+          automatic.addEventListener("click", (e) => {
+            e.stopPropagation();
+            playOnSite(episodeItem, automatic);
+          });
+          sourcePanel.appendChild(automatic);
+          sources.forEach((source) => {
+            if (!source.source_choice) return;
+            const warning = source.video_risk === "risky"
+              ? "⚠ Reported format may not play in this browser"
+              : source.video_risk === "verified"
+                ? "Verified media format"
+                : "Format not yet verified";
+            const row = node("button", "source-card source-choice episode-source-choice");
+            row.type = "button";
+            row.append(
+              node("span", "feed-title", `▶ ${source.source_label || "Cinema source"}`),
+              node("span", "feed-meta", [
+                source.title || "",
+                Number(source.seeds || 0) ? `${source.seeds} reported seeds` : "",
+                warning,
+              ].filter(Boolean).join(" • ")),
+            );
+            row.addEventListener("click", (e) => {
+              e.stopPropagation();
+              playOnSite(episodeItem, row, source.source_choice);
+            });
+            sourcePanel.appendChild(row);
+          });
+          sourcesLoaded = true;
+        } catch (error) {
+          sourcePanel.textContent = "";
+          sourcePanel.appendChild(node(
+            "div", "state-card",
+            error.message || "Episode release search failed. Close and reopen to retry.",
+          ));
+        } finally {
+          chooseRelease.disabled = false;
+        }
+      });
+      stateEl.appendChild(chooseRelease);
+
       card.classList.add("episode-playable");
       card.addEventListener("click", (event) => {
         if (event.target.closest("button, select, option")) return;
@@ -1449,7 +1551,7 @@
         );
         stateEl.appendChild(libraryActions);
       }
-      card.append(still, copy, stateEl);
+      card.append(still, copy, stateEl, sourcePanel);
       list.appendChild(card);
     });
     host.appendChild(list);
@@ -1642,7 +1744,7 @@
       side.appendChild(sourceTitle);
       if (!sources.length) {
         side.appendChild(node("p", "section-sub", d.media_type === "tv"
-          ? "Choose an episode to search connected playback sources for that exact SxxExx release."
+          ? "Use Choose Release beside an episode to inspect its available playback sources."
           : "No connected playback source currently matches this title. Discord can still accept a host-supplied magnet or .torrent."));
       } else {
         side.appendChild(node(

@@ -16,7 +16,7 @@ from typing import Any, Mapping
 
 SESSIONS_FILE = Path(os.getenv("DANK_TOKE_SESSIONS_FILE", str(Path(os.getenv("DANK_DATA_DIR", "data")) / "toke_sessions.json")))
 _LOCK = asyncio.Lock()
-_RETENTION_SECONDS = 86400
+_RETENTION_SECONDS = 7 * 86400
 
 
 def _read() -> dict[str, dict[str, Any]]:
@@ -52,8 +52,19 @@ def _expire(data: dict[str, dict[str, Any]], now: float) -> bool:
         until = float(session.get("expires_at", 0) or 0)
         if session.get("active", False) and until <= now:
             session["active"] = False
+            session["close_reason"] = "expired"
+            session["closed_at"] = until
+            session["close_pending"] = True
             changed = True
-        if until + _RETENTION_SECONDS < now:
+        # A pre-fix restart may already have marked a card inactive without
+        # ever editing the Discord message. Reconcile those too.
+        if not session.get("active", False) and not session.get("close_synced", False):
+            if not session.get("close_pending", False):
+                session["close_pending"] = True
+                session.setdefault("close_reason", "expired")
+                session.setdefault("closed_at", until)
+                changed = True
+        if until + _RETENTION_SECONDS < now and not session.get("close_pending", False):
             data.pop(key, None)
             changed = True
     return changed
@@ -67,7 +78,11 @@ async def save_new(session: Mapping[str, Any]) -> dict[str, Any]:
     value["guild_id"], value["message_id"] = gid, mid
     value["created_at"] = time.time()
     value["cheers_ids"], value["going_ids"] = [], []
+    value["voice_seen_ids"] = []  # Only RSVP identifiers observed in the session VC.
+    value["past_cheers_ids"], value["past_going_ids"] = [], []
     value["active"] = True
+    value["close_pending"] = False
+    value["close_synced"] = False
     async with _LOCK:
         data = _read()
         _expire(data, time.time())
@@ -137,9 +152,13 @@ async def react(
         going = list(dict.fromkeys(int(x) for x in session.get("going_ids", []) if int(x) > 0))
         if action == "end":
             session["active"] = False
+            session["close_reason"] = "ended"
+            session["closed_at"] = time.time()
+            session["close_pending"] = True
         elif action == "withdraw":
             cheers = [x for x in cheers if x != actor_id]
             going = [x for x in going if x != actor_id]
+            session["voice_seen_ids"] = [x for x in session.get("voice_seen_ids", []) if x != actor_id]
         else:
             if actor_id not in cheers and len(cheers) >= max_interested:
                 return dict(session), "This sesh has reached its participant limit."
@@ -152,15 +171,102 @@ async def react(
         return dict(session), ""
 
 
-async def end_expired() -> list[dict[str, Any]]:
-    """Return active cards just expired; caller edits their Discord buttons."""
+async def reconcile_voice(
+    guild_id: int,
+    message_id: int,
+    present_ids: set[int],
+    *,
+    departed_ids: set[int] | None = None,
+) -> dict[str, Any] | None:
+    """Reconcile live attendance atomically with RSVP updates.
+
+    A person who entered this sesh's VC and then left is no longer marked as
+    joining or cheering. A planned RSVP that has *never entered* remains an
+    intention, not proof of presence. Voice events carry departures as well,
+    since someone can join and leave entirely within a debounce window.
+    """
+    present = {int(uid) for uid in present_ids if int(uid) > 0}
+    departed = {int(uid) for uid in (departed_ids or set()) if int(uid) > 0} - present
     async with _LOCK:
         data = _read()
-        now = time.time()
-        expired = [
-            dict(s) for s in data.values()
-            if s.get("active", False) and float(s.get("expires_at", 0) or 0) <= now
-        ]
-        if _expire(data, now):
+        expired = _expire(data, time.time())
+        session = data.get(_id(guild_id, message_id))
+        if session is None:
+            if expired:
+                _write(data)
+            return None
+        if not session.get("active", False):
+            if expired:
+                _write(data)
+            return dict(session)
+        cheers = [int(uid) for uid in session.get("cheers_ids", [])]
+        going = [int(uid) for uid in session.get("going_ids", [])]
+        interested = set(cheers) | set(going)
+        seen = {int(uid) for uid in session.get("voice_seen_ids", []) if int(uid) > 0}
+        leaving = (seen - present) | (departed & interested)
+        updated_cheers = [uid for uid in cheers if uid not in leaving]
+        updated_going = [uid for uid in going if uid not in leaving]
+        updated_seen = sorted((seen | (interested & present)) & present & (set(updated_cheers) | set(updated_going)))
+        past_cheers = {int(uid) for uid in session.get("past_cheers_ids", [])}
+        past_going = {int(uid) for uid in session.get("past_going_ids", [])}
+        new_past_cheers = past_cheers | (leaving & set(cheers))
+        new_past_going = past_going | (leaving & set(going))
+        if (updated_cheers != cheers or updated_going != going
+                or updated_seen != sorted(seen)
+                or new_past_cheers != past_cheers or new_past_going != past_going):
+            session["cheers_ids"] = updated_cheers
+            session["going_ids"] = updated_going
+            session["voice_seen_ids"] = updated_seen
+            # Historical participation is recorded only in the same durable
+            # session and never presented as current attendance.
+            session["past_cheers_ids"] = sorted(new_past_cheers)
+            session["past_going_ids"] = sorted(new_past_going)
             _write(data)
-        return expired
+        elif expired:
+            _write(data)
+        return dict(session)
+
+
+async def pending_closed(limit: int = 100) -> list[dict[str, Any]]:
+    """Durable retry queue for Discord cards awaiting a terminal edit.
+
+    Unlike an edge-triggered expiry snapshot, this queue survives read calls,
+    outages and process restarts. A card leaves the queue only after edit.
+    """
+    async with _LOCK:
+        data = _read()
+        if _expire(data, time.time()):
+            _write(data)
+        return [
+            dict(session) for session in data.values()
+            if not session.get("active", False) and session.get("close_pending", False)
+        ][:max(1, limit)]
+
+
+async def recoverable_views(guild_id: int | None = None) -> list[dict[str, Any]]:
+    """Register callbacks for active cards *and* old buttons awaiting cleanup."""
+    async with _LOCK:
+        data = _read()
+        if _expire(data, time.time()):
+            _write(data)
+        return [
+            dict(s) for s in data.values()
+            if (s.get("active", False) or s.get("close_pending", False))
+            and (guild_id is None or int(s.get("guild_id", 0)) == int(guild_id))
+        ]
+
+
+async def mark_closed_synced(guild_id: int, message_id: int) -> None:
+    """Acknowledge closure only after the Discord card was actually updated."""
+    async with _LOCK:
+        data = _read()
+        entry = data.get(_id(guild_id, message_id))
+        if entry and not entry.get("active", False) and entry.get("close_pending", False):
+            entry["close_pending"] = False
+            entry["close_synced"] = True
+            _write(data)
+
+
+async def end_expired() -> list[dict[str, Any]]:
+    """Backwards-compatible alias; return *closed* session snapshots."""
+    return await pending_closed()

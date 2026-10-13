@@ -1,123 +1,598 @@
+# Active Task Lock — Main/Production Reunification (2026-10-13)
+
+**Active task:** Safely reconcile `main` and `aaa-cinema-pre-pregateway-bind` into one real merge commit, with a draft PR targeting `main`. Do not deploy or switch Discloud yet.
+
+**Baseline:** `main@8e4bf66`; production branch `92f1a14` (including merged #534). Both are parents of the merge candidate. Preserve all production features and valid main changes without resets or force-pushes.
+
+**Findings:** The supplied patch's intended tree is byte-identical to production for 123 of 134 changed files. Eleven files need conflict resolution; verify changed content and CI on the exact candidate. Reconcile GitHub Actions branch filters/diff checks; use consistent PostgreSQL image sourcing.
+
+**Status:** Integration candidate only. Requires exact-head CI, diff/cleanup review, Discloud isolated canary, and live Discord/Cinema/Share Router/verification acceptance. Do not claim complete or redirect production until these pass.
+
+**Suspended task:** Voice Safety #517, including merged #534, remains suspended engineering work until branch reunification's full Definition of Done; #534 is explicitly incorporated in this candidate.
+
+**Next step:** Inspect exact-head GitHub checks, repair only failures inside this reconciliation scope, validate live behavior on an isolated instance, then coordinate a controlled main-branch production cutover with rollback to `584e655`.
+
+---
+
+# Suspended Task Record — Voice Conduct Moderation #517 (FORCE SWITCH 2026-10-12)
+
+**Active task:** Build a verified, privacy-conscious AI voice conduct moderation mode using one existing DAVE/SSRC caption receive pipeline. User force-switched from Share Router #390 to #517. This work remains active and has NOT met production Definition of Done.
+
+**Current branch/PR:** PR #520 merged at `4b085f8d6c7805491665b8462d74ae4b8d08d7f6`; verification-consent/auto VC PR #521 then merged at `7087b2926f85c2b5a7a4b68effba038a5200f573` on `aaa-cinema-pre-pregateway-bind`. **Neither merge substitutes for live DAVE/Discord/Discloud and privacy acceptance.** Screenshot on 2026-10-12 exposed unregistered new navigation routes. **Draft PR #523**, `fix/517-navigation-discoverability-20261012` based on the merged #521 integration branch, restores direct AI Voice Safety discoverability and existing verification reminders, Share Router download, and Toke settings routes. Adds registry-based **New & Updated** Home shortcut and corrects stale category descriptions. Only registry/router/UI entry metadata, docs, tests and a canonical Share Router download settings entry wrapper changed. No media download, toke attendance, Cinema playback, voice capture, or permission logic reconstructed. This is an active #517 integration polish subtask, not a FORCE SWITCH to #390.
+
+**Current requirement:** The user has existing rules displayed before verification and wants automatic monitoring in configured voice rooms without a per-VC Opt In press. The default Basic Verify button only said to read the rules and did not record voice consent, and verified roles can be staff-granted. Therefore **never infer voice processing consent solely from Verified roles or a rules-channel message**. Basic Verify now displays a versioned AI audio/Gemini notice and Agree & Verify. Only a verified click on the disclosed panel records one-time agreement using existing per-guild member settings. Previously verified members must accept once on the current public Voice Safety notice. Opt Out durably revokes; reads always refresh, cannot use caption preference. On join/restart, the existing session manager admits only saved consent, rechecking again after Gemini prewarm to prevent withdrawn-user races; disconnect and Stop revoke live buffer admission. If opt-out persistence fails, stop the guild's voice monitoring and require operator to reconcile prior stored consent.
+
+**Always-on behavior, bounded pilot:** When host and guild are explicitly enabled, existing canonical voice-state path can start the selected VC on new join; one on_ready listener restores configured occupied VCs within configured max session capacity. Auto-start sessions release their slot when the last user leaves. Staff Stop persists disable so auto-start will not re-enable unexpectedly; if write fails, operator must turn off the host gate. Only one selected VC per guild and default four simultaneous guild caption/voice sessions per process. Initial receive negotiation takes time and may miss immediately spoken words; no promise of indefinite simultaneous 10k voice rooms.
+
+**Policy blocking conditions:** Current Gemini unpaid API usage may be used for model development and is discouraged for sensitive/private data. Its 2026 API terms also restrict clients likely to be accessed by under-18 users. On #521, Voice Safety requires all three host confirmations before operation: `DANK_VOICE_SAFETY_ENABLED`, `DANK_VOICE_SAFETY_GEMINI_PAID_CONFIRMED`, `DANK_VOICE_SAFETY_ADULT_ONLY_CONFIRMED`, and the preexisting `DANK_COMMUNITY_LIVE_CAPTIONS_ENABLED` DAVE soak gate. Flag assertions are operator attestations, not proof of actual billing or age. Avoid sending user speech to Google Free Tier; do not deploy without privacy/platform/legal review. No auto sanctions, no second voice listener.
+
+**Validation:** Targeted Community Hub CI includes Voice Safety + Basic Verify source and regression tests; exact-head CI and whole bot CI required. Need consented real Discord audio, overlapping speakers, DAVE epoch/transport reconnect, member opting out while model in-flight, bot restart, verified-role-only denial, staff emergency Stop, Google quotas, API billing and data terms, Discloud CPU/RAM and correct voice permissions. Measure false positives and latency. No VoicePatrol superiority claims without benchmark. Review final diff and remove only directly relevant conflicting code.
+
+**Suspended task preserved below:** Share Router #390 with merged PRs #513/#514/#515, provider/media DM/hosted video live canaries outstanding, actual Discloud runtime SHA and persistence unknown, scaling beyond one instance unproven. Leave untouched. **Backlog:** advanced Voice Safety sanctions, multi-VC distributed workers, local privacy-preserving inference, provider benchmark after #517 pilot acceptance.
+
+**Next action:** Finish #523 exact-head UI/CI validation, live Android `/dank home` new menu canary and actual Discloud SHA check; PR #523 remains draft until accepted. Resume #517 real DAVE/Gemini privacy acceptance afterwards. The suspended Share Router #390 checkpoint below is preserved.
+
+---
+
 # Dank Shield Active Task
 
-## CURRENT ACTIVE TASK — DANK-TOKE-LIVE-SESH-20261010
+## REUNIFICATION RECORD — MAIN/PROD BRANCH MERGE 20261013
 
-**Outcome:** Convert /toke into a simple guild-specific live meetup with visible Cheers and joining participants, actual VC occupancy and a Join VC link, end/expiry controls, durable post/button state, standard Discord composer GIF/photo capture after one /toke command, and editable per-guild settings.
+**Branch:** `reconcile/main-reunification-20261013` (based on `main@8e4bf66`), merging production `aaa-cinema-pre-pregateway-bind@584e655`. Goal: return Discloud production to `main` as the single authoritative branch. No reset, no force-push, no discarded work.
 
-**Branch:** `feat/toke-live-sesh-participants-gifs-20261010` from `main@7f30dcb617ea5262bf34aeb82f028ecd06459530`.
+**Pre-merge verification (all four historical regressions):** the mitigations that caused production to leave `main` were verified present and correct in `main` before merging — Discloud REST recovery budgets (`discord_api_safety.py`, 40 req/30s + 120s quiet window), pre-gateway `:8080` site bind in `setup_hook` (PR #468), lazy libtorrent init with side-effect-free route registration (PRs #471/#472), and the composite interaction-timeout mitigations (`chunk_guilds_at_startup=False`, global-sync budgets, event-loop lag watchdog). The 9 safety-critical startup/lifecycle files were byte-identical or purely additive on the prod side; zero conflicting logic.
 
-**Status:** In progress, draft/CI and live Discord acceptance pending. No unrelated work, production not changed by this branch.
+**Main-side work integrated (103 commits):** ticketing public-panel privacy (#527); Toke per-guild live sesh + GIF composer (#503 — note: prod had already absorbed #503 via `01955af` and evolved it, prod side taken everywhere); Share Router custom proxy sources (#502), dynamic upload caps (#497), TikTok shortlinks (#494), forwarding isolation (#493); Cinema playback HTML handling (#486), episode search year fallback (#485), Nyaa RSS size validation (#484).
 
-### User-approved behavior
-- /toke with a URL or uploaded media still posts directly. /toke without media starts a 90-second, ephemeral capture: the member sends an image/GIF through the normal Discord composer in the same text channel, or taps Post Without Media / Cancel. Only a recognized GIF/photo message gets captured; other normal chat does not.
-- Normal Discord GIFs, keyboard GIFs when supplied as GIF URLs/embeds, and image uploads are accepted, subject to Discord Message Content privileged intent and platform/client behavior. Do not promise Discord's GIF picker can be programmatically opened by a bot.
-- The temporary member GIF post is deleted only after the destination /toke card successfully posts. Failed cards keep the original and notify the sender privately when possible.
-- Cheers and I'm Joining are separate actions; participant roster and actual VC occupancy are distinct. Members can withdraw. No repeat role ping on Cheers/Join. Starter and Manage Server can end sessions. Voice join uses the normal Discord channel URL and checks source/destination permissions.
-- Existing Community & Pings starter and notification roles still govern usage, current /toke role ping only at session creation. Per-guild settings cover lifetime, user/server cooldown, participant names, maximum interested, and default VC.
-- Active sessions persist by guild/message ID and restore persistent views on bot ready. IDs/choices are saved without member chat content. Expiration disables actions and marks session ended. Toke data file must survive Discloud restart.
+**Conflict resolution (15 files):** Toke (`toke_live_ui.py`, `toke_sessions.py`, `public_toke.py` + tests + workflow), Share Router (`share_router_runtime.py`, `public_share_router.py` + tests), Cinema (`cinema_site.py`, `cinema_site.js` + tests). Every resolution keeps both sides' features; prod side taken where it was a strict superset of main's. Full per-file resolution notes live in the merge commit message.
 
-### Files
-- `stoney_verify/toke_sessions.py` durable per-guild session state
-- `stoney_verify/toke_live_ui.py` participant/VC UI, media composer capture and settings controls
-- `stoney_verify/commands_ext/public_toke.py` existing /toke entry wired through one canonical send path
-- `stoney_verify/commands_ext/public_community_pings.py` Toke Settings doorway
-- `stoney_verify/commands_ext/public_command_surface_v2.py` once-only runtime listener registration
-- Focused regression tests must validate state isolation, GIF capture, cooldowns, duplicate Cheers, privacy, VC membership, idempotent listener registration, short-lived drafts, and per-guild settings.
-
-### Validation and blockers
-- Validate exact-head PR CI and source diffs; prior Share Router green checks do not cover this task.
-- Verify Message Content intent is enabled and approved in the Discord Developer Portal for the deployed bot if required. Bot can only see message content, embeds, and attachments when Discord grants the privileged intent; otherwise /toke media: or upload: remains the fallback.
-- Voice counts refresh on participant action and voice state events, with throttling. Discord cached member/channel state may lag.
-- No guarantees about keyboard GIF clients that provide no media or URL the bot can see. No unapproved extra slash command roots, and no second Toke runtime.
-- Real Android/desktop and multi-member testing, Discloud persistence check, and rollback are required before declaring complete.
-
-### Suspended work
-
-The previous active Share Router task **DANK-SHARE-ROUTER-CUSTOM-SOURCES-20261010** was accepted/merged in PR #502 (main@7f30dcb617ea5262bf34aeb82f028ecd06459530). Discord screenshots afterwards showed an older Share Router panel without Create Proxy, so Discloud release/branch verification remains unresolved. The user then explicitly approved switching to the Toke overhaul. Preserve Share Router's deployed-state investigation checkpoint and return only after a new FORCE SWITCH. Cinema remains suspended.
+**Rollback point:** production `584e655`, main `8e4bf66`. The reconciled branch must pass exact-head CI and a controlled Discloud canary before production switches branches. Do not declare the migration complete on merge alone.
 
 ---
 
-## SUSPENDED/HISTORICAL TASK — DANK-SHARE-ROUTER-CUSTOM-SOURCES-20261010
+## CURRENT SCALING SLICE — SHARE-ROUTER-390-DURABLE-FAIR-DOWNLOAD-QUEUE-20261012
 
-**Outcome:** Add independently configurable Share Router proxy source channels per guild with searchable/paged setup, creation, route editing/removal, and safe deletion. Automatically clear successful shares from managed proxy sources, with durable retry for Discord deletion failures and no silent deletion of undelivered shares. Preserve the canonical default sources, legacy external route behavior, media relay stack, and unrelated guild configurations.
+**Authorized continuation:** The user asked whether Download channels would run concurrently for 10,000+ servers, whether upgrading Discloud helps, then directed "ok continue". This is still the explicitly FORCE SWITCHED Share Router #390. No other development task may start.
 
-**Branch:** `feat/share-router-custom-sources-per-guild-20261010` based on `main@df839a303d229c385bf1885a1e5e9677ab903b5a`.
+**Production base:** `aaa-cinema-pre-pregateway-bind@e915dbb419d49b94cd6c235f6f87d0f2ca036cbd`, after PR #514 merged with green GitHub workflows. Actual deployed Discloud SHA and live download/hosting canary remain **unverified**. Draft PR #515 on `feat/share-router-390-fair-durable-download-queue-20261012`.
 
-**Status:** Code and regression tests in progress. Do not claim Discloud acceptance or ready-to-merge until exact-head CI, diff review, and real Discord tests have passed. Production remains unchanged.
+**First scaling slice:** Keep one canonical `route_message` listener; enqueue per-guild opt-in video download requests into bounded local SQLite with only guild/channel/member/message IDs, no URLs or media bytes. Two existing bounded media workers process jobs, global capacity 256, per guild 10, at most one pending per member and one running per guild; round-robin guild preference. Unstarted jobs expire after 6h, queued work survives a process restart **only when local data persists**, and crash-interrupted running jobs are dropped to avoid duplicate DMs. Worker rechecks current saved download channel, actual message/member and all canonical permissions/limits before delivery. No extra slash commands, media resolver, streaming stack or database migration.
 
-### Scope and root cause
+**Additional performance fix:** Reuse cached read-only Share Router config when routing each Discord message; invalidate after writes or file changes to avoid O(total guild config) JSON parse per event. Existing admin writes retain their file format. Staff Download Settings may show queue depth/limits for diagnostics.
 
-- Configuration is keyed per guild in `data/share_routes.json`, and the runtime routes by source/target channel ID. There is no per-guild hardcoding in the delivery path.
-- Previous setup picker only enumerated `DEFAULT_SHARE_CHANNELS` (four fixed proxies), while deletion used a 25-item non-paged picker. The limitation was source provisioning and UI, not media transport.
-- New `custom_sources` within each guild's existing bucket track explicitly bot-managed extra proxy channel IDs. Legacy saved routes remain authoritative for forwarding; no migration or channel deletion is needed.
-- Create creates a hidden, non-NSFW source, with saved identity and rollback if persistence fails. Additional `🔗 SHARE ROUTES N` categories handle Discord's 50-children-per-category ceiling, without any arbitrary low bot-side limit. Actual Discord per-guild limits still apply.
-- Edit/remove routes and delete custom proxies use paged, searchable resource browsers. Only explicitly registered custom proxies are eligible for Discord channel deletion, after interactive confirmation and revalidation. Four built-ins cannot be deleted from the custom manager.
-- Confirmed original cleanup root cause: previous successful-share paths called `Message.delete(reason=...)`; pinned dependency `discord.py[voice]==2.7.1` exposes `Message.delete(*, delay=None)` without `reason`, so the old broad exception handlers silently prevented deletion. Fixed both live `Message.delete()` and retry `PartialMessage.delete()` to use supported no-keyword APIs. Strict no-keyword tests prevent regressions.
-- Managed proxy sources now always require Manage Messages and auto-delete successfully forwarded posts, even if a historical route carried `delete_source=false`; unrelated legacy external channels still honor that opt-out. Failed deliveries remain in the source so user content is never silently lost. Blocked/unconfigured/failure paths attempt a private author DM and existing modlog. The existing one-message-listener runtime owns the cleanup path and installs one idempotent periodic worker for known-delivered messages that Discord initially refused to delete; fair per-pass rotation avoids one stuck guild starving others. No duplicate media resolver.
+**Not a 10k guarantee:** This is a single-instance SQLite queue, not a distributed broker. Other instances won't share a queue or the already-local signed-video files. Four hosted transfers and two download workers remain; truly scalable deployment needs Discord gateway sharding, shared queue/leases, separated workers, durable object storage/CDN, resource/egress accounting and load tests. Upgrading Discloud CPU/RAM alone does not remove these software caps. See `docs/share-router-download-scaling.md`.
 
-### Changes
-
-- `stoney_verify/share_router_resources.py`: custom name validation; mark all managed hubs and their sources as reserved design infrastructure.
-- `stoney_verify/share_router_runtime.py`: per-guild source registry in legacy JSON bucket, guarded channel creation/deletion, overflow categories, corruption-safe config reads, unified post-forward cleanup, and per-guild persisted deletion retry IDs (no message bodies).
-- `stoney_verify/commands_ext/public_share_router.py`: mobile creation modal, custom deletion confirmation, paged searchable source/route/removal browsers, refreshed health summary with pending cleanup count.
-- `tests/test_share_router_custom_sources.py`: guild separation, names, category overflow, legacy route preservation, strict no-keyword live/partial deletion API checks, delivery deletion and failed-deletion retry, queue fairness, failed-send preservation, cleanup rollback, file corruption protection, and menu contracts.
-- `tests/test_share_router_native_runtime.py`: verifies single idempotent on_message and on_ready cleanup registrations.
-- No Cinema, verification, Share Router media extraction, or unrelated commands changed.
-
-### Validation, cleanup and risks
-
-- GitHub exact-head full-suite checks and runtime smoke tests pending. Earlier commits passed compilation, design, security, and command-size checks; those older results do not validate this final API-signature correction. PR #502 remains open/draft and unmerged.
-- Validate source create and configure in two guilds, including an ordinary gaming-clip URL, a direct video, a failed upstream extraction with link fallback, and role/channel permission rejection. Verify immediate deletion after successful send, that a transient Discord deletion failure is logged and queued per guild, automatic retry after Manage Messages is restored, and that failed sends remain recoverable.
-- Ensure per-guild persistence survives a Discloud restart with stable `DANK_DATA_DIR` / `DANK_SHARE_ROUTES_FILE`; the feature inherits the existing local route-file durability contract, it does not create a new database service.
-- Discord enforces 50 channels per category and 500 total guild channels, so "unlimited" means no additional bot-side configuration cap, not limitless physical channels.
-- Clean-channel semantics are best effort, not an unconditional guarantee: lack of Manage Messages, Discord API outages, or failed delivery can leave an original post. Never auto-delete an undelivered source just to make the channel appear clean. The periodic worker only retries IDs known to have been delivered; it does not bulk-delete historic unknown posts. A crash after forward but before deletion is a residual orphan scenario to evaluate in real-world validation.
-- The active branch is isolated. Inspect any CI failures and the final PR diff before asking for merge.
-
-### Suspended task — Dank Cinema
-
-The previous active task **DANK-CINEMA-EPISODE-HTML-20261009** was explicitly suspended by the user's FORCE SWITCH. Its branch `fix/cinema-play-html-response-20261009` originated at `main@27b90e536d946636d2504df3056d546f6dbefe79`. Recorded scope: Dr. STONE S01E01 play request returning HTML rather than expected JSON, preserve canonical episode lookup and playback stack; JS response-type/redirect checks, play ingress logging, and targeted contract tests were implemented, but exact-head CI, Discloud branch, authenticated browser evidence, first-frame acceptance, and cleanup review remained unverified. Resume on that branch only after the user explicitly force-switches back. Existing cinema/verification issues remain on backlog and do not enter this Share Router PR.
+**Acceptance pending:** exact-head scoped Share Router/whole bot CI, durable queue fair admission and crash/restart tests, config cache tests, Discloud persistent volume and runtime SHA, guild opt-in/permission DM canary, burst test and sharding plan. PR #515 stays draft until these pass. Do not claim production release or 10k readiness.
 
 ---
 
-## HISTORICAL SUSPENDED TASK — DANK-CINEMA-EPISODE-HTML-20261009
+## CURRENT SUBTASK — SHARE-ROUTER-PRIVATE-DOWNLOAD-20261012
 
-**Outcome:** Investigate and repair the reported Dr. STONE S01E01 website playback error where the browser receives HTML while expecting JSON. Preserve the canonical episode search, source ranking, torrent session/room, and cross-browser behavior.
+**User continuation inside FORCE SWITCH #390 (Oct 12):** Dedicated opt-in Download channel, private DM delivery, and real above-DM-limit signed HTTPS Watch/Download links with adjustable expiry and easy staff mobile setup.
 
-**Branch:** `fix/cinema-play-html-response-20261009` from `main@27b90e536d946636d2504df3056d546f6dbefe79`.
+**Production base:** `aaa-cinema-pre-pregateway-bind@3811d8a3018930a8f9fcdb82c7d30ed0b3189bce` (Share Router #513 merged). Draft PR #514 on `feat/390-download-channel-private-dm-20261012`; still **unmerged/unproven live**. No other feature authorized.
 
-**Status:** Scoped API-boundary fix and regression tests implemented, with live request origin still undetermined. This is not a verified playback fix until the user can start the exact episode and reach a first frame. PR checks and Discloud acceptance remain pending.
+**UI:** Share Router manager → **Create Download Channel** (per guild) → **Download Settings** → choose 1 hour / 24 hours / 7 days (default) / 30 days (max) → **Test HTTPS Hosting**. Disable Downloads preserves channel but does not revoke already-issued links. If site URL not configured, set the already-existing `DANK_MEDIA_PUBLIC_BASE_URL` to public HTTPS Discloud site once in environment and restart. No new database or extra web server. User sees explicit readiness and configurable storage caps. The status test writes a tiny fake video payload, GETs it from the configured HTTPS origin, then revokes it; no link/token is exposed in Discord.
 
-### Scope, findings, and execution path
+**Delivery:** Existing canonical `share_router_runtime.route_message` dispatches the configured channel only. Reuse existing provider resolver, public-only SSRF guards, bounded HTTP download/remux; DM video attachments <=19MiB. When a larger video is safely staged, DM unguessable **Watch** (inline media extension, byte range) and **Download** (attachment disposition) links with random 256-bit bearer token/hash in sidecar and selected TTL. URL expiry checked on every access. Files are private local temp storage, not Supabase/Postgres; background cleanup every 15min, bounded rotating cleanup, 2 simultaneous ingestion / 4 HTTP transfers; 120sec member cooldown; 128 MiB file / 512MiB total default, hard configurable maximum 256MiB file/2GiB storage, 256 MiB free disk reserve. Fail to original-source link only when hosting unusable, not as fake file delivery. Upload/DM failures preserve source post; if a signed asset was already staged and DM fails, revoke it.
 
-- Real site path: season card click -> `playOnSite` -> shared `api("/play", POST)` -> `/cinema/{guild_id}/api/play` -> exact canonical episode metadata/provider search -> existing room/torrent start -> JSON `watch_url` -> Theater.
-- Screenshot confirms details and season metadata rendered, then an `Unexpected token '<', "<!doctype... is not valid JSON` toast when trying to play Dr. STONE S01E01.
-- The shared website helper unconditionally parsed any successful HTTP response via `response.json()`; an HTML 2xx response thus produced the raw browser syntax error. This defect is confirmed.
-- The registered aiohttp play handler returns JSON only on success, HTTP errors for missing sources/start failures. Therefore HTML 2xx is not explained by the normal canonical no-source path. Its external origin (proxy, redirect, different deployment, etc.) requires a live authenticated response trace. Do not guess.
-- Discloud production branch/SHA and authenticated browser HTTP response are not established; direct public site fetch is blocked in this environment.
+**Privacy / constraints:** Bearer link is transferable by anyone holding it, so it's **not** Discord identity-bound; Discord may cache previews after expiry. Strict storage quota refusal, no indiscriminate cleanup of unexpired files. Discloud's actual disk persistence after redeploy, public Cloudflare ingress, egress and storage quotas **not yet validated**, so cannot promise 7/30-day durability before actual host canary. Discord native inline rendering not guaranteed, only HTTP video playback link and browser fallback. Avoid serving private/copyright-unauthorized data. No startup SQL or duplicate service.
+
+**Acceptance:** scoped exact-head Share Router + full CI and HTTP endpoint tests; staff Android setup/expiry selector, one-file DM and one staged large file, range/expiry/revoke, blocked DM, high concurrency, 413, low disk, Discord link preview and download across Android/desktop, Discloud restart/redeploy storage. Only then remove draft/merge and close #390 if full real provider canary also green. Documentation `docs/share-router-private-downloads.md`.
+
+---
+
+## CURRENT ACTIVE TASK — SHARE-ROUTER-PROVIDER-PLAYBACK-390-20261011
+
+**Explicit FORCE SWITCH (Oct 11):** "Complete Share Router provider compatibility and inline playback under #390." Reason: finish the existing universal resolver, test real providers and fix unsupported-media fallbacks without rebuilding working components. All other work including Server Stats, verification, Cinema, security intelligence and issue #367 is suspended.
+
+**Production base:** `aaa-cinema-pre-pregateway-bind@cf47c10ed3e85b5435179fd9ce5721b4423f37d8` (PR #512 merged). Actual live Discloud deployed SHA and cross-client routing acceptance remain unverified. Work only on `fix/share-router-provider-playback-390-20261011` targeting this production integration branch. Draft PR #513 tracks this slice.
+
+**Existing canonical ownership:** `share_router_media_resolver.py` recognizes providers/canonical URLs, selects progressive/merge/manifest and returns safe metadata. `share_router_media_network.py` guards public-network requests. `share_router_media_remux.py` and `share_router_manifest_proxy.py` own bounded stream-copy remuxing and safe manifest requests. `share_router_runtime.py` remains the only source-to-destination policy/relay/upload owner. Never add another forwarding command, bypass source permissions/NSFW or allow mentions, bypass upload caps, or change unrelated routes.
+
+**First audited defects:** (1) H.264/AAC format could lose to higher resolution HEVC/AV1 or unknown-size formats, reducing inline cross-client success; (2) a first failing provider link masked a later valid manifest or separable A/V candidate; (3) unsafe media hosts could be recognized as "direct"/supported before rejection at download time. Apply codec/known-size ranking, prefer later remux-capable candidate over earlier link-only, reject private/credential-bearing/nonstandard-port media during recognition. Do NOT promise every codec/provider or client plays inline; keep canonical link fallback where upload/playback is unavailable. Add deterministic fixtures and exact-head full CI.
+
+**Acceptance remaining:** check GitHub exact-head CI, unit and provider fixture matrix including X/Twitter, TikTok, Instagram, YouTube/Shorts, Reddit, Twitch, Facebook, Vimeo, Streamable, Imgur, Tumblr, Bluesky, Pinterest and direct media; verify live public sample metadata/extraction and permission boundaries on the actual Discloud deployment (without collecting passwords/links containing private tokens); verify native attachment preview on Discord Android and desktop and link-only fallback on oversized/private/auth-protected/live media. These live external canaries are not proven by mocked CI. Check provider-specific diagnostics and current boost-tier upload caps; keep draft until reliable checks.
+
+**Previously merged and preserved:** Reminder PRs #510, #511 and #512 have landed, and the user confirmed live PostgreSQL migration succeeded via Discloud console. Live reminder canary still unverified; leave untouched under this FORCE SWITCH.
+
+---
+
+## PRIOR TASK — VERIFY-REMINDERS-DISCLOUD-POSTGRES-20261011
+
+**User continuation after PR #510 merge:** DankShield-DB PostgreSQL 16 was provisioned in Discloud (private connection only, reported online with 512 MB RAM / 0.25 CPU and 46 MB used); user saved Dank Shield VLAN enabled with internal hostname `dankbot`. Task remains **Unverified Member Reminders** under Single Active Task Lock. No unrelated fixes.
+
+**Code branch:** `fix/verify-reminders-discloud-postgres-20261011`, from Discloud GitHub integration branch `aaa-cinema-pre-pregateway-bind` merge commit `f4eb863505cf8478100e3401ce3243a108df4f78` (PR #510); Discloud running SHA still needs verification.
+
+**Root cause:** PR #510 uses Supabase RPC `claim_dank_verify_reminder` for durable send cooldowns while the user's actual Discloud PostgreSQL instance has no connected app driver/schema. Bot app already uses Supabase `guild_configs` and `role_truth`; these remain the canonical verification/configuration owners. Supabase's migration workflow runs from `main`, not Discloud's deployment branch, so PR #510 merge did not guarantee the original Supabase reminder schema. The new Discloud Postgres is accessible only via private VLAN, not from hosted GitHub CI.
+
+**Required behavior and changes:** Retain the shipped staff Verification Center, per-server settings, Simple Verify eligibility and safe DM/channel delivery. Replace the single delivery-ledger owner with PostgreSQL 16 one-statement atomic `INSERT .. ON CONFLICT WHERE .. RETURNING`. Add `psycopg[binary]`, private DSN `DANK_VERIFY_REMINDER_DATABASE_URL` in Discloud env, `VLAN=true`/`HOSTNAME=dankbot` in the deployment file. Provide an idempotent standalone PostgreSQL migration and opt-in one-off operator migration command, never startup DDL. Feature fails closed when URL, table, connection, permissions or claim are unavailable. No automatic fallback to Supabase or a second verification authority.
+
+**Changes on branch:** `verification_reminder_postgres.py`, replacement storage calls in `verification_reminders.py`, reminder UI messaging, `postgres/migrations/202610110001_verify_unverified_reminders.sql`, `tools/migrate_verify_reminders_postgres.py`, updated dependencies, `discloud.config`, example env/docs, unit and PG16 integration tests/workflow.
+
+**Validation and blockers:** Existing #510 exact-head CI was green before merge. Follow-up PostgreSQL branch full CI and PG16 atomicity tests pending until PR workflow completes. Actual private database connection, credentials, same-cluster reachability, live schema migration, recovery after restart and mobile Discord canary cannot be proven from GitHub and are unverified. Do not request database secrets in chat, edit Supabase schema, or claim live delivery until proven. If the Discloud UI offers no authorized private-network command runner to execute the migration, identify a supported operator-run SQL path; do not invent one.
+
+**Expanded user requirement (same database integration task, Oct 11):** New Discloud PostgreSQL should never silently grow with useless historical records. Adopt forward-looking storage governance for ALL future Discloud PostgreSQL feature tables, but do not start an unrelated legacy Supabase purge. Pre-existing `docs/PRIVACY_POLICY.md` §7 remains authoritative. Added `postgres/data_lifecycle.json` + `tests/test_postgres_data_lifecycle.py` gate requiring each new table to register purpose, owning cleanup service, minimal fields, TTL/preservation rule, bounded cleanup, backup class and migration; document contract at `docs/discloud-postgres-data-lifecycle.md`. No universal destructive sweeper. Reminder rows are only guild/member IDs, join time, last claim and attempt count. An hourly bounded sweep may remove a record after >=90 days inactivity only when Discord REST reports Unknown Member 10007, with SQL membership-generation and age guards. Live members are NEVER expired merely by age, preventing recycled spam budgets. Verify Discloud storage limits and backup/restore before future irreplaceable migrations; capacity warning thresholds are guidance, not shipped alerts.
+
+**Existing bad-actor owner confirmed (Oct 11):** `stoney_verify/anti_nuke_hostile_actor_runtime.py` already implements persistent guild-scoped confirmed hostile-actor reputation in Supabase table `guild_security_actor_reputation` plus a local mirror, tracking first/last seen, incident count, classification, source, related ID and explicit clearance. It is authoritative today; do not collect a duplicate PostgreSQL registry or run blanket TTL against it. The forward PostgreSQL lifecycle contract now requires `retention_class`, `historical_reuse` and `review_interval_days` in addition to bounded owner-specific cleanup, preserving purposeful longer-lived security, moderation, settings and recovery history. The distinct future security intelligence feature remains backlog-only, with evidence confidence, corrections, review and per-guild privacy constraints.
+
+**Next action:** Finish exact-head reminder+retention CI, PG16 SQL workflow, and final scoped diff inspection. Confirm Discloud private database config/migration without sharing secrets. Canary Simple Verify role changes, member departures and role/Discord/DB outages; only then remove draft status and merge.
+
+### Backlog — Bad actor historical intelligence (NOT active)
+
+**User requirement (Oct 11):** Dank Shield should remember documented bad actors so that a planned additional security feature can use an established history rather than starting cold. Preserve meaningful historical security evidence from indiscriminate database expiry: store authenticated Discord IDs, guild scope, exact source event, timestamp, action, severity/confidence, outcome/reversal, and provenance only where necessary. Keep a per-guild vs cross-guild disclosure/authority model, false-positive corrections and appeals, explicit retention and deletion authority, minimal PII, deduplication, capacity and privacy safeguards. Do not treat reports/allegations as verified facts, or auto-punish without safeguards. This is a distinct evidence collection/assessment capability, **not** authorization to implement it while PostgreSQL reminder integration PR #511 is active. No new bad-actor collection or security enforcement is claimed. Investigate existing AntiNuke/raid/spam/moderation reputation authority and migrations only after this task's Definition of Done or exact FORCE SWITCH. The broad PostgreSQL data lifecycle policy must allow justified durable evidence instead of indiscriminate short TTLs.
+
+### SUSPENDED — PR #509 Server Stats live acceptance
+The prior Server Stats code was merged into the deployment branch before PR #510, but real Discloud-native deletion and reconciliation acceptance remains pending. No code changes to Server Stats are permitted inside this active task.
+
+---
+
+## PRIOR TASK RECORD — VERIFY-UNVERIFIED-REMINDERS-20261011
+
+
+
+**Force switch (Oct 11):** Implement Dank Shield Unverified Member Reminders, starting with existing per-guild Simple Verify and its verified/unverified role truth. No separate verification authority; no unrelated feature work.
+
+**Branch:** `feat/verify-unverified-reminders-20261011`, based on documented Discloud branch `aaa-cinema-pre-pregateway-bind` at `50f5f69dbdc6f99ecc383cf67644e328b1a015bc` after Server Stats PR #509 merged. Discloud's actual deployed revision remains unconfirmed.
+
+**Status:** PR #510 draft, implementation and regression candidate on branch. Exact-head CI, live Discord/Discloud/storage acceptance still required. Nothing enabled in a server. As of 2026-10-11, Schema Authority SQL, Ticket Owner and Dank Design checks are green on current head; full CI remains pending.
+
+**Storage decision:** User recalled plans to use Discloud's database and questioned unlimited storage. Official Discloud Docs confirm managed PostgreSQL/MySQL/MongoDB/Redis templates and local SQLite support, but Diamond's *unlimited bandwidth* does not document unlimited database storage. This PR currently stores delivery attempts in Supabase because it is the existing config owner; do NOT migrate the entire bot's persistence speculatively, and keep PR draft until supported Discloud database instance and safe persistence/backup/migration strategy are identified. Per-guild settings still use existing guild_config. Avoid merging another Supabase dependency if moving this ledger to a provisioned Discloud database is chosen.
+
+**Execution path / source of truth:** Existing `/verify` staff center -> opt-in `Unverified Reminders` manager; `guild_config` CAS per-guild settings -> `verification_modes.basic_verify_allowed_for_guild` -> `role_truth.member_is_pending_verification` -> Discord fresh member role check -> service-role-only Supabase atomic claim -> private DM with saved verify-channel/panel link. Native worker installed once in `app._start_workers_once`; no new verification state model.
+
+**Scope:** Delay (1–720h), repeat (12–720h), max (1–5 per join), optional wording, previews and enable/disable with explicit per-server authorization. Default disabled; configured unverified/verified roles and exact saved verification channel required. Paginated member scans, bounded guild/pass and DM claims, no public pings, no automatic fallback to Voice/ID Verify, and fail-closed on DB/Discord errors.
+
+**Changes:** `stoney_verify/verification_reminders.py`, `commands_ext/public_verify_reminder_ui.py`, app + Verify Center integration, SQL migration `20261011000100_verify_unverified_reminders.sql`, targeted tests.
+
+**Validation / blockers:** Run focused and full GitHub Actions at exact head, review final diff; apply Supabase migration before enabling (RPC + ledger probe fail closed), then verify one overdue pending member receives a DM, already-verified/bot/staff/missing-role members do not, configured link resolves, repeat cooldown/attempt cap work through restart, and disabled/DB-down state sends no message. Actual Discloud SHA, migration and live Discord tests are not yet confirmed. Avoid enabling all servers automatically.
+
+**Oct 11 exact-head CI follow-up:** CI at previous head `346881e` had 3,158 passing / 1 failing `test_attempt_budget_counts_even_failed_dm`, while compile, Schema Authority, Ticket Owner and Design checks passed. Root cause was missing `name` attribute in test fake guild; real Discord guild always has one. While checking the failed test, discovered a production scanner bug: a per-pass cap could advance the page cursor past as-yet-unprocessed members. Fixed both on the same branch and strengthened the channel mention / stale panel link regression tests. Current head `c57829e`: Schema Authority, Ticket Owner and Design green; Profile and full Dank Shield CI in progress at last check. Do not assert full CI success until it is confirmed.
+
+**DB risk/decision:** Discloud docs support PostgreSQL templates and VLAN; Diamond does not establish unlimited storage. Actual database provisioning/credentials, quota and backup have NOT been confirmed. Existing role truth and guild config still depend on Supabase REST. Reminder delivery's new Supabase migration is currently unprovisioned. Keep PR draft and feature disabled until a tested durable store is chosen and wired safely, and do not silently claim the whole bot has migrated.
+
+**Next:** Confirm new-head CI; resolve any failures; inspect final PR diff. Once a Discloud PostgreSQL instance exists, implement only the chosen reminder-ledger adapter/migration as part of THIS task, run database atomicity/restart tests and canary Simple Verify DM/mention checks. Leave Server Stats, Toke, Cinema and unrelated code alone.
+
+### SUSPENDED — Server Stats accuracy (PR #509 merged)
+PR #509 `fix/dank-stats-ticket-reconciliation-20261011` was merged Oct 11 to `aaa-cinema-pre-pregateway-bind` at `50f5f69dbdc6f99ecc383cf67644e328b1a015bc`. It adds safe native-delete reconciliation in ticket repository/events, Server Stats refresh loop/staff actions and regression tests. Prior report: 3,150 tests and relevant checks passed; exact live Discloud runtime branch/SHA and native delete online/offline, Refresh Now, DB failure/recovery still require acceptance. No Server Stats code changed in this task. Preserve original detail below.
+
+---
+
+## PREVIOUS TASK — DANK-STATS-NATIVE-TICKET-DELETE-20261011
+
+**User-approved force switch:** "Fix Dank Shield Server Stats accuracy" because staff can delete ticket channels directly in Discord, missed events or bot downtime can leave stored counters stale, and all displayed counters must remain grounded in authoritative data.
+
+**Outcome:** Reconcile native ticket deletions safely, recover missed channel-deletion events, and keep existing Server Stats accurate without inventing closures or destabilizing other subsystems.
+
+**Branch:** `fix/dank-stats-ticket-reconciliation-20261011` based on documented Discloud Auto Deploy branch `aaa-cinema-pre-pregateway-bind`, after merged PR #508 (merge SHA `57d194714b3c1b4088259a63acc5b9387fa691fb`). **Discloud's actual running branch and SHA require independent verification.**
+
+**Status:** Implementation candidate staged; targeted/full CI, exact-head reviews and live Discloud acceptance pending. Production not changed by this branch.
+
+### Root cause and execution path
+
+- Existing `stoney_verify/app.py` registers `ticket_events.setup(bot)`; `ticket_events.py` already handles `on_guild_channel_delete` by close-then-delete through `tickets_new.repository` and explicitly refreshes `security_stats` on durable success.
+- Missing events while offline, lost Discord gateway events, and transient DB failures leave rows `open`/`claimed` despite vanished channels. Server Stats currently polls all saved lifecycle rows every 10 minutes and takes `max(DB open, visible active channels)`; its live-channel **floor can raise a false zero but cannot lower a stale DB count**.
+- `security_stats.py` refresh loop can reconcile before counting without adding another independent worker. State must only be deleted on authoritative REST 404 / Discord error code 10003, never on cache misses, 403, 5xx or DB failure. Ghost/channel-less ticket rows and surviving alternate thread/channel identities must be preserved.
+- A native deletion is an irreversible delete, not necessarily a completed closure. `Closed Tickets` counts records presently in `closed` status, not a cumulative count of all tickets ever resolved; deleted records are excluded. Do not fabricate extra closed tickets in the display merely to increase the number.
+- Other security counters use durable source registries and current Discord member counts. Do not widen this ticket-state task into unrelated metric redesign.
 
 ### Changes
 
-- `stoney_verify/assets/cinema_site.js`: check HTTP response media type and redirect before parsing, preserve plain/JSON HTTP error semantics, report status/route/type with no HTML or signed query leaks, continue parsing valid JSON and navigating to the returned Watch URL.
-- `stoney_verify/cinema_site.py`: bump JS cache key to v18; emit bounded safe logs for play handler ingress and episode lookup/torrent start exception types so a proxy-generated page can be distinguished from a request that reached the app.
-- `tests/test_cinema_api_response_contract.py`: exercise the actual JS helper under Node with synthetic successful JSON, 200 HTML, redirects, 502 HTML, 409 plain and JSON error bodies, invalid JSON, and no-body 204.
-- `tests/test_cinema_full_platform.py`: align two existing asset-version assertions.
-- No provider resolver, role/access model, server setup, session auth, room lifecycle, libtorrent, or voice/audio changes.
+- `tickets_new/repository.py`: new narrow paginated non-deleted ticket identity reader with explicit failure result and complete scan cap, no schema migration.
+- `ticket_events.py`: reuse the canonical external deletion close/delete transition for normal channels and raw thread delete events; reconcile absent IDs through confirmed Discord REST 10003; preserve live, ghost and unknown/permission-blocked rows; cursor/25 REST checks per guild per pass prevents starvation or API pressure; skip individual stat edits because the existing periodic worker refreshes once.
+- `security_stats.py`: call reconciliation from existing 10-minute enabled-display refresh loop before metric reads. Live channel delete events continue their immediate refresh path.
+- `commands_ext/public_server_stats.py`: Enable/Repair and Refresh Now reconcile first and surface an explicit uncertainty warning instead of claiming complete accuracy when DB/Discord checks fail.
+- `tests/test_ticket_stats_missing_channel_reconcile.py`: regression scenarios for pagination, DB failure, missed native deletion, cached/live/ghost/legacy safety, forbidden/non-10003/5xx/timeouts, alternate channel identity, fair budget, persistence failure, raw thread events, and staff Refresh Now feedback.
 
-### Validation, risks, and cleanup
+### Validation, cleanup, risks and next steps
 
-- In-turn direct execution of the extracted real JS helper confirms JSON success, HTML 200/502 detection, structured/plain errors, invalid JSON, and redirect path handling when the browser URL primitive is supplied.
-- GitHub Actions targeted, full suite, static/type/build, diff conflict review, and exact-head checks: pending.
-- First-frame Dr. STONE S01E01 playback, Android and desktop, and Discloud logs: **not verified**. Improving response diagnostics does not itself restart a dead/proxied origin or supply a missing valid release.
-- Only in-scope files modified on a new task branch. Keep patch and PR isolated; do not deploy automatically until checks and a controlled release path are determined.
-- After testing, compare live browser failure time to server log `cinema_site play ingress`: if absent, inspect hosting/auth/route; if present, inspect episode search, source and torrent startup logs. Capture response status, content type and redirect target without exposing signed cookies or URLs.
+- Run exact-head focused and relevant full GitHub Actions validation and review final diff; avoid claims of complete before results.
+- Test real Discord native deletion while online and offline/restarted, including Refresh Now and Enable/Repair; verify open/claimed counts decline only after deletion is confirmed and persisted; verify historic closed count semantics and DB recovery retry. Check logs and actual Discloud SHA.
+- Discord API and DB outages cannot establish a missing ticket; retain an uncertain row until later recovery. No transcript can be recovered if the channel disappeared before bot could capture it. Audit-log actor attribution remains out of scope unless needed for reliable state.
+- Scoped changes only; no Cinema, Share Router, Toke, or other moderation changes. Before merge, inspect branch conflicts and latest main/production drift.
+
+### Suspended task checkpoint — Toke mobile status sync
+
+Prior active task `TOKE-MOBILE-STATUS-SYNC-20261011` used `fix/toke-mobile-time-state-sync-20261011` and PR #508 targeting `aaa-cinema-pre-pregateway-bind`; GitHub reports PR #508 merged at `57d194714b3c1b4088259a63acc5b9387fa691fb` (Oct 11). Implemented absolute Discord timestamps, a Refresh snapshot and coalesced VC-count updates to avoid Android-relative-clock freezing/lost voice events. PR body reports exact-head 74 targeted tests passing and incomplete broader/live Android acceptance. The user reported the time refreshed only on app force-close; no confirmed Android/Discloud acceptance was supplied. Preserve Toke files untouched; resume validation only after another exact FORCE SWITCH.
+
+---
+
+# Dank Shield Previous Task Records
+
+## CURRENT ACTIVE TASK — TOKE-MOBILE-STATUS-SYNC-20261011
+
+**User report:** In Discord Android, the ended Toke card kept saying a frozen "Closed 5 seconds ago" until force-closing Discord. Members also need accurate VC participation counts when several join within seconds.
+
+**Branch:** `fix/toke-mobile-time-state-sync-20261011` based on the production auto-deploy branch `aaa-cinema-pre-pregateway-bind`, after merged PR #507 (`c3040079eab39b73b9c1d5fb1f528ded3a2cee66`).
+
+### Root causes confirmed
+- Toke used Discord relative timestamp markdown `<t:UNIX:R>` for both "Ends" and "Closed". Discord Android has a long-standing, documented issue where relative time display can freeze until client interaction/restart. A bot cannot force a clock in an already-open message to tick, or detect when a member merely views a message.
+- The Toke voice-state listener dropped every update for a guild within a five-second throttle, including final member joins/leaves. No trailing synchronization was scheduled. That could leave VC counts stale until a button or unrelated event refreshed the public card.
+
+### Scoped fix
+- Use **static localized Discord times** `<t:UNIX:f>` for "Scheduled end" and "Closed at". Fixed times do not depend on mobile relative countdown behavior, remain timezone-aware, and remain accurate when an app view is cached.
+- Active cards show a **fixed last-checked time** and instruct members to use Refresh for on-demand live status. The expiry worker still transitions to a grey/closed card and removes buttons at the configured time (polling at 15-second intervals, plus Discord API latency).
+- Replace lossy guild-wide VC throttle with one 2-second coalescing worker per guild, collecting changed channel IDs. A second pass is guaranteed if events arrive during an edit, eliminating lost final VC changes without triggering an API edit per rapid voice event.
+- No per-view activity event exists in Discord; do not promise an automatic refresh just because a member scrolls to the card. No constant periodic edit loop, which would be rate-limit- and scale-hostile.
+- Change only Toke UI, Toke tests, the targeted regression workflow and this checkpoint. Preserve merged Toke #507 GIF, expiry, roster, Share Router, Cinema and profile card behavior.
+
+### Acceptance gates
+- [ ] Exact-head focused tests for absolute timestamps, mobile stale-clock cases, grouped VC updates, late arrivals, guild isolation and old Toke regressions.
+- [ ] Exact-head full Dank Shield CI, security and design checks.
+- [ ] Merge into Discloud's `aaa-cinema-pre-pregateway-bind` only when safe.
+- [ ] Real Android acceptance: inspect active and ended session without restarting Discord; validate fixed local clock, automatic end-state, Refresh button counts, and burst of several VC joins/leaves.
+
+**Status:** In progress, PR draft. Not merged or deployed; Discloud revision and real mobile behavior unverified.
+
+---
+
+## PREVIOUS TASK — TOKE-SINGLE-GIF-20261011
+
+**Owner report:** Toke posts show the same GIF as a large attachment above the card and as an image inside the card after status updates. Screenshot Oct 11, Android. User asks to fix the duplicate.
+
+**Branch:** `fix/toke-single-gif-preview-20261011` from Discloud Auto Deploy branch `aaa-cinema-pre-pregateway-bind`. Isolated Toke fix; other projects paused.
+
+### Confirmed cause and supported solution
+- `_publish_toke` sent an uploaded GIF as `file=upload_file` AND `embed.set_image(attachment://filename)`. It then `sent.edit(embed=render_card(...))` to add persistent Cheers/VC data and edits again on reactions. Discord API issue #5675 describes how PATCH/edit causes attachment:// images to display twice.
+- GIF uploads and ordinary keyboard files now appear **once** as native message attachments, never again in an edited embed. A public Tenor/Giphy GIF CDN URL is instead displayed **inside the embed**, without file upload.
+- GIF-picker message extraction prefers persistent Tenor/Giphy CDN media from source embeds over their public viewing-page link. User source is deleted only after full successful post; avoid embedding short-lived Discord attachment CDN URLs from messages that will be deleted.
+- If only a non-direct viewing-page URL is available, keep a clickable link **inside the card description** instead of `message.content`, preventing an additional standalone unfurled preview.
+- Existing one canonical send, session persistence, Cheers, Joining, VC tracking, roles, authorization, and cooldowns remain unchanged.
+- Never use `suppress_embeds` to solve this, as it also hides the intended Toke embed.
+
+### Expanded owner report: expired cards and confusing crowd layout
+- At the 60-minute limit, the public Toke card continued to show a green active status with a relative timestamp in the past; buttons could produce a Discord "didn't respond in time" message after bot restart.
+- Root cause: `end_expired()` collected `active=True` copies **before** marking sessions inactive. The worker therefore reused a stale snapshot. Other code paths could mark the storage inactive before the worker saw an expiry, permanently skipping the public edit. Startup restored only active button views, leaving stale expired buttons unhandled.
+- A durable `close_pending` reconciliation queue now covers expiration, explicit End Sesh, legacy inactive records and failed card edits across restarts. It is only acknowledged after a terminal card update removes all components. Old callbacks remain registered until closure can be delivered. Worker retries every 15 seconds.
+- Every interaction now acknowledges before storage access or Discord edits and returns a friendly ended response for old buttons. Public ended cards change title, color and description, preserve media, show final counts, and remove participation controls.
+- Active card displays a compact stats field (Cheers, Joining and live VC with channel), at most three unique members with small status icons, and links longer rosters to Who's Coming. No repeated decorated names or verbose labels beside each member. The paged roster uses the same concise icons.
+- New 8-case regression suite validates restart recovery, stale clicks, durable retries, automatic/manual ending, and 35-person mobile layout. Full CI, Android visual acceptance, and Discloud deployment proof still required.
+
+### Validation
+- New end-to-end mocked send/edit regression checks on upload / direct public media / Tenor view-page link, plus existing Toke tests.
+- CI and actual Android visuals pending; no claim client-specific presentation is guaranteed until verified.
+- PR #506 merged into production branch at 7b71a8a32be2a358efd50a3758b4e462a808a540. Preserve its complete single-line profile-renderer implementation and archived checkpoint below; no profile, Share Router or Cinema files altered by GIF fix.
+
+
+---
+
+## PREVIOUS TASK — PROFILE-USERNAME-SINGLE-LINE-20261011
+
+**User-approved switch:** PR #505 (deduplicated Toke names) was merged to the documented Discloud Auto Deploy branch `aaa-cinema-pre-pregateway-bind`. The user then authorized the separately scoped profile-card layout fix. Share Router and Toke remain preserved and are not being modified in this PR.
+
+**Branch:** `fix/profile-name-single-line-fit-20261011` from `aaa-cinema-pre-pregateway-bind`.
+
+**Outcome:** Display the **whole profile-card display name on exactly one line** in Classic, Minimal, Spotlight and legacy compact layouts, including ornate Unicode/emoji combinations. Prevent textual truncation, ellipses, wrapping, and overlaps with avatar/platform/brand fields. Work inside the current fixed 1400x300 / legacy dimensions.
+
+### Confirmed root causes
+- The modern renderer uses fixed-size emoji rich text then `_fit(...)` to replace long names with `…`, creating `UglyGa…` in screenshot.
+- The shared `welcome_card_typography_engine._fitted_tile` always shortens text to `...` if it cannot fit at `min_size`; this also affects styled, no-emoji names and the legacy renderer.
+- Previous name input was hard-capped to 72/80 code points, which can bisect extended emoji sequences and result in partial text. Valid Discord display names are taken whole with a defensive 2048-character ceiling.
+
+### Scoped implementation
+- Shared typography engine: add an **opt-in** `preserve_text=True` setting. First reduce font size within the existing normal range; if still too wide, draw the whole name once and uniformly scale its tile to the allotted single-line rectangle. Other welcome/profile metadata typography keeps existing defaults.
+- Modern rich emoji names: measure complete emoji/text tokens, select the largest fitting font, or uniformly rescale the full composed raster (never `_fit` or split grapheme sequences). Respect fixed avatar/brand/platform regions.
+- Legacy compact renderer: use the same full-name preserve mode.
+- Platform username/handle text in standard and platform-focused themes also uses a single complete line instead of the prior two-line `_draw_complete` wrapping path. Server branding and role labels keep their established rules.
+- Regression tests: exact long emoji screenshot pattern, mixed Unicode, styled effects, all layouts, safe pixel bounds, legacy, and non-name typography compatibility.
+
+### Remaining gates
+- Exact-head profile-name-focused CI, full CI, asset/visual regressions, and real Android view at a representative phone width.
+- Confirm a truly extreme name must shrink in fixed-space geometry; no claim that arbitrary text can remain simultaneously fully readable at normal font size on a fixed-width card.
+- PR remains draft until tests and live acceptance. No Toke, Share Router, Cinema, or unrelated modules changed.
+
+### Suspended checkpoints
+Share Router #502 and Toke #503 were restored to the production branch through PR #504; Toke name duplication was addressed by PR #505. The earlier Cinema restart/branch divergence remains a separate recorded project. No further changes to those areas in this task.
+
+---
+
+## PREVIOUS TASK — DANK-SHARE-ROUTER-PRODUCTION-RECONCILE-20261010
+
+
+**User force switch:** Toke overhaul PR #503 was merged into `main@fee272e35e75a1eed0f4c2d6f7a21350173fffae`; user explicitly switched back to Share Router to make the live feature work. Preserve Toke and Cinema; do not implement unrelated features during this task.
+
+**Branch:** `fix/share-router-prod-branch-reconcile-20261010` based on historically documented Discloud Auto Deploy branch `aaa-cinema-pre-pregateway-bind`. **Important:** Discloud's *current* selected branch/SHA is still not verified because the connector has no Discloud access. Do not change it blindly.
+
+**Outcome:** Restore BOTH merged PR #502 (custom Share Router and clean proxy forwarding) and PR #503 (Toke sessions, normal GIF composer, visible participants, VC support and per-guild settings) onto the confirmed Discloud Auto Deploy branch without touching Cinema code. Fix proxy cleanup API misuse, and keep existing default routes and media behavior.
+
+### Root cause and evidence
+- Screenshots showed the older six-button Share Router menu with no **Create Proxy**. This matches `aaa-cinema-pre-pregateway-bind` exactly: old `public_share_router.py`, hardcoded four sources and no per-guild `custom_sources`; `main` includes these.
+- `docs/DANK_CINEMA_PLAYBACK_READINESS.md` recorded Discloud Auto Deploy following `aaa-cinema-pre-pregateway-bind`, **not** `main`. This was captured October 8 and is evidence, not proof of current Discloud settings.
+- Both branches have diverged by hundreds of commits, including Cinema/streaming changes on the production branch. **Do not point Discloud at `main` without reviewing that runtime change.**
+- Confirmed legacy post-forward source deletion used unsupported `discord.py==2.7.1` `message.delete(reason=...)`, swallowed by `except Exception: pass`. New code uses `message.delete()` with durable, per-guild cleanup retry.
+- Old UI's **Create / Repair Hub** was never a custom-source creator. "2/2 healthy" means saved route checks only, not live version or successful media delivery.
+- "Dank Shield is thinking" can come from a deferred button before a response; screenshots alone do not establish a timed-out callback. The old repair's after-defer status render is outside its try/except and needs an explicit error state if it fails.
+
+### Scope and changes
+- Transfer Share Router identity, runtime, UI and regression tests from merged PR #502; preserve `share_router_media_resolver.py` and every Cinema file.
+- Restore Toke PR #503 files only: `public_toke.py`, `public_community_pings.py` (8-line menu addition), `public_command_surface_v2.py` (2-line listener registration), `toke_sessions.py`, `toke_live_ui.py`, and Toke-specific tests/workflow. No Cinema code, media resolver, or unrelated startup changes.
+- Validate: creating sources per guild, browse/search >25, permission-check live source and destination, keep built-in four, configure destinations, preserve legacy routes, accurate cleanup diagnostics, delete-source rollback on error, and restart persistence.
+- Use one canonical Share Router runtime and one instance of each listener. Avoid config/environment resets or new Supabase migrations.
+- PR targets the documented Discloud branch so merging it there can produce a candidate without changing Cinema. Do not claim production release until current Discloud branch/SHA confirmed.
+
+### Acceptance & status
+- **In progress**: both Share Router #502 and Toke #503 source changes ported onto one Discloud-branch recovery candidate. Exact-head combined CI and real Android/Discloud acceptance pending.
+- Require focused and full CI on exact head, a fresh /dank → Community Tools → Share Router panel with **Create Proxy** and Custom proxies count, successful + failed source forwarding, and empty proxy after successfully relayed share.
+- The user supplied an Oct 10 Discloud dashboard screenshot confirming Auto Deploy follows `aaa-cinema-pre-pregateway-bind`, with last deployed #499. The PR base is correct. Merge only after exact-head validation; verify full deployed SHA afterwards.
+- Toke PR #503 is merged into `main` but was missing from production. This recovery restores it alongside Share Router; neither is considered live until actual branch deployment and Discord interaction acceptance.
+
+---
+
+## CURRENT ACTIVE TASK — CINEMA-HTML-INSTEAD-OF-JSON-REGRESSION-20261010
+
+**User evidence:** 2026-10-10 19:16 ET Samsung Browser at `stoneyverify.discloud.dev`, Cinema TV episode card `E3 • OutKast`; bottom toast shows `Unexpected token '<', "<!doctype "... is not valid JSON`. This is a JSON parser consuming HTML on an API call. Exact originating request URL/status/content type is not observable from screenshot.
+
+**Production branch at investigation:** `aaa-cinema-pre-pregateway-bind@965633cce170f0d222d8edf5f9777f5a50d40788`, merge of PR #500 at 23:17:11 UTC, AFTER screenshot (~23:16:49 UTC). Therefore new subtitle code cannot explain this screenshot. GitHub `discloud/commit` status is success, but deployed process SHA and live network body not independently verified.
+
+**Root cause confirmed in code:** `stoney_verify/assets/cinema_site.js` production helper `api()` assumed every HTTP success was JSON and called `response.json()` regardless of content type or redirects. A main-branch-only fix and its test `tests/test_cinema_api_response_contract.py` already handled HTML/redirect/malformed-JSON cases, but were not merged into the Discloud branch. This is a cross-branch regression; passing CI on that branch did not cover the missing contract. The *upstream reason* why one API request returned HTML (login/redirect, proxy/origin route, or temporary gateway response) is not proven. Backend `cinema_play_api` returns `web.json_response` normally; do not label the episode corrupt or guess the proxy status.
+
+**Task/branch:** Isolated branch `fix/cinema-api-html-json-contract-discloud-20261010`, based on exact Discloud GitHub SHA `965633cce170f0d222d8edf5f9777f5a50d40788`; dedicated draft PR until tests, root-cause analysis and browser/Discloud acceptance.
+
+**Patch:** Port the proven main-branch response guard to Cinema's actual production JS (content-type validation, unexpected redirects, bounded HTML errors, malformed JSON, sanitized method/path/status logging); port Node-backed JS regression from main; bump `site.js` version 18→19 for Samsung/other browser cache refresh. Do not auto-retry the POST /play request because it may create a room/torrent session and could duplicate work. No playback, Cinema auth, torrent, sync, or subtitle API logic changed.
+
+**Unresolved acceptance:** Obtain actual failing API method/path/status/Content-Type/redirect and origin logs from a recurrence. Exact-head CI, review, Discloud deployed SHA, live Samsung Browser reproduction and ideally second browser validation required before calling this fixed. The patch makes the error diagnosable and prevents raw JSON parse leakage; it cannot guarantee the upstream HTML source is repaired.
+
+## PREVIOUS TASK — CINEMA-SUBTITLE-SUPPORT-20261010 (MERGED)
+
+**Status:** PR #500 merged into Discloud branch `965633cce170f0d222d8edf5f9777f5a50d40788` on 2026-10-10 23:17:11 UTC. Pending separate live subtitle acceptance.
+
+## ARCHIVED TASK DETAILS — CINEMA-SUBTITLE-SUPPORT-20261010
+
+**Authorized transition:** After merging PR #499, user explicitly said “let's do it now” then “continue implementing” subtitles. Do not switch tasks without user directive.
+
+**Production baseline:** Discloud GitHub branch `aaa-cinema-pre-pregateway-bind@714e2af63b7cfa0fa1837c3e9e0832445246816d` (PR #499 merged; running Discloud SHA not independently confirmed).
+
+**Working branch/PR:** `feat/cinema-subtitle-foundation-20261010` → draft PR #500, targeting the exact production branch. Never merge until exact-head CI and authenticated browser validation.
+
+**Implementation in branch:**
+- `stoney_verify/cinema_subtitles.py`: strict SRT → WebVTT conversion; valid text-only stream discovery (SRT/SubRip, ASS/SSA, mov_text and WebVTT; exclude bitmap PGS/VobSub), bounded 35s/1MB FFmpeg extraction through signed 127.0.0.1 torrent endpoint, max 2 parallel jobs, 8-file short-lived cache.
+- `stoney_verify/movie_night_web.py`: same signed user/room, guild membership and access checks as main Theater; per-viewer `/subtitle`, optional `/subtitles/search` and `/subtitles/provider` endpoints, state now advertises verified tracks/provider availability, responsive subtitle menu, local SRT/VTT browser file picker, viewer-local caption delay/size, and attach-only HTML `<track>` media integration. No video URL/session, audio URL, room clock, host action or viewer sync mutations.
+- `stoney_verify/cinema_library_service.py`: per-member/per-guild `subtitle_language_by_guild` with authenticated `guild_subtitle_language` preference updates. Local uploads never leave the viewer's browser.
+- `stoney_verify/cinema_subtitle_providers.py`: SubDL v2 exact metadata/language helpers and paid-plan validation, including TV-labeled exact episodes.
+- `stoney_verify/cinema_subtitle_router.py`: three-source provider system (SubSource API v1, Wyzie Subs, SubDL), authenticated guild/tenant-specific account assignment from Discloud JSON, multiple accounts for distinct authorized guilds, deterministic one-key-per-provider/guild (no same-provider quota circumvention), parallel fallback/combined results, per-account conservative rate budgets + provider 429 cooldown, opaque viewer/guild/session-bound selections, safe signed download host allowlists, exact release+episode matching and bounded ZIP text extraction. Search and download jobs are coalesced between 20 concurrent viewers and cached; independent providers remain operational when one fails.
+- `tests/test_cinema_subtitles.py` covers conversion security/limits, verified embedded text, on-demand extraction cache, authorized endpoint, user/guild scoping and SubDL v2 controls. `tests/test_cinema_subtitle_router.py` covers three-provider search, SubSource schema, Wyzie URL restrictions, quota non-evasion, 20-viewer query/download coalescing, safe archives and scoped opaque selections. `tests/test_cinema_cross_mode_theater_contract.py` verifies 20-person subtitle state without changing shared timeline. `tests/test_movie_night_web.py` updated for new preferences and route.
+- `docs/DANK_CINEMA_SUBTITLES.md` documents setup, fallback and acceptance.
+
+**Known incomplete verification:** Newest exact-head CI pending; real Discloud/Android desktop browser track rendering, FFmpeg against real partially buffered torrent, optional SubDL authenticated real API response/download, native fullscreen subtitling and 20-viewer live subtitle/audio soak not verified. Do not claim user-facing completion/deployment until each evidence gate is satisfied. Provider requires an actual approved key, not in repo.
+
+**Next single action:** Resolve exact-head CI/regression failures if any; inspect final diff then complete authenticated standalone/private/watch-party browser acceptance; merge only after required gates.
+
+## PREVIOUS TASK — CINEMA-FULLSCREEN-PORTRAIT-RECOVERY-20261010 (MERGED)
+
+**Result:** PR #499 merged as `714e2af63b7cfa0fa1837c3e9e0832445246816d`. Live multi-browser fullscreen and 20-person audio load acceptance remain separate from code merge.
+
+## ARCHIVED TASK DETAILS — CINEMA-FULLSCREEN-PORTRAIT-RECOVERY-20261010
+
+**Source:** User screenshot Oct 10 16:57 Eastern, Samsung Browser, authenticated standalone Mad Max: Fury Road playback. Video displays decoded frames and user confirms clear audio; after entering fullscreen and returning to portrait, inline video stage remains visually too tall/distorted. Need correct layout for standalone and shared Theater in Private Sessions and Watch Parties without restarting a running torrent or altering audio and sync.
+
+**Live production baseline:** GitHub Discloud branch `aaa-cinema-pre-pregateway-bind@07aad2db0c376a8395725a5dbbaa403d7552f045` with `discloud/commit` success. PR #498 smart automatic selection merged, exact-head five workflows green. Running Discloud process SHA and per-mode Android viewer experience not independently verified.
+
+**Task branch:** `fix/cinema-fullscreen-portrait-recovery-20261010` based on that production SHA.
+
+**Root cause / fix:** Shared `stoney_verify/movie_night_web.py` previously set fixed pixel `videoStage.style.height=Math.round(rect.width*9/16)+"px"` in resize/fullscreen and removed it depending on a fullscreen signal that could include stale native `video.webkitDisplayingFullscreen`. Browser rotation can report transitional landscape dimensions or stale fullscreen compositor when leaving fullscreen. New code removes JS pixel locks, relies on CSS responsive 16:9 aspect ratio with explicit inline state and actual stage `document.fullscreenElement` checks; adds orientation-change, parent ResizeObserver and deferred settle rechecks. No `video.src`, `video.load`, seek, player session or audio/host timing mutations. Focused regression tests in `tests/test_cinema_fullscreen_portrait.py`.
+
+**Scope and acceptance:** Fullscreen landscape -> inline portrait -> fullscreen again (3+ cycles), Samsung Browser and another desktop/mobile browser, while video and per-viewer audio continue; no black frame, crop, stretched video, extra-height stage, player click breakage, host/viewer clock jumps, duplicate torrent sessions. Also verify Private Session and Watch Party use same shared Theater and independent viewer audio; **standalone evidence alone cannot certify modes not yet tested**. Complete exact-head CI, test and patch audit, merge/deployment status before user rechecks browser.
+
+**Research and contract evidence:** MDN Fullscreen API requires `Document.fullscreenElement` truth after the fullscreenchange event; `ScreenOrientation.lock` is limited support and may reject, so orientation is optional. Browser `HTMLMediaElement.play()` may reject NotAllowedError on audio and native `audioTracks` lacks uniform browser support. Runtime investigation confirms `/movie/{room_id}/watch` uses one `_watch_html` for all modes, each authenticated via signed room/UID URL plus guild membership and `MovieNightManager.user_can_access`. Standalone is host-only, Private is invited/host-only, Watch Party allows eligible guild members. A common `_state_payload` emits room-authoritative clock + viewer-specific `stream_consumer`, signed media and FFmpeg audio track URLs; `movie_night_preferences` fetches user preferences for current guild. The shared page's Sync gesture initiates both video + compatibility audio before awaiting async network response. Cross-mode runtime contract regressions added in `tests/test_cinema_cross_mode_theater_contract.py` for all modes and two viewers, with signed page access, separate consumer/audio URLs, same shared clock/host authority and language scoping. No live two-device browser proof exists yet, so do not claim decoded audio/video or exact A/V lip-sync guarantees.
+
+**Status:** Isolated fullscreen patch and multi-mode contract tests committed to draft PR #499; exact-head CI re-running. Discloud production remains at prior SHA until merge. Confirm CI and realistic browser/device acceptance before declaring complete.
+
+## PREVIOUS TASK CHECKPOINT — CINEMA-SMART-AUTOMATIC-SOURCE-SELECTION-20261010 (MERGED)
+
+**Result:** PR #498 merged to Discloud branch `aaa-cinema-pre-pregateway-bind@07aad2db0c376a8395725a5dbbaa403d7552f045`. Exact-head GitHub checks for its PR head `5ffd3082373b5d353b3d5bbcf4fcb43737bc2f7f` passed all 5 workflow groups; `discloud/commit` success. User independently verified standalone Mad Max video/audio. Private Session and Watch Party real-mode acceptance remains unverified.
+
+## ARCHIVED DETAILS — CINEMA-SMART-AUTOMATIC-SOURCE-SELECTION-20261010
+
+**FORCE SWITCH authorized:** User wrote `FORCE SWITCH: Complete Dank Cinema automatic smart selection`, reason prioritize intelligent selection over remaining episode-picker acceptance.
+
+**Outcome:** Deterministic, conservative automatic movie/episode source choice based on verified compatibility when known, quality/file-size efficiency and bounded swarm evidence, plus bounded safe startup fallback without host/viewer state loops. No false promises of codec proof before torrent bytes arrive.
+
+**Source/branch:** `fix/cinema-smart-auto-selection-20261010` created from exact Discloud GitHub deployed branch `aaa-cinema-pre-pregateway-bind@b93dc9bae8cf1f9d2eef58636565a392e38a7b10` (PR #496 merge). GitHub `discloud/commit` reported success, real runtime SHA not independently validated.
+
+**Status:** Root-cause investigation and implementation committed on isolated task branch; targeted regression tests added. Pre-merge CI and browser/Discloud acceptance pending. Not deployed.
+
+**Implementation checkpoint:** `cinema_playback_service` now uses one source ranking policy for automatic site and next episode selection: confirmed compatibility, size/resolution efficiency, audio, recent measured download performance when available, reported seeds with saturation, and soft provider preference. Sequential automatic startup tries no more than three eligible candidates while retaining room token/host/candidate baseline; explicitly chosen manual sources are unchanged. On automatic launch the selected torrent file is checked, wrong-episode entries excluded, browser-risky codecs/containers rejected before room commit, and leases released for newly rejected sessions. `movie_night_web` carries live peer/download metrics and verified codecs into existing same-source room variants, `MovieNightManager.add_variant` preserves that evidence on provider refresh. No post-commit automatic room swapping, parallel torrents, or video transcoding. Targeted tests in `tests/test_cinema_smart_selection.py`; existing site mocks updated for new explicit automatic flag.
+
+**Per-user/per-guild language integration (same active task):** Existing `cinema_library_service` persists each member's `audio_language_by_guild` and global default; `movie_night_web` independently loads audio track preferences and signs viewer-specific track URLs. Smart ranking now reads the authenticated host's user ID and room guild ID, prefers verified matching audio tracks using browser-consistent aliases, and preserves explicit `auto` overrides without forcing other viewers' audio or trusting provider filename language claims. Site and next-episode call sites pass the authenticated guild ID; fallback uses the same scoring. Regression tests cover different users, two guilds, multilingual audio tracks, unknown labels, explicit auto override, and season-zero specials. Subtitle preference is currently a separate global default; do not claim it is guild-scoped or silently expand this task into subtitle settings.
+
+**Outstanding evidence and risks:** Torrent filename is only negative confidence, not proof of actual codec; FFprobe waits for downloaded bytes and happens asynchronously, and only previously started sources have measured throughput. Host watch-party content never changes automatically after a successful commit. Actual Discloud CPU, decoder support per browser, and live A/V playback cannot be certified by CI alone. Verify session lease cleanup and all regression suites before merge; inspect final diff and stale compatibility logic.
+
+### Execution path and root cause found
+- Provider responses cap results at 25/100; PR #495 moved compatibility-aware lookahead earlier, but still relies on unverified release names.
+- `cinema_site.cinema_play_api` and `movie_night_web.movie_night_next_episode` call `select_preferred_variant` and then `start_room_variant` once. Failures generate errors instead of trying a different eligible release.
+- `MovieNightManager.ranked_variants` is seed/vote driven; `select_preferred_variant` filters risk-2 then lets remembered provider preference override any better candidate. Actual file bytes/codecs cannot be known until `TorrentManager.start_magnet` downloads torrent metadata and later asynchronously probes downloaded file pieces.
+- `TorrentManager.status` exposes **actual** download rate / connected peers, but only for sessions already started; provider-reported seeds are never equivalent to current live throughput. Verified codec metadata propagates later in `movie_night_web._state_payload`.
+- Room authority, leases, owner decisions and signed watch links must remain untouched by unsafe retry logic.
+
+### Suspended task checkpoint (do not resume without new FORCE SWITCH)
+`CINEMA-EPISODE-RELEASE-PICKER-20261010` PR #496 merged at `b93dc9bae8cf1f9d2eef58636565a392e38a7b10`, pre-merge exact-head workflows five green, GitHub Discloud deployment commit status success. In-scope backend API/frontend/asset/test code in six files. Remaining: live Android/desktop user acceptance (Choose Release visible for Carrie S01E01, select source, signed watch first video frame and audible audio, ordinary Resume, different browser). Blocker: no authenticated Android browser or direct Discloud runtime access. Git clean PR merged; no live acceptance claim. Next after resumption: collect browser evidence, repair any same-root failures, complete DoD.
+
+### Acceptance and risks
+- Shared policy must respect verified vs unverified data, incompatible-codec exclusions, provider limits, real vs reported swarm metrics, download caps, quality/file-size defaults, and soft preference.
+- Retry only bounded, sequential, **before** a successful room-media commit. Do not auto-swap shared media after playback has started or let a viewer force host state.
+- Preserve manual source choice as explicit override, session signing, exact identity, adult policy, lease cleanup and race guards.
+- Tests, compile, full CI, security and diff inspection, Discloud deployment SHA and Android + another browser A/V acceptance required. Never claim perfect universal playback or that unstarted torrents have measured download speeds.
+
+**Next:** Implement smallest correct shared selection/fallback mechanisms and targeted regression tests; do not touch unrelated tasks.
+
+## SUSPENDED CHECKPOINT — CINEMA-EPISODE-RELEASE-PICKER-20261010
+
+**Outcome:** Enable release selection for exact TV episodes on Dank Cinema, preserving automatic Play/Resume while allowing manual selection after no-compatible-release errors.
+
+**User evidence:** Oct 10 12:58 PM Eastern Carrie S01E01-S01E08 details screen. Every episode has Play/Resume, but no selectable release; the bottom Playback Source panel says to choose an episode, despite no actual episode-release UI.
+
+**Branch:** `fix/cinema-episode-source-picker-20261010` from Discloud auto-deploy branch `aaa-cinema-pre-pregateway-bind@812834b8ee5592026e80dc4a23b4bb82a0659f25`, after PR #495 merged and successful Discloud commit status. Running-process SHA and real provider inventory still require verification.
+
+**Status:** Backend/API/frontend work and focused tests committed in isolated branch; exact-head CI and runtime/browser acceptance pending. Not merged or deployed.
+
+### Root cause and execution
+- Movie details API returned source choices; TV details returned `sources: []` and an instruction without controls. Season cards only called `playOnSite(episode)` without a source-selection path.
+- The existing `/api/play` already accepts an opaque `source_choice` and validates it against real exact-episode provider variants. The missing part was authenticated episode-specific listing and a click path that supplies the choice.
+- New `GET /api/episode-sources/{series_id}/{season}/{episode}?tmdb_id={id}` requires the same guild/member identity, catalog episode ID and adult-content policy. It caches a bounded 90-second one-shot source snapshot already supported by the canonical Play route and returns only opaque source-choice IDs, never source URLs.
+- Site season cards gain opt-in `Choose Release`; no provider lookup occurs merely by loading a season. Source choices show provider, reported seeds, video compatibility caution, and explicit play; the existing Play/Resume stays automatic.
+
+### Tests / validation / protection
+- Focused tests cover opaque exact-episode results, lower-seed non-risky candidates, manual source choice with no duplicate search, invalid episode ID, guild adult policy, and JS event hookup.
+- Preserve exact session authority, browser player, torrent streaming, room permissions, source providers, feed settings and manual bypass of preflight for host-chosen releases.
+- Run exact-head CI, Python compile/full tests, UI/asset regression, static checks and diff review before merge. Accept production only after playing a real episode from both automatic and manual source choice and confirming first rendered frame plus audio on Android and a second browser. Available candidates may still be unverified or genuinely incompatible.
+- No Discloud changes are authorized until review and validation gates pass.
+
+**Next:** Create scoped draft PR to `aaa-cinema-pre-pregateway-bind`; await exact-head CI and inspect final diff, then verify live on Android.
+
+## PRIOR CHECKPOINT — CINEMA-AUTO-SOURCE-RESULT-WINDOW-20261010
+
+**Outcome:** Ensure high-seed HEVC/MKV results do not crowd lower-seed, potentially browser-compatible releases out of the existing per-provider selection window for Dank Cinema automatic playback.
+
+**Branch:** `fix/cinema-auto-source-compatible-results-20261010` from `aaa-cinema-pre-pregateway-bind@86d1a4f1dcee575b17d61597903fdf4d2e200a2e` (PR #492 merged). No production change or Discloud deployment.
+
+**Status:** Implementation and focused regression tests committed on isolated branch. Exact-head CI, full relevant validation, live candidate evidence and signed playback/first-frame acceptance pending.
+
+### Root cause / execution
+- Provider JSON normalization cut to the first 25 raw entries in `media_source_resolver._search_one`, before Cinema knew video risk. RSS extraction also stopped at 25.
+- An index sorted by reported seeds can thus provide 25 HEVC/MKV variants while a potentially compatible H264 result in the same response is never passed to the existing automatic chooser. Site Play/Resume then receives only risk-2 candidates and PR #490's correct preflight refuses all instead of starting known-risk video.
+- Actual Discloud running SHA, real Carrie source metadata, and existence of a compatible release have not been independently confirmed. No claim a suitable source always exists.
+
+### Scope and changes
+- Keep per-source output 25, total output 100, bounded response bytes, SSRF-safe provider fetching, exact title/episode identity, adult rules, source preferences, lease/host authority and manual override unchanged.
+- Inspect at most 100 already returned items per provider, prioritize risk-0/risk-1 entries ahead of risk-2 using the *same* helper as room ranking, maintain original order within risk class.
+- Move existing risk scoring from `MovieSourceVariant` to `media_metadata.browser_video_risk_key` with a delegating method. This prevents duplicate conflicting codec policies.
+- Expand RSS iteration lookahead to the existing 100-result bound without adding HTTP retries or extra provider requests.
+- Regression tests: candidate after slot 25 survives in JSON; stable ordering and upper bound; RSS candidate after slot 25 survives; existing source preflight and source normalization suites remain authoritative.
+
+### Validation / blockers / next step
+- Source editing done through GitHub connector; local checkout unavailable (container has no GitHub network route).
+- Await exact-head CI and diff review, including existing media metadata, room ranking, source resolver, Cinema and browser playback suites.
+- Retest automatic episode and movie selection against actual provider data. Manual source choice and prior known-risk HEVC fail-closed semantics must remain unchanged. Verify on Android and a second browser to first frame/audio before claiming end-to-end playback.
+- This task does not enable HEVC transcode, guarantee a compatible source exists, change RSS provider configuration, or fix unrelated A/V or website failures.
+- Next: Open scoped PR into actual Discloud auto-deploy branch, run checks, review diff. Do not merge/deploy before validation.
+
+## PRIOR CHECKPOINT — CINEMA-LEGACY-PLAYBACK-GLITCH-TRUTH-20261009
+
+**Production baseline (verified):** Discloud auto-deploy branch aaa-cinema-pre-pregateway-bind at 48f4053ed329e84ec18b45728241c6ca6a844ccf; PR #490/#491 merged and deployed. Forked fix/492-cinema-playback-state-legacy-loop-20261009 from this exact SHA. No change to production until PR CI and real device validation.
+
+**User evidence:** Oct 9 ~11:24 PM Eastern, Samsung Internet The Theater / Mad Max: Fury Road. Torrent 100%, 0 B/s, seeds/leechers labeled "reported" 421/49, media verified H264 + MP4, browser canPlayType says probably, JS health says "Video playing" while timing says "Video paused • embedded audio" and scene is black/glitchy. Browser startup metadata 358ms, playing event 9.09s, initial frame callback 9.34s. Server first request and first byte **both** around 282.7 seconds after session origin: does not prove 282 seconds of download latency; browser request occurred late. 100%/0B/s can be a completed torrent, not failure. Reported seeds are provider counts, not live connections.
+
+**Confirmed old-code conflicts:**
+- streamHealthLabel is based on s.state intent + video.readyState + past first_frame, and pause events refresh some controls but not Stream Health. "Video playing" may be a stale label while the HTML video is paused.
+- Browser without requestVideoFrameCallback could mark first_frame simply because currentTime increased, falsely claiming actual rendered video.
+- applyState host polls every 2 sec and awaits video.play() while a promise can remain pending during buffering; multiple state responses may overlap rather than coalesce.
+- Ordinary HTML video play/pause events call hostAction(resume/pause) even when caused by player recovery, remoteApply timing races or involuntary media events. The custom buttons already handle explicit user actions; PiP/native fullscreen interactions need separate treatment.
+
+**Fix:** Only call host play once while pending; never await it in state reconciliation; keep explicit Play user gesture and native PiP/fullscreen host controls; guard involuntary media events from mutating shared host state; base health on actual paused/readyState and track ongoing requestVideoFrameCallback frames, including frozen playback after a 5s gap; timeupdate without frame callback reports clock advancement, not a confirmed video frame. Preserve signed source, torrent byte routes, cast, FFmpeg AAC, watch-party clock, role permissions and per-guild user audio.
+
+**Validation:** New Node regression executes rendered Theater JS with unresolved Promise, multiple simulated polls, media pause/play event forwarding and active vs stalled video health. Existing stale tests updated to assert removal of old echo. CI, source/security checks, and actual Samsung Browser (first frame, 2min continuous video + audible embedded/AAC audio, seek 1min, pause/play, background restore) required. No claim of universal browser compatibility until real testing. Examine whether overlapping viewer play promises and CDN source range performance remain concerns if tests show glitches.
+
+**Single active task only:** Do not switch to Basic Verify, Dr STONE, or unrelated Dank Shield projects without explicit FORCE SWITCH.
+
+## PRIOR CHECKPOINT — CINEMA-UNSUPPORTED-AUTO-SOURCE-PREFLIGHT-20261009
+
+### Browser-settings resilience, same active Cinema task, stacked companion PR #491
+
+User approved handling browser dark/forced colors, accessibility and text sizing, Data Saver, reduced motion, mobile/desktop-mode layout, background suspension, network reconnect, audio permissions, PiP/fullscreen and strict browser privacy. Opera/Opera GX, Chrome, Edge, Firefox, Safari, Samsung Internet, Brave, Vivaldi and other modern browsers are targets, not all certified by real playback.
+
+Existing correct code already implements signed video/audio, per-viewer language, prefers-reduced-motion, Auto/High/Standard/Lite effects, Data Saver and hardware hints, ResizeObserver/viewport/orientation recovery, fullscreen/PiP capability detection, codec advisories, user-gesture audio recovery, offline/page-wake, background-gated polls and private no-store authenticated HTML. Preserve it, don't duplicate it.
+
+Companion branch fix/491-cinema-browser-settings-resilience-20261009 is based on PR #490. It adds forced-color and higher-contrast support without recoloring actual video/poster imagery; observes local non-identifying forced contrast, reduced motion, Save-Data, network and visibility changes and re-evaluates decorative Auto quality only; gives Advanced Details an environment readout; and debounces pageshow/visibilitychange/online recovery bursts to prevent repeated media restarts. Never read the user's extensions, fingerprints, cookies, DRM, hardware acceleration or battery health. Cannot bypass actual autoplay/security rules. New rendered-browser JavaScript tests exercise the actual functions. Existing #490 source-risk test fixture was also updated in both branches after exact-head CI identified one obsolete mock contract.
+
+No codec transcode changes, permissions, torrent, host/viewer, source/ranking, signing, database or Discord changes in this companion. Keep both PRs draft until CI and actual cross-browser A/V tests. An HTML page opening in Chromium is not validation of Opera GX, Safari, Firefox or real video/audio decode.
+
+**Reason:** At 8:32 PM Eastern, Mad Max: Fury Road still had a black video element after automatic source selection. Advanced Stream Details now positively identify `hevc / video/matroska` and Samsung Browser's `canPlayType` reports no native decoder. User asks why Cinema auto-selected the release and why FFmpeg cannot support it.
+
+**Verified production baseline:** `aaa-cinema-pre-pregateway-bind@09affbf295a0642605aa7eb4c0532925507268cd`. PR #489 merged and Discloud status success Oct 10 00:16:18 UTC. New branch `fix/490-cinema-unsupported-source-preflight-20261009` forks this exact production SHA; do not overwrite other production features.
+
+### Root cause and focused prevention
+
+- `cinema_site` materializes provider results and calls `select_preferred_variant` **before torrent starts**. `MovieSourceVariant.browser_video_risk_key` added in #489 only used `metadata.verified.video`; provider search metadata deliberately sets `source_reported_verified=False`, and FFprobe runs asynchronously *after* torrent pieces arrive. Thus most releases were scored `1 = unknown` before launch even if `release_name.video_tags` contained HEVC/x265. A remembered preferred provider could override the ranking entirely. Later browser detection only warns after the source was committed.
+- New ranking rejects only **high-confidence negative release-name/container clues** (HEVC, x265/H265, .mkv, .avi, .mpeg/.mpg). Such clues never prove that another source is safe. Unmarked releases still remain unknown until a real probe, and Android-specific capabilities cannot be inferred from server-side filename alone.
+- `select_preferred_variant` excludes risk-2 variants from **automatic** site and next-episode selection, including a dangerous preferred provider. If all releases are risky, it fails with a useful compatibility error rather than knowingly starting a black screen. Explicit host-picked variants and original room authority/signatures are unchanged.
+- Targeted regression tests cover HEVC/x265, unsafe containers, unknown-versus-verified risk, preferred-provider override, only-unsupported-source fail-closed.
+- **This is not a universal video conversion claim.** HEVC-to-H264 requires decode/re-encode; changing MKV to MP4 without conversion cannot make an unsupported HEVC decoder work. Discloud shows 1.46 vCPU, 1.46 GB RAM with peaks of 80% CPU and 85.9% RAM; enabling unbounded FFmpeg video workers endangers Discord bot stability. Do not activate transcoding without measured bounded concurrency and real browser evidence.
+
+### Acceptance
+
+- New exact-head CI, source-choice tests, final security/diff review; no unrelated changes.
+- On Android test auto source ranking for multiple candidates, all-risky sources refusal, explicit manual behavior, per-guild language and AAC sync unchanged. When provider metadata hides codec, later probe/browser diagnostic must still surface issue; no false universal-playability claim.
+- **Still open:** reliable audio synchronization and source-specific HEVC video fallback. Do not mark Cinema broadly fixed solely on source preflight or CI. Keep prior verification/Dr STONE work suspended.
+
+### Prior history
+
+## HISTORICAL CHECKPOINT — CINEMA-AUDIO-LANGUAGE-AUTOPLAY-TRUTH-20261009
+
+**Scope:** Continue active Dank Cinema AAC audio stability task after Oct 9 7:12–7:13 PM Eastern user screenshots. Issues: incorrect movie heading ("Portuguese 5.1" for Mad Max artwork), English 7.1 track switching, distracting Audio permission button, black video with "Video playing" badge, automatic release selection, and language preference per user per guild. No FORCE SWITCH to another project.
+
+**Confirmed Discloud baseline:** aaa-cinema-pre-pregateway-bind @ e8773215fb29654decdc7baf8c3dfbf8481eb174. PR #488 merged and deployed successfully at 23:08:44 UTC Oct 9 before screenshots. Branch fix/489-cinema-audio-language-title-truth-20261009 is based on this production SHA.
+
+### Confirmed code issues and scoped changes
+
+- _state_payload serialized room candidate title despite canonical catalog movie_metadata. Prefer canonical movie title to release tags.
+- Verified audio track metadata has language and title. Existing sidecar selection didn't persist preferred language (only native audio selections saved GLOBAL default_audio_language). Add per-user/per-guild preference in existing Cinema user profile JSON, bounded by authenticated room guild ID. Respect viewer-only selection; never change shared room media just to honor one viewer's language.
+- Start selected AAC track within real user gesture; browser may still require gesture on restricted autoplay, so show recovery only when genuine playback block is reported.
+- Stream health said "Video playing" before already-tracked first_frame video callback. Display honest waiting-for-frame status and limited, safe video/AAC clock/readiness diagnostics in Advanced Stream Details to enable empirical live debugging.
+- MovieSourceVariant browser_audio_risk_key marked mixed AAC/DTS audio safe just because any stream was AAC, whereas actual browser_audio_compatibility requires sidecar if any codec is unsupported. Align ranking; add deterministic mixed-codec test. Do not change seed/quality weights blindly.
+- User reports audio skipping even with healthy torrent download speed. Screenshots do not prove exact FFmpeg/decoder/sync fault. The new readout allows checking video/audio clocks, stalls and AAC error without exposing signed media URL. No claim of audible sound recovery without live multi-minute tests.
+
+### Acceptance and safety
+
+- Exact-head GitHub CI pending, tests for per-guild isolation and language matching, mixed-codec ranking, title truth and audio recovery only on browser failure.
+- Before merge: examine complete diff; validate correct title, English selection, no permission prompt during normal Play, correct first frame, audio/video synchronization after seek and buffering, Android plus another browser, host and viewer. No torrent engine/room permissions/auth changes.
+- Stay on this single Cinema audio task. Dr. STONE HTML-JSON issue and Dank Shield self-verification remain suspended with prior checkpoints below. Preserve PR #487 and #488 already deployed; do not merge main blindly.
+
+---
+
+
+## HISTORICAL CHECKPOINT — CINEMA-AAC-AUDIO-STABILITY-20261009
+
+### October 9 continuation: AAC skipping / time drift after PR #487 deployment
+
+**Status:** Investigating and validating. PR #487 merged as `e4d0846a65b7e65fae776842f319ef3c6d9b8d7b` and Discloud `discloud/commit` confirmed successful Oct 9 22:03 UTC. New audio drift/skipping complaint is on that running production baseline. The previously fixed audio recovery UI is still part of the active task. No FORCE SWITCH was issued.
+
+**Branch:** `fix/478-cinema-sidecar-av-sync-20261009`, forked directly from confirmed Discloud branch `aaa-cinema-pre-pregateway-bind@e4d0846a65b7e65fae776842f319ef3c6d9b8d7b`. Production remains untouched.
+
+**Concrete code path and reproducible defect:** The HTML5 video emits `waiting` or `stalled` while `video.paused` may be false; the deployed handlers merely changed the notice text and did not pause the independent AAC sidecar. Its `currentTime` could therefore advance while video was buffering. The deployed `syncCompatAudio` then interpreted resulting drift greater than 2.5 seconds as a reason to discard the AAC source and launch a new FFmpeg transcode every eight seconds. Those source replacements can produce audible jumps. This is grounded in code, but the specific user's live media timing and FFmpeg output have not yet been inspected.
+
+**Scoped proposed behavior:** Treat video readiness, seeking, and buffering as authoritative for advancing the sidecar. Pause AAC on video `waiting`, `stalled` and `seeking`; resume only with a playable video clock. Eliminate periodic FFmpeg-source reloads for ordinary drift and use bounded audio playback-rate corrections. Preserve explicit seek re-anchor and per-viewer gesture recovery. Keep torrent provider, permissions, session signing, and audio-track routes unchanged.
+
+**No speculative throughput change:** An experimental change from FFmpeg `-re` to `-readrate 2` was immediately reverted before PR creation because no session evidence indicates faster-than-normal playback. Final branch should have no changes in the audio transcode backend.
+
+**Regression validation:** New `tests/test_cinema_av_clock_sync.py` executes actual rendered Theater handlers under Node to reproduce unpaused video stalls, prevent audio advancement, verify video recovery without source reload, test drift correction and one explicit seek re-anchor. Exact-head CI and live Android/desktop audible first-frame, stable speech sync over multiple minutes, seek and buffering, host/viewer are still required. Do not claim real playback fixed from mock tests alone.
+
+**Next:** Open scoped draft PR, run exact-head CI. Acquire live signed-session reproduction or safe browser diagnostics (video/audio clock, readyState, stalls, FFmpeg errors) before merging/deploying. If actual timing differs from the code-proven failure, revise the solution rather than layering timeouts.
+
+**Outcome:** Restore usable AAC compatibility audio and consistent per-viewer recovery controls without disrupting video, room synchronization, privacy, or existing source selection. Reported Carrie S01E01 video plays while audio is silent; the Enable audio control appears/disappears between adjacent browser screenshots.
+
+**Actual production branch baseline:** `aaa-cinema-pre-pregateway-bind@70356d1560e8047ddc1dc3dd9f698ee323f5c2ce`, confirmed Discloud successful commit status on Oct 9 UTC. Source differs from `main`: PR #483 added source-aware audio tracks and the Enable audio button to the production branch, not main. Do not substitute main or overwrite unrelated production work.
+
+**Implementation branch:** `fix/478-cinema-aac-audio-stability-20261009` based on that actual deployment branch.
+
+### Investigation / execution path / root causes
+
+- Movie Night `_state_payload` publishes verified audio tracks and per-viewer signed AAC compat URL. Audio sidecar runs `ffmpeg` from the signed torrent stream via `/media/torrent/audio/{token}/{filename}`. Theater `applyCompatAudioState` loads a hidden audio element while keeping canonical video clock; `startCompatAudioFromGesture` requests playback on a user click.
+- PR #483's `refreshAudioPermissionControl` tied visibility to transient `compatAudio.paused` and `video.paused`, not durable audio permission state. So the recovery row flickers during background playback transitions even while its browser-blocked message remains.
+- `syncCompatAudio` continually checked video-versus-audio drift and reloaded the AAC stream after a 750 ms gap, including while its audio `play()` was still pending for buffer or permission. That can interrupt play promises, cause repeated FFmpeg work, and prevent stable audio start. The original sidecar-error path cleared the signed URL and mode, so the next state poll could recreate a broken stream.
+- Current screenshots prove video first frame and audio warning, but do not prove the underlying FFmpeg emitted decodable AAC or actual browser permission state. Live signed browser/Discloud test remains required.
+
+### Scoped changes
+
+- Keep the AAC recovery button visibly available while that audio path is active and the viewer has not intentionally muted; label it Enable audio when paused/blocked and Restart audio otherwise.
+- Track in-flight audio starts and actual gesture recovery so polling never interrupts startup or repeatedly retries a blocked `play()`. Avoid destroying a loaded audio source on each user click. Retire outdated async completion paths via sequence identity.
+- Require the audio element to have playable data and a meaningful drift before automatic restart, paced by an existing-start timestamp.
+- If an original AAC sidecar reports `error`, preserve the signed mode and require explicit user retry instead of restarting on every state poll; preserve verified alternate-track fallback to original.
+- New `tests/test_cinema_aac_recovery.py` runs the rendered Theater's JS behavior under Node and checks the original-error path; existing Movie Night and torrent tests still apply.
+
+### Validation and remaining blockers
+
+- CI and targeted suite: pending exact-head pull-request workflow.
+- Live audible result for Carrie S01E01, another movie/episode, host and viewer, Android Samsung Browser and at least one other engine: **not verified**. Do not equate `Video playing` or an AAC `play()` Promise resolving with audible output.
+- No source search, provider registry, catalog, bot verification, Discord interactions, DNS, auth, storage, or room-mode code touched.
+- Before merge: exact-head CI, inspect regression failures, compile/static checks, cleanup and final diff. Production deployment only to the confirmed branch after checks; user must validate real sound.
 
 ### Suspended tasks / backlog
 
-- **Dank Shield self-verification** suspended by explicit FORCE SWITCH on Oct 9. Confirmed separate Basic Verify role mutation and ticket interception paths; GitHub PR #267 corrected mode precedence and #469/#470 corrected interaction handling. Old backup branches lacked immediate-ack behavior, newer Oct 8 Discloud-status SHA `d7e38e7` had it; actual current production SHA and guild config unconfirmed. No code edits. Resume with Discloud running SHA, failed Verify interaction logs, exact saved verification mode, role hierarchy and ticket routing evidence.
-- Previous Cinema Nyaa/provider episode-year matching: PR #485 merged as `27b90e536d946636d2504df3056d546f6dbefe79`; production acceptance of exact episode and overall catalog still pending.
-- Prior Cinema torrent readiness/low throughput, missing anime posters, audio-track control, and generic provider adapters remain separate backlog; do not combine with this response-contract incident.
+- **Dr. STONE episode playback HTML-vs-JSON:** PR #486 merged to `main@9a7b543abc0a5e205db46616cf12b50a8c6053fd` with all six CI families green. Discloud was not confirmed running that commit because it deploys a different branch. Live authenticated exact-episode first frame and HTTP response status/origin remain unverified. Suspended by exact FORCE SWITCH on Oct 9; do not use an unrelated branch merge to import it.
+- **Dank Shield self-verification:** investigation suspended earlier. Basic Verify immediate-ack vs advanced verification-ticket mode and the currently saved guild configuration require log-based production validation; no fixes were made.
+- Separate poster/anime metadata, feed discovery, general torrent throughput and episode provider compatibility are not part of this AAC fix.
 
-**Next step:** Open focused PR, check exact-head CI, inspect full diff, determine running Discloud SHA, and reproduce Dr. STONE S01E01 while reading API response status/type and matching origin log. Do not claim playback fixed from the error-message repair alone.
+**Next step:** Run browser-behavior regression and full exact-head CI, inspect final diff, then canary production on the existing Discloud branch. If audio remains silent with controls working, collect signed AAC response status/bytes, FFmpeg output and browser media errors to diagnose the separate server/codec path without guessing.
 
 ---
 

@@ -9,6 +9,10 @@ on:
       - "stoney_verify/commands_ext/public_community_pings.py"
       - "stoney_verify/commands_ext/public_command_surface_v2.py"
       - "tests/test_toke_live_sessions.py"
+      - "tests/test_toke_single_media.py"
+      - "tests/test_toke_inline_attendance.py"
+      - "tests/test_toke_expiry_lifecycle.py"
+      - "tests/test_toke_mobile_timestamps.py"
       - "tests/test_profile_community_toke.py"
       - "tests/test_navigation_registry_runtime.py"
       - ".github/workflows/toke-live-regression.yml"
@@ -41,7 +45,7 @@ jobs:
       - name: Compile Toke modules
         run: python -m py_compile stoney_verify/toke_sessions.py stoney_verify/toke_live_ui.py stoney_verify/commands_ext/public_toke.py stoney_verify/commands_ext/public_community_pings.py
       - name: Test participation, normal GIF capture, and compatibility
-        run: python -m pytest tests/test_toke_live_sessions.py tests/test_profile_community_toke.py tests/test_navigation_registry_runtime.py -q --tb=short --disable-warnings
+        run: python -m pytest tests/test_toke_live_sessions.py tests/test_toke_expiry_lifecycle.py tests/test_toke_mobile_timestamps.py tests/test_toke_single_media.py tests/test_toke_inline_attendance.py tests/test_profile_community_toke.py tests/test_navigation_registry_runtime.py -q --tb=short --disable-warnings
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet

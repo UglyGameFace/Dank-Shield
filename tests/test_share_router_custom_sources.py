@@ -496,3 +496,19 @@ def test_failure_paths_preserve_proxy_messages_and_report_rejection():
     assert "Destination delivery failed:" in section
     assert "await _route_rejection_log(" in section
     assert "Your original post was kept" in runtime
+
+
+def test_repair_post_defer_render_failure_reports_explicit_error():
+    """Guard against the user's infinite 'Dank Shield is thinking' UI."""
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "stoney_verify/commands_ext/public_share_router.py"
+    ).read_text(encoding="utf-8")
+    repair = source.split("async def repair(self, interaction:", 1)[1].split(
+        '    @discord.ui.button(label="Add / Change Route"', 1
+    )[0]
+    assert "await interaction.response.defer(ephemeral=True, thinking=True)" in repair
+    assert 'embed = await _share_router_embed(guild)' in repair
+    assert "Hub repair ran, but Share Router could not display its status" in repair
+    assert "share_router repair status failed" in repair
+    assert "except discord.HTTPException:" in repair

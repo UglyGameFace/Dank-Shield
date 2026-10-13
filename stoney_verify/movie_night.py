@@ -15,6 +15,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
+from .media_metadata import browser_video_risk_key
+
 PLAYBACK_ACTIONS = frozenset({"pause", "resume", "seek", "skip"})
 SESSION_ACTIONS = frozenset({"end"})
 PROGRAMMING_ACTIONS = frozenset({"search", "nominate", "queue", "play_next", "play_variant"})
@@ -65,6 +67,10 @@ class MovieSourceVariant:
     metadata: dict[str, Any] = field(default_factory=dict)
     votes: set[int] = field(default_factory=set)
 
+    def browser_video_risk_key(self) -> int:
+        """Shared conservative video risk used by Cinema and provider selection."""
+        return browser_video_risk_key(self.metadata)
+
     def browser_audio_risk_key(self) -> int:
         """0=safest for browsers, 1=unknown/conditional, 2=known risky."""
 
@@ -82,15 +88,23 @@ class MovieSourceVariant:
 
         widely_safe = {"aac", "mp3"}
         conditional = {"opus", "vorbis"}
-        risky = {"ac3", "eac3", "dts", "truehd", "flac"}
+        risky = {
+            "ac3", "eac3", "dca", "dts", "truehd", "mlp",
+            "flac", "pcm_s16le", "pcm_s24le", "pcm_s32le",
+        }
 
-        if codecs & widely_safe:
-            return 0
+        # The stream's first/default track and per-viewer browser codecs are
+        # not interchangeable. The transcoder requires a sidecar when ANY
+        # verified track is unsupported. A safe secondary AAC track must not
+        # make a mixed DTS/AAC release appear browser-native-safe.
+        if codecs & risky:
+            return 2
         if codecs:
-            if codecs <= risky:
-                return 2
+            if codecs <= widely_safe:
+                return 0
             if codecs & conditional:
                 return 1
+            return 1
 
         release = (
             meta.get("release_name")
@@ -1051,7 +1065,13 @@ class MovieNightManager:
             existing_variant.seeds = max(0, int(seeds or 0))
             existing_variant.leechers = max(0, int(leechers or 0))
             if metadata:
-                existing_variant.metadata = dict(metadata)
+                incoming = dict(metadata)
+                # A new provider poll cannot erase file-probed codec evidence
+                # or an observed live torrent rate for this same source.
+                for key in ("verified", "observed_swarm"):
+                    if key not in incoming and key in existing_variant.metadata:
+                        incoming[key] = existing_variant.metadata[key]
+                existing_variant.metadata = incoming
             if auto_vote:
                 existing_variant.votes.add(uid)
             return existing_variant
@@ -1132,6 +1152,7 @@ class MovieNightManager:
             return (
                 -votes,
                 0 if seeds > 0 else 1,
+                item.browser_video_risk_key(),
                 item.browser_audio_risk_key(),
                 -seeds,
                 -ratio,

@@ -30,7 +30,10 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "playback_speed": 1.0,
     "preferred_source": "",
     "default_audio_language": "",
+    # Scoped by the authenticated room's guild, not a user-submitted guild ID.
+    "audio_language_by_guild": {},
     "default_subtitle_language": "",
+    "subtitle_language_by_guild": {},
     "visual_quality": "auto",
     "feed_notification_mode": "instant",
     "feed_playable_only": True,
@@ -79,9 +82,37 @@ def _normalize_preferences(value: Any) -> dict[str, Any]:
     result["default_audio_language"] = " ".join(
         str(raw.get("default_audio_language") or "").split()
     )[:40]
+    scoped = raw.get("audio_language_by_guild")
+    safe_scoped: dict[str, str] = {}
+    if isinstance(scoped, Mapping):
+        for key, value in list(scoped.items())[:100]:
+            guild_key = str(key).strip()
+            language = str(value or "").strip().lower()
+            if (
+                guild_key.isascii() and guild_key.isdigit()
+                and 0 < int(guild_key) < 2**64
+                and language.isascii() and 2 <= len(language) <= 24
+                and language.replace("-", "").isalnum()
+            ):
+                safe_scoped[guild_key] = language
+    result["audio_language_by_guild"] = safe_scoped
     result["default_subtitle_language"] = " ".join(
         str(raw.get("default_subtitle_language") or "").split()
     )[:40]
+    subtitle_scope = raw.get("subtitle_language_by_guild")
+    safe_subtitles: dict[str, str] = {}
+    if isinstance(subtitle_scope, Mapping):
+        for key, value in list(subtitle_scope.items())[:100]:
+            guild_key = str(key).strip()
+            language = str(value or "").strip().lower()
+            if (
+                guild_key.isascii() and guild_key.isdigit()
+                and 0 < int(guild_key) < 2**64
+                and language.isascii() and 2 <= len(language) <= 24
+                and language.replace("-", "").isalnum()
+            ):
+                safe_subtitles[guild_key] = language
+    result["subtitle_language_by_guild"] = safe_subtitles
 
     notification_mode = str(
         raw.get("feed_notification_mode") or "instant"
@@ -202,6 +233,8 @@ async def get_cinema_user(user_id: int, *, refresh: bool = False) -> dict[str, A
 async def update_cinema_preferences(
     user_id: int,
     updates: Mapping[str, Any],
+    *,
+    guild_id: int | None = None,
 ) -> dict[str, Any]:
     uid = int(user_id)
     lock = _LOCKS.setdefault(uid, asyncio.Lock())
@@ -209,8 +242,40 @@ async def update_cinema_preferences(
         current = await get_cinema_user(uid, refresh=True)
         merged = dict(current.get("preferences") or {})
         for key in DEFAULT_PREFERENCES:
-            if key in updates:
+            if key not in {"audio_language_by_guild", "subtitle_language_by_guild"} and key in updates:
                 merged[key] = updates.get(key)
+        if "guild_audio_language" in updates:
+            guild = int(guild_id or 0)
+            if guild <= 0:
+                raise InvalidCinemaState("A guild-linked Cinema session is required.")
+            language = str(updates.get("guild_audio_language") or "").strip().lower()
+            if language and (
+                not language.isascii() or len(language) > 24
+                or len(language) < 2 or not language.replace("-", "").isalnum()
+            ):
+                raise InvalidCinemaState("Choose a valid Cinema audio language.")
+            per_guild = dict(merged.get("audio_language_by_guild") or {})
+            if language:
+                per_guild[str(guild)] = language
+            else:
+                per_guild.pop(str(guild), None)
+            merged["audio_language_by_guild"] = per_guild
+        if "guild_subtitle_language" in updates:
+            guild = int(guild_id or 0)
+            if guild <= 0:
+                raise InvalidCinemaState("A guild-linked Cinema session is required.")
+            language = str(updates.get("guild_subtitle_language") or "").strip().lower()
+            if language and (
+                not language.isascii() or len(language) > 24
+                or len(language) < 2 or not language.replace("-", "").isalnum()
+            ):
+                raise InvalidCinemaState("Choose a valid Cinema subtitle language.")
+            per_guild = dict(merged.get("subtitle_language_by_guild") or {})
+            if language:
+                per_guild[str(guild)] = language
+            else:
+                per_guild.pop(str(guild), None)
+            merged["subtitle_language_by_guild"] = per_guild
         preferences = _normalize_preferences(merged)
         payload = {
             "user_id": uid,
