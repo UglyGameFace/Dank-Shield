@@ -12,7 +12,7 @@ MIGRATIONS = ROOT / "postgres/migrations"
 
 CREATE_TABLE = re.compile(
     r"\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?"
-    r"(?:(?:public\.)?[a-z_][a-z0-9_]*)",
+    r"(?:[a-z_][a-z0-9_]*\.)?[a-z_][a-z0-9_]*",
     re.IGNORECASE,
 )
 
@@ -93,3 +93,10 @@ def test_reminder_retention_uses_one_authoritative_owner() -> None:
     assert "90 days" in lifecycle["retention_rule"]
     assert reminders.RETENTION_DAYS == 90
     assert callable(storage.delete_departed_sync)
+
+
+def test_non_public_staging_schema_is_registered_without_ignoring_its_table() -> None:
+    sql = "CREATE TABLE IF NOT EXISTS dank_migration.staged_records (id int);"
+    match = CREATE_TABLE.search(sql)
+    assert match is not None
+    assert match.group().lower().split()[-1] == "dank_migration.staged_records"
