@@ -344,6 +344,150 @@ def test_saved_current_application_panel_binds_exact_message_without_rest(
     asyncio.run(scenario())
 
 
+
+def test_existing_verify_panel_refreshes_consent_copy_once_without_duplicate(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        edits: list[dict[str, object]] = []
+        fetches: list[int] = []
+        saved_versions: list[int] = []
+        cfg = {
+            "verify_channel_id": "99",
+            "voice_safety_enabled": True,
+            runtime._BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: "123456",
+            runtime._BASIC_VERIFY_PANEL_APPLICATION_ID_KEY: "42",
+            runtime._BASIC_VERIFY_PANEL_COMPONENT_ID_KEY: runtime.BASIC_VERIFY_CUSTOM_ID,
+        }
+
+        class FakeMessage:
+            id = 123456
+            author = SimpleNamespace(id=42)
+            embeds = [discord.Embed(title="✅ Verify to unlock server access")]
+            components = [
+                SimpleNamespace(custom_id=runtime.BASIC_VERIFY_CUSTOM_ID, children=[])
+            ]
+
+            def __init__(self) -> None:
+                self.embeds[0].set_footer(text=runtime.BASIC_VERIFY_FOOTER)
+
+            async def edit(self, **kwargs) -> None:
+                edits.append(kwargs)
+                self.embeds = [kwargs["embed"]]
+
+        class FakeTextChannel:
+            id = 99
+
+        class FakeGuild:
+            id = 77
+            me = SimpleNamespace(id=42)
+            text_channels = []
+
+            def get_channel(self, channel_id):
+                return FakeTextChannel() if channel_id == 99 else None
+
+        message = FakeMessage()
+
+        async def fetch(_channel, message_id: int, **_kwargs):
+            fetches.append(message_id)
+            return message
+
+        async def reserve(*, label: str) -> None:
+            assert "identity fetch" in label
+
+        async def persist(_gid, _mid, *, application_id=0, presentation_version=0):
+            assert application_id == 42
+            saved_versions.append(presentation_version)
+            cfg[runtime._BASIC_VERIFY_PANEL_EMBED_VERSION_KEY] = presentation_version
+
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime, "fetch_message_with_api_safety", fetch)
+        monkeypatch.setattr(runtime, "_reserve_basic_verify_recovery_request", reserve)
+        monkeypatch.setattr(runtime, "_persist_basic_verify_panel_message_id", persist)
+
+        bot = FakeBot()
+        result = await runtime._reconcile_one_basic_verify_panel(bot, FakeGuild(), cfg)
+        assert result == "refreshed_copy"
+        assert fetches == [123456]
+        assert len(edits) == 1
+        assert message.embeds[0].title == "🛡️ Verify Your Access"
+        assert len(message.embeds[0].fields) == 1
+        assert "Dank Shield Voice Safety Agreement v1" in message.embeds[0].fields[0].name
+        assert "sexually explicit" in message.embeds[0].fields[0].value
+        assert "Gemini paid API" not in str(message.embeds[0].to_dict())
+        assert "Agree & Verify" in {
+            child.label for child in edits[0]["view"].children
+        }
+        assert saved_versions == [runtime._BASIC_VERIFY_PANEL_EMBED_VERSION]
+        assert bot.views[-1][1] == 123456
+
+        # The saved version restores the zero-REST bind on subsequent boots.
+        runtime._BOUND_PANEL_MESSAGE_IDS.clear()
+        result = await runtime._reconcile_one_basic_verify_panel(FakeBot(), FakeGuild(), cfg)
+        assert result == "bound"
+        assert fetches == [123456]
+        assert len(edits) == 1
+
+    asyncio.run(scenario())
+
+
+def test_failed_verify_copy_refresh_does_not_claim_new_presentation(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        class FakeTextChannel:
+            id = 99
+
+        class FakeGuild:
+            id = 77
+            me = SimpleNamespace(id=42)
+
+            def get_channel(self, channel_id):
+                return FakeTextChannel() if channel_id == 99 else None
+
+        class FakeMessage:
+            id = 123456
+            author = SimpleNamespace(id=42)
+            embeds = [discord.Embed(title="Old Verify")]
+            components = [SimpleNamespace(custom_id=runtime.BASIC_VERIFY_CUSTOM_ID, children=[])]
+
+            async def edit(self, **_kwargs):
+                raise RuntimeError("Discord edit unavailable")
+
+        # Use a valid signed old panel so the refresh reaches the edit path.
+        old = FakeMessage()
+        old.embeds[0].set_footer(text=runtime.BASIC_VERIFY_FOOTER)
+        saved: list[int] = []
+
+        async def fetch(*_args, **_kwargs):
+            return old
+
+        async def reserve(*, label: str):
+            return None
+
+        async def persist(*_args, **_kwargs):
+            saved.append(1)
+
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime, "fetch_message_with_api_safety", fetch)
+        monkeypatch.setattr(runtime, "_reserve_basic_verify_recovery_request", reserve)
+        monkeypatch.setattr(runtime, "_persist_basic_verify_panel_message_id", persist)
+        result = await runtime._reconcile_one_basic_verify_panel(
+            FakeBot(),
+            FakeGuild(),
+            {
+                "verify_channel_id": "99",
+                runtime._BASIC_VERIFY_PANEL_MESSAGE_ID_KEY: "123456",
+                runtime._BASIC_VERIFY_PANEL_APPLICATION_ID_KEY: "42",
+                runtime._BASIC_VERIFY_PANEL_COMPONENT_ID_KEY: runtime.BASIC_VERIFY_CUSTOM_ID,
+            },
+        )
+        assert result == "panel_refresh_failed"
+        assert saved == []
+
+    asyncio.run(scenario())
+
+
 def test_saved_panel_without_application_identity_fetches_and_migrates(
     monkeypatch,
 ) -> None:
