@@ -181,7 +181,7 @@ def _iter_verified_plaintext(path: Path, passphrase: str) -> Iterable[bytes]:
 def verify_archive_toc(path: Path, passphrase: str) -> dict[str, Any]:
     """Verify AES-GCM and custom-format TOC, WITHOUT doing a database restore."""
     check = subprocess.Popen(
-        ["pg_restore", "--list", "-"], stdin=subprocess.PIPE,
+        ["pg_restore", "--list"], stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     total = 0
