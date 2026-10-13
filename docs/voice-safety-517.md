@@ -1,5 +1,32 @@
 # Dank Shield Voice Safety #517: consented staff-review pilot
 
+## 2026-10-13 scope update: eligible VCs and two-human threshold (development only)
+
+This section supersedes the older **single selected VC** discovery description above.
+Staff can switch between **Single** (backward-compatible; saved VC) and
+**All** (all existing accessible normal voice channels) using the Voice Safety
+staff panel. The new guild config key is `voice_safety_coverage_mode` and
+defaults to `single`. The existing selected VC ID is retained if staff switch
+back. No extra Discloud environment variable is required.
+
+A room qualifies only if at least **two non-bot members** are present and
+Dank Shield has View Channel and Connect permissions. Automatic startup, ready
+recovery, and manual Start choose a qualifying channel, with deterministic
+busiest-first priority. Review ends below two people; a released receiver can
+then serve a different waiting room. The private signed member eligibility
+check accepts any in-scope accessible VC, but **never grants audio authority**
+and does not assert that the room is currently being recorded.
+
+**Capacity truth:** a single Discord bot identity can join only one VC per
+guild at a time. The staff panel reports the number of qualifying VCs and
+waiting rooms; waiting rooms are **not monitored**. Covering simultaneous VCs
+in one guild requires separately authorized bot identities, distributed
+exclusive receiver leases, policy/revocation propagation, and tested worker
+capacity. Those are not shipped by this scope update. Do not advertise all
+rooms as continuously protected or enable listening before the existing DAVE,
+privacy, paid-provider, and age eligibility gates pass.
+
+
 Status: **implementation under review; not deployed, not validated on live Discord/Discloud, and not claimed to outperform VoicePatrol.**
 
 ## Architecture and safety
