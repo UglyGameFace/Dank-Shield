@@ -68,7 +68,14 @@ async def member_eligibility(request: web.Request) -> web.Response:
         return web.Response(status=503, text="Unavailable")
     if request.content_length is not None and request.content_length > MAX_CHECK_BYTES:
         return web.Response(status=413)
-    body = await request.content.read(MAX_CHECK_BYTES + 1)
+    try:
+        # Request.read() consumes the complete body with aiohttp's 1 KiB cap,
+        # unlike StreamReader.read(n), which may return a partial TCP fragment.
+        body = await request.read()
+    except web.HTTPRequestEntityTooLarge:
+        return web.Response(status=413)
+    if len(body) > MAX_CHECK_BYTES:
+        return web.Response(status=413)
     now = int(time.time())
     key = _bridge_secret()
     try:
