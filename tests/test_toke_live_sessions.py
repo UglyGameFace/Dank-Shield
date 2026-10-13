@@ -303,6 +303,26 @@ def test_embed_only_native_gif_formats_are_detected(isolated_sessions):
     assert not live._has_gif_media(unrelated)
 
 
+def test_pending_composer_accepts_generic_public_image_share_pages_only_as_one_link(isolated_sessions):
+    gif_page = SimpleNamespace(
+        content="https://new-gif-site.example/posts/abc123", embeds=[], attachments=[],
+    )
+    assert live.media_url_from_message(gif_page) == ""
+    assert live.media_url_from_message(gif_page, allow_public_page=True) == gif_page.content
+    assert live._has_gif_media(gif_page, allow_public_page=True)
+    # A regular chat message, an unsafe link, and an arbitrary sentence are not media.
+    for content in ("come smoke with us", "https://localhost/internal",
+                    "check out https://new-gif-site.example/posts/abc123"):
+        source = SimpleNamespace(content=content, embeds=[], attachments=[])
+        assert not live._has_gif_media(source, allow_public_page=True)
+    # A Discord-supplied public image still takes precedence over the view-page link.
+    gif_page.embeds = [SimpleNamespace(
+        image=SimpleNamespace(url="https://i.imgur.com/dance.gif"), video=None,
+        thumbnail=None, url=gif_page.content,
+    )]
+    assert live.media_url_from_message(gif_page, allow_public_page=True) == "https://i.imgur.com/dance.gif"
+
+
 def test_composer_gif_message_is_consumed_only_after_card_is_posted(isolated_sessions, monkeypatch):
     from stoney_verify.commands_ext import public_toke
     events = []
