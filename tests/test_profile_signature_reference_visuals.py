@@ -118,7 +118,7 @@ def test_layout_avatar_frame_and_four_colors_change_real_geometry() -> None:
     assert renderer._LAYOUTS["classic"] != renderer._LAYOUTS["spotlight"]
 
 
-def test_rendered_card_stays_compact_and_long_name_is_clipped_to_safe_zone() -> None:
+def test_rendered_card_stays_compact_and_preserves_long_name_in_safe_zone() -> None:
     payload = _render(display_name="UGLYGAMEFACE-" * 20)
     with Image.open(BytesIO(payload)) as image:
         assert image.size == (1400, 300)

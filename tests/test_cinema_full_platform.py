@@ -826,10 +826,11 @@ def test_cinema_site_play_without_room_creates_host_only_standalone_room(monkeyp
         assert media.tmdb_id == 123
         return metadata, "Example Movie", outcome
 
-    async def preferred(_user_id, rows):
+    async def preferred(_user_id, rows, *, guild_id=0):
+        assert guild_id == 100
         return list(rows)[0]
 
-    async def start_variant(room_id, *, actor_id, candidate_id, variant_id):
+    async def start_variant(room_id, *, actor_id, candidate_id, variant_id, automatic=False):
         room = manager.get(room_id)
         assert room is not None
         assert actor_id == 42
@@ -927,10 +928,11 @@ def test_cinema_details_source_snapshot_is_reused_by_immediate_play(monkeypatch)
         assert media.tmdb_id == 123
         return metadata, "Example Movie", outcome
 
-    async def preferred(_user_id, rows):
+    async def preferred(_user_id, rows, *, guild_id=0):
+        assert guild_id == 100
         return list(rows)[0]
 
-    async def start_variant(room_id, *, actor_id, candidate_id, variant_id):
+    async def start_variant(room_id, *, actor_id, candidate_id, variant_id, automatic=False):
         room = manager.get(room_id)
         assert room is not None
         chosen = room.candidates[candidate_id].variants[variant_id]
@@ -1031,7 +1033,7 @@ def test_cinema_site_manual_source_choice_overrides_auto_rank(monkeypatch) -> No
     async def should_not_auto_select(_user_id, _rows):
         raise AssertionError("manual source choice unexpectedly fell back to automatic selection")
 
-    async def start_variant(room_id, *, actor_id, candidate_id, variant_id):
+    async def start_variant(room_id, *, actor_id, candidate_id, variant_id, automatic=False):
         room = manager.get(room_id)
         assert room is not None
         assert actor_id == 42
@@ -1482,7 +1484,7 @@ def test_standalone_cinema_login_and_signed_link_exchange_share_one_site_session
     assert 'initialUrl.searchParams.delete("sig")' in script
     assert 'history.replaceState(' in script
     assert 'return `${path}${AUTH_QUERY ? join + AUTH_QUERY.slice(1) : ""}`;' in script
-    assert 'src="/cinema/assets/site.js?v=18"' in source
+    assert 'src="/cinema/assets/site.js?v=19"' in source
     assert '"/cinema/{guild_id}/api/auth-debug"' in source
     assert "def _cinema_auth_debug_payload(" in source
     assert "signed-session-v8-snowflake-safe" in source
@@ -1729,8 +1731,8 @@ def test_full_site_uses_real_navigation_icons_and_cache_busted_assets() -> None:
     assert 'b.append(uiIcon(iconName), node("span", "bottom-nav-label", label))' in script
     assert ".ui-icon svg" in styles
     assert ".bottom-nav-label" in styles
-    assert 'href="/cinema/assets/site.css?v=10"' in source
-    assert 'src="/cinema/assets/site.js?v=18"' in source
+    assert 'href="/cinema/assets/site.css?v=12"' in source
+    assert 'src="/cinema/assets/site.js?v=19"' in source
 
 
 def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop() -> None:
@@ -1745,7 +1747,7 @@ def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop
         'content="width=device-width,initial-scale=1,minimum-scale=1,'
         'viewport-fit=cover,interactive-widget=resizes-content">'
     ) in source
-    assert 'href="/cinema/assets/site.css?v=10"' in source
+    assert 'href="/cinema/assets/site.css?v=12"' in source
 
     assert "--content:min(1560px,calc(100vw - 48px))" in styles
     assert "@media(min-width:1800px)" in styles
@@ -1765,8 +1767,9 @@ def test_cinema_responsive_layout_keeps_mobile_readable_without_breaking_desktop
     assert "min-height:54px" in styles
     assert ".feed-result-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}" in styles
     assert ".feed-result-card{" in styles
-    assert "-webkit-text-size-adjust:100%" in styles
-    assert "text-size-adjust:100%" in styles
+    # Respect the device/browser font enlargement setting instead of forcing 100%.
+    assert "-webkit-text-size-adjust:auto" in styles
+    assert "text-size-adjust:auto" in styles
 
 
 def test_full_site_auto_quality_and_source_search_controls_are_real() -> None:
@@ -2408,8 +2411,16 @@ def test_theater_queue_play_next_prioritizes_selected_item(monkeypatch) -> None:
 
 
 def test_preferred_source_selection_is_shared_and_falls_back_safely(monkeypatch) -> None:
-    first = SimpleNamespace(source_id="alpha", source_label="Alpha Source")
-    preferred = SimpleNamespace(source_id="beta", source_label="Beta Premium")
+    # Selection expects candidate variants with an explicit video risk key.
+    # Unverified candidates must be unknown, never certified browser-safe.
+    first = SimpleNamespace(
+        source_id="alpha", source_label="Alpha Source",
+        browser_video_risk_key=lambda: 1,
+    )
+    preferred = SimpleNamespace(
+        source_id="beta", source_label="Beta Premium",
+        browser_video_risk_key=lambda: 1,
+    )
 
     async def profile(_user_id: int):
         return {"preferences": {"preferred_source": "beta"}}

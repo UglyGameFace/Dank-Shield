@@ -61,6 +61,48 @@ Do not configure `SUPABASE_DB_URL`, `DATABASE_URL`, `POSTGRES_URL`, or `POSTGRES
 
 Before deploying a bot version that contains new migrations, verify the migration chain and apply it through the deployment pipeline. If runtime schema health reports a missing table or column, treat that as a deployment/configuration error and apply the referenced committed migration. Do not expect the bot process to modify production schema.
 
+## Discloud private PostgreSQL reminder ledger (opt-in)
+
+Only the unverified-member reminder **delivery history** uses this PostgreSQL
+instance. Supabase `guild_configs`, staff verification settings, role truth,
+Simple Verify and the rest of Dank Shield are unchanged. Do not repoint the
+generic `DATABASE_URL` or remove `SUPABASE_URL`.
+
+1. On Discloud, create a PostgreSQL 16 service (e.g. `DankShield-DB`) and
+   confirm its **private** Host, Port, Database, User and Password in its overview.
+   The bot and database must be in the same supported private-network cluster.
+2. Enable **Private Network (VLAN)** for the Dank Shield bot. The deployment
+   `discloud.config` uses `VLAN=true` and `HOSTNAME=dankbot`. That hostname
+   names the **bot**; it is not the DB hostname. The database's own private
+   hostname is used in the connection URL.
+3. Save the full **private** PostgreSQL URL in the bot's Discloud environment
+   (not GitHub), as `DANK_VERIFY_REMINDER_DATABASE_URL`.
+   Keep the password and full URL out of chat, screenshots, PRs and logs.
+   Never enable external/public PostgreSQL access just for the bot.
+4. Run the one-shot deployment operation **from a runtime that can access the
+   same Discloud private VLAN**, with the above environment variable:
+   `python -m tools.migrate_verify_reminders_postgres --apply`.
+   This reads `postgres/migrations/202610110001_verify_unverified_reminders.sql`;
+   it is intentionally **not run at bot startup**. If your Discloud account
+   does not provide a private-shell/deployment command runner, arrange the
+   approved private-network migration step first. Do not assume GitHub Actions
+   can access the private DB or that saving the VLAN setting created the table.
+5. Confirm the app can read the ledger. In Discord open
+   **Verification Center → Unverified Reminders**. The Enable action is blocked
+   unless the private PostgreSQL ledger is reachable and correctly migrated.
+   Configure a small test server and verify cooldown/restart behavior before
+   enabling bulk reminders across servers.
+
+The PostgreSQL 16 integration workflow applies the standalone schema twice and
+tests atomic competing claims. The existing Supabase migration
+`20261011000100_verify_unverified_reminders.sql` was committed in PR #510 and
+is retained as migration history; the reminder runtime no longer calls it and
+does not switch back to Supabase if PostgreSQL becomes unavailable.
+
+**Failure handling:** no private URL, wrong VLAN, database offline, missing
+table, privilege errors and unknown transaction outcomes all block reminder
+sending. Never interpret missing history as permission to send a fresh ping.
+
 ## Startup health lines to expect
 
 Healthy public startup should show the normal module-registration line first, then the final UI-first compactor before Discord global sync:
@@ -70,7 +112,7 @@ public_server_env_id_guard public mode active; deployment-level Discord IDs are 
 globals: startup summary: {'guild': 0, ...}
 globals: supabase status: state=ready ... service_role_present=True
 commands_ext registration complete. ... profile=public
-public_command_surface_v2 compact UI installed roots=['View Dank Profile', 'captions', 'cinema', 'dank', 'mod', 'movie', 'role', 'ticket', 'tickets', 'toke', 'verify'] dank_children=['home', 'purge', 'setup', 'upload'] ...
+public_command_surface_v2 compact UI installed roots=['View Dank Profile', 'captions', 'cinema', 'dank', 'mod', 'movie', 'role', 'ticket', 'tickets', 'toke', 'verify'] dank_children=[...curated direct shortcuts, purge, setup, upload] ...
 ```
 
 The intentional **final** public global application-command surface is exactly **11** commands/items:
@@ -87,11 +129,25 @@ The intentional **final** public global application-command surface is exactly *
 10. `/verify` — one verification status/repair doorway
 11. `View Dank Profile` user context menu
 
-`/dank` intentionally exposes only four direct children:
+`/dank` exposes a curated set of short, discoverable direct children; the underlying Home UI remains the complete feature catalog:
 
 - `/dank home` — the categorized Dank Shield control center. It exposes Setup & Server Settings, Onboarding & Access, Safety & Moderation, Members/Roles/Profiles, Community & Engagement, Tickets & Support, Design & Branding, Voice & Accessibility, Logs/Stats/Diagnostics, My Dank Shield, Utilities & Help, plus Find a Feature and All Features.
 - `/dank purge` — the compact destructive-cleanup entrypoint that remains a direct command for explicit targeting and confirmation.
 - `/dank setup` — the guided onboarding/setup entrypoint restored for discoverability while advanced setup tools stay inside the UI. Its **Live Captions** section can select/create the ordinary-server caption output, allow all VCs or selected VCs/categories/exclusions, and choose **Original**, **English**, or **Original + English** caption text. Gemini Live input defaults to automatic detection across its supported languages and code-switching.
+- `/dank protection` — protected server safety center (AntiNuke, Spam Guard, invite/Automod).
+- `/dank voice-safety` — staff configuration of disclosed AI voice monitoring; **not** a member opt-out command or an activation bypass.
+- `/dank welcome` — canonical Welcome, Join & Exit manager.
+- `/dank design` — canonical server/channel design studio.
+- `/dank share` — Share Router and inline-media manager.
+- `/dank pings` — community and notification ping-role manager.
+- `/dank community` — Community Hub and LFG.
+- `/dank logs` — logging and activity setup.
+- `/dank stats` — live server-stats center.
+- `/dank status` — live bot service status.
+- `/dank diagnostics` — read-only health and configuration diagnostics.
+- `/dank profile` — personal profile studio.
+- `/dank help` — built-in feature guide.
+
 - `/dank upload` — the compact **card-asset** attachment command for a Join Card background, Exit Card background, or custom card font. The only other approved attachment doorways are `/toke upload:` for optional Toke image/GIF media and `/movie torrent:` for Movie Night torrent metadata. Discord buttons still cannot provide attachment fields.
 
 
@@ -113,7 +169,7 @@ The branded `/cinema` group is a thin command facade over the same canonical Mov
 
 `/movie` remains available for compatibility and for its optional magnet/.torrent attachment fields.
 
-Former roots such as `/ticket-intake`, `/ticket-category`, and `/ticket-panel` are not public autocomplete commands anymore. Their implementation modules remain loaded and their actions are available inside `/tickets`. Likewise, former `/dank` shortcuts such as status/diagnostics/welcome are reached through `/dank home` rather than separate autocomplete entries.
+Former roots such as `/ticket-intake`, `/ticket-category`, and `/ticket-panel` are not public autocomplete commands anymore. Their implementation modules remain loaded and their actions are available inside `/tickets`. Advanced and obsolete `/dank` shortcuts remain hidden. The curated shortcuts above and `/dank home` both open the same canonical features.
 
 Advanced repair/setup aliases such as direct `/dank setup-review`, `/dank db-check`, and `/dank setup-access` are also not part of the normal public profile. Their functionality belongs inside the guided mega-menu/diagnostics surfaces unless an explicit admin/development profile selects an advanced registrar.
 

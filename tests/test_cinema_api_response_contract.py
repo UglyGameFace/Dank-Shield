@@ -30,8 +30,10 @@ const makeApi = new Function(
 let nextResponse;
 let requestedUrl = "";
 let requestOptions;
+let fetchCount = 0;
 const errors = [];
 const fetch = async (url, options) => {
+  fetchCount += 1;
   requestedUrl = url;
   requestOptions = options;
   return nextResponse;
@@ -67,7 +69,7 @@ async function expectMessage(value) {
 
 (async () => {
   nextResponse = response(200, "text/html; charset=utf-8", "<!doctype html><title>Redirect</title>");
-  await expectMessage("instead of JSON for /play");
+  await expectMessage("instead of JSON for /cinema/123/api/play");
   assert.equal(errors.at(-1)[0], "cinema_api_non_json_success");
 
   nextResponse = response(200, "text/html", "<!doctype html>", {
@@ -79,6 +81,19 @@ async function expectMessage(value) {
 
   nextResponse = response(502, "text/html", "<!doctype html><title>Gateway error</title>");
   await expectMessage("HTML error page (HTTP 502)");
+  await expectMessage("Request: POST /cinema/123/api/play. Response: text/html.");
+  assert.equal(errors.at(-1)[0], "cinema_api_http_error");
+  assert.deepEqual(errors.at(-1)[1], {
+    path: "/cinema/123/api/play",
+    method: "POST", status: 502, contentType: "text/html",
+    finalPath: "/cinema/123/api/play",
+  });
+  await assert.rejects(
+    api("/play?sig=private-secret", { method: "POST", body: "{}" }),
+    /HTML error page/,
+  );
+  assert.equal(errors.at(-1)[1].path, "/cinema/123/api/play");
+  assert.ok(!JSON.stringify(errors.at(-1)).includes("private-secret"));
 
   nextResponse = response(409, "text/plain; charset=utf-8", "No playable source is available");
   await expectMessage("No playable source is available");
@@ -87,7 +102,9 @@ async function expectMessage(value) {
   await expectMessage("Exact episode unavailable");
 
   nextResponse = response(200, "application/json; charset=utf-8", '{"ok":true,"watch_url":"/movie/demo/watch"}');
+  const beforeSuccess = fetchCount;
   const result = await api("/play", { method: "POST", body: "{}" });
+  assert.equal(fetchCount, beforeSuccess + 1, "Never repeat a side-effecting POST");
   assert.equal(result.watch_url, "/movie/demo/watch");
   assert.equal(requestedUrl, "/cinema/123/api/play");
   assert.equal(requestOptions.credentials, "same-origin");
@@ -98,9 +115,11 @@ async function expectMessage(value) {
 
   nextResponse = response(200, "application/json", "<!doctype html>");
   await expectMessage("invalid JSON (HTTP 200)");
+  assert.equal(errors.at(-1)[0], "cinema_api_invalid_json");
+  assert.equal(errors.at(-1)[1].path, "/cinema/123/api/play");
 
   nextResponse = response(204, "", "");
-  await expectMessage("instead of JSON for /play");
+  await expectMessage("instead of JSON for /cinema/123/api/play");
 
   console.log("Cinema API success, HTML, redirect, errors, and invalid JSON verified");
 })().catch((error) => {

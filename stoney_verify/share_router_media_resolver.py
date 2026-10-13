@@ -52,6 +52,42 @@ _REDDIT_POST_RE = re.compile(r"/comments/([^/?#]+)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
+class ExtractionFailure:
+    """Safe, stable failure category. Never expose provider error text or URLs."""
+    reason: str
+
+
+def _classify_extraction_failure(error: BaseException) -> str:
+    # yt-dlp errors can embed raw signed URLs, cookies or provider responses.
+    # Only return one of these fixed categories, never raw exception text.
+    detail = str(error).casefold()
+    # Recent Facebook public Reels have hit parser regressions in the pinned
+    # yt-dlp release. Report that distinct category instead of blaming file
+    # size, a blocked DM or an allegedly unconfigured HTTPS host.
+    if "cannot parse data" in detail:
+        return "provider_extractor_incompatible"
+    if "no video formats found" in detail:
+        return "provider_no_downloadable_formats"
+    if "not a bot" in detail or "bot detection" in detail or "captcha" in detail:
+        return "provider_bot_verification"
+    if "private video" in detail or "members-only" in detail or "members only" in detail:
+        return "provider_private_or_restricted"
+    if "age-restricted" in detail or "age restricted" in detail or "login required" in detail:
+        return "provider_login_required"
+    if "sign in" in detail or "log in" in detail or "authentication" in detail:
+        return "provider_login_required"
+    if "http error 429" in detail or "too many requests" in detail or "rate limit" in detail:
+        return "provider_rate_limited"
+    if "http error 403" in detail or "forbidden" in detail:
+        return "provider_forbidden"
+    if "video unavailable" in detail or "not available" in detail or "removed" in detail:
+        return "provider_video_unavailable"
+    if "timed out" in detail or "timeout" in detail:
+        return "provider_extract_timeout"
+    return "extract_failed"
+
+
+@dataclass(frozen=True)
 class MediaProvider:
     key: str
     label: str
@@ -76,6 +112,10 @@ class MediaResolution:
     request_headers: tuple[tuple[str, str], ...] = ()
     audio_request_headers: tuple[tuple[str, str], ...] = ()
     reason: str = ""
+    # Existing provider metadata may expose more than one progressive MP4 URL.
+    # Retain at most one separate safe alternative for a failed Facebook CDN
+    # transfer; this is not an additional extractor request or unbounded retry.
+    alternate_progressive: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
 
     @property
     def progressive(self) -> bool:
@@ -183,7 +223,7 @@ def _host_matches(host: str, root: str) -> bool:
 
 
 def _clean_input_url(value: str) -> str:
-    return _safe_str(value).rstrip(".,)")
+    return _safe_str(value).rstrip(".,)]}")
 
 
 def _parsed_http_url(value: str):
@@ -197,6 +237,18 @@ def _parsed_http_url(value: str):
     if str(parsed.scheme or "").lower() not in {"http", "https"}:
         return None
     if not parsed.hostname:
+        return None
+    # Avoid even classifying private/LAN media as a supported provider.
+    # The actual outbound media fetch uses a separate public-only DNS resolver.
+    if not is_safe_media_download_url(raw):
+        return None
+    # Never hand credential-bearing or nonstandard-port links to yt-dlp.
+    if parsed.username or parsed.password:
+        return None
+    try:
+        if parsed.port not in {None, 80, 443}:
+            return None
+    except ValueError:
         return None
     return parsed
 
@@ -485,6 +537,45 @@ def _manifest_candidate(fmt: Mapping[str, Any]) -> tuple[str, str, str]:
     return "", "", ""
 
 
+def _playback_format_priority(ext: str, vcodec: str, acodec: str) -> int:
+    """Favor broadly playable *existing* media without promising playback.
+
+    Discord accepts several MP4 codecs, but attachment playback still depends
+    on the device and client. Prefer MP4 H.264/AAC when the provider offers it.
+    This never transcodes or invents a codec from a filename.
+    """
+    video = (vcodec or "").lower()
+    audio = (acodec or "").lower()
+    extension = (ext or "").lower()
+    if extension == "gif":
+        return 6
+    avc = video == "h264" or video.startswith("avc1")
+    aac = audio == "aac" or audio.startswith("mp4a")
+    if extension == "mp4" and avc and aac:
+        return 6
+    if extension == "mp4" and avc and (not audio or audio == "none"):
+        return 5
+    if extension == "webm" and video.startswith(("vp8", "vp9")):
+        return 4
+    if avc:
+        return 3
+    if video.startswith(("hev1", "hvc1", "hevc", "h265", "av01", "av1", "vvc")):
+        return 1
+    return 2
+
+
+def _audio_merge_priority(ext: str, acodec: str) -> int:
+    """MP4-compatible audio should beat WebM/Opus when stream-copy merging."""
+    audio = (acodec or "").lower()
+    if (ext or "").lower() in {"m4a", "mp4", "aac"} and (
+        audio == "aac" or audio.startswith("mp4a")
+    ):
+        return 3
+    if audio in {"mp3", "mp4a"}:
+        return 2
+    return 1
+
+
 def select_media_resolution(
     info: Any,
     *,
@@ -511,7 +602,7 @@ def select_media_resolution(
         )
     progressive: list[
         tuple[
-            tuple[int, int, float, int],
+            tuple[int, int, int, float, int],
             str,
             str,
             str,
@@ -527,7 +618,7 @@ def select_media_resolution(
     ] | None = None
     video_only: list[
         tuple[
-            tuple[int, float, int],
+            tuple[int, int, int, float, int],
             str,
             str,
             str,
@@ -537,7 +628,7 @@ def select_media_resolution(
     ] = []
     audio_only: list[
         tuple[
-            tuple[float, int],
+            tuple[int, float, int],
             str,
             str,
             str,
@@ -601,7 +692,7 @@ def select_media_resolution(
                         size_score = -size if size > 0 else 0
                         audio_only.append(
                             (
-                                (abr, size_score),
+                                (_audio_merge_priority(ext, acodec), abr, size_score),
                                 url,
                                 protocol,
                                 ext,
@@ -624,7 +715,13 @@ def select_media_resolution(
                         size_score = -size if size > 0 else 0
                         video_only.append(
                             (
-                                (height, tbr, size_score),
+                                (
+                                    _playback_format_priority(ext, vcodec, acodec),
+                                    int(size > 0),
+                                    height,
+                                    tbr,
+                                    size_score,
+                                ),
                                 url,
                                 protocol,
                                 ext,
@@ -641,7 +738,13 @@ def select_media_resolution(
                         size_score = -size if size > 0 else 0
                         progressive.append(
                             (
-                                (1, height, tbr, size_score),
+                                (
+                                    _playback_format_priority(ext, vcodec, acodec),
+                                    int(size > 0),
+                                    height,
+                                    tbr,
+                                    size_score,
+                                ),
                                 url,
                                 protocol,
                                 ext,
@@ -663,6 +766,16 @@ def select_media_resolution(
     if progressive:
         progressive.sort(key=lambda item: item[0], reverse=True)
         _, url, protocol, ext, size, request_headers = progressive[0]
+        alternatives: list[tuple[str, tuple[tuple[str, str], ...]]] = []
+        if provider == "facebook":
+            # A FB CDN HD URL may expire or be unavailable while its SD
+            # representation is valid. Reuse only a distinct progressive URL
+            # from the same extractor response; never invent an endpoint.
+            for candidate in progressive[1:]:
+                if candidate[3] != ext or candidate[1] == url:
+                    continue
+                alternatives.append((candidate[1], candidate[5]))
+                break
         return MediaResolution(
             source_url=source_url,
             canonical_url=canonical,
@@ -674,6 +787,7 @@ def select_media_resolution(
             ext=ext,
             known_size=size,
             request_headers=request_headers,
+            alternate_progressive=tuple(alternatives),
         )
 
     if video_only and audio_only:
@@ -737,7 +851,7 @@ def _extract_info_sync(canonical_url: str) -> Any:
     try:
         import yt_dlp
     except Exception:
-        return None
+        return ExtractionFailure("extractor_unavailable")
 
     options = {
         "quiet": True,
@@ -754,8 +868,8 @@ def _extract_info_sync(canonical_url: str) -> Any:
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
             return ydl.extract_info(canonical_url, download=False)
-    except Exception:
-        return None
+    except Exception as exc:
+        return ExtractionFailure(_classify_extraction_failure(exc))
 
 
 def _health_bucket(provider: str) -> dict[str, Any]:
@@ -781,6 +895,39 @@ def _record(provider: str, field: str, *, reason: str = "") -> None:
     bucket[field] = int(bucket.get(field, 0) or 0) + 1
     if reason:
         bucket["last_reason"] = _safe_str(reason)[:120]
+
+
+def _resolution_cache_ttl(resolution: MediaResolution) -> float:
+    """Never cache a recognized expiring signed media URL past its expiry.
+
+    CDN URLs often expire well before the old fixed 15-minute metadata cache.
+    Treat common Unix-second expiration parameters as bounds; unknown token
+    formats keep the existing TTL and never make authorization claims.
+    """
+    ttl = (
+        _POSITIVE_CACHE_TTL_SECONDS
+        if resolution.delivery in {"progressive", "manifest", "merge"}
+        else _NEGATIVE_CACHE_TTL_SECONDS
+    )
+    if resolution.delivery == "link":
+        return ttl
+    for url in (resolution.media_url, resolution.audio_url):
+        if not url:
+            continue
+        try:
+            query = parse_qsl(urlsplit(url).query, keep_blank_values=False)
+        except (TypeError, ValueError):
+            continue
+        for key, value in query:
+            if key.lower() not in {"expire", "expires", "exp"}:
+                continue
+            # Unix seconds only. An arbitrary short number is not an epoch.
+            if not str(value).isdigit() or not (10 <= len(str(value)) <= 11):
+                continue
+            expiration = int(value)
+            # Leave room for network fetch/Discord upload after extraction.
+            ttl = min(ttl, max(0.0, expiration - time.time() - 30.0))
+    return max(0.0, ttl)
 
 
 def _prune_cache(now: Optional[float] = None) -> None:
@@ -823,17 +970,20 @@ async def _resolve_extracted(
                 asyncio.to_thread(_extract_info_sync, canonical),
                 timeout=_extract_timeout_seconds(),
             )
+        except asyncio.TimeoutError:
+            info = ExtractionFailure("provider_extract_timeout")
         except Exception:
-            info = None
+            info = ExtractionFailure("extract_failed")
 
-    if info is None:
+    if info is None or isinstance(info, ExtractionFailure):
+        reason = info.reason if isinstance(info, ExtractionFailure) else "extract_failed"
         resolution = MediaResolution(
             source_url=source_url,
             canonical_url=canonical,
             identity=media_url_identity(canonical),
             provider=provider,
             delivery="link",
-            reason="extract_failed",
+            reason=reason,
         )
     else:
         # The extractor consumed the resolved permalink, so metadata identity
@@ -959,18 +1109,16 @@ async def resolve_media_url(value: str, *, max_bytes: int) -> MediaResolution:
 
     task.add_done_callback(_cleanup)
     resolution = await asyncio.shield(task)
-    ttl = (
-        _POSITIVE_CACHE_TTL_SECONDS
-        if resolution.delivery in {"progressive", "manifest", "merge"}
-        else _NEGATIVE_CACHE_TTL_SECONDS
-    )
-    _RESOLUTION_CACHE[cache_key] = (time.monotonic() + ttl, resolution)
-    _prune_cache()
+    ttl = _resolution_cache_ttl(resolution)
+    if ttl > 0:
+        _RESOLUTION_CACHE[cache_key] = (time.monotonic() + ttl, resolution)
+        _prune_cache()
     return resolution
 
 
 async def resolve_first_media(text: str, *, max_bytes: int) -> Optional[MediaResolution]:
     fallback: Optional[MediaResolution] = None
+    remux_candidate: Optional[MediaResolution] = None
     seen: set[str] = set()
     for raw in MEDIA_URL_RE.findall(text or ""):
         canonical = canonicalize_media_url(raw)
@@ -983,9 +1131,13 @@ async def resolve_first_media(text: str, *, max_bytes: int) -> Optional[MediaRes
         resolution = await resolve_media_url(canonical, max_bytes=max_bytes)
         if resolution.progressive:
             return resolution
-        if fallback is None:
+        if resolution.delivery in {"merge", "manifest"} and remux_candidate is None:
+            remux_candidate = resolution
+        elif fallback is None and resolution.delivery == "link":
             fallback = resolution
-    return fallback
+    # Do not let an earlier inaccessible/provider-blocked link prevent a later
+    # playable HLS/DASH or separate audio/video candidate from being attempted.
+    return remux_candidate or fallback
 
 
 def media_resolver_snapshot() -> dict[str, Any]:

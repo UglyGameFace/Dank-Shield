@@ -55,6 +55,7 @@ def test_movie_night_public_routes_are_media_only() -> None:
     rendered = "\n".join(f"{method} {resource}" for method, resource in routes)
     assert "/movie/{room_id}/watch" in rendered
     assert "/movie/{room_id}/state" in rendered
+    assert "/movie/{room_id}/subtitle" in rendered
     assert "/movie/{room_id}/heartbeat" in rendered
     assert "/movie/{room_id}/action" in rendered
     assert "/movie/{room_id}/invite-options" in rendered
@@ -80,7 +81,9 @@ def test_cinema_library_runtime_defaults_and_episode_lookup(monkeypatch) -> None
         "playback_speed": 1.0,
         "preferred_source": "",
         "default_audio_language": "",
+        "audio_language_by_guild": {},
         "default_subtitle_language": "",
+        "subtitle_language_by_guild": {},
         "visual_quality": "auto",
         "feed_notification_mode": "instant",
         "feed_playable_only": True,
@@ -544,6 +547,38 @@ def test_watch_room_revokes_definitively_absent_server_member(monkeypatch) -> No
         assert "active membership" in exc.text.lower()
     else:
         raise AssertionError("A removed server member unexpectedly kept Watch access.")
+
+
+def test_theater_heading_prefers_canonical_movie_over_language_release_label(monkeypatch) -> None:
+    manager = MovieNightManager()
+    room = manager.create_room(
+        guild_id=1, channel_id=2, host_id=10, stream_token="", mode="standalone",
+    )
+    candidate = manager.nominate(
+        room.room_id,
+        user_id=10,
+        title="Portuguese 5.1",
+        metadata={"catalog": {
+            "title": "Mad Max: Fury Road",
+            "tmdb_id": 76341,
+            "media_type": "movie",
+            "year": 2015,
+        }},
+        auto_vote=False,
+    )
+    room.current_candidate_id = candidate.candidate_id
+
+    class _TorrentManager:
+        async def get(self, token):
+            return None
+
+    monkeypatch.setattr(movie_night_web, "get_movie_night_manager", lambda: manager)
+    monkeypatch.setattr(movie_night_web, "get_torrent_manager", lambda: _TorrentManager())
+
+    state = asyncio.run(movie_night_web._state_payload(room, 10))
+    assert state["title"] == "Mad Max: Fury Road"
+    assert state["movie"]["title"] == "Mad Max: Fury Road"
+    assert candidate.title == "Portuguese 5.1"  # preserve release identity
 
 
 def test_movie_night_state_exposes_private_room_mode(monkeypatch) -> None:
@@ -1460,7 +1495,16 @@ def test_player_layout_recovers_from_mobile_desktop_mode_resizes() -> None:
     assert 'video.addEventListener("webkitendfullscreen"' in html
     assert 'document.addEventListener("webkitfullscreenchange",handleFullscreenChange)' in html
     assert 'video.style.pointerEvents="none"' in html
-    assert "videoStage.style.maxHeight=height+\"px\"" in html
+    # CSS now owns portrait 16:9 geometry. Cached pixel heights can retain
+    # landscape dimensions when mobile browsers exit native fullscreen.
+    assert '.video-stage[data-cinema-layout="inline"]' in html
+    assert "aspect-ratio:16/9!important;" in html
+    assert "height:auto!important;" in html
+    assert "max-height:none!important;" in html
+    assert 'videoStage.dataset.cinemaLayout=stageFullscreen?"fullscreen":"inline";' in html
+    assert "document.fullscreenElement===videoStage" in html
+    assert 'videoStage.style.height=height+"px"' not in html
+    assert 'videoStage.style.maxHeight=height+"px"' not in html
 
 
 
@@ -1475,7 +1519,7 @@ def test_dank_cinema_uses_ffmpeg_aac_sidecar_without_replacing_video_clock() -> 
     assert "function compatAudioActive()" in html
     assert "function restartCompatAudio(seconds, shouldPlay=false)" in html
     assert "function syncCompatAudio(force=false)" in html
-    assert "function startCompatAudioFromGesture(seconds, keepPlaying)" in html
+    assert "function startCompatAudioFromGesture(seconds, keepPlaying, forceRestart=false)" in html
     assert "s?.audio_compat_required && s?.audio_compat_url" in html
     assert "video.muted=true" in html
     assert "compatAudio.volume=target" in html
@@ -1856,8 +1900,12 @@ def test_dank_cinema_host_play_does_not_wait_for_buffering_before_resume() -> No
     assert "await compatAudio.play()" not in primer
     assert "video.pause();" not in primer
     assert "const attempt=video.play();" in primer
-    assert 'if(!hostPlayGesturePending && lastState.state!=="playing")' in html
-    assert '!hostPlayGesturePending && lastState.state!=="paused"' in html
+    # Native PiP/fullscreen controls may propagate deliberate host actions,
+    # but ordinary playback events must not feed a second Play/Pause to room.
+    assert 'if(nativeVideoControlsActive() && !hostPlayGesturePending' in html
+    assert 'nativeVideoControlsActive() && lastState.state==="playing"' in html
+    assert 'requestHostVideoPlayFromState();' in html
+    assert 'try { await video.play(); } catch(_) {}' not in html
 
 
 def test_dank_cinema_resume_confirms_position_not_playback() -> None:
@@ -1889,3 +1937,62 @@ def test_dank_cinema_health_depends_on_browser_readiness_not_seed_count() -> Non
     assert "t.seeds" not in health
     assert "t.download_rate" not in health
     assert "refreshStreamHealth();" in html
+
+
+def test_dank_cinema_startup_reports_first_http_request_mode_without_signed_urls() -> None:
+    html = movie_night_web._watch_html(
+        "room-transport-mode",
+        42,
+        "uid=42&exp=9999999999&sig=test",
+    )
+    assert "server.first_http_status" in html
+    assert '"HTTP 206 Range"' in html
+    assert '"HTTP 200 full"' in html
+    assert '"HTTP mode unknown"' in html
+    assert "server.first_range_start" in html
+
+
+def test_dank_cinema_audio_selector_only_shows_real_browser_or_verified_stream_choices() -> None:
+    html = movie_night_web._watch_html(
+        "room-track-picker", 42, "uid=42&exp=9999999999&sig=test",
+    )
+    assert ".quality-control[hidden] { display:none !important; }" in html
+    assert 'id="audioTrack" aria-label="Audio track"></select>' in html
+    assert "const nativeTracks=video.audioTracks;" in html
+    assert "Array.isArray(lastState?.audio_track_options)" in html
+    assert "audioControl.hidden=!(useSidecar || useNative);" in html
+    assert 'original.value="original";' in html
+    assert 'option.value="sidecar:"+String(row.index);' in html
+    assert 'option.value="native:"+String(i);' in html
+    assert 'url.searchParams.set("track",String(track));' in html
+    assert 'selectedAudioTrack=value;' in html
+    assert 'applyCompatAudioState(lastState);' in html
+    assert "audioMenuSignature=signature;" in html
+    assert "refreshNativePlayerCapabilities();" in html
+
+
+def test_cinema_state_exposes_verified_audio_track_choices_only_with_signed_sidecar() -> None:
+    source = __import__("inspect").getsource(movie_night_web._state_payload)
+    assert 'verified.get("audio_tracks") if verified.get("available") else None' in source
+    assert 'if isinstance(tracks, list) and len(tracks) > 1:' in source
+    assert 'audio_track_url = torrent_manager.compat_audio_url(' in source
+    assert '"audio_track_options": audio_track_options' in source
+    assert '"audio_track_url": audio_track_url' in source
+
+
+def test_cinema_audio_permission_can_be_granted_without_host_play_pause() -> None:
+    html = movie_night_web._watch_html(
+        "room-enable-audio", 42, "uid=42&exp=9999999999&sig=test",
+    )
+    assert 'id="enableAudioControl" hidden' in html
+    assert 'id="enableAudio" type="button"' in html
+    assert "function refreshAudioPermissionControl()" in html
+    assert "control.hidden=!(compatAudioActive()" in html
+    assert 'document.getElementById("enableAudio").onclick=async()=>' in html
+    enabled = html.split('document.getElementById("enableAudio").onclick=async()=>', 1)[1].split(
+        'compatAudio.addEventListener("error"', 1
+    )[0]
+    assert "startCompatAudioFromGesture(" in enabled
+    assert 'hostAction("resume")' not in enabled
+    assert 'hostAction("pause")' not in enabled
+    assert "Tap Enable audio in Advanced Stream Details." in html

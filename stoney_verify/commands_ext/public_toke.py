@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 from stoney_verify import toke_sessions
 from stoney_verify.toke_live_ui import (
-    TokeCheersView, begin_capture, choose_voice, media_url_from_message, pending_for, render_card, settings_from_config,
+    TokeCheersView, TokeMediaLayout, begin_capture, choose_voice, media_url_from_message, pending_for, render_card, settings_from_config,
 )
 
 import discord
@@ -100,6 +100,8 @@ def _is_direct_media_url(value: str) -> bool:
     parsed = urlsplit(text)
     host = str(parsed.hostname or "").lower()
     path = str(parsed.path or "").lower()
+    if path.endswith((".mp4", ".webm", ".mov", ".m3u8")):
+        return False  # Videos cannot be embedded as an image.
     if path.endswith(_TOKE_MEDIA_EXTENSIONS):
         return True
     if host in {"cdn.discordapp.com", "media.discordapp.net", "media.tenor.com", "i.giphy.com"}:
@@ -107,6 +109,20 @@ def _is_direct_media_url(value: str) -> bool:
     if host.startswith("media") and host.endswith(".giphy.com"):
         return True
     return False
+
+
+def _is_stable_provider_media_url(value: str) -> bool:
+    """Avoid embedding short-lived Discord CDN URLs from deleted draft posts."""
+    parsed = urlsplit(str(value or ""))
+    host = str(parsed.hostname or "").lower()
+    path = str(parsed.path or "").lower()
+    if not path.endswith(_TOKE_MEDIA_EXTENSIONS):
+        return False
+    return parsed.scheme.lower() == "https" and (
+        host == "media.tenor.com"
+        or host == "i.giphy.com"
+        or (host.startswith("media") and host.endswith(".giphy.com"))
+    )
 
 
 def _attachment_is_supported_media(attachment: Any) -> bool:
@@ -313,40 +329,76 @@ async def _publish_toke(
         upload_file: Optional[discord.File] = None
         direct = bool(clean_media and _is_direct_media_url(clean_media))
         if upload is not None:
+            # Editable attachment:// embeds duplicate after PATCH, but naked
+            # attachments display far too large above the session card.
+            # Components V2 MediaGallery renders one full-width inline image through edits.
             upload_file = await upload.to_file()
-            embed.set_image(url=f"attachment://{upload_file.filename}")
+            # Discord's attachment:// component reference must be a bare,
+            # predictable filename. Preserve the true image format (including
+            # animated GIFs) rather than copying unsafe mobile upload names.
+            declared_type = str(getattr(upload, "content_type", "") or "").split(";", 1)[0].lower()
+            content_extensions = {
+                "image/gif": "gif", "image/jpeg": "jpg",
+                "image/png": "png", "image/webp": "webp",
+            }
+            original_suffix = str(getattr(upload, "filename", "") or "").rsplit(".", 1)[-1].lower()
+            suffix = content_extensions.get(declared_type)
+            if suffix is None:
+                suffix = original_suffix if f".{original_suffix}" in _TOKE_MEDIA_EXTENSIONS else "png"
+            upload_file.filename = f"toke-{guild.id}-{member.id}-{time.time_ns()}.{suffix}"
         elif direct:
+            # Provider/CDN URLs do not require a message attachment and remain
+            # inside the Toke embed through later session edits.
             embed.set_image(url=clean_media)
+        elif clean_media:
+            # Putting a Tenor/Giphy page URL in message.content lets Discord
+            # unfurl a SECOND standalone preview above the Toke card.
+            # Keep the fallback link clickable inside the card instead.
+            embed.description += f"\n\n[Open shared GIF or image]({clean_media})"
 
-        content = notify_role.mention
-        if clean_media and not direct:
-            content += f"\n{clean_media}"
         voice_id = choose_voice(guild, member, settings)
-        view = TokeCheersView(
-            member.id, starter_role.id, voice_channel_id=voice_id, guild_id=guild.id,
-        )
-        payload: dict[str, Any] = {
-            "content": content,
-            "embed": embed,
-            "view": view,
-            "allowed_mentions": _toke_allowed_mentions(notify_role),
+        session_data: dict[str, Any] = {
+            "guild_id": guild.id,
+            "message_id": 0,
+            "channel_id": channel.id,
+            "starter_id": member.id,
+            "starter_role_id": starter_role.id,
+            "notify_role_id": notify_role.id,
+            "voice_channel_id": voice_id,
+            "max_interested": int(settings["max_interested"]),
+            "show_member_names": bool(settings["show_member_names"]),
+            "expires_at": time.time() + int(settings["session_minutes"]) * 60,
         }
         if upload_file is not None:
-            payload["file"] = upload_file
+            session_data["media_layout"] = "gallery_v2"
+            session_data["media_filename"] = upload_file.filename
+            pending_card = {**session_data, "active": True, "cheers_ids": [], "going_ids": []}
+            intro = (
+                "## 💨 Toke Time\n"
+                f"{notify_role.mention}\n"
+                f"**{discord.utils.escape_markdown(member.display_name)}** is calling the sesh crowd."
+                + (f"\n\n> {discord.utils.escape_markdown(_clean_member_message(message_text))}" if message_text else "")
+            )
+            # Discord V2 messages cannot mix content/embeds with layout views.
+            # The single authorized role ping is inside the header TextDisplay.
+            payload: dict[str, Any] = {
+                "view": TokeMediaLayout(guild, pending_card, intro=intro),
+                "file": upload_file,
+                "allowed_mentions": _toke_allowed_mentions(notify_role),
+            }
+        else:
+            payload = {
+                "content": notify_role.mention,
+                "embed": embed,
+                "view": TokeCheersView(
+                    member.id, starter_role.id, voice_channel_id=voice_id, guild_id=guild.id,
+                ),
+                "allowed_mentions": _toke_allowed_mentions(notify_role),
+            }
         sent = await channel.send(**payload)
         try:
-            session = await toke_sessions.save_new({
-                "guild_id": guild.id,
-                "message_id": sent.id,
-                "channel_id": channel.id,
-                "starter_id": member.id,
-                "starter_role_id": starter_role.id,
-                "notify_role_id": notify_role.id,
-                "voice_channel_id": voice_id,
-                "max_interested": int(settings["max_interested"]),
-                "show_member_names": bool(settings["show_member_names"]),
-                "expires_at": time.time() + int(settings["session_minutes"]) * 60,
-            })
+            session_data["message_id"] = sent.id
+            session = await toke_sessions.save_new(session_data)
         except Exception:
             # A card that cannot track participants must not remain posted with
             # a broken button. Log and attempt to undo the posted announcement.
@@ -357,13 +409,16 @@ async def _publish_toke(
             raise
         _TOKE_USER_LAST[(int(guild.id), int(member.id))] = monotonic()
         _TOKE_GUILD_LAST[int(guild.id)] = monotonic()
-        try:
-            await sent.edit(embed=render_card(guild, session, embed), view=TokeCheersView(
-                member.id, starter_role.id, guild_id=guild.id, message_id=sent.id,
-                voice_channel_id=voice_id,
-            ))
-        except discord.HTTPException as exc:
-            print(f"[toke] initial card status edit failed guild={guild.id} message={sent.id}: {exc}")
+        if upload_file is None:
+            try:
+                await sent.edit(embed=render_card(guild, session, embed), view=TokeCheersView(
+                    member.id, starter_role.id, guild_id=guild.id, message_id=sent.id,
+                    voice_channel_id=voice_id,
+                ))
+            except discord.HTTPException as exc:
+                print(f"[toke] initial card status edit failed guild={guild.id} message={sent.id}: {exc}")
+        # No first PATCH for uploaded images; the V2 layout already shows
+        # its empty attendance and its controls before the first interaction.
         return sent
 
 
@@ -391,13 +446,18 @@ async def publish_toke_from_draft(
     clean_media = ""
     upload = None
     if media_message is not None:
-        for attachment in media_message.attachments:
-            if _attachment_is_supported_media(attachment):
-                upload = attachment
-                break
-        if upload is None:
-            found = media_url_from_message(media_message)
-            if found:
+        found = media_url_from_message(media_message)
+        # Prefer a provider-hosted public image when Discord's GIF picker
+        # supplied one; it can stay *inside* the embed without a local upload
+        # and without leaving a duplicate native attachment on edits.
+        if found and _is_stable_provider_media_url(found):
+            clean_media = _clean_media_url(found)
+        else:
+            for attachment in media_message.attachments:
+                if _attachment_is_supported_media(attachment):
+                    upload = attachment
+                    break
+            if upload is None and found:
                 clean_media = _clean_media_url(found)
         if upload is None and not clean_media:
             raise ValueError("No supported GIF or picture could be read. Check Message Content Intent.")

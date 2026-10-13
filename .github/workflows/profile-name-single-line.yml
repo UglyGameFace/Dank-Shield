@@ -1,0 +1,35 @@
+name: Profile Name Single-Line Regression
+
+on:
+  pull_request:
+    paths:
+      - "stoney_verify/profile_signature_live_renderer.py"
+      - "stoney_verify/profile_signature_renderer.py"
+      - "stoney_verify/welcome_card_typography_engine.py"
+      - "tests/test_profile_name_single_line.py"
+      - "tests/test_profile_signature_reference_visuals.py"
+      - "tests/test_compact_profile_signature_renderer.py"
+      - ".github/workflows/profile-name-single-line.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  profile-name-single-line:
+    name: Full-name layout and typography contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install Python dependencies
+        run: |
+          python -m pip install -q -r requirements.txt
+          python -m pip install -q pytest
+      - name: Compile profile renderers
+        run: python -m py_compile stoney_verify/profile_signature_live_renderer.py stoney_verify/profile_signature_renderer.py stoney_verify/welcome_card_typography_engine.py
+      - name: Test single-line names, all themes and legacy cards
+        run: python -m pytest -q tests/test_profile_name_single_line.py tests/test_profile_signature_reference_visuals.py tests/test_compact_profile_signature_renderer.py --tb=short --disable-warnings

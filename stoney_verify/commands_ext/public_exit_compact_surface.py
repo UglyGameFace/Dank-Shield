@@ -40,8 +40,8 @@ def _install_final_layers(bot: Any, tree: Any) -> dict[str, Any]:
     install_lifecycle_menu_compat()
     install_cleanup_menu_compat()
 
-    # The compact-v2 installer intentionally strips all optional /dank children.
-    # Restore the one approved direct destructive-action doorway *after* that
+    # The compact-v2 installer retains the curated /dank shortcuts.
+    # Restore the direct destructive-action doorway *after* that
     # cleanup, using thin wrappers that delegate to the canonical purge engines.
     install_direct_purge_group()
 
@@ -57,7 +57,8 @@ def _install_final_layers(bot: Any, tree: Any) -> dict[str, Any]:
         )
 
     children = sorted(str(getattr(item, "name", "")) for item in dank_group.commands)
-    expected_children = ["home", "purge", "setup", "upload"]
+    from stoney_verify.command_surface_contract import PUBLIC_DANK_CHILDREN
+    expected_children = sorted(PUBLIC_DANK_CHILDREN)
     if children != expected_children:
         raise RuntimeError(
             f"final /dank children mismatch expected={expected_children} actual={children}"

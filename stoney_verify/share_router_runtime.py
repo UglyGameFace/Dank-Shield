@@ -56,8 +56,12 @@ from stoney_verify.torrent_streaming import (
 from stoney_verify.torrent_media_server import media_server_ready
 
 _DATA_LOCK = asyncio.Lock()
+# Route reads are on EVERY Discord message. Avoid JSON parsing all guilds for
+# each event; the one immutable read cache is replaced on every route write.
+_ROUTE_STATE_CACHE: Optional[tuple[str, int, int, dict[str, Any]]] = None
 # Only successfully delivered posts are eligible for automatic cleanup retries.
 _SOURCE_CLEANUP_TASK: Optional[asyncio.Task[None]] = None
+SHARE_ROUTER_FEATURE_BUILD = "custom-sources-v2-prod-reconcile"
 _SOURCE_CLEANUP_INTERVAL_SECONDS = 900
 _SOURCE_CLEANUP_MAX_PER_PASS = 50
 _SOURCE_CLEANUP_CURSOR = 0
@@ -236,6 +240,13 @@ def _trusted_video_url(value: str) -> bool:
     if not host:
         return False
     if host in _TRUSTED_VIDEO_HOSTS:
+        return True
+    # Facebook sometimes supplies an actual video CDN URL to Discord's embed
+    # rather than a Discord-hosted proxy. Only accept the Meta-owned fbcdn.net
+    # hostname boundary, never facebook.com HTML player pages or lookalikes.
+    # _download_trusted_video still validates public DNS, redirects, media
+    # content-type, byte cap and timeout before forwarding to Discord.
+    if host == "fbcdn.net" or host.endswith(".fbcdn.net"):
         return True
     if host.endswith(".discordapp.net") or host.endswith(".discordapp.com"):
         return True
@@ -466,6 +477,34 @@ async def _download_trusted_video(
                 pass
 
 
+async def _download_resolved_progressive(
+    resolution: Any,
+    *,
+    max_bytes: int,
+) -> Optional[RoutedVideo]:
+    """Try one provider-declared Facebook alternate if the first CDN URL fails.
+
+    Both candidates go through the same guarded bounded download. Do not add
+    more yt-dlp extraction, use arbitrary page links, or bypass size limits.
+    """
+    candidates = [(resolution.media_url, resolution.request_headers)]
+    if resolution.provider == "facebook":
+        candidates.extend(tuple(resolution.alternate_progressive)[:1])
+    attempted: set[str] = set()
+    for candidate, headers in candidates:
+        if not candidate or candidate in attempted or not is_safe_media_download_url(candidate):
+            continue
+        attempted.add(candidate)
+        result = await _download_trusted_video(
+            candidate,
+            max_bytes=max_bytes,
+            request_headers=dict(headers),
+        )
+        if result is not None:
+            return result
+    return None
+
+
 async def _prepare_native_video(
     message: discord.Message,
     target: discord.TextChannel,
@@ -497,10 +536,9 @@ async def _prepare_native_video(
         return None
 
     if resolution.progressive:
-        routed = await _download_trusted_video(
-            resolution.media_url,
+        routed = await _download_resolved_progressive(
+            resolution,
             max_bytes=max_bytes,
-            request_headers=dict(resolution.request_headers),
         )
         if routed is not None:
             _log(
@@ -641,20 +679,46 @@ def _load_all_unlocked() -> dict[str, Any]:
     return data
 
 
+def _read_route_state_unlocked() -> dict[str, Any]:
+    """Read-only cache for the high-volume Discord gateway path.
+
+    No caller mutates this index. All admin writes retain _load_all_unlocked's
+    fresh standalone dict and invalidate this cache after an atomic save.
+    """
+    global _ROUTE_STATE_CACHE
+    path = ROUTES_FILE
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        _ROUTE_STATE_CACHE = None
+        return {}
+    fingerprint = (str(path), int(stat.st_mtime_ns), int(stat.st_size))
+    previous = _ROUTE_STATE_CACHE
+    if previous is not None and previous[:3] == fingerprint:
+        return previous[3]
+    data = _load_all_unlocked()
+    _ROUTE_STATE_CACHE = (*fingerprint, data)
+    return data
+
+
 def _save_all_unlocked(data: Mapping[str, Any]) -> None:
+    global _ROUTE_STATE_CACHE
     ROUTES_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = ROUTES_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(dict(data), indent=2, sort_keys=True), encoding="utf-8")
     tmp.replace(ROUTES_FILE)
+    _ROUTE_STATE_CACHE = None
 
 
-async def guild_routes(guild_id: int) -> list[dict[str, Any]]:
+async def guild_route_state(guild_id: int) -> tuple[list[dict[str, Any]], int]:
+    """Read one guild's routes from the invalidated-on-write cached snapshot."""
     async with _DATA_LOCK:
-        data = _load_all_unlocked()
+        data = _read_route_state_unlocked()
         bucket = data.get(str(int(guild_id))) or {}
+        download_id = _safe_int(bucket.get("download_channel_id"), 0) if isinstance(bucket, dict) else 0
         routes = bucket.get("routes") if isinstance(bucket, dict) else []
         if not isinstance(routes, list):
-            return []
+            routes = []
 
         clean: list[dict[str, Any]] = []
         for raw in routes:
@@ -670,7 +734,300 @@ async def guild_routes(guild_id: int) -> list[dict[str, Any]]:
             item["enabled"] = bool(item.get("enabled", True))
             item["delete_source"] = bool(item.get("delete_source", True))
             clean.append(item)
-        return clean
+        return clean, download_id
+
+
+async def guild_routes(guild_id: int) -> list[dict[str, Any]]:
+    routes, _ = await guild_route_state(guild_id)
+    return routes
+
+
+async def guild_download_channel_id(guild_id: int) -> int:
+    _, channel_id = await guild_route_state(guild_id)
+    return channel_id
+
+
+async def guild_download_expiry_seconds(guild_id: int) -> int:
+    # Reuse the existing Share Router per-guild file, with safe defaults.
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        bucket = data.get(str(int(guild_id))) or {}
+        stored = _safe_int(bucket.get("download_expiry_seconds"), 7 * 86400) if isinstance(bucket, dict) else 7 * 86400
+    return stored if stored in {3600, 86400, 7 * 86400, 30 * 86400} else 7 * 86400
+
+
+async def save_guild_download_expiry_seconds(guild_id: int, expiry_seconds: int) -> None:
+    if int(guild_id) <= 0 or int(expiry_seconds) not in {3600, 86400, 7 * 86400, 30 * 86400}:
+        raise ValueError("Download expiry must be one hour, one day, seven days, or thirty days")
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        key = str(int(guild_id))
+        bucket = data.get(key)
+        if not isinstance(bucket, dict):
+            bucket = {}
+        bucket["download_expiry_seconds"] = int(expiry_seconds)
+        data[key] = bucket
+        _save_all_unlocked(data)
+
+
+async def save_guild_download_channel(guild_id: int, channel_id: int) -> None:
+    """One opt-in channel per guild, stored with the existing Share Router routes."""
+    if guild_id <= 0 or channel_id < 0:
+        raise ValueError("Invalid Share Router download channel scope")
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        key = str(int(guild_id))
+        bucket = data.get(key)
+        if not isinstance(bucket, dict):
+            bucket = {}
+        bucket["download_channel_id"] = str(int(channel_id)) if channel_id else ""
+        data[key] = bucket
+        _save_all_unlocked(data)
+
+
+async def guild_custom_share_sources(guild_id: int) -> list[int]:
+    """Explicit custom proxy IDs scoped to one guild, using the existing route file."""
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        bucket = data.get(str(int(guild_id))) or {}
+        raw = bucket.get("custom_sources", []) if isinstance(bucket, dict) else []
+        if not isinstance(raw, list):
+            return []
+        return list(dict.fromkeys(
+            source_id for item in raw if (source_id := _safe_int(item, 0)) > 0
+        ))
+
+
+def _guild_source_lock(guild_id: int) -> asyncio.Lock:
+    return _GUILD_SOURCE_LOCKS.setdefault(int(guild_id), asyncio.Lock())
+
+
+async def available_share_source_ids(guild: discord.Guild) -> set[int]:
+    """One authority for visible defaults, registered custom IDs and legacy routes."""
+    category = find_share_router_category(guild)
+    ids: set[int] = set(await guild_custom_share_sources(int(guild.id)))
+    if category is not None:
+        ids.update(
+            int(source.id) for name in DEFAULT_SHARE_CHANNELS
+            if (source := find_share_source_channel(category, name)) is not None
+        )
+    ids.update(
+        _safe_int(route.get("source_channel_id"), 0)
+        for route in await guild_routes(int(guild.id))
+    )
+    return {
+        source_id for source_id in ids
+        if isinstance(guild.get_channel(source_id), discord.TextChannel)
+    }
+
+
+async def save_managed_share_route(
+    guild: discord.Guild,
+    *,
+    source_channel_id: int,
+    target_channel_id: int,
+    created_by_id: int,
+) -> None:
+    """Revalidate selection under the same per-guild lock as proxy deletion."""
+    async with _guild_source_lock(int(guild.id)):
+        if int(source_channel_id) not in await available_share_source_ids(guild):
+            raise ValueError("The proxy source no longer exists or is no longer configured.")
+        await save_route(
+            int(guild.id),
+            source_channel_id=int(source_channel_id),
+            target_channel_id=int(target_channel_id),
+            delete_source=True,
+            created_by_id=int(created_by_id),
+        )
+
+
+async def prune_missing_custom_share_sources(guild: discord.Guild) -> int:
+    """Admin-triggered cleanup, using Discord's live channel listing as authority."""
+    async with _guild_source_lock(int(guild.id)):
+        # Never infer deletion solely from an incomplete gateway channel cache.
+        live_ids = {
+            int(channel.id) for channel in await guild.fetch_channels()
+        }
+        async with _DATA_LOCK:
+            data = _load_all_unlocked()
+            key = str(int(guild.id))
+            bucket = data.get(key)
+            if not isinstance(bucket, dict):
+                return 0
+            raw = bucket.get("custom_sources", [])
+            if not isinstance(raw, list):
+                return 0
+            stale = {
+                source_id for item in raw
+                if (source_id := _safe_int(item, 0)) > 0 and source_id not in live_ids
+            }
+            if not stale:
+                return 0
+            bucket["custom_sources"] = [
+                item for item in raw if _safe_int(item, 0) not in stale
+            ]
+            bucket["routes"] = [
+                route for route in bucket.get("routes", [])
+                if not (
+                    isinstance(route, dict)
+                    and _safe_int(route.get("source_channel_id"), 0) in stale
+                )
+            ]
+            data[key] = bucket
+            _save_all_unlocked(data)
+            return len(stale)
+
+
+async def create_custom_share_source(
+    guild: discord.Guild,
+    actor: discord.abc.User,
+    requested_name: str,
+) -> discord.TextChannel:
+    """Create a private, non-NSFW proxy and persist its identity within this guild."""
+    name = custom_share_source_name(requested_name)
+    async with _guild_source_lock(int(guild.id)):
+        hub = find_share_router_category(guild)
+        if hub is None:
+            raise ValueError("Run Create / Repair Hub before creating a custom proxy.")
+
+        managed = [
+            category for category in guild.categories
+            if is_share_router_managed_category_name(category.name)
+        ]
+        # Never reuse a name already present in a managed hub: duplicates make
+        # Android share-sheet selection ambiguous.
+        if any(
+            channel.name == name
+            for category in managed for channel in category.text_channels
+        ):
+            raise ValueError(f"#{name} already exists. Choose a different name.")
+
+        category = next(
+            (item for item in [hub, *[c for c in managed if c.id != hub.id]]
+             if len(item.channels) < _DISCORD_CATEGORY_CHANNEL_LIMIT),
+            None,
+        )
+        created_overflow_category = None
+        if category is None:
+            indices = {
+                int(key.split("-")[-1])
+                for item in managed
+                if (key := normalize_share_router_name(item.name)).rsplit("-", 1)[-1].isdigit()
+            }
+            index = next(n for n in range(2, 1000) if n not in indices)
+            category_name = f"🔗 SHARE ROUTES {index}"
+            overwrites = _permission_overwrite_map(guild, actor)
+            overwrites = await _add_configured_staff_overwrites(guild, overwrites)
+            category = await guild.create_category(
+                category_name, overwrites=overwrites,
+                reason="Dank Shield Share Router additional proxy hub",
+            )
+            created_overflow_category = category
+
+        overwrites = _permission_overwrite_map(guild, actor)
+        overwrites = await _add_configured_staff_overwrites(guild, overwrites)
+        try:
+            source = await guild.create_text_channel(
+                name, category=category, nsfw=False, overwrites=overwrites,
+                reason="Dank Shield custom Share Router proxy",
+            )
+        except Exception:
+            # Creating an overflow category must not leave an empty orphan when
+            # the channel API rejects a guild at its server-wide channel limit.
+            if created_overflow_category is not None:
+                try:
+                    await created_overflow_category.delete(reason="Share Router proxy creation failed")
+                except Exception:
+                    _log(f"overflow category cleanup failed guild={guild.id} category={category.id}")
+            raise
+        try:
+            async with _DATA_LOCK:
+                data = _load_all_unlocked()
+                key = str(int(guild.id))
+                bucket = data.get(key)
+                if not isinstance(bucket, dict):
+                    bucket = {}
+                sources = [
+                    _safe_int(value, 0)
+                    for value in bucket.get("custom_sources", [])
+                ]
+                bucket["custom_sources"] = [
+                    str(value) for value in dict.fromkeys([*sources, int(source.id)])
+                    if value > 0
+                ]
+                data[key] = bucket
+                _save_all_unlocked(data)
+        except Exception:
+            # An unregistered proxy would accept posts without routing them.
+            try:
+                await source.delete(reason="Share Router registration failed; rollback")
+            except Exception:
+                _log(f"CRITICAL: failed to rollback unregistered source guild={guild.id} source={source.id}")
+            if created_overflow_category is not None and not any(
+                int(getattr(child, "id", 0)) != int(source.id)
+                for child in created_overflow_category.channels
+            ):
+                try:
+                    await created_overflow_category.delete(reason="Share Router registration failed")
+                except Exception:
+                    _log(f"overflow category cleanup failed guild={guild.id} category={category.id}")
+            raise
+        return source
+
+
+async def delete_custom_share_source(guild: discord.Guild, source_id: int) -> None:
+    """Delete only an explicitly registered custom proxy, then its saved route."""
+    async with _guild_source_lock(int(guild.id)):
+        async with _DATA_LOCK:
+            data = _load_all_unlocked()
+            bucket = data.get(str(int(guild.id)))
+            sources = bucket.get("custom_sources", []) if isinstance(bucket, dict) else []
+            if not isinstance(sources, list) or int(source_id) not in {
+                _safe_int(value, 0) for value in sources
+            }:
+                raise ValueError("This is not a registered custom proxy in this server.")
+
+        source = guild.get_channel(int(source_id))
+        overflow_category = None
+        if source is not None:
+            if (
+                not isinstance(source, discord.TextChannel)
+                or source.category is None
+                or not is_share_router_managed_category_name(source.category.name)
+            ):
+                raise ValueError("Proxy was moved outside Share Routes; restore it before deleting.")
+            if not is_share_router_category_name(source.category.name):
+                overflow_category = source.category
+            await source.delete(reason="Dank Shield custom Share Router proxy removed")
+
+        async with _DATA_LOCK:
+            data = _load_all_unlocked()
+            key = str(int(guild.id))
+            bucket = data.get(key)
+            if not isinstance(bucket, dict):
+                return
+            bucket["custom_sources"] = [
+                value for value in bucket.get("custom_sources", [])
+                if _safe_int(value, 0) != int(source_id)
+            ]
+            bucket["routes"] = [
+                route for route in bucket.get("routes", [])
+                if not (
+                    isinstance(route, dict)
+                    and _safe_int(route.get("source_channel_id"), 0) == int(source_id)
+                )
+            ]
+            data[key] = bucket
+            _save_all_unlocked(data)
+
+        if overflow_category is not None and not any(
+            int(getattr(child, "id", 0)) != int(source_id)
+            for child in overflow_category.channels
+        ):
+            try:
+                await overflow_category.delete(reason="Dank Shield empty overflow proxy hub cleanup")
+            except Exception:
+                _log(f"overflow category cleanup failed guild={guild.id} category={overflow_category.id}")
 
 
 async def guild_custom_share_sources(guild_id: int) -> list[int]:
@@ -1638,7 +1995,13 @@ async def route_message(message: discord.Message) -> None:
         if getattr(message.author, "bot", False):
             return
 
-        routes = await guild_routes(int(guild.id))
+        routes, download_channel_id = await guild_route_state(int(guild.id))
+        if download_channel_id and int(message.channel.id) == download_channel_id:
+            # Discord gateway listener stays non-blocking while download workers
+            # process a bounded durable queue. Never create another listener.
+            from .share_router_download_queue import enqueue_download_request
+            await enqueue_download_request(message)
+            return
         route = route_for_source(routes, int(message.channel.id))
         if route is None:
             if is_share_router_design_resource(message.channel):
@@ -2052,9 +2415,11 @@ def ensure_share_router_runtime(bot: Any) -> bool:
             global _SOURCE_CLEANUP_TASK
             if _SOURCE_CLEANUP_TASK is None or _SOURCE_CLEANUP_TASK.done():
                 _SOURCE_CLEANUP_TASK = asyncio.create_task(_share_router_cleanup_loop(bot))
+            from .share_router_download_queue import start_download_workers
+            await start_download_workers(bot)
 
         bot.add_listener(start_cleanup_worker, "on_ready")
-        _log("active; private share proxies can route into configured destinations")
+        _log(f"active; private share proxies can route into configured destinations build={SHARE_ROUTER_FEATURE_BUILD}")
         return True
     except Exception as exc:
         _log(f"runtime install failed: {type(exc).__name__}: {exc}")

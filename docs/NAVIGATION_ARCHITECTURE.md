@@ -48,7 +48,7 @@ Expected Home composition:
 🛡️ DANK SHIELD
 CONTROL CENTER
 ━━━━━━━━━━━━━━━━━━━━
-🧭 11 sections  •  ✨ 27 destinations
+🧭 11 sections  •  ✨ 30 destinations
 
 [ 🧭 Choose a section… ▾ ]
   ⚙️ Setup & Server Settings
@@ -64,6 +64,7 @@ CONTROL CENTER
   🧰 Utilities & Help
 
 [🔎 Find Feature] [📚 Directory] [❓ Help] [✖ Close]
+[✨ New & Updated]
 ```
 
 The Home embed must not repeat the full category directory. Compactness comes from
@@ -73,16 +74,58 @@ names.
 | Key | Category | Purpose |
 | --- | --- | --- |
 | `setup` | ⚙️ Setup & Server Settings | Initial setup, mappings, permissions, configuration |
-| `access` | 🚪 Onboarding & Access | Verification, Member Setup, welcome/access workflows |
-| `safety` | 🛡️ Safety & Moderation | Protection, moderation, cleanup, spam/invite safety |
+| `access` | 🚪 Onboarding & Access | Verification reminders, agreements, Member Setup, welcome |
+| `safety` | 🛡️ Safety & Moderation | Protection, AI Voice Safety, moderation, spam/invite safety |
 | `people` | 👥 Members, Roles & Profiles | Server roles and staff profile configuration |
-| `community` | 🌿 Community & Engagement | Community roles, pings, Hub, sharing, community tools |
+| `community` | 🌿 Community & Engagement | Toke Settings, Share Router Downloads, roles, pings, Hub |
 | `tickets` | 🎫 Tickets & Support | Ticket queues, routing, categories, forms, panels |
 | `design` | 🎨 Design & Branding | Server design, naming, cards, artwork, fonts |
-| `voice` | 🔊 Voice & Accessibility | Live Captions and voice accessibility |
+| `voice` | 🔊 Voice & Accessibility | AI Voice Safety, Live Captions, voice accessibility |
 | `ops` | 📊 Logs, Stats & Diagnostics | Logs, counters, status, diagnostics |
 | `my` | 👤 My Dank Shield | Member-owned profile/setup/community choices |
 | `utilities` | 🧰 Utilities & Help | Help and cross-feature guidance |
+
+
+## Newly registered destinations and recent features (October 2026)
+
+The primary Home selector only lists broad categories. It **must not be mistaken
+for the complete feature directory**. The public registry is authoritative.
+A new feature must be discoverable in its category **and** by natural search
+aliases. For recently shipped major workflows, the same canonical registry
+entry can be pinned in the **New & Updated** Home shortcut using
+`RECENT_FEATURE_KEYS`; it is never an independent dispatcher.
+
+Current major destinations include:
+- **AI Voice Safety** → Voice & Accessibility → existing
+  `open_voice_safety_center` under Protection Center, with its real admin and
+  host privacy/DAVE gates. Search “voice moderation”, “voice patrol”, or
+  “voice consent”.
+- **Share Router Downloads** → Community & Engagement → the same Download
+  Settings view with expiring private Watch links and delivery tests.
+- **Toke Sesh Settings** → Community & Engagement → the existing Toke meetup
+  configuration, not an automatic slash-command post.
+- **Verification Reminders** → Onboarding & Access → the existing opt-in
+  unverified-member reminder setup.
+- **Dank Cinema & Movie Night** → Community & Engagement → original canonical
+  movie home with subtitles, source providers, and synchronized parties.
+- **Server Stats** → Logs, Stats & Diagnostics → existing live counter studio,
+  including reconciliation of manually deleted tickets.
+
+Historical Discord ephemeral menu messages do not update when the bot deploys
+new code. Reopen `/dank home` to create a fresh panel after deployment, and
+verify that the runtime actually uses the intended GitHub/Discloud revision.
+
+### CI contract
+
+Navigation changes must keep:
+- identical key sets across `FEATURES` and `_FEATURE_ROUTE_KEYS`;
+- 11 stable Home sections (unless deliberately reviewed), no category with
+  zero destinations, unique keys/aliases and useful descriptions;
+- fewer than 25 total Discord components per view and component rows 0–4;
+- live dispatch to existing authorized feature owners, with no fake actions;
+- searchable names for new features and their everyday aliases;
+- `RECENT_FEATURE_KEYS` references that all resolve and render;
+- mobile Home’s compact full-name selector and no repetitive full-directory embed.
 
 ## Category page contract
 
@@ -118,7 +161,7 @@ Examples:
 - `invite shield` → Protection
 - `ping roles` → Community & Pings Manager
 - `share router` → Share Router
-- `movie night` / `watch party` → Movie Night
+- `movie night` / `watch party` → Dank Cinema & Movie Night
 - `member setup manager` → Member Setup Manager
 - `captions` → Live Captions
 - `channel fonts` → Server Design

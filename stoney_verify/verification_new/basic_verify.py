@@ -21,6 +21,10 @@ from stoney_verify.guild_config import (
     upsert_guild_config,
 )
 from stoney_verify.globals import get_supabase
+from stoney_verify.voice_safety_consent import (
+    VOICE_SAFETY_DISCLOSURE_MARKER,
+    verification_message_discloses_voice_safety,
+)
 from stoney_verify.setup_engine.loader import snapshot_from_config
 from stoney_verify.startup_guards.discord_api_safety import fetch_message_with_api_safety
 from stoney_verify.setup_engine.verification_modes import (
@@ -41,6 +45,8 @@ _RUNTIME_REGISTRATION_ERROR: str = ""
 _BASIC_VERIFY_PANEL_MESSAGE_ID_KEY = "basic_verify_panel_message_id"
 _BASIC_VERIFY_PANEL_APPLICATION_ID_KEY = "basic_verify_panel_application_id"
 _BASIC_VERIFY_PANEL_COMPONENT_ID_KEY = "basic_verify_panel_component_id"
+_BASIC_VERIFY_PANEL_EMBED_VERSION_KEY = "basic_verify_panel_embed_version"
+_BASIC_VERIFY_PANEL_EMBED_VERSION = 2
 _RUNTIME_READY_RECONCILER_REGISTERED = False
 _RUNTIME_READY_RECONCILE_STARTED = False
 _BOUND_PANEL_MESSAGE_IDS: set[int] = set()
@@ -246,43 +252,36 @@ def _lock_for(guild_id: int, user_id: int) -> asyncio.Lock:
 
 def build_basic_verify_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     rules = _channel_from_cfg(guild, cfg, "rules_channel_id", "rule_channel_id", "rules_text_channel_id") or _channel_by_name(guild, "rules", "rule")
-    verify = _channel_from_cfg(guild, cfg, "verify_channel_id", "verification_channel_id") or _channel_by_name(guild, "verification", "verify")
-    support = _channel_from_cfg(guild, cfg, "ticket_panel_channel_id", "support_channel_id", "panel_channel_id") or _channel_by_name(guild, "support", "ticket")
-
-    rules_text = rules.mention if rules else "the rules channel"
-    verify_text = verify.mention if verify else "this verification channel"
-    support_text = support.mention if support else "the support/ticket channel"
+    voice_safety = bool(_cfg_value(cfg, "voice_safety_enabled", False))
+    rules_text = rules.mention if rules else "the server rules"
 
     embed = discord.Embed(
-        title="✅ Verify to unlock server access",
+        title="🛡️ Verify Your Access",
         description=(
-            "This button verifies that you are ready to enter the server. "
-            "It is separate from the welcome message and only controls access roles."
+            f"Please read {rules_text} before verifying.\n"
+            f"Tap **{'Agree & Verify' if voice_safety else 'Verify'}** to accept "
+            "the rules and unlock server access."
         ),
         color=discord.Color.green(),
     )
-    embed.add_field(
-        name="Before you tap Verify",
-        value=f"Please read {rules_text} first so you understand the server rules.",
-        inline=False,
-    )
-    embed.add_field(
-        name="What happens when you verify",
-        value=(
-            f"1. Stay in {verify_text}.\n"
-            "2. Tap **Verify** below.\n"
-            "3. Dank Shield gives you the server access role and removes the Unverified role."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Need help?",
-        value=f"If the button does not work, go to {support_text} and open a ticket.",
-        inline=False,
-    )
+    if voice_safety:
+        embed.add_field(
+            name=f"🎙️ {VOICE_SAFETY_DISCLOSURE_MARKER}",
+            value=(
+                "Selected voice channels use AI moderation to detect potentially "
+                "**inappropriate, hateful, harassing, lewd, sexually explicit, or offensive comments** "
+                "that may make others uncomfortable or violate server rules.\n\n"
+                "Audio is processed using **Google Gemini**. Staff may receive private "
+                "safety alerts, but Dank Shield does not store raw audio.\n\n"
+                "By selecting **Agree & Verify**, you consent to monitoring in designated "
+                "channels. If you decline, press **Decline & Exit Server**. Your access roles "
+                "will be removed, Unverified assigned, and a 10-second grace period offered "
+                "to change your mind before removal."
+            ),
+            inline=False,
+        )
     embed.set_footer(text=f"{BASIC_VERIFY_FOOTER} • access only")
     return embed
-
 
 def is_basic_verify_panel_embed(embed: discord.Embed) -> bool:
     """Return true for old or current Basic Verify embeds.
@@ -355,8 +354,9 @@ async def _reply(interaction: discord.Interaction, message: str, *, ok: bool) ->
 
 
 class BasicVerifyButton(discord.ui.Button):
-    def __init__(self) -> None:
-        super().__init__(label="Verify", emoji="✅", style=discord.ButtonStyle.success, custom_id=BASIC_VERIFY_CUSTOM_ID)
+    def __init__(self, *, voice_safety_agreement: bool = False) -> None:
+        label = "Agree & Verify" if voice_safety_agreement else "Verify"
+        super().__init__(label=label, emoji="✅", style=discord.ButtonStyle.success, custom_id=BASIC_VERIFY_CUSTOM_ID)
 
     async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
         # The raw on_interaction listener is the canonical live owner because it
@@ -368,10 +368,27 @@ class BasicVerifyButton(discord.ui.Button):
         await maybe_handle_basic_verify_interaction(interaction)
 
 
-class BasicVerifyView(discord.ui.View):
+class BasicVerifyDeclineButton(discord.ui.Button):
     def __init__(self) -> None:
+        from stoney_verify.verification_new.decline_exit import DECLINE_CUSTOM_ID
+        super().__init__(
+            label="Decline & Exit Server", emoji="🚪",
+            style=discord.ButtonStyle.secondary, custom_id=DECLINE_CUSTOM_ID,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if _RUNTIME_FALLBACK_LISTENER_REGISTERED:
+            return
+        from stoney_verify.verification_new.decline_exit import decline_and_exit
+        await decline_and_exit(interaction, from_verify=True)
+
+
+class BasicVerifyView(discord.ui.View):
+    def __init__(self, *, voice_safety_agreement: bool = False) -> None:
         super().__init__(timeout=None)
-        self.add_item(BasicVerifyButton())
+        self.add_item(BasicVerifyButton(voice_safety_agreement=voice_safety_agreement))
+        if voice_safety_agreement:
+            self.add_item(BasicVerifyDeclineButton())
 
 
 async def _basic_verify_fallback_listener(
@@ -394,6 +411,11 @@ async def _basic_verify_fallback_listener(
             else {}
         )
         custom_id = str(data.get("custom_id") or "")
+        from stoney_verify.verification_new.decline_exit import DECLINE_CUSTOM_ID, decline_and_exit
+        if custom_id == DECLINE_CUSTOM_ID:
+            if not interaction.response.is_done():
+                await decline_and_exit(interaction, from_verify=True)
+            return
         if custom_id != BASIC_VERIFY_CUSTOM_ID:
             return
 
@@ -564,6 +586,7 @@ async def _persist_basic_verify_panel_message_id(
     message_id: int,
     *,
     application_id: int = 0,
+    presentation_version: int = 0,
 ) -> None:
     gid = _safe_int(guild_id, 0)
     mid = _safe_int(message_id, 0)
@@ -578,6 +601,8 @@ async def _persist_basic_verify_panel_message_id(
     }
     if aid > 0:
         patch[_BASIC_VERIFY_PANEL_APPLICATION_ID_KEY] = str(aid)
+    if int(presentation_version or 0) > 0:
+        patch[_BASIC_VERIFY_PANEL_EMBED_VERSION_KEY] = int(presentation_version)
     try:
         await upsert_guild_config(gid, patch)
     except Exception as exc:
@@ -764,7 +789,7 @@ async def post_basic_verify_panel(
     if not basic_verify_allowed_for_guild(channel.guild, cfg):
         return "disabled"
     embed = build_basic_verify_embed(channel.guild, cfg)
-    view = BasicVerifyView()
+    view = BasicVerifyView(voice_safety_agreement=bool(_cfg_value(cfg, "voice_safety_enabled", False)))
 
     history_scan_completed = False
     current_panels: list[Any] = []
@@ -801,6 +826,7 @@ async def post_basic_verify_panel(
             int(channel.guild.id),
             int(msg.id),
             application_id=me_id,
+            presentation_version=_BASIC_VERIFY_PANEL_EMBED_VERSION,
         )
         if target_bot is not None:
             _bind_basic_verify_panel_message(target_bot, int(msg.id))
@@ -829,6 +855,7 @@ async def post_basic_verify_panel(
             getattr(getattr(msg, "author", None), "id", 0),
             _safe_int(getattr(getattr(channel.guild, "me", None), "id", 0), 0),
         ),
+        presentation_version=_BASIC_VERIFY_PANEL_EMBED_VERSION,
     )
     if target_bot is not None:
         _bind_basic_verify_panel_message(target_bot, int(msg.id))
@@ -943,6 +970,7 @@ async def _reconcile_one_basic_verify_panel(
         and saved_application_id > 0
         and saved_application_id == current_application_id
         and saved_component_id == BASIC_VERIFY_CUSTOM_ID
+        and _safe_int(_cfg_value(cfg, _BASIC_VERIFY_PANEL_EMBED_VERSION_KEY, 0)) >= _BASIC_VERIFY_PANEL_EMBED_VERSION
     ):
         return (
             "bound"
@@ -990,66 +1018,67 @@ async def _reconcile_one_basic_verify_panel(
         )
         if author_id == current_application_id and current_application_id > 0:
             custom_ids = _message_custom_ids(message)
-            if BASIC_VERIFY_CUSTOM_ID not in custom_ids:
+            needs_component_repair = BASIC_VERIFY_CUSTOM_ID not in custom_ids
+            needs_copy_refresh = (
+                _safe_int(_cfg_value(cfg, _BASIC_VERIFY_PANEL_EMBED_VERSION_KEY, 0))
+                < _BASIC_VERIFY_PANEL_EMBED_VERSION
+            )
+            if needs_component_repair or needs_copy_refresh:
+                # Refresh the existing bot-owned panel instead of posting another.
+                # Preserve the versioned disclosure and matching button label.
+                refreshed_view = BasicVerifyView(
+                    voice_safety_agreement=bool(_cfg_value(cfg, "voice_safety_enabled", False))
+                )
                 try:
                     await message.edit(
                         embed=build_basic_verify_embed(guild, cfg),
-                        view=BasicVerifyView(),
+                        view=refreshed_view,
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                 except TypeError:
-                    # Compatibility with lightweight test doubles and Discord
-                    # message implementations that do not expose
-                    # allowed_mentions on edit().
                     try:
                         await message.edit(
                             embed=build_basic_verify_embed(guild, cfg),
-                            view=BasicVerifyView(),
+                            view=refreshed_view,
                         )
                     except Exception as exc:
                         try:
                             print(
-                                "⚠️ basic_verify component contract repair failed "
+                                "⚠️ basic_verify panel refresh failed "
                                 f"guild={guild.id} channel={channel.id} message={message.id} "
-                                f"found={sorted(custom_ids)} expected={BASIC_VERIFY_CUSTOM_ID!r} "
                                 f"error={type(exc).__name__}: {exc}"
                             )
                         except Exception:
                             pass
-                        return "component_repair_failed"
+                        return "panel_refresh_failed"
                 except Exception as exc:
                     try:
                         print(
-                            "⚠️ basic_verify component contract repair failed "
+                            "⚠️ basic_verify panel refresh failed "
                             f"guild={guild.id} channel={channel.id} message={message.id} "
-                            f"found={sorted(custom_ids)} expected={BASIC_VERIFY_CUSTOM_ID!r} "
                             f"error={type(exc).__name__}: {exc}"
                         )
                     except Exception:
                         pass
-                    return "component_repair_failed"
+                    return "panel_refresh_failed"
 
                 await _persist_basic_verify_panel_message_id(
                     int(guild.id),
                     int(message.id),
                     application_id=current_application_id,
+                    presentation_version=_BASIC_VERIFY_PANEL_EMBED_VERSION,
                 )
                 bound = _bind_basic_verify_panel_message(bot, int(message.id))
-                try:
-                    print(
-                        "♻️ basic_verify repaired legacy component contract "
-                        f"guild={guild.id} channel={channel.id} message={message.id} "
-                        f"old_ids={sorted(custom_ids)} new_id={BASIC_VERIFY_CUSTOM_ID!r} "
-                        f"bound={bound}"
-                    )
-                except Exception:
-                    pass
-                return "repaired_component" if bound else "repair_bind_failed"
+                return (
+                    ("repaired_component" if needs_component_repair else "refreshed_copy")
+                    if bound else "repair_bind_failed"
+                )
 
             await _persist_basic_verify_panel_message_id(
                 int(guild.id),
                 int(message.id),
                 application_id=current_application_id,
+                presentation_version=_BASIC_VERIFY_PANEL_EMBED_VERSION,
             )
             return (
                 "migrated_current"
@@ -1193,6 +1222,7 @@ async def _reconcile_basic_verify_panels_after_ready(bot: Any) -> None:
                 and saved_application_id > 0
                 and saved_application_id == current_application_id
                 and saved_component_id == BASIC_VERIFY_CUSTOM_ID
+                and _safe_int(_cfg_value(cfg, _BASIC_VERIFY_PANEL_EMBED_VERSION_KEY, 0)) >= _BASIC_VERIFY_PANEL_EMBED_VERSION
             )
             target = current_rows if proven_current else legacy_rows
             target.append((int(gid), cfg))
@@ -1300,6 +1330,9 @@ async def apply_basic_verification(member: discord.Member) -> tuple[bool, str]:
             return False, why
 
     async with _lock_for(int(guild.id), int(member.id)):
+        from stoney_verify.verification_new.decline_exit import exit_pending
+        if exit_pending(int(guild.id), int(member.id)):
+            return False, "Exit is pending. Use Agree & Stay on your private grace-period notice."
         try:
             fresh = guild.get_member(member.id) or await guild.fetch_member(member.id)
         except Exception:
@@ -1341,6 +1374,12 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
     try:
         data = getattr(interaction, "data", None) or {}
         custom_id = str(data.get("custom_id") or "")
+        from stoney_verify.verification_new.decline_exit import DECLINE_CUSTOM_ID, decline_and_exit
+        if custom_id == DECLINE_CUSTOM_ID:
+            if not _claim_basic_verify_interaction(interaction):
+                return True
+            await decline_and_exit(interaction, from_verify=True)
+            return True
         if custom_id != BASIC_VERIFY_CUSTOM_ID:
             return False
         if not _claim_basic_verify_interaction(interaction):
@@ -1371,7 +1410,41 @@ async def maybe_handle_basic_verify_interaction(interaction: discord.Interaction
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             await _reply(interaction, "This only works inside the server.", ok=False)
             return True
+        from stoney_verify.verification_new.decline_exit import exit_pending
+        if exit_pending(int(interaction.guild.id), int(interaction.user.id)):
+            await _reply(
+                interaction,
+                "An exit countdown is active. Use **Agree & Stay** on your private 10-second notice; "
+                "the regular Verify button cannot bypass a pending exit.",
+                ok=False,
+            )
+            return True
+        # In a server that requires Voice Safety, the role grant cannot come
+        # before consent. Previously a storage failure left members verified
+        # without an agreement. Never infer permission from membership.
+        try:
+            config = await get_guild_config(int(interaction.guild.id), refresh=True)
+        except Exception:
+            await _reply(interaction, "Could not confirm Voice Safety policy; no access was granted. Try again later.", ok=False)
+            return True
+        required = bool(_cfg_value(config, "voice_safety_enabled", False))
+        if required:
+            if not verification_message_discloses_voice_safety(getattr(interaction, "message", None)):
+                await _reply(interaction, "This is an older Verify panel without the current Voice Safety agreement. Ask staff to refresh it. No access was granted.", ok=False)
+                return True
+            try:
+                from stoney_verify.community_voice_caption_runtime import ensure_community_voice_caption_manager
+                manager = ensure_community_voice_caption_manager(interaction.client)
+                await manager.set_voice_safety_consent(
+                    int(interaction.guild.id), int(interaction.user.id), True,
+                    source="basic_verify_v1",
+                )
+            except Exception:
+                await _reply(interaction, "Could not save the disclosed Voice Safety agreement. Verification was not granted; try again later.", ok=False)
+                return True
         ok, message = await apply_basic_verification(interaction.user)
+        if ok and required:
+            message += " Your one-time Voice Safety agreement was saved."
         await _reply(interaction, message, ok=ok)
         return True
     except Exception as exc:

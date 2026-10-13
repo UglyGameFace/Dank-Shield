@@ -19,7 +19,8 @@ def isolated_sessions(tmp_path, monkeypatch):
     live._PENDING.clear()
     live._REGISTERED.clear()
     live._STARTED_BOTS.clear()
-    live._VOICE_REFRESH.clear()
+    live._VOICE_PENDING.clear()
+    live._VOICE_WORKERS.clear()
     return tmp_path
 
 
@@ -156,10 +157,10 @@ def test_cheers_view_is_persistent_and_has_separate_participation_controls(isola
 
 def test_render_distinguishes_cheers_joining_voice_and_hidden_names(isolated_sessions, monkeypatch):
     voice = SimpleNamespace(id=999, mention="<#999>", members=[SimpleNamespace(id=1), SimpleNamespace(id=2)])
-    # Make the voice channel match the discord.py type for this isolated unit test.
     monkeypatch.setattr(live.discord, "VoiceChannel", type(voice))
+    # Long styled usernames must not get duplicated as raw text plus mention.
     members = {
-        1: SimpleNamespace(display_name="RJ"),
+        1: SimpleNamespace(display_name="🎃👻💀LongStyledHost💀👻🎃"),
         2: SimpleNamespace(display_name="Alex"),
         3: SimpleNamespace(display_name="Taylor"),
     }
@@ -168,17 +169,86 @@ def test_render_distinguishes_cheers_joining_voice_and_hidden_names(isolated_ses
         get_member=lambda i: members.get(i),
     )
     session = {
-        **_session(), "voice_channel_id": 999, "cheers_ids": [1,3],
-        "going_ids": [3], "active": True,
+        **_session(), "starter_id": 1, "voice_channel_id": 999,
+        "cheers_ids": [1, 3], "going_ids": [1, 3], "active": True,
     }
-    card = live.render_card(guild, session, discord.Embed(title="💨 Toke Time"))
-    assert any("Cheers • 2" in f.name for f in card.fields)
-    assert any("voice now • 2" in f.name for f in card.fields)
-    assert any("Taylor" in f.value for f in card.fields)
-    assert not any("Alex" in f.value for f in card.fields if f.name.startswith("💨 Cheers"))
+    original = discord.Embed(
+        title="💨 Toke Time",
+        description="**🎃👻💀LongStyledHost💀👻🎃** is calling the sesh crowd.",
+    )
+    card = live.render_card(guild, session, original)
+    assert "Cheers: 2" in card.fields[0].value
+    assert "Joining: 2" in card.fields[0].value
+    assert "In VC: 2" in card.fields[0].value
+    assert "<#999>" in card.fields[0].value
+    crowd = card.fields[1].value
+    assert crowd.count("**Host**") == 1
+    assert "👑💨🙋🔊" in crowd
+    assert crowd.count("<@3>") == 1
+    assert crowd.count("<@2>") == 1
+    assert "<@1>" not in crowd  # Host is already identified in the description.
+    assert "LongStyledHost" not in crowd
+    assert card.description.count("LongStyledHost") == 1
+    assert "👥 People" in card.fields[1].name
+
     session["show_member_names"] = False
-    hidden = live.render_card(guild, session, discord.Embed(title="💨 Toke Time"))
-    assert not any("Taylor" in f.value for f in hidden.fields)
+    hidden = live.render_card(guild, session, original)
+    assert hidden.fields[1].value == "Participant names are private in this server."
+    assert "<@3>" not in "\n".join(str(f.value) for f in hidden.fields)
+    assert "<#999>" in hidden.fields[0].value
+
+
+def test_toke_roster_deduplicates_all_attendance_sources(isolated_sessions, monkeypatch):
+    voice = SimpleNamespace(
+        id=998, mention="<#998>",
+        members=[SimpleNamespace(id=3), SimpleNamespace(id=2), SimpleNamespace(id=1)],
+    )
+    monkeypatch.setattr(live.discord, "VoiceChannel", type(voice))
+    guild = SimpleNamespace(get_channel=lambda n: voice if n == 998 else None)
+    session = {
+        **_session(), "starter_id": 1, "voice_channel_id": 998,
+        "cheers_ids": [1, 2, 3], "going_ids": [1, 2, 3, 4],
+        "show_member_names": True,
+    }
+    roster = live.TokeRosterView(guild, session)
+    assert len(roster.lines) == 4
+    text = "\n".join(roster.lines)
+    for member_id in (1, 2, 3, 4):
+        assert text.count(f"<@{member_id}>") == 1
+    assert text.count("👑") == 1
+    assert "🙋" in text and "🔊" in text
+    assert roster.pages == 1
+
+
+def test_toke_roster_pagination_shows_every_member_once(isolated_sessions, monkeypatch):
+    voice = SimpleNamespace(id=987, mention="<#987>", members=[])
+    monkeypatch.setattr(live.discord, "VoiceChannel", type(voice))
+    guild = SimpleNamespace(get_channel=lambda _n: voice)
+    session = {
+        **_session(), "starter_id": 1, "voice_channel_id": 987,
+        "cheers_ids": list(range(2, 41)), "going_ids": list(range(35, 51)),
+        "active": True,
+    }
+    # 1 host + 39 cheers + 10 new joiners = 50 unique people.
+    view = live.TokeRosterView(guild, session)
+    assert len(view.lines) == 50
+    assert view.pages == 4
+    names = "\n".join(view.lines)
+    for member_id in range(1, 51):
+        assert names.count(f"<@{member_id}>") == 1
+    crowd = live.render_card(guild, session, discord.Embed(description="A host is calling the sesh crowd."))
+    assert "+47 more" in crowd.fields[1].value
+    assert len(crowd.fields[1].value) <= 1024
+    assert len(crowd.fields[1].value.splitlines()) == 4
+
+
+def test_toke_single_member_without_cheers_still_shows_host(isolated_sessions):
+    guild = SimpleNamespace(get_channel=lambda _n: None)
+    session = {**_session(), "starter_id": 1, "cheers_ids": [], "going_ids": [], "active": True}
+    card = live.render_card(guild, session, discord.Embed(description="Host is calling."))
+    assert card.fields[1].value == "👑  **Host**"
+    assert "Cheers: 0" in card.fields[0].value
+    assert "No VC selected" in card.fields[0].value
 
 
 def test_manager_and_command_are_wired_to_single_toke_runtime():

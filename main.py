@@ -116,6 +116,31 @@ def _install_invite_reconciliation_runtime() -> None:
         )
 
 
+def _install_voice_safety_membership_sync() -> None:
+    """Keep Voice Safety agreement in step with Discord membership.
+
+    Membership is the agreement in voice-safety-enabled guilds: the one-time
+    backfill grandfathers current members, joins record agreement, and leaves
+    withdraw it (the opt-out).
+    """
+    try:
+        from stoney_verify.globals import bot
+        from stoney_verify.voice_safety_membership_sync_runtime import (
+            install_voice_safety_membership_sync,
+        )
+
+        if not install_voice_safety_membership_sync(bot):
+            print(
+                "⚠️ voice safety membership sync could not install; "
+                "agreement records will not follow joins/leaves"
+            )
+    except Exception as exc:
+        print(
+            "⚠️ voice safety membership sync install failed before app import: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
 def _install_spam_guard_abuse_runtimes() -> None:
     """Attach artifact-informed SpamGuard burst defenses after product policy."""
 
@@ -142,6 +167,7 @@ def main() -> None:
     _attach_process_health_runtime()
     _install_invite_policy_message_surface_runtime()
     _install_invite_reconciliation_runtime()
+    _install_voice_safety_membership_sync()
 
     from stoney_verify.globals import bot
     from stoney_verify.anti_nuke_runtime_coordinator import (
