@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from functools import wraps
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -10,6 +11,13 @@ import discord
 import pytest
 
 from stoney_verify.verification_new import decline_exit
+
+
+def sync_async(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        return asyncio.run(fn(*args, **kwargs))
+    return wrapper
 
 
 class Role:
@@ -123,7 +131,7 @@ def environment(monkeypatch):
     return recorded
 
 
-@pytest.mark.asyncio
+@sync_async
 async def test_decline_revokes_before_stripping_and_kicks_after_grace(environment):
     guild = Guild()
     interaction = Interaction(guild)
@@ -144,7 +152,7 @@ async def test_decline_revokes_before_stripping_and_kicks_after_grace(environmen
     assert environment["value"] is False
 
 
-@pytest.mark.asyncio
+@sync_async
 async def test_member_can_reaccept_within_grace_and_original_roles_return(environment):
     guild = Guild()
     interaction = Interaction(guild)
@@ -159,7 +167,7 @@ async def test_member_can_reaccept_within_grace_and_original_roles_return(enviro
     assert not guild.member.kicks
 
 
-@pytest.mark.asyncio
+@sync_async
 async def test_grace_rejects_other_members_and_expired_entries(environment):
     guild = Guild()
     await decline_exit.decline_and_exit(Interaction(guild), from_verify=True)
@@ -176,7 +184,7 @@ async def test_grace_rejects_other_members_and_expired_entries(environment):
     assert environment["value"] is False
 
 
-@pytest.mark.asyncio
+@sync_async
 @pytest.mark.parametrize("opts", [{"owner_id":24}, {"can_kick":False}, {"can_roles":False}])
 async def test_permission_blockers_do_not_claim_roles_or_exit(environment, opts):
     guild = Guild(**opts)
