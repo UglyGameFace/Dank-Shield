@@ -1,3 +1,39 @@
+# Active Task Lock — Production-branch sharding scalability backport (2026-10-13)
+
+**Authorized continuation:** Following FORCE SWITCH to sharding scalability, the Discloud
+screenshot confirmed the deployment is GitHub-linked to
+`aaa-cinema-pre-pregateway-bind` (Auto Deploy), not `main`. Latest visible
+deployed SHA in Discloud was `148a175` while GitHub's production branch
+has advanced separately. Preserve the latest `/toke` and Cinema changes.
+
+**Active outcome:** Port PR #542's four bounded guild-maintenance loops
+surgically onto an isolated branch from the Discloud-target production branch,
+without merging all of `main` or depending on the unverified PR #540
+Supabase batch RPC migration. This PR must target `aaa-cinema-pre-pregateway-bind`
+and remain a draft until exact-head CI and operator acceptance. **Do not
+merge it**: Discloud's Auto Deploy makes a production-branch merge consequential.
+
+**Implementation:** Reuse `DankAutoShardedBot`, add bounded guild_sweep,
+non-blocking SpamGuard warmup, paced metrics and enabled-only ticket sweeps
+with per-guild locks. Backport heartbeat concurrency to the *legacy* per-event
+activity tracker, preserving `record_member_activity`; first failed heartbeat
+temporarily stops the fleet's DB writes, fails all guilds closed, and after
+cooldown requires a durable new proof window per guild. Preserve legacy
+startup history reconciliation and public permissions behavior.
+
+**Validation and canary:** Run exact-head GitHub CI and backport-specific
+tests; inspect branch diff and production-only /toke files. Confirm the running
+Discloud Git SHA, distinguish GitHub push/webhook from a completed Rebuild,
+and require operator-led 2-shard canary using `DISCORD_AUTO_SHARD=true`
+and `DISCORD_SHARD_COUNT=2` after reviewing memory, CPU, REST budgets,
+Supabase health, activity cycle time and rollback strategy.
+
+**Suspended:** Main-only PR #540 batching migration and live Discloud
+acceptance have *not* been verified on the correct Supabase project. The
+main/production branch reunification remains a separate, unfinished task.
+
+---
+
 # Active Task Lock — Toke Inline Media (2026-10-13)
 
 **Authorized FORCE SWITCH:** Suspend Facebook downloader/Share Router #390 (merged work and outstanding live downloads/provider tests remain preserved, not reopened). Active outcome: show the actual GIF/image inside the /toke card, without blue page links, tiny thumbnails, duplicated media, or oversized naked attachments. Do not alter Voice Safety #517 or branch reunification during this task.
