@@ -31,7 +31,8 @@ PUBLIC_GLOBAL_COMMAND_COUNT = len(PUBLIC_GLOBAL_COMMAND_NAMES)
 # button cannot provide an attachment field. Purge is the intentional direct
 # destructive-action exception so staff can reach both message purge and
 # inactive-member purge without digging through nested menus. Setup is the
-# intentional first-run/admin doorway for server owners onboarding the bot.\n# A small set of high-utility direct shortcuts delegates to canonical UI managers.
+# intentional first-run/admin doorway for server owners onboarding the bot.
+# A small set of high-utility direct shortcuts delegates to canonical UI managers.
 PUBLIC_DANK_CHILDREN: frozenset[str] = frozenset({
     "home", "setup", "upload", "purge",
     "community", "design", "diagnostics", "help", "logs", "pings",
