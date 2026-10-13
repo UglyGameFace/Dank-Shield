@@ -60,6 +60,105 @@ def test_public_ticket_panel_footer_is_user_facing() -> None:
 
     assert embed.footer.text == "Guild • Dank Shield ticket panel • choose a category"
     assert "category-menu" not in str(embed.footer.text or "")
+    assert embed.fields == []
+    assert "private support channel" in str(embed.description or "")
+    assert "Panel lifetime" not in str(embed.to_dict())
+    assert "Control Center" not in str(embed.to_dict())
+
+
+
+def test_public_ticket_button_does_not_disclose_staff_setup_problems(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        details = "Confidential staff role and channel permissions"
+        seen: list[tuple[str, dict[str, object]]] = []
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=333),
+            user=SimpleNamespace(id=444),
+        )
+
+        async def defer(_interaction, _ephemeral) -> bool:
+            return True
+
+        async def no_open_ticket(_guild, _member):
+            return None
+
+        async def preflight(_guild):
+            return None, None, [details], ["Staff-only warning"]
+
+        async def respond(_interaction, content: str, **kwargs):
+            seen.append((content, kwargs))
+
+        monkeypatch.setattr(panel, "_defer", defer)
+        monkeypatch.setattr(panel, "_member_from_interaction", lambda _i: interaction.user)
+        monkeypatch.setattr(panel, "_existing_open", no_open_ticket)
+        monkeypatch.setattr(panel, "_ticket_setup_preflight", preflight)
+        monkeypatch.setattr(panel, "_staff_check", lambda _i: False)
+        monkeypatch.setattr(panel, "_ephemeral", respond)
+
+        await panel._handle_panel_button_core(interaction)
+        assert len(seen) == 1
+        assert "temporarily unavailable" in seen[0][0]
+        assert details not in str(seen)
+        assert "embed" not in seen[0][1]
+
+        seen.clear()
+        monkeypatch.setattr(panel, "_staff_check", lambda _i: True)
+        await panel._handle_panel_button_core(interaction)
+        assert len(seen) == 1
+        staff_embed = seen[0][1].get("embed")
+        assert isinstance(staff_embed, discord.Embed)
+        assert details in str(staff_embed.to_dict())
+
+    asyncio.run(scenario())
+
+
+def test_public_ticket_category_menu_hides_staff_warnings(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        private_warning = "Staff-only category permission warning"
+        seen: list[tuple[str, dict[str, object]]] = []
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=333),
+            user=SimpleNamespace(id=444),
+        )
+
+        async def defer(_interaction, _ephemeral) -> bool:
+            return True
+
+        async def no_open_ticket(_guild, _member):
+            return None
+
+        async def preflight(_guild):
+            return None, None, [], [private_warning]
+
+        async def rows(_guild):
+            return ([{"slug": "support", "name": "Support", "description": "Get help"}], "internal fallback state")
+
+        async def respond(_interaction, content: str, **kwargs):
+            seen.append((content, kwargs))
+
+        monkeypatch.setattr(panel, "_defer", defer)
+        monkeypatch.setattr(panel, "_member_from_interaction", lambda _i: interaction.user)
+        monkeypatch.setattr(panel, "_existing_open", no_open_ticket)
+        monkeypatch.setattr(panel, "_ticket_setup_preflight", preflight)
+        monkeypatch.setattr(panel, "_load_rows", rows)
+        monkeypatch.setattr(panel, "_new_menu_session", lambda *_a: "session")
+        monkeypatch.setattr(panel, "_staff_check", lambda _i: False)
+        monkeypatch.setattr(panel, "_ephemeral", respond)
+
+        await panel._handle_panel_button_core(interaction)
+        assert len(seen) == 1
+        embed = seen[0][1]["embed"]
+        assert isinstance(embed, discord.Embed)
+        assert embed.title == "Create Ticket"
+        assert not embed.fields
+        assert private_warning not in str(embed.to_dict())
+        assert isinstance(seen[0][1]["view"], panel.TicketSelectView)
+
+    asyncio.run(scenario())
 
 
 def test_runtime_installs_persistent_view_and_independent_fallback(monkeypatch) -> None:
@@ -174,12 +273,152 @@ def test_saved_current_application_panel_binds_exact_message_without_rest(
                 "ticket_panel_channel_id": "444",
                 "ticket_panel_message_id": "555",
                 runtime._TICKET_PANEL_APPLICATION_ID_KEY: "222",
+                runtime._PUBLIC_PANEL_EMBED_VERSION_KEY: panel.PUBLIC_PANEL_EMBED_VERSION,
             },
             allow_legacy_rest=False,
         )
 
         assert result == "bound"
         assert fake_bot.views == [(sentinel_view, 555)]
+
+    asyncio.run(scenario())
+
+
+
+def test_existing_public_ticket_panel_is_sanitized_once_without_reposting(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        original = discord.Embed(
+            title="🎫 Need help? Open a ticket",
+            description="Existing guild-customized public guidance.",
+        )
+        original.add_field(name="How it works", value="Choose a category.", inline=False)
+        original.add_field(
+            name="Panel lifetime",
+            value=(
+                "Stale private controls fall back to the Control Center. "
+                "Health checks setup, permissions, roles, and boot registration."
+            ),
+            inline=False,
+        )
+        edits: list[dict[str, object]] = []
+        identities: list[tuple[int, int, int]] = []
+
+        class FakeMessage:
+            id = 555
+            author = SimpleNamespace(id=222)
+            components = [
+                SimpleNamespace(custom_id=panel.PANEL_BUTTON_CUSTOM_ID, children=[])
+            ]
+            embeds = [original]
+
+            async def edit(self, **kwargs) -> None:
+                edits.append(kwargs)
+
+        class FakeTextChannel:
+            id = 444
+
+        class FakeGuild:
+            id = 333
+            name = "Guild"
+            me = SimpleNamespace(id=222)
+
+            def get_channel(self, channel_id: int):
+                assert channel_id == 444
+                return FakeTextChannel()
+
+        async def fake_fetch(_channel, message_id, **_kwargs):
+            assert message_id == 555
+            return FakeMessage()
+
+        async def fake_persist(guild, channel, message):
+            identities.append((guild.id, channel.id, message.id))
+
+        async def no_reserve(*_args, **_kwargs) -> None:
+            pass
+
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime, "fetch_message_with_api_safety", fake_fetch)
+        monkeypatch.setattr(runtime, "_reserve_recovery_requests", no_reserve)
+        monkeypatch.setattr(runtime, "_persist_ticket_panel_identity", fake_persist)
+
+        bot = FakeBot()
+        result = await runtime._reconcile_saved_ticket_panel(
+            bot,
+            FakeGuild(),
+            {
+                "ticket_panel_channel_id": "444",
+                "ticket_panel_message_id": "555",
+                runtime._TICKET_PANEL_APPLICATION_ID_KEY: "222",
+            },
+            allow_legacy_rest=True,
+        )
+
+        assert result == "migrated_current"
+        assert identities == [(333, 444, 555)]
+        assert len(edits) == 1
+        assert set(edits[0]) == {"embed"}
+        refreshed = edits[0]["embed"]
+        assert isinstance(refreshed, discord.Embed)
+        assert refreshed.description == original.description
+        assert [field.name for field in refreshed.fields] == ["How it works"]
+        assert [field.name for field in original.fields] == ["How it works", "Panel lifetime"]
+        assert len(bot.views) == 1
+        assert bot.views[0][1] == 555
+
+    asyncio.run(scenario())
+
+
+def test_existing_current_panel_without_leaked_details_is_not_reedited(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        edits: list[dict[str, object]] = []
+        writes: list[int] = []
+
+        class FakeTextChannel:
+            id = 444
+
+        class FakeGuild:
+            id = 333
+            me = SimpleNamespace(id=222)
+
+            def get_channel(self, channel_id: int):
+                assert channel_id == 444
+                return FakeTextChannel()
+
+        async def fake_fetch(_channel, _message_id, **_kwargs):
+            embed = discord.Embed(title="🎫 Need help? Open a ticket")
+            return SimpleNamespace(
+                id=555,
+                author=SimpleNamespace(id=222),
+                embeds=[embed],
+                components=[
+                    SimpleNamespace(custom_id=panel.PANEL_BUTTON_CUSTOM_ID, children=[])
+                ],
+                edit=lambda **kwargs: edits.append(kwargs),
+            )
+
+        async def fake_persist(_guild, _channel, message):
+            writes.append(message.id)
+
+        monkeypatch.setattr(runtime.discord, "TextChannel", FakeTextChannel)
+        monkeypatch.setattr(runtime, "fetch_message_with_api_safety", fake_fetch)
+        monkeypatch.setattr(runtime, "_persist_ticket_panel_identity", fake_persist)
+        result = await runtime._reconcile_saved_ticket_panel(
+            FakeBot(),
+            FakeGuild(),
+            {
+                "ticket_panel_channel_id": "444",
+                "ticket_panel_message_id": "555",
+                runtime._TICKET_PANEL_APPLICATION_ID_KEY: "222",
+            },
+            allow_legacy_rest=True,
+        )
+        assert result == "migrated_current"
+        assert edits == []
+        assert writes == [555]
 
     asyncio.run(scenario())
 
