@@ -80,6 +80,7 @@ _ACTIVITY_BUFFER: dict[tuple[int, int, str], dict[str, Any]] = {}
 _FLUSH_TASK: Optional[asyncio.Task] = None
 # In-flight snapshot is immutable until PostgreSQL acknowledges its batch ID.
 _PENDING_BATCH: Optional[dict[str, Any]] = None
+_PENDING_SPLITS: list[dict[str, Any]] = []
 _FLUSH_LOCK = asyncio.Lock()
 _ACTIVITY_SEQUENCE = 0
 _LOST_COVERAGE_GUILDS: set[int] = set()
@@ -741,9 +742,31 @@ def _ack_batch_receipts_sync(batch_ids: list[str]) -> None:
     _rpc_sync("ack_member_activity_batches", {"p_batch_ids": batch_ids})
 
 
+def _is_deterministic_batch_rejection(exc: Exception) -> bool:
+    """Only known SQL validation failures may trigger batch bisection.
+
+    Network, authentication, timeout and unknown PostgreSQL failures must
+    preserve the original batch ID for exactly-once retry.
+    """
+    code = str(getattr(exc, "code", "") or "").upper()
+    if code in {"22P02", "22007", "22003", "23514", "P0001"}:
+        return True
+    detail = str(exc).lower()
+    return any(part in detail for part in (
+        "unsupported direct activity type",
+        "invalid input syntax for type timestamp",
+        "invalid input syntax for type bigint",
+    ))
+
+
 def _guild_has_unflushed_activity(guild_id: int) -> bool:
     return (
         any(key[0] == guild_id for key in _ACTIVITY_BUFFER)
+        or any(
+            key[0] == guild_id
+            for batch in _PENDING_SPLITS
+            for key in batch["snapshot"]
+        )
         or bool(_PENDING_BATCH and any(
             key[0] == guild_id for key in _PENDING_BATCH["snapshot"]
         ))
@@ -752,7 +775,7 @@ def _guild_has_unflushed_activity(guild_id: int) -> bool:
 
 async def _flush_once() -> bool:
     """Commit one chunk; on failure keep its ID and all entries for retry."""
-    global _PENDING_BATCH, _LAST_DROP_LOG_COUNT
+    global _PENDING_BATCH, _LAST_DROP_LOG_COUNT, _DROPPED_EVENT_COUNT
     async with _FLUSH_LOCK:
         if _db_breaker_open():
             return False
@@ -765,6 +788,8 @@ async def _flush_once() -> bool:
             _LAST_DROP_LOG_COUNT = _DROPPED_EVENT_COUNT
         completed_guilds: set[int] = set()
         progress = False
+        if _PENDING_BATCH is None and _PENDING_SPLITS:
+            _PENDING_BATCH = _PENDING_SPLITS.pop(0)
         if _PENDING_BATCH is None and _ACTIVITY_BUFFER:
             items = sorted(
                 _ACTIVITY_BUFFER.items(), key=lambda pair: pair[1]["order"]
@@ -778,6 +803,37 @@ async def _flush_once() -> bool:
             try:
                 await asyncio.to_thread(_flush_batch_sync, batch)
             except Exception as exc:
+                if _is_deterministic_batch_rejection(exc):
+                    entries = list(batch["snapshot"].items())
+                    if len(entries) > 1:
+                        midpoint = len(entries) // 2
+                        # The rejected SQL transaction committed neither its
+                        # receipt nor any ledger entries; fresh child IDs are safe.
+                        _PENDING_BATCH = {
+                            "id": str(uuid.uuid4()),
+                            "snapshot": dict(entries[:midpoint]),
+                        }
+                        _PENDING_SPLITS.insert(0, {
+                            "id": str(uuid.uuid4()),
+                            "snapshot": dict(entries[midpoint:]),
+                        })
+                        return True
+                    (gid, _uid, atype), invalid = entries[0]
+                    # Explicitly quarantine irreparable data. Never silently
+                    # treat its missing count as a successful write.
+                    _DROPPED_EVENT_COUNT += int(invalid["count"])
+                    _LOST_COVERAGE_GUILDS.add(gid)
+                    _LOCAL_ERRORS[gid] = (
+                        "Invalid activity record quarantined; "
+                        "coverage must restart before inactivity cleanup."
+                    )
+                    _PENDING_FAIL_REPORTS[gid] = _LOCAL_ERRORS[gid]
+                    _PENDING_BATCH = None
+                    print(
+                        "⚠️ activity entry quarantined after SQL validation "
+                        f"guild={gid} type={atype} error={type(exc).__name__}"
+                    )
+                    return True
                 _record_db_failure()
                 error = (
                     f"Activity batch pending retry: {type(exc).__name__}: "
@@ -857,10 +913,11 @@ async def flush_activity_buffer() -> None:
     for _ in range(128):
         if not await _flush_once():
             break
-    if _PENDING_BATCH or _ACTIVITY_BUFFER:
+    if _PENDING_BATCH or _PENDING_SPLITS or _ACTIVITY_BUFFER:
         print(
             "⚠️ activity shutdown unflushed "
             f"pending_batch={bool(_PENDING_BATCH)} "
+            f"pending_split_chunks={len(_PENDING_SPLITS)} "
             f"buffered_keys={len(_ACTIVITY_BUFFER)}"
         )
 
