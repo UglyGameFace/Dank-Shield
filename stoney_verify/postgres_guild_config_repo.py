@@ -257,7 +257,14 @@ class GuildConfigPgRepository:
                     clear_keys=clearing, timestamp=stamp,
                 )
                 if not changed:
-                    return ConfigWriteResult(False, revision, row, (), blocked, "no_change")
+                    # An accepted CAS expectation is still successful when
+                    # its target value already matches. Avoid a needless DB
+                    # write, but don't report a successful compare as a loss.
+                    cas_matched = (expected_map is not None or
+                                   expected_revision is not None) and not blocked
+                    return ConfigWriteResult(
+                        cas_matched, revision, row, (), blocked, "no_change"
+                    )
                 cursor.execute(_SQL_WRITE, (Jsonb(updated), gid, revision))
                 written = cursor.fetchone()
                 if not written or int(written[0]) != revision + 1:
