@@ -136,6 +136,16 @@ def _help_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
+        name="Direct /dank shortcuts",
+        value=(
+            "`/dank protection` • `/dank voice-safety` • `/dank diagnostics` • "
+            "`/dank stats` • `/dank status` • `/dank logs`\\n"
+            "`/dank welcome` • `/dank design` • `/dank share` • "
+            "`/dank pings` • `/dank community` • `/dank profile` • `/dank help`"
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="Uploads",
         value=(
             "`/dank upload` — choose **Join Card Background**, **Exit Card Background**, or **Custom Card Font**, "
@@ -881,6 +891,50 @@ def _standalone(name: str, description: str, callback: Any) -> app_commands.Comm
     return app_commands.Command(name=name, description=description, callback=resolved)
 
 
+# A small set of discoverable direct commands, each delegating to its existing
+# Home feature owner. Keep this short enough for Discord's 25 subcommand limit,
+# with extra payload headroom for future command schema changes.
+DANK_SHORTCUTS: tuple[tuple[str, str, str], ...] = (
+    ("community", "Open the community hub, LFG and activities.", "community_hub"),
+    ("design", "Open channel naming and server design settings.", "server_design"),
+    ("diagnostics", "Check setup, startup and operational health.", "diagnostics"),
+    ("help", "See the Dank Shield feature guide and navigation.", "help"),
+    ("logs", "Configure logging destinations and activity tracking.", "logs_activity"),
+    ("pings", "Manage community and notification ping roles.", "community_pings_manager"),
+    ("profile", "Open your member profile and privacy settings.", "my_profile"),
+    ("protection", "Open AntiNuke, Spam Guard, invites and Automod.", "protection"),
+    ("share", "Open Share Router and inline media settings.", "share_router"),
+    ("stats", "Manage live server stats and accurate counters.", "server_stats"),
+    ("status", "View the bot's service and runtime status.", "status"),
+    ("voice-safety", "Configure disclosed AI voice safety and alerts.", "voice_safety"),
+    ("welcome", "Manage welcome, join and exit messages and cards.", "welcome"),
+)
+
+
+def _shortcut_callback(feature_key: str) -> Any:
+    """Use the existing owner; do not create alternative command/business logic."""
+
+    async def open_shortcut(interaction: discord.Interaction) -> None:
+        # These UI owners use component edit-message when reached through Home.
+        # Fresh slash interactions must receive a new private response instead.
+        if feature_key == "community_hub":
+            from .public_community_hub import open_community_hub
+            return await open_community_hub(interaction, replace_message=False)
+        if feature_key == "share_router":
+            from .public_share_router import open_share_router
+            return await open_share_router(interaction, replace_message=False)
+        if feature_key == "community_pings_manager":
+            from .public_toke import open_community_ping_setup
+            return await open_community_ping_setup(interaction, replace_message=False)
+        if feature_key == "server_stats" and not interaction.response.is_done():
+            # Canonical stats editor switches to edit_original_response once
+            # deferred, instead of edit_message (invalid for slash commands).
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        await _route_feature(interaction, feature_key)
+
+    return open_shortcut
+
+
 def _compact_dank_children(tree: Any) -> int:
     setup_command = dank_group.get_command("setup")
     if not isinstance(setup_command, app_commands.Command):
@@ -902,6 +956,11 @@ def _compact_dank_children(tree: Any) -> int:
         callback=consolidated_asset_upload,
     )
     dank_group.add_command(upload)
+
+    for name, description, feature_key in DANK_SHORTCUTS:
+        if feature_key not in _FEATURE_ROUTE_KEYS:
+            raise RuntimeError(f"shortcut {name} has no canonical registered feature owner")
+        dank_group.add_command(_standalone(name, description, _shortcut_callback(feature_key)))
 
     from .public_command_hub import DANK_PAYLOAD_SAFETY_LIMIT, dank_payload_size
     size = dank_payload_size(tree)
@@ -968,7 +1027,8 @@ def install_compact_public_surface_v2(bot: Any, tree: Any) -> dict[str, Any]:
         )
 
     dank_children = sorted(str(getattr(item, "name", "")) for item in dank_group.commands)
-    if dank_children != ["home", "setup", "upload"]:
+    expected_children = sorted(["home", "setup", "upload"] + [name for name, _, _ in DANK_SHORTCUTS])
+    if dank_children != expected_children:
         raise RuntimeError(f"compact v2 /dank children mismatch: {dank_children}")
 
     _INSTALLED = True
