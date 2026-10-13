@@ -258,6 +258,114 @@ def test_nonfacebook_download_does_not_use_facebook_embed_path(monkeypatch):
     assert "provider_bot_verification" in message.author.sent[0][0]
 
 
+
+def test_provider_title_shows_above_private_dm_attachment(monkeypatch):
+    message = FakeMessage(content="https://vimeo.com/123456")
+
+    async def resolve(url, *, max_bytes):
+        return MediaResolution(
+            source_url=url, canonical_url=url, identity="vimeo:123456",
+            provider="vimeo", delivery="progressive",
+            media_url="https://cdn.example.com/clip.mp4",
+            title="Great Goalie Saves",
+        )
+
+    class File:
+        filename = "video.mp4"
+        closed = False
+        def close(self):
+            self.closed = True
+
+    file = File()
+
+    async def download(url, *, max_bytes, request_headers=None):
+        return SimpleNamespace(
+            file=file, source_url=url, size_bytes=100, cleanup_path=None,
+        )
+
+    monkeypatch.setattr(downloads, "resolve_first_media", resolve)
+    monkeypatch.setattr(router, "_download_trusted_video", download)
+    assert run(downloads.handle_download_message(message))
+    content, attachment, mentions = message.author.sent[0]
+    assert content.startswith("🎬 **Great Goalie Saves**\n")
+    assert attachment is file
+    assert mentions.everyone is False
+    assert file.closed and message.deleted
+
+
+def test_facebook_embed_title_survives_private_download_without_extractor(monkeypatch):
+    fb = "https://www.facebook.com/reel/123456789"
+    video_cdn = "https://video.xx.fbcdn.net/v/actual.mp4"
+    message = FakeMessage(content=fb)
+    message.embeds = [SimpleNamespace(
+        url=fb, title="Funny Cat Reel",
+        video=SimpleNamespace(url=video_cdn, proxy_url=None),
+    )]
+
+    class File:
+        filename = "video.mp4"
+        def close(self):
+            pass
+
+    async def guarded_download(url, *, max_bytes, request_headers=None):
+        assert url == video_cdn
+        return SimpleNamespace(
+            file=File(), source_url=url, size_bytes=100, cleanup_path=None,
+        )
+
+    async def no_extract(*_args, **_kwargs):
+        raise AssertionError("Facebook embed should avoid extra extraction")
+
+    monkeypatch.setattr(router, "_download_trusted_video", guarded_download)
+    monkeypatch.setattr(downloads, "resolve_first_media", no_extract)
+    assert run(downloads.handle_download_message(message))
+    assert message.author.sent[0][0].startswith("🎬 **Funny Cat Reel**\n")
+    assert message.deleted
+
+
+def test_provider_title_shows_on_hosted_dm_link(monkeypatch):
+    import io
+    message = FakeMessage(content="https://www.facebook.com/watch/?v=100")
+
+    async def resolve(url, *, max_bytes):
+        return MediaResolution(
+            source_url=url, canonical_url=url, identity="fb:100",
+            provider="facebook", delivery="progressive",
+            media_url="https://video.xx.fbcdn.net/real.mp4", title="Live Concert Clip",
+        )
+
+    class File:
+        filename = "download.mp4"
+        fp = io.BytesIO(b"pretend video")
+        def close(self):
+            pass
+
+    async def download(url, *, max_bytes, request_headers=None):
+        return SimpleNamespace(
+            file=File(), source_url=url, size_bytes=downloads.DM_ATTACHMENT_BYTES + 1,
+            cleanup_path=None,
+        )
+
+    async def stage(fp, *, ttl_seconds, ext):
+        return ("https://host.example/watch", "https://host.example/download", "asset-a")
+
+    async def expiry(_guild_id):
+        return 3600
+
+    monkeypatch.setattr(downloads, "delivery_status", lambda: (True, "ready"))
+    monkeypatch.setattr(downloads, "file_max_bytes", lambda: 128 * 1024 * 1024)
+    monkeypatch.setattr(downloads, "resolve_first_media", resolve)
+    monkeypatch.setattr(router, "_download_trusted_video", download)
+    monkeypatch.setattr(router, "guild_download_expiry_seconds", expiry)
+    monkeypatch.setattr(downloads, "stage_video", stage)
+    assert run(downloads.handle_download_message(message))
+    sent, attachment, mentions = message.author.sent[0]
+    assert sent.startswith("🎬 **Live Concert Clip**\n")
+    assert "▶️ Watch:" in sent and "📥 Download:" in sent
+    assert attachment is None and not mentions.everyone
+    assert message.deleted
+
+
 def test_over_limit_returns_honest_private_source_link_not_fake_file(monkeypatch):
     message = FakeMessage()
 

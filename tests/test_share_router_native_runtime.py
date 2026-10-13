@@ -371,6 +371,70 @@ def test_direct_memes_supported_video_uses_canonical_native_relay(monkeypatch) -
     assert key in share_runtime._RECENT_ROUTE_KEYS
 
 
+
+def test_native_upload_includes_provider_title_without_duplication(monkeypatch):
+    message, _routes, target = _direct_memes_fixture()
+
+    class File:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    file = File()
+
+    async def prepare(_source, _target, _text):
+        return SimpleNamespace(
+            file=file, size_bytes=400, cleanup_path=None,
+            title="Haunted Gameplay *Highlights* @everyone",
+        )
+
+    monkeypatch.setattr(share_runtime, "_prepare_native_video", prepare)
+    assert asyncio.run(share_runtime._relay_native_video_upload(
+        message, target, message.content,
+        content="See this\n\nShared by a member",
+    ))
+    content = target.sent[0]["content"]
+    assert content.startswith("🎬 **Haunted Gameplay")
+    assert "@everyone" not in content
+    assert "@\u200beveryone" in content
+    assert content.count("Shared by a member") == 1
+    assert target.sent[0]["allowed_mentions"].everyone is False
+    assert target.sent[0]["file"] is file
+    assert file.closed
+
+
+def test_prepare_native_video_uses_existing_extraction_title(monkeypatch):
+    from stoney_verify.share_router_media_resolver import MediaResolution
+
+    message, _routes, target = _direct_memes_fixture()
+
+    class Member:
+        pass
+
+    target.guild = SimpleNamespace(me=Member())
+    target.permissions_for = lambda _member: SimpleNamespace(attach_files=True)
+    monkeypatch.setattr(share_runtime.discord, "Member", Member)
+    monkeypatch.setattr(share_runtime, "_video_source_urls", lambda *_args, **_kwargs: [])
+    async def resolve(_text, *, max_bytes):
+        return MediaResolution(
+            source_url="https://vimeo.com/123",
+            canonical_url="https://vimeo.com/123",
+            identity="vimeo:123", provider="vimeo", delivery="progressive",
+            media_url="https://cdn.example.com/vid.mp4", title="Perfect Match Highlights",
+        )
+    async def download(_resolution, *, max_bytes):
+        return share_runtime.RoutedVideo(
+            file=SimpleNamespace(filename="video.mp4", close=lambda: None),
+            source_url="https://cdn.example.com/vid.mp4", size_bytes=500,
+        )
+    monkeypatch.setattr(share_runtime, "resolve_first_media", resolve)
+    monkeypatch.setattr(share_runtime, "_download_resolved_progressive", download)
+    result = asyncio.run(share_runtime._prepare_native_video(message, target, message.content))
+    assert result.title == "Perfect Match Highlights"
+
+
 def test_native_upload_removes_remux_temp_file_after_send(
     monkeypatch,
     tmp_path: Path,

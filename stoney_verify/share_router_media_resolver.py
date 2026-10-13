@@ -20,6 +20,7 @@ import aiohttp
 from typing import Any, Mapping, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from stoney_verify.share_router_media_titles import title_from_extraction
 from stoney_verify.share_router_media_network import (
     is_public_address,
     is_safe_media_download_url,
@@ -116,6 +117,7 @@ class MediaResolution:
     # Retain at most one separate safe alternative for a failed Facebook CDN
     # transfer; this is not an additional extractor request or unbounded retry.
     alternate_progressive: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
+    title: str = ""
 
     @property
     def progressive(self) -> bool:
@@ -994,6 +996,9 @@ async def _resolve_extracted(
             provider=provider,
             max_bytes=max_bytes,
         )
+        # Keep the real provider title with the already-cached resolution.
+        # No second extractor request is needed for Discord presentation.
+        resolution = replace(resolution, title=title_from_extraction(info))
         if resolution.source_url != source_url:
             resolution = replace(resolution, source_url=source_url)
 
