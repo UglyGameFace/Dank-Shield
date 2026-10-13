@@ -21,7 +21,6 @@ from datetime import datetime, timezone
 import math
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Mapping, Optional
 import uuid
 
@@ -80,7 +79,10 @@ _DEFAULT_FLUSH_RPC_WORKERS = 8
 _ACTIVITY_BUFFER: dict[tuple[int, int, str], dict[str, Any]] = {}
 _FLUSH_TASK: Optional[asyncio.Task] = None
 # None = batch RPC not yet probed; True/False = cached probe result.
-_BATCH_RPC_AVAILABLE: Optional[bool] = None
+_PENDING_BATCH: Optional[dict[str, Any]] = None
+_FLUSH_LOCK = asyncio.Lock()
+_ACTIVITY_SEQUENCE = 0
+_LOST_COVERAGE_GUILDS: set[int] = set()
 # Consecutive DB-RPC failures across flush AND heartbeat paths. When this
 # reaches the threshold the breaker opens and ALL DB write attempts pause.
 _CONSECUTIVE_DB_FAILURES = 0
@@ -635,17 +637,23 @@ def _stage_event(
     """Buffer one event. Latest timestamp wins per (guild, user, type);
     counts accumulate. The ledger upsert is greatest()-based, so flushing
     only the latest entry converges to the identical row state."""
+    global _ACTIVITY_SEQUENCE
     key = (int(guild_id), int(user_id), activity_type)
     existing = _ACTIVITY_BUFFER.get(key)
-    if existing is not None and existing["occurred_at"] >= occurred_at:
-        existing["count"] = int(existing.get("count", 0)) + int(count)
+    _ACTIVITY_SEQUENCE += 1
+    if existing is not None and existing["occurred_at"] > occurred_at:
+        existing["count"] += int(count)
+        existing["first_occurred_at"] = min(
+            existing["first_occurred_at"], occurred_at
+        )
         return
     _ACTIVITY_BUFFER[key] = {
         "occurred_at": occurred_at,
+        "first_occurred_at": min(existing["first_occurred_at"], occurred_at)
+            if existing else occurred_at,
         "channel_id": int(channel_id) if channel_id else None,
-        "count": int(existing.get("count", 0)) + int(count)
-        if existing
-        else int(count),
+        "count": int(existing["count"]) + int(count) if existing else int(count),
+        "order": _ACTIVITY_SEQUENCE,
     }
     limit = _buffer_max_entries()
     if len(_ACTIVITY_BUFFER) > limit:
@@ -657,6 +665,12 @@ def _stage_event(
             _oldest_key = next(iter(_ACTIVITY_BUFFER))
             _dropped = _ACTIVITY_BUFFER.pop(_oldest_key)
             _DROPPED_EVENT_COUNT += int(_dropped.get("count", 1))
+            lost_guild = int(_oldest_key[0])
+            _LOST_COVERAGE_GUILDS.add(lost_guild)
+            _LOCAL_ERRORS[lost_guild] = (
+                "Activity buffer overflow: records were lost; "
+                "continuous coverage must restart before cleanup."
+            )
 
 
 async def record_direct_member_activity(
@@ -690,199 +704,136 @@ async def record_direct_member_activity(
     return True
 
 
-def _batch_rpc_available_sync() -> bool:
-    """Probe once per process for the batch RPC (requires the matching
-    migration). A missing function falls back to per-entry RPCs."""
-    global _BATCH_RPC_AVAILABLE
-    if _BATCH_RPC_AVAILABLE is not None:
-        return _BATCH_RPC_AVAILABLE
-    try:
-        _rpc_sync("record_member_activity_batch", {"p_events": []})
-        _BATCH_RPC_AVAILABLE = True
-    except Exception as exc:
-        detail = str(exc).casefold()
-        if (
-            "does not exist" in detail
-            or "not found" in detail
-            or "could not find" in detail
-            or " 404" in detail
-            or detail.strip().endswith("404")
-        ):
-            _BATCH_RPC_AVAILABLE = False
-        else:
-            raise
-    return bool(_BATCH_RPC_AVAILABLE)
-
-
-def _flush_batch_sync(
-    snapshot: dict[tuple[int, int, str], dict[str, Any]],
-) -> None:
+def _flush_batch_sync(batch: dict[str, Any]) -> None:
+    """Retry the same immutable batch ID; SQL dedupes acknowledged commits."""
     events = [
         {
             "guild_id": str(gid),
             "user_id": str(uid),
             "activity_type": atype,
             "occurred_at": entry["occurred_at"].isoformat(),
-            "channel_id": (
-                str(entry["channel_id"])
-                if entry.get("channel_id")
-                else ""
-            ),
+            "first_occurred_at": entry["first_occurred_at"].isoformat(),
+            "channel_id": str(entry["channel_id"]) if entry.get("channel_id") else "",
             "process_id": _PROCESS_ID,
-            "event_count": int(entry.get("count", 1)),
+            "event_count": int(entry["count"]),
         }
-        for (gid, uid, atype), entry in snapshot.items()
+        for (gid, uid, atype), entry in batch["snapshot"].items()
     ]
-    _rpc_sync("record_member_activity_batch", {"p_events": events})
+    _rpc_sync("record_member_activity_batch", {
+        "p_batch_id": batch["id"],
+        "p_events": events,
+    })
 
 
-def _flush_batched_chunked_sync(
-    snapshot: dict[tuple[int, int, str], dict[str, Any]],
-) -> None:
-    """Split large flushes into bounded batch RPCs. If one chunk is rejected
-    (poison pill), isolate to per-entry writes so a single bad record can
-    never block thousands of valid ones."""
-    items = list(snapshot.items())
-    for start in range(0, len(items), _BATCH_CHUNK_SIZE):
-        chunk = dict(items[start : start + _BATCH_CHUNK_SIZE])
-        try:
-            _flush_batch_sync(chunk)
-        except Exception as exc:
+def _guild_has_unflushed_activity(guild_id: int) -> bool:
+    return (
+        any(key[0] == guild_id for key in _ACTIVITY_BUFFER)
+        or bool(_PENDING_BATCH and any(
+            key[0] == guild_id for key in _PENDING_BATCH["snapshot"]
+        ))
+    )
+
+
+async def _flush_once() -> bool:
+    """Commit one chunk; on failure keep its ID and all entries for retry."""
+    global _PENDING_BATCH, _LAST_DROP_LOG_COUNT
+    async with _FLUSH_LOCK:
+        if _db_breaker_open():
+            return False
+        if _DROPPED_EVENT_COUNT != _LAST_DROP_LOG_COUNT:
             print(
-                "⚠️ activity batch chunk rejected "
-                f"size={len(chunk)} error={type(exc).__name__}; "
-                "isolating per-entry"
+                "⚠️ activity buffer overflow: "
+                f"{_DROPPED_EVENT_COUNT - _LAST_DROP_LOG_COUNT} newly dropped events "
+                f"(total={_DROPPED_EVENT_COUNT}); guild coverage fail-closed"
             )
-            _flush_individual_isolated_sync(chunk)
+            _LAST_DROP_LOG_COUNT = _DROPPED_EVENT_COUNT
+        completed_guilds: set[int] = set()
+        progress = False
+        if _PENDING_BATCH is None and _ACTIVITY_BUFFER:
+            items = sorted(
+                _ACTIVITY_BUFFER.items(), key=lambda pair: pair[1]["order"]
+            )[:_BATCH_CHUNK_SIZE]
+            snapshot = dict(items)
+            for key, _ in items:
+                _ACTIVITY_BUFFER.pop(key, None)
+            _PENDING_BATCH = {"id": str(uuid.uuid4()), "snapshot": snapshot}
+        if _PENDING_BATCH is not None:
+            batch = _PENDING_BATCH
+            try:
+                await asyncio.to_thread(_flush_batch_sync, batch)
+            except Exception as exc:
+                _record_db_failure()
+                error = (
+                    f"Activity batch pending retry: {type(exc).__name__}: "
+                    f"{str(exc)[:180]}"
+                )
+                for gid, _uid, _atype in batch["snapshot"]:
+                    _LOCAL_ERRORS[gid] = error
+                    _PENDING_FAIL_REPORTS[gid] = error
+                return False
+            completed_guilds.update(k[0] for k in batch["snapshot"])
+            _PENDING_BATCH = None
+            _record_db_success()
+            progress = True
 
-
-def _flush_individual_isolated_sync(
-    snapshot: dict[tuple[int, int, str], dict[str, Any]],
-) -> None:
-    """Per-entry fallback with isolation: a failing entry is logged (guild
-    id + type, never user content) and skipped; valid entries still land."""
-
-    def _one(item: tuple[tuple[int, int, str], dict[str, Any]]) -> None:
-        (gid, uid, atype), entry = item
-        try:
-            _record_activity_sync(
-                guild_id=gid,
-                user_id=uid,
-                activity_type=atype,
-                occurred_at=entry["occurred_at"],
-                channel_id=entry.get("channel_id"),
-            )
-        except Exception as exc:
-            print(
-                "⚠️ activity entry rejected and skipped "
-                f"guild={gid} type={atype} "
-                f"error={type(exc).__name__}: {str(exc)[:200]}"
-            )
-
-    with ThreadPoolExecutor(
-        max_workers=_DEFAULT_FLUSH_RPC_WORKERS,
-        thread_name_prefix="activity-flush",
-    ) as pool:
-        for future in [pool.submit(_one, item) for item in snapshot.items()]:
-            future.result()
-
-
-def _flush_individual_sync(
-    snapshot: dict[tuple[int, int, str], dict[str, Any]],
-) -> None:
-    """Fallback when the batch migration is not applied. Still a large win:
-    entries are already deduplicated to one per (guild, user, type)."""
-    _flush_individual_isolated_sync(snapshot)
-
-
-def _flush_snapshot_sync(
-    snapshot: dict[tuple[int, int, str], dict[str, Any]],
-    fail_reports: dict[int, str],
-) -> None:
-    if snapshot:
-        if _batch_rpc_available_sync():
-            _flush_batched_chunked_sync(snapshot)
-        else:
-            _flush_individual_sync(snapshot)
-    # At most one fail report per guild per flush cycle — never per event.
-    for gid, message in fail_reports.items():
-        try:
-            _fail_tracker_sync(gid, message)
-        except Exception:
-            pass
-
-
-async def _flush_once() -> None:
-    global _BREAKER_OPEN_UNTIL, _LAST_DROP_LOG_COUNT
-    if _db_breaker_open():
-        return
-    # Explicit loss reporting: drops during a prolonged outage are counted,
-    # never silent. Counts dropped here cannot be reconstructed later.
-    if _DROPPED_EVENT_COUNT != _LAST_DROP_LOG_COUNT:
-        print(
-            "⚠️ activity buffer overflow: dropped "
-            f"{_DROPPED_EVENT_COUNT - _LAST_DROP_LOG_COUNT} events this cycle "
-            f"(total dropped={_DROPPED_EVENT_COUNT})"
-        )
-        _LAST_DROP_LOG_COUNT = _DROPPED_EVENT_COUNT
-    if not _ACTIVITY_BUFFER and not _PENDING_FAIL_REPORTS:
-        return
-    # Swap on the event loop: atomic w.r.t. concurrent staging.
-    snapshot = dict(_ACTIVITY_BUFFER)
-    _ACTIVITY_BUFFER.clear()
-    fail_reports = dict(_PENDING_FAIL_REPORTS)
-    _PENDING_FAIL_REPORTS.clear()
-    try:
-        await asyncio.to_thread(
-            _flush_snapshot_sync, snapshot, fail_reports
-        )
-    except Exception as exc:
-        _record_db_failure()
-        # Fail-closed per guild: a failed flush must mark coverage incomplete
-        # for every guild it carried, so automated inactivity cleanup stays
-        # blocked. (The old code set a single global key; that was a bug.)
-        _flush_error = (
-            f"activity flush failed: {type(exc).__name__}: "
-            f"{str(exc)[:200]}"
-        )
-        for (gid, _uid, _atype) in snapshot:
-            _LOCAL_ERRORS[int(gid)] = _flush_error
-        # Re-queue so a transient outage loses nothing (bounded by cap).
-        for (gid, uid, atype), entry in snapshot.items():
-            _stage_event(
-                guild_id=gid,
-                user_id=uid,
-                activity_type=atype,
-                occurred_at=entry["occurred_at"],
-                channel_id=entry.get("channel_id"),
-                count=int(entry.get("count", 1)),
-            )
-        _PENDING_FAIL_REPORTS.update(fail_reports)
-        return
-    _record_db_success()
-    # A successful flush clears fail-closed state for guilds it covered,
-    # mirroring the old per-write success-clears-error contract.
-    for (gid, _uid, _atype) in snapshot:
-        _LOCAL_ERRORS.pop(int(gid), None)
+        # A recovery report restarts the durable coverage clock even when
+        # buffered events replay. Never clear a failure on heartbeat alone.
+        for gid, message in list(_PENDING_FAIL_REPORTS.items())[:10]:
+            try:
+                await asyncio.to_thread(_fail_tracker_sync, gid, message)
+            except Exception:
+                _record_db_failure()
+                return progress
+            _PENDING_FAIL_REPORTS.pop(gid, None)
+            completed_guilds.add(gid)
+            _record_db_success()
+            progress = True
+        # Records dropped under memory pressure cannot be reconstructed.
+        for gid in list(_LOST_COVERAGE_GUILDS)[:10]:
+            if _guild_has_unflushed_activity(gid):
+                continue
+            try:
+                await asyncio.to_thread(_start_tracker_sync, gid)
+            except Exception:
+                _record_db_failure()
+                return progress
+            _LOST_COVERAGE_GUILDS.discard(gid)
+            completed_guilds.add(gid)
+            _record_db_success()
+            progress = True
+        for gid in completed_guilds:
+            if (gid not in _LOST_COVERAGE_GUILDS
+                    and gid not in _PENDING_FAIL_REPORTS
+                    and not _guild_has_unflushed_activity(gid)):
+                _LOCAL_ERRORS.pop(gid, None)
+        return progress
 
 
 async def _flush_loop() -> None:
     while True:
         await asyncio.sleep(_flush_seconds())
-        try:
-            await _flush_once()
-        except Exception:
-            # Never let the flush loop itself die.
-            pass
+        for _ in range(128):
+            try:
+                if not await _flush_once():
+                    break
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"⚠️ activity flush loop error: {type(exc).__name__}")
+                break
 
 
 async def flush_activity_buffer() -> None:
-    """Best-effort immediate flush. Wire into the bot shutdown path so a
-    restart loses at most the in-flight window rather than the buffer."""
-    try:
-        await _flush_once()
-    except Exception:
-        pass
+    """Best-effort bounded shutdown drain (SIGKILL/OOM still loses RAM)."""
+    for _ in range(128):
+        if not await _flush_once():
+            break
+    if _PENDING_BATCH or _ACTIVITY_BUFFER:
+        print(
+            "⚠️ activity shutdown unflushed "
+            f"pending_batch={bool(_PENDING_BATCH)} "
+            f"buffered_keys={len(_ACTIVITY_BUFFER)}"
+        )
 
 
 async def _refresh_scope_status(
@@ -1279,8 +1230,11 @@ async def _heartbeat_loop(
                     _heartbeat_sync,
                     gid,
                 )
-                _LOCAL_ERRORS.pop(gid, None)
                 _record_db_success()
+                if (gid not in _LOST_COVERAGE_GUILDS
+                        and gid not in _PENDING_FAIL_REPORTS
+                        and not _guild_has_unflushed_activity(gid)):
+                    _LOCAL_ERRORS.pop(gid, None)
             except Exception as exc:
                 await _mark_failure(
                     gid,
