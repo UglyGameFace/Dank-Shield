@@ -45,6 +45,8 @@ _RUNTIME_REGISTRATION_ERROR: str = ""
 _BASIC_VERIFY_PANEL_MESSAGE_ID_KEY = "basic_verify_panel_message_id"
 _BASIC_VERIFY_PANEL_APPLICATION_ID_KEY = "basic_verify_panel_application_id"
 _BASIC_VERIFY_PANEL_COMPONENT_ID_KEY = "basic_verify_panel_component_id"
+_BASIC_VERIFY_PANEL_EMBED_VERSION_KEY = "basic_verify_panel_embed_version"
+_BASIC_VERIFY_PANEL_EMBED_VERSION = 2
 _RUNTIME_READY_RECONCILER_REGISTERED = False
 _RUNTIME_READY_RECONCILE_STARTED = False
 _BOUND_PANEL_MESSAGE_IDS: set[int] = set()
@@ -250,56 +252,35 @@ def _lock_for(guild_id: int, user_id: int) -> asyncio.Lock:
 
 def build_basic_verify_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     rules = _channel_from_cfg(guild, cfg, "rules_channel_id", "rule_channel_id", "rules_text_channel_id") or _channel_by_name(guild, "rules", "rule")
-    verify = _channel_from_cfg(guild, cfg, "verify_channel_id", "verification_channel_id") or _channel_by_name(guild, "verification", "verify")
-    support = _channel_from_cfg(guild, cfg, "ticket_panel_channel_id", "support_channel_id", "panel_channel_id") or _channel_by_name(guild, "support", "ticket")
-
-    rules_text = rules.mention if rules else "the rules channel"
-    verify_text = verify.mention if verify else "this verification channel"
-    support_text = support.mention if support else "the support/ticket channel"
+    voice_safety = bool(_cfg_value(cfg, "voice_safety_enabled", False))
+    rules_text = rules.mention if rules else "the server rules"
 
     embed = discord.Embed(
-        title="✅ Verify to unlock server access",
+        title="🛡️ Verify Your Access",
         description=(
-            "This button verifies that you are ready to enter the server. "
-            "It is separate from the welcome message and only controls access roles."
+            f"Please read {rules_text} before verifying.\n"
+            f"Tap **{'Agree & Verify' if voice_safety else 'Verify'}** to accept "
+            "the rules and unlock server access."
         ),
         color=discord.Color.green(),
     )
-    embed.add_field(
-        name="Before you tap Verify",
-        value=f"Please read {rules_text} first so you understand the server rules.",
-        inline=False,
-    )
-    embed.add_field(
-        name="What happens when you verify",
-        value=(
-            f"1. Stay in {verify_text}.\n"
-            "2. Tap **Verify** below.\n"
-            "3. Dank Shield gives you the server access role and removes the Unverified role."
-        ),
-        inline=False,
-    )
-    if bool(_cfg_value(cfg, "voice_safety_enabled", False)):
+    if voice_safety:
         embed.add_field(
-            name=VOICE_SAFETY_DISCLOSURE_MARKER,
+            name=f"🎙️ {VOICE_SAFETY_DISCLOSURE_MARKER}",
             value=(
-                "By pressing **Agree & Verify**, you acknowledge that **selected voice channels may be "
-                "monitored by Dank Shield for safety**. Your audio is processed by Google Gemini "
-                "for transcription and AI conduct review; staff receive private incident alerts. "
-                "Dank Shield does not save raw audio. Voice Safety requires an approved Gemini paid API project so content is not used for model improvement, "
-                "and an adult-only monitored space. You can withdraw via **Opt Out** in the Voice Safety notice. "
-                "Without agreement your voice is not monitored; contact staff for other access options."
+                "Selected voice channels use AI moderation to detect potentially "
+                "**inappropriate, hateful, harassing, lewd, sexually explicit, or offensive comments** "
+                "that may make others uncomfortable or violate server rules.\n\n"
+                "Audio is processed using **Google Gemini**. Staff may receive private "
+                "safety alerts, but Dank Shield does not store raw audio.\n\n"
+                "By selecting **Agree & Verify**, you consent to monitoring in designated "
+                "channels. You may **Opt Out** in the Voice Safety notice and contact "
+                "staff about alternative access."
             ),
             inline=False,
         )
-    embed.add_field(
-        name="Need help?",
-        value=f"If the button does not work, go to {support_text} and open a ticket.",
-        inline=False,
-    )
     embed.set_footer(text=f"{BASIC_VERIFY_FOOTER} • access only")
     return embed
-
 
 def is_basic_verify_panel_embed(embed: discord.Embed) -> bool:
     """Return true for old or current Basic Verify embeds.
@@ -582,6 +563,7 @@ async def _persist_basic_verify_panel_message_id(
     message_id: int,
     *,
     application_id: int = 0,
+    presentation_version: int = 0,
 ) -> None:
     gid = _safe_int(guild_id, 0)
     mid = _safe_int(message_id, 0)
@@ -596,6 +578,8 @@ async def _persist_basic_verify_panel_message_id(
     }
     if aid > 0:
         patch[_BASIC_VERIFY_PANEL_APPLICATION_ID_KEY] = str(aid)
+    if int(presentation_version or 0) > 0:
+        patch[_BASIC_VERIFY_PANEL_EMBED_VERSION_KEY] = int(presentation_version)
     try:
         await upsert_guild_config(gid, patch)
     except Exception as exc:
@@ -819,6 +803,7 @@ async def post_basic_verify_panel(
             int(channel.guild.id),
             int(msg.id),
             application_id=me_id,
+            presentation_version=_BASIC_VERIFY_PANEL_EMBED_VERSION,
         )
         if target_bot is not None:
             _bind_basic_verify_panel_message(target_bot, int(msg.id))
@@ -847,6 +832,7 @@ async def post_basic_verify_panel(
             getattr(getattr(msg, "author", None), "id", 0),
             _safe_int(getattr(getattr(channel.guild, "me", None), "id", 0), 0),
         ),
+        presentation_version=_BASIC_VERIFY_PANEL_EMBED_VERSION,
     )
     if target_bot is not None:
         _bind_basic_verify_panel_message(target_bot, int(msg.id))
@@ -961,6 +947,7 @@ async def _reconcile_one_basic_verify_panel(
         and saved_application_id > 0
         and saved_application_id == current_application_id
         and saved_component_id == BASIC_VERIFY_CUSTOM_ID
+        and _safe_int(_cfg_value(cfg, _BASIC_VERIFY_PANEL_EMBED_VERSION_KEY, 0)) >= _BASIC_VERIFY_PANEL_EMBED_VERSION
     ):
         return (
             "bound"
@@ -1008,66 +995,67 @@ async def _reconcile_one_basic_verify_panel(
         )
         if author_id == current_application_id and current_application_id > 0:
             custom_ids = _message_custom_ids(message)
-            if BASIC_VERIFY_CUSTOM_ID not in custom_ids:
+            needs_component_repair = BASIC_VERIFY_CUSTOM_ID not in custom_ids
+            needs_copy_refresh = (
+                _safe_int(_cfg_value(cfg, _BASIC_VERIFY_PANEL_EMBED_VERSION_KEY, 0))
+                < _BASIC_VERIFY_PANEL_EMBED_VERSION
+            )
+            if needs_component_repair or needs_copy_refresh:
+                # Refresh the existing bot-owned panel instead of posting another.
+                # Preserve the versioned disclosure and matching button label.
+                refreshed_view = BasicVerifyView(
+                    voice_safety_agreement=bool(_cfg_value(cfg, "voice_safety_enabled", False))
+                )
                 try:
                     await message.edit(
                         embed=build_basic_verify_embed(guild, cfg),
-                        view=BasicVerifyView(),
+                        view=refreshed_view,
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                 except TypeError:
-                    # Compatibility with lightweight test doubles and Discord
-                    # message implementations that do not expose
-                    # allowed_mentions on edit().
                     try:
                         await message.edit(
                             embed=build_basic_verify_embed(guild, cfg),
-                            view=BasicVerifyView(),
+                            view=refreshed_view,
                         )
                     except Exception as exc:
                         try:
                             print(
-                                "⚠️ basic_verify component contract repair failed "
+                                "⚠️ basic_verify panel refresh failed "
                                 f"guild={guild.id} channel={channel.id} message={message.id} "
-                                f"found={sorted(custom_ids)} expected={BASIC_VERIFY_CUSTOM_ID!r} "
                                 f"error={type(exc).__name__}: {exc}"
                             )
                         except Exception:
                             pass
-                        return "component_repair_failed"
+                        return "panel_refresh_failed"
                 except Exception as exc:
                     try:
                         print(
-                            "⚠️ basic_verify component contract repair failed "
+                            "⚠️ basic_verify panel refresh failed "
                             f"guild={guild.id} channel={channel.id} message={message.id} "
-                            f"found={sorted(custom_ids)} expected={BASIC_VERIFY_CUSTOM_ID!r} "
                             f"error={type(exc).__name__}: {exc}"
                         )
                     except Exception:
                         pass
-                    return "component_repair_failed"
+                    return "panel_refresh_failed"
 
                 await _persist_basic_verify_panel_message_id(
                     int(guild.id),
                     int(message.id),
                     application_id=current_application_id,
+                    presentation_version=_BASIC_VERIFY_PANEL_EMBED_VERSION,
                 )
                 bound = _bind_basic_verify_panel_message(bot, int(message.id))
-                try:
-                    print(
-                        "♻️ basic_verify repaired legacy component contract "
-                        f"guild={guild.id} channel={channel.id} message={message.id} "
-                        f"old_ids={sorted(custom_ids)} new_id={BASIC_VERIFY_CUSTOM_ID!r} "
-                        f"bound={bound}"
-                    )
-                except Exception:
-                    pass
-                return "repaired_component" if bound else "repair_bind_failed"
+                return (
+                    ("repaired_component" if needs_component_repair else "refreshed_copy")
+                    if bound else "repair_bind_failed"
+                )
 
             await _persist_basic_verify_panel_message_id(
                 int(guild.id),
                 int(message.id),
                 application_id=current_application_id,
+                presentation_version=_BASIC_VERIFY_PANEL_EMBED_VERSION,
             )
             return (
                 "migrated_current"
@@ -1211,6 +1199,7 @@ async def _reconcile_basic_verify_panels_after_ready(bot: Any) -> None:
                 and saved_application_id > 0
                 and saved_application_id == current_application_id
                 and saved_component_id == BASIC_VERIFY_CUSTOM_ID
+                and _safe_int(_cfg_value(cfg, _BASIC_VERIFY_PANEL_EMBED_VERSION_KEY, 0)) >= _BASIC_VERIFY_PANEL_EMBED_VERSION
             )
             target = current_rows if proven_current else legacy_rows
             target.append((int(gid), cfg))

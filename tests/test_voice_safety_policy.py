@@ -177,6 +177,24 @@ def test_voice_safety_agreement_requires_explicit_disclosed_action(monkeypatch) 
     guild = SimpleNamespace(get_channel=lambda key: None, text_channels=[])
     configured = build_basic_verify_embed(guild, {"voice_safety_enabled": True})
     regular = build_basic_verify_embed(guild, {})
+    assert configured.title == "🛡️ Verify Your Access"
+    assert len(configured.fields) == 1
+    assert len(str(configured.to_dict())) < 1200
+    voice_copy = str(configured.fields[0].value)
+    assert all(
+        phrase in voice_copy
+        for phrase in (
+            "inappropriate", "hateful", "harassing", "lewd", "sexually explicit",
+            "offensive", "Google Gemini", "private safety alerts", "raw audio",
+            "Opt Out", "alternative access",
+        )
+    )
+    assert "Gemini paid API" not in str(configured.to_dict())
+    assert "Before you tap Verify" not in str(configured.to_dict())
+    assert "What happens when you verify" not in str(configured.to_dict())
+    assert "Agreement v1" not in str(regular.to_dict())
+    assert "Tap **Verify**" in str(regular.description)
+    assert "Agree & Verify" in str(configured.description)
     assert consent.verification_message_discloses_voice_safety(
         SimpleNamespace(embeds=[configured])
     )
