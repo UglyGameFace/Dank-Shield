@@ -250,56 +250,35 @@ def _lock_for(guild_id: int, user_id: int) -> asyncio.Lock:
 
 def build_basic_verify_embed(guild: discord.Guild, cfg: Any) -> discord.Embed:
     rules = _channel_from_cfg(guild, cfg, "rules_channel_id", "rule_channel_id", "rules_text_channel_id") or _channel_by_name(guild, "rules", "rule")
-    verify = _channel_from_cfg(guild, cfg, "verify_channel_id", "verification_channel_id") or _channel_by_name(guild, "verification", "verify")
-    support = _channel_from_cfg(guild, cfg, "ticket_panel_channel_id", "support_channel_id", "panel_channel_id") or _channel_by_name(guild, "support", "ticket")
-
-    rules_text = rules.mention if rules else "the rules channel"
-    verify_text = verify.mention if verify else "this verification channel"
-    support_text = support.mention if support else "the support/ticket channel"
+    voice_safety = bool(_cfg_value(cfg, "voice_safety_enabled", False))
+    rules_text = rules.mention if rules else "the server rules"
 
     embed = discord.Embed(
-        title="✅ Verify to unlock server access",
+        title="🛡️ Verify Your Access",
         description=(
-            "This button verifies that you are ready to enter the server. "
-            "It is separate from the welcome message and only controls access roles."
+            f"Please read {rules_text} before verifying.\n"
+            f"Tap **{'Agree & Verify' if voice_safety else 'Verify'}** to accept "
+            "the rules and unlock server access."
         ),
         color=discord.Color.green(),
     )
-    embed.add_field(
-        name="Before you tap Verify",
-        value=f"Please read {rules_text} first so you understand the server rules.",
-        inline=False,
-    )
-    embed.add_field(
-        name="What happens when you verify",
-        value=(
-            f"1. Stay in {verify_text}.\n"
-            "2. Tap **Verify** below.\n"
-            "3. Dank Shield gives you the server access role and removes the Unverified role."
-        ),
-        inline=False,
-    )
-    if bool(_cfg_value(cfg, "voice_safety_enabled", False)):
+    if voice_safety:
         embed.add_field(
-            name=VOICE_SAFETY_DISCLOSURE_MARKER,
+            name=f"🎙️ {VOICE_SAFETY_DISCLOSURE_MARKER}",
             value=(
-                "By pressing **Agree & Verify**, you acknowledge that **selected voice channels may be "
-                "monitored by Dank Shield for safety**. Your audio is processed by Google Gemini "
-                "for transcription and AI conduct review; staff receive private incident alerts. "
-                "Dank Shield does not save raw audio. Voice Safety requires an approved Gemini paid API project so content is not used for model improvement, "
-                "and an adult-only monitored space. You can withdraw via **Opt Out** in the Voice Safety notice. "
-                "Without agreement your voice is not monitored; contact staff for other access options."
+                "Selected voice channels use AI moderation to detect potentially "
+                "**inappropriate, hateful, harassing, lewd, sexually explicit, or offensive comments** "
+                "that may make others uncomfortable or violate server rules.\n\n"
+                "Audio is processed using **Google Gemini**. Staff may receive private "
+                "safety alerts, but Dank Shield does not store raw audio.\n\n"
+                "By selecting **Agree & Verify**, you consent to monitoring in designated "
+                "channels. You may **Opt Out** in the Voice Safety notice and contact "
+                "staff about alternative access."
             ),
             inline=False,
         )
-    embed.add_field(
-        name="Need help?",
-        value=f"If the button does not work, go to {support_text} and open a ticket.",
-        inline=False,
-    )
     embed.set_footer(text=f"{BASIC_VERIFY_FOOTER} • access only")
     return embed
-
 
 def is_basic_verify_panel_embed(embed: discord.Embed) -> bool:
     """Return true for old or current Basic Verify embeds.
