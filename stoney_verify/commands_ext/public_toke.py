@@ -10,7 +10,7 @@ import weakref
 from collections.abc import Mapping
 from time import monotonic
 from typing import Any, Optional
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from stoney_verify import toke_sessions
 from stoney_verify.toke_live_ui import (
@@ -20,7 +20,9 @@ from stoney_verify.toke_live_ui import (
 import aiohttp
 import discord
 from discord import app_commands
-from stoney_verify.share_router_media_network import public_tcp_connector
+from stoney_verify.share_router_media_network import (
+    is_safe_media_download_url, public_get, public_tcp_connector,
+)
 
 from stoney_verify.community_pings_service import (
     COMMUNITY_PINGS_KEY,
@@ -97,16 +99,24 @@ def _clean_media_url(value: Any) -> str:
 
 
 def _is_direct_media_url(value: str) -> bool:
-    text = str(value or "").strip()
-    if not text:
+    """Detect embeddable image assets, not provider sharing pages or videos."""
+    try:
+        parsed = urlsplit(str(value or "").strip())
+    except ValueError:
         return False
-    parsed = urlsplit(text)
     host = str(parsed.hostname or "").lower()
     path = str(parsed.path or "").lower()
+    if parsed.scheme.lower() not in {"http", "https"} or not host:
+        return False
     if path.endswith((".mp4", ".webm", ".mov", ".m3u8")):
-        return False  # Videos cannot be embedded as an image.
+        return False
     if path.endswith(_TOKE_MEDIA_EXTENSIONS):
         return True
+    # Some image CDNs use extensionless paths and specify image type via
+    # ?format=jpg or ?format=gif (notably Twitter/X's pbs.twimg.com).
+    formats = parse_qs(parsed.query).get("format", [])
+    if formats and host in {"pbs.twimg.com", "images.unsplash.com"}:
+        return formats[0].lower() in {"gif", "jpg", "jpeg", "png", "webp"}
     if host in {"cdn.discordapp.com", "media.discordapp.net", "media.tenor.com", "i.giphy.com"}:
         return True
     if host.startswith("media") and host.endswith(".giphy.com"):
@@ -115,21 +125,24 @@ def _is_direct_media_url(value: str) -> bool:
 
 
 def _is_stable_provider_media_url(value: str) -> bool:
-    """Avoid embedding short-lived Discord CDN URLs from deleted draft posts."""
-    parsed = urlsplit(str(value or ""))
-    host = str(parsed.hostname or "").lower()
-    path = str(parsed.path or "").lower()
-    if not path.endswith(_TOKE_MEDIA_EXTENSIONS):
+    """Accept durable public image URLs from any host, excluding draft CDN assets."""
+    try:
+        parsed = urlsplit(str(value or "").strip())
+    except ValueError:
         return False
-    return parsed.scheme.lower() == "https" and (
-        host in {"media.tenor.com", "media1.tenor.com", "c.tenor.com"}
-        or host == "i.giphy.com"
-        or (host.startswith("media") and host.endswith(".giphy.com"))
-    )
+    host = str(parsed.hostname or "").lower()
+    if parsed.scheme.lower() != "https" or not is_safe_media_download_url(value):
+        return False
+    # The temporary composer message is deleted on success. Its Discord CDN
+    # attachment URL is not a safe source for future refreshes or restarts.
+    if host in {"cdn.discordapp.com", "media.discordapp.net", "images-ext-1.discordapp.net",
+                "images-ext-2.discordapp.net"}:
+        return False
+    return _is_direct_media_url(value)
 
 
 class _TokeMediaMetaParser(HTMLParser):
-    """Read provider-owned image URLs, never arbitrary HTML or iframe embeds."""
+    """Extract image-only OpenGraph/Twitter assets from bounded public HTML."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -140,33 +153,39 @@ class _TokeMediaMetaParser(HTMLParser):
             return
         meta = dict(attrs)
         label = str(meta.get("property") or meta.get("name") or "").lower()
-        if label in {"og:image", "og:image:secure_url", "twitter:image"}:
+        if label in {"og:image", "og:image:secure_url", "og:image:url",
+                     "twitter:image", "twitter:image:src"}:
             self.images.append(str(meta.get("content") or ""))
 
 
 def _provider_page_image(html: str) -> str:
     parser = _TokeMediaMetaParser()
     parser.feed(html)
-    # Prefer animated GIF over a static social-media preview.
+    # Prefer animation when the page exposes both JPG cover art and GIF.
+    # Other providers are permitted, but only direct HTTPS public image assets.
     candidates = [url for url in parser.images if _is_stable_provider_media_url(url)]
-    return next((url for url in candidates if urlsplit(url).path.lower().endswith(".gif")), candidates[0] if candidates else "")
+    return next(
+        (url for url in candidates if urlsplit(url).path.lower().endswith(".gif")),
+        candidates[0] if candidates else "",
+    )
 
 
 async def _resolve_toke_media_url(value: str) -> str:
-    """Resolve supported sharing pages *before* posting; never publish link-only media."""
+    """Normalize direct GIFs or metadata-backed sharing pages before publishing."""
     if _is_direct_media_url(value):
         return value
-    parsed = urlsplit(value)
-    host, path = str(parsed.hostname or "").lower(), str(parsed.path or "")
-    if parsed.scheme.lower() != "https" or parsed.username or parsed.password:
-        raise ValueError("Use a direct HTTPS image/GIF URL, or upload the file to /toke.")
     try:
-        if parsed.port not in (None, 443):
-            raise ValueError("Media sharing links must use standard HTTPS.")
+        parsed = urlsplit(value)
+        port = parsed.port
     except ValueError as exc:
-        raise ValueError("Media sharing links must use standard HTTPS.") from exc
+        raise ValueError("Media sharing link is not a valid public HTTPS URL.") from exc
+    if (parsed.scheme.lower() != "https" or parsed.username or parsed.password
+            or port not in (None, 443) or not is_safe_media_download_url(value)):
+        raise ValueError("Use a public HTTPS GIF/image sharing link or upload the file.")
 
-    # GIPHY's public GIF CDN has a canonical animated asset for its page ID.
+    # Keep this existing fast path for GIPHY's canonical GIF pages. Other
+    # providers are handled by the same generic metadata path below.
+    host, path = str(parsed.hostname or "").lower(), str(parsed.path or "")
     if host in {"giphy.com", "www.giphy.com"} and path.startswith("/gifs/"):
         slug = path[len("/gifs/"):].strip("/")
         if "/" not in slug:
@@ -174,30 +193,45 @@ async def _resolve_toke_media_url(value: str) -> str:
             if re.fullmatch(r"[A-Za-z0-9]{6,}", gif_id):
                 return f"https://media.giphy.com/media/{gif_id}/giphy.gif"
 
-    # Tenor page IDs cannot be safely converted to CDN filenames. Inspect only
-    # the allowlisted provider's bounded public HTML metadata. No API key, no
-    # arbitrary-URL scraping, no redirects, and no internal-network lookups.
-    if host in {"tenor.com", "www.tenor.com"} and path.startswith("/view/"):
-        try:
-            timeout = aiohttp.ClientTimeout(total=5, connect=3)
-            async with aiohttp.ClientSession(
-                connector=public_tcp_connector(limit=2), timeout=timeout,
-            ) as session:
-                async with session.get(value, allow_redirects=False) as response:
-                    if response.status != 200 or "text/html" not in response.headers.get("Content-Type", "").lower():
-                        raise ValueError("Tenor did not return a readable GIF page.")
-                    raw = await response.content.read(256 * 1024 + 1)
-                    if len(raw) > 256 * 1024:
-                        raise ValueError("Tenor GIF page was too large to inspect.")
-            found = _provider_page_image(raw.decode("utf-8", errors="replace"))
-            if found:
-                return found
-        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
-            raise ValueError("Could not retrieve the Tenor GIF image. Upload the GIF or use its direct image link.") from exc
+    # Only the canonical public-network reader can follow redirects: each hop
+    # is checked and DNS refuses private/loopback targets. Inspect at most
+    # 256 KiB of HTML, never download a whole video/GIF and never follow HTML
+    # frames/scripts. This covers Imgur, Reddit, blogs, other providers, etc.
+    try:
+        timeout = aiohttp.ClientTimeout(total=5, connect=3)
+        async with aiohttp.ClientSession(
+            connector=public_tcp_connector(limit=2), timeout=timeout,
+        ) as session:
+            response, final_url = await public_get(session, value, max_redirects=3)
+            try:
+                if response.status != 200:
+                    raise ValueError("The media sharing page is unavailable.")
+                content_type = response.headers.get("Content-Type", "").lower()
+                if content_type.split(";", 1)[0].strip() in _TOKE_MEDIA_CONTENT_TYPES:
+                    # An extensionless redirect may itself end at an image.
+                    if _is_stable_provider_media_url(final_url):
+                        return final_url
+                    raise ValueError("The image URL is not stable or publicly embeddable.")
+                if "text/html" not in content_type:
+                    raise ValueError("The shared URL did not return a GIF/image page.")
+                if int(response.headers.get("Content-Length", "0") or "0") > 256 * 1024:
+                    raise ValueError("The media sharing page is too large to inspect.")
+                raw = await response.content.read(256 * 1024 + 1)
+                if len(raw) > 256 * 1024:
+                    raise ValueError("The media sharing page is too large to inspect.")
+            finally:
+                response.release()
+        found = _provider_page_image(raw.decode("utf-8", errors="replace"))
+        if found:
+            return found
+    except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+        raise ValueError(
+            "Could not load this GIF/image sharing page. Upload the file or use its direct image URL."
+        ) from exc
 
     raise ValueError(
-        "This sharing link did not provide a playable inline GIF/image. "
-        "Upload the GIF/photo or use a direct image URL instead."
+        "This sharing page does not expose a public inline GIF/image. "
+        "Upload the GIF/photo or use its direct image URL instead."
     )
 
 
