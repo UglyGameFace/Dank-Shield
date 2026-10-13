@@ -162,15 +162,15 @@ def test_toke_media_send_path_keeps_one_canonical_post() -> None:
     # Editing an attachment:// embed causes some Discord clients to show
     # the same attachment above and inside the interactive Toke card.
     assert 'embed.set_image(url=f"attachment://{upload_file.filename}")' not in source
-    assert "elif direct:" in source
+    assert "clean_media = await _resolve_toke_media_url(clean_media)" in source
     assert "embed.set_image(url=clean_media)" in source
-    assert 'embed.description += f"\\n\\n[Open shared GIF or image]({clean_media})"' in source
+    assert "Open shared GIF or image" not in source
     assert 'content += f"\\n{clean_media}"' not in source
     assert '"file": upload_file' in source
     assert 'TokeMediaLayout(guild, pending_card, intro=intro)' in source
     assert "await channel.send(**payload)" in source
     assert "await toke_sessions.save_new(" in source
-    assert "aiohttp" not in source
+    assert "public_tcp_connector" in source  # Provider page inspection is DNS-restricted.
 
 
 def test_toke_allowed_mentions_only_serializes_selected_role() -> None:

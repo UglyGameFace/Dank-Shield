@@ -1,3 +1,24 @@
+# Active Task Lock — Main/Production Reunification for Discloud (2026-10-13)
+
+**Active outcome:** Merge the current Discloud-connected `aaa-cinema-pre-pregateway-bind`
+history into `main` using a true two-parent merge commit while preserving
+the five production-only `/toke` source/test files and all main-only work.
+**Do not switch Discloud to main yet**: first pass exact-head CI, then verify
+PR #540's required Supabase batch RPC migration on the actual Dank Shield
+database, and only then perform a controlled cutover and two-shard canary.
+
+**Source snapshots:** main `fcebe42ebf7addd3afd4d3afaf2bf8c875f0a1a7`;
+production `0401552e859afbed7c17845366f87752b638235c`. Both are parents of the integration candidate.
+Production's `/toke` blob SHAs are reused unchanged. No modifications to
+Cinema, Share Router, verification, voice moderation, or Supabase migrations
+in this reconciliation diff. Preserve the previous lock history below.
+
+**Next step:** Exact-head CI, review two-parent ancestry and diff, merge the
+integration PR only after checks, and validate the actual Dank Shield Supabase
+migration before telling the operator to redeploy on `main`.
+
+---
+
 # Active Task Lock — Single-process sharding scalability (2026-10-13)
 
 **Active task/outcome:** Enable safe future two-shard Discloud canary by
@@ -109,6 +130,21 @@ Gemini processing and adult-use eligibility remain operator requirements.
 Only after validation, follow with the separate receiver-pool coordination
 work *within #517*, never claim comprehensive coverage early.
 
+---
+
+# Active Task Lock — Toke Inline Media (2026-10-13)
+
+**Authorized FORCE SWITCH:** Suspend Facebook downloader/Share Router #390 (merged work and outstanding live downloads/provider tests remain preserved, not reopened). Active outcome: show the actual GIF/image inside the /toke card, without blue page links, tiny thumbnails, duplicated media, or oversized naked attachments. Do not alter Voice Safety #517 or branch reunification during this task.
+
+**Production base:** `aaa-cinema-pre-pregateway-bind`, the historically confirmed Discloud auto-deploy branch. **Task branch:** `fix/toke-embed-share-media-20261013`; draft PR until validated. Current Discloud running SHA remains unverified. Main/production reunification from the prior checkpoint is suspended, not discarded.
+
+**Observed failure/root cause:** Android screenshot 2026-10-13 shows "Open shared GIF or image" instead of the GIF. `_publish_toke` explicitly formatted non-direct Tenor/Giphy share-page links into embed.description rather than resolving an inline media asset. The existing direct image embed path and uploaded-photo/GIF Components V2 MediaGallery path must remain distinct: the latter prevents the Discord attachment:// PATCH duplicate previously observed and retains medium/wide inline media in the card.
+
+**Changes:** Resolve public HTTPS GIF/image sharing pages from any domain exposing direct OpenGraph/Twitter image metadata, with a five-second timeout, 256-KiB HTML cap, max three safety-checked redirects, and the existing public-only DNS connector to block private network targets. Accept safe image MIME redirects without a filename; preserve fast Giphy canonical-GIF path and normal Tenor URLs. Pending Discord composer now also accepts a *single* public HTTPS page URL, while ordinary messages remain untouched. Prefer animated GIF assets; never publish link-only media, and fail before posting with actionable instructions when metadata is missing or blocked. No new config/env variables or media storage. Preserve uploaded animated GIF/gallery (not the old Section thumbnail), role mention, live Cheers/Joining/VC/Refresh/expiry, composer cleanup semantics and view restoration. Tests include generic providers, private network rejection, HTML caps and source filtering.
+
+**Validation/status:** Source changes and tests on task branch; exact-head regression/full CI and real Android/Discord visual acceptance are still pending. Verify native composer Tenor/Giphy, /toke media: share-page, direct CDN and gallery uploads; ensure no linked-only card, no duplicate/oversized attachment, no tiny thumbnail, media remains after Cheers, Refresh, End and restart. Check GitHub PR diff/mergeability and Discloud deployed SHA before declaring success.
+
+**Next step:** Open draft PR targeting production branch, inspect exact-head CI, repair scoped failures, then run Android/Discloud canary. No claims of production completion without canary.
 ---
 
 # Active Task Lock — Main/Production Reunification (2026-10-13)
