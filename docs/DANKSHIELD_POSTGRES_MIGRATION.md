@@ -291,6 +291,40 @@ remaining tickets/community/Cinema/member/moderation repositories, full source
 backup and restore tests, size/load soak, and a reversible switch. Do not
 update bot routing, remove Supabase secrets, or redeploy Discloud on main yet.
 
+## Phase 4: explicit cross-database configuration parity gate
+
+`stoney_verify.postgres_guild_config_parity` is a **read-only audit** between
+the current `public.guild_configs` source and the offline
+`dank_core.guild_config_state` target. Run manually inside the authorized
+private VLAN with `python -m tools.audit_dankshield_guild_config_parity`.
+
+- The command requires both the exact Supabase hostname project reference
+  (`DANK_MIGRATION_SOURCE_REF`) and the exact existing Discloud PostgreSQL
+  database name (`DANK_MIGRATION_EXPECTED_DB`). It uses current application
+  credentials without logging or displaying them.
+- PostgreSQL reads execute in `REPEATABLE READ, READ ONLY` mode, with a
+  connection timeout and statement timeout. Source pages use an explicit,
+  stable `guild_id` + `id` order.
+- Reports only source/target row counts, canonical JSON content digests and
+  an unchanged-source flag. Missing, additional, duplicate, oversized or
+  changed data does not pass. Reads source twice to catch common changes
+  during the check. Never prints the actual server IDs, settings, role or
+  channel IDs, or connection strings.
+- Its initial memory/row envelope is 500 guilds / 12 MiB, carried forward
+  from the small shadow-seed slice. This is **not** a 10,000-server ceiling:
+  a separate streaming/delta migration and throughput profile are required.
+- **Critical:** Even a matching report has
+  `cutover_authorized=false`. Supabase REST paging is not a repeatable-read
+  source snapshot, and writes can occur immediately after the scan. Backups,
+  cutover write-fencing / delta replay, all other feature repositories,
+  identity/privilege boundaries and rollback remain release blockers.
+  Never auto-flip backend selection because this audit is green.
+
+The existing `stoney_verify.guild_config` read and write paths remain
+Supabase-only. No monkey patches, automatic DB client switching, hidden
+fallback writes or startup schema updates were introduced. The test suite
+includes an isolated real PostgreSQL 17 check detecting JSONB drift.
+
 ## Deployment sequence
 
 1. Confirm the real disk limit/backups for the existing Discloud DB and the
