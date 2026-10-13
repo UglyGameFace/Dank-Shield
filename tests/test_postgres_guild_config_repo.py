@@ -122,6 +122,18 @@ def test_patch_merges_only_requested_sibling_keys_and_noop_does_not_write():
     assert before == sum(x.startswith("update ") for x in db.sql)
 
 
+def test_matching_cas_is_success_without_new_revision_or_write():
+    r, db = repo()
+    successful = r.patch(
+        123, {"welcome_message": "hello"}, expected={"welcome_message": "hello"},
+        expected_revision=0, timestamp=T0,
+    )
+    assert successful.applied is True
+    assert successful.reason == "no_change"
+    assert successful.revision == 0
+    assert not any(sql.startswith("update ") for sql in db.sql)
+
+
 def test_compare_and_swap_rejects_stale_settings_and_revision():
     r, _db = repo()
     winner = r.patch(123, {"welcome_message": "new"}, expected={
