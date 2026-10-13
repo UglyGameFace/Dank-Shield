@@ -138,15 +138,22 @@ def test_public_tenor_gif_is_embedded_only_without_native_attachment(monkeypatch
     assert sent["content"] == "<@&555>"
 
 
-def test_tenor_page_url_is_linked_inside_card_and_not_unfurled_in_content(monkeypatch):
+def test_tenor_page_resolves_to_inline_gif_without_link_or_extra_preview(monkeypatch):
     url = "https://tenor.com/view/reaction-gif-9867"
+    media = "https://media.tenor.com/123/reaction.gif"
+
+    async def resolve(value):
+        assert value == url
+        return media
+
+    monkeypatch.setattr(toke, "_resolve_toke_media_url", resolve)
     channel = asyncio.run(_run_publish(monkeypatch, media=url))
     sent = channel.sent_payload
     assert sent["content"] == "<@&555>"
     assert "file" not in sent
-    assert sent["embed"].image.url is None
-    assert f"[Open shared GIF or image]({url})" in sent["embed"].description
-    assert channel.edited_payload["embed"].description == sent["embed"].description
+    assert sent["embed"].image.url == media
+    assert channel.edited_payload["embed"].image.url == media
+    assert "Open shared GIF" not in sent["embed"].description
 
 
 def test_prefers_tenor_cdn_from_native_picker_over_view_page():
@@ -188,6 +195,108 @@ def test_native_tenor_video_track_does_not_replace_gif_image():
     assert not toke._is_stable_provider_media_url("https://media.tenor.com/abc/tenor.mp4")
     assert not toke._is_direct_media_url("https://media.tenor.com/abc/tenor.mp4")
 
+
+
+def test_giphy_share_page_uses_animated_media_in_embed(monkeypatch):
+    link = "https://giphy.com/gifs/dancing-with-friends-aBcD1234"
+    channel = asyncio.run(_run_publish(monkeypatch, media=link))
+    image = "https://media.giphy.com/media/aBcD1234/giphy.gif"
+    assert channel.sent_payload["embed"].image.url == image
+    assert channel.edited_payload["embed"].image.url == image
+    assert channel.sent_payload["content"] == "<@&555>"
+
+
+def test_tenor_html_metadata_prefers_animation_and_ignores_foreign_hosts():
+    html = """
+    <meta name="twitter:image" content="https://media.tenor.com/123/static.png">
+    <meta content="https://evil.example/hijack.gif" property="og:image">
+    <meta content="https://media.tenor.com/123/animated.gif?foo=1&amp;bar=2" property="og:image">
+    """
+    assert toke._provider_page_image(html) == "https://media.tenor.com/123/animated.gif?foo=1&bar=2"
+    assert toke._provider_page_image('<meta property="og:image" content="http://localhost/a.gif">') == ""
+
+
+def test_tenor_provider_html_is_bounded_and_only_used_for_known_page(monkeypatch):
+    class Response:
+        status = 200
+        headers = {"Content-Type": "text/html; charset=utf-8"}
+        content = SimpleNamespace(read=None)
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_args):
+            return None
+
+    response = Response()
+    async def read(_n):
+        return b'<meta property="og:image" content="https://media.tenor.com/a/party.gif">'
+    response.content.read = read
+    requests = []
+    class Session:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_args):
+            return None
+        def get(self, url, *, allow_redirects):
+            requests.append((url, allow_redirects))
+            return response
+
+    monkeypatch.setattr(toke, "public_tcp_connector", lambda **_kwargs: object())
+    monkeypatch.setattr(toke.aiohttp, "ClientSession", lambda **_kwargs: Session())
+    source = "https://tenor.com/view/dance-gif-12345678"
+    assert asyncio.run(toke._resolve_toke_media_url(source)) == "https://media.tenor.com/a/party.gif"
+    assert requests == [(source, False)]
+
+    with pytest.raises(ValueError, match="direct image URL"):
+        asyncio.run(toke._resolve_toke_media_url("https://not-tenor.example/view/dance"))
+    with pytest.raises(ValueError, match="standard HTTPS"):
+        asyncio.run(toke._resolve_toke_media_url("https://tenor.com:8080/view/dance"))
+
+
+def test_unresolvable_provider_page_does_not_publish_link_only_card(monkeypatch):
+    class Response:
+        status = 200
+        headers = {"Content-Type": "text/html"}
+        content = SimpleNamespace(read=None)
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_args):
+            return None
+    response = Response()
+    async def read(_n):
+        return b"<html><body>No GIF in this response.</body></html>"
+    response.content.read = read
+    class Session:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_args):
+            return None
+        def get(self, *_args, **_kwargs):
+            return response
+    monkeypatch.setattr(toke, "public_tcp_connector", lambda **_kwargs: object())
+    monkeypatch.setattr(toke.aiohttp, "ClientSession", lambda **_kwargs: Session())
+    with pytest.raises(ValueError, match="did not provide a playable inline"):
+        asyncio.run(_run_publish(monkeypatch, media="https://tenor.com/view/broken-gif-123"))
+
+
+def test_bad_tenor_response_is_not_silently_shared_as_a_link(monkeypatch):
+    class Response:
+        status = 403
+        headers = {"Content-Type": "text/html"}
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_args):
+            return None
+    class Session:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_args):
+            return None
+        def get(self, *_args, **_kwargs):
+            return Response()
+    monkeypatch.setattr(toke, "public_tcp_connector", lambda **_kwargs: object())
+    monkeypatch.setattr(toke.aiohttp, "ClientSession", lambda **_kwargs: Session())
+    with pytest.raises(ValueError, match="readable GIF page"):
+        asyncio.run(_run_publish(monkeypatch, media="https://tenor.com/view/blocked-gif-123"))
 
 def test_no_suppress_embeds_flag_hides_interactive_toke_embed():
     # Discord's suppress_embeds flag also suppresses bot-authored custom
