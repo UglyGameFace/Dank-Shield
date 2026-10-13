@@ -307,7 +307,7 @@ def test_voice_safety_manager_end_to_end_consent_and_staff_alert(monkeypatch) ->
         member = SimpleNamespace(
             id=99, bot=False, voice=SimpleNamespace(channel=voice),
         )
-        voice.members = [member]
+        voice.members = [member, SimpleNamespace(id=100, bot=False)]
 
         class FakeGuild:
             id = 5
@@ -425,13 +425,19 @@ def test_voice_safety_auto_start_uses_configured_channel_and_single_owner(monkey
 
         class FakeVoice:
             id = 22
-            members = [SimpleNamespace(id=51, bot=False)]
+            members = [
+                SimpleNamespace(id=51, bot=False),
+                SimpleNamespace(id=52, bot=False),
+            ]
+            def permissions_for(self, member):
+                return SimpleNamespace(connect=True, view_channel=True)
 
         class FakeGuild:
             id = 17
+            me = "bot"
             voice_channels = [FakeVoice()]
             def get_channel(self, channel_id):
-                return FakeVoice() if channel_id == 22 else None
+                return self.voice_channels[0] if channel_id == 22 else None
 
         guild = FakeGuild()
         bot = SimpleNamespace(guilds=[guild], get_guild=lambda gid: guild)
@@ -895,4 +901,125 @@ def test_voice_safety_staff_panel_displays_readiness_without_key(monkeypatch) ->
         assert "Gemini API key configured" in status
         assert "not-a-real-secret" not in str(embed.to_dict())
 
+    asyncio.run(run())
+
+
+def test_voice_safety_coverage_selects_accessible_two_human_rooms(monkeypatch) -> None:
+    import stoney_verify.voice_safety_coverage as coverage
+
+    class FakeVoice:
+        def __init__(self, cid, humans, *, bots=0, accessible=True):
+            self.id = cid
+            self.members = [SimpleNamespace(id=cid * 10 + i, bot=False) for i in range(humans)]
+            self.members += [SimpleNamespace(id=cid * 100 + i, bot=True) for i in range(bots)]
+            self.accessible = accessible
+        def permissions_for(self, member):
+            return SimpleNamespace(view_channel=self.accessible, connect=self.accessible)
+
+    monkeypatch.setattr(coverage.discord, "VoiceChannel", FakeVoice)
+    rooms = [
+        FakeVoice(10, 1, bots=3), FakeVoice(11, 3), FakeVoice(12, 2),
+        FakeVoice(13, 4, accessible=False), FakeVoice(14, 2),
+    ]
+    class Guild:
+        me = "bot"
+        voice_channels = rooms
+        def get_channel(self, cid):
+            return next((vc for vc in rooms if vc.id == cid), None)
+
+    guild = Guild()
+    cfg = {"voice_safety_voice_channel_id": 12}
+    assert coverage.coverage_mode(cfg) == coverage.SINGLE
+    assert [v.id for v in coverage.qualifying_channels(guild, cfg)] == [12]
+    assert coverage.human_count(rooms[0]) == 1
+    cfg[coverage.COVERAGE_KEY] = coverage.ALL
+    assert [v.id for v in coverage.qualifying_channels(guild, cfg)] == [11, 12, 14]
+    cfg[coverage.COVERAGE_KEY] = "unknown"
+    assert coverage.coverage_mode(cfg) == coverage.SINGLE
+    assert [v.id for v in coverage.qualifying_channels(guild, cfg)] == [12]
+
+
+def test_voice_safety_all_vcs_auto_starts_only_qualifying_room(monkeypatch) -> None:
+    async def run() -> None:
+        import stoney_verify.community_voice_caption_runtime as runtime
+        import stoney_verify.guild_config as guild_config
+        import stoney_verify.voice_safety_coverage as coverage
+
+        class FakeVoice:
+            def __init__(self, cid, humans):
+                self.id = cid
+                self.members = [SimpleNamespace(id=cid + x, bot=False) for x in range(humans)]
+            def permissions_for(self, member):
+                return SimpleNamespace(view_channel=True, connect=True)
+
+        monkeypatch.setattr(runtime.discord, "VoiceChannel", FakeVoice)
+        rooms = [FakeVoice(31, 1), FakeVoice(32, 2), FakeVoice(33, 3)]
+        guild = SimpleNamespace(
+            id=5, me="bot", voice_channels=rooms,
+            get_channel=lambda cid: next((v for v in rooms if v.id == cid), None),
+        )
+        bot = SimpleNamespace(guilds=[guild], get_guild=lambda gid: guild)
+        cfg = {"voice_safety_enabled": True, coverage.COVERAGE_KEY: coverage.ALL,
+               "voice_safety_staff_channel_id": 40, "voice_safety_notice_channel_id": 41}
+        async def read(gid, **kwargs):
+            return cfg
+        monkeypatch.setattr(guild_config, "get_guild_config", read)
+        monkeypatch.setattr(runtime, "voice_safety_host_enabled", lambda: True)
+        monkeypatch.setattr(runtime, "live_captions_enabled", lambda: True)
+        manager = CommunityVoiceCaptionManager(bot)
+        calls = []
+        async def begin(**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(session_id="voice_safety:5")
+        monkeypatch.setattr(manager, "start_voice_safety", begin)
+        assert not await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=31)
+        assert await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=32)
+        assert calls[-1]["voice_channel_id"] == 32
+        assert calls[-1]["automatic"] is True
+        # Simulate the result being a real owned receiver for contention handling.
+        manager._guild_owner[5] = "voice_safety:5"
+        assert not await manager.maybe_auto_start_voice_safety(guild, joined_voice_id=33)
+        manager._guild_owner.clear()
+        await manager.restore_voice_safety_after_ready()
+        assert calls[-1]["voice_channel_id"] == 33
+        assert len(calls) == 2
+    asyncio.run(run())
+
+
+def test_voice_safety_releases_room_below_two_and_checks_next_room(monkeypatch) -> None:
+    async def run() -> None:
+        class FakeVoice:
+            id = 51
+            members = [SimpleNamespace(id=7, bot=False), SimpleNamespace(id=8, bot=False)]
+        voice = FakeVoice()
+        guild = SimpleNamespace(id=4, get_channel=lambda cid: voice)
+        member = SimpleNamespace(id=7, bot=False, guild=guild)
+        manager = CommunityVoiceCaptionManager(SimpleNamespace())
+        sid = voice_safety_scope_id(4)
+        state = SimpleNamespace(
+            session_id=sid, scope_kind="voice_safety", voice_channel_id=51,
+            safety_automatic=True, safety_consent_epochs={}, safety_consents=set(),
+        )
+        manager._sessions[sid] = state
+        manager._guild_owner[4] = sid
+        disabled, stopped, retried = [], [], []
+
+        async def disable(*args):
+            disabled.append(args[1])
+        async def stop(sid):
+            stopped.append(sid)
+            manager._guild_owner.pop(4, None)
+            manager._sessions.pop(sid, None)
+        async def try_next(guild):
+            retried.append(guild.id)
+
+        monkeypatch.setattr(manager, "_disable_user_for_state", disable)
+        monkeypatch.setattr(manager, "stop", stop)
+        monkeypatch.setattr(manager, "maybe_auto_start_voice_safety", try_next)
+        before = SimpleNamespace(channel=voice)
+        after = SimpleNamespace(channel=None)
+        await manager.handle_voice_state_update(member, before, after)
+        assert disabled == [7]
+        assert stopped == [sid]
+        assert retried == [4]
     asyncio.run(run())
