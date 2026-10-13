@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import time
 from typing import Any, Dict, List
 
 import discord
+
+from ..guild_sweep import run_bounded_guild_sweep
 
 from ..globals import (
     bot,
@@ -95,7 +98,7 @@ def _sync_role_metrics(guild: discord.Guild) -> int:
     def _bulk_upsert() -> None:
         sb = get_supabase(force_new=False)
         if sb is None:
-            return
+            raise RuntimeError("Supabase unavailable for role metrics")
         for chunk in _chunked(payload, UPSERT_CHUNK_SIZE):
             sb.table("guild_roles").upsert(
                 chunk,
@@ -110,7 +113,7 @@ def _sync_staff_metrics(guild: discord.Guild) -> int:
     def _select_staff():
         sb = get_supabase(force_new=False)
         if sb is None:
-            return []
+            raise RuntimeError("Supabase unavailable for staff metrics")
         res = (
             sb.table("guild_members")
             .select("user_id, username")
@@ -141,7 +144,7 @@ def _sync_staff_metrics(guild: discord.Guild) -> int:
     def _bulk_upsert() -> None:
         sb = get_supabase(force_new=False)
         if sb is None:
-            return
+            raise RuntimeError("Supabase unavailable for staff metrics")
         for chunk in _chunked(payload, UPSERT_CHUNK_SIZE):
             sb.table("staff_metrics").upsert(
                 chunk,
@@ -152,40 +155,96 @@ def _sync_staff_metrics(guild: discord.Guild) -> int:
     return len(payload)
 
 
-async def update_role_metrics(guild: discord.Guild) -> None:
+async def update_role_metrics(guild: discord.Guild) -> bool:
     try:
         count = await asyncio.to_thread(_sync_role_metrics, guild)
         previous = _LAST_ROLE_METRICS_COUNTS.get(int(guild.id))
         _LAST_ROLE_METRICS_COUNTS[int(guild.id)] = int(count)
         if previous != int(count):
             print(f"📊 Role metrics synced ({count})")
+        return True
     except Exception as e:
         print("❌ Role metrics sync failed:", repr(e))
+        return False
 
 
-async def update_staff_metrics(guild: discord.Guild) -> None:
+async def update_staff_metrics(guild: discord.Guild) -> bool:
     try:
         count = await asyncio.to_thread(_sync_staff_metrics, guild)
         previous = _LAST_STAFF_METRICS_COUNTS.get(int(guild.id))
         _LAST_STAFF_METRICS_COUNTS[int(guild.id)] = int(count)
         if previous != int(count):
             print(f"👮 Staff metrics synced ({count})")
+        return True
     except Exception as e:
         print("❌ Staff metrics sync failed:", repr(e))
+        return False
+
+
+def _metrics_guild_concurrency() -> int:
+    try:
+        value = int(os.getenv("DANK_METRICS_GUILD_CONCURRENCY", "4"))
+    except (TypeError, ValueError):
+        value = 4
+    return max(1, min(value, 12))
+
+
+async def _sync_metrics_for_guild(guild: discord.Guild) -> bool:
+    if bot.is_closed():
+        return False
+    # Maintain role-before-staff ordering for a guild; only independent
+    # guilds run concurrently. Existing retry and chunking logic is reused.
+    roles_ok = await update_role_metrics(guild)
+    staff_ok = await update_staff_metrics(guild)
+    return roles_ok and staff_ok
 
 
 async def metrics_loop() -> None:
     await bot.wait_until_ready()
     print("📡 Metrics sync worker started")
+    # Avoid the startup stampede with ticket automation and activity recovery.
+    await asyncio.sleep(random.uniform(0.0, 10.0))
 
     while not bot.is_closed():
-        for guild in list(bot.guilds):
-            try:
-                await update_role_metrics(guild)
-                await update_staff_metrics(guild)
-            except Exception as e:
-                print("❌ Metrics loop error:", repr(e))
-        await asyncio.sleep(SYNC_INTERVAL)
+        consecutive_failures = 0
+        halted_on_failures = False
+
+        async def _sync_one(guild: discord.Guild) -> bool:
+            nonlocal consecutive_failures, halted_on_failures
+            if halted_on_failures:
+                return False
+            ok = await _sync_metrics_for_guild(guild)
+            if ok:
+                consecutive_failures = 0
+            else:
+                consecutive_failures += 1
+                if consecutive_failures >= 5:
+                    # An unavailable database should not generate thousands
+                    # of per-guild retries every five minutes. Next cycle
+                    # probes again; no metrics are marked persisted.
+                    halted_on_failures = True
+            return ok
+
+        result = await run_bounded_guild_sweep(
+            list(bot.guilds),
+            _sync_one,
+            concurrency=_metrics_guild_concurrency(),
+            on_error=lambda guild, exc: print(
+                "❌ Metrics guild sync failed "
+                f"guild={getattr(guild, 'id', '?')}: {type(exc).__name__}: {exc}"
+            ),
+        )
+        print(
+            "📊 metrics sync cycle "
+            f"guilds={result.total} ok={result.succeeded} failed={result.failed} "
+            f"concurrency={result.concurrency} elapsed_s={result.seconds:.2f} "
+            f"halted_on_failures={halted_on_failures}"
+        )
+        # No overlapping passes or zero-delay retry loops after an overrun.
+        await asyncio.sleep(
+            max(10.0, SYNC_INTERVAL - result.seconds)
+            + random.uniform(0.0, 10.0)
+        )
 
 
 def start_metrics_worker() -> None:
