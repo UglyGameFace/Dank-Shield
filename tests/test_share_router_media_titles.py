@@ -8,7 +8,8 @@ import pytest
 from stoney_verify import share_router_media_resolver as resolver
 from stoney_verify.share_router_media_titles import (
     clean_video_title, title_from_embeds, title_from_extraction,
-    title_from_filename, title_prefix,
+    title_from_filename, title_from_matching_attachment,
+    title_from_media_url, title_prefix,
 )
 
 
@@ -80,3 +81,27 @@ def test_filename_only_used_when_meaningful_and_not_a_signed_url():
     assert not title_from_filename("video.mp4")
     assert not title_from_filename("123456789012345.mp4")
     assert not title_from_filename("https://cdn.example.com/secret.mp4?token=private")
+
+
+def test_direct_media_filename_without_token_leak_or_fabricated_label():
+    assert title_from_media_url(
+        "https://cdn.example.com/clips/Great_Gameplay_Moments.mp4?token=do-not-show"
+    ) == "Great Gameplay Moments"
+    assert title_from_media_url("https://cdn.example.com/video.mp4?token=secret") == ""
+    assert title_from_filename("share-router-video.mp4") == ""
+
+
+def test_only_matching_upload_attachment_can_supply_title():
+    message = SimpleNamespace(
+        attachments=[
+            SimpleNamespace(url="https://cdn.discordapp.com/other.mp4",
+                            proxy_url=None, filename="Unrelated_Clip.mp4"),
+            SimpleNamespace(url="https://cdn.discordapp.com/matching.mp4",
+                            proxy_url="https://media.discordapp.net/matching.mp4",
+                            filename="My_Gaming_Clip.mp4"),
+        ],
+    )
+    assert title_from_matching_attachment(
+        message, "https://media.discordapp.net/matching.mp4"
+    ) == "My Gaming Clip"
+    assert title_from_matching_attachment(message, "https://cdn.example.com/no.mp4") == ""
