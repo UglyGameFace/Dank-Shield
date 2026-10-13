@@ -18,10 +18,12 @@ each serial cycle, metrics ran all guilds sequentially per interval, ticket
 sweeps could overlap manual invocations, and SpamGuard performed startup
 settings reads serially inside `on_ready`.
 
-**Changes:** Fixed-size async workers, heartbeat elapsed/overrun logging and
-fail-closed reuse; role-before-staff metrics sync and explicit DB failure
-results; per-guild ticket automation locks plus sweep jitter; nonblocking,
-bounded SpamGuard warming with stop-on-repeated-persistence-failure behavior.
+**Changes:** Fixed-size async workers, heartbeat elapsed/overrun logging,
+global breaker fail-closed coverage and start-to-start pacing; role-before-staff
+metrics sync with honest DB failure and per-cycle outage short-circuit; paginated
+indexed enabled-guild ticket discovery (avoids a per-guild disabled SELECT),
+per-guild ticket automation locks plus sweep jitter; nonblocking, bounded
+SpamGuard warming with stop-on-repeated-persistence-failure behavior.
 `docs/SHARDING_CANARY.md` specifies 2-shard settings, measurements and
 rollback. Production sharding env is unchanged.
 
