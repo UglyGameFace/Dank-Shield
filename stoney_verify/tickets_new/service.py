@@ -23,6 +23,8 @@ from .repository import (
     list_open_tickets_for_guild as repo_list_open_tickets_for_guild,
     mark_ticket_closed as repo_mark_ticket_closed,
     mark_ticket_deleted as repo_mark_ticket_deleted,
+    note_ticket_channel_deleted as repo_note_ticket_channel_deleted,
+    note_ticket_channel_opened as repo_note_ticket_channel_opened,
     reopen_ticket as repo_reopen_ticket,
     safe_optional_update_by_channel_id as repo_safe_optional_update_by_channel_id,
     set_ticket_priority as repo_set_ticket_priority,
@@ -2050,6 +2052,7 @@ async def create_ticket_channel(
                 _service_debug(
                     f"reused-existing-ticket guild={guild.id} owner={owner.id} channel={existing_channel.id}"
                 )
+                repo_note_ticket_channel_opened(existing_channel.id)
                 return existing_channel
 
             await _repair_stale_open_ticket_row(row=existing_row, owner=owner)
@@ -2225,6 +2228,7 @@ async def create_ticket_channel(
         _service_debug(
             f"create success guild={guild.id} owner={owner.id} channel={channel.id} ticket_number={ticket_number}"
         )
+        repo_note_ticket_channel_opened(channel.id)
         return channel
 
 
@@ -2321,6 +2325,8 @@ async def sync_existing_ticket_channel(
         pass
 
     if ok:
+        # Reconciliation path: an existing channel was confirmed as a ticket.
+        repo_note_ticket_channel_opened(channel.id)
         try:
             owner_member = owner if isinstance(owner, discord.Member) else None
             if clean_status in {"open", "claimed"}:
@@ -3282,6 +3288,8 @@ async def reopen_ticket_channel(
             f"reopen-channel success channel={channel.id} moved_to_active={moved_to_active} "
             f"location={_channel_lifecycle_location(channel)} final_status={final_status}"
         )
+        if final_ok:
+            repo_note_ticket_channel_opened(channel.id)
         return final_ok
 
 
