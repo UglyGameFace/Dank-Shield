@@ -350,3 +350,100 @@ def test_uploaded_media_view_restores_after_bot_restart(storage, layout):
         assert len(registered) == 1
         live._REGISTERED.clear()
     asyncio.run(run())
+
+def test_end_sesh_requires_private_confirm_and_cancel_does_not_end():
+    async def run():
+        source = live.TokeCheersView(1, 9, guild_id=100, message_id=200)
+        sent = []
+        async def send_message(*args, **kwargs):
+            sent.append((args, kwargs))
+        guild = SimpleNamespace(id=100)
+        message = SimpleNamespace(id=200)
+        owner = SimpleNamespace(id=1, guild_permissions=SimpleNamespace(manage_guild=False))
+        interaction = SimpleNamespace(
+            guild=guild, message=message, user=owner,
+            response=SimpleNamespace(send_message=send_message),
+        )
+        await source.end.callback(interaction)
+        assert len(sent) == 1
+        assert sent[0][1]["ephemeral"] is True
+        confirmation = sent[0][1]["view"]
+        assert isinstance(confirmation, live.TokeEndConfirmView)
+        assert confirmation.message_id == 200 and confirmation.actor_id == 1
+
+        cancelled = []
+        async def edit_message(**kwargs):
+            cancelled.append(kwargs)
+        cancel_click = SimpleNamespace(
+            user=owner, response=SimpleNamespace(edit_message=edit_message),
+        )
+        await confirmation.cancel.callback(cancel_click)
+        assert cancelled == [{"content": "Sesh stays active.", "view": None}]
+
+        sent.clear()
+        non_host = SimpleNamespace(id=99, guild_permissions=SimpleNamespace(manage_guild=False))
+        interaction.user = non_host
+        await source.end.callback(interaction)
+        assert len(sent) == 1
+        assert "Only the starter or server managers" in sent[0][0][0]
+        assert "view" not in sent[0][1]
+    asyncio.run(run())
+
+
+def test_end_confirmation_routes_to_original_card_not_ephemeral_message(monkeypatch):
+    async def run():
+        source = live.TokeCheersView(1, 9, guild_id=100, message_id=200)
+        confirmation = live.TokeEndConfirmView(source, 1, 200)
+        calls = []
+        async def fake_commit(self, interaction, action, **kwargs):
+            calls.append((action, kwargs))
+        monkeypatch.setattr(live.TokeCheersView, "_respond", fake_commit)
+        async def defer(**kwargs):
+            calls.append(("defer", kwargs))
+        async def edit_original_response(**kwargs):
+            calls.append(("edit", kwargs))
+        click = SimpleNamespace(
+            user=SimpleNamespace(id=1), message=SimpleNamespace(id=999),
+            response=SimpleNamespace(defer=defer),
+            edit_original_response=edit_original_response,
+        )
+        await confirmation.confirm.callback(click)
+        assert calls == [
+            ("defer", {}),
+            ("end", {"session_message_id": 200, "already_deferred": True}),
+            ("edit", {"view": None}),
+        ]
+    asyncio.run(run())
+
+
+def test_confirmed_end_rechecks_persisted_permissions_and_target(storage, monkeypatch):
+    class FakeMember:
+        id = 1
+        guild_permissions = SimpleNamespace(manage_guild=False)
+    async def run():
+        await toke_sessions.save_new(_session())
+        monkeypatch.setattr(live.discord, "Member", FakeMember)
+        refreshes = []
+        async def refresh(_bot, session, interaction=None, **_kwargs):
+            refreshes.append((session["message_id"], interaction))
+            return True
+        monkeypatch.setattr(live, "refresh_card", refresh)
+        edits = []
+        async def edit_original_response(**kwargs):
+            edits.append(kwargs)
+        async def wrong_defer(**_kwargs):
+            raise AssertionError("Already deferred confirmation must not defer twice")
+        click = SimpleNamespace(
+            guild=SimpleNamespace(id=100), user=FakeMember(),
+            message=SimpleNamespace(id=999),
+            response=SimpleNamespace(defer=wrong_defer),
+            edit_original_response=edit_original_response,
+            client=object(),
+        )
+        source = live.TokeCheersView(1, 9, guild_id=100, message_id=200)
+        await source._respond(click, "end", session_message_id=200, already_deferred=True)
+        stored = await toke_sessions.get(100, 200)
+        assert stored["active"] is False
+        assert refreshes == [(200, None)]
+        assert "Sesh ended" in edits[-1]["content"]
+    asyncio.run(run())
