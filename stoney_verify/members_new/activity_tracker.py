@@ -172,7 +172,8 @@ def _record_db_failure() -> None:
     successes interleave and reset the count."""
     global _CONSECUTIVE_DB_FAILURES, _BREAKER_OPEN_UNTIL
     _CONSECUTIVE_DB_FAILURES += 1
-    if _CONSECUTIVE_DB_FAILURES >= _breaker_threshold():
+    if (_CONSECUTIVE_DB_FAILURES >= _breaker_threshold()
+            and not _db_breaker_open()):
         _BREAKER_OPEN_UNTIL = time.monotonic() + _breaker_cooldown_seconds()
         print(
             "⛔ activity DB circuit breaker OPEN "
@@ -235,6 +236,10 @@ def _combined_local_error(guild_id: int) -> str:
         str(_LOCAL_ERRORS.get(gid, "") or "").strip(),
         str(_LOCAL_SCOPE_ERRORS.get(gid, "") or "").strip(),
     ]
+    if gid in _PENDING_FAIL_REPORTS:
+        parts.append("Unreported activity-write failure; coverage is unverified.")
+    if gid in _LOST_COVERAGE_GUILDS:
+        parts.append("Activity events were dropped; a new proof window is required.")
     return " | ".join(part for part in parts if part)
 
 
@@ -1236,13 +1241,11 @@ async def _heartbeat_loop(
                 )
                 continue
 
-            await _refresh_scope_status(guild)
-
-            # Shared DB breaker: while open (DB down), skip heartbeat RPCs
-            # too — they would fail like everything else, and the per-guild
-            # fail-closed state is already set by the failed flushes.
+            # Stop scope-reset writes and heartbeats while the DB breaker is
+            # open. Previously scope handling could still trigger a fail storm.
             if _db_breaker_open():
                 continue
+            await _refresh_scope_status(guild)
 
             try:
                 await asyncio.to_thread(
