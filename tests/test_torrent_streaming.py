@@ -1884,3 +1884,23 @@ def test_cache_budget_fails_closed_if_usage_cannot_be_scanned(
     assert "could not be measured" in manager.capacity_snapshot().blocker
     with pytest.raises(RuntimeError, match="could not be measured"):
         manager._assert_disk_capacity(512)
+
+
+def test_cache_reserves_live_logical_size_plus_separate_orphan_allocations(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.disk_reserve_bytes = 0
+    manager.cache_budget_bytes = 3 * 1024 * 1024
+    monkeypatch.setattr(torrent_streaming, "current_rss_mb", lambda: 200.0)
+    tracked = _shared_session(tmp_path, token="tracked")
+    tracked.file_size = 2 * 1024 * 1024
+    (tracked.save_root / "movie.mp4").write_bytes(b"placeholder")
+    manager._sessions[tracked.token] = tracked
+    orphan = tmp_path / "abandoned"
+    orphan.mkdir()
+    (orphan / "movie.mp4").write_bytes(b"x" * (2 * 1024 * 1024))
+    snap = manager.capacity_snapshot()
+    assert snap.cache_used_bytes >= 2 * 1024 * 1024
+    assert not snap.admission_allowed
+    assert "cache budget" in snap.blocker.lower()
