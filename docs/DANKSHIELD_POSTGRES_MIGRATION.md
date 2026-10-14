@@ -547,6 +547,72 @@ backup was completed. A brand new `workflow_dispatch` on the
 merged **main** is needed to establish actual success. Rerunning a
 prior failed job reuses the old commit and is not an acceptance test.
 
+## Recovery gate: independent restore of the owner's encrypted source Backup #9
+
+On 2026-10-13 the manual source backup workflow **#9** completed with a
+valid authenticated encrypted archive. The artifact's SHA-256 is
+`84acce40549855387ad04ddaaec41cf845fe12cf73a5e5e88282422eddb1f1c0`
+and its original artifact is
+`https://github.com/UglyGameFace/Dank-Shield/actions/runs/38501909516/artifacts/11866606300`.
+The owner separately verified the downloaded `.dsbak` SHA-256 matched.
+**This establishes intact encrypted bytes and readable archive TOC, NOT
+a successful full restore.**
+
+The new `.github/workflows/verify-source-backup9-restore.yml` provides a
+**manual-only** independent restore drill on a fresh GitHub-hosted runner
+with an ephemeral Docker PostgreSQL 17 database. It downloads only this
+one pinned encrypted archive directly from the successful workflow
+using the read-only Actions token. It requires no Supabase connection
+credentials and never connects to the existing Discloud PostgreSQL
+`DankShield-DB` or the voice-bot runtime.
+
+Security and fidelity requirements:
+
+- `workflow_dispatch` on `main` with the deliberate
+  `VERIFY_BACKUP_9_ISOLATED_ONLY` confirmation.
+- Only fetches encrypted Backup #9 (run `38501909516`) and checks
+  its **exact SHA-256** before decryption. Requires the existing
+  `DANK_BACKUP_PASSPHRASE` repository secret; it is not logged.
+- Authenticates the entire archive's AES-GCM tag and checks the TOC
+  **before opening any SQL restore connection**. The disposable
+  PostgreSQL 17 target is `127.0.0.1:5432` and a newly created,
+  named `dank_source_recovery_drill` database. Existing DB detection
+  aborts. Repository identity and explicit disposable-runner gates
+  abort use outside authorized CI.
+- Streams plaintext through a PG17 subprocess directly to the isolated
+  DB, never to a runner artifact or plaintext dump file.
+  `--single-transaction --exit-on-error --no-owner --no-privileges`
+  prevents partial-restore approval. PostgreSQL service is destroyed
+  after the GitHub job completes.
+- On success, prints aggregate table counts in `public`/`idle`
+  and row counts for five critical Dank Shield tables only. On failure,
+  prints **only a fixed failure code** and never raw SQL, passwords,
+  private filenames, connection strings, schema contents or rows.
+- The whole source DB is shared with other applications. Therefore
+  the encrypted archive is strictly for **isolated recovery testing**;
+  never restore it wholesale into the existing Discloud DB. A
+  compatible source environment may be required if Supabase-managed
+  roles, extensions or policies are unavailable on stock PostgreSQL 17.
+  Such a missing dependency is a recovery blocker, not grounds to
+  skip failures or claim a successful full restore.
+
+**GitHub Actions workflow, full visible URL:**
+
+`https://github.com/UglyGameFace/Dank-Shield/actions/workflows/verify-source-backup9-restore.yml`
+
+After merging the workflow on main, manually run it soon: GitHub's
+original Backup #9 artifact expires around Oct 16 10:37 PM EDT (2026).
+The owner already has their separately downloaded, checksum-matching
+backup and must keep a private durable copy and backup passphrase
+separately. A lost ephemeral artifact does **not** justify weakening
+source verification.
+
+Even a successful independent source restore does not verify the
+existing target DB size, table-by-table mapping, 10,000-guild scaling,
+delta writes, rollback or migration of all bot-owned features. Supabase
+must remain authoritative until a separately approved cutover with
+source/destination record parity and recovery is complete.
+
 ## Deployment sequence
 
 1. Confirm the real disk limit/backups for the existing Discloud DB and the
