@@ -1768,3 +1768,118 @@ def test_signed_audio_route_rejects_unverified_or_invalid_track(monkeypatch) -> 
         await reject("1", verified=False)
 
     asyncio.run(run())
+
+
+def _old_canonical_cache_path(tmp_path: Path, name: str) -> Path:
+    path = tmp_path / (name * 24 + "-abcdefgh")
+    path.mkdir()
+    (path / "movie.mp4").write_bytes(b"unused-download")
+    old = time.time() - 4 * 3600
+    os.utime(path / "movie.mp4", (old, old))
+    os.utime(path, (old, old))
+    return path
+
+
+def test_crash_orphan_cleanup_deletes_only_aged_managed_directories(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    abandoned = _old_canonical_cache_path(tmp_path, "a")
+    unrelated = tmp_path / "cinema-profiles"
+    unrelated.mkdir()
+    (unrelated / "preferences.json").write_text("keep")
+    fresh = tmp_path / ("b" * 24 + "-abcdefgh")
+    fresh.mkdir()
+    (fresh / "movie.mp4").write_bytes(b"still-new")
+    manager = _manager(monkeypatch, tmp_path)
+    manager.orphan_grace_seconds = 1800
+
+    assert asyncio.run(manager.cleanup_expired()) == 0
+    assert not abandoned.exists()
+    assert unrelated.joinpath("preferences.json").exists()
+    assert fresh.exists()
+
+
+def test_crash_recovery_preserves_active_lease_and_inflight_creation(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    active_root = _old_canonical_cache_path(tmp_path, "c")
+    abandoned = _old_canonical_cache_path(tmp_path, "d")
+    manager = _manager(monkeypatch, tmp_path)
+    session = _cleanup_session(tmp_path, token="still-watching")
+    session.save_root = active_root
+    session.leases.add("movie:1:2")
+    manager._sessions[session.token] = session
+    manager._starting = 1
+    asyncio.run(manager.cleanup_expired())
+    assert active_root.exists() and abandoned.exists()
+
+    manager._starting = 0
+    asyncio.run(manager.cleanup_expired())
+    assert active_root.exists()
+    assert not abandoned.exists()
+
+
+def test_crash_recovery_does_not_follow_symlink_or_touch_noncanonical_paths(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    external = tmp_path.parent / (tmp_path.name + "-protected")
+    external.mkdir()
+    sentinel = external / "outside.txt"
+    sentinel.write_text("keep")
+    symlink = tmp_path / ("e" * 24 + "-abcdefgh")
+    symlink.symlink_to(external, target_is_directory=True)
+    strange = tmp_path / "manually-stored-media"
+    strange.mkdir()
+    old = time.time() - 4 * 3600
+    os.utime(strange, (old, old))
+    manager = _manager(monkeypatch, tmp_path)
+    asyncio.run(manager.cleanup_expired())
+    assert symlink.is_symlink()
+    assert sentinel.read_text() == "keep"
+    assert strange.exists()
+
+
+def test_only_one_live_process_owns_the_torrent_cache(monkeypatch, tmp_path: Path):
+    manager = _manager(monkeypatch, tmp_path)
+    assert manager._cache_owner_fd >= 0
+    with pytest.raises(RuntimeError, match="cache is in use"):
+        _manager(monkeypatch, tmp_path)
+
+
+def test_torrent_cache_budget_rejects_existing_orphan_usage_and_large_files(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.disk_reserve_bytes = 0
+    manager.cache_budget_bytes = 2 * 1024 * 1024
+    monkeypatch.setattr(torrent_streaming, "current_rss_mb", lambda: 200.0)
+    orphan = tmp_path / "unclaimed-cache"
+    orphan.mkdir()
+    (orphan / "occupied.bin").write_bytes(b"x" * (3 * 1024 * 1024))
+    snap = manager.capacity_snapshot()
+    assert snap.cache_used_bytes >= 3 * 1024 * 1024
+    assert snap.cache_budget_bytes == 2 * 1024 * 1024
+    assert not snap.admission_allowed
+    assert "cache budget" in snap.blocker.lower()
+    with pytest.raises(RuntimeError, match="cache budget"):
+        manager._assert_disk_capacity(1024)
+
+    (orphan / "occupied.bin").unlink()
+    with pytest.raises(RuntimeError, match="cache budget"):
+        manager._assert_disk_capacity(3 * 1024 * 1024)
+    manager._assert_disk_capacity(256 * 1024)
+
+
+def test_cache_budget_fails_closed_if_usage_cannot_be_scanned(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.disk_reserve_bytes = 0
+    monkeypatch.setattr(torrent_streaming, "current_rss_mb", lambda: 200.0)
+    monkeypatch.setattr(
+        manager, "_cache_allocated_bytes",
+        lambda: (_ for _ in ()).throw(PermissionError("private cache")),
+    )
+    assert "could not be measured" in manager.capacity_snapshot().blocker
+    with pytest.raises(RuntimeError, match="could not be measured"):
+        manager._assert_disk_capacity(512)
