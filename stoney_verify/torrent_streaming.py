@@ -381,6 +381,12 @@ class TorrentMediaManager:
         )
         self.rolling_gateway = None
         rolling_enabled = _env_bool("DANK_CINEMA_ROLLING_ENABLED", False)
+        self.rolling_memory_budget_bytes = _env_int(
+            "DANK_CINEMA_ROLLING_MEMORY_BUDGET_BYTES",
+            128 * 1024 * 1024,
+            minimum=64 * 1024 * 1024,
+            maximum=512 * 1024 * 1024,
+        )
         if rolling_enabled:
             from .cinema_rolling_gateway import CinemaRollingGateway
             address = str(os.getenv("DANK_CINEMA_ROLLING_ENDPOINT", "")).strip()
@@ -389,9 +395,10 @@ class TorrentMediaManager:
             self.rolling_gateway = CinemaRollingGateway(
                 base_url=address,
                 cache_dir=self.root / "rolling-pieces",
-                cache_budget_bytes=self.cache_budget_bytes,
+                cache_budget_bytes=self.rolling_memory_budget_bytes,
                 per_torrent_cache_bytes=max(
-                    16 * 1024 * 1024, self.cache_budget_bytes // (self.max_sessions * 4)
+                    4 * 1024 * 1024,
+                    self.rolling_memory_budget_bytes // (self.max_sessions * 4),
                 ),
                 max_torrents=self.max_sessions,
             )
@@ -749,7 +756,7 @@ class TorrentMediaManager:
     def _committed_file_bytes(self, *, exclude_token: str = "") -> int:
         excluded = str(exclude_token or "")
         return sum(
-            max(0, int(self.rolling_gateway.per_torrent_bytes if getattr(session, "rolling_media", None) is not None and self.rolling_gateway is not None else getattr(session, "file_size", 0) or 0))
+            max(0, int(0 if getattr(session, "rolling_media", None) is not None else getattr(session, "file_size", 0) or 0))
             for token, session in self._sessions.items()
             if token != excluded
         )
@@ -1402,7 +1409,7 @@ class TorrentMediaManager:
             async with self._lock:
                 # Admission is serialized with session registration.
                 self._assert_disk_capacity(
-                    (self.rolling_gateway.per_torrent_bytes if self.rolling_gateway is not None else selected.size),
+                    (0 if self.rolling_gateway is not None else selected.size),
                     replace_token=replace_token,
                     lease_key=lease_key,
                 )
