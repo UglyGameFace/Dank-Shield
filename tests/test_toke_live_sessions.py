@@ -453,3 +453,12 @@ def test_host_extension_is_bounded_and_survives_reads(isolated_sessions):
         closed, error = await toke_sessions.extend(123, 456, minutes=15)
         assert closed is None and "ended" in error
     asyncio.run(run())
+
+
+def test_toke_draft_retains_session_specific_voice_override(isolated_sessions):
+    live.begin_capture(123, 456, 789, 999, "meeting up", voice_channel_id=556677)
+    pending = live.pending_for(123, 456)
+    assert pending is not None and pending.voice_channel_id == 556677
+    panel = live.TokeManageView(456, 123, 999)
+    labels = {getattr(button, "label", "") for button in panel.children}
+    assert {"+15 minutes", "+30 minutes", "Close"} <= labels
