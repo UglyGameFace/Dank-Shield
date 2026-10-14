@@ -159,7 +159,7 @@ class CinemaRollingGateway:
         hash_key = self._safe_hash(info_hash)
         if source_torrent_file is not None:
             source_path = source_torrent_file.resolve(strict=True)
-            if not source_path.is_file() or source_path.suffix != ".torrent":
+            if not (source_path.is_file() and source_path.suffix == ".torrent" and source_path.is_relative_to(self.cache_dir.parent)):
                 raise ValueError("Unapproved local torrent metadata file.")
             link = source_path.as_uri()
         else:
@@ -176,31 +176,44 @@ class CinemaRollingGateway:
                 raise RollingGatewayUnavailable("Rolling engine did not accept this source.") from exc
             if not isinstance(item, dict) or self._safe_hash(item.get("hash")) != hash_key:
                 raise RollingGatewayUnavailable("Rolling engine returned a different torrent identity.")
-            # Magnet metadata may arrive asynchronously; an index is only
-            # trusted after a file path and 64-bit size match.
-            deadline = asyncio.get_running_loop().time() + 30.0
-            while True:
-                info = await self._post("/torrents", {"action": "get", "hash": hash_key})
-                if not isinstance(info, dict):
-                    raise RollingGatewayUnavailable("Rolling torrent disappeared during metadata discovery.")
-                files = info.get("file_stats") or []
-                matched = [
-                    row for row in files if isinstance(row, dict)
-                    and str(row.get("path") or "") == expected_file_path
-                    and int(row.get("length") or 0) == int(expected_file_size)
-                    and int(row.get("id") or 0) > 0
-                ]
-                if len(matched) == 1:
-                    media = RollingMedia(
-                        info_hash=hash_key,
-                        file_index=int(matched[0]["id"]),
-                        file_size=int(expected_file_size),
-                    )
-                    self._active_hashes.add(hash_key)
-                    return media
-                if asyncio.get_running_loop().time() >= deadline:
-                    raise RollingGatewayUnavailable("Rolling metadata did not match the selected Cinema file.")
-                await asyncio.sleep(0.5)
+            try:
+                media = await self.select_file(
+                    hash_key,
+                    expected_file_path=expected_file_path,
+                    expected_file_size=expected_file_size,
+                )
+            except Exception:
+                # A torrent is not left running if its files do not match the
+                # Cinema-approved selection. Any cleanup error fails closed.
+                await self._post("/torrents", {"action": "rem", "hash": hash_key})
+                raise
+            self._active_hashes.add(hash_key)
+            return media
+
+    async def select_file(
+        self, info_hash: str, *, expected_file_path: str, expected_file_size: int,
+    ) -> RollingMedia:
+        hash_key = self._safe_hash(info_hash)
+        deadline = asyncio.get_running_loop().time() + 30.0
+        while True:
+            info = await self._post("/torrents", {"action": "get", "hash": hash_key})
+            if not isinstance(info, dict) or self._safe_hash(info.get("hash")) != hash_key:
+                raise RollingGatewayUnavailable("Rolling torrent metadata is unavailable.")
+            matched = [
+                row for row in info.get("file_stats", []) if isinstance(row, dict)
+                and str(row.get("path") or "") == expected_file_path
+                and int(row.get("length") or 0) == int(expected_file_size)
+                and int(row.get("id") or 0) > 0
+            ]
+            if len(matched) == 1:
+                return RollingMedia(
+                    info_hash=hash_key,
+                    file_index=int(matched[0]["id"]),
+                    file_size=int(expected_file_size),
+                )
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RollingGatewayUnavailable("Rolling metadata did not match the selected Cinema file.")
+            await asyncio.sleep(0.5)
 
     async def remove(self, media: RollingMedia) -> None:
         hash_key = self._safe_hash(media.info_hash)
