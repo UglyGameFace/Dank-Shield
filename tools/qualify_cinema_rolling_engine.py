@@ -173,7 +173,8 @@ def request_json(base, path, payload):
         base + path, data=body,
         headers={"Content-Type": "application/json"}, method="POST",
     ), timeout=15) as response:
-        return json.loads(response.read()) if response.status != 204 else None
+        payload = response.read()
+        return json.loads(payload) if payload else None
 
 
 def port_free():
