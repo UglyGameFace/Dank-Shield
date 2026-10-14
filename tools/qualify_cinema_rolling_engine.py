@@ -234,14 +234,17 @@ def main():
         cache_dir = root / "piece-cache"
         cache_dir.mkdir()
         # Only on loopback; never reachable via Cinema's public signed route.
+        log_path = root / "engine-stderr.log"
+        engine_log = log_path.open("wb")
         proc = subprocess.Popen([
             binary, "--port", str(port), "--ip", "127.0.0.1",
             "--path", str(runtime_dir), "--torrent-addr", "127.0.0.1:0",
-        ], cwd=str(root), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ], cwd=str(root), stdout=engine_log, stderr=subprocess.STDOUT)
         try:
             for _ in range(60):
                 if proc.poll() is not None:
-                    raise AssertionError("TorrServer exited during startup")
+                    engine_log.flush()
+                    raise AssertionError("TorrServer exited during startup: " + log_path.read_text(errors="replace")[-7000:])
                 try:
                     settings = request_json(base, "/settings", {"action": "get"})
                     break
@@ -303,6 +306,7 @@ def main():
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=5)
+            engine_log.close()
 
 
 if __name__ == "__main__":
