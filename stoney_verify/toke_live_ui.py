@@ -624,7 +624,10 @@ class TokeCheersView(discord.ui.View):
         if interaction.guild is None or interaction.message is None:
             return await interaction.response.send_message("This sesh is unavailable.", ephemeral=True)
         await interaction.response.defer(ephemeral=True, thinking=True)
-        session = await toke_sessions.get(interaction.guild.id, interaction.message.id)
+        try:
+            session = await toke_sessions.get(interaction.guild.id, interaction.message.id)
+        except (OSError, ValueError):
+            return await interaction.edit_original_response(content="The sesh manager is temporarily unavailable.")
         if not session or not session.get("active", False):
             return await interaction.edit_original_response(content="This sesh has ended.")
         if interaction.user.id != int(session["starter_id"]) and not getattr(interaction.user.guild_permissions, "manage_guild", False):
@@ -668,7 +671,12 @@ class TokeManageView(discord.ui.View):
 
     async def _extend(self, interaction: discord.Interaction, minutes: int) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
-        session = await toke_sessions.get(self.guild_id, self.message_id)
+        try:
+            session = await toke_sessions.get(self.guild_id, self.message_id)
+        except (OSError, ValueError):
+            return await interaction.edit_original_response(
+                content="The sesh manager is temporarily unavailable.", view=None,
+            )
         if not session or not session.get("active", False):
             return await interaction.edit_original_response(content="This sesh has ended.", view=None)
         if interaction.user.id != int(session["starter_id"]) and not getattr(interaction.user.guild_permissions, "manage_guild", False):
