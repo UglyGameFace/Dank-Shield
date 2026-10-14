@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 
+from stoney_verify.postgres_storage_budget import migration_database_budget_mb
 from stoney_verify.postgres_guild_config_shadow import (
     import_config_shadow, inspect_staged_config,
 )
@@ -40,7 +41,7 @@ def main() -> int:
                 print(json.dumps(result, sort_keys=True))
                 return 0
             expected = os.environ.get("DANK_MIGRATION_EXPECTED_DB", "").strip()
-            budget = int(os.environ.get("DANK_PG_STORAGE_BUDGET_MB", "0"))
+            budget = migration_database_budget_mb(os.environ)
             result = import_config_shadow(
                 connection, expected_database=expected, disk_budget_mb=budget
             )

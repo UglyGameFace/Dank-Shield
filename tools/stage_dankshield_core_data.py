@@ -15,6 +15,7 @@ import json
 import os
 from urllib.parse import urlparse
 
+from stoney_verify.postgres_storage_budget import migration_database_budget_mb
 from stoney_verify.core_data_stage import (
     DEFAULT_MAX_BYTES, SOURCE_KEYS, apply_stage, plan_source, rest_page_reader
 )
@@ -71,10 +72,11 @@ def main() -> int:
             or ""
         ).strip()
         expected_db = os.environ.get("DANK_MIGRATION_EXPECTED_DB", "").strip()
-        budget_str = os.environ.get("DANK_PG_STORAGE_BUDGET_MB", "").strip()
-        if not dsn or not expected_db or not budget_str:
-            raise ValueError("verified private destination and disk budget are required")
-        disk_budget = int(budget_str)
+        if not dsn or not expected_db:
+            raise ValueError("verified private destination required")
+        # The confirmed 10 GB Diamond plan is shared across apps, not
+        # dedicated to this DB. Require accounted-for other app usage.
+        disk_budget = migration_database_budget_mb(os.environ)
         import psycopg
         with psycopg.connect(
             dsn, connect_timeout=5, options="-c statement_timeout=15000"

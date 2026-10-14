@@ -10,6 +10,39 @@ from dataclasses import dataclass
 import os
 from typing import Any, Mapping
 
+# Discloud Diamond's confirmed shared plan allowance is 10 decimal GB,
+# NOT ten dedicated database GiB. This constant is used only by the explicit
+# private operator migration commands, never at Discord startup.
+DIAMOND_SHARED_STORAGE_BYTES = 10_000_000_000
+MIB = 1024 * 1024
+# An additional shared-pool reserve protects app files, new writes and WAL.
+SHARED_POOL_RESERVE_BYTES = 1024 * MIB
+
+
+def migration_database_budget_mb(environ: Mapping[str, str]) -> int:
+    """Require a verified DB earmark inside the *shared* Diamond allowance.
+
+    Other-file consumption is measured outside the target DB. Without that
+    operator-provided measurement, the apply path cannot assume the entire
+    10 GB plan belongs to PostgreSQL. All values use MiB (not decimal MB).
+    """
+    raw_target = str(environ.get("DANK_PG_STORAGE_BUDGET_MB") or "").strip()
+    raw_other = str(environ.get("DANK_PG_OTHER_APP_STORAGE_MIB") or "").strip()
+    if not raw_target or not raw_other:
+        raise ValueError("shared-storage usage and dedicated DB budget must be verified")
+    try:
+        budget_mb = int(raw_target)
+        other_mb = int(raw_other)
+    except ValueError:
+        raise ValueError("storage inputs must be integer MiB") from None
+    if budget_mb <= 0 or other_mb < 0:
+        raise ValueError("invalid positive DB budget or other app usage")
+    committed = (budget_mb + other_mb) * MIB + SHARED_POOL_RESERVE_BYTES
+    if committed > DIAMOND_SHARED_STORAGE_BYTES:
+        raise ValueError("database budget exceeds remaining shared Diamond storage")
+    return budget_mb
+
+
 DEFAULT_WARNING_FRACTION = 0.70
 DEFAULT_CRITICAL_FRACTION = 0.85
 MAX_TABLES = 12

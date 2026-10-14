@@ -129,3 +129,56 @@ def test_wrong_budget_format_is_rejected():
             "DANK_CORE_POSTGRES_DATABASE_URL": "postgresql://private",
             "DANK_PG_STORAGE_BUDGET_MB": "512 MB",
         })
+
+
+@pytest.mark.parametrize("budget_mb,other_app_mib", [
+    (512, 0), (4096, 1024), (5000, 2000),
+])
+def test_confirmed_10_decimal_gb_shared_storage_allows_earmarked_db_space(
+    budget_mb, other_app_mib,
+):
+    assert budget.migration_database_budget_mb({
+        "DANK_PG_STORAGE_BUDGET_MB": str(budget_mb),
+        "DANK_PG_OTHER_APP_STORAGE_MIB": str(other_app_mib),
+    }) == budget_mb
+
+
+def test_shared_storage_budget_never_treats_10gb_as_dedicated_db():
+    assert budget.DIAMOND_SHARED_STORAGE_BYTES == 10_000_000_000
+    assert budget.SHARED_POOL_RESERVE_BYTES == 1024 * 1024 * 1024
+    with pytest.raises(ValueError, match="remaining shared Diamond storage"):
+        budget.migration_database_budget_mb({
+            "DANK_PG_STORAGE_BUDGET_MB": "9000",
+            "DANK_PG_OTHER_APP_STORAGE_MIB": "0",
+        })
+    with pytest.raises(ValueError, match="remaining shared Diamond storage"):
+        budget.migration_database_budget_mb({
+            "DANK_PG_STORAGE_BUDGET_MB": "7000",
+            "DANK_PG_OTHER_APP_STORAGE_MIB": "2000",
+        })
+
+
+@pytest.mark.parametrize("env", [
+    {},
+    {"DANK_PG_STORAGE_BUDGET_MB": "512"},
+    {"DANK_PG_OTHER_APP_STORAGE_MIB": "0"},
+    {"DANK_PG_STORAGE_BUDGET_MB": "512", "DANK_PG_OTHER_APP_STORAGE_MIB": "-1"},
+    {"DANK_PG_STORAGE_BUDGET_MB": "0", "DANK_PG_OTHER_APP_STORAGE_MIB": "0"},
+    {"DANK_PG_STORAGE_BUDGET_MB": "512MB", "DANK_PG_OTHER_APP_STORAGE_MIB": "0"},
+])
+def test_shared_storage_migration_fails_closed_without_verified_accounting(env):
+    with pytest.raises(ValueError):
+        budget.migration_database_budget_mb(env)
+
+
+def test_all_explicit_migration_apply_commands_use_one_storage_authority():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    for path in (
+        "tools/stage_dankshield_core_data.py",
+        "tools/materialize_dankshield_pg_config.py",
+    ):
+        text = (root / path).read_text("utf-8")
+        assert "migration_database_budget_mb(os.environ)" in text
+        assert "DANK_PG_STORAGE_BUDGET_MB" not in text
