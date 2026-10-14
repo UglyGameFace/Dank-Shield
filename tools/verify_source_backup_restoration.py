@@ -20,6 +20,7 @@ from typing import Any
 from stoney_verify.source_pg_backup import (
     _iter_verified_plaintext, _sha256_file, verify_archive_toc,
 )
+from stoney_verify.core_data_stage import SOURCE_KEYS
 
 EXPECTED_REPO = "UglyGameFace/Dank-Shield"
 EXPECTED_RESTORE_DB = "dank_source_recovery_drill"
@@ -190,6 +191,74 @@ def _stream_restore(path: Path, passphrase: str, expected_sha256: str) -> int:
         proc.wait(timeout=10)
 
 
+def _staging_candidate_inventory(conn: Any) -> dict[str, Any]:
+    """Read-only checks of the *existing* 16-table migration allowlist.
+
+    Counts and key-integrity flags only; nothing here proves the table belongs
+    to Dank Shield, represents live source state, or authorizes migration.
+    Missing/unsafe candidates are reported explicitly instead of silently
+    treating absent tables as empty. No user data is returned to CI logs.
+    """
+    from psycopg import sql
+
+    results: dict[str, dict[str, Any]] = {}
+    for table, keys in SOURCE_KEYS.items():
+        # The only identifiers are the fixed audited constants from
+        # core_data_stage; never take table/column names from workflow input.
+        rel = conn.execute(
+            "select c.oid from pg_class c join pg_namespace n "
+            "on n.oid=c.relnamespace where n.nspname='public' "
+            "and c.relname=%s and c.relkind in ('r','p')",
+            (table,),
+        ).fetchone()
+        if rel is None:
+            results[table] = {"status": "missing"}
+            continue
+        attributes = {
+            str(row[0]) for row in conn.execute(
+                "select attname from pg_attribute "
+                "where attrelid=%s and attnum>0 and not attisdropped",
+                (rel[0],),
+            ).fetchall()
+        }
+        if any(key not in attributes for key in keys):
+            results[table] = {"status": "missing_key_columns"}
+            continue
+        target = sql.SQL("{}.{}").format(
+            sql.Identifier("public"), sql.Identifier(table)
+        )
+        safe_keys = [sql.Identifier(key) for key in keys]
+        row_count = int(conn.execute(
+            sql.SQL("select count(*)::bigint from {}").format(target)
+        ).fetchone()[0])
+        null_condition = sql.SQL(" OR ").join(
+            sql.SQL("{} IS NULL").format(key) for key in safe_keys
+        )
+        null_keys = conn.execute(
+            sql.SQL("select exists(select 1 from {} where {} limit 1)").format(
+                target, null_condition
+            )
+        ).fetchone()[0]
+        duplicate_keys = conn.execute(
+            sql.SQL(
+                "select exists(select 1 from {} group by {} "
+                "having count(*) > 1 limit 1)"
+            ).format(target, sql.SQL(", ").join(safe_keys))
+        ).fetchone()[0]
+        results[table] = {
+            "status": ("invalid_keys" if null_keys or duplicate_keys
+                       else "keys_valid"),
+            "rows": row_count,
+            "null_keys_present": bool(null_keys),
+            "duplicate_keys_present": bool(duplicate_keys),
+        }
+    return {
+        "source_snapshot_only": True,
+        "cutover_authorized": False,
+        "candidate_tables": results,
+    }
+
+
 def _restore_inventory() -> dict[str, Any]:
     import psycopg
     # Fixed aggregate-only audit; no rows, guild IDs, user records or
@@ -198,7 +267,9 @@ def _restore_inventory() -> dict[str, Any]:
         "host=127.0.0.1 port=5432 "
         f"dbname={EXPECTED_RESTORE_DB} connect_timeout=10",
         user=os.environ["PGUSER"], password=os.environ["PGPASSWORD"],
+        options="-c statement_timeout=20000",
     ) as conn:
+        conn.execute("set transaction read only")
         schema_counts = conn.execute(
             "select table_schema,count(*)::int "
             "from information_schema.tables "
@@ -226,11 +297,13 @@ def _restore_inventory() -> dict[str, Any]:
                     )
                 ).fetchone()
                 restored_tables[table] = int(result[0])
+        candidate_inventory = _staging_candidate_inventory(conn)
     if any(v is None for v in restored_tables.values()):
         raise RecoveryDrillError("critical_dank_tables_missing_after_restore")
     return {
         "schema_table_counts": {str(k): int(n) for k, n in schema_counts},
         "critical_table_row_counts": restored_tables,
+        "staging_candidate_inventory": candidate_inventory,
     }
 
 
