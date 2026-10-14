@@ -980,7 +980,7 @@ def _setting_embed(settings: Mapping[str, Any]) -> discord.Embed:
             f"**Show participant names:** {'Yes' if settings['show_member_names'] else 'No'}\n"
             f"**Default voice:** {f'<#{voice_id}>' if voice_id else 'None (use starter voice if connected)'}\n"
             f"**Empty VC auto-close:** "
-            f"{f'{settings.get('empty_vc_end_minutes', 0)} min after the room empties' if settings.get('empty_vc_end_minutes', 0) else 'Disabled (default)'}"
+            f"{str(settings.get('empty_vc_end_minutes', 0)) + ' min after the room empties' if settings.get('empty_vc_end_minutes', 0) else 'Disabled (default)'}"
         ),
         color=discord.Color.green(),
     )
