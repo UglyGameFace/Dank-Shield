@@ -36,7 +36,7 @@ assert len(PATTERN) == PIECE_BYTES
 PIECE_HASH = hashlib.sha1(PATTERN).digest()
 PROOF_RANGE_BYTES = 64 * 1024
 TRACKER_INTERVAL = 2
-TIMEOUT_SECONDS = 105
+TIMEOUT_SECONDS = 25
 
 
 def bencode(value):
@@ -72,6 +72,7 @@ class SyntheticPeer(socketserver.ThreadingTCPServer):
         super().__init__(("127.0.0.1", 0), PeerHandler)
         self.info_hash = info_hash
         self.requests = Counter()
+        self.connections = 0
         self.requests_lock = threading.Lock()
 
     def piece_requests(self, index):
@@ -82,7 +83,9 @@ class SyntheticPeer(socketserver.ThreadingTCPServer):
 class PeerHandler(socketserver.BaseRequestHandler):
     def handle(self):
         sock = self.request
-        sock.settimeout(60)
+        with self.server.requests_lock:
+            self.server.connections += 1
+        sock.settimeout(40)
         try:
             header = receive_exact(sock, 68)
             if header[0] != 19 or header[1:20] != b"BitTorrent protocol":
@@ -198,7 +201,8 @@ def stream_once(base, torrent_url, offset, report):
     url = (base + "/stream/proof.mkv?link=" + quote(torrent_url, safe="") +
            "&index=1&play")
     last = None
-    for attempt in range(3):
+    print(f'QUALIFY range bytes={offset}-{end}', flush=True)
+    for attempt in range(2):
         try:
             with urlopen(Request(url, headers={
                 "Range": f"bytes={offset}-{end}"
@@ -218,6 +222,7 @@ def stream_once(base, torrent_url, offset, report):
                            "bytes": len(data)})
             return
         except (HTTPError, URLError, TimeoutError, OSError) as error:
+            print(f'QUALIFY range attempt {attempt + 1} failed: {type(error).__name__}', flush=True)
             last = error
             time.sleep(min(5, attempt + 1))
     raise AssertionError(f"synthetic range unavailable offset={offset}: {last}")
@@ -277,6 +282,7 @@ def main():
                         50 * 1024 ** 3, 3 * 1024 ** 3]
             report = []
             for position in sequence:
+                print(f'QUALIFY peer connections={peer.connections}', flush=True)
                 stream_once(base, torrent_uri, position, report)
                 used = allocated_bytes(cache_dir)
                 # Allow a bounded 4x transient margin for in-flight pieces.
