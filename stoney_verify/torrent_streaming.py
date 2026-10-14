@@ -1283,11 +1283,6 @@ class TorrentMediaManager:
             raise ValueError("This torrent does not contain a supported playable video file.")
 
         selected = candidates[0]
-        self._assert_disk_capacity(
-            selected.size,
-            replace_token=replace_token,
-            lease_key=lease_key,
-        )
         piece_length = int(info.piece_length())
         if piece_length <= 0:
             raise RuntimeError("Torrent metadata reported an invalid piece length.")
@@ -1335,6 +1330,14 @@ class TorrentMediaManager:
         self._select_candidate(session, selected)
 
         async with self._lock:
+            # File-size admission and registration must share one lock:
+            # simultaneous torrent metadata completions cannot both reserve
+            # the same remaining cache budget.
+            self._assert_disk_capacity(
+                selected.size,
+                replace_token=replace_token,
+                lease_key=lease_key,
+            )
             self._sessions[token] = session
             self._identity_index[source_identity] = token
         self._record_session_memory_observation(start_rss_mb)
