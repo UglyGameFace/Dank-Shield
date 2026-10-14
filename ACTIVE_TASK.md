@@ -1,3 +1,60 @@
+# Active Task Lock — /toke private reminder UX and delivery (2026-10-14)
+
+**Active user directive:** Continue complete Dank Shield /toke overhaul, audit
+for further improvements and avoid stopping after a small UI fix. Explicit
+FORCE SWITCH from Discloud PG17 migration remains in effect; no database
+cutover, migration, irreversible DB work or unrelated features permitted.
+
+**Verified baseline:** PRs #560, #561 and #565 merged to `main` with applicable
+CI green. Exact current slice base `main@dc2944e1cab97b0ab98fb6f953fee68a39745346`.
+Work branch: `feat/toke-opt-in-reminders-20261014`.
+Merged/deployed are different: Android/Discloud live acceptance not verified.
+
+**Current slice:** A one-click member-driven **Remind Me** toggle on both
+regular embeds and inline-media layouts, with ephemeral consent/cancellation.
+Only users with the configured Toke community/notification role may opt in.
+A private DM is attempted once around ten minutes before the scheduled end
+(only when >2 minutes remain, and after the session has existed one minute).
+No unsolicited role re-pings, no broadcast follow-up, no new channels,
+no stored message bodies. At most 20 unique reminder subscriptions per
+session and at most one globally claimed member every existing 15-second
+maintenance sweep (~4 attempted DMs/min). The claim is persisted atomically
+before the Discord request, preventing repeats across restarts, permission
+changes or delivery failures. Guild membership, role possession, session
+liveness and delivery time are rechecked before the DM. Disabled DMs fail
+quietly, not through retry storms. Reminders do not extend the session and
+an extension does not reset the one-attempt cap. `/toke` remains usable
+without choosing reminders. Legacy sessions have no recipients unless
+a member explicitly opts in.
+
+**Independent acceptance gates:** Focused and repository-wide CI, Discord
+component row count, media preservation, single-process persistence,
+role revocation, ended/expired session suppression, consent cancellation,
+member departed case, duplicate recovery and direct Android/Discloud canary.
+This PR is not production-ready until green and deployed+verified separately.
+
+**Further audit findings and ordered backlog (same one task):**
+1) The JSON store still full-reads and atomically rewrites all guild sessions
+   using one in-process `asyncio.Lock`. Not suitable for concurrent
+   processes; cannot claim 10,000-guild reliability. Need bounded indexed
+   store and verified PG17 migration later, without any parallel cutover.
+2) VC gateway events still iterate `all_active(guild)` and issue card edits
+   for every matching session. Introduce bounded active-channel indexing,
+   debounce fairness, provider REST-budget measurements and no-op suppression.
+3) Configurable non-intrusive per-guild notification cadence/quiet-hour
+   policy, private presets and opt-out controls; do not add noisy @role DMs.
+4) Accessibility/mobile, invite/member role changes, orphaned channels,
+   restart exact-once card recovery and sustainable retention/metrics.
+5) Run actual Android/Discord/Discloud canary and load tests. Do not
+   equate green CI with production acceptance.
+
+**Guardrails:** Do not edit core Discloud/Supabase workflows, Discord
+application identity, Voice Safety, Cinema or Share Router. Preserve
+privacy and existing /toke artwork and functionality; never use monkey
+patches or hidden fallback. Advance only after exact-head CI review.
+
+---
+
 # Active Task Lock — /toke voice lifecycle and opt-in idle policy (2026-10-14)
 
 **Active task:** Continue the user-authorized complete Dank Shield /toke
