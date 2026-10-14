@@ -284,6 +284,7 @@ async def prove_rolling_gateway_http(
 
 def main():
     binary = os.environ.get("DANK_TEST_TORRSERVER_BINARY", "")
+    memory_mode = os.environ.get("DANK_QUALIFY_MEMORY_MODE") == "1"
     if not binary or not Path(binary).is_file():
         raise SystemExit("DANK_TEST_TORRSERVER_BINARY must be set by isolated CI")
     if not str(lt.version).startswith("2.1.1"):
@@ -301,6 +302,21 @@ def main():
                 binary, "--port", str(api_port), "--ip", "127.0.0.1",
                 "--path", str(config), "--torrentaddr", "127.0.0.1:0",
             ], cwd=str(root), stdout=engine_log, stderr=subprocess.STDOUT)
+            rss_peak = [0]
+            stop_rss = threading.Event()
+            def sample_rss():
+                while not stop_rss.is_set():
+                    try:
+                        status = Path(f"/proc/{engine.pid}/status").read_text()
+                        for line in status.splitlines():
+                            if line.startswith("VmRSS:"):
+                                rss_peak[0] = max(rss_peak[0], int(line.split()[1]) * 1024)
+                                break
+                    except (FileNotFoundError, OSError, ValueError):
+                        pass
+                    stop_rss.wait(0.05)
+            rss_sampler = threading.Thread(target=sample_rss, daemon=True)
+            rss_sampler.start()
             try:
                 for _ in range(60):
                     if engine.poll() is not None:
@@ -318,8 +334,8 @@ def main():
 
                 sets.update({
                     "CacheSize": CACHE_BYTES,
-                    "UseDisk": True,
-                    "TorrentsSavePath": str(cache),
+                    "UseDisk": not memory_mode,
+                    "TorrentsSavePath": "" if memory_mode else str(cache),
                     "RemoveCacheOnDrop": True,
                     "ResponsiveMode": False,
                     "ReaderReadAHead": 50,
@@ -333,7 +349,7 @@ def main():
                 post_json(base, "/settings", {"action": "set", "sets": sets})
                 verified_sets = post_json(base, "/settings", {"action": "get"})
                 if not (
-                    verified_sets.get("UseDisk") is True
+                    verified_sets.get("UseDisk") is (not memory_mode)
                     and verified_sets.get("CacheSize") == CACHE_BYTES
                 ):
                     raise AssertionError("real engine rejected cache settings")
@@ -357,8 +373,10 @@ def main():
                 for offset in POSITIONS:
                     results.append(check_range(base, uri, offset))
                     used = allocated_bytes(cache)
-                    if used > CACHE_BYTES * 4:
-                        raise AssertionError(f"cache allocated {used} bytes")
+                    if memory_mode and used != 0:
+                        raise AssertionError(f"memory-only engine wrote {used} media cache bytes to disk")
+                    if not memory_mode and used > CACHE_BYTES * 4:
+                        raise AssertionError(f"disk cache allocated {used} bytes, above tested margin")
 
                 uploaded_before_seek = int(seed.status().total_upload)
                 results.append(check_range(base, uri, POSITIONS[0]))
@@ -368,12 +386,13 @@ def main():
                         "backward seek did not force new peer data transfer"
                     )
                 used = allocated_bytes(cache)
-                if used > CACHE_BYTES * 4:
-                    raise AssertionError(
-                        f"cache exceeded 4x transient bound: {used}"
-                    )
+                if memory_mode and used != 0:
+                    raise AssertionError(f"memory-only engine wrote {used} media cache bytes")
+                if not memory_mode and used > CACHE_BYTES * 4:
+                    raise AssertionError(f"disk cache exceeded 4x transient bound: {used}")
                 print(json.dumps({
-                    "result": "real_engine_qualification_only",
+                    "peak_worker_rss_bytes": rss_peak[0],
+                    "result": "real_engine_memory_only" if memory_mode else "real_engine_qualification_only",
                     "logical_movie_bytes": FILE_BYTES,
                     "configured_cache_bytes": CACHE_BYTES,
                     "actual_disk_bytes": used,
@@ -382,10 +401,11 @@ def main():
                         uploaded_after_seek - uploaded_before_seek,
                     "verified_ranges": results,
                 }, sort_keys=True), flush=True)
-                import asyncio
-                asyncio.run(prove_rolling_gateway_http(
-                    base=base, root=root, source=source, infohash=infohash,
-                ))
+                if not memory_mode:
+                    import asyncio
+                    asyncio.run(prove_rolling_gateway_http(
+                        base=base, root=root, source=source, infohash=infohash,
+                    ))
             except Exception:
                 engine_log.flush()
                 print(
@@ -401,6 +421,10 @@ def main():
                 )
                 raise
             finally:
+                stop_rss.set()
+                rss_sampler.join(timeout=2)
+                if memory_mode and rss_peak[0] > 512 * 1024 * 1024:
+                    print(f"QUALIFY MEMORY RSS EXCEEDED: {rss_peak[0]}", flush=True)
                 engine.terminate()
                 try:
                     engine.wait(timeout=10)
