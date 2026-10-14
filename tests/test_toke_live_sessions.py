@@ -462,3 +462,29 @@ def test_toke_draft_retains_session_specific_voice_override(isolated_sessions):
     panel = live.TokeManageView(456, 123, 999)
     labels = {getattr(button, "label", "") for button in panel.children}
     assert {"+15 minutes", "+30 minutes", "Close"} <= labels
+
+
+def test_toke_extension_rechecks_host_authority_at_click_time(monkeypatch):
+    async def run():
+        events = []
+        async def read(_guild_id, _message_id):
+            return {**_session(), "active": True}
+        async def should_not_extend(*args, **kwargs):
+            raise AssertionError("unauthorized extension must not reach the store")
+        async def defer(**kwargs):
+            events.append("deferred")
+        async def edit_original_response(**kwargs):
+            events.append(kwargs.get("content", ""))
+        monkeypatch.setattr(toke_sessions, "get", read)
+        monkeypatch.setattr(toke_sessions, "extend", should_not_extend)
+        view = live.TokeManageView(actor_id=222, guild_id=123, message_id=456)
+        member = SimpleNamespace(id=222, guild_permissions=SimpleNamespace(manage_guild=False))
+        interaction = SimpleNamespace(
+            guild=SimpleNamespace(id=123), user=member,
+            response=SimpleNamespace(defer=defer),
+            edit_original_response=edit_original_response,
+        )
+        await view._extend(interaction, 15)
+        assert events[0] == "deferred"
+        assert "no longer manage" in events[1]
+    asyncio.run(run())
