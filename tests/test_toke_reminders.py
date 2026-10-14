@@ -223,3 +223,74 @@ def test_rendered_media_maintains_five_buttons_per_row():
     rows = [node for node in view.walk_children() if isinstance(node, discord.ui.ActionRow)]
     assert len(rows) == 2
     assert [len(row.children) for row in rows] == [4, 5]
+
+
+def test_blocked_dm_does_not_retry_or_spam(isolated_store):
+    async def run():
+        await toke_sessions.save_new(_session())
+        await toke_sessions.toggle_reminder(123, 456, 101)
+        _due()
+        attempts = []
+        async def blocked(_content, **_kwargs):
+            attempts.append("blocked")
+            raise discord.Forbidden(
+                SimpleNamespace(status=403, reason="Forbidden"), "DM blocked",
+            )
+        member = SimpleNamespace(
+            id=101, bot=False, roles=[SimpleNamespace(id=22)], send=blocked,
+        )
+        guild = SimpleNamespace(get_member=lambda _uid: member)
+        bot = SimpleNamespace(is_ready=lambda: True, get_guild=lambda _gid: guild)
+        await live._deliver_one_toke_reminder(bot)
+        await live._deliver_one_toke_reminder(bot)
+        assert attempts == ["blocked"]
+        assert (await toke_sessions.get(123, 456))["reminder_attempted_ids"] == [101]
+    asyncio.run(run())
+
+
+def test_automatic_room_closure_precedes_personal_dm(isolated_store, monkeypatch):
+    async def run():
+        await toke_sessions.save_new({
+            **_session(mins=8), "voice_channel_id": 404, "empty_vc_end_minutes": 5,
+        })
+        await toke_sessions.toggle_reminder(123, 456, 101)
+        data = toke_sessions._read()
+        data["123:456"]["created_at"] = time.time() - 1800
+        toke_sessions._write(data)
+        await toke_sessions.reconcile_voice(123, 456, {111})
+        await toke_sessions.reconcile_voice(123, 456, set())
+        data = toke_sessions._read()
+        data["123:456"]["empty_voice_since"] = time.time() - 6 * 60
+        toke_sessions._write(data)
+
+        class Voice:
+            members = []
+        monkeypatch.setattr(live.discord, "VoiceChannel", Voice)
+        guild = SimpleNamespace(
+            id=123, get_channel=lambda ch: Voice() if ch == 404 else None,
+            get_member=lambda _uid: None,
+        )
+        messages = []
+        class Bot:
+            closed = False
+            intents = SimpleNamespace(voice_states=True)
+            def is_closed(self):
+                return self.closed
+            def is_ready(self):
+                return True
+            def get_guild(self, gid):
+                return guild if gid == 123 else None
+        bot = Bot()
+        async def sleep(_delay):
+            bot.closed = True
+        async def refresh(_bot, state, **_kwargs):
+            messages.append(state.get("close_reason"))
+            return True
+        monkeypatch.setattr(live.asyncio, "sleep", sleep)
+        monkeypatch.setattr(live, "refresh_card", refresh)
+        await live._expire_and_refresh(bot)
+        latest = await toke_sessions.get(123, 456)
+        assert not latest["active"] and latest["close_reason"] == "voice_idle"
+        assert messages and messages[0] == "voice_idle"
+        assert latest["reminder_attempted_ids"] == []
+    asyncio.run(run())
