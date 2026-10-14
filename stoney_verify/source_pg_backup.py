@@ -238,22 +238,44 @@ def _iter_verified_plaintext(path: Path, passphrase: str) -> Iterable[bytes]:
 
 
 def verify_archive_toc(path: Path, passphrase: str) -> dict[str, Any]:
-    """Verify AES-GCM and custom-format TOC, WITHOUT doing a database restore."""
+    """Authenticate ALL ciphertext while checking the non-executing dump TOC.
+
+    pg_restore --list is allowed to stop reading stdin once it has consumed
+    the archive's table of contents. Large dumps then cause EPIPE when the
+    producer writes the remaining encrypted archive payload to its stdin.
+    That is *not* a dump verification failure if pg_restore exits cleanly.
+    We MUST still decrypt and GCM-authenticate the complete archive after
+    pg_restore has closed its input, or a corrupted trailing payload could
+    falsely be reported as verified.
+    """
     check = subprocess.Popen(
         ["pg_restore", "--list"], stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     total = 0
+    consumer_closed = False
     try:
         assert check.stdin is not None
         for data in _iter_verified_plaintext(path, passphrase):
             total += len(data)
-            check.stdin.write(data)
-        check.stdin.close()
+            if not consumer_closed:
+                try:
+                    check.stdin.write(data)
+                except BrokenPipeError:
+                    # pg_restore -l may exit after reading only the TOC.
+                    # Keep authenticating the rest; check exit code below.
+                    consumer_closed = True
+        try:
+            check.stdin.close()
+        except BrokenPipeError:
+            consumer_closed = True
+        # An early EOF with exit 0 is normal for non-executing TOC listing.
+        # Any nonzero status, even after EPIPE, remains a hard failure.
         if check.wait(timeout=90) != 0:
             raise RuntimeError("pg_restore rejected custom-format archive TOC")
     except Exception:
-        check.kill()
+        if check.poll() is None:
+            check.kill()
         check.wait()
         raise
     return {
