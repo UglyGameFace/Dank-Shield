@@ -1400,6 +1400,9 @@ async def _expire_and_refresh(bot: Any) -> None:
                     if guild is not None else None
                 )
                 if not isinstance(voice, (discord.VoiceChannel, discord.StageChannel)):
+                    await toke_sessions.defer_idle_voice_check(
+                        int(session["guild_id"]), int(session["message_id"])
+                    )
                     continue
                 present = any(not getattr(m, "bot", False) for m in (voice.members or []))
                 if present:
