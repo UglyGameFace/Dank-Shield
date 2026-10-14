@@ -1842,7 +1842,7 @@ def test_crash_recovery_does_not_follow_symlink_or_touch_noncanonical_paths(
 
 def test_only_one_live_process_owns_the_torrent_cache(monkeypatch, tmp_path: Path):
     manager = _manager(monkeypatch, tmp_path)
-    assert manager._cache_owner_fd >= 0
+    assert manager._cache_owner_file.fileno() >= 0
     with pytest.raises(RuntimeError, match="cache is in use"):
         _manager(monkeypatch, tmp_path)
 
