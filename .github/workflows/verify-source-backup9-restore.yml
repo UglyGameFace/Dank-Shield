@@ -1,0 +1,129 @@
+# Manual restoration of the EXACT encrypted shared Supabase Backup #9.
+# The downloaded artifact is decrypted ONLY inside an ephemeral GitHub runner,
+# and SQL is restored ONLY into a disposable PostgreSQL 17 service container.
+# Never points at the existing Discloud database or Supabase.
+name: Verify Source Backup 9 Restore
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Run an isolated full restore of encrypted Backup #9 (no live DB writes)"
+        required: true
+        type: choice
+        options:
+          - VERIFY_BACKUP_9_ISOLATED_ONLY
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: verify-source-backup9-restore
+  cancel-in-progress: false
+
+jobs:
+  independent-restore:
+    name: Recover shared backup in disposable PostgreSQL 17
+    if: github.ref == 'refs/heads/main' && inputs.confirmation == 'VERIFY_BACKUP_9_ISOLATED_ONLY'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CI: "true"
+      GITHUB_REPOSITORY: UglyGameFace/Dank-Shield
+      DANK_RECOVERY_DISPOSABLE_PG17: YES_ISOLATED
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+      EXPECTED_BACKUP9_SHA256: 84acce40549855387ad04ddaaec41cf845fe12cf73a5e5e88282422eddb1f1c0
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Check out tested recovery code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up recovery-only Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install minimum offline recovery dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -q -r requirements-backup.txt "psycopg[binary]>=3.2,<4"
+
+      - name: Retrieve only encrypted artifact from successful Backup 9
+        uses: actions/download-artifact@v4
+        with:
+          name: dankshield-encrypted-supabase-source
+          repository: UglyGameFace/Dank-Shield
+          run-id: 38501909516
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/supabase-source-backup9
+
+      - name: Validate exact archived file without displaying its contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          archive_dir="$RUNNER_TEMP/supabase-source-backup9"
+          count=$(find "$archive_dir" -maxdepth 1 -type f -name '*.dsbak' | wc -l)
+          if [[ "$count" -ne 1 ]]; then
+            echo "::error::Expected exactly one encrypted .dsbak from Backup #9."
+            exit 2
+          fi
+          archive=$(find "$archive_dir" -maxdepth 1 -type f -name '*.dsbak' -print -quit)
+          chmod 0600 "$archive"
+          sha=$(sha256sum "$archive" | awk '{print $1}')
+          if [[ "$sha" != "$EXPECTED_BACKUP9_SHA256" ]]; then
+            echo "::error::Backup #9 SHA-256 mismatch. Abort; no restore attempted."
+            exit 2
+          fi
+          echo "Backup #9 encrypted checksum matches."
+
+      - name: Supply isolated PostgreSQL 17 archive-reader client
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/setup_pg17_backup_clients.sh "$RUNNER_TEMP/pg17-client"
+          echo "$RUNNER_TEMP/pg17-client" >> "$GITHUB_PATH"
+          docker pull postgres:17 >/dev/null
+          "$RUNNER_TEMP/pg17-client/pg_restore" --version
+
+      - name: Independently restore authenticated backup in ephemeral PostgreSQL 17
+        shell: bash
+        env:
+          DANK_BACKUP_PASSPHRASE: ${{ secrets.DANK_BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          archive=$(find "$RUNNER_TEMP/supabase-source-backup9" -maxdepth 1 -type f -name '*.dsbak' -print -quit)
+          python -m tools.verify_source_backup_restoration \
+            --encrypted-archive "$archive" \
+            --sha256 "$EXPECTED_BACKUP9_SHA256"
+
+      - name: Interpret restore result
+        if: success()
+        run: |
+          echo "Backup #9 fully restored in a disposable PostgreSQL 17 database."
+          echo "Preserve the independently downloaded encrypted backup and passphrase."
+          echo "This test never contacts your live DankShield-DB or original Supabase."
+          echo "Do not deploy, delete Supabase data, or switch bot storage yet."
