@@ -90,7 +90,7 @@ def gateway(url, cache_dir):
         base_url=url,
         cache_dir=cache_dir,
         cache_budget_bytes=256 * 1024 * 1024,
-        per_torrent_cache_bytes=64 * 1024 * 1024,
+        per_torrent_cache_bytes=16 * 1024 * 1024,
         max_torrents=4,
         max_parallel_ranges=4,
         max_per_guild_ranges=2,
@@ -99,7 +99,7 @@ def gateway(url, cache_dir):
 
 def settings(cache):
     return {
-        "CacheSize": 64 * 1024 * 1024,
+        "CacheSize": 16 * 1024 * 1024,
         "UseDisk": True,
         "RemoveCacheOnDrop": True,
         "DisableUPNP": True,
