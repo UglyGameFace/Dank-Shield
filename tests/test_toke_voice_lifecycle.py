@@ -194,8 +194,11 @@ def test_due_idle_worker_skips_missing_voice_and_closes_valid_empty_vc(storage, 
         monkeypatch.setattr(live, "refresh_card", refresh)
         class Bot:
             closed = False
+            intents = SimpleNamespace(voice_states=True)
             def is_closed(self):
                 return self.closed
+            def is_ready(self):
+                return True
             def get_guild(self, gid):
                 return guild if gid == 101 else None
         bot = Bot()
