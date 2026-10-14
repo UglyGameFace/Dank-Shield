@@ -30,15 +30,24 @@ jobs:
     timeout-minutes: 25
     services:
       postgres:
-        image: postgres:17
+        # Supabase's PG17 distribution includes supabase_vault and related
+        # extensions used by the real shared-source archive. Never use the
+        # standard postgres:17 image for the full-source recovery drill.
+        image: supabase/postgres:17.6.1.136
         env:
-          POSTGRES_USER: postgres
+          POSTGRES_USER: supabase_admin
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: postgres
+          POSTGRES_PORT: "5432"
+          PGPORT: "5432"
+          PGUSER: supabase_admin
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
+          PGHOST: /var/run/postgresql
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-cmd "pg_isready -U supabase_admin -d postgres -h localhost"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
@@ -48,7 +57,7 @@ jobs:
       DANK_RECOVERY_DISPOSABLE_PG17: YES_ISOLATED
       PGHOST: 127.0.0.1
       PGPORT: "5432"
-      PGUSER: postgres
+      PGUSER: supabase_admin
       PGPASSWORD: postgres
       PGDATABASE: postgres
       EXPECTED_BACKUP9_SHA256: 84acce40549855387ad04ddaaec41cf845fe12cf73a5e5e88282422eddb1f1c0
@@ -108,6 +117,38 @@ jobs:
           echo "$RUNNER_TEMP/pg17-client" >> "$GITHUB_PATH"
           docker pull postgres:17 >/dev/null
           "$RUNNER_TEMP/pg17-client/pg_restore" --version
+
+      - name: Verify disposable Supabase PG17 extensions and private database logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import psycopg
+
+          with psycopg.connect(
+              host="127.0.0.1", port=5432, user="supabase_admin",
+              dbname="postgres", password="postgres", connect_timeout=10,
+              autocommit=True,
+          ) as conn:
+              version = int(conn.execute("SHOW server_version_num").fetchone()[0])
+              if version // 10000 != 17:
+                  raise SystemExit("Isolated restore requires PostgreSQL 17")
+              extension = conn.execute(
+                  "SELECT 1 FROM pg_available_extensions WHERE name = 'supabase_vault'"
+              ).fetchone()
+              if extension is None:
+                  raise SystemExit("Supabase Vault is missing in the disposable PG17 image")
+              # GitHub prints service container logs on teardown. Prevent
+              # restore failures from logging statements with private data.
+              conn.execute("ALTER SYSTEM SET log_min_error_statement = 'panic'")
+              conn.execute("ALTER SYSTEM SET log_min_messages = 'fatal'")
+              conn.execute("SELECT pg_reload_conf()")
+              messages = conn.execute("SHOW log_min_messages").fetchone()[0]
+              statements = conn.execute("SHOW log_min_error_statement").fetchone()[0]
+              if messages != "fatal" or statements != "panic":
+                  raise SystemExit("Private restore logging safeguards not active")
+          print("Isolated Supabase PG17 extensions and private logging verified.")
+          PY
 
       - name: Independently restore authenticated backup in ephemeral PostgreSQL 17
         shell: bash
