@@ -243,3 +243,21 @@ def test_deferred_idle_check_clears_when_human_rejoins(storage):
         assert rejoined.get("idle_check_retry_at", 0) == 0
         assert rejoined["empty_voice_since"] == 0
     asyncio.run(run())
+
+
+def test_bot_only_voice_occupancy_does_not_hide_idle_warning(storage, monkeypatch):
+    class FakeVoice:
+        id = 404
+        mention = "<#404>"
+        members = [SimpleNamespace(id=999, bot=True)]
+    monkeypatch.setattr(live.discord, "VoiceChannel", FakeVoice)
+    async def run():
+        await toke_sessions.save_new(session(grace=5))
+        await toke_sessions.reconcile_voice(101, 202, {11})
+        state = await toke_sessions.reconcile_voice(101, 202, set())
+        guild = SimpleNamespace(get_channel=lambda cid: FakeVoice() if cid == 404 else None)
+        card = live.render_card(guild, state, discord.Embed(title="Toke Time"))
+        content = "\n".join(field.value for field in card.fields)
+        assert "VC occupants: 1" in content
+        assert "No humans in VC: auto-close" in content
+    asyncio.run(run())
