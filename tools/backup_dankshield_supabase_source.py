@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 from pathlib import Path
 
 from stoney_verify.source_pg_backup import (
@@ -71,6 +72,9 @@ def main() -> int:
         code = (
             exc.code if isinstance(exc, BackupFailure)
             else "preflight_input_rejected" if isinstance(exc, ValueError)
+            else "backup_subprocess_timeout"
+                if isinstance(exc, subprocess.TimeoutExpired)
+            else "archive_io_failed" if isinstance(exc, OSError)
             else "backup_failed_unclassified"
         )
         guidance = {
@@ -100,6 +104,10 @@ def main() -> int:
                 "The encrypted archive did not pass restore-TOC verification.",
             "pg_dump_failed_unclassified":
                 "Source pg_dump failed for an unknown reason; examine private connection settings.",
+            "backup_subprocess_timeout":
+                "A backup process timed out; inspect the private source network or archive size.",
+            "archive_io_failed":
+                "Local archive I/O or archive verification pipe failed; do not alter database credentials.",
             "preflight_input_rejected":
                 "Check exact source project ref, URI format, private output folder and password length.",
         }
