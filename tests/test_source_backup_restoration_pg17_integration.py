@@ -115,13 +115,15 @@ def test_supabase_recovery_service_can_create_vault_extension():
         assert conn.execute(
             "SELECT 1 FROM pg_available_extensions WHERE name = 'supabase_vault'"
         ).fetchone() is not None
-        # GitHub publishes service logs at teardown. The exact restore
-        # preflight must prevent private SQL statements from reaching them.
-        conn.execute("ALTER SYSTEM SET log_min_error_statement = 'panic'")
-        conn.execute("ALTER SYSTEM SET log_min_messages = 'fatal'")
-        conn.execute("SELECT pg_reload_conf()")
-        assert conn.execute("SHOW log_min_error_statement").fetchone()[0] == "panic"
-        assert conn.execute("SHOW log_min_messages").fetchone()[0] == "fatal"
+        # The real workflow configures per-role logging for future
+        # connections, where pg_restore will execute the private source SQL.
+        conn.execute("ALTER ROLE supabase_admin SET log_statement = 'none'")
+        conn.execute("ALTER ROLE supabase_admin SET log_min_error_statement = 'panic'")
+        conn.execute("ALTER ROLE supabase_admin SET log_min_messages = 'fatal'")
+    with psycopg.connect(dbname="postgres", **settings) as fresh:
+        assert fresh.execute("SHOW log_statement").fetchone()[0] == "none"
+        assert fresh.execute("SHOW log_min_error_statement").fetchone()[0] == "panic"
+        assert fresh.execute("SHOW log_min_messages").fetchone()[0] == "fatal"
     recovery._create_empty_restore_db()
     with psycopg.connect(
         dbname=recovery.EXPECTED_RESTORE_DB, autocommit=True, **settings
