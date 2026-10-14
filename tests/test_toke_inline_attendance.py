@@ -136,7 +136,7 @@ def test_inline_uploaded_gallery_has_single_full_width_media_and_reused_callback
     assert {"Cheers", "I'm Joining", "Withdraw", "Who's Coming?", "Remind Me", "Refresh", "Manage", "End Sesh", "Join VC"} <= {
         button.label for button in buttons
     }
-    assert len(buttons) == 8
+    assert len(buttons) == 9
     assert any(isinstance(x, discord.ui.TextDisplay) and "<@&10>" in x.content for x in nodes)
 
     dispatched = []
