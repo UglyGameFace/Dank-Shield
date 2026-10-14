@@ -486,6 +486,34 @@ on failure; only an authenticated archive with verified TOC can be uploaded.
 The GitHub Actions workflow remains manual, read-only on Supabase, and has
 no connection to the live voice bot or existing Discloud database.
 
+## Backup #6: large archive TOC pipe handling (2026-10-13)
+
+The owner triggered manual encrypted backup #6
+(`https://github.com/UglyGameFace/Dank-Shield/actions/runs/38496328485`).
+Earlier runs #2–5 consistently failed with
+`database_authentication_rejected`; #6 reached a different category,
+`backup_failed_unclassified`, after around 40 seconds in the encrypted
+archive step. This alone does not prove the source dump completed.
+
+A concrete code defect was found in `verify_archive_toc`: a large custom
+format `pg_dump` is streamed to `pg_restore --list`, but `pg_restore`
+may exit successfully after reading only its table of contents. Sending
+the **remaining** archive bytes to its closed stdin then raises
+`BrokenPipeError`, incorrectly rejecting a valid ciphertext archive.
+The verifier now handles early input close while continuing to GCM
+authenticate the **entire encrypted payload and final tag** and requiring
+`pg_restore --list` to exit **zero**. A failed TOC or tampered trailing
+payload is still always rejected. The tool also emits fixed redacted
+`archive_io_failed` and `backup_subprocess_timeout` codes for unrelated
+archive/timeout errors.
+
+This patch does NOT claim the previous #6 failure was definitely caused by
+the pipe; only a new exact-head test and an explicitly launched new manual
+backup can confirm the source-specific outcome. No plaintext source
+backup, database writes or voice-bot data alterations were performed.
+Do not reset shared Supabase database credentials as a substitute for
+fixing an archive verifier error.
+
 ## Deployment sequence
 
 1. Confirm the real disk limit/backups for the existing Discloud DB and the
