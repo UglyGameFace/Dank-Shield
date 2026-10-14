@@ -138,6 +138,7 @@ def local_services():
 
         class Tracker(BaseHTTPRequestHandler):
             def do_GET(self):
+                self.server.hits += 1
                 addr = socket.inet_aton("127.0.0.1")
                 compact = addr + struct.pack("!H", peer.server_address[1])
                 data = bencode({b"interval": TRACKER_INTERVAL,
@@ -151,6 +152,7 @@ def local_services():
                 pass
 
         tracker = ThreadingHTTPServer(tracker_address, Tracker)
+        tracker.hits = 0
         torrent_bytes = bencode({
             b"announce": (
                 f"http://127.0.0.1:{tracker.server_address[1]}/announce"
@@ -162,7 +164,7 @@ def local_services():
         threading.Thread(target=peer.serve_forever, daemon=True).start()
         threading.Thread(target=tracker.serve_forever, daemon=True).start()
         try:
-            yield root, torrent_file, peer
+            yield root, torrent_file, peer, tracker
         finally:
             tracker.shutdown()
             peer.shutdown()
@@ -232,7 +234,7 @@ def main():
     binary = os.environ.get("DANK_TEST_TORRSERVER_BINARY", "")
     if not binary or not Path(binary).is_file():
         raise SystemExit("Provide an existing pinned TorrServer binary in CI")
-    with local_services() as (root, torrent_file, peer):
+    with local_services() as (root, torrent_file, peer, tracker):
         port = port_free()
         base = f"http://127.0.0.1:{port}"
         runtime_dir = root / "private-config"
@@ -278,11 +280,13 @@ def main():
             assert state.get("CacheSize") == CACHE_BYTES
 
             torrent_uri = torrent_file.as_uri()
+            added = request_json(base, "/torrents", {"action": "add", "link": torrent_uri})
+            print("QUALIFY torrent accepted:", {key: added.get(key) for key in ("hash", "stat", "torrent_size")}, flush=True)
             sequence = [3 * 1024 ** 3, 12 * 1024 ** 3,
                         50 * 1024 ** 3, 3 * 1024 ** 3]
             report = []
             for position in sequence:
-                print(f'QUALIFY peer connections={peer.connections}', flush=True)
+                print(f'QUALIFY tracker hits={tracker.hits} peer connections={peer.connections}', flush=True)
                 stream_once(base, torrent_uri, position, report)
                 used = allocated_bytes(cache_dir)
                 # Allow a bounded 4x transient margin for in-flight pieces.
@@ -306,6 +310,11 @@ def main():
                 "requests_to_original_piece": rerequests,
                 "verified_ranges": report,
             }, sort_keys=True))
+        except Exception:
+            engine_log.flush()
+            print(f"QUALIFY failure tracker_hits={tracker.hits} peer_connections={peer.connections}", flush=True)
+            print("QUALIFY engine log tail:", log_path.read_text(errors="replace")[-5000:], flush=True)
+            raise
         finally:
             proc.terminate()
             try:
