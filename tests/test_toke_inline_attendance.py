@@ -132,7 +132,11 @@ def test_inline_uploaded_gallery_has_single_full_width_media_and_reused_callback
     assert len(galleries) == 1
     assert len(galleries[0].items) == 1
     assert galleries[0].items[0].media.url == "attachment://sesh.gif"
-    assert len([x for x in nodes if isinstance(x, discord.ui.Button)]) == 7
+    buttons = [x for x in nodes if isinstance(x, discord.ui.Button)]
+    assert {"Cheers", "I'm Joining", "Withdraw", "Who's Coming?", "Refresh", "Manage", "End Sesh", "Join VC"} <= {
+        button.label for button in buttons
+    }
+    assert len(buttons) == 8
     assert any(isinstance(x, discord.ui.TextDisplay) and "<@&10>" in x.content for x in nodes)
 
     dispatched = []
