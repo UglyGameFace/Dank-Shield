@@ -516,6 +516,37 @@ migration has been added. Even after these tests pass, one new explicit
 manual workflow execution is needed to find the real operational failure
 before applying a targeted fix.
 
+## Confirmed archive pipe failure in manual source backup #8
+
+Manual encrypted backup #8 was launched with the merged phase diagnostics
+and failed at `archive_toc_validation_started` with `error_kind=broken_pipe`.
+The exact GitHub Actions run:
+`https://github.com/UglyGameFace/Dank-Shield/actions/runs` (select
+`Manual Encrypted Supabase Backup #8`). This is direct operational
+evidence of a pipe closure during `pg_restore --list`, **not** another
+database password rejection or proof that the archive was fully verified.
+
+`pg_restore --list` may finish reading the **TOC** and exit with status 0
+before consuming a large custom-format dump's data segment. Our previous
+verifier kept writing decrypted bytes to closed stdin and raised
+`BrokenPipeError`, rejecting a potentially valid encrypted archive.
+The fix now stops writing to that input if it closes, but always:
+
+- finishes decrypting **all** encrypted source bytes and verifies the
+  final AES-256-GCM authentication tag, rejecting altered trailing data;
+- requires the non-executing `pg_restore --list` process to exit 0;
+- rejects malformed archive / nonzero process exit and prevents partial
+  ciphertext files from being uploaded.
+
+Tests reproduce the actual early-close behavior via the manual backup CLI,
+authenticate >7 MiB ciphertext through early close, detect trailing
+ciphertext tampering, and reject a consumer that exits nonzero.
+This repair does not change any database schema, credentials, bot runtime
+or Discloud voice-bot data; it **cannot** prove the production source
+backup was completed. A brand new `workflow_dispatch` on the
+merged **main** is needed to establish actual success. Rerunning a
+prior failed job reuses the old commit and is not an acceptance test.
+
 ## Deployment sequence
 
 1. Confirm the real disk limit/backups for the existing Discloud DB and the

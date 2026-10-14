@@ -241,13 +241,13 @@ def test_diagnostic_phase_for_source_auth_rejection_is_redacted(
     assert list(out.iterdir()) == []
 
 
-def test_diagnostic_phase_identifies_archive_broken_pipe_not_bad_login(
+def test_backup_recovers_when_archive_toc_reader_exits_early(
     tmp_path, monkeypatch, capsys,
 ):
-    """The intentionally exiting TOC reader causes a known LOCAL failure.
+    """Reproduce the confirmed Backup #8 pipe close through the actual CLI.
 
-    We do not claim this is what happened in real backup #6. It simply
-    proves instrumentation can locate that particular failure.
+    The early-closed pg_restore process exits zero; the full ciphertext
+    must still authenticate and be committed, without exposing credentials.
     """
     from tools.backup_dankshield_supabase_source import main
     fake_bin = tmp_path / "bin"
@@ -287,10 +287,69 @@ def test_diagnostic_phase_identifies_archive_broken_pipe_not_bad_login(
     monkeypatch.setattr(
         "sys.argv", ["backup", "--create", "--output-dir", str(private)]
     )
-    assert main() == 2
+    assert main() == 0
     output = capsys.readouterr().out
-    assert '"phase_at_failure": "archive_toc_validation_started"' in output
-    assert '"error_kind": "broken_pipe"' in output
-    assert '"failure_code": "backup_failed_unclassified"' in output
+    assert '"status": "encrypted_archive_toc_verified"' in output
+    assert '"restore_drill_passed": false' in output
     assert "secret-keep-private" not in output
-    assert not list(private.iterdir())
+    assert len(list(private.glob("*.dsbak"))) == 1
+
+
+def test_large_archive_when_nonexecuting_toc_reader_exits_early(tmp_path, monkeypatch):
+    """A TOC-only pg_restore can exit before consuming a large archive.
+
+    The rest of the ciphertext must STILL be GCM-authenticated. Simulates
+    the allowed early-stop behavior without reaching a real database.
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_restore = fake_bin / "pg_restore"
+    fake_restore.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.buffer.read(64)\n"
+        "sys.exit(0)\n",
+        encoding="utf-8",
+    )
+    fake_restore.chmod(0o700)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ.get('PATH','')}")
+    archive = tmp_path / "large.dsbak"
+    payload = b"PGDMP" + os.urandom(7 * 1024 * 1024)
+    with archive.open("wb") as output:
+        backup.encrypt_stream_to_file(BytesIO(payload), output, PASSPHRASE)
+    result = backup.verify_archive_toc(archive, PASSPHRASE)
+    assert result["authenticated"]
+    assert result["archive_toc_readable"]
+    assert result["plaintext_archive_bytes"] == len(payload)
+    assert result["restore_drill_passed"] is False
+
+    # An exit-zero TOC reader MUST NOT be enough if later ciphertext was
+    # tampered with. Authenticate everything even after the early EPIPE.
+    tampered = bytearray(archive.read_bytes())
+    tampered[-backup.TAG_LEN-1024] ^= 0x29
+    archive.write_bytes(tampered)
+    with pytest.raises(RuntimeError, match="authentication failed"):
+        backup.verify_archive_toc(archive, PASSPHRASE)
+
+
+def test_early_toc_reader_failure_still_rejects_archive(tmp_path, monkeypatch):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_restore = fake_bin / "pg_restore"
+    fake_restore.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.buffer.read(64)\n"
+        "sys.exit(4)\n",
+        encoding="utf-8",
+    )
+    fake_restore.chmod(0o700)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ.get('PATH','')}")
+    archive = tmp_path / "invalid.dsbak"
+    with archive.open("wb") as output:
+        backup.encrypt_stream_to_file(
+            BytesIO(b"PGDMP" + os.urandom(6 * 1024 * 1024)),
+            output, PASSPHRASE
+        )
+    with pytest.raises(RuntimeError, match="rejected custom-format archive TOC"):
+        backup.verify_archive_toc(archive, PASSPHRASE)
