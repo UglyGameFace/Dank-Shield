@@ -208,7 +208,7 @@ def test_mobile_roster_preview_bounded_with_pagination(monkeypatch):
     assert "Sesh activity" in card.fields[0].name
     assert "Cheers: 30" in card.fields[0].value
     assert "Joining: 30" in card.fields[0].value
-    assert "In VC: 31" in card.fields[0].value
+    assert "VC occupants: 31" in card.fields[0].value
     assert card.fields[1].name.startswith("👥 People")
     assert len(card.fields[1].value.splitlines()) == 4
     assert "+32 more" in card.fields[1].value
@@ -217,3 +217,12 @@ def test_mobile_roster_preview_bounded_with_pagination(monkeypatch):
     view = live.TokeRosterView(guild, session)
     assert len(view.lines) == 35
     assert view.pages == 3
+
+
+def test_unreachable_terminal_cards_are_bounded_by_retention(isolated_store):
+    async def work():
+        await toke_sessions.save_new(_sample(expires=time.time() - 8 * 86400))
+        assert await toke_sessions.pending_closed() == []
+        assert await toke_sessions.recoverable_views() == []
+        assert await toke_sessions.get(123, 456) is None
+    asyncio.run(work())
