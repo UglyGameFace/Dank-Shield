@@ -226,3 +226,26 @@ def test_unreachable_terminal_cards_are_bounded_by_retention(isolated_store):
         assert await toke_sessions.recoverable_views() == []
         assert await toke_sessions.get(123, 456) is None
     asyncio.run(work())
+
+
+def test_failed_terminal_delivery_backs_off_without_blocking_other_sessions(isolated_store):
+    async def work():
+        await toke_sessions.save_new(_sample(expires=time.time() - 1))
+        other = {**_sample(expires=time.time() - 1), "message_id": 457}
+        await toke_sessions.save_new(other)
+        pending = await toke_sessions.pending_closed()
+        assert {entry["message_id"] for entry in pending} == {456, 457}
+        await toke_sessions.defer_closed_retry(123, 456)
+        pending = await toke_sessions.pending_closed()
+        assert [entry["message_id"] for entry in pending] == [457]
+        deferred = await toke_sessions.get(123, 456)
+        assert deferred["close_retry_count"] == 1
+        assert deferred["close_retry_at"] > time.time()
+        await toke_sessions.defer_closed_retry(123, 456)
+        deferred2 = await toke_sessions.get(123, 456)
+        assert deferred2["close_retry_count"] == 2
+        assert deferred2["close_retry_at"] > deferred["close_retry_at"]
+        await toke_sessions.mark_closed_synced(123, 456)
+        synced = await toke_sessions.get(123, 456)
+        assert synced["close_synced"] and "close_retry_at" not in synced
+    asyncio.run(work())
