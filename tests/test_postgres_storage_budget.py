@@ -165,6 +165,7 @@ def test_wrong_budget_format_is_rejected():
         budget.run_from_environment({
             "DANK_CORE_POSTGRES_DATABASE_URL": "postgresql://private",
             "DANK_PG_STORAGE_BUDGET_MB": "512 MB",
+            "DANK_PG_OTHER_APP_STORAGE_MIB": "0",
         })
 
 
