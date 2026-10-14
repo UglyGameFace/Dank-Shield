@@ -99,6 +99,7 @@ def test_snapshot_is_read_only_and_redacts_secrets():
         "DANK_VERIFY_REMINDER_DATABASE_URL":
             "postgresql://secret:verysecret@internal:5432/dankshield",
         "DANK_PG_STORAGE_BUDGET_MB": "100",
+        "DANK_PG_OTHER_APP_STORAGE_MIB": "0",
     }, connect=connect)
     assert result["state"] == "within_budget"
     assert result["top_tables"][0]["table"] == "dank_verify_reminder_delivery"
@@ -121,6 +122,42 @@ def test_unrecognized_disk_quota_is_reported_as_unknown():
         "DANK_CORE_POSTGRES_DATABASE_URL": "postgresql://private",
     }, connect=lambda *_a, **_k: _Connection())
     assert result["state"] == "budget_unverified"
+
+
+def test_storage_audit_refuses_unverified_shared_usage_without_connecting():
+    calls = []
+
+    def connect(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("should fail before connecting")
+
+    with pytest.raises(ValueError, match="shared-storage usage"):
+        budget.run_from_environment({
+            "DANK_CORE_POSTGRES_DATABASE_URL": "postgresql://private",
+            "DANK_PG_STORAGE_BUDGET_MB": "4096",
+        }, connect=connect)
+    assert calls == []
+
+
+def test_storage_audit_refuses_overcommitted_shared_quota():
+    with pytest.raises(ValueError, match="remaining shared Diamond storage"):
+        budget.run_from_environment({
+            "DANK_CORE_POSTGRES_DATABASE_URL": "postgresql://private",
+            "DANK_PG_STORAGE_BUDGET_MB": "8000",
+            "DANK_PG_OTHER_APP_STORAGE_MIB": "1200",
+        }, connect=lambda *_a, **_kw: None)
+
+
+def test_storage_audit_uses_actual_earmarked_db_budget_not_plan_total():
+    report = budget.run_from_environment({
+        "DANK_CORE_POSTGRES_DATABASE_URL": "postgresql://private",
+        "DANK_PG_STORAGE_BUDGET_MB": "50",
+        "DANK_PG_OTHER_APP_STORAGE_MIB": "50",
+    }, connect=lambda *_args, **_kwargs: _Connection())
+    assert report["state"] == "critical"
+    assert report["database_allocated_bytes"] == 47 * 1024 * 1024
+    assert report["budget_bytes"] == 50 * 1024 * 1024
+    assert report["utilization_pct"] == 94.0
 
 
 def test_wrong_budget_format_is_rejected():
@@ -182,3 +219,12 @@ def test_all_explicit_migration_apply_commands_use_one_storage_authority():
         text = (root / path).read_text("utf-8")
         assert "migration_database_budget_mb(os.environ)" in text
         assert "DANK_PG_STORAGE_BUDGET_MB" not in text
+
+
+def test_all_storage_operator_paths_share_one_validator():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    code = (root / "stoney_verify/postgres_storage_budget.py").read_text("utf-8")
+    assert "budget = migration_database_budget_mb(env) if raw_budget else None" in code
+    assert "DANK_PG_OTHER_APP_STORAGE_MIB" in code
