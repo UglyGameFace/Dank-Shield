@@ -1388,6 +1388,12 @@ async def _expire_and_refresh(bot: Any) -> None:
             # and bound work to 25 due sessions per sweep. Never end a sesh
             # merely because its VC is unavailable or empty at creation.
             for session in await toke_sessions.idle_voice_candidates():
+                # Never infer empty occupancy when the gateway's voice state
+                # data is not ready or its intent is unavailable.
+                if not callable(getattr(bot, "is_ready", None)) or not bot.is_ready():
+                    break
+                if not getattr(getattr(bot, "intents", None), "voice_states", False):
+                    break
                 guild = bot.get_guild(int(session["guild_id"]))
                 voice = (
                     guild.get_channel(int(session["voice_channel_id"]))
