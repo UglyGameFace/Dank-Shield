@@ -210,3 +210,36 @@ def test_due_idle_worker_skips_missing_voice_and_closes_valid_empty_vc(storage, 
         assert closed["close_reason"] == "voice_idle"
         assert calls and calls[0] == "voice_idle"
     asyncio.run(run())
+
+
+def test_unavailable_voice_session_is_deferred_without_starving_other_due_sesh(storage):
+    async def run():
+        # More due sessions than one capped sweep can handle.
+        for mid in range(200, 226):
+            await toke_sessions.save_new(session(message_id=mid, grace=5))
+            await toke_sessions.reconcile_voice(101, mid, {11})
+            await toke_sessions.reconcile_voice(101, mid, set())
+            age_empty_session(message_id=mid)
+        first = await toke_sessions.idle_voice_candidates()
+        assert len(first) == 25
+        assert 225 not in {item["message_id"] for item in first}
+        await toke_sessions.defer_idle_voice_check(101, 200)
+        after = await toke_sessions.idle_voice_candidates()
+        assert len(after) == 25
+        assert 200 not in {item["message_id"] for item in after}
+        assert 225 in {item["message_id"] for item in after}
+        assert (await toke_sessions.get(101, 200))["active"]
+    asyncio.run(run())
+
+
+def test_deferred_idle_check_clears_when_human_rejoins(storage):
+    async def run():
+        await toke_sessions.save_new(session(grace=5))
+        await toke_sessions.reconcile_voice(101, 202, {11})
+        await toke_sessions.reconcile_voice(101, 202, set())
+        await toke_sessions.defer_idle_voice_check(101, 202)
+        assert (await toke_sessions.get(101, 202))["idle_check_retry_at"] > time.time()
+        rejoined = await toke_sessions.reconcile_voice(101, 202, {11})
+        assert rejoined.get("idle_check_retry_at", 0) == 0
+        assert rejoined["empty_voice_since"] == 0
+    asyncio.run(run())
