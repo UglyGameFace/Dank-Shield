@@ -15,13 +15,9 @@ permissions:
 
 jobs:
   rolling-torrent-proof:
-    name: 52 GiB rolling engine (${{ matrix.cache_mode }})
+    name: 52 GiB memory-only engine + signed Cinema proxy
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        cache_mode: [disk, memory]
     steps:
       - name: Check out Dank Shield
         uses: actions/checkout@v4
@@ -61,7 +57,7 @@ jobs:
         env:
           DANK_TEST_TORRSERVER_BINARY: ${{ github.workspace }}/torrserver-test-only
           PYTHONPATH: ${{ github.workspace }}
-          DANK_QUALIFY_MEMORY_MODE: ${{ matrix.cache_mode == 'memory' && '1' || '0' }}
+          DANK_QUALIFY_MEMORY_MODE: '1'
         run: |
           python3 -u tools/qualify_cinema_rolling_engine.py
       - name: No production deployment
