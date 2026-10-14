@@ -1,0 +1,44 @@
+name: Cinema real-engine rolling-cache qualification
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "tools/qualify_cinema_rolling_engine.py"
+      - ".github/workflows/cinema-real-engine-rolling-cache.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  rolling-torrent-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out Dank Shield
+        uses: actions/checkout@v4
+      - name: Set up pinned Go compiler
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.7"
+          cache: false
+      - name: Build isolated pinned upstream engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --no-checkout --depth 1 https://github.com/YouROK/TorrServer.git upstream-torrserver
+          cd upstream-torrserver
+          git fetch --depth=1 origin 98cdbacaddfac278a21a4a4d6424bd3a9dcd407f
+          git checkout --detach 98cdbacaddfac278a21a4a4d6424bd3a9dcd407f
+          test "$(git rev-parse HEAD)" = "98cdbacaddfac278a21a4a4d6424bd3a9dcd407f"
+          cd server
+          go build -trimpath -o "$GITHUB_WORKSPACE/torrserver-test-only" ./cmd
+      - name: Verify 52 GiB logical ranges and cache eviction with real engine
+        timeout-minutes: 6
+        env:
+          DANK_TEST_TORRSERVER_BINARY: ${{ github.workspace }}/torrserver-test-only
+        run: |
+          python3 -u tools/qualify_cinema_rolling_engine.py
+      - name: No production deployment
+        run: |
+          echo 'QUALIFICATION ONLY. No binary or torrent sources are uploaded or deployed.'
