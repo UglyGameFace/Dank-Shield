@@ -105,6 +105,38 @@ relying on it for rollback. Do not treat automatic snapshots as a substitute
 for the separately preserved, authenticated Backup #9 or a tested Discloud
 target restore.
 
+## Oct 14 live-source comparison (read-only, pre-cutover)
+
+The merged PR #563 inventory succeeded in manual isolated Backup #9
+restore run `38572982196`. All **16 existing first-slice source tables**
+have available expected logical keys and no NULL or duplicate key
+combinations. The snapshot contains **988** candidate rows; this does
+**not** prove table ownership or authorize any target write.
+
+A separate **read-only SQL** audit of the currently connected IdleGrowOp
+Supabase project found **989** rows across the same 16 tables. The
+`member_activity_ledger` count increased **289 → 290**; counts
+for the other 15 tables are unchanged. Equal counts do not imply equal
+payloads. This is evidence that an authenticated historical backup,
+even when perfectly restored, is not a current-state migration plan.
+Source-first staging, row-level digests, write reconciliation, and final
+rollback checks remain required.
+
+On this read-only inspection, the 16 candidate tables occupy **3,743,744
+bytes** of PostgreSQL allocated space including their associated index
+and auxiliary files, while the full **shared Supabase source** reports
+**127,855,763 allocated bytes**. Neither is a measurement of destination
+Discloud free SSD or a safe growth allowance.
+
+The read-only destination storage audit, first-slice staging and
+guild-config shadow import must use the **same shared-plan-aware budget
+validator**. Reporting a raw, unchecked `DANK_PG_STORAGE_BUDGET_MB`
+as "within_budget" without accounting for the other apps would be
+misleading. If no budget has been assigned the audit may still report
+`budget_unverified` without writing. If a budget is configured, the
+audit rejects missing other-app usage and shared-plan overcommit before
+connecting; the existing 1 GiB reserve is unchanged.
+
 ## Preservation contract
 
 1. First identify Dank Shield-owned tables in the shared source. Ambiguous
