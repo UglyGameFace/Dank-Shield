@@ -8,6 +8,11 @@ on:
       - "postgres/migrations/**"
       - "postgres/data_lifecycle.json"
       - "stoney_verify/core_data_stage.py"
+      - "stoney_verify/postgres_storage_budget.py"
+      - "tools/audit_discloud_postgres_storage.py"
+      - "tools/stage_dankshield_core_data.py"
+      - "tools/materialize_dankshield_pg_config.py"
+      - "tests/test_postgres_storage_budget.py"
       - "stoney_verify/postgres_guild_config_repo.py"
       - "stoney_verify/postgres_guild_config_shadow.py"
       - "stoney_verify/postgres_guild_config_parity.py"
@@ -97,6 +102,7 @@ jobs:
       - name: Verify isolated PG17 schema and concurrency
         run: |
           python -m pytest -q --tb=short \
+            tests/test_postgres_storage_budget.py \
             tests/test_core_data_stage.py \
             tests/test_postgres_guild_config_repo.py \
             tests/test_postgres_guild_config_parity.py \
