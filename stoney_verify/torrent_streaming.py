@@ -10,12 +10,14 @@ magnet or .torrent source they are authorized to use.
 
 import asyncio
 import base64
+import fcntl
 import hashlib
 import hmac
 import mimetypes
 import os
 import re
 import secrets
+import stat
 import shutil
 import tempfile
 import time
@@ -43,6 +45,8 @@ _PLAYABLE_EXTENSIONS = (
 )
 _MAGNET_RE = re.compile(r"magnet:\?[^\s<>]+", re.IGNORECASE)
 _BTIH_RE = re.compile(r"(?:^|&)xt=urn:btih:([^&]+)", re.IGNORECASE)
+# Only directories created by the canonical token_urlsafe(18) + mkdtemp path.
+_TORRENT_CACHE_DIR_RE = re.compile(r"^[A-Za-z0-9_-]{24}-[a-z0-9_]{8}$")
 
 _MANAGER: Optional["TorrentMediaManager"] = None
 
@@ -239,6 +243,8 @@ class MediaCapacitySnapshot:
     committed_file_bytes: int
     admission_allowed: bool
     blocker: str = ""
+    cache_used_bytes: int = 0
+    cache_budget_bytes: int = 0
 
 
 @dataclass
@@ -306,6 +312,29 @@ class TorrentMediaManager:
             )
         )
         self.root.mkdir(parents=True, exist_ok=True)
+        # The cache is owned by only one media manager process at a time.
+        # After a crash the OS releases this lock, allowing safe orphan
+        # recovery without deleting another running worker's torrent files.
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(self.root / ".torrent-cache-owner.lock", flags, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BaseException:
+            os.close(fd)
+            raise RuntimeError("Torrent cache is in use by another worker") from None
+        self._cache_owner_fd = fd
+        self._cache_started_wall = time.time()
+        # 4 GiB of the confirmed shared 10 GB Diamond pool, reserving room
+        # for the database, other apps and temporary PostgreSQL/WAL files.
+        self.cache_budget_bytes = _env_int(
+            "DANK_TORRENT_CACHE_BUDGET_BYTES",
+            4 * 1024 ** 3, minimum=512 * 1024 ** 2,
+            maximum=8 * 1024 ** 3,
+        )
+        self.orphan_grace_seconds = _env_float(
+            "DANK_TORRENT_ORPHAN_GRACE_SECONDS",
+            1800.0, minimum=300.0, maximum=86400.0,
+        )
         self.max_sessions = _env_int("DANK_TORRENT_MAX_SESSIONS", 4, minimum=1, maximum=16)
         self.soft_session_limit = _env_int(
             "DANK_TORRENT_SOFT_SESSION_LIMIT",
@@ -610,6 +639,76 @@ class TorrentMediaManager:
             return not leases or leases <= {key}
         return not leases
 
+    def _cache_allocated_bytes(self) -> int:
+        """Count allocated bytes without following links outside this cache.
+
+        Disk-wide df() cannot enforce the shared Diamond allowance.
+        stat.st_blocks accounts for partially downloaded/sparse files.
+        Failure to inspect a directory fails admission closed.
+        """
+        total = 0
+        for folder, dirs, files in os.walk(self.root, followlinks=False):
+            dirs[:] = [
+                name for name in dirs
+                if not (Path(folder) / name).is_symlink()
+            ]
+            for name in files:
+                entry = Path(folder) / name
+                info = entry.stat(follow_symlinks=False)
+                total += int(info.st_blocks) * 512
+        return total
+
+    def _orphan_cache_paths(self) -> list[Path]:
+        """Select only aged, canonical session directories not owned here."""
+        if self._starting:
+            return []
+        cutoff = min(
+            self._cache_started_wall,
+            time.time() - float(self.orphan_grace_seconds),
+        )
+        protected = {
+            str(session.save_root.resolve())
+            for session in self._sessions.values()
+        }
+        orphaned: list[Path] = []
+        for entry in self.root.iterdir():
+            if not _TORRENT_CACHE_DIR_RE.fullmatch(entry.name):
+                continue
+            info = entry.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_mtime > cutoff:
+                continue
+            if str(entry.resolve()) in protected:
+                continue
+            orphaned.append(entry)
+        return orphaned[:8]  # bounded cleanup, not a startup disk sweep
+
+    async def _remove_orphaned_cache(self) -> int:
+        # The same manager lock protects in-flight starts and live sessions.
+        async with self._lock:
+            try:
+                paths = self._orphan_cache_paths()
+            except OSError:
+                return 0
+        removed = 0
+        for path in paths:
+            # A second age/type check protects against replacement between
+            # discovery and deletion. Noncanonical and symlink paths survive.
+            try:
+                info = path.lstat()
+                if (
+                    not stat.S_ISDIR(info.st_mode)
+                    or info.st_mtime > min(
+                        self._cache_started_wall,
+                        time.time() - float(self.orphan_grace_seconds),
+                    )
+                ):
+                    continue
+                await asyncio.to_thread(shutil.rmtree, path)
+                removed += 1
+            except (FileNotFoundError, OSError):
+                continue
+        return removed
+
     def _committed_file_bytes(self, *, exclude_token: str = "") -> int:
         excluded = str(exclude_token or "")
         return sum(
@@ -734,6 +833,10 @@ class TorrentMediaManager:
 
         exclude = str(replace_token or "") if releasable else ""
         committed = self._committed_file_bytes(exclude_token=exclude)
+        try:
+            cache_used: int | None = self._cache_allocated_bytes()
+        except OSError:
+            cache_used = None
         guild_unique = self._guild_unique_session_count(
             int(request_guild_id),
             exclude_token=exclude,
@@ -792,6 +895,10 @@ class TorrentMediaManager:
                 f"This server reached its {self.max_unique_per_guild}-unique-torrent "
                 "Movie Night limit. Existing identical torrents can still be shared."
             )
+        elif cache_used is None:
+            blocker = "Movie Night cache space could not be measured safely."
+        elif max(int(cache_used), int(committed)) + max(0, int(expected_file_bytes)) > self.cache_budget_bytes:
+            blocker = "Movie Night cache budget would be exceeded by another torrent."
         elif free_disk <= 0:
             blocker = "Free disk could not be measured; refusing a new torrent safely."
         elif free_disk < required_disk:
@@ -822,6 +929,8 @@ class TorrentMediaManager:
             committed_file_bytes=int(committed),
             admission_allowed=not blocker,
             blocker=blocker,
+            cache_used_bytes=int(cache_used or 0),
+            cache_budget_bytes=int(self.cache_budget_bytes),
         )
 
     def capacity_snapshot(self, *, guild_id: int = 0) -> MediaCapacitySnapshot:
@@ -858,6 +967,8 @@ class TorrentMediaManager:
             "free_disk_bytes": snap.free_disk_bytes,
             "disk_reserve_bytes": snap.disk_reserve_bytes,
             "committed_file_bytes": snap.committed_file_bytes,
+            "cache_used_bytes": snap.cache_used_bytes,
+            "cache_budget_bytes": snap.cache_budget_bytes,
             "admission_allowed": snap.admission_allowed,
             "blocker": snap.blocker,
         }
@@ -874,6 +985,8 @@ class TorrentMediaManager:
             lease_key=lease_key,
             expected_file_bytes=max(0, int(expected_file_bytes)),
         )
+        if snap.blocker.startswith("Movie Night cache"):
+            raise RuntimeError(snap.blocker)
         if snap.free_disk_bytes <= 0:
             raise RuntimeError("Movie Night cannot verify free disk for this torrent.")
         required = (
@@ -2114,6 +2227,7 @@ class TorrentMediaManager:
         for session in expired:
             self._safe_remove_handle(session.handle)
             await asyncio.to_thread(shutil.rmtree, session.save_root, True)
+        await self._remove_orphaned_cache()
         return len(expired)
 
     async def discard_unusable_session(self, token: str) -> bool:
