@@ -391,7 +391,7 @@ class TorrentMediaManager:
                 cache_dir=self.root / "rolling-pieces",
                 cache_budget_bytes=self.cache_budget_bytes,
                 per_torrent_cache_bytes=max(
-                    16 * 1024 * 1024, self.cache_budget_bytes // self.max_sessions
+                    16 * 1024 * 1024, self.cache_budget_bytes // (self.max_sessions * 4)
                 ),
                 max_torrents=self.max_sessions,
             )
