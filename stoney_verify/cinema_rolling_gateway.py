@@ -64,7 +64,7 @@ class CinemaRollingGateway:
             raise ValueError("Invalid rolling torrent concurrency limits.")
         if (
             self.per_torrent_bytes < 16 * 1024 * 1024
-            or self.per_torrent_bytes * self.max_torrents > self.budget_bytes
+            or self.per_torrent_bytes * self.max_torrents * 4 > self.budget_bytes
             or self.budget_bytes <= 0
         ):
             raise ValueError("Rolling cache reservations exceed the shared storage budget.")
@@ -117,7 +117,7 @@ class CinemaRollingGateway:
             and settings.get("DisableUPNP") is True
             and configured_size >= 16 * 1024 * 1024
             and configured_size <= self.per_torrent_bytes
-            and self.max_torrents * configured_size <= self.budget_bytes
+            and self.max_torrents * configured_size * 4 <= self.budget_bytes
             and Path(str(settings.get("TorrentsSavePath") or "/")).resolve()
                 == self.cache_dir
         ):
