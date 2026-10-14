@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
-"""Real-engine qualification of bounded BitTorrent streaming.
+"""Qualify a real rolling BitTorrent engine using a 52 GiB sparse seeder.
 
-Runs only under the dedicated isolated CI workflow. A loopback synthetic
-BitTorrent peer supplies deterministic 1 MiB pieces for a 50+ GiB logical
-torrent without materializing a large file. This is an external engine
-qualification, NOT an enabled Dank Cinema backend or a production guarantee.
+This script is opt-in, CI-only and must never run in production. Its real
+libtorrent 2.1.1 seed-mode source has 52 GiB of logical bytes but only a few
+MiB physically allocated. A real pinned TorrServer instance makes the range
+requests, not a fake socket peer. No copyrighted media or internet swarm.
 """
 from __future__ import annotations
 
-from collections import Counter
 from contextlib import contextmanager
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
-import shutil
 import socket
-import socketserver
 import struct
 import subprocess
 import tempfile
@@ -27,310 +24,307 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+import libtorrent as lt
+
 FILE_BYTES = 52 * 1024 ** 3
 PIECE_BYTES = 1024 * 1024
 CACHE_BYTES = 4 * 1024 * 1024
+RANGE_BYTES = 64 * 1024
+TIMEOUT_SECONDS = 45
+POSITIONS = (3 * 1024 ** 3, 12 * 1024 ** 3, 50 * 1024 ** 3)
 PIECES = FILE_BYTES // PIECE_BYTES
-PATTERN = (b"Cinema rolling cache integrity proof; " * 30000)[:PIECE_BYTES]
-assert len(PATTERN) == PIECE_BYTES
-PIECE_HASH = hashlib.sha1(PATTERN).digest()
-PROOF_RANGE_BYTES = 64 * 1024
-TRACKER_INTERVAL = 2
-TIMEOUT_SECONDS = 25
+NAME = "cinema-52gib-proof.mkv"
+ZERO_PIECE = bytes(PIECE_BYTES)
+SPECIAL_PIECES = {
+    offset // PIECE_BYTES for offset in POSITIONS
+}
+
+
+def proof_piece(index):
+    if index not in SPECIAL_PIECES:
+        return ZERO_PIECE
+    phrase = f"CINEMA-PIECE-{index:08d}-KNOWN-CONTENT! ".encode()
+    return (phrase * (PIECE_BYTES // len(phrase) + 1))[:PIECE_BYTES]
 
 
 def bencode(value):
     if isinstance(value, int):
         return b"i" + str(value).encode() + b"e"
     if isinstance(value, (bytes, str)):
-        value = value.encode() if isinstance(value, str) else value
-        return str(len(value)).encode() + b":" + value
+        payload = value.encode() if isinstance(value, str) else value
+        return str(len(payload)).encode() + b":" + payload
     if isinstance(value, list):
-        return b"l" + b"".join(map(bencode, value)) + b"e"
+        return b"l" + b"".join(bencode(x) for x in value) + b"e"
     if isinstance(value, dict):
-        return (b"d" + b"".join(bencode(key) + bencode(value[key])
-                                for key in sorted(value)) + b"e")
+        return b"d" + b"".join(
+            bencode(key) + bencode(value[key]) for key in sorted(value)
+        ) + b"e"
     raise TypeError(type(value))
 
 
-def receive_exact(sock, count):
-    chunks = []
-    while count:
-        payload = sock.recv(count)
-        if not payload:
-            raise EOFError("peer connection closed")
-        chunks.append(payload)
-        count -= len(payload)
-    return b"".join(chunks)
-
-
-class SyntheticPeer(socketserver.ThreadingTCPServer):
-    allow_reuse_address = True
-    daemon_threads = True
-
-    def __init__(self, info_hash):
-        super().__init__(("127.0.0.1", 0), PeerHandler)
-        self.info_hash = info_hash
-        self.requests = Counter()
-        self.connections = 0
-        self.events = []
-        self.requests_lock = threading.Lock()
-
-    def piece_requests(self, index):
-        with self.requests_lock:
-            return self.requests[index]
-
-
-class PeerHandler(socketserver.BaseRequestHandler):
-    def handle(self):
-        sock = self.request
-        with self.server.requests_lock:
-            self.server.connections += 1
-        sock.settimeout(40)
-        try:
-            header = receive_exact(sock, 68)
-            if header[0] != 19 or header[1:20] != b"BitTorrent protocol":
-                self.server.events.append("invalid handshake prefix")
-                return
-            if header[28:48] != self.server.info_hash:
-                self.server.events.append("torrent info hash mismatch")
-                return
-            self.server.events.append("handshake accepted")
-            sock.sendall(header[:20] + bytes(8) + self.server.info_hash +
-                         (b"-DS0001-" + b"proof-peer01"))
-            # Each piece is advertised as available. All data is generated
-            # on demand; no file is opened or seeded from the internet.
-            bitfield = bytes([255]) * (PIECES // 8)
-            sock.sendall(struct.pack("!I", len(bitfield) + 1) +
-                         b"\x05" + bitfield)
-            sock.sendall(b"\x00\x00\x00\x01\x01")  # unchoke
-            while True:
-                length = struct.unpack("!I", receive_exact(sock, 4))[0]
-                if length > 1024 * 1024:
-                    return
-                if not length:
-                    continue
-                message = receive_exact(sock, length)
-                if len(self.server.events) < 18:
-                    self.server.events.append(f"message={message[0]} length={len(message)}")
-                if message[0] != 6 or len(message) != 13:
-                    continue
-                index, offset, count = struct.unpack("!III", message[1:])
-                if index >= PIECES or offset + count > PIECE_BYTES or count > 16384:
-                    return
-                with self.server.requests_lock:
-                    self.server.requests[index] += 1
-                response = b"\x07" + struct.pack("!II", index, offset)
-                response += PATTERN[offset:offset + count]
-                sock.sendall(struct.pack("!I", len(response)) + response)
-        except (EOFError, OSError, TimeoutError) as error:
-            self.server.events.append(type(error).__name__)
-            return
-
-
-@contextmanager
-def local_services():
-    with tempfile.TemporaryDirectory(prefix="cinema-real-engine-") as work:
-        root = Path(work)
-        proof_info = {
-            b"length": FILE_BYTES,
-            b"name": b"cinema-52gib-proof.mkv",
-            b"piece length": PIECE_BYTES,
-            b"pieces": PIECE_HASH * PIECES,
-        }
-        encoded = bencode(proof_info)
-        info_hash = hashlib.sha1(encoded).digest()
-        peer = SyntheticPeer(info_hash)
-        tracker_address = ("127.0.0.1", 0)
-
-        class Tracker(BaseHTTPRequestHandler):
-            def do_GET(self):
-                self.server.hits += 1
-                addr = socket.inet_aton("127.0.0.1")
-                compact = addr + struct.pack("!H", peer.server_address[1])
-                data = bencode({b"interval": TRACKER_INTERVAL,
-                                b"complete": 1, b"incomplete": 0, b"peers": compact})
-                self.send_response(200)
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-
-            def log_message(self, *_args):
-                pass
-
-        tracker = ThreadingHTTPServer(tracker_address, Tracker)
-        tracker.hits = 0
-        torrent_bytes = bencode({
-            b"announce": (
-                f"http://127.0.0.1:{tracker.server_address[1]}/announce"
-            ).encode(),
-            b"info": proof_info,
-        })
-        torrent_file = root / "synthetic-52gib.torrent"
-        torrent_file.write_bytes(torrent_bytes)
-        threading.Thread(target=peer.serve_forever, daemon=True).start()
-        threading.Thread(target=tracker.serve_forever, daemon=True).start()
-        try:
-            yield root, torrent_file, peer, tracker
-        finally:
-            tracker.shutdown()
-            peer.shutdown()
-            tracker.server_close()
-            peer.server_close()
-
-
-def request_json(base, path, payload):
-    body = json.dumps(payload).encode()
-    with urlopen(Request(
-        base + path, data=body,
-        headers={"Content-Type": "application/json"}, method="POST",
-    ), timeout=15) as response:
-        payload = response.read()
-        return json.loads(payload) if payload else None
-
-
-def port_free():
+def free_port():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
 
 
 def allocated_bytes(directory):
-    # Linux st_blocks is what Discloud counts for sparse/allocated cache
-    # files; logical file length is not a substitute for physical usage.
     total = 0
     for root, _, files in os.walk(directory, followlinks=False):
         for name in files:
-            total += (Path(root) / name).stat(follow_symlinks=False).st_blocks * 512
+            total += (Path(root) / name).stat(
+                follow_symlinks=False
+            ).st_blocks * 512
     return total
 
 
-def stream_once(base, torrent_url, offset, report):
-    end = offset + PROOF_RANGE_BYTES - 1
-    url = (base + "/stream/proof.mkv?link=" + quote(torrent_url, safe="") +
-           "&index=1&play")
+@contextmanager
+def synthetic_seed():
+    with tempfile.TemporaryDirectory(prefix="cinema-52gib-ci-") as work:
+        root = Path(work)
+        payload_root = root / "seeder-files"
+        payload_root.mkdir()
+        sparse = payload_root / NAME
+        with sparse.open("wb") as out:
+            out.truncate(FILE_BYTES)
+            for index in sorted(SPECIAL_PIECES):
+                out.seek(index * PIECE_BYTES)
+                out.write(proof_piece(index))
+        if allocated_bytes(payload_root) > 16 * 1024 * 1024:
+            raise AssertionError("seed-mode synthetic fixture is not sparse")
+
+        seeder_port = free_port()
+        tracker_hits = [0]
+
+        class Tracker(BaseHTTPRequestHandler):
+            def do_GET(self):
+                tracker_hits[0] += 1
+                peer = socket.inet_aton("127.0.0.1")
+                compact = peer + struct.pack("!H", seeder_port)
+                payload = bencode({
+                    b"interval": 2, b"complete": 1,
+                    b"incomplete": 0, b"peers": compact,
+                })
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *_unused):
+                pass
+
+        tracker = ThreadingHTTPServer(("127.0.0.1", 0), Tracker)
+        meta = {
+            b"length": FILE_BYTES,
+            b"name": NAME.encode(),
+            b"piece length": PIECE_BYTES,
+            b"pieces": b"".join(
+                hashlib.sha1(proof_piece(i)).digest()
+                for i in range(PIECES)
+            ),
+        }
+        torrent_data = bencode({
+            b"announce": (
+                f"http://127.0.0.1:{tracker.server_address[1]}/announce"
+            ).encode(),
+            b"info": meta,
+        })
+        torrent_file = root / "synthetic-52gib.torrent"
+        torrent_file.write_bytes(torrent_data)
+        expected_hash = hashlib.sha1(bencode(meta)).hexdigest()
+        seed = lt.session({
+            "listen_interfaces": f"127.0.0.1:{seeder_port}",
+            "enable_dht": False, "enable_lsd": False,
+            "enable_upnp": False, "enable_natpmp": False,
+        })
+        params = lt.add_torrent_params()
+        params.ti = lt.torrent_info(str(torrent_file))
+        params.save_path = str(payload_root)
+        params.flags |= lt.torrent_flags.seed_mode
+        handle = seed.add_torrent(params)
+        if not seed.is_listening():
+            raise AssertionError("actual libtorrent seeder did not bind locally")
+        print(
+            f"QUALIFY real libtorrent={lt.version} seeder_port={seeder_port} "
+            f"infohash={expected_hash} sparse_bytes={allocated_bytes(payload_root)}",
+            flush=True,
+        )
+        threading.Thread(target=tracker.serve_forever, daemon=True).start()
+        try:
+            yield root, torrent_file, handle, tracker_hits, expected_hash
+        finally:
+            tracker.shutdown()
+            tracker.server_close()
+            seed.pause()
+            del handle
+            del seed
+
+
+def post_json(base, path, data):
+    with urlopen(Request(
+        base + path, data=json.dumps(data).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    ), timeout=15) as response:
+        payload = response.read()
+        return json.loads(payload) if payload else None
+
+
+def check_range(base, torrent_uri, offset):
+    end = offset + RANGE_BYTES - 1
+    url = (
+        base + "/stream/proof.mkv?link=" + quote(torrent_uri, safe="")
+        + "&index=1&play"
+    )
+    print(f"QUALIFY HTTP 206 Range bytes={offset}-{end}", flush=True)
     last = None
-    print(f'QUALIFY range bytes={offset}-{end}', flush=True)
     for attempt in range(2):
         try:
-            with urlopen(Request(url, headers={
-                "Range": f"bytes={offset}-{end}"
-            }), timeout=TIMEOUT_SECONDS) as response:
+            with urlopen(Request(
+                url, headers={"Range": f"bytes={offset}-{end}"}
+            ), timeout=TIMEOUT_SECONDS) as response:
                 status = response.status
                 content_range = response.headers.get("Content-Range")
-                data = response.read()
-            if (status != 206 or content_range !=
-                    f"bytes {offset}-{end}/{FILE_BYTES}"):
-                raise AssertionError(
-                    f"HTTP range mismatch: {status}, {content_range}"
-                )
-            if data != PATTERN[offset % PIECE_BYTES:
-                               offset % PIECE_BYTES + PROOF_RANGE_BYTES]:
-                raise AssertionError(f"byte integrity failure at offset={offset}")
-            report.append({"offset": offset, "status": status,
-                           "bytes": len(data)})
-            return
-        except (HTTPError, URLError, TimeoutError, OSError) as error:
-            print(f'QUALIFY range attempt {attempt + 1} failed: {type(error).__name__}', flush=True)
-            last = error
-            time.sleep(min(5, attempt + 1))
-    raise AssertionError(f"synthetic range unavailable offset={offset}: {last}")
+                result = response.read()
+            if status != 206:
+                raise AssertionError(f"wrong status {status}")
+            if content_range != f"bytes {offset}-{end}/{FILE_BYTES}":
+                raise AssertionError(f"wrong Content-Range {content_range}")
+            reference = proof_piece(offset // PIECE_BYTES)
+            if result != reference[:RANGE_BYTES]:
+                raise AssertionError(f"corrupt or incomplete bytes at {offset}")
+            return {"offset": offset, "bytes": len(result), "status": status}
+        except (HTTPError, URLError, TimeoutError, OSError) as err:
+            print(
+                f"QUALIFY attempt {attempt + 1}: {type(err).__name__}",
+                flush=True,
+            )
+            last = err
+            time.sleep(2)
+    raise AssertionError(f"range {offset} cannot be streamed: {last}")
 
 
 def main():
     binary = os.environ.get("DANK_TEST_TORRSERVER_BINARY", "")
     if not binary or not Path(binary).is_file():
-        raise SystemExit("Provide an existing pinned TorrServer binary in CI")
-    with local_services() as (root, torrent_file, peer, tracker):
-        port = port_free()
-        base = f"http://127.0.0.1:{port}"
-        runtime_dir = root / "private-config"
-        runtime_dir.mkdir()
-        cache_dir = root / "piece-cache"
-        cache_dir.mkdir()
-        # Only on loopback; never reachable via Cinema's public signed route.
-        log_path = root / "engine-stderr.log"
-        engine_log = log_path.open("wb")
-        proc = subprocess.Popen([
-            binary, "--port", str(port), "--ip", "127.0.0.1",
-            "--path", str(runtime_dir), "--torrentaddr", "127.0.0.1:0",
-        ], cwd=str(root), stdout=engine_log, stderr=subprocess.STDOUT)
-        try:
-            for _ in range(60):
-                if proc.poll() is not None:
-                    engine_log.flush()
-                    raise AssertionError("TorrServer exited during startup: " + log_path.read_text(errors="replace")[-7000:])
-                try:
-                    settings = request_json(base, "/settings", {"action": "get"})
-                    break
-                except (HTTPError, URLError, TimeoutError, OSError):
-                    time.sleep(0.5)
-            else:
-                raise AssertionError("TorrServer did not bind loopback")
-            settings.update({
-                "CacheSize": CACHE_BYTES,
-                "UseDisk": True,
-                "TorrentsSavePath": str(cache_dir),
-                "RemoveCacheOnDrop": True,
-                "ResponsiveMode": False,
-                "ReaderReadAHead": 50,
-                "PreloadCache": 0,
-                "ConnectionsLimit": 8,
-                "DisableUPNP": True,
-                "DisableDHT": True,
-                "DisablePEX": True,
-                "DisableUpload": True,
-            })
-            request_json(base, "/settings", {"action": "set", "sets": settings})
-            state = request_json(base, "/settings", {"action": "get"})
-            assert state.get("UseDisk") is True
-            assert state.get("CacheSize") == CACHE_BYTES
+        raise SystemExit("DANK_TEST_TORRSERVER_BINARY must be set by isolated CI")
+    if not str(lt.version).startswith("2.1.1"):
+        raise AssertionError("expected pinned libtorrent 2.1.1 as seed peer")
+    with synthetic_seed() as (root, source, seed, tracker_hits, infohash):
+        api_port = free_port()
+        base = f"http://127.0.0.1:{api_port}"
+        config = root / "private-config"
+        cache = root / "piece-cache"
+        config.mkdir()
+        cache.mkdir()
+        log_path = root / "engine.log"
+        with log_path.open("wb") as engine_log:
+            engine = subprocess.Popen([
+                binary, "--port", str(api_port), "--ip", "127.0.0.1",
+                "--path", str(config), "--torrentaddr", "127.0.0.1:0",
+            ], cwd=str(root), stdout=engine_log, stderr=subprocess.STDOUT)
+            try:
+                for _ in range(60):
+                    if engine.poll() is not None:
+                        raise AssertionError(
+                            "real engine exited at startup: " +
+                            log_path.read_text(errors="replace")[-5000:]
+                        )
+                    try:
+                        sets = post_json(base, "/settings", {"action": "get"})
+                        break
+                    except (HTTPError, URLError, TimeoutError, OSError):
+                        time.sleep(0.5)
+                else:
+                    raise AssertionError("real engine failed to bind loopback")
 
-            torrent_uri = torrent_file.as_uri()
-            added = request_json(base, "/torrents", {"action": "add", "link": torrent_uri})
-            print("QUALIFY torrent accepted:", {key: added.get(key) for key in ("hash", "stat", "torrent_size")}, flush=True)
-            sequence = [3 * 1024 ** 3, 12 * 1024 ** 3,
-                        50 * 1024 ** 3, 3 * 1024 ** 3]
-            report = []
-            for position in sequence:
-                print(f'QUALIFY tracker hits={tracker.hits} peer connections={peer.connections}', flush=True)
-                stream_once(base, torrent_uri, position, report)
-                used = allocated_bytes(cache_dir)
-                # Allow a bounded 4x transient margin for in-flight pieces.
-                # This is a QUALIFICATION limit; production needs a measured
-                # global cap across concurrent torrents and other apps.
+                sets.update({
+                    "CacheSize": CACHE_BYTES,
+                    "UseDisk": True,
+                    "TorrentsSavePath": str(cache),
+                    "RemoveCacheOnDrop": True,
+                    "ResponsiveMode": False,
+                    "ReaderReadAHead": 50,
+                    "PreloadCache": 0,
+                    "ConnectionsLimit": 8,
+                    "DisableUPNP": True,
+                    "DisableDHT": True,
+                    "DisablePEX": True,
+                    "DisableUpload": True,
+                })
+                post_json(base, "/settings", {"action": "set", "sets": sets})
+                verified_sets = post_json(base, "/settings", {"action": "get"})
+                if not (
+                    verified_sets.get("UseDisk") is True
+                    and verified_sets.get("CacheSize") == CACHE_BYTES
+                ):
+                    raise AssertionError("real engine rejected cache settings")
+
+                uri = source.as_uri()  # synthetic CI file only
+                accepted = post_json(base, "/torrents", {
+                    "action": "add", "link": uri
+                })
+                print(
+                    f"QUALIFY engine accepted hash={accepted.get('hash')} "
+                    f"size={accepted.get('torrent_size')} "
+                    f"tracker_hits={tracker_hits[0]}",
+                    flush=True,
+                )
+                if accepted.get("hash") != infohash:
+                    raise AssertionError("torrent infohash mismatch")
+                if accepted.get("torrent_size") != FILE_BYTES:
+                    raise AssertionError("52 GiB metadata size not accepted")
+
+                results = []
+                for offset in POSITIONS:
+                    results.append(check_range(base, uri, offset))
+                    used = allocated_bytes(cache)
+                    if used > CACHE_BYTES * 4:
+                        raise AssertionError(f"cache allocated {used} bytes")
+
+                uploaded_before_seek = int(seed.status().total_upload)
+                results.append(check_range(base, uri, POSITIONS[0]))
+                uploaded_after_seek = int(seed.status().total_upload)
+                if uploaded_after_seek <= uploaded_before_seek:
+                    raise AssertionError(
+                        "backward seek did not force new peer data transfer"
+                    )
+                used = allocated_bytes(cache)
                 if used > CACHE_BYTES * 4:
                     raise AssertionError(
-                        f"disk cache exceeded qualification ceiling: {used}"
+                        f"cache exceeded 4x transient bound: {used}"
                     )
-            first_piece = sequence[0] // PIECE_BYTES
-            rerequests = peer.piece_requests(first_piece)
-            if rerequests < (2 * PROOF_RANGE_BYTES // 16384):
-                raise AssertionError(
-                    "Evicted playback data was not proven re-downloadable"
+                print(json.dumps({
+                    "result": "real_engine_qualification_only",
+                    "logical_movie_bytes": FILE_BYTES,
+                    "configured_cache_bytes": CACHE_BYTES,
+                    "actual_disk_bytes": used,
+                    "tracker_hits": tracker_hits[0],
+                    "backward_seek_download_bytes":
+                        uploaded_after_seek - uploaded_before_seek,
+                    "verified_ranges": results,
+                }, sort_keys=True), flush=True)
+            except Exception:
+                engine_log.flush()
+                print(
+                    f"QUALIFY failure tracker_hits={tracker_hits[0]} "
+                    f"seed_upload={seed.status().total_upload} "
+                    f"seed_peers={seed.status().num_peers}",
+                    flush=True,
                 )
-            print(json.dumps({
-                "result": "engine_qualification_only",
-                "logical_movie_bytes": FILE_BYTES,
-                "disk_cache_bytes": allocated_bytes(cache_dir),
-                "configured_cache_bytes": CACHE_BYTES,
-                "requests_to_original_piece": rerequests,
-                "verified_ranges": report,
-            }, sort_keys=True))
-        except Exception:
-            engine_log.flush()
-            print(f"QUALIFY failure tracker_hits={tracker.hits} peer_connections={peer.connections}", flush=True)
-            print(f"QUALIFY expected infohash={peer.info_hash.hex()} peer_events={peer.events} peer_piece_count={sum(peer.requests.values())}", flush=True)
-            print("QUALIFY engine log tail:", log_path.read_text(errors="replace")[-5000:], flush=True)
-            raise
-        finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5)
-            engine_log.close()
+                print(
+                    "QUALIFY engine tail:",
+                    log_path.read_text(errors="replace")[-4000:],
+                    flush=True,
+                )
+                raise
+            finally:
+                engine.terminate()
+                try:
+                    engine.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    engine.kill()
+                    engine.wait(timeout=5)
 
 
 if __name__ == "__main__":
