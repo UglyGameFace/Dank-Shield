@@ -486,6 +486,36 @@ on failure; only an authenticated archive with verified TOC can be uploaded.
 The GitHub Actions workflow remains manual, read-only on Supabase, and has
 no connection to the live voice bot or existing Discloud database.
 
+## Backup #6 root cause is NOT confirmed: evidence-only diagnostics
+
+The actual manual backup #6
+(`https://github.com/UglyGameFace/Dank-Shield/actions/runs/38496328485`)
+returned `backup_failed_unclassified`, about 40 seconds into the archive
+step. No traceback, dump completion marker or archive verification status
+was captured. This **does not prove** a broken pipe, password, network or
+database failure. A separate unmerged PR #555 explored one possible
+`pg_restore --list` early-close condition, but its passing tests do
+**not** establish it caused backup #6. Do not merge that behavioral change
+on hypothesis alone.
+
+This diagnostics-only slice adds an optional fixed-name phase reporter to
+`create_backup`. The operator CLI prints the **last operation reached**
+and a fixed exception category if a future backup fails. Phases distinguish
+preflight, private file opening, PostgreSQL dump launch, streaming
+encryption, dump exit status, fsync, archive TOC verification and commit.
+Known controlled PostgreSQL failure codes remain intact. Only fixed
+program-authored labels and error kinds reach GitHub Actions logs. The
+source URI, password, user/host, stderr, exceptions, schema rows and
+plaintext archives are never printed.
+
+The new tests intentionally simulate a source-authentication rejection and
+a large encrypted archive whose TOC-only consumer closes early, proving
+their diagnostic output is **different** and contains no source secrets.
+No bot runtime hook, monkey patch, destructive cleanup or automatic data
+migration has been added. Even after these tests pass, one new explicit
+manual workflow execution is needed to find the real operational failure
+before applying a targeted fix.
+
 ## Deployment sequence
 
 1. Confirm the real disk limit/backups for the existing Discloud DB and the
