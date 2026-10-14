@@ -245,6 +245,8 @@ class MediaCapacitySnapshot:
     blocker: str = ""
     cache_used_bytes: int = 0
     cache_budget_bytes: int = 0
+    cache_projected_bytes: int = 0
+    cache_measurement_ok: bool = True
 
 
 @dataclass
@@ -854,6 +856,12 @@ class TorrentMediaManager:
             cache_used, cache_untracked = self._cache_allocated_bytes()
         except OSError:
             cache_used = cache_untracked = None
+        cache_projected = (
+            max(int(cache_used), int(cache_untracked) + int(committed))
+            + max(0, int(expected_file_bytes))
+            if cache_used is not None and cache_untracked is not None
+            else 0
+        )
         guild_unique = self._guild_unique_session_count(
             int(request_guild_id),
             exclude_token=exclude,
@@ -914,9 +922,7 @@ class TorrentMediaManager:
             )
         elif cache_used is None:
             blocker = "Movie Night cache space could not be measured safely."
-        elif max(
-            int(cache_used), int(cache_untracked) + int(committed)
-        ) + max(0, int(expected_file_bytes)) > self.cache_budget_bytes:
+        elif cache_projected > self.cache_budget_bytes:
             blocker = "Movie Night cache budget would be exceeded by another torrent."
         elif free_disk <= 0:
             blocker = "Free disk could not be measured; refusing a new torrent safely."
@@ -950,6 +956,8 @@ class TorrentMediaManager:
             blocker=blocker,
             cache_used_bytes=int(cache_used or 0),
             cache_budget_bytes=int(self.cache_budget_bytes),
+            cache_projected_bytes=int(cache_projected),
+            cache_measurement_ok=cache_used is not None,
         )
 
     def capacity_snapshot(self, *, guild_id: int = 0) -> MediaCapacitySnapshot:
@@ -988,6 +996,8 @@ class TorrentMediaManager:
             "committed_file_bytes": snap.committed_file_bytes,
             "cache_used_bytes": snap.cache_used_bytes,
             "cache_budget_bytes": snap.cache_budget_bytes,
+            "cache_projected_bytes": snap.cache_projected_bytes,
+            "cache_measurement_ok": snap.cache_measurement_ok,
             "admission_allowed": snap.admission_allowed,
             "blocker": snap.blocker,
         }
@@ -1004,8 +1014,12 @@ class TorrentMediaManager:
             lease_key=lease_key,
             expected_file_bytes=max(0, int(expected_file_bytes)),
         )
-        if snap.blocker.startswith("Movie Night cache"):
-            raise RuntimeError(snap.blocker)
+        # Capacity snapshots prioritize user-facing memory/slot blockers,
+        # but disk is independently authoritative even when those also fail.
+        if not snap.cache_measurement_ok:
+            raise RuntimeError("Movie Night cache space could not be measured safely.")
+        if snap.cache_projected_bytes > snap.cache_budget_bytes:
+            raise RuntimeError("Movie Night cache budget would be exceeded by another torrent.")
         if snap.free_disk_bytes <= 0:
             raise RuntimeError("Movie Night cannot verify free disk for this torrent.")
         required = (
