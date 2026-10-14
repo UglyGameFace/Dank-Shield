@@ -166,7 +166,7 @@ def test_deliver_one_private_dm_no_role_ping_and_no_duplicate(isolated_store):
         assert len(dms) == 1
         assert "discord.com/channels/123/700/456" in dms[0][0]
         assert "one-time" in dms[0][0]
-        assert dms[0][1]["allowed_mentions"] == discord.AllowedMentions.none()
+        assert dms[0][1]["allowed_mentions"].to_dict() == discord.AllowedMentions.none().to_dict()
         assert (await toke_sessions.get(123, 456))["reminder_attempted_ids"] == [101]
     asyncio.run(run())
 
@@ -212,6 +212,7 @@ def test_reminder_is_not_sent_when_member_leaves_during_fetch(isolated_store):
 
 def test_rendered_media_maintains_five_buttons_per_row():
     session = {**_session(), "active": True, "cheers_ids": [], "going_ids": [],
+               "voice_channel_id": 404,
                "media_filename": "sesh.gif", "media_layout": "gallery_v2"}
     guild = SimpleNamespace(get_channel=lambda _cid: None)
     view = live.TokeMediaLayout(guild, session, intro="## 💨 Toke Time")
