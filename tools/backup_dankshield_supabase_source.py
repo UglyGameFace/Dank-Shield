@@ -42,6 +42,24 @@ def main() -> int:
         }))
         return 0
 
+    # No dynamic exception messages or secrets reach this log. These static
+    # phase labels identify the last operation attempted before failure.
+    phases = frozenset((
+        "source_preflight_started", "source_preflight_passed",
+        "private_archive_opened", "pg_dump_started",
+        "encrypted_stream_started", "encrypted_stream_finished",
+        "pg_dump_wait_started", "pg_dump_exit_zero",
+        "encrypted_archive_fsynced", "archive_toc_validation_started",
+        "archive_toc_validation_passed", "encrypted_archive_committed",
+    ))
+    phase = "not_started"
+
+    def note_phase(value: str) -> None:
+        nonlocal phase
+        if value not in phases:
+            raise RuntimeError("invalid internal backup checkpoint")
+        phase = value
+
     try:
         secret = os.environ.get("DANK_BACKUP_PASSPHRASE", "")
         if args.verify:
@@ -62,6 +80,7 @@ def main() -> int:
             dsn=os.environ.get("DANK_SOURCE_DATABASE_URL", ""),
             source_ref=os.environ.get("DANK_MIGRATION_SOURCE_REF", ""),
             passphrase=secret, output_dir=Path(args.output_dir),
+            phase_reporter=note_phase,
         )
         print(json.dumps(result, sort_keys=True))
         return 0
@@ -103,8 +122,19 @@ def main() -> int:
             "preflight_input_rejected":
                 "Check exact source project ref, URI format, private output folder and password length.",
         }
+        kind = (
+            "broken_pipe" if isinstance(exc, BrokenPipeError)
+            else "subprocess_timeout" if isinstance(exc, subprocess.TimeoutExpired)
+            else "filesystem_or_pipe_error" if isinstance(exc, OSError)
+            else "preflight_value_error" if isinstance(exc, ValueError)
+            else "controlled_backup_failure" if isinstance(exc, BackupFailure)
+            else "runtime_error" if isinstance(exc, RuntimeError)
+            else "unexpected_exception"
+        )
         print(json.dumps({
             "status": "failed", "failure_code": code,
+            "phase_at_failure": phase,
+            "error_kind": kind,
             "next_action": guidance.get(code, "Backup was not completed; do not approve migration."),
             "warning": "No source or destination database records were modified.",
         }, sort_keys=True))
