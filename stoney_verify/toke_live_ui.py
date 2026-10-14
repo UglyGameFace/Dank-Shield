@@ -608,6 +608,32 @@ class TokeCheersView(discord.ui.View):
                 content=f"⚠️ Could not open the member list: {type(exc).__name__}."
             )
 
+    @discord.ui.button(label="Remind Me", emoji="🔔", style=discord.ButtonStyle.secondary, custom_id="dank:toke:v2:remind", row=1)
+    async def remind(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if interaction.guild is None or interaction.message is None:
+            return await interaction.response.send_message("This sesh is unavailable.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            session = await toke_sessions.get(interaction.guild.id, interaction.message.id)
+            if not session or not session.get("active", False):
+                return await interaction.edit_original_response(content="This sesh has ended.")
+            member = interaction.user
+            permitted = {int(session["starter_role_id"]), int(session["notify_role_id"])}
+            if not any(int(role.id) in permitted for role in getattr(member, "roles", ())):
+                return await interaction.edit_original_response(
+                    content="A configured Toke community/notification role is required for reminders."
+                )
+            _, status = await toke_sessions.toggle_reminder(
+                interaction.guild.id, interaction.message.id, member.id,
+            )
+        except (OSError, ValueError):
+            return await interaction.edit_original_response(content="Could not save your reminder choice.")
+        await interaction.edit_original_response(
+            content="🔔 " + status,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank:toke:v2:refresh", row=1)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1380,6 +1406,58 @@ async def _on_toke_voice_state(
         _VOICE_WORKERS[gid] = asyncio.create_task(_flush_toke_voice_updates(member.guild, bot))
 
 
+async def _deliver_one_toke_reminder(bot: Any) -> None:
+    """At most one consenting-member DM per 15-second maintenance sweep.
+
+    A due delivery is durably claimed *before* making Discord requests.
+    Failed DMs, removed members and restarts do not cause duplicate attempts.
+    This uses the existing maintenance task, no extra worker or role ping.
+    """
+    if not callable(getattr(bot, "is_ready", None)) or not bot.is_ready():
+        return
+    claimed = await toke_sessions.claim_due_reminder()
+    if claimed is None:
+        return
+    session, user_id = claimed
+    guild = bot.get_guild(int(session["guild_id"]))
+    if guild is None:
+        return
+    member = guild.get_member(user_id)
+    if member is None:
+        try:
+            member = await asyncio.wait_for(guild.fetch_member(user_id), timeout=5)
+        except (discord.HTTPException, asyncio.TimeoutError):
+            return
+    if getattr(member, "bot", False):
+        return
+    allowed_roles = {int(session["starter_role_id"]), int(session["notify_role_id"])}
+    if not any(int(role.id) in allowed_roles for role in getattr(member, "roles", ())):
+        return
+    # Never send reminders for sessions that ended between claiming and
+    # loading the member. No member or role IDs are printed to bot logs.
+    latest = await toke_sessions.get(int(session["guild_id"]), int(session["message_id"]))
+    if not latest or not latest.get("active", False):
+        return
+    seconds_left = float(latest.get("expires_at", 0) or 0) - time.time()
+    if not 120 < seconds_left <= 600:
+        return
+    url = (
+        f"https://discord.com/channels/{int(session['guild_id'])}/"
+        f"{int(session['channel_id'])}/{int(session['message_id'])}"
+    )
+    try:
+        await asyncio.wait_for(member.send(
+            "🔔 Your requested /toke reminder: this sesh is scheduled to end "
+            f"<t:{int(latest['expires_at'])}:R>. Join or check the session: {url}\n"
+            "This was a one-time reminder you enabled. There will be no repeated DMs.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        ), timeout=5)
+    except (discord.HTTPException, asyncio.TimeoutError):
+        # At-most-once, not uncontrolled retries. A user can open the
+        # session card for current information if DMs were disabled.
+        return
+
+
 async def _expire_and_refresh(bot: Any) -> None:
     while not bot.is_closed():
         try:
@@ -1387,6 +1465,12 @@ async def _expire_and_refresh(bot: Any) -> None:
             for key, pending in list(_PENDING.items()):
                 if pending.deadline <= current:
                     _PENDING.pop(key, None)
+            # Personal reminders are opt-in and capped at one claimed attempt
+            # globally per sweep (four/minute, no repeated guild-role pings).
+            try:
+                await _deliver_one_toke_reminder(bot)
+            except (OSError, ValueError) as exc:
+                print(f"[toke] reminder store unavailable: {type(exc).__name__}")
             # Idle policy is opt-in per session. Use only cached real voice
             # rooms, sample live humans before and during the atomic close,
             # and bound work to 25 due sessions per sweep. Never end a sesh
