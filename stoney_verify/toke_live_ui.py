@@ -22,6 +22,7 @@ _DEFAULTS = {
     "max_interested": 100,
     "show_member_names": True,
     "voice_channel_id": 0,
+    "empty_vc_end_minutes": 0,  # Disabled by default. Must be opted into by staff.
 }
 _PENDING: dict[tuple[int, int], "PendingToke"] = {}
 _REGISTERED: set[tuple[int, int]] = set()
@@ -64,6 +65,11 @@ def settings_from_config(cfg: Mapping[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             val = int(result[key])
         result[key] = max(low, min(val, high))
+    try:
+        grace = int(raw.get("empty_vc_end_minutes", 0) or 0)
+    except (TypeError, ValueError):
+        grace = 0
+    result["empty_vc_end_minutes"] = max(5, min(120, grace)) if grace > 0 else 0
     result["show_member_names"] = raw.get("show_member_names", True) is not False
     try:
         result["voice_channel_id"] = max(0, int(raw.get("voice_channel_id", 0) or 0))
@@ -178,7 +184,9 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
             name="✅ This sesh has ended",
             value=(
                 f"Closed at <t:{ended_at}:f>."
-                + (" The time limit was reached." if reason == "expired" else " The host or staff ended it.")
+                + (" The time limit was reached." if reason == "expired"
+                   else " The room was empty past its configured grace period."
+                   if reason == "voice_idle" else " The host or staff ended it.")
                 + "\nStart a new `/toke` when you're ready. This announcement is no longer taking responses."
             ),
             inline=False,
@@ -216,9 +224,22 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
         )[:1024],
         inline=False,
     )
+    lifecycle = ""
+    if voice is not None:
+        away_since = int(session.get("host_away_since", 0) or 0)
+        empty_since = int(session.get("empty_voice_since", 0) or 0)
+        idle_limit = int(session.get("empty_vc_end_minutes", 0) or 0)
+        if away_since and int(session.get("starter_id", 0)) not in {
+            int(getattr(member, "id", 0))
+            for member in getattr(voice, "members", ()) or ()
+        }:
+            lifecycle += f"👑 Host away since <t:{away_since}:t>. This sesh stays active.\n"
+        if empty_since and idle_limit >= 5 and voice_count == 0:
+            lifecycle += f"🔕 Empty VC: auto-close <t:{empty_since + idle_limit * 60}:R> unless someone returns.\n"
     embed.add_field(
         name="⏳ Session",
         value=(
+            lifecycle +
             ((
                 f"Current host: <@{int(session['starter_id'])}>\n"
                 if visible else "Host was reassigned.\n"
@@ -244,7 +265,10 @@ async def reconcile_live_attendance(
     channel = guild.get_channel(int(session.get("voice_channel_id", 0) or 0))
     if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
         return dict(session)
-    present = {int(member.id) for member in (getattr(channel, "members", []) or [])}
+    present = {
+        int(member.id) for member in (getattr(channel, "members", []) or [])
+        if not getattr(member, "bot", False)
+    }
     current = await toke_sessions.reconcile_voice(
         int(session["guild_id"]), int(session["message_id"]),
         present, departed_ids=departed_ids,
@@ -954,7 +978,9 @@ def _setting_embed(settings: Mapping[str, Any]) -> discord.Embed:
             f"**Server cooldown:** {settings['guild_cooldown_minutes']} minutes\n"
             f"**Maximum interested:** {settings['max_interested']}\n"
             f"**Show participant names:** {'Yes' if settings['show_member_names'] else 'No'}\n"
-            f"**Default voice:** {f'<#{voice_id}>' if voice_id else 'None (use starter voice if connected)'}"
+            f"**Default voice:** {f'<#{voice_id}>' if voice_id else 'None (use starter voice if connected)'}\n"
+            f"**Empty VC auto-close:** "
+            f"{f'{settings.get('empty_vc_end_minutes', 0)} min after the room empties' if settings.get('empty_vc_end_minutes', 0) else 'Disabled (default)'}"
         ),
         color=discord.Color.green(),
     )
@@ -1012,10 +1038,48 @@ class TokeSettingsModal(discord.ui.Modal, title="Toke Meetup Settings"):
                 "max_interested": nums[3],
                 "show_member_names": choice == "yes",
                 "voice_channel_id": int(fresh["voice_channel_id"]),
+                "empty_vc_end_minutes": int(fresh["empty_vc_end_minutes"]),
             })
         except Exception as exc:
             return await interaction.edit_original_response(content=f"❌ Settings not saved: {type(exc).__name__}: {exc}")
         await interaction.edit_original_response(content="✅ Toke settings saved and verified.", embed=_setting_embed(actual))
+
+
+class TokeIdlePolicyModal(discord.ui.Modal, title="Toke Empty Voice Policy"):
+    idle = discord.ui.TextInput(
+        label="Auto-close empty VC after minutes (0 or 5-120)",
+        max_length=3, default="0",
+    )
+
+    def __init__(self, owner_id: int, settings: Mapping[str, Any]) -> None:
+        super().__init__(timeout=300)
+        self.owner_id = int(owner_id)
+        self.idle.default = str(settings.get("empty_vc_end_minutes", 0))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if (interaction.guild is None or interaction.user.id != self.owner_id
+                or not getattr(interaction.user.guild_permissions, "manage_guild", False)):
+            return await interaction.response.send_message("Manage Server is required.", ephemeral=True)
+        try:
+            minutes = int(str(self.idle.value).strip())
+        except ValueError:
+            return await interaction.response.send_message("Enter 0 or a whole number from 5 to 120.", ephemeral=True)
+        if minutes != 0 and not 5 <= minutes <= 120:
+            return await interaction.response.send_message("Choose 0 (disabled) or 5-120 minutes.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            fresh = settings_from_config(await _get_live_config(interaction.guild.id))
+            fresh["empty_vc_end_minutes"] = minutes
+            saved = await save_toke_settings(interaction.guild.id, interaction.user.id, fresh)
+        except Exception as exc:
+            return await interaction.edit_original_response(
+                content=f"Could not save the empty-room policy: {type(exc).__name__}.",
+            )
+        await interaction.edit_original_response(
+            content="✅ Saved. This applies to new seshes; existing sessions keep their original policy.",
+            embed=_setting_embed(saved),
+            view=TokeSettingsView(self.owner_id, saved),
+        )
 
 
 class TokeSettingsView(discord.ui.View):
@@ -1037,6 +1101,11 @@ class TokeSettingsView(discord.ui.View):
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.send_modal(TokeSettingsModal(self.owner_id, self.settings))
+
+    @discord.ui.button(label="Empty VC Policy", emoji="🔕", style=discord.ButtonStyle.secondary)
+    async def idle_policy(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.send_modal(TokeIdlePolicyModal(self.owner_id, self.settings))
 
     @discord.ui.button(label="Choose Default VC", emoji="🔊", style=discord.ButtonStyle.secondary)
     async def voice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1314,6 +1383,38 @@ async def _expire_and_refresh(bot: Any) -> None:
             for key, pending in list(_PENDING.items()):
                 if pending.deadline <= current:
                     _PENDING.pop(key, None)
+            # Idle policy is opt-in per session. Use only cached real voice
+            # rooms, sample live humans before and during the atomic close,
+            # and bound work to 25 due sessions per sweep. Never end a sesh
+            # merely because its VC is unavailable or empty at creation.
+            for session in await toke_sessions.idle_voice_candidates():
+                guild = bot.get_guild(int(session["guild_id"]))
+                voice = (
+                    guild.get_channel(int(session["voice_channel_id"]))
+                    if guild is not None else None
+                )
+                if not isinstance(voice, (discord.VoiceChannel, discord.StageChannel)):
+                    continue
+                present = any(not getattr(m, "bot", False) for m in (voice.members or []))
+                if present:
+                    await reconcile_live_attendance(guild, session)
+                    continue
+                current_session = await reconcile_live_attendance(guild, session)
+                if not current_session.get("active", False):
+                    continue
+                # Avoid closure if a new member was observed while reconciling.
+                if any(not getattr(m, "bot", False) for m in (voice.members or [])):
+                    await reconcile_live_attendance(guild, current_session)
+                    continue
+                ended = await toke_sessions.close_idle_voice(
+                    int(session["guild_id"]), int(session["message_id"]), confirmed_empty=True,
+                )
+                if ended is not None:
+                    try:
+                        await refresh_card(bot, ended)
+                    except (discord.HTTPException, OSError, ValueError) as exc:
+                        print(f"[toke] idle card sync delayed guild={session['guild_id']} "
+                              f"message={session['message_id']} error={type(exc).__name__}")
             # Persistent queue includes pre-existing expired cards, explicit
             # End Sesh actions and any failed Discord edits from prior boots.
             for session in await toke_sessions.pending_closed():
