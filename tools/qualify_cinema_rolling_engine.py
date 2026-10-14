@@ -406,10 +406,11 @@ def main():
                     "verified_ranges": results,
                 }, sort_keys=True), flush=True)
                 if not memory_mode:
-                    import asyncio
-                    asyncio.run(prove_rolling_gateway_http(
-                        base=base, root=root, source=source, infohash=infohash,
-                    ))
+                    raise AssertionError("Disk-backed Cinema is not approved for rolling streaming.")
+                import asyncio
+                asyncio.run(prove_rolling_gateway_http(
+                    base=base, root=root, source=source, infohash=infohash,
+                ))
             except Exception:
                 engine_log.flush()
                 print(
