@@ -100,10 +100,10 @@ def gateway(url, cache_dir):
 def settings(cache):
     return {
         "CacheSize": 16 * 1024 * 1024,
-        "UseDisk": True,
+        "UseDisk": False,
         "RemoveCacheOnDrop": True,
         "DisableUPNP": True,
-        "TorrentsSavePath": str(cache),
+        "TorrentsSavePath": "",
     }
 
 
@@ -135,10 +135,10 @@ def test_rolling_engine_refuses_unverified_disk_settings(tmp_path):
         try:
             transport = gateway(url, root)
             await transport.verified_settings()
-            upstream.settings["UseDisk"] = False
-            with pytest.raises(RollingGatewayUnavailable, match="configuration"):
-                await transport.verified_settings()
             upstream.settings["UseDisk"] = True
+            with pytest.raises(RollingGatewayUnavailable, match="memory-only"):
+                await transport.verified_settings()
+            upstream.settings["UseDisk"] = False
             upstream.settings["CacheSize"] = 512 * 1024 * 1024
             with pytest.raises(RollingGatewayUnavailable):
                 await transport.verified_settings()
