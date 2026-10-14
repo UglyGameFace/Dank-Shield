@@ -1904,3 +1904,15 @@ def test_cache_reserves_live_logical_size_plus_separate_orphan_allocations(
     assert snap.cache_used_bytes >= 2 * 1024 * 1024
     assert not snap.admission_allowed
     assert "cache budget" in snap.blocker.lower()
+
+
+def test_disk_cap_applies_even_when_memory_capacity_is_also_exhausted(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    manager = _manager(monkeypatch, tmp_path)
+    manager.disk_reserve_bytes = 0
+    manager.cache_budget_bytes = 1024 * 1024
+    monkeypatch.setattr(torrent_streaming, "current_rss_mb", lambda: 10_000.0)
+    assert "protected memory reserve" in manager.capacity_snapshot().blocker
+    with pytest.raises(RuntimeError, match="cache budget"):
+        manager._assert_disk_capacity(2 * 1024 * 1024)
