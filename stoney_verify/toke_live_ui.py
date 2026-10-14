@@ -620,7 +620,14 @@ class TokeCheersView(discord.ui.View):
                 return await interaction.edit_original_response(content="This sesh has ended.")
             member = interaction.user
             permitted = {int(session["starter_role_id"]), int(session["notify_role_id"])}
-            if not any(int(role.id) in permitted for role in getattr(member, "roles", ())):
+            already_opted_in = int(member.id) in {
+                int(uid) for uid in session.get("reminder_ids", [])
+            }
+            # Removing the role must never trap a person's DM preference.
+            # New opt-ins require a role, but cancellation is unconditional.
+            if not already_opted_in and not any(
+                int(role.id) in permitted for role in getattr(member, "roles", ())
+            ):
                 return await interaction.edit_original_response(
                     content="A configured Toke community/notification role is required for reminders."
                 )
