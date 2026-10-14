@@ -749,7 +749,7 @@ class TorrentMediaManager:
     def _committed_file_bytes(self, *, exclude_token: str = "") -> int:
         excluded = str(exclude_token or "")
         return sum(
-            max(0, int(self.rolling_gateway.per_torrent_bytes if session.rolling_media is not None and self.rolling_gateway is not None else getattr(session, "file_size", 0) or 0))
+            max(0, int(self.rolling_gateway.per_torrent_bytes if getattr(session, "rolling_media", None) is not None and self.rolling_gateway is not None else getattr(session, "file_size", 0) or 0))
             for token, session in self._sessions.items()
             if token != excluded
         )
