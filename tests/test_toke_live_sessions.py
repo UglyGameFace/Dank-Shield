@@ -149,7 +149,7 @@ def test_cheers_view_is_persistent_and_has_separate_participation_controls(isola
     v = live.TokeCheersView(starter_id=11, stoner_role_id=22, guild_id=123, voice_channel_id=456)
     assert v.timeout is None
     labels = {getattr(item, "label", "") for item in v.children}
-    assert {"Cheers", "I'm Joining", "Withdraw", "Who's Coming?", "Refresh", "End Sesh", "Join VC"} <= labels
+    assert {"Cheers", "I'm Joining", "Withdraw", "Who's Coming?", "Refresh", "Manage", "End Sesh", "Join VC"} <= labels
     interactive = [x for x in v.children if isinstance(x, discord.ui.Button) and x.style != discord.ButtonStyle.link]
     assert all(x.custom_id for x in interactive)
     assert any(getattr(x, "url", "").endswith("/123/456") for x in v.children if isinstance(x, discord.ui.Button) and x.style == discord.ButtonStyle.link)
@@ -179,13 +179,14 @@ def test_render_distinguishes_cheers_joining_voice_and_hidden_names(isolated_ses
     card = live.render_card(guild, session, original)
     assert "Cheers: 2" in card.fields[0].value
     assert "Joining: 2" in card.fields[0].value
-    assert "In VC: 2" in card.fields[0].value
+    assert "VC occupants: 2" in card.fields[0].value
+    assert "Sesh attendees: 1" in card.fields[0].value
     assert "<#999>" in card.fields[0].value
     crowd = card.fields[1].value
     assert crowd.count("**Host**") == 1
     assert "👑💨🙋🔊" in crowd
     assert crowd.count("<@3>") == 1
-    assert crowd.count("<@2>") == 1
+    assert "<@2>" not in crowd  # A VC occupant without RSVP is not a sesh participant.
     assert "<@1>" not in crowd  # Host is already identified in the description.
     assert "LongStyledHost" not in crowd
     assert card.description.count("LongStyledHost") == 1
@@ -414,3 +415,41 @@ def test_persisted_cooldown_uses_successful_launch_history(isolated_sessions):
         delay2, reason2 = await public_toke._persistent_cooldown_remaining(123, 222, settings)
         assert delay2 > 4 * 60 and "server" in reason2
     asyncio.run(check())
+
+
+def test_rsvp_capacity_counts_unique_members_across_both_buttons(isolated_sessions):
+    async def run():
+        await toke_sessions.save_new({**_session(), "max_interested": 2})
+        going, error = await toke_sessions.react(123, 456, 10, "going", max_interested=2)
+        assert not error and going["going_ids"] == [10] and going["cheers_ids"] == []
+        cheers, error = await toke_sessions.react(123, 456, 10, "cheers", max_interested=2)
+        assert not error and cheers["cheers_ids"] == [10]
+        second, error = await toke_sessions.react(123, 456, 11, "going", max_interested=2)
+        assert not error and second["going_ids"] == [10, 11]
+        blocked, error = await toke_sessions.react(123, 456, 12, "cheers", max_interested=2)
+        assert "limit" in error and blocked["cheers_ids"] == [10]
+        blocked, error = await toke_sessions.react(123, 456, 12, "going", max_interested=2)
+        assert "limit" in error and blocked["going_ids"] == [10, 11]
+        after, error = await toke_sessions.react(123, 456, 11, "cheers", max_interested=2)
+        assert not error and after["cheers_ids"] == [10, 11]
+    asyncio.run(run())
+
+
+def test_host_extension_is_bounded_and_survives_reads(isolated_sessions):
+    async def run():
+        await toke_sessions.save_new(_session())
+        prior = await toke_sessions.get(123, 456)
+        initial = prior["expires_at"]
+        increased, error = await toke_sessions.extend(123, 456, minutes=15)
+        assert not error and increased["expires_at"] == initial + 900
+        assert (await toke_sessions.get(123, 456))["expires_at"] == increased["expires_at"]
+        for _ in range(20):
+            changed, error = await toke_sessions.extend(123, 456, minutes=30)
+            if error:
+                break
+        assert "maximum lifetime" in error
+        assert changed["expires_at"] <= changed["created_at"] + 240 * 60
+        await toke_sessions.react(123, 456, 111, "end")
+        closed, error = await toke_sessions.extend(123, 456, minutes=15)
+        assert closed is None and "ended" in error
+    asyncio.run(run())
