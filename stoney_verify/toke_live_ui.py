@@ -158,6 +158,14 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
     historical_cheers = cheer_ids | {int(uid) for uid in session.get("past_cheers_ids", [])}
     historical_going = going_ids | {int(uid) for uid in session.get("past_going_ids", [])}
     expiry = float(session.get("expires_at", 0) or 0)
+    if session.get("host_transfer_count", 0):
+        # The original announcement names its author, not the current host.
+        # Make that distinction explicit instead of leaving the old header
+        # falsely saying that the first host is still calling the sesh.
+        if embed.description:
+            embed.description = embed.description.replace(
+                "is calling the sesh crowd.", "started this sesh."
+            )
     if not active or expiry <= time.time():
         ended_at = int(session.get("closed_at") or expiry or time.time())
         reason = str(session.get("close_reason") or "expired")
@@ -211,7 +219,11 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
     embed.add_field(
         name="⏳ Session",
         value=(
-            f"Scheduled end: <t:{int(expiry)}:f>\n"
+            ((
+                f"Current host: <@{int(session['starter_id'])}>\n"
+                if visible else "Host was reassigned.\n"
+            ) if session.get("host_transfer_count", 0) else "")
+            + f"Scheduled end: <t:{int(expiry)}:f>\n"
             f"Counts last checked: <t:{int(time.time())}:t>  ·  Tap **Refresh** for current status."
         ),
         inline=False,
@@ -338,6 +350,8 @@ class TokeMediaLayout(discord.ui.LayoutView):
         )
         card = render_card(guild, session, discord.Embed(title="💨 Toke Time"))
         active = bool(session.get("active", False)) and float(session.get("expires_at", 0) or 0) > time.time()
+        if active and session.get("host_transfer_count", 0):
+            intro = intro.replace("is calling the sesh crowd.", "started this sesh.")
         if not active:
             if "## 💨 Toke Time · Sesh Ended" not in intro:
                 intro = intro.replace("## 💨 Toke Time", "## 💨 Toke Time · Sesh Ended", 1)
@@ -633,7 +647,7 @@ class TokeCheersView(discord.ui.View):
         if interaction.user.id != int(session["starter_id"]) and not getattr(interaction.user.guild_permissions, "manage_guild", False):
             return await interaction.edit_original_response(content="Only the host or server managers can manage this sesh.")
         await interaction.edit_original_response(
-            content="Manage this sesh. Extensions do not ping members again.",
+            content="Manage this sesh. Extensions and host transfers do not ping members again.",
             view=TokeManageView(interaction.user.id, interaction.guild.id, interaction.message.id),
         )
 
@@ -643,14 +657,20 @@ class TokeCheersView(discord.ui.View):
         if interaction.guild is None or interaction.message is None:
             return await interaction.response.send_message("This sesh is no longer available.", ephemeral=True)
         member = interaction.user
-        if member.id != self.starter_id and not getattr(member.guild_permissions, "manage_guild", False):
-            return await interaction.response.send_message(
-                "Only the starter or server managers can end this sesh.", ephemeral=True,
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            session = await toke_sessions.get(interaction.guild.id, interaction.message.id)
+        except (OSError, ValueError):
+            return await interaction.edit_original_response(content="The sesh is temporarily unavailable.")
+        if not session or not session.get("active", False):
+            return await interaction.edit_original_response(content="This sesh has already ended.")
+        if member.id != int(session["starter_id"]) and not getattr(member.guild_permissions, "manage_guild", False):
+            return await interaction.edit_original_response(
+                content="Only the current host or server managers can end this sesh."
             )
-        await interaction.response.send_message(
-            "End this sesh for everyone? Responses will close immediately.",
+        await interaction.edit_original_response(
+            content="End this sesh for everyone? Responses will close immediately.",
             view=TokeEndConfirmView(self, member.id, interaction.message.id),
-            ephemeral=True,
         )
 
 
@@ -711,9 +731,155 @@ class TokeManageView(discord.ui.View):
     async def thirty(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._extend(interaction, 30)
 
+    @discord.ui.button(label="Transfer Host", emoji="👑", style=discord.ButtonStyle.secondary)
+    async def transfer(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.defer()
+        if interaction.guild is None or interaction.guild.id != self.guild_id:
+            return await interaction.edit_original_response(content="This sesh is unavailable.", view=None)
+        try:
+            session = await toke_sessions.get(self.guild_id, self.message_id)
+        except (OSError, ValueError):
+            return await interaction.edit_original_response(content="The sesh is temporarily unavailable.", view=None)
+        if not session or not session.get("active", False):
+            return await interaction.edit_original_response(content="This sesh has ended.", view=None)
+        if interaction.user.id != int(session["starter_id"]) and not getattr(interaction.user.guild_permissions, "manage_guild", False):
+            return await interaction.edit_original_response(content="You can no longer manage this sesh.", view=None)
+        await interaction.edit_original_response(
+            content="Select a server member who has the configured Toke starter role. You'll confirm the transfer next.",
+            view=TokeHostPickerView(self.actor_id, self.guild_id, self.message_id),
+        )
+
     @discord.ui.button(label="Close", style=discord.ButtonStyle.secondary)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.edit_message(content="Sesh manager closed.", view=None)
+
+
+async def _resolve_toke_handoff_target(guild: discord.Guild, user_id: int) -> discord.Member | None:
+    """Resolve only the explicitly selected member, never chunk every guild.
+
+    The native UserSelect may resolve a valid guild user even when member
+    caching is disabled. A single user-triggered REST lookup is safe; a
+    missing/forbidden member fails closed.
+    """
+    member = guild.get_member(int(user_id))
+    if member is not None:
+        return member
+    try:
+        return await guild.fetch_member(int(user_id))
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        return None
+
+
+
+class TokeHostPickerView(discord.ui.View):
+    """Choose the next host privately; never reassign on selection alone."""
+
+    def __init__(self, actor_id: int, guild_id: int, message_id: int) -> None:
+        super().__init__(timeout=120)
+        self.actor_id, self.guild_id, self.message_id = int(actor_id), int(guild_id), int(message_id)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.actor_id or interaction.guild is None or int(interaction.guild.id) != self.guild_id:
+            await interaction.response.send_message("Open your own sesh manager.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Choose the new Toke host", min_values=1, max_values=1)
+    async def choose(self, interaction: discord.Interaction, select: discord.ui.UserSelect) -> None:
+        await interaction.response.defer()
+        if interaction.guild is None:
+            return await interaction.edit_original_response(content="This server is unavailable.", view=None)
+        try:
+            current = await toke_sessions.get(self.guild_id, self.message_id)
+        except (OSError, ValueError):
+            return await interaction.edit_original_response(content="The sesh is temporarily unavailable.", view=None)
+        if not current or not current.get("active", False):
+            return await interaction.edit_original_response(content="This sesh has ended.", view=None)
+        if interaction.user.id != int(current["starter_id"]) and not getattr(interaction.user.guild_permissions, "manage_guild", False):
+            return await interaction.edit_original_response(content="You can no longer manage this sesh.", view=None)
+        candidate = await _resolve_toke_handoff_target(interaction.guild, int(select.values[0].id))
+        if candidate is None or candidate.bot:
+            return await interaction.edit_original_response(content="Choose a current non-bot server member.", view=None)
+        if int(candidate.id) == int(current["starter_id"]):
+            return await interaction.edit_original_response(content="That member is already hosting this sesh.", view=None)
+        if not any(int(role.id) == int(current["starter_role_id"]) for role in candidate.roles):
+            return await interaction.edit_original_response(
+                content="The new host must have the configured Toke starter role.", view=None,
+            )
+        await interaction.edit_original_response(
+            content=f"Transfer this sesh to <@{int(candidate.id)}> without pinging the role?",
+            view=TokeHostConfirmView(
+                self.actor_id, self.guild_id, self.message_id,
+                expected_starter_id=int(current["starter_id"]), new_starter_id=int(candidate.id),
+            ),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+class TokeHostConfirmView(discord.ui.View):
+    """Confirmation rechecks guild membership, role, and atomic host ownership."""
+
+    def __init__(
+        self, actor_id: int, guild_id: int, message_id: int, *,
+        expected_starter_id: int, new_starter_id: int,
+    ) -> None:
+        super().__init__(timeout=60)
+        self.actor_id = int(actor_id)
+        self.guild_id, self.message_id = int(guild_id), int(message_id)
+        self.expected_starter_id = int(expected_starter_id)
+        self.new_starter_id = int(new_starter_id)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.actor_id or interaction.guild is None or int(interaction.guild.id) != self.guild_id:
+            await interaction.response.send_message("This is not your confirmation.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Confirm Transfer", emoji="👑", style=discord.ButtonStyle.primary)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.defer()
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.edit_original_response(content="This sesh is unavailable.", view=None)
+        try:
+            session = await toke_sessions.get(self.guild_id, self.message_id)
+            if not session or not session.get("active", False):
+                return await interaction.edit_original_response(content="This sesh has ended.", view=None)
+            if interaction.user.id != int(session["starter_id"]) and not getattr(interaction.user.guild_permissions, "manage_guild", False):
+                return await interaction.edit_original_response(content="You can no longer manage this sesh.", view=None)
+            member = await _resolve_toke_handoff_target(guild, self.new_starter_id)
+            if member is None or member.bot:
+                return await interaction.edit_original_response(content="The selected member is no longer in this server.", view=None)
+            if not any(int(role.id) == int(session["starter_role_id"]) for role in member.roles):
+                return await interaction.edit_original_response(content="The selected member no longer has the Toke starter role.", view=None)
+            updated, error = await toke_sessions.transfer_host(
+                self.guild_id, self.message_id,
+                expected_starter_id=self.expected_starter_id,
+                new_starter_id=self.new_starter_id,
+            )
+            if error:
+                return await interaction.edit_original_response(content=f"⚠️ {error}", view=None)
+        except (OSError, ValueError):
+            return await interaction.edit_original_response(content="Could not save the host transfer.", view=None)
+        try:
+            refreshed = await refresh_card(interaction.client, updated)
+        except (discord.HTTPException, OSError, ValueError):
+            refreshed = False
+        await interaction.edit_original_response(
+            content=(
+                "✅ The new host can now manage and end this sesh."
+                if refreshed else
+                "✅ Host transfer saved. The public card update is delayed."
+            ),
+            view=None,
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.edit_message(content="Host transfer cancelled.", view=None)
 
 
 class TokeEndConfirmView(discord.ui.View):

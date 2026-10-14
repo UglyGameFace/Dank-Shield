@@ -357,21 +357,24 @@ def test_uploaded_media_view_restores_after_bot_restart(storage, layout):
 
 def test_end_sesh_requires_private_confirm_and_cancel_does_not_end():
     async def run():
+        await toke_sessions.save_new(_session())
         source = live.TokeCheersView(1, 9, guild_id=100, message_id=200)
-        sent = []
-        async def send_message(*args, **kwargs):
-            sent.append((args, kwargs))
+        calls = []
+        async def defer(**kwargs):
+            calls.append(("defer", kwargs))
+        async def edit_original_response(**kwargs):
+            calls.append(("edit", kwargs))
         guild = SimpleNamespace(id=100)
         message = SimpleNamespace(id=200)
         owner = SimpleNamespace(id=1, guild_permissions=SimpleNamespace(manage_guild=False))
         interaction = SimpleNamespace(
             guild=guild, message=message, user=owner,
-            response=SimpleNamespace(send_message=send_message),
+            response=SimpleNamespace(defer=defer),
+            edit_original_response=edit_original_response,
         )
         await source.end.callback(interaction)
-        assert len(sent) == 1
-        assert sent[0][1]["ephemeral"] is True
-        confirmation = sent[0][1]["view"]
+        assert calls[0] == ("defer", {"ephemeral": True, "thinking": True})
+        confirmation = calls[1][1]["view"]
         assert isinstance(confirmation, live.TokeEndConfirmView)
         assert confirmation.message_id == 200 and confirmation.actor_id == 1
 
@@ -384,13 +387,13 @@ def test_end_sesh_requires_private_confirm_and_cancel_does_not_end():
         await confirmation.cancel.callback(cancel_click)
         assert cancelled == [{"content": "Sesh stays active.", "view": None}]
 
-        sent.clear()
+        calls.clear()
         non_host = SimpleNamespace(id=99, guild_permissions=SimpleNamespace(manage_guild=False))
         interaction.user = non_host
         await source.end.callback(interaction)
-        assert len(sent) == 1
-        assert "Only the starter or server managers" in sent[0][0][0]
-        assert "view" not in sent[0][1]
+        assert calls[0][0] == "defer"
+        assert "Only the current host or server managers" in calls[1][1]["content"]
+        assert "view" not in calls[1][1]
     asyncio.run(run())
 
 

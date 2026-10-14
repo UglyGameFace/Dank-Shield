@@ -210,6 +210,42 @@ async def extend(
         return dict(session), ""
 
 
+async def transfer_host(
+    guild_id: int, message_id: int, *,
+    expected_starter_id: int, new_starter_id: int,
+) -> tuple[dict[str, Any] | None, str]:
+    """Atomically transfer an active session using a previous-host CAS.
+
+    Permission and role checks belong to the interaction boundary. The store
+    refuses stale confirmations so two moderators cannot silently override
+    each other's transfer. No extra notifications or session reset occurs.
+    """
+    if expected_starter_id <= 0 or new_starter_id <= 0:
+        return None, "Invalid host selection."
+    async with _LOCK:
+        data = _read()
+        expired = _expire(data, time.time())
+        session = data.get(_id(guild_id, message_id))
+        if not session or not session.get("active", False):
+            if expired:
+                _write(data)
+            return None, "This sesh has ended or expired."
+        current = int(session.get("starter_id", 0))
+        if current != expected_starter_id:
+            if expired:
+                _write(data)
+            return dict(session), "The sesh host has already changed. Reopen Manage."
+        if current == new_starter_id:
+            if expired:
+                _write(data)
+            return dict(session), "That member is already hosting this sesh."
+        session.setdefault("original_starter_id", current)
+        session["starter_id"] = new_starter_id
+        session["host_transfer_count"] = int(session.get("host_transfer_count", 0) or 0) + 1
+        _write(data)
+        return dict(session), ""
+
+
 async def reconcile_voice(
     guild_id: int,
     message_id: int,
