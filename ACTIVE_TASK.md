@@ -1,3 +1,73 @@
+# Active Task Lock — Complete /toke overhaul (2026-10-14)
+
+**Authorized FORCE SWITCH:** User explicitly suspended the Discloud PostgreSQL
+migration because Discloud support is blocking operator steps. This /toke
+modernization is the **only active implementation task**. Existing PostgreSQL
+migration work is preserved, not undone, and production remains untouched.
+
+**Active outcome:** Develop the complete /toke improvements in validated slices
+while avoiding the unfinished Discloud database cutover. Current focused slice:
+truthful distinct Cheers/Joining RSVP semantics; unique-member capacity;
+session-specific VC selection with publish-time access checks, including the
+GIF composer; host/staff +15/+30 extension capped at four hours from creation;
+accurate session-specific attendees vs whole-VC occupancy; durable bounded
+retry/retention for closed-message edits. Preserve inline media, buttons,
+explicit End Sesh confirmation, restart restoration and historical attendance.
+
+**Base and execution path:** `main@86a48adfa4191750c860275aabd1d58f33206902`,
+production's last confirmed independent branch snapshot is
+`aaa-cinema-pre-pregateway-bind@0401552e859afbed7c17845366f87752b638235c`.
+Work branch: `feat/toke-lifecycle-and-coordination-20261014` off main.
+`public_command_surface_v2` registers `public_toke.open_toke_command` ->
+`_publish_toke` -> `toke_sessions.save_new`; `toke_live_ui` handles
+persistent session interactions, composer, on_voice_state_update,
+expiry and view recovery. The durable session store is currently the
+JSON file `DANK_TOKE_SESSIONS_FILE`, with one local process lock.
+
+**Findings:** Previously `going` also added `cheers`, but capacity checked
+only Cheers. Session roster included unrelated VC occupants as participants.
+Every inaccessible expired card could attempt a Discord edit every 15 seconds,
+and unsynced terminal sessions were retained indefinitely. No per-session
+VC override or host extension control existed.
+
+**Changes on current branch:** Distinct RSVPs and union capacity, truthful
+voice counts/roster, bounded extension, optional selected VC in slash/draft,
+persisted exponential closure retry and seven-day terminal retention.
+Targeted regression tests updated and added. No PostgreSQL/Supabase migration,
+startup shim, shared storage hook, Cinema or Voice Safety source is changed.
+
+**Validation status:** Code changes authored; independent local runtime,
+exact-head CI, Discord integration and Android/Discloud acceptance are pending.
+Do not call this deployed, production-ready or complete until verified.
+Check original branch ancestry and final PR diff before merging. Do not
+enable auto-deploy or alter Discord bot token/application identity.
+
+**Suspended migration checkpoint:** PRs #545–#553 were merged to main,
+including staged PG17 data migration, shadow/parity/CAS repositories,
+disposable PG17 integration tests and an Android-friendly *manual* encrypted
+Supabase-source backup workflow (#553). User has not performed an independently
+verified full live-source encrypted backup/restore or approved a live cutover.
+Discloud's actual SSD disk allowance, backup/restore capability, private
+schema/voice-data ownership and required credentials remain unverified with
+support. Existing source Supabase RPC rollout/production safety and canary
+gates also remain pending. No live Supabase deletion, Discloud database copy,
+voice-bot DB mutation or main production cutover is authorized. Resume from
+`main@86a48adfa4191750c860275aabd1d58f33206902` and recheck newer
+commits before any migration activity; validate backup, disk and rollback first.
+
+**Remaining /toke backlog (same task, not concurrent implementations):**
+validated DB-backed session repository once core PG17 migration is ready;
+active-VC event indexing without duplicate authority; host absence/handoff
+policy; smart opt-in notification and quiet hours; owner presets/settings;
+lightweight bounded engagement metrics, fuller Android/mobile and
+10,000-guild scale validation. Stage these after the current slice's DoD.
+
+**Next:** Open draft PR for the focused slice, run exact-head CI and
+regression checks, resolve defects without patches or hidden fallbacks,
+then review diff and complete controlled integration validation.
+
+---
+
 # Active Task Lock — Discloud PostgreSQL guild settings parity (2026-10-13)
 
 **Current task:** After merged PR #547, implement an explicit standalone
