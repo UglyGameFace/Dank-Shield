@@ -138,14 +138,21 @@ jobs:
               ).fetchone()
               if extension is None:
                   raise SystemExit("Supabase Vault is missing in the disposable PG17 image")
-              # GitHub prints service container logs on teardown. Prevent
-              # restore failures from logging statements with private data.
-              conn.execute("ALTER SYSTEM SET log_min_error_statement = 'panic'")
-              conn.execute("ALTER SYSTEM SET log_min_messages = 'fatal'")
-              conn.execute("SELECT pg_reload_conf()")
-              messages = conn.execute("SHOW log_min_messages").fetchone()[0]
-              statements = conn.execute("SHOW log_min_error_statement").fetchone()[0]
-              if messages != "fatal" or statements != "panic":
+              # All restore sessions use this dedicated disposable superuser.
+              # Role settings apply atomically to fresh sessions, unlike an
+              # asynchronous ALTER SYSTEM reload. GitHub publishes container
+              # logs on teardown, so restored SQL must not appear there.
+              conn.execute("ALTER ROLE supabase_admin SET log_statement = 'none'")
+              conn.execute("ALTER ROLE supabase_admin SET log_min_error_statement = 'panic'")
+              conn.execute("ALTER ROLE supabase_admin SET log_min_messages = 'fatal'")
+          with psycopg.connect(
+              host="127.0.0.1", port=5432, user="supabase_admin",
+              dbname="postgres", password="postgres", connect_timeout=10,
+          ) as proof:
+              messages = proof.execute("SHOW log_min_messages").fetchone()[0]
+              statements = proof.execute("SHOW log_min_error_statement").fetchone()[0]
+              sql_log = proof.execute("SHOW log_statement").fetchone()[0]
+              if (messages, statements, sql_log) != ("fatal", "panic", "none"):
                   raise SystemExit("Private restore logging safeguards not active")
           print("Isolated Supabase PG17 extensions and private logging verified.")
           PY
