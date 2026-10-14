@@ -41,6 +41,30 @@ def test_full_disposable_pg17_restore_with_critical_data(tmp_path, monkeypatch):
                 ).format(sql.Identifier(table))
             )
 
+    # A small synthetic staging-candidate set proves we distinguish
+    # valid logical keys, duplicates, and missing key columns safely.
+    with psycopg.connect(connection, password="postgres") as conn:
+        conn.execute(
+            "create table if not exists public.guild_security_settings "
+            "(guild_id bigint not null, enabled boolean not null)"
+        )
+        conn.execute(
+            "insert into public.guild_security_settings(guild_id,enabled) "
+            "values (987123, true)"
+        )
+        conn.execute(
+            "create table if not exists public.guild_role_rules "
+            "(guild_id bigint, role_id bigint, rule text)"
+        )
+        conn.execute(
+            "insert into public.guild_role_rules(guild_id,role_id,rule) "
+            "values (987123, 2, 'a'), (987123, 2, 'b')"
+        )
+        conn.execute(
+            "create table if not exists public.guild_roles "
+            "(name text not null)"
+        )
+
     # No source Supabase or Discloud environment variables. This is a
     # disposable local Postgres source that we can safely restore elsewhere.
     dumping = subprocess.Popen([
@@ -91,6 +115,22 @@ def test_full_disposable_pg17_restore_with_critical_data(tmp_path, monkeypatch):
         count >= 1 for count in outcome["critical_table_row_counts"].values()
     )
     assert outcome["schema_table_counts"]["public"] >= 5
+    inventory = outcome["staging_candidate_inventory"]
+    assert inventory["source_snapshot_only"] is True
+    assert inventory["cutover_authorized"] is False
+    candidates = inventory["candidate_tables"]
+    from stoney_verify.core_data_stage import SOURCE_KEYS
+    assert set(candidates) == set(SOURCE_KEYS)
+    assert candidates["guild_configs"]["rows"] >= 1
+    assert candidates["guild_configs"]["status"] == "keys_valid"
+    assert candidates["guild_security_settings"] == {
+        "status": "keys_valid", "rows": 1,
+        "null_keys_present": False, "duplicate_keys_present": False,
+    }
+    assert candidates["guild_role_rules"]["status"] == "invalid_keys"
+    assert candidates["guild_role_rules"]["duplicate_keys_present"] is True
+    assert candidates["guild_roles"]["status"] == "missing_key_columns"
+    assert candidates["member_cleanup_settings"]["status"] == "missing"
 
 
 @pytest.mark.skipif(
