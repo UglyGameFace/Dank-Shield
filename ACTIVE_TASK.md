@@ -1,3 +1,41 @@
+# Active Task Lock — /toke host handoff and lifecycle controls (2026-10-14)
+
+**Single active task:** Complete Dank Shield /toke overhaul, authorized by
+the owner's explicit FORCE SWITCH on 2026-10-14. Discloud PostgreSQL migration
+remains *suspended* with all safety/backup/storage checkpoints below preserved.
+
+**Verified previous slice:** PR #560 merged into main and all eight applicable
+exact-head checks passed, including 3,584+ repository-wide tests and dedicated
+/toke validation. Production deployment/canary is not verified.
+
+**Current slice:** From `main` after merged PR #560, branch
+`feat/toke-host-handoff-20261014`. Add a private Manage → Transfer Host
+native member picker and confirmation; require chosen human still belongs to
+the guild and has the configured Toke starter role; recheck actor manager/host
+authorization at both selection and confirmation. Persist handoff atomically
+with expected-current-host CAS so stale staff confirmations cannot overwrite
+another transfer. Existing RSVPs, session time, inline media, cooldowns and
+expiration state are not reset, and no extra notification pings are sent.
+Display current host distinctly from original announcement author, honoring
+hidden participant-name settings. Fix initial End Sesh button authorization to
+read the *current durable host*, including old Discord persistent views after
+handoff. Keep explicit End Sesh confirmation.
+
+**Validation:** Tests added for concurrent/stale transfer, guild isolation,
+expiry, restart persistence, role revocation, private UI and latest-host
+permission, plus compatibility with inline V2. Exact-head CI, Android and
+live Discloud integration are still required; do not declare deployment.
+
+**Boundaries:** No Discloud database access/migration, Supabase writes,
+hidden fallback/monkey patches, unrelated feature change or production branch
+cutover. No live database-backed /toke session store in this slice.
+
+**Next:** Finish focused tests and repo-wide checks, fix only verified
+regressions, open draft PR, and proceed to quiet-session/reminder policy and
+scalable active-session event indexing after this slice is validated.
+
+---
+
 # Active Task Lock — Complete /toke overhaul (2026-10-14)
 
 **Authorized FORCE SWITCH:** User explicitly suspended the Discloud PostgreSQL
