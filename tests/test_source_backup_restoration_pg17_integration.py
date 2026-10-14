@@ -64,6 +64,14 @@ def test_full_disposable_pg17_restore_with_critical_data(tmp_path, monkeypatch):
             "create table if not exists public.guild_roles "
             "(name text not null)"
         )
+        conn.execute(
+            "create table if not exists public.member_cleanup_settings "
+            "(guild_id bigint, setting text)"
+        )
+        conn.execute(
+            "insert into public.member_cleanup_settings(guild_id,setting) "
+            "values (null, 'unsafe-key')"
+        )
 
     # No source Supabase or Discloud environment variables. This is a
     # disposable local Postgres source that we can safely restore elsewhere.
@@ -130,7 +138,9 @@ def test_full_disposable_pg17_restore_with_critical_data(tmp_path, monkeypatch):
     assert candidates["guild_role_rules"]["status"] == "invalid_keys"
     assert candidates["guild_role_rules"]["duplicate_keys_present"] is True
     assert candidates["guild_roles"]["status"] == "missing_key_columns"
-    assert candidates["member_cleanup_settings"]["status"] == "missing"
+    assert candidates["member_cleanup_settings"]["status"] == "invalid_keys"
+    assert candidates["member_cleanup_settings"]["null_keys_present"] is True
+    assert candidates["member_verify_timers"]["status"] == "missing"
 
 
 @pytest.mark.skipif(
