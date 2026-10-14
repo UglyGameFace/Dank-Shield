@@ -274,12 +274,32 @@ async def pending_closed(limit: int = 100) -> list[dict[str, Any]]:
     """
     async with _LOCK:
         data = _read()
-        if _expire(data, time.time()):
+        now = time.time()
+        if _expire(data, now):
             _write(data)
         return [
             dict(session) for session in data.values()
-            if not session.get("active", False) and session.get("close_pending", False)
+            if not session.get("active", False)
+            and session.get("close_pending", False)
+            and float(session.get("close_retry_at", 0) or 0) <= now
         ][:max(1, limit)]
+
+
+async def defer_closed_retry(guild_id: int, message_id: int) -> None:
+    """Persist per-message exponential backoff for failed Discord card edits.
+
+    A failed card does not starve other terminal cards in the bounded queue,
+    and repeated restarts do not reset its retry budget.
+    """
+    async with _LOCK:
+        data = _read()
+        session = data.get(_id(guild_id, message_id))
+        if not session or not session.get("close_pending", False):
+            return
+        attempts = min(32, int(session.get("close_retry_count", 0) or 0) + 1)
+        session["close_retry_count"] = attempts
+        session["close_retry_at"] = time.time() + min(3600, 15 * (2 ** min(attempts - 1, 8)))
+        _write(data)
 
 
 async def recoverable_views(guild_id: int | None = None) -> list[dict[str, Any]]:
@@ -303,6 +323,8 @@ async def mark_closed_synced(guild_id: int, message_id: int) -> None:
         if entry and not entry.get("active", False) and entry.get("close_pending", False):
             entry["close_pending"] = False
             entry["close_synced"] = True
+            entry.pop("close_retry_count", None)
+            entry.pop("close_retry_at", None)
             _write(data)
 
 
