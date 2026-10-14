@@ -238,7 +238,7 @@ def main():
         engine_log = log_path.open("wb")
         proc = subprocess.Popen([
             binary, "--port", str(port), "--ip", "127.0.0.1",
-            "--path", str(runtime_dir), "--torrent-addr", "127.0.0.1:0",
+            "--path", str(runtime_dir), "--torrentaddr", "127.0.0.1:0",
         ], cwd=str(root), stdout=engine_log, stderr=subprocess.STDOUT)
         try:
             for _ in range(60):
