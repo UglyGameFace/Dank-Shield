@@ -254,6 +254,7 @@ async def transfer_host(
         # A deliberate handoff grants the new host a full empty-room grace
         # period rather than inheriting the old host's elapsed countdown.
         session["empty_voice_since"] = 0
+        session.pop("idle_check_retry_at", None)
         session["host_transfer_count"] = int(session.get("host_transfer_count", 0) or 0) + 1
         _write(data)
         return dict(session), ""
@@ -321,6 +322,8 @@ async def reconcile_voice(
             session["host_away_since"] = host_away
             session["voice_had_humans"] = had_humans
             session["empty_voice_since"] = empty_since
+            if present:
+                session.pop("idle_check_retry_at", None)
             session["cheers_ids"] = updated_cheers
             session["going_ids"] = updated_going
             session["voice_seen_ids"] = updated_seen
@@ -348,8 +351,25 @@ async def idle_voice_candidates(limit: int = 25) -> list[dict[str, Any]]:
             and int(s.get("voice_channel_id", 0) or 0) > 0
             and int(s.get("empty_vc_end_minutes", 0) or 0) >= 5
             and float(s.get("empty_voice_since", 0) or 0) > 0
+            and float(s.get("idle_check_retry_at", 0) or 0) <= now
             and float(s["empty_voice_since"]) + int(s["empty_vc_end_minutes"]) * 60 <= now
         ][:max(1, min(25, limit))]
+
+
+async def defer_idle_voice_check(guild_id: int, message_id: int) -> None:
+    """Skip an inaccessible VC temporarily instead of starving due sessions.
+
+    This is a bounded per-session queue delay, not an automatic closure.
+    """
+    async with _LOCK:
+        data = _read()
+        entry = data.get(_id(guild_id, message_id))
+        if not entry or not entry.get("active", False):
+            return
+        if not entry.get("empty_voice_since", 0) or not entry.get("empty_vc_end_minutes", 0):
+            return
+        entry["idle_check_retry_at"] = time.time() + 60
+        _write(data)
 
 
 async def close_idle_voice(guild_id: int, message_id: int, *, confirmed_empty: bool) -> dict[str, Any] | None:
