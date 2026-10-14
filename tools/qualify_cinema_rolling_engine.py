@@ -390,6 +390,10 @@ def main():
                     raise AssertionError(f"memory-only engine wrote {used} media cache bytes")
                 if not memory_mode and used > CACHE_BYTES * 4:
                     raise AssertionError(f"disk cache exceeded 4x transient bound: {used}")
+                if memory_mode and rss_peak[0] > 512 * 1024 * 1024:
+                    raise AssertionError(
+                        f"memory-only engine RSS exceeded qualification guard: {rss_peak[0]}"
+                    )
                 print(json.dumps({
                     "peak_worker_rss_bytes": rss_peak[0],
                     "result": "real_engine_memory_only" if memory_mode else "real_engine_qualification_only",
