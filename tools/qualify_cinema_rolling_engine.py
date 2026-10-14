@@ -204,6 +204,84 @@ def check_range(base, torrent_uri, offset):
     raise AssertionError(f"range {offset} cannot be streamed: {last}")
 
 
+async def prove_rolling_gateway_http(
+    *, base: str, root: Path, source: Path, infohash: str,
+) -> None:
+    """Exercise the production rolling transport against real TorrServer.
+
+    The synthetic seeder and actual engine are already running. A separate
+    loopback test route checks authorization before giving the transport a
+    request, just as the existing signed Cinema route does in production.
+    """
+    from aiohttp import ClientSession, web
+    from stoney_verify.cinema_rolling_gateway import CinemaRollingGateway
+
+    client = CinemaRollingGateway(
+        base_url=base,
+        cache_dir=root / "piece-cache",
+        cache_budget_bytes=64 * 1024 * 1024,
+        per_torrent_cache_bytes=16 * 1024 * 1024,
+        max_torrents=1,
+        max_parallel_ranges=4,
+        max_per_guild_ranges=2,
+    )
+    await client.verified_settings()
+    media = await client.add(
+        info_hash=infohash,
+        source="",
+        source_torrent_file=source,
+        expected_file_path=NAME,
+        expected_file_size=FILE_BYTES,
+    )
+
+    async def signed_media(request: web.Request) -> web.StreamResponse:
+        if request.query.get("signed") != "ci-test-token":
+            raise web.HTTPUnauthorized()
+        try:
+            start = int(request.match_info["offset"])
+        except (ValueError, KeyError) as exc:
+            raise web.HTTPBadRequest() from exc
+        if start not in POSITIONS:
+            raise web.HTTPForbidden()
+        return await client.stream(
+            request,
+            media=media,
+            start=start,
+            end=start + RANGE_BYTES - 1,
+            content_type="video/x-matroska",
+            guild_id=1,
+        )
+
+    app = web.Application()
+    app.router.add_get("/ci/signed/{offset}", signed_media)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    listening = site._server.sockets[0].getsockname()[1]
+    try:
+        async with ClientSession() as http:
+            no_sig = f"http://127.0.0.1:{listening}/ci/signed/{POSITIONS[0]}"
+            async with http.get(no_sig) as response:
+                if response.status != 401:
+                    raise AssertionError("Unsigned large media accessed engine")
+            for offset in (POSITIONS[0], POSITIONS[-1], POSITIONS[0]):
+                uri = f"http://127.0.0.1:{listening}/ci/signed/{offset}?signed=ci-test-token"
+                async with http.get(uri, timeout=50) as response:
+                    payload = await response.read()
+                    expected_header = f"bytes {offset}-{offset + RANGE_BYTES - 1}/{FILE_BYTES}"
+                    if response.status != 206 or response.headers.get("Content-Range") != expected_header:
+                        raise AssertionError("Proxy corrupted HTTP 206 range metadata")
+                    if payload != proof_piece(offset // PIECE_BYTES)[:RANGE_BYTES]:
+                        raise AssertionError("Proxy corrupted 52 GiB logical movie bytes")
+                if allocated_bytes(root / "piece-cache") > 64 * 1024 * 1024:
+                    raise AssertionError("Integrated rolling cache exceeded the reserved allowance")
+        print("QUALIFY actual gateway HTTP: unauthorized=401, signed 52GiB ranges=3, cache bounded", flush=True)
+    finally:
+        await runner.cleanup()
+        await client.remove(media)
+
+
 def main():
     binary = os.environ.get("DANK_TEST_TORRSERVER_BINARY", "")
     if not binary or not Path(binary).is_file():
@@ -304,6 +382,10 @@ def main():
                         uploaded_after_seek - uploaded_before_seek,
                     "verified_ranges": results,
                 }, sort_keys=True), flush=True)
+                import asyncio
+                asyncio.run(prove_rolling_gateway_http(
+                    base=base, root=root, source=source, infohash=infohash,
+                ))
             except Exception:
                 engine_log.flush()
                 print(
