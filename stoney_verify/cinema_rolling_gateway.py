@@ -111,21 +111,26 @@ class CinemaRollingGateway:
         # Each active torrent owns a distinct per-torrent cache. Multiplying by
         # the maximum admission slots is essential: CacheSize is NOT global.
         configured_size = int(settings.get("CacheSize") or 0)
+        # Real pinned-engine test run 38649065919 observed 16.8 MiB on
+        # disk with a 4 MiB nominal cache, disproving even 4x headroom.
+        # NO disk-backed torrent pieces are permitted for this integration.
         if not (
-            settings.get("UseDisk") is True
+            settings.get("UseDisk") is False
             and settings.get("RemoveCacheOnDrop") is True
             and settings.get("DisableUPNP") is True
+            and not str(settings.get("TorrentsSavePath") or "").strip()
             and configured_size >= 4 * 1024 * 1024
             and configured_size <= self.per_torrent_bytes
             and self.max_torrents * configured_size * 4 <= self.budget_bytes
-            and Path(str(settings.get("TorrentsSavePath") or "/")).resolve()
-                == self.cache_dir
         ):
-            raise RollingGatewayUnavailable("Rolling engine cache or network isolation configuration is unsafe.")
+            raise RollingGatewayUnavailable(
+                "Rolling engine must use isolated memory-only pieces with bounded RAM reservations."
+            )
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        allocated = self.disk_allocated_bytes()
-        if allocated > self.budget_bytes:
-            raise RollingGatewayUnavailable("Rolling engine's disk cache has exceeded its budget.")
+        if self.disk_allocated_bytes():
+            raise RollingGatewayUnavailable(
+                "Rolling engine media cache contains disk files; memory-only mode is required."
+            )
 
     def disk_allocated_bytes(self) -> int:
         total = 0
