@@ -322,7 +322,8 @@ class TorrentMediaManager:
         except BaseException:
             os.close(fd)
             raise RuntimeError("Torrent cache is in use by another worker") from None
-        self._cache_owner_fd = fd
+        # A file object releases its advisory lock when the manager is GC'd.
+        self._cache_owner_file = os.fdopen(fd, "rb")
         self._cache_started_wall = time.time()
         # 4 GiB of the confirmed shared 10 GB Diamond pool, reserving room
         # for the database, other apps and temporary PostgreSQL/WAL files.
