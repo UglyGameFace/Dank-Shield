@@ -149,7 +149,7 @@ def test_cheers_view_is_persistent_and_has_separate_participation_controls(isola
     v = live.TokeCheersView(starter_id=11, stoner_role_id=22, guild_id=123, voice_channel_id=456)
     assert v.timeout is None
     labels = {getattr(item, "label", "") for item in v.children}
-    assert {"Cheers", "I'm Joining", "Withdraw", "Who's Coming?", "Refresh", "Manage", "End Sesh", "Join VC"} <= labels
+    assert {"Cheers", "I'm Joining", "Withdraw", "Who's Coming?", "Refresh", "Remind Me", "Manage", "End Sesh", "Join VC"} <= labels
     interactive = [x for x in v.children if isinstance(x, discord.ui.Button) and x.style != discord.ButtonStyle.link]
     assert all(x.custom_id for x in interactive)
     assert any(getattr(x, "url", "").endswith("/123/456") for x in v.children if isinstance(x, discord.ui.Button) and x.style == discord.ButtonStyle.link)

@@ -90,6 +90,9 @@ async def save_new(session: Mapping[str, Any]) -> dict[str, Any]:
         120, max(0, int(value.get("empty_vc_end_minutes", 0) or 0))
     )
     value["past_cheers_ids"], value["past_going_ids"] = [], []
+    # The only reminder recipients are people who explicitly opt in on this
+    # exact session. Legacy sessions default to the same safe opt-in behavior.
+    value["reminder_ids"], value["reminder_attempted_ids"] = [], []
     value["active"] = True
     value["close_pending"] = False
     value["close_synced"] = False
@@ -185,6 +188,87 @@ async def react(
         session["cheers_ids"], session["going_ids"] = cheers, going
         _write(data)
         return dict(session), ""
+
+
+_REMINDER_CAP = 20
+_REMINDER_LEAD_SECONDS = 10 * 60
+_REMINDER_MIN_REMAINING_SECONDS = 2 * 60
+
+
+async def toggle_reminder(
+    guild_id: int, message_id: int, actor_id: int,
+) -> tuple[dict[str, Any] | None, str]:
+    """Opt in/out of one private session reminder; never ping a role.
+
+    The choice is stored under this session only. Attempted members cannot
+    enroll twice even if the first Discord DM was blocked or lost.
+    """
+    if actor_id <= 0:
+        return None, "Invalid member."
+    async with _LOCK:
+        data = _read()
+        changed = _expire(data, time.time())
+        session = data.get(_id(guild_id, message_id))
+        if not session or not session.get("active", False):
+            if changed:
+                _write(data)
+            return None, "This sesh has ended or expired."
+        attempted = {int(x) for x in session.get("reminder_attempted_ids", [])}
+        if actor_id in attempted:
+            if changed:
+                _write(data)
+            return dict(session), "Your one-time reminder was already processed."
+        requested = list(dict.fromkeys(int(x) for x in session.get("reminder_ids", []) if int(x) > 0))
+        if actor_id in requested:
+            requested.remove(actor_id)
+            status = "Reminder cancelled. No DM will be sent."
+        else:
+            if len(requested) + len(attempted) >= _REMINDER_CAP:
+                if changed:
+                    _write(data)
+                return dict(session), "This sesh has reached its private reminder limit."
+            if float(session.get("expires_at", 0) or 0) - time.time() <= _REMINDER_MIN_REMAINING_SECONDS:
+                if changed:
+                    _write(data)
+                return dict(session), "Too close to the end to schedule a reminder."
+            requested.append(actor_id)
+            status = "Reminder enabled. One private DM near the end, if Discord allows it."
+        session["reminder_ids"] = requested
+        _write(data)
+        return dict(session), status
+
+
+async def claim_due_reminder() -> tuple[dict[str, Any], int] | None:
+    """Atomically claim at most one due personal DM across the whole worker.
+
+    Claim before sending ensures at-most-one attempt even on worker restart.
+    A short lead window avoids sending expired/stale reminders after an outage.
+    """
+    async with _LOCK:
+        data = _read()
+        now = time.time()
+        changed = _expire(data, now)
+        for session in data.values():
+            if not session.get("active", False):
+                continue
+            remaining = float(session.get("expires_at", 0) or 0) - now
+            if not (_REMINDER_MIN_REMAINING_SECONDS < remaining <= _REMINDER_LEAD_SECONDS):
+                continue
+            if now - float(session.get("created_at", 0) or 0) < 60:
+                continue
+            pending = list(dict.fromkeys(int(uid) for uid in session.get("reminder_ids", []) if int(uid) > 0))
+            attempted = {int(uid) for uid in session.get("reminder_attempted_ids", []) if int(uid) > 0}
+            pending = [uid for uid in pending if uid not in attempted]
+            if not pending:
+                continue
+            claimed = pending.pop(0)
+            session["reminder_ids"] = pending
+            session["reminder_attempted_ids"] = sorted(attempted | {claimed})
+            _write(data)
+            return dict(session), claimed
+        if changed:
+            _write(data)
+        return None
 
 
 async def extend(
