@@ -45,6 +45,7 @@ class PendingToke:
     note: str
     deadline: float
     claimed: bool = False
+    voice_channel_id: int = 0
 
 
 def settings_from_config(cfg: Mapping[str, Any]) -> dict[str, Any]:
@@ -98,9 +99,10 @@ def _sesh_people(
     } if is_voice else set()
 
     ordered: list[int] = []
-    # Include the host first, even before they tap Cheers. Everyone else is
-    # included once, at their first recorded participation or live VC presence.
-    for uid in [starter_id, *session.get("cheers_ids", []), *session.get("going_ids", []), *sorted(voice_ids)]:
+    # Include the host first, even before they tap Cheers. Everyone else
+    # appears only after interacting; unrelated VC occupants stay out of the
+    # session-specific roster while the VC occupancy count stays truthful.
+    for uid in [starter_id, *session.get("cheers_ids", []), *session.get("going_ids", [])]:
         uid = int(uid)
         if uid > 0 and uid not in ordered:
             ordered.append(uid)
@@ -182,6 +184,7 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
         return embed
 
     people, voice, voice_count = _sesh_people(guild, session)
+    attending = sum("🔊 In VC" in statuses for _uid, statuses in people)
     visible = bool(session.get("show_member_names", True))
     voice_id = int(session.get("voice_channel_id", 0) or 0)
     channel_text = voice.mention if voice is not None else ("No VC selected" if not voice_id else "VC unavailable")
@@ -190,7 +193,8 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
         name="📊 Sesh activity",
         value=(
             f"💨 **Cheers: {len(cheer_ids)}**   ·   🙋 **Joining: {len(going_ids)}**\n"
-            f"🔊 **In VC: {voice_status}**   ·   {channel_text}"
+            f"🔊 **VC occupants: {voice_status}**   ·   **Sesh attendees: {attending if voice is not None else 'Unknown'}**\n"
+            f"{channel_text}"
         )[:1024],
         inline=False,
     )
@@ -591,7 +595,8 @@ class TokeCheersView(discord.ui.View):
                 return await interaction.edit_original_response(
                     content="✅ This sesh has ended. The public card is closing."
                 )
-            _, voice, voice_count = _sesh_people(interaction.guild, latest)
+            people, voice, voice_count = _sesh_people(interaction.guild, latest)
+            attending = sum("🔊 In VC" in statuses for _uid, statuses in people)
             cheers = len({int(uid) for uid in latest.get("cheers_ids", [])})
             joining = len({int(uid) for uid in latest.get("going_ids", [])})
             clock = int(time.time())
@@ -601,7 +606,8 @@ class TokeCheersView(discord.ui.View):
                 content=(
                     f"✅ **Sesh status checked <t:{clock}:t>**\n"
                     f"💨 Cheers: **{cheers}** · 🙋 Joining: **{joining}** · "
-                    f"🔊 In VC: **{voice_status}**\n"
+                    f"🔊 VC occupants: **{voice_status}** · "
+                    f"Sesh attendees: **{attending if voice is not None else 'Unknown'}**\n"
                     f"Scheduled end: <t:{int(latest['expires_at'])}:f>"
                     + (f" · {voice.mention}" if voice is not None else "")
                 ),
@@ -611,6 +617,25 @@ class TokeCheersView(discord.ui.View):
             await interaction.edit_original_response(
                 content=f"⚠️ Could not refresh the card: {type(exc).__name__}."
             )
+
+    @discord.ui.button(label="Manage", emoji="⚙️", style=discord.ButtonStyle.secondary, custom_id="dank:toke:v2:manage", row=1)
+    async def manage(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if interaction.guild is None or interaction.message is None:
+            return await interaction.response.send_message("This sesh is unavailable.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            session = await toke_sessions.get(interaction.guild.id, interaction.message.id)
+        except (OSError, ValueError):
+            return await interaction.edit_original_response(content="The sesh manager is temporarily unavailable.")
+        if not session or not session.get("active", False):
+            return await interaction.edit_original_response(content="This sesh has ended.")
+        if interaction.user.id != int(session["starter_id"]) and not getattr(interaction.user.guild_permissions, "manage_guild", False):
+            return await interaction.edit_original_response(content="Only the host or server managers can manage this sesh.")
+        await interaction.edit_original_response(
+            content="Manage this sesh. Extensions do not ping members again.",
+            view=TokeManageView(interaction.user.id, interaction.guild.id, interaction.message.id),
+        )
 
     @discord.ui.button(label="End Sesh", emoji="🛑", style=discord.ButtonStyle.danger, custom_id="dank:toke:v2:end", row=1)
     async def end(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -627,6 +652,68 @@ class TokeCheersView(discord.ui.View):
             view=TokeEndConfirmView(self, member.id, interaction.message.id),
             ephemeral=True,
         )
+
+
+class TokeManageView(discord.ui.View):
+    """Private host/staff extension controls, with click-time authorization."""
+
+    def __init__(self, actor_id: int, guild_id: int, message_id: int) -> None:
+        super().__init__(timeout=120)
+        self.actor_id = int(actor_id)
+        self.guild_id = int(guild_id)
+        self.message_id = int(message_id)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.actor_id or interaction.guild is None or interaction.guild.id != self.guild_id:
+            await interaction.response.send_message("Open your own sesh manager.", ephemeral=True)
+            return False
+        return True
+
+    async def _extend(self, interaction: discord.Interaction, minutes: int) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            session = await toke_sessions.get(self.guild_id, self.message_id)
+        except (OSError, ValueError):
+            return await interaction.edit_original_response(
+                content="The sesh manager is temporarily unavailable.", view=None,
+            )
+        if not session or not session.get("active", False):
+            return await interaction.edit_original_response(content="This sesh has ended.", view=None)
+        if interaction.user.id != int(session["starter_id"]) and not getattr(interaction.user.guild_permissions, "manage_guild", False):
+            return await interaction.edit_original_response(content="You can no longer manage this sesh.", view=None)
+        try:
+            updated, error = await toke_sessions.extend(self.guild_id, self.message_id, minutes=minutes)
+            if error:
+                return await interaction.edit_original_response(content=f"⚠️ {error}", view=None)
+            if updated is None:
+                return await interaction.edit_original_response(content="This sesh has ended.", view=None)
+        except (OSError, ValueError) as exc:
+            return await interaction.edit_original_response(
+                content=f"⚠️ Could not save the extension: {type(exc).__name__}.", view=None,
+            )
+        try:
+            refreshed = await refresh_card(interaction.client, updated)
+        except (discord.HTTPException, OSError, ValueError):
+            refreshed = False
+        await interaction.edit_original_response(
+            content=(
+                f"✅ Sesh extended. New end: <t:{int(updated['expires_at'])}:f>."
+                + ("" if refreshed else " The public card refresh is delayed.")
+            ),
+            view=None,
+        )
+
+    @discord.ui.button(label="+15 minutes", style=discord.ButtonStyle.primary)
+    async def fifteen(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._extend(interaction, 15)
+
+    @discord.ui.button(label="+30 minutes", style=discord.ButtonStyle.primary)
+    async def thirty(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._extend(interaction, 30)
+
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.secondary)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.edit_message(content="Sesh manager closed.", view=None)
 
 
 class TokeEndConfirmView(discord.ui.View):
@@ -906,10 +993,14 @@ class TokeComposeView(discord.ui.View):
         await interaction.response.edit_message(content="Toke draft cancelled.", view=None)
 
 
-def begin_capture(guild_id: int, user_id: int, channel_id: int, destination_id: int, note: str) -> TokeComposeView:
+def begin_capture(
+    guild_id: int, user_id: int, channel_id: int, destination_id: int,
+    note: str, *, voice_channel_id: int = 0,
+) -> TokeComposeView:
     _PENDING[(int(guild_id), int(user_id))] = PendingToke(
         int(guild_id), int(user_id), int(channel_id), int(destination_id),
         note, time.monotonic() + CAPTURE_SECONDS,
+        voice_channel_id=int(voice_channel_id),
     )
     return TokeComposeView(user_id, guild_id)
 
@@ -1060,12 +1151,17 @@ async def _expire_and_refresh(bot: Any) -> None:
             # Persistent queue includes pre-existing expired cards, explicit
             # End Sesh actions and any failed Discord edits from prior boots.
             for session in await toke_sessions.pending_closed():
+                synced = False
                 try:
-                    await refresh_card(bot, session)
+                    synced = await refresh_card(bot, session)
                 except (discord.HTTPException, ValueError, OSError) as exc:
                     print(
                         f"[toke] terminal card retry guild={session.get('guild_id')} "
                         f"message={session.get('message_id')} error={type(exc).__name__}"
+                    )
+                if not synced:
+                    await toke_sessions.defer_closed_retry(
+                        int(session["guild_id"]), int(session["message_id"])
                     )
         except (OSError, ValueError) as exc:
             print(f"[toke] session cleanup failed: {type(exc).__name__}: {exc}")

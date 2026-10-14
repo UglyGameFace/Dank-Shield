@@ -190,7 +190,8 @@ def test_refresh_returns_current_counts_in_private_reply_even_if_embed_is_cached
     body = events[2][1]["content"]
     assert "Cheers: **2**" in body
     assert "Joining: **1**" in body
-    assert "In VC: **3**" in body
+    assert "VC occupants: **3**" in body
+    assert "Sesh attendees: **2**" in body
     assert "<#987>" in body
     assert "Scheduled end: <t:" in body and ":f>" in body
     assert "status checked <t:" in body

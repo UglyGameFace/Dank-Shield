@@ -64,7 +64,10 @@ def _expire(data: dict[str, dict[str, Any]], now: float) -> bool:
                 session.setdefault("close_reason", "expired")
                 session.setdefault("closed_at", until)
                 changed = True
-        if until + _RETENTION_SECONDS < now and not session.get("close_pending", False):
+        # A permanently inaccessible Discord message cannot hold its local
+        # session record forever. Retain unsynced closures for seven days, then
+        # retire them even if permissions were never restored.
+        if until + _RETENTION_SECONDS < now:
             data.pop(key, None)
             changed = True
     return changed
@@ -160,13 +163,49 @@ async def react(
             going = [x for x in going if x != actor_id]
             session["voice_seen_ids"] = [x for x in session.get("voice_seen_ids", []) if x != actor_id]
         else:
-            if actor_id not in cheers and len(cheers) >= max_interested:
+            # Cheers is a reaction; Joining is a separate RSVP. Neither click
+            # silently creates the other. Capacity applies to unique people,
+            # not only the Cheers list (or a person clicking both buttons).
+            interested = set(cheers) | set(going)
+            if actor_id not in interested and len(interested) >= max_interested:
+                if changed:
+                    _write(data)
                 return dict(session), "This sesh has reached its participant limit."
-            if actor_id not in cheers:
+            if action == "cheers" and actor_id not in cheers:
                 cheers.append(actor_id)
             if action == "going" and actor_id not in going:
                 going.append(actor_id)
         session["cheers_ids"], session["going_ids"] = cheers, going
+        _write(data)
+        return dict(session), ""
+
+
+async def extend(
+    guild_id: int, message_id: int, *,
+    minutes: int, max_lifetime_minutes: int = 240,
+) -> tuple[dict[str, Any] | None, str]:
+    """Atomically extend an active sesh without resetting the original cap.
+
+    Caller must recheck host/staff authorization. A fixed lifetime measured
+    from creation prevents unlimited extensions through repeated clicks.
+    """
+    if minutes not in (15, 30):
+        return None, "Choose a supported extension."
+    async with _LOCK:
+        data = _read()
+        changed = _expire(data, time.time())
+        session = data.get(_id(guild_id, message_id))
+        if not session or not session.get("active", False):
+            if changed:
+                _write(data)
+            return None, "This sesh has ended or expired."
+        limit = float(session.get("created_at", 0) or 0) + max_lifetime_minutes * 60
+        expiry = float(session.get("expires_at", 0) or 0)
+        if limit <= expiry:
+            if changed:
+                _write(data)
+            return dict(session), "This sesh has reached its maximum lifetime."
+        session["expires_at"] = min(limit, expiry + minutes * 60)
         _write(data)
         return dict(session), ""
 
@@ -235,12 +274,32 @@ async def pending_closed(limit: int = 100) -> list[dict[str, Any]]:
     """
     async with _LOCK:
         data = _read()
-        if _expire(data, time.time()):
+        now = time.time()
+        if _expire(data, now):
             _write(data)
         return [
             dict(session) for session in data.values()
-            if not session.get("active", False) and session.get("close_pending", False)
+            if not session.get("active", False)
+            and session.get("close_pending", False)
+            and float(session.get("close_retry_at", 0) or 0) <= now
         ][:max(1, limit)]
+
+
+async def defer_closed_retry(guild_id: int, message_id: int) -> None:
+    """Persist per-message exponential backoff for failed Discord card edits.
+
+    A failed card does not starve other terminal cards in the bounded queue,
+    and repeated restarts do not reset its retry budget.
+    """
+    async with _LOCK:
+        data = _read()
+        session = data.get(_id(guild_id, message_id))
+        if not session or not session.get("close_pending", False):
+            return
+        attempts = min(32, int(session.get("close_retry_count", 0) or 0) + 1)
+        session["close_retry_count"] = attempts
+        session["close_retry_at"] = time.time() + min(3600, 15 * (2 ** min(attempts - 1, 8)))
+        _write(data)
 
 
 async def recoverable_views(guild_id: int | None = None) -> list[dict[str, Any]]:
@@ -264,6 +323,8 @@ async def mark_closed_synced(guild_id: int, message_id: int) -> None:
         if entry and not entry.get("active", False) and entry.get("close_pending", False):
             entry["close_pending"] = False
             entry["close_synced"] = True
+            entry.pop("close_retry_count", None)
+            entry.pop("close_retry_at", None)
             _write(data)
 
 

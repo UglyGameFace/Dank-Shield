@@ -38,7 +38,7 @@ def test_planning_stays_until_present_then_departure_retires_it(storage):
         await toke_sessions.react(100, 200, 45, "going")
         # A never-arrived RSVP is an intention, not a detected departure.
         planned = await toke_sessions.reconcile_voice(100, 200, set())
-        assert planned["going_ids"] == [45] and planned["cheers_ids"] == [45]
+        assert planned["going_ids"] == [45] and planned["cheers_ids"] == []
         present = await toke_sessions.reconcile_voice(100, 200, {45})
         assert present["voice_seen_ids"] == [45]
         # Persisted observation survives a simulated restart/read.
@@ -46,7 +46,7 @@ def test_planning_stays_until_present_then_departure_retires_it(storage):
         left = await toke_sessions.reconcile_voice(100, 200, set())
         assert left["voice_seen_ids"] == []
         assert left["cheers_ids"] == left["going_ids"] == []
-        assert left["past_cheers_ids"] == [45]
+        assert left["past_cheers_ids"] == []
         assert left["past_going_ids"] == [45]
         other = await toke_sessions.get(101, 200)
         assert other["cheers_ids"] == []
@@ -74,7 +74,7 @@ def test_lifetime_response_summary_preserves_departed_member_without_showing_liv
         await toke_sessions.react(100, 200, 1, "end")
         ended = await toke_sessions.get(100, 200)
         closed = live.render_card(guild, ended, discord.Embed(title="💨 Toke Time"))
-        assert "Cheers **1**" in closed.fields[1].value
+        assert "Cheers **0**" in closed.fields[1].value
         assert "Joining **1**" in closed.fields[1].value
         # Attending and leaving twice must not inflate lifetime counts.
         assert len(ended["past_going_ids"]) == 1
@@ -88,11 +88,11 @@ def test_rapid_in_and_out_event_clears_unobserved_rsvp(storage):
         # Join+leave inside debounce can be missed by periodic voice.member reads.
         departed = await toke_sessions.reconcile_voice(100, 200, set(), departed_ids={45})
         assert departed["cheers_ids"] == departed["going_ids"] == []
-        assert departed["past_cheers_ids"] == departed["past_going_ids"] == [45]
+        assert departed["past_cheers_ids"] == [] and departed["past_going_ids"] == [45]
         await toke_sessions.react(100, 200, 45, "going")
         # A quick rejoin wins over a queued departure notification.
         rejoined = await toke_sessions.reconcile_voice(100, 200, {45}, departed_ids={45})
-        assert rejoined["cheers_ids"] == rejoined["going_ids"] == [45]
+        assert rejoined["cheers_ids"] == [] and rejoined["going_ids"] == [45]
         assert rejoined["voice_seen_ids"] == [45]
         # Withdrawal does not leave any lingering seen/attendance marker.
         await toke_sessions.react(100, 200, 45, "withdraw")
@@ -132,7 +132,11 @@ def test_inline_uploaded_gallery_has_single_full_width_media_and_reused_callback
     assert len(galleries) == 1
     assert len(galleries[0].items) == 1
     assert galleries[0].items[0].media.url == "attachment://sesh.gif"
-    assert len([x for x in nodes if isinstance(x, discord.ui.Button)]) == 7
+    buttons = [x for x in nodes if isinstance(x, discord.ui.Button)]
+    assert {"Cheers", "I'm Joining", "Withdraw", "Who's Coming?", "Refresh", "Manage", "End Sesh", "Join VC"} <= {
+        button.label for button in buttons
+    }
+    assert len(buttons) == 8
     assert any(isinstance(x, discord.ui.TextDisplay) and "<@&10>" in x.content for x in nodes)
 
     dispatched = []
@@ -185,11 +189,11 @@ def test_inaccessible_vc_reports_unknown_instead_of_false_zero():
     }
     guild = SimpleNamespace(get_channel=lambda _cid: None)
     card = live.render_card(guild, session, discord.Embed(title="Toke Time"))
-    assert "In VC: Unavailable" in card.fields[0].value
+    assert "VC occupants: Unavailable" in card.fields[0].value
     assert "VC unavailable" in card.fields[0].value
     session["voice_channel_id"] = 0
     no_voice = live.render_card(guild, session, discord.Embed(title="Toke Time"))
-    assert "In VC: Not selected" in no_voice.fields[0].value
+    assert "VC occupants: Not selected" in no_voice.fields[0].value
 
 
 def test_voice_unavailable_does_not_make_uncertain_rsvps_disappear(storage):

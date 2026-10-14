@@ -101,9 +101,13 @@ def test_attachment_doorways_are_limited_to_card_upload_and_toke_media() -> None
         "stoney_verify.commands_ext.public_toke"
     )
     toke_params = getattr(toke, "_params", {})
-    assert set(toke_params) == {"message", "media", "upload"}
+    # /toke preserves its media doorways and now offers an optional VC
+    # override without adding another attachment type or global command.
+    assert set(toke_params) == {"message", "media", "upload", "voice"}
     assert toke_params["upload"].type is discord.AppCommandOptionType.attachment
     assert not bool(getattr(toke_params["upload"], "required", True))
+    assert toke_params["voice"].type is discord.AppCommandOptionType.channel
+    assert not bool(getattr(toke_params["voice"], "required", True))
 
     attachment_paths: set[str] = set()
 

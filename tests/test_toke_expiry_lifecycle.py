@@ -208,7 +208,7 @@ def test_mobile_roster_preview_bounded_with_pagination(monkeypatch):
     assert "Sesh activity" in card.fields[0].name
     assert "Cheers: 30" in card.fields[0].value
     assert "Joining: 30" in card.fields[0].value
-    assert "In VC: 31" in card.fields[0].value
+    assert "VC occupants: 31" in card.fields[0].value
     assert card.fields[1].name.startswith("👥 People")
     assert len(card.fields[1].value.splitlines()) == 4
     assert "+32 more" in card.fields[1].value
@@ -217,3 +217,35 @@ def test_mobile_roster_preview_bounded_with_pagination(monkeypatch):
     view = live.TokeRosterView(guild, session)
     assert len(view.lines) == 35
     assert view.pages == 3
+
+
+def test_unreachable_terminal_cards_are_bounded_by_retention(isolated_store):
+    async def work():
+        await toke_sessions.save_new(_sample(expires=time.time() - 8 * 86400))
+        assert await toke_sessions.pending_closed() == []
+        assert await toke_sessions.recoverable_views() == []
+        assert await toke_sessions.get(123, 456) is None
+    asyncio.run(work())
+
+
+def test_failed_terminal_delivery_backs_off_without_blocking_other_sessions(isolated_store):
+    async def work():
+        await toke_sessions.save_new(_sample(expires=time.time() - 1))
+        other = {**_sample(expires=time.time() - 1), "message_id": 457}
+        await toke_sessions.save_new(other)
+        pending = await toke_sessions.pending_closed()
+        assert {entry["message_id"] for entry in pending} == {456, 457}
+        await toke_sessions.defer_closed_retry(123, 456)
+        pending = await toke_sessions.pending_closed()
+        assert [entry["message_id"] for entry in pending] == [457]
+        deferred = await toke_sessions.get(123, 456)
+        assert deferred["close_retry_count"] == 1
+        assert deferred["close_retry_at"] > time.time()
+        await toke_sessions.defer_closed_retry(123, 456)
+        deferred2 = await toke_sessions.get(123, 456)
+        assert deferred2["close_retry_count"] == 2
+        assert deferred2["close_retry_at"] > deferred["close_retry_at"]
+        await toke_sessions.mark_closed_synced(123, 456)
+        synced = await toke_sessions.get(123, 456)
+        assert synced["close_synced"] and "close_retry_at" not in synced
+    asyncio.run(work())
