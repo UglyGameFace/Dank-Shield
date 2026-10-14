@@ -15,7 +15,7 @@ import shutil
 import stat
 import subprocess
 import threading
-from typing import Any, BinaryIO, Iterable
+from typing import Any, BinaryIO, Callable, Iterable
 from urllib.parse import unquote, urlsplit
 
 MAGIC = b"DSBK001\n"
@@ -273,8 +273,18 @@ def _sanitized_pg_environment(pg_vars: dict[str, str]) -> dict[str, str]:
 
 def create_backup(
     *, dsn: str, source_ref: str, passphrase: str, output_dir: Path,
+    phase_reporter: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """One-shot private operator backup, no DB writes or data transfer to Discloud."""
+    """One-shot private backup with secret-free operation-level diagnostics.
+
+    phase_reporter receives only static code-owned phase names. It does NOT
+    receive a DSN, hostname, schema, user, passphrase or exception message.
+    """
+    def mark(phase: str) -> None:
+        if phase_reporter is not None:
+            phase_reporter(phase)
+
+    mark("source_preflight_started")
     _postgres_tools_are_17()
     pg_vars = validate_source_dsn(dsn, source_ref)
     _derive_key(passphrase, b"0" * SALT_LEN)  # Refuse weak key before DB access
@@ -283,11 +293,13 @@ def create_backup(
     # Discloud PostgreSQL database quota or a guarantee of durable backups.
     if shutil.disk_usage(folder).free < 256 * 1024 * 1024:
         raise RuntimeError("backup destination has insufficient free disk space")
+    mark("source_preflight_passed")
     name = datetime.now(timezone.utc).strftime("supabase-source-%Y%m%dT%H%M%SZ")
     suffix = os.urandom(6).hex()
     destination = folder / f"{name}-{suffix}.dsbak"
     pending = folder / f".{destination.name}.partial"
     fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    mark("private_archive_opened")
     proc = None
     try:
         proc = subprocess.Popen(
@@ -296,6 +308,7 @@ def create_backup(
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, env=_sanitized_pg_environment(pg_vars)
         )
+        mark("pg_dump_started")
         # Drain stderr concurrently. Capture only a bounded prefix in memory,
         # never write raw pg_dump errors (which may contain a DSN) to disk.
         pg_errors = bytearray()
@@ -316,10 +329,12 @@ def create_backup(
         with os.fdopen(fd, "wb") as encrypted_file:
             fd = -1
             assert proc.stdout is not None
+            mark("encrypted_stream_started")
             try:
                 info = encrypt_stream_to_file(
                     proc.stdout, encrypted_file, passphrase
                 )
+                mark("encrypted_stream_finished")
             except RuntimeError as exc:
                 # A failed login/host check produces zero stdout, which used
                 # to hide the useful pg_dump error behind "too small".
@@ -333,19 +348,25 @@ def create_backup(
                 raise
             finally:
                 proc.stdout.close()
+            mark("pg_dump_wait_started")
             status = proc.wait(timeout=180)
             stderr_reader.join(timeout=5)
             if status != 0:
                 raise BackupFailure(
                     classify_pg_dump_failure(bytes(pg_errors))
                 )
+            mark("pg_dump_exit_zero")
             encrypted_file.flush()
             os.fsync(encrypted_file.fileno())
+        mark("encrypted_archive_fsynced")
+        mark("archive_toc_validation_started")
         try:
             _ = verify_archive_toc(pending, passphrase)
         except RuntimeError:
             raise BackupFailure("encrypted_archive_verification_failed") from None
+        mark("archive_toc_validation_passed")
         os.replace(pending, destination)
+        mark("encrypted_archive_committed")
         return {
             "status": "encrypted_archive_toc_verified",
             "encrypted_path": str(destination),
