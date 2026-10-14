@@ -1,4 +1,4 @@
-"""Opt-in, loopback-only TorrServer transport for Dank Cinema.
+"""Opt-in, loopback-only memory-piece TorrServer transport for Dank Cinema.
 
 Existing Cinema sessions remain the authority for authorization and leases.
 This transport never exposes TorrServer's general API or accepts a caller URL.
@@ -63,7 +63,7 @@ class CinemaRollingGateway:
         if not (1 <= self.max_torrents <= 16 and 1 <= self.max_per_guild <= self.max_parallel <= 32):
             raise ValueError("Invalid rolling torrent concurrency limits.")
         if (
-            self.per_torrent_bytes < 16 * 1024 * 1024
+            self.per_torrent_bytes < 4 * 1024 * 1024
             or self.per_torrent_bytes * self.max_torrents * 4 > self.budget_bytes
             or self.budget_bytes <= 0
         ):
