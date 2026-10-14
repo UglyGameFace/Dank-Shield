@@ -82,6 +82,13 @@ async def save_new(session: Mapping[str, Any]) -> dict[str, Any]:
     value["created_at"] = time.time()
     value["cheers_ids"], value["going_ids"] = [], []
     value["voice_seen_ids"] = []  # Only RSVP identifiers observed in the session VC.
+    value["host_seen_in_vc"] = False
+    value["host_away_since"] = 0
+    value["voice_had_humans"] = False
+    value["empty_voice_since"] = 0
+    value["empty_vc_end_minutes"] = min(
+        120, max(0, int(value.get("empty_vc_end_minutes", 0) or 0))
+    )
     value["past_cheers_ids"], value["past_going_ids"] = [], []
     value["active"] = True
     value["close_pending"] = False
@@ -241,6 +248,13 @@ async def transfer_host(
             return dict(session), "That member is already hosting this sesh."
         session.setdefault("original_starter_id", current)
         session["starter_id"] = new_starter_id
+        # A new host begins their own voice-presence lifecycle.
+        session["host_seen_in_vc"] = False
+        session["host_away_since"] = 0
+        # A deliberate handoff grants the new host a full empty-room grace
+        # period rather than inheriting the old host's elapsed countdown.
+        session["empty_voice_since"] = 0
+        session.pop("idle_check_retry_at", None)
         session["host_transfer_count"] = int(session.get("host_transfer_count", 0) or 0) + 1
         _write(data)
         return dict(session), ""
@@ -284,11 +298,32 @@ async def reconcile_voice(
         updated_seen = sorted((seen | (interested & present)) & present & (set(updated_cheers) | set(updated_going)))
         past_cheers = {int(uid) for uid in session.get("past_cheers_ids", [])}
         past_going = {int(uid) for uid in session.get("past_going_ids", [])}
+        host = int(session.get("starter_id", 0) or 0)
+        previously_seen = bool(session.get("host_seen_in_vc", False))
+        is_host_present = host in present
+        has_seen_host = previously_seen or is_host_present or host in departed
+        old_away = float(session.get("host_away_since", 0) or 0)
+        # Never label a host "away" when they have not been observed in VC
+        # at all. Rapid join/leave events still count as observation.
+        host_away = 0 if is_host_present or not has_seen_host else (old_away or time.time())
+        had_humans = bool(session.get("voice_had_humans", False))
+        had_humans = had_humans or bool(present) or bool(departed & (interested | {host}))
+        old_empty = float(session.get("empty_voice_since", 0) or 0)
+        empty_since = (old_empty or time.time()) if had_humans and not present else 0
         new_past_cheers = past_cheers | (leaving & set(cheers))
         new_past_going = past_going | (leaving & set(going))
         if (updated_cheers != cheers or updated_going != going
                 or updated_seen != sorted(seen)
-                or new_past_cheers != past_cheers or new_past_going != past_going):
+                or new_past_cheers != past_cheers or new_past_going != past_going
+                or has_seen_host != previously_seen
+                or host_away != old_away or had_humans != bool(session.get("voice_had_humans", False))
+                or empty_since != old_empty):
+            session["host_seen_in_vc"] = has_seen_host
+            session["host_away_since"] = host_away
+            session["voice_had_humans"] = had_humans
+            session["empty_voice_since"] = empty_since
+            if present:
+                session.pop("idle_check_retry_at", None)
             session["cheers_ids"] = updated_cheers
             session["going_ids"] = updated_going
             session["voice_seen_ids"] = updated_seen
@@ -299,6 +334,74 @@ async def reconcile_voice(
             _write(data)
         elif expired:
             _write(data)
+        return dict(session)
+
+
+async def idle_voice_candidates(limit: int = 25) -> list[dict[str, Any]]:
+    """Due, opt-in auto-closures only. Read is bounded in returned work."""
+    async with _LOCK:
+        data = _read()
+        now = time.time()
+        changed = _expire(data, now)
+        if changed:
+            _write(data)
+        return [
+            dict(s) for s in data.values()
+            if s.get("active", False)
+            and int(s.get("voice_channel_id", 0) or 0) > 0
+            and int(s.get("empty_vc_end_minutes", 0) or 0) >= 5
+            and float(s.get("empty_voice_since", 0) or 0) > 0
+            and float(s.get("idle_check_retry_at", 0) or 0) <= now
+            and float(s["empty_voice_since"]) + int(s["empty_vc_end_minutes"]) * 60 <= now
+        ][:max(1, min(25, limit))]
+
+
+async def defer_idle_voice_check(guild_id: int, message_id: int) -> None:
+    """Skip an inaccessible VC temporarily instead of starving due sessions.
+
+    This is a bounded per-session queue delay, not an automatic closure.
+    """
+    async with _LOCK:
+        data = _read()
+        entry = data.get(_id(guild_id, message_id))
+        if not entry or not entry.get("active", False):
+            return
+        if not entry.get("empty_voice_since", 0) or not entry.get("empty_vc_end_minutes", 0):
+            return
+        entry["idle_check_retry_at"] = time.time() + 60
+        _write(data)
+
+
+async def close_idle_voice(guild_id: int, message_id: int, *, confirmed_empty: bool) -> dict[str, Any] | None:
+    """Confirm a previously observed empty VC under the session store lock.
+
+    The caller must verify a real, available Discord VC at decision time.
+    Unknown channels, never-populated rooms and default-disabled timeouts
+    are never enough to close a session.
+    """
+    if not confirmed_empty:
+        return None
+    async with _LOCK:
+        data = _read()
+        now = time.time()
+        changed = _expire(data, now)
+        session = data.get(_id(guild_id, message_id))
+        if session is None or not session.get("active", False):
+            if changed:
+                _write(data)
+            return None
+        empty_since = float(session.get("empty_voice_since", 0) or 0)
+        minutes = int(session.get("empty_vc_end_minutes", 0) or 0)
+        if (minutes < 5 or not session.get("voice_had_humans", False)
+                or empty_since <= 0 or empty_since + minutes * 60 > now):
+            if changed:
+                _write(data)
+            return None
+        session["active"] = False
+        session["close_reason"] = "voice_idle"
+        session["closed_at"] = now
+        session["close_pending"] = True
+        _write(data)
         return dict(session)
 
 

@@ -512,6 +512,7 @@ async def _publish_toke(
             "voice_channel_id": voice_id,
             "max_interested": int(settings["max_interested"]),
             "show_member_names": bool(settings["show_member_names"]),
+            "empty_vc_end_minutes": int(settings.get("empty_vc_end_minutes", 0)),
             "expires_at": time.time() + int(settings["session_minutes"]) * 60,
         }
         if upload_file is not None:
