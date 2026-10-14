@@ -42,7 +42,7 @@ def validate_disposable_runner() -> None:
         and os.getenv("DANK_RECOVERY_DISPOSABLE_PG17") == "YES_ISOLATED"
         and os.getenv("PGHOST") == "127.0.0.1"
         and os.getenv("PGPORT") == "5432"
-        and os.getenv("PGUSER") == "postgres"
+        and os.getenv("PGUSER") in ("postgres", "supabase_admin")
         and os.getenv("PGDATABASE") == "postgres"
         and bool(os.getenv("PGPASSWORD"))
     ):
@@ -99,7 +99,7 @@ def _safe_pg_env() -> dict[str, str]:
            if k in os.environ}
     env.update({
         "PGHOST": "127.0.0.1", "PGPORT": "5432",
-        "PGUSER": "postgres", "PGPASSWORD": os.environ["PGPASSWORD"],
+        "PGUSER": os.environ["PGUSER"], "PGPASSWORD": os.environ["PGPASSWORD"],
         "PGDATABASE": EXPECTED_RESTORE_DB,
         "PGCONNECT_TIMEOUT": "10",
     })
@@ -110,8 +110,9 @@ def _create_empty_restore_db() -> None:
     import psycopg
     # Connect ONLY to disposable localhost service and create a NEW named DB.
     with psycopg.connect(
-        "host=127.0.0.1 port=5432 user=postgres dbname=postgres connect_timeout=10",
-        password=os.environ["PGPASSWORD"], autocommit=True,
+        "host=127.0.0.1 port=5432 dbname=postgres connect_timeout=10",
+        user=os.environ["PGUSER"], password=os.environ["PGPASSWORD"],
+        autocommit=True,
     ) as conn:
         version = int(conn.execute("show server_version_num").fetchone()[0])
         if version // 10000 != 17:
@@ -155,19 +156,31 @@ def _stream_restore(path: Path, passphrase: str, expected_sha256: str) -> int:
     drain_thread = threading.Thread(target=drain, daemon=True)
     drain_thread.start()
     sent = 0
+    input_closed_early = False
     try:
         assert proc.stdin is not None
-        try:
-            for data in _iter_verified_plaintext(path, passphrase):
+        for data in _iter_verified_plaintext(path, passphrase):
+            if input_closed_early:
+                # Authenticate the rest of the encrypted archive even after
+                # pg_restore exits on a SQL error. Never ignore that exit.
+                continue
+            try:
                 proc.stdin.write(data)
                 sent += len(data)
+            except BrokenPipeError:
+                input_closed_early = True
+        try:
             proc.stdin.close()
         except BrokenPipeError:
-            raise RecoveryDrillError("pg_restore_closed_input_early") from None
+            input_closed_early = True
         status = proc.wait(timeout=300)
         drain_thread.join(timeout=5)
         if status:
+            # A SQL error closes stdin early: classify the actual PostgreSQL
+            # failure before treating the pipe closure as the cause.
             raise RecoveryDrillError(_restore_error_category(bytes(stderr_sample)))
+        if input_closed_early:
+            raise RecoveryDrillError("pg_restore_closed_input_early")
         if _sha256_file(path) != expected_sha256:
             raise RecoveryDrillError("archive_changed_during_restore")
         return sent
@@ -182,9 +195,9 @@ def _restore_inventory() -> dict[str, Any]:
     # Fixed aggregate-only audit; no rows, guild IDs, user records or
     # plaintext schema contents ever printed.
     with psycopg.connect(
-        "host=127.0.0.1 port=5432 user=postgres "
+        "host=127.0.0.1 port=5432 "
         f"dbname={EXPECTED_RESTORE_DB} connect_timeout=10",
-        password=os.environ["PGPASSWORD"],
+        user=os.environ["PGUSER"], password=os.environ["PGPASSWORD"],
     ) as conn:
         schema_counts = conn.execute(
             "select table_schema,count(*)::int "
