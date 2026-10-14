@@ -1,3 +1,44 @@
+# Active Task Lock — /toke indexed VC routing and no-op suppression (2026-10-14)
+
+**Active task:** Continue complete Dank Shield /toke overhaul, not the
+suspended Supabase-to-Discloud PostgreSQL migration. PR #566 merged; this
+slice begins from `main@bb72726da18f09b389754e25d3e8775d1d987d76` on
+`feat/toke-voice-index-and-noop-20261014`. No changes to PostgreSQL,
+Supabase, Cinema, Voice Safety, or production deployment.
+
+**Problem verified:** Before this slice every voice-state burst scanned
+`all_active(guild)`, which parsed the *entire global* session JSON and
+checked unrelated session cards. Frequent voice updates also re-edited cards
+with unchanged room membership. Both are poor for scaling and Discord REST
+budgets.
+
+**Implementation:** `toke_sessions.active_in_voices(guild_id, channels)`
+uses a transient, derived guild+voice index. Successful atomic JSON writes
+rebuild it, and a path+inode+mtime_ns+size signature invalidates it when
+an external process atomically replaces the source file. Expired sessions
+never route, corrupt files fail closed instead of using stale cache, and
+returned snapshots are deep copies. Discord VC debounce uses only indexed
+affected sessions, and skips redundant edits for unchanged final member
+snapshots. Explicit departures still bypass suppression to handle rapid
+join+leave. Fingerprint cache is LRU-bounded to 2,048 message entries and
+never owns attendance or session state.
+
+**Tests:** Dedicated new cases cover per-guild/channel matching, hot
+lookup without rereading JSON, external atomic replacement/corruption,
+expiry/end, unexpected fast departures, unchanged events, and bounded
+no-op cache. Existing Toke tests and repository-wide Python CI remain
+release gates, followed by live Android/Discloud acceptance.
+
+**Limitations:** Source remains one JSON file with a single-process asyncio
+lock. Mutating session actions still reread/rewrite that file; no claim of
+cross-process consistency or support for 10k+ servers. Actual PG17-backed
+per-shard session repository, fairness under extremely large voice bursts,
+quantitative Discord REST load testing, and guild-specific optional quiet
+hours/presets remain later /toke slices after validated safety gates.
+No monkey patches or blind datastore migrations.
+
+---
+
 # Active Task Lock — /toke private reminder UX and delivery (2026-10-14)
 
 **Active user directive:** Continue complete Dank Shield /toke overhaul, audit
