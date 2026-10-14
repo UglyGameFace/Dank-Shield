@@ -755,6 +755,23 @@ class TokeManageView(discord.ui.View):
         await interaction.response.edit_message(content="Sesh manager closed.", view=None)
 
 
+async def _resolve_toke_handoff_target(guild: discord.Guild, user_id: int) -> discord.Member | None:
+    """Resolve only the explicitly selected member, never chunk every guild.
+
+    The native UserSelect may resolve a valid guild user even when member
+    caching is disabled. A single user-triggered REST lookup is safe; a
+    missing/forbidden member fails closed.
+    """
+    member = guild.get_member(int(user_id))
+    if member is not None:
+        return member
+    try:
+        return await guild.fetch_member(int(user_id))
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        return None
+
+
+
 class TokeHostPickerView(discord.ui.View):
     """Choose the next host privately; never reassign on selection alone."""
 
@@ -781,7 +798,7 @@ class TokeHostPickerView(discord.ui.View):
             return await interaction.edit_original_response(content="This sesh has ended.", view=None)
         if interaction.user.id != int(current["starter_id"]) and not getattr(interaction.user.guild_permissions, "manage_guild", False):
             return await interaction.edit_original_response(content="You can no longer manage this sesh.", view=None)
-        candidate = interaction.guild.get_member(int(select.values[0].id))
+        candidate = await _resolve_toke_handoff_target(interaction.guild, int(select.values[0].id))
         if candidate is None or candidate.bot:
             return await interaction.edit_original_response(content="Choose a current non-bot server member.", view=None)
         if int(candidate.id) == int(current["starter_id"]):
@@ -832,7 +849,7 @@ class TokeHostConfirmView(discord.ui.View):
                 return await interaction.edit_original_response(content="This sesh has ended.", view=None)
             if interaction.user.id != int(session["starter_id"]) and not getattr(interaction.user.guild_permissions, "manage_guild", False):
                 return await interaction.edit_original_response(content="You can no longer manage this sesh.", view=None)
-            member = guild.get_member(self.new_starter_id)
+            member = await _resolve_toke_handoff_target(guild, self.new_starter_id)
             if member is None or member.bot:
                 return await interaction.edit_original_response(content="The selected member is no longer in this server.", view=None)
             if not any(int(role.id) == int(session["starter_role_id"]) for role in member.roles):
