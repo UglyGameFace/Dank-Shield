@@ -212,6 +212,22 @@ async def torrent_stream(request: web.Request) -> web.StreamResponse:
             )
         return web.Response(status=status_code, headers=headers)
 
+    if getattr(session, "rolling_media", None) is not None:
+        # Signed access above remains mandatory. TorrServer is never exposed
+        # publicly, and only the selected file ID for this room is proxied.
+        gateway = getattr(manager, "rolling_gateway", None)
+        if gateway is None:
+            raise web.HTTPServiceUnavailable(text="Rolling Cinema engine is unavailable.")
+        return await gateway.stream(
+            request,
+            media=session.rolling_media,
+            start=start,
+            end=requested_end,
+            content_type=media_content_type(session.file_name),
+            guild_id=int(session.guild_id),
+            cors_headers=cors_headers,
+        )
+
     first_end = min(requested_end, start + _STREAM_CHUNK_BYTES - 1)
     manager.record_stream_timing(
         session,
