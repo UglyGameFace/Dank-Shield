@@ -9,7 +9,10 @@ database or remove the Supabase secrets until repositories are ported and tested
 The owner's existing **DankShield-DB** on Discloud is a PostgreSQL 17 service
 with private VLAN access. At the screenshot checkpoint it used ~47 MB, with
 512 MB RAM and 0.25 vCPU. **512 MB is RAM, not database disk capacity.**
-The storage limit and free physical disk are not established by the screenshot.
+Discloud support confirmed the owner's Diamond plan provides **10 GB of shared
+storage across apps** (file dependencies excluded). That is **10 decimal GB**,
+not a dedicated 10 GiB PostgreSQL quota. The current usage of other apps,
+PostgreSQL logs/host allocation and actual free space remain unverified.
 
 The DB already supports a small `public.dank_verify_reminder_delivery`
 PostgreSQL integration in Dank Shield. Voice-bot-owned data must not be
@@ -50,6 +53,30 @@ Stats are **estimates and PostgreSQL allocated size**, not proof of disk
 capacity, missing data, or Supabase billing root cause. The Supabase banner
 said that an organization exceeded a previous billing-cycle quota; the
 quota category is unverified. Do not guess it was database disk usage.
+
+## Diamond 10 GB shared-storage operating budget (support-confirmed)
+
+Discloud's developer confirmed the owner's Diamond plan has **10 GB shared
+across apps** and excludes dependencies from its file accounting. For
+conservative byte checks this migration uses **10,000,000,000 bytes**,
+not 10 GiB; there is no evidence that 512 MB of RAM is a disk quota.
+
+The manual-only migration entrypoints now validate their proposed PostgreSQL
+allocation inside that shared plan before writing. The operator must supply:
+
+- `DANK_PG_STORAGE_BUDGET_MB`: a deliberately assigned PostgreSQL **MiB**
+  budget, including its present data and projected new records;
+- `DANK_PG_OTHER_APP_STORAGE_MIB`: the **measured** consumption of other app
+  files outside the destination database, also in MiB (zero only if verified).
+
+The tools reserve another 1 GiB of unassigned shared storage, then retain the
+existing 70% database-budget staging threshold, 4x staged-payload sizing,
+transactional checks, and schema/row hash verification. If other-app usage
+cannot be measured, manual `--apply` refuses to proceed. Neither the plan
+limit nor the DB's own `pg_database_size` reports real host free bytes or the
+WAL's exact usage. No Discloud database or existing voice-bot data was read,
+written, restarted or migrated by this code change. For other service plans,
+review the migration's operator-only Diamond assumption before reuse.
 
 ## Preservation contract
 
@@ -103,7 +130,8 @@ quota category is unverified. Do not guess it was database disk usage.
 - **Observability and headroom.** Run `stoney_verify.postgres_storage_budget`
   through `tools/audit_discloud_postgres_storage.py` as a read-only,
   explicitly invoked check. Supply a real `DANK_PG_STORAGE_BUDGET_MB`
-  from the database service plan, not 512 MB RAM. At 70% flag a warning,
+  conservatively earmarked from the shared plan allowance, not 512 MB RAM
+  or the full 10 GB. At 70% flag a warning,
   at 85% flag critical. These are alerts, **not** automatic deletes or disk
   reservation; `pg_database_size` cannot tell remaining host disk space.
   Protect required writes by reclaiming only previously authorized ephemeral
@@ -152,7 +180,11 @@ its VLAN (no passwords in GitHub, chat, screenshots, command history or logs):
 # Supabase bot environment already provides SUPABASE_URL and service-role key.
 # Set DANK_MIGRATION_SOURCE_REF to the confirmed project's hostname prefix.
 # Set DANK_MIGRATION_EXPECTED_DB to the existing Discloud DB's name.
-# Set DANK_PG_STORAGE_BUDGET_MB to the VERIFIED disk storage allowance.
+# Set DANK_PG_STORAGE_BUDGET_MB to a deliberately earmarked slice of the
+# confirmed shared 10 GB plan (integer MiB, NOT the full 10,000 MB).
+# Set DANK_PG_OTHER_APP_STORAGE_MIB to measured other-app file usage,
+# excluding target DB bytes. Unmeasured shared usage blocks --apply.
+# The operator tools reserve another 1 GiB for shared writes/WAL.
 # Reuse the private PostgreSQL connection via DANK_CORE_POSTGRES_DATABASE_URL,
 # or the already-established DANK_VERIFY_REMINDER_DATABASE_URL.
 
