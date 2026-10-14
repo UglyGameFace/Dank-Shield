@@ -1,3 +1,42 @@
+# Active Task Lock — /toke voice lifecycle and opt-in idle policy (2026-10-14)
+
+**Active task:** Continue the user-authorized complete Dank Shield /toke
+overhaul. PRs #560 (accurate session coordination) and #561 (host handoff)
+are merged into main. Their GitHub checks passed, but live Discloud/Android
+acceptance remains unverified. The prior Supabase-to-Discloud PostgreSQL
+migration is **suspended**, not abandoned. Its complete rollback, backup,
+private database and SSD capacity constraints are preserved below.
+
+**Current focused slice:** Branch `feat/toke-voice-lifecycle-20261014`
+from `main@d970c206b2826863cb825358b0d82472be650598`. Add durable host
+observed/away/rejoined status based only on verified VC membership or real
+departure events, not merely missing host at session launch. Preserve guest
+attendance when the host leaves; do not auto-elect a host, DM/ping again, or
+terminate a sesh for host absence. Provide an opt-in owner-controlled
+empty-voice-room auto-close (0 disabled by default; 5–120 minutes); snapshot
+the selected policy on new sessions only. Start the empty timer only after
+real session-associated voice presence was observed, reset it on human
+re-entry, never count bot-only occupancy as people, and never auto-close if
+the VC is missing/inaccessible or has human members. A bounded 15-second
+existing worker examines at most 25 due records, resamples live VC, and
+closes through a durable atomic session-store operation; terminal edits keep
+the existing queue and backoff. Legacy sessions default to disabled.
+
+**Boundaries:** No runtime monkey patching, Supabase/PostgreSQL work, voice
+bot data changes, Discord command tree expansion, or production deployment.
+The current JSON store remains authoritative. Server settings persist via
+the existing canonical guild-config interface. The full /toke overhaul
+also needs better notifications, scalable VC event indexing, presets,
+measured analytics, true concurrent-shard durable storage, and integration
+acceptance when the DB is unblocked. No claims of 10k-guild readiness.
+
+**Validation/next:** Tests added for host departure with remaining members,
+host rejoin, never-occupied sessions, disabled default, age/expiry gates,
+host handoff, absent VC, modal policy validation and opt-in worker closure.
+Run exact-head CI, fix regressions and keep PR draft until all checks pass.
+
+---
+
 # Active Task Lock — /toke host handoff and lifecycle controls (2026-10-14)
 
 **Single active task:** Complete Dank Shield /toke overhaul, authorized by
