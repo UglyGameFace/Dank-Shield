@@ -640,15 +640,28 @@ class TorrentMediaManager:
             return not leases or leases <= {key}
         return not leases
 
-    def _cache_allocated_bytes(self) -> int:
-        """Count allocated bytes without following links outside this cache.
+    def _cache_allocated_bytes(self) -> tuple[int, int]:
+        """Return total and untracked allocated bytes in the cache.
 
-        Disk-wide df() cannot enforce the shared Diamond allowance.
-        stat.st_blocks accounts for partially downloaded/sparse files.
-        Failure to inspect a directory fails admission closed.
+        Reserve full declared sizes for *tracked* torrents even when files are
+        still sparse, plus actual orphan bytes. Otherwise an old 3 GiB cache
+        and a new 3 GiB movie could wrongly be considered a single 3 GiB use.
         """
-        total = 0
-        for folder, dirs, files in os.walk(self.root, followlinks=False):
+        root = self.root.resolve()
+        tracked = {
+            str(path.relative_to(root).parts[0])
+            for session in self._sessions.values()
+            for path in [Path(getattr(session, "save_root", root)).resolve()]
+            if path != root and path.is_relative_to(root)
+        }
+
+        def fail_closed(error: OSError) -> None:
+            raise error
+
+        total = unmanaged = 0
+        for folder, dirs, files in os.walk(
+            self.root, followlinks=False, onerror=fail_closed
+        ):
             dirs[:] = [
                 name for name in dirs
                 if not (Path(folder) / name).is_symlink()
@@ -656,8 +669,11 @@ class TorrentMediaManager:
             for name in files:
                 entry = Path(folder) / name
                 info = entry.stat(follow_symlinks=False)
-                total += int(info.st_blocks) * 512
-        return total
+                allocated = int(info.st_blocks) * 512
+                total += allocated
+                if entry.relative_to(self.root).parts[0] not in tracked:
+                    unmanaged += allocated
+        return total, unmanaged
 
     def _orphan_cache_paths(self) -> list[Path]:
         """Select only aged, canonical session directories not owned here."""
@@ -835,9 +851,9 @@ class TorrentMediaManager:
         exclude = str(replace_token or "") if releasable else ""
         committed = self._committed_file_bytes(exclude_token=exclude)
         try:
-            cache_used: int | None = self._cache_allocated_bytes()
+            cache_used, cache_untracked = self._cache_allocated_bytes()
         except OSError:
-            cache_used = None
+            cache_used = cache_untracked = None
         guild_unique = self._guild_unique_session_count(
             int(request_guild_id),
             exclude_token=exclude,
@@ -898,7 +914,9 @@ class TorrentMediaManager:
             )
         elif cache_used is None:
             blocker = "Movie Night cache space could not be measured safely."
-        elif max(int(cache_used), int(committed)) + max(0, int(expected_file_bytes)) > self.cache_budget_bytes:
+        elif max(
+            int(cache_used), int(cache_untracked) + int(committed)
+        ) + max(0, int(expected_file_bytes)) > self.cache_budget_bytes:
             blocker = "Movie Night cache budget would be exceeded by another torrent."
         elif free_disk <= 0:
             blocker = "Free disk could not be measured; refusing a new torrent safely."
