@@ -152,12 +152,9 @@ def run_from_environment(
     env = os.environ if environ is None else environ
     dsn = str(env.get("DANK_CORE_POSTGRES_DATABASE_URL") or
               env.get("DANK_VERIFY_REMINDER_DATABASE_URL") or "").strip()
+    # A read-only audit must use the same shared-plan allocation authority
+    # as staging and shadow imports. Otherwise a mistyped or oversized budget
+    # could yield a misleading "within_budget" report.
     raw_budget = str(env.get("DANK_PG_STORAGE_BUDGET_MB") or "").strip()
-    if raw_budget:
-        try:
-            budget = int(raw_budget)
-        except ValueError as exc:
-            raise ValueError("DANK_PG_STORAGE_BUDGET_MB must be an integer") from exc
-    else:
-        budget = None
+    budget = migration_database_budget_mb(env) if raw_budget else None
     return read_only_snapshot(dsn, budget_mb=budget, connect=connect)
