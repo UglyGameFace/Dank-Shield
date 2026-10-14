@@ -143,8 +143,12 @@ def test_reminder_button_requires_role_and_returns_ephemeral_consent(isolated_st
         FakeMember.roles = []
         calls.clear()
         await view.remind.callback(interaction)
+        assert "cancelled" in calls[-1][1]["content"]
+        assert (await toke_sessions.get(123, 456))["reminder_ids"] == []
+        calls.clear()
+        await view.remind.callback(interaction)
         assert "role is required" in calls[-1][1]["content"]
-        assert (await toke_sessions.get(123, 456))["reminder_ids"] == [101]
+        assert (await toke_sessions.get(123, 456))["reminder_ids"] == []
     asyncio.run(run())
 
 
