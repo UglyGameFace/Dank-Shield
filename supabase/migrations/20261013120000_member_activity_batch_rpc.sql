@@ -24,7 +24,7 @@ returns void
 language plpgsql
 security definer
 set search_path = pg_catalog, public
-as $
+as $$
 declare
     e jsonb;
     v_guild_id text;
@@ -206,7 +206,7 @@ create or replace function public.ack_member_activity_batches(
 language plpgsql
 security definer
 set search_path = pg_catalog, public
-as $
+as $$
 begin
     if p_batch_ids is null or array_length(p_batch_ids, 1) > 128 then
         raise exception 'expected up to 128 acknowledged batch IDs';
@@ -214,7 +214,7 @@ begin
     delete from public.member_activity_batch_receipts
     where batch_id = any(p_batch_ids);
 end;
-$;
+$$;
 revoke execute on function public.ack_member_activity_batches(uuid[])
 from public, anon, authenticated;
 grant execute on function public.ack_member_activity_batches(uuid[])
