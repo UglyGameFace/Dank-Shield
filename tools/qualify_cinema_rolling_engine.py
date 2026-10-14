@@ -204,8 +204,87 @@ def check_range(base, torrent_uri, offset):
     raise AssertionError(f"range {offset} cannot be streamed: {last}")
 
 
+async def prove_rolling_gateway_http(
+    *, base: str, root: Path, source: Path, infohash: str,
+) -> None:
+    """Exercise the production rolling transport against real TorrServer.
+
+    The synthetic seeder and actual engine are already running. A separate
+    loopback test route checks authorization before giving the transport a
+    request, just as the existing signed Cinema route does in production.
+    """
+    from aiohttp import ClientSession, web
+    from stoney_verify.cinema_rolling_gateway import CinemaRollingGateway
+
+    client = CinemaRollingGateway(
+        base_url=base,
+        cache_dir=root / "piece-cache",
+        cache_budget_bytes=64 * 1024 * 1024,
+        per_torrent_cache_bytes=16 * 1024 * 1024,
+        max_torrents=1,
+        max_parallel_ranges=4,
+        max_per_guild_ranges=2,
+    )
+    await client.verified_settings()
+    media = await client.add(
+        info_hash=infohash,
+        source="",
+        source_torrent_file=source,
+        expected_file_path=NAME,
+        expected_file_size=FILE_BYTES,
+    )
+
+    async def signed_media(request: web.Request) -> web.StreamResponse:
+        if request.query.get("signed") != "ci-test-token":
+            raise web.HTTPUnauthorized()
+        try:
+            start = int(request.match_info["offset"])
+        except (ValueError, KeyError) as exc:
+            raise web.HTTPBadRequest() from exc
+        if start not in POSITIONS:
+            raise web.HTTPForbidden()
+        return await client.stream(
+            request,
+            media=media,
+            start=start,
+            end=start + RANGE_BYTES - 1,
+            content_type="video/x-matroska",
+            guild_id=1,
+        )
+
+    app = web.Application()
+    app.router.add_get("/ci/signed/{offset}", signed_media)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    listening = site._server.sockets[0].getsockname()[1]
+    try:
+        async with ClientSession() as http:
+            no_sig = f"http://127.0.0.1:{listening}/ci/signed/{POSITIONS[0]}"
+            async with http.get(no_sig) as response:
+                if response.status != 401:
+                    raise AssertionError("Unsigned large media accessed engine")
+            for offset in (POSITIONS[0], POSITIONS[-1], POSITIONS[0]):
+                uri = f"http://127.0.0.1:{listening}/ci/signed/{offset}?signed=ci-test-token"
+                async with http.get(uri, timeout=50) as response:
+                    payload = await response.read()
+                    expected_header = f"bytes {offset}-{offset + RANGE_BYTES - 1}/{FILE_BYTES}"
+                    if response.status != 206 or response.headers.get("Content-Range") != expected_header:
+                        raise AssertionError("Proxy corrupted HTTP 206 range metadata")
+                    if payload != proof_piece(offset // PIECE_BYTES)[:RANGE_BYTES]:
+                        raise AssertionError("Proxy corrupted 52 GiB logical movie bytes")
+                if allocated_bytes(root / "piece-cache") > 64 * 1024 * 1024:
+                    raise AssertionError("Integrated rolling cache exceeded the reserved allowance")
+        print("QUALIFY actual gateway HTTP: unauthorized=401, signed 52GiB ranges=3, cache bounded", flush=True)
+    finally:
+        await runner.cleanup()
+        await client.remove(media)
+
+
 def main():
     binary = os.environ.get("DANK_TEST_TORRSERVER_BINARY", "")
+    memory_mode = os.environ.get("DANK_QUALIFY_MEMORY_MODE") == "1"
     if not binary or not Path(binary).is_file():
         raise SystemExit("DANK_TEST_TORRSERVER_BINARY must be set by isolated CI")
     if not str(lt.version).startswith("2.1.1"):
@@ -223,6 +302,21 @@ def main():
                 binary, "--port", str(api_port), "--ip", "127.0.0.1",
                 "--path", str(config), "--torrentaddr", "127.0.0.1:0",
             ], cwd=str(root), stdout=engine_log, stderr=subprocess.STDOUT)
+            rss_peak = [0]
+            stop_rss = threading.Event()
+            def sample_rss():
+                while not stop_rss.is_set():
+                    try:
+                        status = Path(f"/proc/{engine.pid}/status").read_text()
+                        for line in status.splitlines():
+                            if line.startswith("VmRSS:"):
+                                rss_peak[0] = max(rss_peak[0], int(line.split()[1]) * 1024)
+                                break
+                    except (FileNotFoundError, OSError, ValueError):
+                        pass
+                    stop_rss.wait(0.05)
+            rss_sampler = threading.Thread(target=sample_rss, daemon=True)
+            rss_sampler.start()
             try:
                 for _ in range(60):
                     if engine.poll() is not None:
@@ -240,8 +334,8 @@ def main():
 
                 sets.update({
                     "CacheSize": CACHE_BYTES,
-                    "UseDisk": True,
-                    "TorrentsSavePath": str(cache),
+                    "UseDisk": not memory_mode,
+                    "TorrentsSavePath": "" if memory_mode else str(cache),
                     "RemoveCacheOnDrop": True,
                     "ResponsiveMode": False,
                     "ReaderReadAHead": 50,
@@ -255,7 +349,7 @@ def main():
                 post_json(base, "/settings", {"action": "set", "sets": sets})
                 verified_sets = post_json(base, "/settings", {"action": "get"})
                 if not (
-                    verified_sets.get("UseDisk") is True
+                    verified_sets.get("UseDisk") is (not memory_mode)
                     and verified_sets.get("CacheSize") == CACHE_BYTES
                 ):
                     raise AssertionError("real engine rejected cache settings")
@@ -279,8 +373,10 @@ def main():
                 for offset in POSITIONS:
                     results.append(check_range(base, uri, offset))
                     used = allocated_bytes(cache)
-                    if used > CACHE_BYTES * 4:
-                        raise AssertionError(f"cache allocated {used} bytes")
+                    if memory_mode and used != 0:
+                        raise AssertionError(f"memory-only engine wrote {used} media cache bytes to disk")
+                    if not memory_mode and used > CACHE_BYTES * 4:
+                        raise AssertionError(f"disk cache allocated {used} bytes, above tested margin")
 
                 uploaded_before_seek = int(seed.status().total_upload)
                 results.append(check_range(base, uri, POSITIONS[0]))
@@ -290,12 +386,17 @@ def main():
                         "backward seek did not force new peer data transfer"
                     )
                 used = allocated_bytes(cache)
-                if used > CACHE_BYTES * 4:
+                if memory_mode and used != 0:
+                    raise AssertionError(f"memory-only engine wrote {used} media cache bytes")
+                if not memory_mode and used > CACHE_BYTES * 4:
+                    raise AssertionError(f"disk cache exceeded 4x transient bound: {used}")
+                if memory_mode and rss_peak[0] > 512 * 1024 * 1024:
                     raise AssertionError(
-                        f"cache exceeded 4x transient bound: {used}"
+                        f"memory-only engine RSS exceeded qualification guard: {rss_peak[0]}"
                     )
                 print(json.dumps({
-                    "result": "real_engine_qualification_only",
+                    "peak_worker_rss_bytes": rss_peak[0],
+                    "result": "real_engine_memory_only" if memory_mode else "real_engine_qualification_only",
                     "logical_movie_bytes": FILE_BYTES,
                     "configured_cache_bytes": CACHE_BYTES,
                     "actual_disk_bytes": used,
@@ -304,6 +405,12 @@ def main():
                         uploaded_after_seek - uploaded_before_seek,
                     "verified_ranges": results,
                 }, sort_keys=True), flush=True)
+                if not memory_mode:
+                    raise AssertionError("Disk-backed Cinema is not approved for rolling streaming.")
+                import asyncio
+                asyncio.run(prove_rolling_gateway_http(
+                    base=base, root=root, source=source, infohash=infohash,
+                ))
             except Exception:
                 engine_log.flush()
                 print(
@@ -319,6 +426,10 @@ def main():
                 )
                 raise
             finally:
+                stop_rss.set()
+                rss_sampler.join(timeout=2)
+                if memory_mode and rss_peak[0] > 512 * 1024 * 1024:
+                    print(f"QUALIFY MEMORY RSS EXCEEDED: {rss_peak[0]}", flush=True)
                 engine.terminate()
                 try:
                     engine.wait(timeout=10)

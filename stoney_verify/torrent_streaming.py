@@ -292,6 +292,7 @@ class TorrentStreamSession:
     lease_guild_ids: dict[str, int] = field(default_factory=dict)
     unleased_hold: bool = False
     reuse_hits: int = 0
+    rolling_media: Any | None = None
 
     @property
     def absolute_path(self) -> Path:
@@ -378,17 +379,40 @@ class TorrentMediaManager:
             minimum=64 * 1024,
             maximum=16 * 1024 * 1024,
         )
+        self.rolling_gateway = None
+        rolling_enabled = _env_bool("DANK_CINEMA_ROLLING_ENABLED", False)
+        self.rolling_memory_budget_bytes = _env_int(
+            "DANK_CINEMA_ROLLING_MEMORY_BUDGET_BYTES",
+            128 * 1024 * 1024,
+            minimum=64 * 1024 * 1024,
+            maximum=512 * 1024 * 1024,
+        )
+        if rolling_enabled:
+            from .cinema_rolling_gateway import CinemaRollingGateway
+            address = str(os.getenv("DANK_CINEMA_ROLLING_ENDPOINT", "")).strip()
+            if not address:
+                raise RuntimeError("Cinema rolling engine endpoint is not configured.")
+            self.rolling_gateway = CinemaRollingGateway(
+                base_url=address,
+                cache_dir=self.root / "rolling-pieces",
+                cache_budget_bytes=self.rolling_memory_budget_bytes,
+                per_torrent_cache_bytes=max(
+                    4 * 1024 * 1024,
+                    self.rolling_memory_budget_bytes // (self.max_sessions * 4),
+                ),
+                max_torrents=self.max_sessions,
+            )
         self.max_file_bytes = _env_int(
             "DANK_TORRENT_MAX_FILE_BYTES",
-            25 * 1024 * 1024 * 1024,
+            (100 if rolling_enabled else 25) * 1024 * 1024 * 1024,
             minimum=8 * 1024 * 1024,
-            maximum=100 * 1024 * 1024 * 1024,
+            maximum=150 * 1024 * 1024 * 1024,
         )
         self.max_torrent_bytes = _env_int(
             "DANK_TORRENT_MAX_TOTAL_BYTES",
-            50 * 1024 * 1024 * 1024,
+            (200 if rolling_enabled else 50) * 1024 * 1024 * 1024,
             minimum=16 * 1024 * 1024,
-            maximum=200 * 1024 * 1024 * 1024,
+            maximum=300 * 1024 * 1024 * 1024,
         )
         self.disk_reserve_bytes = _env_int(
             "DANK_TORRENT_DISK_RESERVE_BYTES",
@@ -486,6 +510,7 @@ class TorrentMediaManager:
         self._replacements_in_flight: set[str] = set()
         self._lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task[Any]] = None
+        self._rolling_retire_retries: dict[str, Any] = {}
         self._session = self._build_libtorrent_session()
 
     @staticmethod
@@ -731,7 +756,7 @@ class TorrentMediaManager:
     def _committed_file_bytes(self, *, exclude_token: str = "") -> int:
         excluded = str(exclude_token or "")
         return sum(
-            max(0, int(getattr(session, "file_size", 0) or 0))
+            max(0, int(0 if getattr(session, "rolling_media", None) is not None else getattr(session, "file_size", 0) or 0))
             for token, session in self._sessions.items()
             if token != excluded
         )
@@ -1091,6 +1116,7 @@ class TorrentMediaManager:
                     start_rss_mb=start_rss_mb,
                     startup_started_at=startup_started_at,
                     metadata_ready_at=metadata_ready_at,
+                    rolling_source=raw,
                 )
             except Exception:
                 self._safe_remove_handle(handle)
@@ -1310,6 +1336,7 @@ class TorrentMediaManager:
         start_rss_mb: float | None = None,
         startup_started_at: float = 0.0,
         metadata_ready_at: float = 0.0,
+        rolling_source: str = "",
     ) -> TorrentStreamSession:
         candidates = self._playable_candidates(info)
         if not candidates:
@@ -1360,19 +1387,44 @@ class TorrentMediaManager:
             ),
             unleased_hold=not bool(str(lease_key or "").strip()),
         )
-        self._select_candidate(session, selected)
-
-        async with self._lock:
-            # File-size admission and registration must share one lock:
-            # simultaneous torrent metadata completions cannot both reserve
-            # the same remaining cache budget.
-            self._assert_disk_capacity(
-                selected.size,
-                replace_token=replace_token,
-                lease_key=lease_key,
+        if self.rolling_gateway is not None:
+            # Native libtorrent discovers metadata only; the rolling engine
+            # exclusively owns playback pieces and bounded disk eviction.
+            media = await self.rolling_gateway.add(
+                info_hash=source_identity.partition(":")[2],
+                source=rolling_source,
+                source_torrent_file=(save_root / "source.torrent" if source_kind == "torrent" else None),
+                expected_file_path=str(selected.path),
+                expected_file_size=int(selected.size),
             )
-            self._sessions[token] = session
-            self._identity_index[source_identity] = token
+            session.rolling_media = media
+        try:
+            self._select_candidate(session, selected)
+        except Exception:
+            if session.rolling_media is not None:
+                await self.rolling_gateway.remove(session.rolling_media)
+            raise
+
+        try:
+            async with self._lock:
+                # Admission is serialized with session registration.
+                self._assert_disk_capacity(
+                    (0 if self.rolling_gateway is not None else selected.size),
+                    replace_token=replace_token,
+                    lease_key=lease_key,
+                )
+                self._sessions[token] = session
+                self._identity_index[source_identity] = token
+        except Exception:
+            if session.rolling_media is not None:
+                await self.rolling_gateway.remove(session.rolling_media)
+            raise
+        # Completed admission.
+        if session.rolling_media is not None:
+            try:
+                session.handle.pause()
+            except Exception:
+                pass
         self._record_session_memory_observation(start_rss_mb)
         return session
 
@@ -1383,7 +1435,8 @@ class TorrentMediaManager:
     ) -> None:
         files = session.info.files()
         priorities = [0] * int(files.num_files())
-        priorities[selected.index] = 1
+        if session.rolling_media is None:
+            priorities[selected.index] = 1
         session.handle.prioritize_files(priorities)
 
         session.file_index = int(selected.index)
@@ -1402,6 +1455,8 @@ class TorrentMediaManager:
         ) // session.piece_length
         session.last_access = time.monotonic()
 
+        if session.rolling_media is not None:
+            return
         self.prioritize_range(
             session,
             0,
@@ -1441,6 +1496,15 @@ class TorrentMediaManager:
         if selected is None:
             raise ValueError("That torrent file is not an approved playable media candidate.")
 
+        if session.rolling_media is not None and self.rolling_gateway is not None:
+            # TorrServer's file numbering follows its own sorted file table,
+            # not libtorrent's original index order. Never reuse an old file ID.
+            matching = await self.rolling_gateway.select_file(
+                session.rolling_media.info_hash,
+                expected_file_path=str(selected.path),
+                expected_file_size=int(selected.size),
+            )
+            session.rolling_media = matching
         self._select_candidate(session, selected)
         return session
 
@@ -1531,6 +1595,8 @@ class TorrentMediaManager:
         return True
 
     def schedule_metadata_probe(self, session: TorrentStreamSession) -> bool:
+        if session.rolling_media is not None:
+            return False
         if session.verified_metadata.get("available"):
             return False
         if session.metadata_probe_running or session.metadata_probe_attempts >= 3:
@@ -1585,6 +1651,9 @@ class TorrentMediaManager:
         readahead_bytes: Optional[int] = None,
         time_critical: bool = True,
     ) -> None:
+        if session.rolling_media is not None:
+            session.last_access = time.monotonic()
+            return
         start = max(0, min(int(start), session.file_size - 1))
         end = max(start, min(int(end), session.file_size - 1))
 
@@ -2008,6 +2077,24 @@ class TorrentMediaManager:
         }
 
     def status(self, session: TorrentStreamSession) -> dict[str, Any]:
+        if session.rolling_media is not None:
+            return {
+                "token": session.token, "name": session.file_name,
+                "source_identity": session.source_identity,
+                "lease_count": len(session.leases),
+                "consumer_guilds": sorted(self._consumer_guild_ids(session)),
+                "shared": len(session.leases) > 1,
+                "size": session.file_size, "downloaded": 0, "progress": 0.0,
+                "download_rate": 0, "upload_rate": 0, "peers": 0, "seeds": 0,
+                "leechers": 0, "state": "rolling-cache", "rolling_cache": True,
+                "stats_available": False, "buffer": {},
+                "metadata": {"release_name": dict(session.release_metadata or {}),
+                             "verified": dict(session.verified_metadata or {})},
+                "playable_files": [{"index": i.index, "name": _safe_name(i.path),
+                                    "path": i.path, "size": i.size,
+                                    "selected": i.index == session.file_index}
+                                   for i in session.candidates],
+            }
         try:
             status = session.handle.status()
         except RuntimeError as exc:
@@ -2239,6 +2326,34 @@ class TorrentMediaManager:
         expected = self._signature(session, exp, consumer_key)
         return bool(signature) and hmac.compare_digest(expected, str(signature))
 
+    async def _retire_media_session(self, session: TorrentStreamSession) -> None:
+        # The last room lease is the only authority for removing a torrent.
+        # Keep failed remote removals in the same cleanup worker for retries.
+        media = session.rolling_media
+        if media is not None and self.rolling_gateway is not None:
+            try:
+                await self.rolling_gateway.remove(media)
+                self._rolling_retire_retries.pop(media.info_hash, None)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "cinema rolling torrent removal failed; queued retry hash_prefix=%s",
+                    media.info_hash[:8],
+                )
+                self._rolling_retire_retries[media.info_hash] = media
+        self._safe_remove_handle(session.handle)
+        await asyncio.to_thread(shutil.rmtree, session.save_root, True)
+
+    async def _retry_rolling_retirements(self) -> None:
+        if self.rolling_gateway is None:
+            return
+        for key, media in list(self._rolling_retire_retries.items())[:4]:
+            try:
+                await self.rolling_gateway.remove(media)
+                self._rolling_retire_retries.pop(key, None)
+            except Exception:
+                continue
+
     async def cleanup_expired(self) -> int:
         """Reclaim only truly idle, unleased sessions.
 
@@ -2261,8 +2376,8 @@ class TorrentMediaManager:
                 expired.append(session)
 
         for session in expired:
-            self._safe_remove_handle(session.handle)
-            await asyncio.to_thread(shutil.rmtree, session.save_root, True)
+            await self._retire_media_session(session)
+        await self._retry_rolling_retirements()
         await self._remove_orphaned_cache()
         return len(expired)
 
@@ -2281,8 +2396,7 @@ class TorrentMediaManager:
 
         if session is None:
             return False
-        self._safe_remove_handle(session.handle)
-        await asyncio.to_thread(shutil.rmtree, session.save_root, True)
+        await self._retire_media_session(session)
         return True
 
     async def release_lease(
@@ -2324,8 +2438,7 @@ class TorrentMediaManager:
                     self._identity_index.pop(detached.source_identity, None)
 
         if detached is not None:
-            self._safe_remove_handle(detached.handle)
-            await asyncio.to_thread(shutil.rmtree, detached.save_root, True)
+            await self._retire_media_session(detached)
         return existed
 
     async def remove(self, token: str, *, force: bool = False) -> bool:
@@ -2339,8 +2452,7 @@ class TorrentMediaManager:
             self._sessions.pop(clean_token, None)
             if self._identity_index.get(session.source_identity) == clean_token:
                 self._identity_index.pop(session.source_identity, None)
-        self._safe_remove_handle(session.handle)
-        await asyncio.to_thread(shutil.rmtree, session.save_root, True)
+        await self._retire_media_session(session)
         return True
 
     def _safe_remove_handle(self, handle: Any) -> None:
