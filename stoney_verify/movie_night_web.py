@@ -3459,6 +3459,8 @@ try {{
     subtitleSizePercent=Math.max(75,Math.min(175,Number(saved.size)));
 }} catch(_) {{}}
 let lastProgressPersistAt=0;
+let progressPersistInFlight=false;
+let lastLocalProgressAt=0;
 let lastProgressMediaKey="";
 let lastProgressRestoreKey="";
 let pendingProgressResume=null;
@@ -4951,12 +4953,37 @@ async function applyPendingProgressResume() {{
   }}
 }}
 
+function progressLocalKey(key) {{
+  return "dank-cinema-progress-v2:"+String(BOOT.uid)+":"+key;
+}}
+function readLocalProgress(key) {{
+  try {{
+    const row=JSON.parse(localStorage.getItem(progressLocalKey(key))||"null");
+    if(!row || row.key!==key || row.completed) return null;
+    const age=Date.now()-Number(row.savedAt||0);
+    if(!Number.isFinite(age) || age<0 || age>7*24*3600*1000) return null;
+    const seconds=Number(row.seconds||0);
+    if(!Number.isFinite(seconds) || seconds<5) return null;
+    return row;
+  }} catch(_) {{ return null; }}
+}}
+function checkpointLocalProgress(key,seconds,duration,completed,force=false) {{
+  const now=Date.now();
+  if(!force && now-lastLocalProgressAt<2000) return;
+  lastLocalProgressAt=now;
+  try {{
+    localStorage.setItem(progressLocalKey(key),JSON.stringify({{
+      key,seconds,duration,completed:!!completed,savedAt:now
+    }}));
+  }} catch(_) {{ /* Storage can be blocked in private/mobile browsers. */ }}
+}}
 async function maybeRestoreWatchProgress(s) {{
   if(!s?.is_host || !s?.stream_url) return;
   const key=progressIdentity(s.movie);
   if(!key || key===lastProgressRestoreKey) return;
   lastProgressRestoreKey=key;
   if(Number(s.position_seconds||0)>2.5) return;
+  const local=readLocalProgress(key);
   try {{
     const saved=await jsonFetch("/movie/"+BOOT.roomId+"/progress");
     if(
@@ -4965,13 +4992,22 @@ async function maybeRestoreWatchProgress(s) {{
       Number(lastState.position_seconds||0)>2.5
     ) return;
     const item=saved?.item;
-    if(!item || item.completed) return;
-    const seconds=Math.max(0,Number(item.progress_seconds||0));
+    if(item?.completed) return;
+    const remoteSeconds=Math.max(0,Number(item?.progress_seconds||0));
+    const serverStamp=Date.parse(String(item?.updated_at||""))||0;
+    const useLocal=local && Number(local.savedAt)>serverStamp;
+    const seconds=Math.max(0,Number(useLocal?local.seconds:remoteSeconds));
     if(seconds<5) return;
     pendingProgressResume={{key,seconds}};
     await applyPendingProgressResume();
   }} catch(_) {{
-    // Playback remains available when durable Cinema storage is temporarily down.
+    // The most recent local checkpoint preserves position when the device
+    // loses network or Cinema storage temporarily cannot be reached.
+    if(local && progressIdentity()===key && lastState?.is_host &&
+       Number(lastState.position_seconds||0)<=2.5) {{
+      pendingProgressResume={{key,seconds:Number(local.seconds)}};
+      await applyPendingProgressResume();
+    }}
   }}
 }}
 
@@ -7024,10 +7060,13 @@ async function persistWatchProgress(force=false) {{
   const key=progressIdentity(movie);
   if(!key) return;
   if(key!==lastProgressMediaKey) lastProgressPersistAt=0;
-  if(!force && now-lastProgressPersistAt<30000) return;
   const duration=Number.isFinite(video.duration)?Number(video.duration):0;
   const position=Math.max(0,Number(video.currentTime||0));
   if(duration<=0 && position<=0) return;
+  const completed=duration>0 && position>=Math.max(30,duration*.92);
+  checkpointLocalProgress(key,position,duration,completed,force);
+  if(progressPersistInFlight || (!force && now-lastProgressPersistAt<30000)) return;
+  progressPersistInFlight=true;
   lastProgressMediaKey=key;
   lastProgressPersistAt=now;
   try {{
@@ -7037,19 +7076,27 @@ async function persistWatchProgress(force=false) {{
       body:JSON.stringify({{
         progress_seconds:position,
         duration_seconds:duration,
-        completed:duration>0 && position>=Math.max(30,duration*.92)
+        completed
       }}),
       keepalive:!!force
     }});
-    if(!response.ok && !progressStorageWarned) {{
-      progressStorageWarned=true;
-      notice.textContent="Playback is continuing, but Continue Watching could not be saved right now.";
+    if(response.ok) {{
+      progressStorageWarned=false;
+    }} else {{
+      lastProgressPersistAt=Date.now()-25000; // bounded retry after 5 seconds
+      if(!progressStorageWarned) {{
+        progressStorageWarned=true;
+        notice.textContent="Playback is continuing, but Continue Watching could not be saved right now.";
+      }}
     }}
   }} catch(_) {{
+    lastProgressPersistAt=Date.now()-25000;
     if(!progressStorageWarned) {{
       progressStorageWarned=true;
       notice.textContent="Playback is continuing, but Continue Watching could not be saved right now.";
     }}
+  }} finally {{
+    progressPersistInFlight=false;
   }}
 }}
 video.addEventListener("timeupdate",()=>persistWatchProgress(false));
