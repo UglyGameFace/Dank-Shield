@@ -45,6 +45,7 @@ class PendingToke:
     note: str
     deadline: float
     claimed: bool = False
+    voice_channel_id: int = 0
 
 
 def settings_from_config(cfg: Mapping[str, Any]) -> dict[str, Any]:
@@ -980,10 +981,14 @@ class TokeComposeView(discord.ui.View):
         await interaction.response.edit_message(content="Toke draft cancelled.", view=None)
 
 
-def begin_capture(guild_id: int, user_id: int, channel_id: int, destination_id: int, note: str) -> TokeComposeView:
+def begin_capture(
+    guild_id: int, user_id: int, channel_id: int, destination_id: int,
+    note: str, *, voice_channel_id: int = 0,
+) -> TokeComposeView:
     _PENDING[(int(guild_id), int(user_id))] = PendingToke(
         int(guild_id), int(user_id), int(channel_id), int(destination_id),
         note, time.monotonic() + CAPTURE_SECONDS,
+        voice_channel_id=int(voice_channel_id),
     )
     return TokeComposeView(user_id, guild_id)
 
