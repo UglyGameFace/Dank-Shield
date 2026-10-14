@@ -329,6 +329,7 @@ def create_backup(
         with os.fdopen(fd, "wb") as encrypted_file:
             fd = -1
             assert proc.stdout is not None
+            mark("encrypted_stream_started")
             try:
                 info = encrypt_stream_to_file(
                     proc.stdout, encrypted_file, passphrase
@@ -347,6 +348,7 @@ def create_backup(
                 raise
             finally:
                 proc.stdout.close()
+            mark("pg_dump_wait_started")
             status = proc.wait(timeout=180)
             stderr_reader.join(timeout=5)
             if status != 0:
