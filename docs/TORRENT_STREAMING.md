@@ -129,9 +129,10 @@ Current production-oriented defaults:
 - per-guild unique-torrent limit: 1
 - burst beyond the soft limit: disabled
 - torrent metadata file: 4 MiB
-- selected video file: 25 GiB
-- total torrent declared size: 50 GiB
-- protected free-disk reserve: 64 GiB
+- selected video file: 25 GiB metadata ceiling (subject to the stricter cache cap)
+- total torrent declared size: 50 GiB metadata ceiling (subject to the stricter cache cap)
+- **Cinema cache cap: 4 GiB default** (`DANK_TORRENT_CACHE_BUDGET_BYTES`, adjustable 512 MiB to 8 GiB)
+- protected free-disk reserve: 64 GiB on the host, in addition to the cache cap
 - readahead: 16 MiB
 - startup priority window: 8 MiB
 - tail priority window: 4 MiB
@@ -146,6 +147,32 @@ Current production-oriented defaults:
 - upload cap: 512 KiB/s
 - requested playback pieces: libtorrent time-critical deadlines (500 ms base, 350 ms step)
 
+### Diamond shared storage and crash-recovery guarantees
+
+Discloud Diamond advertises 10 decimal GB shared across apps. The host
+filesystem's 1.9 TB total must not be treated as the account quota. The
+existing torrent manager now accounts for allocated bytes under its torrent
+cache root and reserves a selected video's declared size during admission.
+New torrents fail closed when the default 4 GiB cache budget would be
+exceeded. The other 6 GB is not promised to the bot or the database:
+other app usage still needs measurement before database migration.
+
+The same lazy 60-second torrent cleanup worker now also reaps at most eight
+aged orphan torrent directories per pass after an abrupt process restart.
+Only exact canonical random session directories created before the current
+manager instance, older than the configured 30-minute grace period, and not
+owned by a current live session are candidates. The scanner ignores symlinks
+and unrelated folders. The manager skips orphan cleanup during any in-flight
+torrent start. A Linux advisory lock permits only one new manager at a time
+to own this cache. The old code did not use that lock, so **never run the old
+and new workers concurrently on the same cache volume** during cutover.
+
+Cleanup starts only when the torrent manager is acquired for real media;
+neither a PR merge nor the bot startup deletes old files. Existing session
+release/lease semantics remain authoritative. Monitor disk usage over
+multiple cleanup cycles after a controlled release, and do not manually
+delete active torrent folders. The production branch must not be switched
+to main until the separate deployment rollback and acceptance gates pass.
 ### Shared torrent reuse
 
 Torrent identity/info-hash is indexed process-wide. Multiple Movie Night rooms
