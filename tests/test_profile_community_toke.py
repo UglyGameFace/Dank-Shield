@@ -520,6 +520,6 @@ def test_member_picker_rejects_stale_configuration_before_mutation() -> None:
 
 def test_cheers_card_shows_interested_joining_and_vc_actions() -> None:
     view = public_toke.TokeCheersView(starter_id=123, stoner_role_id=456)
-    assert {"Cheers", "I'm Joining", "Withdraw", "Who's Coming?", "Refresh", "End Sesh"} <= _labels(view)
+    assert {"Cheers", "I'm Joining", "Withdraw", "Who's Coming?", "Refresh", "Manage", "End Sesh"} <= _labels(view)
     assert view.timeout is None
-    assert len(view.children) == 6
+    assert len(view.children) == 7
