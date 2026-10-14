@@ -90,7 +90,7 @@ class PeerHandler(socketserver.BaseRequestHandler):
             if header[28:48] != self.server.info_hash:
                 return
             sock.sendall(header[:28] + self.server.info_hash +
-                         b"-DS0001-SyntheticTest")
+                         (b"-DS0001-" + b"proof-peer01"))
             # Each piece is advertised as available. All data is generated
             # on demand; no file is opened or seeded from the internet.
             bitfield = bytes([255]) * (PIECES // 8)
