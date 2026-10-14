@@ -108,11 +108,20 @@ def test_supabase_recovery_service_can_create_vault_extension():
         host="127.0.0.1", port=5432,
         user="supabase_admin", password="postgres", connect_timeout=10,
     )
-    with psycopg.connect(dbname="postgres", **settings) as conn:
+    with psycopg.connect(
+        dbname="postgres", autocommit=True, **settings
+    ) as conn:
         assert int(conn.execute("SHOW server_version_num").fetchone()[0]) // 10000 == 17
         assert conn.execute(
             "SELECT 1 FROM pg_available_extensions WHERE name = 'supabase_vault'"
         ).fetchone() is not None
+        # GitHub publishes service logs at teardown. The exact restore
+        # preflight must prevent private SQL statements from reaching them.
+        conn.execute("ALTER SYSTEM SET log_min_error_statement = 'panic'")
+        conn.execute("ALTER SYSTEM SET log_min_messages = 'fatal'")
+        conn.execute("SELECT pg_reload_conf()")
+        assert conn.execute("SHOW log_min_error_statement").fetchone()[0] == "panic"
+        assert conn.execute("SHOW log_min_messages").fetchone()[0] == "fatal"
     recovery._create_empty_restore_db()
     with psycopg.connect(
         dbname=recovery.EXPECTED_RESTORE_DB, autocommit=True, **settings
