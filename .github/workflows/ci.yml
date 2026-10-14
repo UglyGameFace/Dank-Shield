@@ -128,7 +128,7 @@ jobs:
         run: |
           python -m pip install -q -r requirements.txt pytest
       - name: Check Cinema torrent cache and session lease regressions
-        run: python -m pytest -q tests/test_torrent_streaming.py --tb=short --disable-warnings
+        run: python -m pytest -q tests/test_torrent_streaming.py tests/test_cinema_rolling_gateway.py --tb=short --disable-warnings
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
