@@ -7,6 +7,7 @@ Discloud deployments must preserve DANK_DATA_DIR between restarts.
 """
 
 import asyncio
+import copy
 import json
 import os
 import tempfile
@@ -17,6 +18,40 @@ from typing import Any, Mapping
 SESSIONS_FILE = Path(os.getenv("DANK_TOKE_SESSIONS_FILE", str(Path(os.getenv("DANK_DATA_DIR", "data")) / "toke_sessions.json")))
 _LOCK = asyncio.Lock()
 _RETENTION_SECONDS = 7 * 86400
+
+# Rebuildable, process-local optimization only. The JSON file remains the sole
+# authority; the signature includes inode, so an external atomic replacement
+# invalidates the index. Never use this as a cross-process write lock.
+_VOICE_INDEX_SIGNATURE: tuple[str, int, int, int, int] | None = None
+_VOICE_INDEX: dict[tuple[int, int], tuple[dict[str, Any], ...]] = {}
+
+
+def _voice_file_signature() -> tuple[str, int, int, int, int]:
+    path = str(SESSIONS_FILE.absolute())
+    try:
+        info = SESSIONS_FILE.stat()
+    except FileNotFoundError:
+        return path, 0, 0, 0, 0
+    return path, int(info.st_dev), int(info.st_ino), int(info.st_mtime_ns), int(info.st_size)
+
+
+def _rebuild_voice_index(data: Mapping[str, Mapping[str, Any]]) -> None:
+    global _VOICE_INDEX_SIGNATURE, _VOICE_INDEX
+    grouped: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    now = time.time()
+    for session in data.values():
+        if not session.get("active", False):
+            continue
+        try:
+            guild_id = int(session.get("guild_id", 0))
+            voice_id = int(session.get("voice_channel_id", 0) or 0)
+            expiry = float(session.get("expires_at", 0) or 0)
+        except (TypeError, ValueError, OverflowError):
+            continue  # Invalid legacy rows are not eligible for routing.
+        if guild_id > 0 and voice_id > 0 and expiry > now:
+            grouped.setdefault((guild_id, voice_id), []).append(copy.deepcopy(dict(session)))
+    _VOICE_INDEX = {key: tuple(items) for key, items in grouped.items()}
+    _VOICE_INDEX_SIGNATURE = _voice_file_signature()
 
 
 def _read() -> dict[str, dict[str, Any]]:
@@ -37,6 +72,7 @@ def _write(data: dict[str, dict[str, Any]]) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp, SESSIONS_FILE)
+        _rebuild_voice_index(data)
     finally:
         if os.path.exists(temp):
             os.unlink(temp)
@@ -124,6 +160,34 @@ async def all_active(guild_id: int | None = None) -> list[dict[str, Any]]:
             if session.get("active", False)
             and (guild_id is None or int(session.get("guild_id", 0)) == int(guild_id))
         ]
+
+
+async def active_in_voices(
+    guild_id: int, voice_channel_ids: set[int],
+) -> list[dict[str, Any]]:
+    """Return only active sessions in affected VCs without scanning all guilds.
+
+    This derived index is rebuilt after successful writes and when another
+    writer replaces the file. It is not a second durable store. Every returned
+    snapshot is isolated from in-memory index state, and expired rows never
+    reappear even between cleanup passes.
+    """
+    if guild_id <= 0 or not voice_channel_ids:
+        return []
+    channels = {int(channel_id) for channel_id in voice_channel_ids if int(channel_id) > 0}
+    if not channels:
+        return []
+    async with _LOCK:
+        if _VOICE_INDEX_SIGNATURE != _voice_file_signature():
+            # On corruption, fail closed rather than trusting a stale index.
+            _rebuild_voice_index(_read())
+        now = time.time()
+        result: list[dict[str, Any]] = []
+        for channel_id in channels:
+            for item in _VOICE_INDEX.get((int(guild_id), channel_id), ()):
+                if item.get("active", False) and float(item.get("expires_at", 0) or 0) > now:
+                    result.append(copy.deepcopy(item))
+        return result
 
 
 async def recent_launch_times(guild_id: int, starter_id: int) -> tuple[float, float]:
