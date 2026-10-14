@@ -112,7 +112,11 @@ def test_durable_empty_timer_and_handoff_reset(storage):
         assert not err
         assert transferred["host_away_since"] == 0
         assert transferred["host_seen_in_vc"] is False
-        assert transferred["empty_voice_since"] == saved["empty_voice_since"]
+        assert transferred["empty_voice_since"] == 0
+        # If the newly appointed host has not joined yet, the next observed
+        # empty room starts a new full grace period.
+        recalc = await toke_sessions.reconcile_voice(101, 202, set())
+        assert recalc["empty_voice_since"] > saved["empty_voice_since"]
     asyncio.run(run())
 
 
