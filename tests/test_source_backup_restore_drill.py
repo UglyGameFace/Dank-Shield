@@ -34,6 +34,12 @@ def test_disposable_runner_guard_blocks_default_and_remote_instances(monkeypatch
     for k, v in checks.items():
         monkeypatch.setenv(k, v)
     recovery.validate_disposable_runner()
+    monkeypatch.setenv("PGUSER", "supabase_admin")
+    recovery.validate_disposable_runner()
+    monkeypatch.setenv("PGUSER", "unrelated_role")
+    with pytest.raises(recovery.RecoveryDrillError, match="not_disposable_runner"):
+        recovery.validate_disposable_runner()
+    monkeypatch.setenv("PGUSER", "postgres")
     monkeypatch.setenv("PGHOST", "dankbot")
     with pytest.raises(recovery.RecoveryDrillError, match="not_disposable_runner"):
         recovery.validate_disposable_runner()
@@ -120,7 +126,11 @@ def test_restore_workflow_never_exposes_shared_database_or_plaintext_artifacts()
     assert "84acce40549855387ad04ddaaec41cf845fe12cf73a5e5e88282422eddb1f1c0" in text
     assert "actions/download-artifact@v4" in text
     assert "VERIFY_BACKUP_9_ISOLATED_ONLY" in text
-    assert "postgres:17" in text
+    assert "supabase/postgres:17.6.1.136" in text
+    assert "POSTGRES_USER: supabase_admin" in text
+    assert "Supabase Vault is missing" in text
+    assert "log_min_error_statement = 'panic'" in text
+    assert "log_min_messages = 'fatal'" in text
     assert "DANK_BACKUP_PASSPHRASE: ${{ secrets.DANK_BACKUP_PASSPHRASE }}" in text
     assert "DANK_SOURCE_DATABASE_URL" not in text
     assert "DANK_CORE_POSTGRES_DATABASE_URL" not in text
@@ -133,3 +143,57 @@ def test_restore_workflow_never_exposes_shared_database_or_plaintext_artifacts()
     assert "authenticate" in code.lower()
     assert "--single-transaction" in code and "--exit-on-error" in code
     assert 'stdout=subprocess.DEVNULL' in code
+
+
+def test_sql_error_behind_broken_restore_pipe_is_classified_without_raw_output(
+    tmp_path, monkeypatch,
+):
+    """A real restore SQL failure may close stdin before the archive is streamed."""
+    archive = tmp_path / "offline-only.dsbak"
+    archive.write_bytes(b"no user data: synthetic fixture")
+    digest = backup._sha256_file(archive)
+    seen_chunks = []
+
+    def synthetic_verified_archive(_path, _passphrase):
+        for chunk in (b"first", b"second", b"authenticated-trailer"):
+            seen_chunks.append(chunk)
+            yield chunk
+
+    class ClosedInput:
+        def write(self, _chunk):
+            raise BrokenPipeError()
+        def close(self):
+            pass
+
+    class FailedRestore:
+        stdin = ClosedInput()
+        stderr = BytesIO(
+            b'pg_restore: error: could not execute query: ERROR: '
+            b'extension "supabase_vault" is not available'
+        )
+        def wait(self, timeout=None):
+            return 1
+        def poll(self):
+            return 1
+        def kill(self):
+            raise AssertionError("already stopped")
+
+    class Runner:
+        def __call__(self, command, **kwargs):
+            assert command[0:2] == ["docker", "run"]
+            assert "--single-transaction" in command
+            assert "--exit-on-error" in command
+            assert kwargs["env"]["PGUSER"] == "supabase_admin"
+            return FailedRestore()
+
+    monkeypatch.setenv("PGUSER", "supabase_admin")
+    monkeypatch.setenv("PGPASSWORD", "postgres")
+    monkeypatch.setattr(recovery, "_iter_verified_plaintext", synthetic_verified_archive)
+    monkeypatch.setattr(recovery.subprocess, "Popen", Runner())
+    with pytest.raises(
+        recovery.RecoveryDrillError,
+        match="source_extension_not_available_on_plain_pg17",
+    ):
+        recovery._stream_restore(archive, PASS, digest)
+    # Even when the consumer exits, the encrypted reader must reach its end.
+    assert len(seen_chunks) == 3
