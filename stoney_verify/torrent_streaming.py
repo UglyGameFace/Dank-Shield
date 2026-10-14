@@ -1489,6 +1489,15 @@ class TorrentMediaManager:
         if selected is None:
             raise ValueError("That torrent file is not an approved playable media candidate.")
 
+        if session.rolling_media is not None and self.rolling_gateway is not None:
+            # TorrServer's file numbering follows its own sorted file table,
+            # not libtorrent's original index order. Never reuse an old file ID.
+            matching = await self.rolling_gateway.select_file(
+                session.rolling_media.info_hash,
+                expected_file_path=str(selected.path),
+                expected_file_size=int(selected.size),
+            )
+            session.rolling_media = matching
         self._select_candidate(session, selected)
         return session
 
