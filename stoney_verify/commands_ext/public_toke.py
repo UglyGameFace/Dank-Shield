@@ -434,6 +434,7 @@ async def _publish_toke(
     clean_media: str,
     upload: Optional[discord.Attachment],
     settings: Mapping[str, Any],
+    voice_channel_id: int = 0,
 ) -> discord.Message:
     """The only outbound /toke send path for slash and normal-composer media."""
     me = guild.me
@@ -492,6 +493,15 @@ async def _publish_toke(
             embed.set_image(url=clean_media)
 
         voice_id = choose_voice(guild, member, settings)
+        if voice_channel_id:
+            selected = guild.get_channel(int(voice_channel_id))
+            if not isinstance(selected, (discord.VoiceChannel, discord.StageChannel)):
+                raise ValueError("This sesh voice channel no longer exists.")
+            member_access = selected.permissions_for(member)
+            bot_access = selected.permissions_for(me)
+            if not (member_access.view_channel and member_access.connect and bot_access.view_channel):
+                raise ValueError("Both you and Dank Shield must be able to access the selected voice channel.")
+            voice_id = int(selected.id)
         session_data: dict[str, Any] = {
             "guild_id": guild.id,
             "message_id": 0,
@@ -606,6 +616,7 @@ async def publish_toke_from_draft(
         guild=guild, member=member, channel=channel, starter_role=starter_role,
         notify_role=notify_role, message_text=draft.note,
         clean_media=clean_media, upload=upload, settings=settings_from_config(cfg),
+        voice_channel_id=int(getattr(draft, "voice_channel_id", 0) or 0),
     )
 
 
@@ -613,12 +624,14 @@ async def publish_toke_from_draft(
     message="Optional short message to include with the sesh ping.",
     media="Optional image/GIF URL (Discord CDN, direct media, Tenor/Giphy share link).",
     upload="Optional PNG/JPG/GIF/WEBP upload to place on the Toke card.",
+    voice="Optional voice room for this session; otherwise use your current/default VC.",
 )
 async def open_toke_command(
     interaction: discord.Interaction,
     message: Optional[str] = None,
     media: Optional[str] = None,
     upload: Optional[discord.Attachment] = None,
+    voice: Optional[discord.VoiceChannel] = None,
 ) -> None:
     guild = interaction.guild
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
@@ -703,7 +716,10 @@ async def open_toke_command(
         draft = pending_for(guild.id, member.id)
         if draft is not None:
             return await _reply(interaction, "You already have a Toke draft waiting for a GIF. Use its Post Without Media or Cancel button.")
-        compose = begin_capture(guild.id, member.id, source.id, channel.id, clean_message)
+        compose = begin_capture(
+            guild.id, member.id, source.id, channel.id, clean_message,
+            voice_channel_id=int(voice.id) if voice is not None else 0,
+        )
         return await interaction.followup.send(
             "💨 **Toke is ready.** Send a GIF or picture using Discord's normal message box "
             "in this channel within 90 seconds. Dank Shield will create the sesh card and "
@@ -717,6 +733,7 @@ async def open_toke_command(
             guild=guild, member=member, channel=channel, starter_role=stoner_role,
             notify_role=ping_role, message_text=clean_message,
             clean_media=clean_media, upload=upload, settings=settings,
+            voice_channel_id=int(voice.id) if voice is not None else 0,
         )
     except (ValueError, discord.HTTPException, OSError) as exc:
         return await _reply(interaction, f"Toke was not sent: {type(exc).__name__}: {exc}")
