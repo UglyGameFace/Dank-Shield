@@ -613,6 +613,43 @@ delta writes, rollback or migration of all bot-owned features. Supabase
 must remain authoritative until a separately approved cutover with
 source/destination record parity and recovery is complete.
 
+## Backup #9 restore attempt: concrete Supabase extension blocker (Oct 13)
+
+The first manual independent restore (GitHub Actions run
+`38505374227`) **failed** in the disposable `postgres:17` container.
+The real PostgreSQL service logs showed
+`extension "supabase_vault" is not available`. The previous Python
+streamer reported `pg_restore_closed_input_early` because the failing
+`pg_restore --exit-on-error` closed stdin; this was an effect, not the
+root cause. Backup retrieval, exact SHA-256 verification and encrypted
+archive TOC authentication had passed. No source or Discloud data was
+modified, and **the real source has NOT yet been restored**.
+
+The recovery candidate now uses the published self-hosted Supabase
+PostgreSQL 17 image `supabase/postgres:17.6.1.136` **only in the manual
+disposable restoration workflow**. It authenticates the exact same
+archive before restoring, requires the Supabase Vault extension to be
+available, and uses the container's dedicated `supabase_admin` role
+for necessary extension/schema operations. The verified fixture-only
+plain PostgreSQL 17 integration path remains unchanged. Errors
+and early pipe closures are classified by the underlying process's
+captured stderr, returning a fixed failure code, never raw SQL. The
+ephemeral PostgreSQL service disables error SQL statement logging
+before the source archive is streamed because GitHub publishes
+service-container logs after job teardown.
+
+Do not weaken `--exit-on-error`, skip failed objects, delete Vault
+statements from the dump, or report a partial restore as success.
+The first new manual workflow run on merged `main` must demonstrate
+source-schema and required Dank Shield row counts, or its first
+real incompatibility must be diagnosed explicitly. Even if SQL
+restores, Supabase-managed roles, extensions and Vault/pgsodium
+encryption keys, platform credentials, external Storage and secrets
+require separate inventories/exports; restoring rows **does not prove**
+encrypted Vault secrets can be decrypted. Supabase remains authoritative,
+and the existing Discloud database must never receive the entire
+shared-source archive.
+
 ## Deployment sequence
 
 1. Confirm the real disk limit/backups for the existing Discloud DB and the

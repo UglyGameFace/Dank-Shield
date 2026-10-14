@@ -91,3 +91,45 @@ def test_full_disposable_pg17_restore_with_critical_data(tmp_path, monkeypatch):
         count >= 1 for count in outcome["critical_table_row_counts"].values()
     )
     assert outcome["schema_table_counts"]["public"] >= 5
+
+
+@pytest.mark.skipif(
+    os.getenv("RUN_BACKUP9_SUPABASE_IMAGE_INTEGRATION") != "1",
+    reason="requires an isolated Supabase PostgreSQL 17 CI service",
+)
+def test_supabase_recovery_service_can_create_vault_extension():
+    """Prove the missing extension can actually be restored into fresh PG17."""
+    import psycopg
+    from tools import verify_source_backup_restoration as recovery
+
+    recovery.validate_disposable_runner()
+    assert os.environ["PGUSER"] == "supabase_admin"
+    settings = dict(
+        host="127.0.0.1", port=5432,
+        user="supabase_admin", password="postgres", connect_timeout=10,
+    )
+    with psycopg.connect(
+        dbname="postgres", autocommit=True, **settings
+    ) as conn:
+        assert int(conn.execute("SHOW server_version_num").fetchone()[0]) // 10000 == 17
+        assert conn.execute(
+            "SELECT 1 FROM pg_available_extensions WHERE name = 'supabase_vault'"
+        ).fetchone() is not None
+        # The real workflow configures per-role logging for future
+        # connections, where pg_restore will execute the private source SQL.
+        conn.execute("ALTER ROLE supabase_admin SET log_statement = 'none'")
+        conn.execute("ALTER ROLE supabase_admin SET log_min_error_statement = 'panic'")
+        conn.execute("ALTER ROLE supabase_admin SET log_min_messages = 'fatal'")
+    with psycopg.connect(dbname="postgres", **settings) as fresh:
+        assert fresh.execute("SHOW log_statement").fetchone()[0] == "none"
+        assert fresh.execute("SHOW log_min_error_statement").fetchone()[0] == "panic"
+        assert fresh.execute("SHOW log_min_messages").fetchone()[0] == "fatal"
+    recovery._create_empty_restore_db()
+    with psycopg.connect(
+        dbname=recovery.EXPECTED_RESTORE_DB, autocommit=True, **settings
+    ) as conn:
+        conn.execute("CREATE SCHEMA IF NOT EXISTS vault")
+        conn.execute("CREATE EXTENSION IF NOT EXISTS supabase_vault WITH SCHEMA vault")
+        assert conn.execute(
+            "SELECT 1 FROM pg_extension WHERE extname = 'supabase_vault'"
+        ).fetchone() is not None

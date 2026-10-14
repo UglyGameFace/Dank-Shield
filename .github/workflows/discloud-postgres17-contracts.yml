@@ -107,3 +107,52 @@ jobs:
             tests/test_manual_supabase_backup_workflow.py \
             tests/test_postgres_guild_config_pg17_integration.py \
             tests/test_postgres_data_lifecycle.py
+
+  backup9-supabase-pg17:
+    name: Supabase Vault PG17 recovery target
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: supabase/postgres:17.6.1.136
+        env:
+          POSTGRES_USER: supabase_admin
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+          POSTGRES_PORT: "5432"
+          PGPORT: "5432"
+          PGUSER: supabase_admin
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
+          PGHOST: /var/run/postgresql
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U supabase_admin -d postgres -h localhost"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CI: "true"
+      DANK_RECOVERY_DISPOSABLE_PG17: YES_ISOLATED
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: supabase_admin
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+      RUN_PG_BACKUP_INTEGRATION: "1"
+      RUN_BACKUP9_SUPABASE_IMAGE_INTEGRATION: "1"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install isolated recovery test dependencies
+        run: python -m pip install -q -r requirements-backup.txt "psycopg[binary]>=3.2,<4" "pytest>=8,<10"
+      - name: Prove Supabase PG17 can create Vault in a fresh database
+        run: |
+          python -m pytest -q --tb=short \
+            tests/test_source_backup_restoration_pg17_integration.py \
+            -k test_supabase_recovery_service_can_create_vault_extension
