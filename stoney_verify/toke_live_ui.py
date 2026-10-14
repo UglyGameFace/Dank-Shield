@@ -1047,7 +1047,7 @@ class TokeSettingsModal(discord.ui.Modal, title="Toke Meetup Settings"):
 
 class TokeIdlePolicyModal(discord.ui.Modal, title="Toke Empty Voice Policy"):
     idle = discord.ui.TextInput(
-        label="Auto-close empty VC after minutes (0 or 5-120)",
+        label="Auto-close empty VC: 0=off, 5-120 minutes",
         max_length=3, default="0",
     )
 
