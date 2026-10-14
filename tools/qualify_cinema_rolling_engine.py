@@ -73,6 +73,7 @@ class SyntheticPeer(socketserver.ThreadingTCPServer):
         self.info_hash = info_hash
         self.requests = Counter()
         self.connections = 0
+        self.events = []
         self.requests_lock = threading.Lock()
 
     def piece_requests(self, index):
@@ -89,10 +90,13 @@ class PeerHandler(socketserver.BaseRequestHandler):
         try:
             header = receive_exact(sock, 68)
             if header[0] != 19 or header[1:20] != b"BitTorrent protocol":
+                self.server.events.append("invalid handshake prefix")
                 return
             if header[28:48] != self.server.info_hash:
+                self.server.events.append("torrent info hash mismatch")
                 return
-            sock.sendall(header[:28] + self.server.info_hash +
+            self.server.events.append("handshake accepted")
+            sock.sendall(header[:20] + bytes(8) + self.server.info_hash +
                          (b"-DS0001-" + b"proof-peer01"))
             # Each piece is advertised as available. All data is generated
             # on demand; no file is opened or seeded from the internet.
@@ -107,6 +111,8 @@ class PeerHandler(socketserver.BaseRequestHandler):
                 if not length:
                     continue
                 message = receive_exact(sock, length)
+                if len(self.server.events) < 18:
+                    self.server.events.append(f"message={message[0]} length={len(message)}")
                 if message[0] != 6 or len(message) != 13:
                     continue
                 index, offset, count = struct.unpack("!III", message[1:])
@@ -117,7 +123,8 @@ class PeerHandler(socketserver.BaseRequestHandler):
                 response = b"\x07" + struct.pack("!II", index, offset)
                 response += PATTERN[offset:offset + count]
                 sock.sendall(struct.pack("!I", len(response)) + response)
-        except (EOFError, OSError, TimeoutError):
+        except (EOFError, OSError, TimeoutError) as error:
+            self.server.events.append(type(error).__name__)
             return
 
 
@@ -313,6 +320,7 @@ def main():
         except Exception:
             engine_log.flush()
             print(f"QUALIFY failure tracker_hits={tracker.hits} peer_connections={peer.connections}", flush=True)
+            print(f"QUALIFY expected infohash={peer.info_hash.hex()} peer_events={peer.events} peer_piece_count={sum(peer.requests.values())}", flush=True)
             print("QUALIFY engine log tail:", log_path.read_text(errors="replace")[-5000:], flush=True)
             raise
         finally:
