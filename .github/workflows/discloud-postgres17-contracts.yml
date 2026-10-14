@@ -34,6 +34,8 @@ on:
       - "tests/test_postgres_guild_config_repo.py"
       - "tests/test_postgres_guild_config_pg17_integration.py"
       - "tests/test_postgres_data_lifecycle.py"
+      - "supabase/migrations/20261013120000_member_activity_batch_rpc.sql"
+      - "tests/test_activity_batch_sql_pg17_integration.py"
   push:
     branches: [main]
     paths:
@@ -75,6 +77,7 @@ jobs:
       RUN_CORE_PG_INTEGRATION: "1"
       RUN_PG_GUILD_CONFIG_INTEGRATION: "1"
       RUN_PG_BACKUP_INTEGRATION: "1"
+      RUN_ACTIVITY_BATCH_SQL_INTEGRATION: "1"
       DANK_STARTUP_LOG_STYLE: quiet
       DANK_COMMAND_LOG_STYLE: quiet
     steps:
@@ -112,7 +115,8 @@ jobs:
             tests/test_source_backup_restoration_pg17_integration.py \
             tests/test_manual_supabase_backup_workflow.py \
             tests/test_postgres_guild_config_pg17_integration.py \
-            tests/test_postgres_data_lifecycle.py
+            tests/test_postgres_data_lifecycle.py \
+            tests/test_activity_batch_sql_pg17_integration.py
 
   backup9-supabase-pg17:
     name: Supabase Vault PG17 recovery target
