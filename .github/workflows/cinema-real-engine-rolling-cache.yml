@@ -55,6 +55,7 @@ jobs:
         timeout-minutes: 6
         env:
           DANK_TEST_TORRSERVER_BINARY: ${{ github.workspace }}/torrserver-test-only
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           python3 -u tools/qualify_cinema_rolling_engine.py
       - name: No production deployment
