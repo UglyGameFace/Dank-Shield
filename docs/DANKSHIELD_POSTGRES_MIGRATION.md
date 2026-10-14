@@ -78,6 +78,33 @@ WAL's exact usage. No Discloud database or existing voice-bot data was read,
 written, restarted or migrated by this code change. For other service plans,
 review the migration's operator-only Diamond assumption before reuse.
 
+## Next gate: restored source staging candidates (Backup #9 only)
+
+Before connecting to the live Discloud destination, the existing **manual**
+Backup #9 independent-restore workflow now audits the *same fixed 16-table
+allowlist* used by `stoney_verify.core_data_stage.SOURCE_KEYS`. After a fully
+authenticated, transactionally successful restore into disposable Supabase
+PostgreSQL 17, it reads exact row counts and checks each table's expected key
+columns, NULL logical keys and duplicate composite keys. Absent tables,
+missing key columns or unsafe keys are **reported separately**; they are not
+silently treated as valid empty tables. Queries use only code-owned identifiers
+and read-only SQL. The workflow emits counts/boolean results only, never
+payloads, guild/user IDs, passwords or decrypted archives.
+
+This is **historical snapshot evidence** from Backup #9, not proof that all
+16 tables belong exclusively to Dank Shield, that Supabase has not changed
+since the backup, or that Discloud has storage headroom. The result explicitly
+keeps `cutover_authorized=false`. The legacy five critical-table counts and
+full restore gate remain required.
+
+Discloud's July 2026 developer announcement also states Diamond and higher
+receive automatic daily application backups **including databases**. This
+is valuable independent protection, but their retention, recoverability and
+how existing Watch Yo Mouf data would be restored must be verified before
+relying on it for rollback. Do not treat automatic snapshots as a substitute
+for the separately preserved, authenticated Backup #9 or a tested Discloud
+target restore.
+
 ## Preservation contract
 
 1. First identify Dank Shield-owned tables in the shared source. Ambiguous
