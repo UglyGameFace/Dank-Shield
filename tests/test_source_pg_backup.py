@@ -196,3 +196,101 @@ def test_actual_pg_dump_failure_reports_safe_code_without_leaking_secrets(tmp_pa
     assert "private-password-is-never-printed" not in line
     assert "postgresql://" not in line
     assert list(private.iterdir()) == []
+
+
+def test_diagnostic_phase_for_source_auth_rejection_is_redacted(
+    tmp_path, monkeypatch, capsys,
+):
+    """The reported phase is evidence, not an inferred cause."""
+    from tools.backup_dankshield_supabase_source import main
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for exe in ("pg_dump", "pg_restore"):
+        script = fake_bin / exe
+        script.write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            "if '--version' in sys.argv:\n"
+            f"    print('{exe} (PostgreSQL) 17.11')\n"
+            "else:\n"
+            "    print('password authentication failed for confidential-user', "
+            "file=sys.stderr)\n"
+            "    sys.exit(1)\n",
+            encoding="utf-8",
+        )
+        script.chmod(0o700)
+    out = tmp_path / "private"
+    out.mkdir(mode=0o700)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ.get('PATH', '')}")
+    monkeypatch.setenv(
+        "DANK_SOURCE_DATABASE_URL",
+        f"postgresql://postgres:secret-keep-private@db.{REF}.supabase.co:5432/postgres",
+    )
+    monkeypatch.setenv("DANK_MIGRATION_SOURCE_REF", REF)
+    monkeypatch.setenv("DANK_BACKUP_PASSPHRASE", PASSPHRASE)
+    monkeypatch.setattr(
+        "sys.argv", ["backup", "--create", "--output-dir", str(out)]
+    )
+    assert main() == 2
+    output = capsys.readouterr().out
+    assert '"failure_code": "database_authentication_rejected"' in output
+    assert '"error_kind": "controlled_backup_failure"' in output
+    assert '"phase_at_failure": "encrypted_stream_started"' in output
+    assert "secret-keep-private" not in output
+    assert "confidential-user" not in output
+    assert list(out.iterdir()) == []
+
+
+def test_diagnostic_phase_identifies_archive_broken_pipe_not_bad_login(
+    tmp_path, monkeypatch, capsys,
+):
+    """The intentionally exiting TOC reader causes a known LOCAL failure.
+
+    We do not claim this is what happened in real backup #6. It simply
+    proves instrumentation can locate that particular failure.
+    """
+    from tools.backup_dankshield_supabase_source import main
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    dump = fake_bin / "pg_dump"
+    dump.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "if '--version' in sys.argv:\n"
+        "    print('pg_dump (PostgreSQL) 17.11')\n"
+        "else:\n"
+        "    sys.stdout.buffer.write(b'PGDMP' + os.urandom(8*1024*1024))\n",
+        encoding="utf-8",
+    )
+    dump.chmod(0o700)
+    restore = fake_bin / "pg_restore"
+    restore.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "if '--version' in sys.argv:\n"
+        "    print('pg_restore (PostgreSQL) 17.11')\n"
+        "else:\n"
+        "    sys.stdin.buffer.read(64)\n"
+        "    sys.exit(0)\n",
+        encoding="utf-8",
+    )
+    restore.chmod(0o700)
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ.get('PATH', '')}")
+    monkeypatch.setenv(
+        "DANK_SOURCE_DATABASE_URL",
+        f"postgresql://postgres:secret-keep-private@db.{REF}.supabase.co:5432/postgres",
+    )
+    monkeypatch.setenv("DANK_MIGRATION_SOURCE_REF", REF)
+    monkeypatch.setenv("DANK_BACKUP_PASSPHRASE", PASSPHRASE)
+    monkeypatch.setattr(
+        "sys.argv", ["backup", "--create", "--output-dir", str(private)]
+    )
+    assert main() == 2
+    output = capsys.readouterr().out
+    assert '"phase_at_failure": "archive_toc_validation_started"' in output
+    assert '"error_kind": "broken_pipe"' in output
+    assert '"failure_code": "backup_failed_unclassified"' in output
+    assert "secret-keep-private" not in output
+    assert not list(private.iterdir())
