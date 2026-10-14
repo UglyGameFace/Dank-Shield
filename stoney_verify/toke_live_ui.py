@@ -234,8 +234,12 @@ def render_card(guild: discord.Guild, session: Mapping[str, Any], original: disc
             for member in getattr(voice, "members", ()) or ()
         }:
             lifecycle += f"👑 Host away since <t:{away_since}:t>. This sesh stays active.\n"
-        if empty_since and idle_limit >= 5 and voice_count == 0:
-            lifecycle += f"🔕 Empty VC: auto-close <t:{empty_since + idle_limit * 60}:R> unless someone returns.\n"
+        humans_here = any(
+            not getattr(member, "bot", False)
+            for member in getattr(voice, "members", ()) or ()
+        )
+        if empty_since and idle_limit >= 5 and not humans_here:
+            lifecycle += f"🔕 No humans in VC: auto-close <t:{empty_since + idle_limit * 60}:R> unless someone returns.\n"
     embed.add_field(
         name="⏳ Session",
         value=(
