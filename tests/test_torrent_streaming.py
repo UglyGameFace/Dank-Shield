@@ -1890,6 +1890,8 @@ def test_cache_reserves_live_logical_size_plus_separate_orphan_allocations(
     monkeypatch, tmp_path: Path,
 ) -> None:
     manager = _manager(monkeypatch, tmp_path)
+    manager.max_sessions = 3
+    manager.soft_session_limit = 3
     manager.disk_reserve_bytes = 0
     manager.cache_budget_bytes = 3 * 1024 * 1024
     monkeypatch.setattr(torrent_streaming, "current_rss_mb", lambda: 200.0)
