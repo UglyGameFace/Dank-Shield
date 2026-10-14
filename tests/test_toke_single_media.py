@@ -47,10 +47,21 @@ class _FakeChannel:
         return Sent()
 
 
-async def _run_publish(monkeypatch, *, upload=None, media=""):
-    guild = SimpleNamespace(id=55378, me=_FakeMember())
+async def _run_publish(monkeypatch, *, upload=None, media="", voice_channel_id=0, voice_access=True):
+    class FakeVoice:
+        id = 99880
+
+        def permissions_for(self, _member):
+            return SimpleNamespace(view_channel=voice_access, connect=voice_access)
+
+    voice = FakeVoice()
+    guild = SimpleNamespace(
+        id=55378, me=_FakeMember(),
+        get_channel=lambda cid: voice if cid == 99880 else None,
+    )
     member = guild.me
     channel = _FakeChannel()
+    monkeypatch.setattr(toke.discord, "VoiceChannel", FakeVoice)
     starter_role = SimpleNamespace(id=776, mention="<@&776>")
     notify_role = SimpleNamespace(id=555, mention="<@&555>")
 
@@ -71,6 +82,7 @@ async def _run_publish(monkeypatch, *, upload=None, media=""):
         return 0.0, ""
 
     async def save_new(data):
+        channel.saved_session = dict(data)
         return {**data, "active": True, "cheers_ids": [], "going_ids": []}
 
     monkeypatch.setattr(toke, "_persistent_cooldown_remaining", no_cooldown)
@@ -87,7 +99,7 @@ async def _run_publish(monkeypatch, *, upload=None, media=""):
         guild=guild, member=member, channel=channel,
         starter_role=starter_role, notify_role=notify_role,
         message_text="where's the sesh", clean_media=media,
-        upload=upload, settings=settings,
+        upload=upload, settings=settings, voice_channel_id=voice_channel_id,
     )
     return channel
 
@@ -387,3 +399,16 @@ def test_no_suppress_embeds_flag_hides_interactive_toke_embed():
     source = inspect.getsource(toke._publish_toke)
     assert "suppress_embeds" not in source
     assert "suppress=True" not in source
+
+
+def test_session_specific_voice_requires_member_and_bot_access(monkeypatch):
+    with pytest.raises(ValueError, match="Both you and Dank Shield"):
+        asyncio.run(_run_publish(monkeypatch, voice_channel_id=99880, voice_access=False))
+    channel = asyncio.run(_run_publish(monkeypatch, voice_channel_id=99880))
+    assert channel.saved_session["voice_channel_id"] == 99880
+    assert channel.sent_payload is not None
+
+
+def test_deleted_session_voice_does_not_publish_toke_card(monkeypatch):
+    with pytest.raises(ValueError, match="no longer exists"):
+        asyncio.run(_run_publish(monkeypatch, voice_channel_id=12345678))
