@@ -115,7 +115,7 @@ class CinemaRollingGateway:
             settings.get("UseDisk") is True
             and settings.get("RemoveCacheOnDrop") is True
             and settings.get("DisableUPNP") is True
-            and configured_size >= 16 * 1024 * 1024
+            and configured_size >= 4 * 1024 * 1024
             and configured_size <= self.per_torrent_bytes
             and self.max_torrents * configured_size * 4 <= self.budget_bytes
             and Path(str(settings.get("TorrentsSavePath") or "/")).resolve()
