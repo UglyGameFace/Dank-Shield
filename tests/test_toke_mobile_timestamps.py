@@ -65,14 +65,14 @@ def test_toke_voice_events_are_coalesced_without_losing_last_join(monkeypatch):
             {"guild_id": 123, "message_id": 456, "voice_channel_id": 987},
             {"guild_id": 123, "message_id": 457, "voice_channel_id": 444},
         ]
-        async def all_active(guild_id):
-            assert guild_id == 123
-            return stored
+        async def active_in_voices(guild_id, affected):
+            assert guild_id == 123 and affected == {987}
+            return [item for item in stored if item["voice_channel_id"] in affected]
         async def refresh(_bot, session, interaction=None):
             calls.append(session["message_id"])
             return True
 
-        monkeypatch.setattr(live.toke_sessions, "all_active", all_active)
+        monkeypatch.setattr(live.toke_sessions, "active_in_voices", active_in_voices)
         monkeypatch.setattr(live, "refresh_card", refresh)
         guild = SimpleNamespace(id=123)
         member = SimpleNamespace(guild=guild)
@@ -96,7 +96,8 @@ def test_toke_voice_events_during_edit_trigger_trailing_update(monkeypatch):
         gate = asyncio.Event()
         first_seen = asyncio.Event()
         recorded = []
-        async def all_active(_guild_id):
+        async def active_in_voices(_guild_id, affected):
+            assert affected == {987}
             return [{"guild_id": 123, "message_id": 456, "voice_channel_id": 987}]
         async def refresh(_bot, session, interaction=None):
             recorded.append(session["message_id"])
@@ -105,7 +106,7 @@ def test_toke_voice_events_during_edit_trigger_trailing_update(monkeypatch):
                 await gate.wait()
             return True
 
-        monkeypatch.setattr(live.toke_sessions, "all_active", all_active)
+        monkeypatch.setattr(live.toke_sessions, "active_in_voices", active_in_voices)
         monkeypatch.setattr(live, "refresh_card", refresh)
         member = SimpleNamespace(guild=SimpleNamespace(id=123))
         channel = SimpleNamespace(id=987)
@@ -127,13 +128,14 @@ def test_toke_voice_updates_are_isolated_by_guild(monkeypatch):
         live._VOICE_WORKERS.clear()
         monkeypatch.setattr(live, "_VOICE_DEBOUNCE_SECONDS", 0.001)
         groups = []
-        async def all_active(guild_id):
+        async def active_in_voices(guild_id, affected):
+            assert affected == {987}
             return [{"guild_id": guild_id, "message_id": guild_id + 1, "voice_channel_id": 987}]
         async def refresh(_bot, session, interaction=None):
             groups.append(session["guild_id"])
             return True
 
-        monkeypatch.setattr(live.toke_sessions, "all_active", all_active)
+        monkeypatch.setattr(live.toke_sessions, "active_in_voices", active_in_voices)
         monkeypatch.setattr(live, "refresh_card", refresh)
         voice = SimpleNamespace(id=987)
         for gid in (123, 234):
