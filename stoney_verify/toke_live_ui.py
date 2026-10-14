@@ -1386,7 +1386,8 @@ async def _flush_toke_voice_updates(guild: discord.Guild, bot: Any) -> None:
                 voice_id = int(session.get("voice_channel_id", 0) or 0)
                 departures = departed.get(voice_id, set())
                 cache_key = gid, int(session["message_id"])
-                voice = guild.get_channel(voice_id)
+                resolver = getattr(guild, "get_channel", None)
+                voice = resolver(voice_id) if callable(resolver) else None
                 members = getattr(voice, "members", None) if voice is not None else None
                 signature = (
                     frozenset(int(member.id) for member in members)
