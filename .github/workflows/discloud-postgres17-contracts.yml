@@ -17,6 +17,10 @@ on:
       - "tools/backup_dankshield_supabase_source.py"
       - "tests/test_source_pg_backup.py"
       - "tests/test_source_pg_backup_pg17_integration.py"
+      - ".github/workflows/verify-source-backup9-restore.yml"
+      - "tools/verify_source_backup_restoration.py"
+      - "tests/test_source_backup_restore_drill.py"
+      - "tests/test_source_backup_restoration_pg17_integration.py"
       - "requirements-backup.txt"
       - ".github/workflows/manual-encrypted-supabase-backup.yml"
       - "tools/setup_pg17_backup_clients.sh"
@@ -98,6 +102,8 @@ jobs:
             tests/test_postgres_guild_config_parity.py \
             tests/test_source_pg_backup.py \
             tests/test_source_pg_backup_pg17_integration.py \
+            tests/test_source_backup_restore_drill.py \
+            tests/test_source_backup_restoration_pg17_integration.py \
             tests/test_manual_supabase_backup_workflow.py \
             tests/test_postgres_guild_config_pg17_integration.py \
             tests/test_postgres_data_lifecycle.py
