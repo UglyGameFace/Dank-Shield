@@ -251,6 +251,9 @@ async def transfer_host(
         # A new host begins their own voice-presence lifecycle.
         session["host_seen_in_vc"] = False
         session["host_away_since"] = 0
+        # A deliberate handoff grants the new host a full empty-room grace
+        # period rather than inheriting the old host's elapsed countdown.
+        session["empty_voice_since"] = 0
         session["host_transfer_count"] = int(session.get("host_transfer_count", 0) or 0) + 1
         _write(data)
         return dict(session), ""
