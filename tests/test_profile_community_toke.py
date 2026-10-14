@@ -522,4 +522,4 @@ def test_cheers_card_shows_interested_joining_and_vc_actions() -> None:
     view = public_toke.TokeCheersView(starter_id=123, stoner_role_id=456)
     assert {"Cheers", "I'm Joining", "Withdraw", "Who's Coming?", "Remind Me", "Refresh", "Manage", "End Sesh"} <= _labels(view)
     assert view.timeout is None
-    assert len(view.children) == 7
+    assert len(view.children) == 8
