@@ -1472,12 +1472,6 @@ async def _expire_and_refresh(bot: Any) -> None:
             for key, pending in list(_PENDING.items()):
                 if pending.deadline <= current:
                     _PENDING.pop(key, None)
-            # Personal reminders are opt-in and capped at one claimed attempt
-            # globally per sweep (four/minute, no repeated guild-role pings).
-            try:
-                await _deliver_one_toke_reminder(bot)
-            except (OSError, ValueError) as exc:
-                print(f"[toke] reminder store unavailable: {type(exc).__name__}")
             # Idle policy is opt-in per session. Use only cached real voice
             # rooms, sample live humans before and during the atomic close,
             # and bound work to 25 due sessions per sweep. Never end a sesh
@@ -1519,6 +1513,13 @@ async def _expire_and_refresh(bot: Any) -> None:
                     except (discord.HTTPException, OSError, ValueError) as exc:
                         print(f"[toke] idle card sync delayed guild={session['guild_id']} "
                               f"message={session['message_id']} error={type(exc).__name__}")
+            # Only remind after opt-in idle closures have been processed.
+            # This avoids a DM about a sesh that just ended for inactivity.
+            # One global delivery attempt per sweep (about four/minute).
+            try:
+                await _deliver_one_toke_reminder(bot)
+            except (OSError, ValueError) as exc:
+                print(f"[toke] reminder store unavailable: {type(exc).__name__}")
             # Persistent queue includes pre-existing expired cards, explicit
             # End Sesh actions and any failed Discord edits from prior boots.
             for session in await toke_sessions.pending_closed():
