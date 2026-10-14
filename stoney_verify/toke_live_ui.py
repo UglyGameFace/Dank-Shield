@@ -3,6 +3,7 @@ from __future__ import annotations
 """Member-first Toke controls and normal Discord-composer media capture."""
 
 import asyncio
+from collections import OrderedDict
 import re
 import time
 from dataclasses import dataclass
@@ -33,6 +34,11 @@ _VOICE_PENDING: dict[int, set[int]] = {}
 _VOICE_DEPARTED: dict[int, dict[int, set[int]]] = {}
 _VOICE_WORKERS: dict[int, asyncio.Task[None]] = {}
 _VOICE_DEBOUNCE_SECONDS = 2.0
+# Transient REST-edit no-op filter. Bounded and never an attendance authority.
+# Departures bypass the filter because rapid join+leave can need reconciliation
+# even when the final voice-member snapshot looks unchanged.
+_VOICE_RENDERED_MEMBERS: OrderedDict[tuple[int, int], frozenset[int]] = OrderedDict()
+_VOICE_RENDER_CACHE_CAP = 2048
 _STARTED_BOTS: set[int] = set()
 _LOOP_TASK: asyncio.Task[None] | None = None
 
@@ -1376,16 +1382,35 @@ async def _flush_toke_voice_updates(guild: discord.Guild, bot: Any) -> None:
             departed = _VOICE_DEPARTED.pop(gid, {})
             if not affected:
                 continue
-            for session in await toke_sessions.all_active(gid):
-                if int(session.get("voice_channel_id", 0) or 0) not in affected:
+            for session in await toke_sessions.active_in_voices(gid, affected):
+                voice_id = int(session.get("voice_channel_id", 0) or 0)
+                departures = departed.get(voice_id, set())
+                cache_key = gid, int(session["message_id"])
+                voice = guild.get_channel(voice_id)
+                members = getattr(voice, "members", None) if voice is not None else None
+                signature = (
+                    frozenset(int(member.id) for member in members)
+                    if members is not None else None
+                )
+                # Mute/deafen state events do not alter the sesh's member list.
+                # Still process explicit departures to preserve rapid VC churn.
+                if (
+                    signature is not None and not departures
+                    and _VOICE_RENDERED_MEMBERS.get(cache_key) == signature
+                ):
                     continue
                 try:
-                    departing_members = departed.get(int(session.get("voice_channel_id", 0) or 0), set())
-                    if departing_members:
-                        await refresh_card(bot, session, departed_ids=departing_members)
+                    if departures:
+                        updated = await refresh_card(bot, session, departed_ids=departures)
                     else:
-                        await refresh_card(bot, session)
+                        updated = await refresh_card(bot, session)
+                    if updated and signature is not None:
+                        _VOICE_RENDERED_MEMBERS[cache_key] = signature
+                        _VOICE_RENDERED_MEMBERS.move_to_end(cache_key)
+                        if len(_VOICE_RENDERED_MEMBERS) > _VOICE_RENDER_CACHE_CAP:
+                            _VOICE_RENDERED_MEMBERS.popitem(last=False)
                 except (discord.HTTPException, ValueError, OSError) as exc:
+                    _VOICE_RENDERED_MEMBERS.pop(cache_key, None)
                     print(
                         f"[toke] voice refresh error guild={gid} "
                         f"message={session.get('message_id')} error={type(exc).__name__}"
