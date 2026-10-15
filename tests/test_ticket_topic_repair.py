@@ -96,3 +96,99 @@ def test_repair_requires_preview_confirmation_and_bounds():
     assert "MAX_REPAIR" in svc
     assert "PUBLIC_TICKET_TOPIC" in svc
     assert "guild.text_channels" in svc
+
+
+def test_repair_rechecks_db_and_edits_only_safe_topic(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from stoney_verify import guild_config
+    from stoney_verify.tickets_new import topic_repair
+
+    class FakeMember:
+        pass
+
+    class FakeChannel:
+        def __init__(self, topic, *, allowed=True):
+            self.id = 800
+            self.topic = topic
+            self.allowed = allowed
+            self.edits = []
+
+        def permissions_for(self, _member):
+            return SimpleNamespace(manage_channels=self.allowed)
+
+        async def edit(self, *, topic, reason):
+            self.edits.append((topic, reason))
+            self.topic = topic
+
+    async def refresh(_guild_id, *, refresh):
+        assert refresh
+        return SimpleNamespace()
+
+    async def read(_channel_id):
+        return good_row()
+
+    monkeypatch.setattr(guild_config, "get_guild_config", refresh)
+    monkeypatch.setattr(topic_repair.discord, "TextChannel", FakeChannel)
+    monkeypatch.setattr(topic_repair.discord, "Member", FakeMember)
+    monkeypatch.setattr(topic_repair, "_in_ticket_area", lambda _ch: True)
+    monkeypatch.setattr(topic_repair, "get_ticket_by_any_channel_id", read)
+
+    channel = FakeChannel(TOPIC)
+    guild = SimpleNamespace(id=700, me=FakeMember(), get_channel=lambda _cid: channel)
+    result = asyncio.run(topic_repair.repair_verified_topics(guild, [800]))
+    assert result == {"cleaned": 1, "skipped": 0, "failed": 0}
+    assert channel.edits == [
+        (topic_repair.PUBLIC_TICKET_TOPIC,
+         "Dank Shield: owner-confirmed ticket topic privacy repair")
+    ]
+
+    second = asyncio.run(topic_repair.repair_verified_topics(guild, [800]))
+    assert second == {"cleaned": 0, "skipped": 1, "failed": 0}
+    assert len(channel.edits) == 1
+
+
+def test_repair_skips_disallowed_or_conflicting_channels(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from stoney_verify import guild_config
+    from stoney_verify.tickets_new import topic_repair
+
+    class FakeMember:
+        pass
+
+    class FakeChannel:
+        id = 800
+        topic = TOPIC
+        def __init__(self, permitted):
+            self.permitted = permitted
+            self.edits = 0
+        def permissions_for(self, _member):
+            return SimpleNamespace(manage_channels=self.permitted)
+        async def edit(self, **_kwargs):
+            self.edits += 1
+
+    async def refresh(_guild_id, *, refresh):
+        return SimpleNamespace()
+
+    async def conflicting(_channel_id):
+        row = good_row()
+        row["owner_id"] = "999"
+        return row
+
+    monkeypatch.setattr(guild_config, "get_guild_config", refresh)
+    monkeypatch.setattr(topic_repair.discord, "TextChannel", FakeChannel)
+    monkeypatch.setattr(topic_repair.discord, "Member", FakeMember)
+    monkeypatch.setattr(topic_repair, "_in_ticket_area", lambda _ch: True)
+    monkeypatch.setattr(topic_repair, "get_ticket_by_any_channel_id", conflicting)
+    channel = FakeChannel(permitted=True)
+    guild = SimpleNamespace(id=700, me=FakeMember(), get_channel=lambda _cid: channel)
+    result = asyncio.run(topic_repair.repair_verified_topics(guild, [800]))
+    assert result == {"cleaned": 0, "skipped": 1, "failed": 0}
+    assert channel.edits == 0
+
+    channel = FakeChannel(permitted=False)
+    guild = SimpleNamespace(id=700, me=FakeMember(), get_channel=lambda _cid: channel)
+    result = asyncio.run(topic_repair.repair_verified_topics(guild, [800]))
+    assert result["skipped"] == 1
+    assert channel.edits == 0
