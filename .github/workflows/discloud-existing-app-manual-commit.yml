@@ -1,7 +1,9 @@
 name: Discloud existing-app code update (manual, guarded)
 
-# Never run on push, merge, schedule, or an untrusted PR. Deliberate operator
-# action only. This updates the EXISTING app ID; it does not create/delete apps.
+# Dispatch is always manual. Reuse is permitted only through guarded callers:
+# quick manual owner authorization, or verified-recovery auto CI release.
+# All callers hit the same exact-source and data-recovery gates below.
+# This updates the EXISTING app ID; it never creates/deletes apps.
 on:
   workflow_dispatch:
     inputs:
@@ -47,6 +49,36 @@ on:
         description: "Production .env is backed up securely and recovery-tested"
         type: boolean
         default: false
+        required: true
+
+  # Reuse the exact same production deployment guards from both the
+  # two-field quick-release workflow and the fail-closed verified-recovery
+  # automation. This is not a second deployer.
+  workflow_call:
+    inputs:
+      operation:
+        type: string
+        required: true
+      expected_main_sha:
+        type: string
+        required: true
+      off_host_backup_receipt:
+        type: string
+        required: false
+      recovery_policy:
+        type: string
+        required: true
+      owner_risk_acknowledgement:
+        type: string
+        required: false
+      database_rpc_verified:
+        type: boolean
+        required: true
+      app_files_persistence_verified:
+        type: boolean
+        required: true
+      env_recovery_verified:
+        type: boolean
         required: true
 
 permissions:

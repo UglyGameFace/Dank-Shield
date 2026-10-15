@@ -1,0 +1,40 @@
+name: Discloud quick main deploy (owner approval)
+
+# One simple form instead of manually typing a SHA and eight guard flags.
+# Still deliberately manual while Discloud recovery is unverified. Never
+# accepts risk without fresh owner-typed acknowledgement and backup reference.
+on:
+  workflow_dispatch:
+    inputs:
+      off_host_backup_receipt:
+        description: "Backup ID for the off-Discloud copy you checked (not a password)"
+        type: string
+        required: true
+      owner_risk_acknowledgement:
+        description: "Type I_ACCEPT_STONEYVERIFY_DATA_LOSS to approve this risky deployment"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  guarded-existing-app-deploy:
+    # workflow_dispatch retains the owner's identity in the called workflow.
+    if: ${{ github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' }}
+    uses: ./.github/workflows/discloud-existing-app-manual-commit.yml
+    with:
+      operation: deploy_existing_app
+      # GitHub supplies the exact checked-out main commit. The called workflow
+      # additionally checks that main has not advanced and push CI passed.
+      expected_main_sha: ${{ github.sha }}
+      off_host_backup_receipt: ${{ inputs.off_host_backup_receipt }}
+      recovery_policy: owner_accepts_unverified_recovery
+      owner_risk_acknowledgement: ${{ inputs.owner_risk_acknowledgement }}
+      # Owner configures this once only after read-only verification on the
+      # ACTUAL production database. If missing or false: fail closed.
+      database_rpc_verified: ${{ vars.DANK_PRODUCTION_MEMBER_RPC_VERIFIED == 'true' }}
+      app_files_persistence_verified: false
+      env_recovery_verified: false
+    secrets: inherit
