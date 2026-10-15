@@ -1,6 +1,6 @@
 # Dank Shield branch hygiene: reviewed historical retirement
 
-Status: third-wave PR under review. This record belongs to the **single active GitHub branch-cleanup task**. It does not authorize merging incomplete product features or changing the Discloud database/application.
+Status: third wave verified executed, fourth wave awaiting PR/CI, owner preview and separate deletion. This record belongs to the **single active GitHub branch-cleanup task**. It does not authorize merging incomplete product features or changing the Discloud database/application.
 
 ## Verified checkpoint
 
@@ -21,11 +21,11 @@ Status: third-wave PR under review. This record belongs to the **single active G
 | #173 | `ci/ds-setup-020-final-validation` | Reviewed retirement; documented temporary validation for merged #171 |
 | #9 | `feature/setup-picker-wizard` | Reported superseded by `main`; hold pending file/scope comparison |
 | #10 | `scale/production-readiness-10k` | Unsafe legacy monkey patches; **do not merge**; preserve until historical requirements are triaged |
-| #45 | `hotfix/quiet-member-update-modlog` | Hold for provenance and current runtime comparison |
+| #45 | `hotfix/quiet-member-update-modlog` | Fourth-wave reviewed retirement: PR #46 merged the intended listener fix; PR #45 explicitly rejects its obsolete monkey patches |
 | #114 | `feat/native-welcome-cards` | Superseded but stacked historical PR #113 changes; hold until preservation confirmed |
-| #217 | `chore/finalize-ds-sec-045-record` | Hold pending task record supersession review |
-| #219 | `chore/align-active-task-base-pr216` | Hold pending bookkeeping/history review |
-| #231 | `chore/close-interaction-ownership-audit` | Hold pending bookkeeping/history review |
+| #217 | `chore/finalize-ds-sec-045-record` | Fourth-wave reviewed retirement: bookkeeping-only closeout; functional implementation #214 merged |
+| #219 | `chore/align-active-task-base-pr216` | Fourth-wave reviewed retirement: one-file bookkeeping alignment superseded by merged #216 |
+| #231 | `chore/close-interaction-ownership-audit` | Fourth-wave reviewed retirement: bookkeeping-only closure; canonical implementation #229 merged |
 | #237 | `chore/close-antinuke-authorized-bot-trust` | Explicitly suspended closure after ongoing AntiNuke failures; do not close task by deleting branch |
 | #263 | `fix/welcome-card-long-tail-unicode` | Hold: validation incomplete for Unicode/font rendering |
 | #285 | `fix/quiet-notice-auto-clear-recovery-20260921` | Hold: production quiet-notice behavior needs validation |
@@ -54,3 +54,17 @@ Status: third-wave PR under review. This record belongs to the **single active G
 - Preview and invalid-confirmation simulations must pass, and repo CI must be green; actual deletion and post-run counts remain to be verified separately.
 
 **Next step:** merge the reviewed workflow PR after CI; run `preview-reviewed` and inspect all 17 intended candidates before authorizing `delete-reviewed`. Then verify GitHub count, protected refs, and linked Discloud branch, and triage the remaining unfinished PRs before proposing any further destructive work.
+
+
+## October 15 fourth-wave checkpoint (after PR #584 execution)
+
+- GitHub branch listing now has **143** refs (517 original, 374 removed in three owner-executed waves).
+- Full inventory matches: 62 exact-head merged into main, 8 exact-head merged into other bases, 15 closed-unmerged, 15 changed-after-merge, 42 with no PR and main.
+- **Nine further exact-SHA branches** are manually reviewed for retirement using the existing `preview-reviewed`/`delete-reviewed` path. Prior 17 names stay recorded but no longer exist:
+  - Exact-head PRs merged into main: #582, #583, #584, #293. Their review diffs and merge commits remain available.
+  - Closed but unmerged: #45 (explicitly replaced by merged #46; discarded runtime monkey patches), #217 (bookkeeping-only, functional #214 merged), #219 (bookkeeping-only, #216 merged), #231 (bookkeeping-only, #229 merged). No product code is being merged as part of branch cleanup.
+  - No-PR: `chore/close-release-governance-009` at `9112528e42e77ec348abe69d9207e37a64294380`, independently confirmed a Git ancestor of `main` with zero ahead commits and no matching PR.
+- Every deletion requires branch head SHA to match the frozen manifest, non-protected ref, no open PR reference, appropriate closed/merged PR status and verified replacement, or real no-PR Git ancestry. GitHub rechecks SHA/protection immediately before deletion.
+- The linked Discloud branch and all backups, recoveries, diverged branches, and outstanding product implementation branches remain excluded. Five production-base merged PR heads are ancestors of main, but their operational acceptance remains uncertain, so they are deliberately **not** in this wave.
+- **PR #9** has a matching setup picker on current main but remains held pending deeper functional equivalence review. #10, #114, #237, #263, #285, #310, #355, #458, #544 and #555 are not silently retired. The oldest unmerged bookkeeping or topic branches were reviewed individually; no direct production code is changed.
+- Operational acceptance: no new bot deploy, CI and actual deletion are separate checks. After this PR passes CI and merges, dispatch **preview-reviewed** first and inspect the nine candidate names, then separately **delete-reviewed** with `DELETE_REVIEWED_HISTORICAL_BRANCHES`. Recheck resulting branch count and all protected names.

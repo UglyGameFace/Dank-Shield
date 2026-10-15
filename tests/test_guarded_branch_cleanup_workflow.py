@@ -101,7 +101,30 @@ def test_reviewed_wave_is_frozen_and_requires_supersession_evidence() -> None:
 def test_reviewed_wave_has_exact_frozen_retirement_count() -> None:
     text = _workflow()
     manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
-    assert manifest.count("kind: 'merged'") == 13
-    assert manifest.count("kind: 'superseded'") == 4
-    for pr in (94, 171):
+    assert manifest.count("kind: 'merged'") == 17
+    assert manifest.count("kind: 'superseded'") == 5
+    assert manifest.count("kind: 'closed-record'") == 3
+    assert manifest.count("kind: 'ancestor-only'") == 1
+    for pr in (46, 94, 171, 214, 216, 229):
         assert f"replacement: {pr}" in manifest
+
+
+def test_fourth_wave_requires_live_git_ancestry_and_exact_records() -> None:
+    text = _workflow()
+    assert "review.kind === 'superseded' || review.kind === 'closed-record'" in text
+    assert "if (prs.length || !await ancestorOfMain(branch.commit.sha)) continue;" in text
+    assert "review.sha !== branch.commit.sha" in text
+    assert "if (!original || !replacement) continue;" in text
+    assert "pr.head.sha === branch.commit.sha" in text
+    assert "inUseByOpenPR.has(name)" in text
+    assert "current.protected || current.commit.sha !== candidate.sha" in text
+    manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
+    assert manifest.count("kind:") == 26
+    for branch in (
+        "aaa-cinema-pre-pregateway-bind",
+        "feat/cinema-library-intelligence",
+        "fix/prod-shard-guild-loops-no-batching-20261013",
+        "fix/source-backup-large-toc-stream-20261013",
+        "fix/ticket-panel-legacy-interaction-recovery-20260924",
+    ):
+        assert "'" + branch + "', { kind:" not in manifest

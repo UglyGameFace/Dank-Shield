@@ -121,7 +121,7 @@ jobs:
               'noop', 'noop2', 'temp-ignore', 'tmp-noop', 'tmp-noop2'
             ]);
 
-            // Third wave is reviewed individually, never inferred from prefixes.
+            // Historical reviewed waves are individually verified, never inferred from prefixes.
             // Closed-unmerged entries were explicitly superseded or validation-only.
             // GitHub retains their PR discussion/diff, but their branches are not
             // removed until the owner reviews a separate preview.
@@ -143,6 +143,16 @@ jobs:
               ['fix/startup-spamguard-command-activity-health', { kind: 'superseded', pr: 93, replacement: 94, sha: '6dd2d71176e2b7845f1b1136fa668c442d561f1e' }],
               ['ci/ds-setup-020-final-validation', { kind: 'superseded', pr: 173, replacement: 171, sha: '008e705cb9b59fdeaf76fc908acdfd8723c752e2' }],
               ['ci/ds-setup-020-macos-trigger', { kind: 'superseded', pr: 172, replacement: 171, sha: '15482f01deea0ab9e439d0ed603e4f219212abfe' }],
+              // Fourth wave: exact-head merged cleanup branches and reviewed closed records.
+              ['chore/guarded-merged-branch-cleanup-20261015', { kind: 'merged', pr: 582, sha: 'b898fadd0773339b956beea830e77489edb9b4ce' }],
+              ['chore/guarded-branch-cleanup-phase2-20261015', { kind: 'merged', pr: 583, sha: 'b2627d369cbed9d6ba461e8179aec9629121a3d6' }],
+              ['chore/guarded-branch-cleanup-reviewed-20261015', { kind: 'merged', pr: 584, sha: 'dea25965f14d147fb5398bb31fde6fd453284c74' }],
+              ['revert/pr292-unrelated-ledger-change-20260921', { kind: 'merged', pr: 293, sha: '05ec0de6865bc4c1300878ec007a1505b7083254' }],
+              ['hotfix/quiet-member-update-modlog', { kind: 'superseded', pr: 45, replacement: 46, sha: '28fa268e0f4a3a57df90331309d67e26134fbea1' }],
+              ['chore/finalize-ds-sec-045-record', { kind: 'closed-record', pr: 217, replacement: 214, sha: '5ba0a7bd6414a4a83feaa79633ee8678cb24251d' }],
+              ['chore/align-active-task-base-pr216', { kind: 'closed-record', pr: 219, replacement: 216, sha: '1565fd0b90ceedc970f8d097f97b9494b6176179' }],
+              ['chore/close-interaction-ownership-audit', { kind: 'closed-record', pr: 231, replacement: 229, sha: '10562b8935ac2ac12b1e14277b76305c5c203ae1' }],
+              ['chore/close-release-governance-009', { kind: 'ancestor-only', sha: '9112528e42e77ec348abe69d9207e37a64294380' }],
             ]);
             const [branches, closedPRs, openPRs] = await Promise.all([
               github.paginate(github.rest.repos.listBranches, {
@@ -201,7 +211,7 @@ jobs:
                     pr.base?.ref === defaultBranch &&
                     pr.head.sha === branch.commit.sha
                   )) continue;
-                } else if (review.kind === 'superseded') {
+                } else if (review.kind === 'superseded' || review.kind === 'closed-record') {
                   const original = prs.find(pr =>
                     pr.number === review.pr && !pr.merged_at &&
                     pr.head.sha === branch.commit.sha
@@ -212,15 +222,20 @@ jobs:
                     pr.head?.repo?.full_name === fullName
                   );
                   if (!original || !replacement) continue;
+                } else if (review.kind === 'ancestor-only') {
+                  // For the single audited no-PR record, require real Git ancestry.
+                  if (prs.length || !await ancestorOfMain(branch.commit.sha)) continue;
                 } else {
                   continue;
                 }
-                candidates.push({
-                  name, sha: branch.commit.sha,
-                  reason: review.kind === 'merged'
-                    ? 'reviewed merged PR #' + review.pr
-                    : 'reviewed closed PR #' + review.pr + ' superseded by #' + review.replacement
-                });
+                const reason = review.kind === 'merged'
+                  ? 'reviewed merged PR #' + review.pr
+                  : review.kind === 'ancestor-only'
+                    ? 'reviewed no-PR ancestor of main'
+                    : review.kind === 'closed-record'
+                      ? 'reviewed closed record #' + review.pr + ' after merged implementation #' + review.replacement
+                      : 'reviewed closed PR #' + review.pr + ' superseded by #' + review.replacement;
+                candidates.push({ name, sha: branch.commit.sha, reason });
                 continue;
               }
               // Never discard any branch associated with a closed-unmerged PR,
