@@ -1,0 +1,20 @@
+# Exact filenames/directories only; Discloud ignore does not use glob syntax.
+# This is a source-code archive, never a backup or an upload of local state.
+.git
+.github
+.env
+.env.production
+.env.local
+.envrc
+data
+tests
+docs
+tools
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.venv
+venv
+node_modules
+.DS_Store
