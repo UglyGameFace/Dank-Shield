@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from stoney_verify.tickets_new.topic_policy import PUBLIC_TICKET_TOPIC
-
 """Auto-route verification-needed users from the public ticket panel.
 
 The public Create Ticket button should feel like TicketTool for verified users,
@@ -26,6 +24,8 @@ Hardening:
   channel into a locked waiting-room state. If Discord will not let Dank Shield lock
   it, the flow stops instead of running half-configured.
 """
+
+from stoney_verify.tickets_new.topic_policy import PUBLIC_TICKET_TOPIC
 
 import asyncio
 import re
