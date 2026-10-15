@@ -15,6 +15,8 @@ MAX_TEMPLATES = 12
 MAX_EMBEDS = 10
 MAX_FIELDS = 25
 MAX_LINK_BUTTONS = 5
+MAX_ROLE_ACTIONS = 10
+MAX_ROLE_BUTTONS = 5
 MAX_PROJECT_BYTES = 40000
 MAX_TEMPLATES_BYTES = 100000
 
@@ -34,7 +36,7 @@ def default_embed() -> dict[str, Any]:
 
 
 def new_project() -> dict[str, Any]:
-    return {"version": 1, "content": "", "embeds": [default_embed()], "links": []}
+    return {"version": 1, "content": "", "embeds": [default_embed()], "links": [], "role_mode": "buttons", "role_actions": []}
 
 
 def _text(value: Any, limit: int, label: str) -> str:
@@ -126,7 +128,33 @@ def validate_project(project: Mapping[str, Any]) -> dict[str, Any]:
         if not name or not url:
             raise StudioValidationError("URL buttons need a label and HTTPS destination.")
         buttons.append({"label": name, "url": url})
-    cleaned = {"version": 1, "content": content, "embeds": result, "links": buttons}
+    mode = str(project.get("role_mode") or "buttons").strip().lower()
+    if mode not in {"buttons", "dropdown"}:
+        raise StudioValidationError("Role controls must use buttons or a dropdown.")
+    actions = project.get("role_actions") or []
+    if not isinstance(actions, list) or len(actions) > MAX_ROLE_ACTIONS:
+        raise StudioValidationError("A message may offer up to ten member-selectable roles.")
+    roles: list[dict[str, str]] = []
+    used: set[str] = set()
+    for raw in actions:
+        if not isinstance(raw, Mapping):
+            raise StudioValidationError("Invalid role control.")
+        role_id = str(raw.get("role_id") or "").strip()
+        if not role_id.isascii() or not role_id.isdecimal() or int(role_id) <= 0:
+            raise StudioValidationError("Role controls must refer to a real role ID.")
+        if role_id in used:
+            raise StudioValidationError("A role can only appear once in an embed.")
+        used.add(role_id)
+        label = _text(raw.get("label"), 80, "Role control label")
+        if not label:
+            raise StudioValidationError("Every role control needs a label.")
+        roles.append({"role_id": role_id, "label": label})
+    if mode == "buttons" and len(roles) > MAX_ROLE_BUTTONS:
+        raise StudioValidationError("Use the dropdown layout for more than five role controls.")
+    if mode == "buttons" and len(roles) + len(buttons) > 5:
+        raise StudioValidationError("Buttons layout supports at most five total link and role buttons. Switch roles to dropdown.")
+    cleaned = {"version": 1, "content": content, "embeds": result, "links": buttons,
+               "role_mode": mode, "role_actions": roles}
     if len(repr(cleaned).encode("utf-8")) > MAX_PROJECT_BYTES:
         raise StudioValidationError("Draft exceeds the storage limit. Reduce media links or text.")
     return cleaned
