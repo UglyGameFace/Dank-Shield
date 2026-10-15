@@ -7,6 +7,7 @@ privileged or verification/access/staff role self-assignment.
 from __future__ import annotations
 
 import asyncio
+from time import monotonic
 from typing import Any, Mapping
 
 import discord
@@ -15,6 +16,27 @@ from .embed_studio_core import StudioValidationError, validate_project
 
 ROLE_PREFIX = "dank:es:role:v1:"
 _ATTACHED_BOT_IDS: set[int] = set()
+# Bounded per-member cooldown so rapidly repeated clicks cannot exhaust
+# Discord REST or Supabase on busy multi-guild deployments.
+_ROLE_LAST_CLICK: dict[tuple[int, int], float] = {}
+_ROLE_COOLDOWN_SECONDS = 2.5
+_ROLE_COOLDOWN_MAX_KEYS = 4096
+
+
+def _rate_limited(guild_id: int, member_id: int, *, now: float | None = None) -> bool:
+    stamp = monotonic() if now is None else now
+    key = (int(guild_id), int(member_id))
+    previous = _ROLE_LAST_CLICK.get(key)
+    if previous is not None and stamp - previous < _ROLE_COOLDOWN_SECONDS:
+        return True
+    if len(_ROLE_LAST_CLICK) >= _ROLE_COOLDOWN_MAX_KEYS:
+        stale = [k for k, v in _ROLE_LAST_CLICK.items() if stamp - v >= _ROLE_COOLDOWN_SECONDS]
+        for item in stale:
+            _ROLE_LAST_CLICK.pop(item, None)
+        if len(_ROLE_LAST_CLICK) >= _ROLE_COOLDOWN_MAX_KEYS:
+            _ROLE_LAST_CLICK.pop(next(iter(_ROLE_LAST_CLICK)), None)
+    _ROLE_LAST_CLICK[key] = stamp
+    return False
 
 
 def role_custom_id(token: str, index: str | int) -> str:
@@ -82,6 +104,8 @@ async def _role_click(interaction: discord.Interaction, token: str, item: str) -
     message = interaction.message
     if not guild or not isinstance(user, discord.Member) or not message or not channel:
         return await _answer(interaction, "This role control only works in its server.")
+    if _rate_limited(guild.id, user.id):
+        return await _answer(interaction, "Please wait a moment before changing roles again.")
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=True)
 
