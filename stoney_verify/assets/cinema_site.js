@@ -2487,7 +2487,8 @@
     // Search by the title portion only; never claim a release was linked to
     // a playable movie when its canonical Cinema identity is still unknown.
     const text = String(result.title || result.release_title || "").replace(/[._]+/g, " ").trim();
-    const clean = text.split(/\s*(?:[\[(]?\b(?:19|20)\d{2}\b[\])]?|\b(?:2160p|1080p|720p|480p|webrip|web-dl|bluray|brrip|x264|x265)\b)/i)[0].trim();
+    const clean = text.split(/\s*(?:[\[(](?:19|20)\d{2}[\])]|(?:19|20)\d{2}(?=\s+(?:2160p|1080p|720p|480p|webrip|web-dl|bluray|brrip|x264|x265)\b)|[\[(]?(?:2160p|1080p|720p|480p|webrip|web-dl|bluray|brrip|x264|x265)\b)/i)[0]
+      .replace(/[\s()[\]{}.-]+$/g, "").trim();
     return clean || text;
   }
 
