@@ -134,9 +134,14 @@ async def _home(interaction: discord.Interaction, session: StudioSession, *, not
         ("✅ " + notice + "\n" if notice else "")
         + "Private editor • choose a section; Publish requires confirmation."
     )
+    current = _preview_embed(session)
+    summary = _summary(session)
+    # Discord's 6000-character cap applies across every displayed embed.
+    # A full-length single embed must not be made invalid by editor chrome.
+    preview_embeds = [current] if len(current) + len(summary) > 6000 else [summary, current]
     kwargs = {
         "content": message,
-        "embeds": [_summary(session), _preview_embed(session)],
+        "embeds": preview_embeds,
         "view": StudioHomeView(session),
         "allowed_mentions": _MENTIONS,
     }
