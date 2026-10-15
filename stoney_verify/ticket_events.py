@@ -9,6 +9,7 @@ from typing import Dict, Optional, Set
 import discord
 
 from .globals import bot, STAFF_ROLE_ID, TICKET_CATEGORY_ID, TRANSCRIPTS_CHANNEL_ID
+from .tickets_new.topic_policy import is_public_ticket_topic
 from .tickets_new.claim_policy import (
     evaluate_ticket_action,
     is_staff_member as claim_policy_is_staff_member,
@@ -121,7 +122,8 @@ def _matches_ticket_name(channel_name: str) -> bool:
 def _topic_looks_ticketish(topic: str) -> bool:
     text = str(topic or "").lower()
     return (
-        ("owner_id=" in text and "ticket_number=" in text)
+        is_public_ticket_topic(topic)
+        or ("owner_id=" in text and "ticket_number=" in text)
         or ("owner_id=" in text and "category=" in text)
         or ("requester_id=" in text and "ticket_number=" in text)
         or ("user_id=" in text and "ticket_number=" in text)
