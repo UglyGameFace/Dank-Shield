@@ -79,9 +79,22 @@ def test_scan_uses_authoritative_coverage() -> None:
 
 
 def test_cleanup_preserves_scan_threshold() -> None:
+    # Preview and execution must use the SAME thresholds, not rescan the
+    # entire server for each target or silently widen eligibility.
     assert "inactive_days: int = 90" in CLEANUP
-    assert "inactive_days=int(item.inactive_days)" in CLEANUP_COMMANDS
+    assert "grace_days: int = 14" in CLEANUP
     assert "inactive_days=int(report.options.inactive_days)" in CLEANUP_COMMANDS
+    assert "grace_days=int(report.options.grace_days)" in CLEANUP_COMMANDS
+    assert "inactive_days = int(items[0].inactive_days)" in CLEANUP_COMMANDS
+    assert "grace_days = int(items[0].grace_days)" in CLEANUP_COMMANDS
+    assert "int(item.inactive_days) != inactive_days" in CLEANUP_COMMANDS
+    assert "int(item.grace_days) != grace_days" in CLEANUP_COMMANDS
+    assert "inactive_days=inactive_days," in CLEANUP_COMMANDS
+    assert "grace_days=grace_days," in CLEANUP_COMMANDS
+    assert "authoritative_scan_report=fresh_report" in CLEANUP_COMMANDS
+    assert "not 0 <= (now_utc() - scan_at).total_seconds() <= 45" in CLEANUP
+    assert 'int(getattr(scan_opts, "inactive_days", 0))' in CLEANUP
+    assert 'int(getattr(scan_opts, "grace_days", 0))' in CLEANUP
 
 
 def test_coverage_never_activates_early() -> None:
