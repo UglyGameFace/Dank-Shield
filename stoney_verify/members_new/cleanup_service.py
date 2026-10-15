@@ -47,12 +47,15 @@ class MemberCleanupRequest:
     guild_id: int
     target_user_id: int
     actor_user_id: int
-    reason: str = "Confirmed inactive verified/resident cleanup"
+    reason: str = "Confirmed inactive member cleanup"
     require_scan_unlocked: bool = True
     protect_bots: bool = True
     protect_staff: bool = True
     inactive_days: int = 90
+    grace_days: int = 14
     require_authoritative_inactivity: bool = True
+    # Transient, action-time batch proof; never accepted from client input.
+    authoritative_scan_report: Any = None
 
 
 @dataclass
@@ -305,34 +308,52 @@ async def validate_member_cleanup(guild: discord.Guild, request: MemberCleanupRe
             if await is_scan_user_locked(int(guild.id), target_id):
                 reasons.append("Target is locked/skipped from cleanup scans. Unlock them first if this is intentional.")
         except Exception:
-            warnings.append("Could not verify scan-lock status; continuing with other safety checks.")
+            reasons.append("Could not verify scan-lock status; cleanup stopped.")
 
     if request.require_authoritative_inactivity:
         if scan_inactive_members is None or InactiveScanOptions is None:
             reasons.append("Authoritative inactivity validation is unavailable. Cleanup stopped instead of guessing.")
         else:
             try:
-                fresh_report = await scan_inactive_members(
-                    guild,
-                    InactiveScanOptions(
-                        inactive_days=max(7, min(int(request.inactive_days), 730)),
-                        grace_days=1,
-                        include_low_confidence=False,
-                        include_medium_confidence=True,
-                        include_high_confidence=True,
-                        max_candidates=10000,
-                        verified_resident_focus=True,
-                        use_audit_log_fallback=True,
-                        skip_locked_users=True,
-                    ),
-                )
-                if not bool(getattr(fresh_report, "actionable", False)):
+                fresh_report = request.authoritative_scan_report
+                if fresh_report is None:
+                    fresh_report = await scan_inactive_members(
+                        guild,
+                        InactiveScanOptions(
+                            inactive_days=max(7, min(int(request.inactive_days), 730)),
+                            grace_days=max(1, min(int(request.grace_days), 90)),
+                            include_low_confidence=False,
+                            include_medium_confidence=True,
+                            include_high_confidence=True,
+                            max_candidates=10000,
+                            verified_resident_focus=False,
+                            use_audit_log_fallback=True,
+                            skip_locked_users=True,
+                        ),
+                    )
+                scan_at = getattr(fresh_report, "scanned_at", None)
+                scan_opts = getattr(fresh_report, "options", None)
+                if (
+                    not isinstance(scan_at, datetime)
+                    or scan_at.tzinfo is None
+                    or not 0 <= (now_utc() - scan_at).total_seconds() <= 45
+                    or int(getattr(fresh_report, "guild_id", 0)) != int(guild.id)
+                    or int(getattr(scan_opts, "inactive_days", 0)) != max(7, min(int(request.inactive_days), 730))
+                    or int(getattr(scan_opts, "grace_days", 0)) != max(1, min(int(request.grace_days), 90))
+                    or bool(getattr(scan_opts, "verified_resident_focus", True))
+                ):
+                    reasons.append("Fresh scan expired, changed scope, or lacks proof. No member removed.")
+                elif not bool(getattr(fresh_report, "actionable", False)):
                     reasons.append("Fresh inactivity proof is not actionable: " + str(getattr(fresh_report, "actionability_reason", "continuous activity coverage is incomplete")))
                 else:
                     fresh_candidate = next((candidate for candidate in fresh_report.candidates if int(candidate.user_id) == target_id), None)
                     if fresh_candidate is None:
                         reasons.append("The member is not present in the fresh inactivity candidate set.")
-                    elif not bool(getattr(fresh_candidate, "removable", False)):
+                    elif (
+                        not bool(getattr(fresh_candidate, "removable", False))
+                        or getattr(fresh_candidate, "inactivity_days", None) is None
+                        or int(fresh_candidate.inactivity_days) < int(request.inactive_days)
+                    ):
                         reasons.append("The fresh scan did not mark this member purge-safe.")
             except Exception as exc:
                 reasons.append(f"Fresh inactivity validation failed: {type(exc).__name__}: {str(exc)[:180]}. Cleanup stopped instead of guessing.")
@@ -429,7 +450,7 @@ async def _execute_member_cleanup_unqueued(guild: discord.Guild, request: Member
         )
         return MemberCleanupResult(False, validation.status, validation.target_user_id, validation.target_display_name, validation.reasons, validation.warnings)
 
-    reason = str(request.reason or "Confirmed inactive verified/resident cleanup")[:450]
+    reason = str(request.reason or "Confirmed inactive member cleanup")[:450]
     audit_reason = f"Dank Shield confirmed member cleanup by {request.actor_user_id}: {reason}"
     try:
         await with_retry(
