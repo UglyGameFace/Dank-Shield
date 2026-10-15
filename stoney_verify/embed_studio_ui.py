@@ -289,7 +289,7 @@ class StudioTextModal(_ProjectModal):
         super().__init__(session, "Write Embed Text")
         e = session.project["embeds"][session.active]
         self.title_input = discord.ui.TextInput(label="Headline", required=False, max_length=256, default=e["title"])
-        self.body_input = discord.ui.TextInput(label="Description", required=False, style=discord.TextStyle.paragraph, max_length=4000, default=e["description"])
+        self.body_input = discord.ui.TextInput(label="Description", required=False, style=discord.TextStyle.paragraph, max_length=4096, default=e["description"])
         self.content_input = discord.ui.TextInput(label="Text above embeds (optional)", required=False, style=discord.TextStyle.paragraph, max_length=1900, default=session.project["content"][:1900])
         for control in (self.title_input, self.body_input, self.content_input):
             self.add_item(control)
@@ -818,6 +818,12 @@ class StudioReviewView(_StudioView):
     def __init__(self, session: StudioSession) -> None:
         super().__init__(session, timeout=300)
         self.sent = False
+        # Bind confirmation to exactly what the staff member previewed.
+        # Other open editor messages may still mutate the session while this
+        # confirmation is visible; a stale preview must never be publishable.
+        self.preview_project = deepcopy(session.project)
+        self.preview_channel_id = session.channel_id
+        self.preview_post_key = session.post_key
         # Link buttons on the preview serve as a useful live test.
         for link in session.project["links"]:
             self.add_item(discord.ui.Button(label=link["label"], url=link["url"], style=discord.ButtonStyle.link, row=1))
@@ -828,6 +834,12 @@ class StudioReviewView(_StudioView):
             return await _say(interaction, "This confirmation has already been used.")
         self.sent = True
         await interaction.response.defer(ephemeral=True, thinking=True)
+        if (
+            self.session.project != self.preview_project
+            or self.session.channel_id != self.preview_channel_id
+            or self.session.post_key != self.preview_post_key
+        ):
+            return await _say(interaction, "The draft changed after your preview. Open Preview again before publishing.")
         editing_existing = bool(self.session.post_key)
         channel = _target_channel(interaction, self.session)
         if channel is None:
@@ -839,7 +851,15 @@ class StudioReviewView(_StudioView):
             from .commands_ext.public_embed_group import _require_safe_embed_action
             if not await _require_safe_embed_action(interaction, action="send public embed"):
                 return
-            draft = validate_project(self.session.project)
+            # Re-evaluate the same immutable preview snapshot after the
+            # awaited permission/guild preflight, immediately before send.
+            if (
+                self.session.project != self.preview_project
+                or self.session.channel_id != self.preview_channel_id
+                or self.session.post_key != self.preview_post_key
+            ):
+                return await _say(interaction, "This preview is stale. Reopen it; nothing was sent.")
+            draft = validate_project(self.preview_project)
             embeds = render_embeds(draft)
             action_view = link_view(draft)
             message: discord.Message
