@@ -86,8 +86,15 @@ def test_quiet_delivery_clear_is_database_atomic_and_service_role_only() -> None
 def test_poll_and_embed_posting_use_preview_publish_and_real_permissions() -> None:
     assert "NativePollPreviewView" in UI
     assert 'label="Publish Poll"' in UI
-    assert "EmbedDraftView" in UI
-    assert 'label="Publish Embed"' in UI
+    studio = (ROOT / "stoney_verify/embed_studio_ui.py").read_text(encoding="utf-8")
+    core = (ROOT / "stoney_verify/embed_studio_core.py").read_text(encoding="utf-8")
+    assert "from ..embed_studio_ui import open_embed_studio" in UI
+    assert "class StudioReviewView" in studio
+    assert 'label="Publish / Save Edit"' in studio
+    assert "await channel.send(" in studio
+    assert "await message.edit(" in studio
+    assert "channel.permissions_for(bot)" in studio
+    assert "validate_project(" in core
     assert "_poll_permission" in UI
     assert "channel.permissions_for(member)" in UI
     assert "the value was not silently changed" in UI
