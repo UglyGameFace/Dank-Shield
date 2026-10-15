@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Public /dank members server-activity review commands.
 
-This module owns the review UI for verified/resident member activity scans.
+This module owns evidence-based inactivity review for every current member type.
 The scan itself is intentionally conservative:
 - It does not use online/offline/idle presence.
 - It only uses activity Dank Shield can observe inside this guild.
@@ -319,7 +319,7 @@ def _build_report_embed(report: InactiveScanReport, *, page: int = 0) -> discord
     confidence = str(getattr(report, "data_confidence_label", "") or "")
     color = discord.Color.green() if confidence in {"Good", "Partial"} else discord.Color.orange()
     embed = discord.Embed(
-        title="🧹 Verified Member Review",
+        title="🧹 Member Activity Review",
         description=(
             "Preview only. No action is taken here.\n"
             "Reviews all current member types using server activity, with explicit safety and evidence checks."
@@ -400,7 +400,7 @@ def _build_locked_users_embed(
     embed = discord.Embed(
         title="🔒 Scan-Locked Members",
         description=(
-            "These users are skipped by future `/dank members scan` results until unlocked.\n"
+            "These users are skipped by future inactivity reviews until unlocked.\n"
             "Use this screen to review locks, confirm unlocks, and relock a user if you change your mind."
         ),
         color=discord.Color.blurple(),
@@ -2033,7 +2033,7 @@ async def members_scan(interaction: discord.Interaction) -> None:
 
 @members_group.command(name="scan-custom", description="Review member activity with custom thresholds.")
 @app_commands.describe(
-    inactive_days="Verified/resident members quiet this many days after verification are shown.",
+    inactive_days="Review members of any role type quiet for this many days.",
     grace_days="Protect members newer than this many days.",
     include_low_confidence="Show weak/low-confidence manual-review users too. Default: true; low confidence is not purge-safe.",
     use_audit_log_fallback="Use Discord audit log to estimate when Verified/Resident was added. Default: true.",
@@ -2098,7 +2098,7 @@ async def members_last_scan(interaction: discord.Interaction) -> None:
     if report is None:
         return await reply_once(
             interaction,
-            {"content": "No server-activity review has been run since the bot started. Use `/dank members scan` first.", "ephemeral": True},
+            {"content": "No activity review has been run since the bot started. Open Member Command Center → Activity & Cleanup to review.", "ephemeral": True},
         )
     await interaction.response.send_message(
         embed=_build_report_embed(report, page=0),
