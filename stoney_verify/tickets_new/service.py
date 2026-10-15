@@ -35,6 +35,7 @@ from .orphan_safety import cleanup_unpersisted_ticket_channel
 from ..services.server_design_ticket_naming import build_ticket_channel_name
 from .counter_allocator import reserve_next_ticket_number as reserve_persistent_ticket_number
 from .claim_policy import TicketActionDecision, evaluate_ticket_action
+from .topic_policy import PUBLIC_TICKET_TOPIC
 
 try:
     from .event_service import (
@@ -919,12 +920,8 @@ def _topic_for_ticket(
     is_ghost: bool,
     ticket_number: int,
 ) -> str:
-    return (
-        f"owner_id={owner_id};"
-        f"category={category};"
-        f"ghost={str(bool(is_ghost)).lower()};"
-        f"ticket_number={int(ticket_number)}"
-    )
+    """Retain the old signature; ownership and metadata now live only in the DB."""
+    return PUBLIC_TICKET_TOPIC
 
 
 def _parse_ticket_number_from_topic(channel: discord.TextChannel) -> Optional[int]:
@@ -1829,7 +1826,11 @@ async def _ensure_channel_identity(
 
     try:
         edits: Dict[str, Any] = {}
-        if channel.topic != desired_topic:
+        # Old ticket topics still hold legacy recovery fields. Do not strip
+        # them during ordinary sync before an independently verified DB-backed
+        # migration. Only fill a genuinely blank topic here; new channels
+        # already use PUBLIC_TICKET_TOPIC at creation.
+        if not str(channel.topic or "").strip():
             edits["topic"] = desired_topic
         if channel.name != desired_name and not _channel_name_exists(
             channel.guild,

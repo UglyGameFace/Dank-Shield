@@ -7,6 +7,8 @@ public Create Ticket button. No runtime patch modules are required for ticket
 creation.
 """
 
+from ..tickets_new.topic_policy import PUBLIC_TICKET_TOPIC
+
 import asyncio
 import re
 import time
@@ -549,7 +551,7 @@ async def _create_synced_ticket_channel(guild: discord.Guild, owner: discord.Mem
     channel = await guild.create_text_channel(
         name=f"ticket-{number:04d}",
         category=parent,
-        topic=f"owner_id={owner.id};category={_row_slug(row)};ghost=false;ticket_number={number}",
+        topic=PUBLIC_TICKET_TOPIC,
         reason=f"Ticket opened by {owner} from category menu",
     )
     try:

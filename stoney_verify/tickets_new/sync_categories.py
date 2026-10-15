@@ -18,6 +18,7 @@ from typing import Any, Iterable, Optional
 import discord
 
 from ..guild_config import get_cached_guild_config
+from .topic_policy import is_public_ticket_topic
 
 
 TICKET_NAME_RE = re.compile(r"^(ticket|closed)-(\d{1,8})$", re.I)
@@ -162,6 +163,12 @@ def channel_looks_like_ticket(channel: discord.TextChannel) -> bool:
     topic = _topic(channel)
 
     if TICKET_NAME_RE.match(name):
+        return True
+
+    if is_public_ticket_topic(topic) and (
+        channel_is_in_configured_active(channel)
+        or channel_is_in_configured_archive(channel)
+    ):
         return True
 
     if TOPIC_OWNER_RE.search(topic) and (TOPIC_NUMBER_RE.search(topic) or TOPIC_CATEGORY_RE.search(topic)):
