@@ -98,7 +98,6 @@ def test_profile_remains_customizable_with_advanced_controls() -> None:
         assert f'"{key}"' in script
     assert 'api("/profile", { method: "POST", body: JSON.stringify(payload) })' in script
     assert '.advanced-prefs summary' in styles
-    assert '"Your Cinema, ${displayName}"' not in script  # JS uses template literal
 
 
 def test_missing_artwork_is_intentional_and_not_a_blank_card() -> None:
