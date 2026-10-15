@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from stoney_verify.tickets_new.topic_policy import PUBLIC_TICKET_TOPIC
+
 """Auto-route verification-needed users from the public ticket panel.
 
 The public Create Ticket button should feel like TicketTool for verified users,
@@ -781,7 +783,7 @@ async def _create_direct_verification_ticket(guild: discord.Guild, member: disco
     cfg = await _get_guild_config_safe(guild.id)
     ticket_number = await _reserve_direct_ticket_number(guild)
     channel_name = f"ticket-{int(ticket_number):04d}"
-    topic = f"owner_id={member.id};category=verification_issue;ghost=false;ticket_number={int(ticket_number)}"
+    topic = PUBLIC_TICKET_TOPIC
     category = _configured_open_ticket_category(guild, cfg)
     can_create, create_reason = _can_create_ticket_channel(guild, category)
     if not can_create:
