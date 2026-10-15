@@ -1,7 +1,7 @@
 # Dank Shield Discloud: update the EXISTING app without deleting it
 
-**Target app ID:** `stoneyverify` (`TYPE=site`, `MAIN=main.py`, 1495 MiB).  
-**Production GitHub branch still selected in Discloud:** `aaa-cinema-pre-pregateway-bind@0401552e859afbed7c17845366f87752b638235c` (PR #541).  
+**Target app ID:** `stoneyverify` (`TYPE=site`, `MAIN=main.py`, 1495 MiB).
+**Production GitHub branch still selected in Discloud:** `aaa-cinema-pre-pregateway-bind@0401552e859afbed7c17845366f87752b638235c` (PR #541).
 **Main includes the full production history:** `aaa-cinema-pre-pregateway-bind` is an ancestor of `main`; no force push or repository replacement is required.
 
 ## Verified deployment mechanism
