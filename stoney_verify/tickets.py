@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import discord
 
 from .globals import *
+from .tickets_new.topic_policy import is_public_ticket_topic
 
 
 # ============================================================
@@ -396,7 +397,7 @@ def looks_like_tickettool_ticket(channel: discord.abc.GuildChannel) -> bool:
 
     try:
         topic = channel.topic or ""
-        if _extract_owner_id_from_topic(topic) or _extract_ticket_number_from_topic(topic):
+        if is_public_ticket_topic(topic) or _extract_owner_id_from_topic(topic) or _extract_ticket_number_from_topic(topic):
             return True
     except Exception:
         pass
@@ -460,12 +461,14 @@ def is_verification_ticket_channel(
         topic = ch.topic or ""
         owner_id = _extract_owner_id_from_topic(topic)
         ticket_num = _extract_ticket_number_from_topic(topic)
+        cat_ids = _configured_ticket_category_ids()
         if owner_id and ticket_num:
-            cat_ids = _configured_ticket_category_ids()
             if not cat_ids:
                 return True
             if int(getattr(ch, "category_id", 0) or 0) in cat_ids:
                 return True
+        if is_public_ticket_topic(topic) and cat_ids and int(getattr(ch, "category_id", 0) or 0) in cat_ids:
+            return True
     except Exception:
         pass
 
