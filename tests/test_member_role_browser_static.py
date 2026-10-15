@@ -97,7 +97,15 @@ def test_internal_member_tools_are_reused_behind_ui() -> None:
     assert "from .public_members_cleanup_group import members_cleanup_queue" in source
     assert "from .public_members_cleanup_group import members_purge_all" in source
     assert "from .public_members_cleanup_group import members_cleanup_settings" in source
-    assert "from .public_member_review_feedback import review_history" in source
+    # History used to import a callback defined inside a registration closure.
+    # That callback is not a module export and crashed these buttons in runtime.
+    # Current and departed users now share a direct, staff-scoped DB reader.
+    assert "async def _show_stored_member_history" in source
+    assert "get_member_context_snapshot(" in source
+    assert "from stoney_verify.member_review_feedback import get_member_review_history" in source
+    assert "await _show_stored_member_history(interaction, self.member_id)" in source
+    assert "await _show_stored_member_history(interaction, int(raw))" in source
+    assert "from .public_member_review_feedback import review_history" not in source
     assert "open_review_panel" in source
 
 
