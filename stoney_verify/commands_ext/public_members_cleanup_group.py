@@ -215,7 +215,7 @@ def _settings_embed(settings: MemberCleanupSettings) -> discord.Embed:
     updated_by = "Unknown" if not settings.updated_by else f"<@{settings.updated_by}>"
     embed = discord.Embed(
         title="🧹 Member Cleanup Settings",
-        description="Server-level defaults for `/dank members cleanup-queue` and `/dank members purge-all`.",
+        description="Server defaults for Member Command Center → Activity & Cleanup.",
         color=discord.Color.green() if settings.require_queue_confirmation else discord.Color.orange(),
     )
     embed.add_field(
@@ -679,7 +679,7 @@ async def members_cleanup_queue(
             "No queue-ready users were found.\n\n"
             f"{_queue_source_summary(report)}\n\n"
             f"{_queue_context_line(settings, include_low_confidence=include_low, safe_limit=safe_limit)}\n\n"
-            "Try selecting users one-by-one from `/dank members scan`, or include low-confidence users only if you are ready to manually review weaker evidence."
+            "Use Member Command Center → Activity & Cleanup to review individual members. Weak evidence stays manual-only; incomplete tracker coverage cannot authorize an automated purge."
         )
         if skipped:
             body += "\n\n**Skipped before validation**\n" + _format_blocked_lines(skipped)
