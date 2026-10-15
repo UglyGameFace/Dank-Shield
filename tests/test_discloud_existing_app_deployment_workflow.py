@@ -51,6 +51,7 @@ def sandbox(tmp_path: Path):
     env = os.environ.copy()
     env.update({
         "GITHUB_REF": "refs/heads/main",
+        "GITHUB_ACTOR": "UglyGameFace",
         "GITHUB_OUTPUT": str(tmp_path / "outputs.txt"),
         "REQUESTED_SHA": sha,
         "OPERATION": "deploy_existing_app",
@@ -87,6 +88,7 @@ def test_risk_mode_accepts_only_explicit_accurate_owner_acknowledgement(sandbox)
     ({"RPC_VERIFIED": "false"}, "production member-activity RPC"),
     ({"RECOVERY_POLICY": "not-a-valid-mode"}, "Unknown recovery policy"),
     ({"GITHUB_REF": "refs/heads/feature"}, "Only workflow_dispatch on main"),
+    ({"GITHUB_ACTOR": "another-maintainer"}, "Only the repository owner"),
     ({"REQUESTED_SHA": "0" * 40}, "Main advanced"),
 ])
 def test_deploy_denies_missing_evidence_and_bad_source(sandbox, overrides, expected_message):
@@ -148,6 +150,7 @@ def test_workflow_never_auto_deploys_or_uploads_env_data():
     assert "FILE_PERSISTENCE_VERIFIED" in text
     assert "ENV_RECOVERY_VERIFIED" in text
     assert "owner_accepts_unverified_recovery" in text
+    assert '"${GITHUB_ACTOR}" == "UglyGameFace"' in text
     assert RISK_PHRASE in text
 
 
