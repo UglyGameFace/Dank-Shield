@@ -839,7 +839,7 @@ class OperationsSafetyMenuView(OwnedView):
         embed = discord.Embed(
             title="🛡️ Member Center Safety Guide",
             description=(
-                "• Activity cleanup uses post-verification server evidence, not online status.\n"
+                "• Activity cleanup considers all current member types, not online status.\n"
                 "• Low-confidence evidence remains manual-review by default.\n"
                 "• Locked users stay out of future inactivity scans until unlocked.\n"
                 "• Kick and ban require a reason plus typed confirmation.\n"
