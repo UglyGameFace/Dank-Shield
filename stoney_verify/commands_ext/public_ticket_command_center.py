@@ -748,6 +748,10 @@ class TicketTopicCleanupConfirmView(_OwnedView):
             or not (member.guild_permissions.manage_guild or member.guild_permissions.administrator)
         ):
             return await _private(interaction, "❌ Only a server manager can repair ticket topics.")
+        # Recheck after awaited authorization: two quick clicks must not apply
+        # the same batch concurrently or report a cancelled active repair.
+        if self.used:
+            return await _private(interaction, "This repair was already submitted or cancelled.")
         self.used = True
         button.disabled = True
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -765,6 +769,8 @@ class TicketTopicCleanupConfirmView(_OwnedView):
 
     @discord.ui.button(label="Cancel", emoji="✖️", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if self.used:
+            return await _private(interaction, "This cleanup was already submitted or cancelled.")
         self.used = True
         for item in self.children:
             item.disabled = True
