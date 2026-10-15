@@ -66,6 +66,9 @@ def test_feed_actions_do_not_pretend_unmatched_release_is_playable_movie() -> No
     assert '"▶ Play Movie"' in script
     assert 'playOnSite(result, play, "", status)' in script
     assert '"Find Movie or Show"' in script
+    assert '"Search by Movie Title"' in script
+    assert '"View matching titles"' not in script
+    assert 'input.value.trim().toLowerCase() === cleaned.toLowerCase()' in script
     assert '"A release was found, but Cinema hasn\'t matched it to a movie or show yet.' in script
     assert 'node("p", "feed-action-status")' in script
     assert 'status.setAttribute("role", "alert")' in script
