@@ -169,6 +169,13 @@ img{max-width:100%}
 .media-card:hover{transform:translateY(-3px) scale(1.012);border-color:rgba(167,255,100,.25);box-shadow:0 18px 38px rgba(0,0,0,.28)}
 .card-art{aspect-ratio:2/3;background:#0e1b17;position:relative;overflow:hidden}
 .card-art img{width:100%;height:100%;display:block;object-fit:cover}
+.card-art-fallback{
+  position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:12px;padding:20px;text-align:center;color:#a6bdb1;
+  background:radial-gradient(circle at 50% 28%,#183d2c 0%,#0b1a15 60%,#07100d 100%);
+  font-size:.75rem;font-weight:700;
+}
+.card-art-fallback .ui-icon{width:40px;height:40px;color:#a7ff64;opacity:.85}
 .card-art::after{content:"";position:absolute;inset:auto 0 0;height:42%;background:linear-gradient(transparent,rgba(2,6,5,.88));pointer-events:none}
 .card-progress{position:absolute;left:7px;right:7px;bottom:7px;height:4px;border-radius:99px;background:rgba(255,255,255,.2);overflow:hidden;z-index:2}
 .card-progress span{display:block;height:100%;background:var(--lime)}
@@ -348,6 +355,15 @@ img{max-width:100%}
 .source-selection-status{margin-top:9px;font-size:.72rem;color:var(--muted)}
 .source-help{margin-bottom:3px}
 .source-play-action{width:100%;margin-top:10px}
+.feed-action-help{margin:10px 0 0;color:var(--muted);font-size:.75rem;line-height:1.5}
+.feed-action-status:not([hidden]){
+  display:block;margin:10px 0 0;padding:10px 12px;border:1px solid rgba(248,136,112,.28);
+  border-radius:10px;background:rgba(100,29,22,.16);color:#ffd6cc;font-size:.78rem;
+  overflow-wrap:anywhere;
+}
+.advanced-prefs{margin:20px 0 8px;padding:14px;border:1px solid rgba(167,255,100,.2);border-radius:14px;background:rgba(10,28,19,.55)}
+.advanced-prefs summary{cursor:pointer;font-weight:800;color:#d4efd7}
+.advanced-prefs .form-grid{margin-top:12px}
 .feed-mode-tabs{
   display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding:4px 0 2px;margin:12px 0 4px;
   -webkit-overflow-scrolling:touch;overscroll-behavior-inline:contain

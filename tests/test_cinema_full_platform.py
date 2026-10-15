@@ -2202,7 +2202,8 @@ def test_full_site_feed_center_uses_real_search_pagination_and_source_capabiliti
     assert 'saved feed result' in script
     assert 'matching “" + state.feedQuery + "”.' in script
     assert '"No feed results yet. Refresh an enabled RSS or structured source below' in script
-    assert '"Search in Cinema"' in script
+    assert '"Find Movie or Show"' in script
+    assert '"▶ Play Movie"' in script
     assert '"View Details"' in script
     assert "last_refresh_result_count" in script
     assert "playable result" in script
