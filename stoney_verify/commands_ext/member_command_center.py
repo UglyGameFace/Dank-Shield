@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Optional
 
 import discord
@@ -121,7 +122,7 @@ def _activity_embed() -> discord.Embed:
     embed = discord.Embed(
         title="📊 Activity & Cleanup",
         description=(
-            "Review verified/resident activity using server evidence—not presence. "
+            "Review activity across current member types using server evidence, not presence. "
             "Cleanup remains preview-first and destructive actions keep confirmation gates."
         ),
         color=discord.Color.blurple(),
@@ -147,9 +148,10 @@ def _intelligence_embed() -> discord.Embed:
     return discord.Embed(
         title="🧠 Member Intelligence",
         description=(
-            "Select a current member to review join evidence, staff verdicts, and "
-            "their guarded moderation panel. Departed-user verdict history can be "
-            "looked up by Discord user ID."
+            "Select a current member for moderation and intelligence, or enter a "
+            "Discord user ID to inspect retained join/leave events, activity timestamps, "
+            "tickets and staff decisions for someone who left or was kicked. "
+            "Stored records are not proof someone is still in the server."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -193,6 +195,9 @@ class MemberCommandCenterView(OwnedView):
         button: discord.ui.Button,
     ) -> None:
         _ = button
+        # Role configuration may require a DB read; acknowledge on mobile
+        # before that wait so Discord doesn't mark the button failed.
+        await interaction.response.defer(ephemeral=True)
         from .public_member_role_browser import _load_quick_roles
 
         quick_roles = await _load_quick_roles(interaction.guild)
@@ -600,7 +605,7 @@ class IntelligenceMenuView(OwnedView):
         super().__init__(owner_id)
         self.add_item(IntelligenceMemberSelect(self))
 
-    @discord.ui.button(label="History by User ID", emoji="🧾", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Stored History by ID", emoji="🧾", style=discord.ButtonStyle.secondary, row=1)
     async def history_by_id(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.send_modal(MemberHistoryByIdModal())
@@ -637,9 +642,7 @@ class IntelligenceTargetView(OwnedView):
         if member is None:
             await reply_ephemeral(interaction, "❌ That member left the server.")
             return
-        from .public_member_review_feedback import review_history
-
-        await _invoke_command(review_history, interaction, member)
+        await _show_stored_member_history(interaction, self.member_id)
 
     @discord.ui.button(label="Moderation Panel", emoji="🛡️", style=discord.ButtonStyle.secondary, row=0)
     async def moderation(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -669,27 +672,132 @@ class IntelligenceTargetView(OwnedView):
         await _replace_panel(interaction, embed=_intelligence_embed(), view=view)
 
 
-class MemberHistoryByIdModal(discord.ui.Modal, title="Member verdict history"):
+
+def _historical_member_embed(user_id: int, snapshot: dict[str, Any], verdicts: list[dict[str, Any]]) -> discord.Embed:
+    """Display guild-scoped stored evidence, not Discord membership guesses."""
+    member = snapshot.get("member") or {}
+    joins = snapshot.get("join_summary") or {}
+    events = snapshot.get("event_summary") or {}
+    tickets = snapshot.get("ticket_summary") or {}
+    names = snapshot.get("name_history") or {}
+    label = (
+        member.get("display_name") or member.get("username")
+        or next(iter(names.get("all_names") or []), None)
+        or "Former / uncached user"
+    )
+    label = discord.utils.escape_markdown(str(label)[:90])
+    embed = discord.Embed(
+        title="🧠 Stored Member Intelligence",
+        description=(
+            f"**{label}** `{user_id}`\\n"
+            "Retained server records only. A user ID can be looked up even when "
+            "Discord no longer resolves the user. This is not an automatic punishment."
+        ).replace("\\n", "\n"),
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    join_text = (
+        f"Joins: **{joins.get('times_joined', 0)}** • "
+        f"Departures: **{joins.get('times_left', 0)}**\\n"
+        f"Last joined: `{str(joins.get('latest_joined_at') or 'unknown')[:50]}`\\n"
+        f"Left: `{str(joins.get('left_at') or 'not recorded')[:50]}`\\n"
+        f"Last seen: `{str(joins.get('last_seen_at') or 'unknown')[:50]}`"
+    ).replace("\\n", "\n")
+    embed.add_field(name="Membership History", value=join_text[:1024], inline=False)
+    types = events.get("type_counts") or {}
+    type_text = ", ".join(
+        f"{str(k)[:36]}: {v}" for k, v in list(types.items())[:8]
+    ) or "No retained event types"
+    embed.add_field(
+        name="Activity & Moderation Evidence",
+        value=(
+            f"Retained events: **{events.get('total', 0)}** • "
+            f"Moderation: **{events.get('moderation_count', 0)}**\\n"
+            f"Last event: `{str(events.get('latest_event_type') or 'unknown')[:65]}`\\n"
+            f"Types: {type_text}"
+        ).replace("\\n", "\n")[:1024],
+        inline=False,
+    )
+    embed.add_field(
+        name="Tickets & Staff Decisions",
+        value=(
+            f"Retained tickets: **{tickets.get('total', 0)}** • "
+            f"Staff verdicts: **{len(verdicts)}** (last 10 queried)\\n"
+            + "\\n".join(
+                f"• {str((row.get('metadata') or {}).get('verdict_label') or (row.get('metadata') or {}).get('verdict') or 'Decision')[:42]}"
+                for row in verdicts[:5]
+            )
+        ).replace("\\n", "\n")[:1024],
+        inline=False,
+    )
+    if not (snapshot.get("recent_joins") or snapshot.get("recent_events") or snapshot.get("recent_tickets") or verdicts
+            or member.get("username") or member.get("joined_at")):
+        embed.add_field(
+            name="Evidence Availability",
+            value="No retained records found for this ID in this server. Discord does not supply deleted history retroactively.",
+            inline=False,
+        )
+    embed.set_footer(text="Staff-only historical lookup • activity and join data can be incomplete")
+    return embed
+
+
+async def _show_stored_member_history(interaction: discord.Interaction, user_id: int) -> None:
+    """Read historical guild records without fetch_user() or a live member."""
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
+    if not await require_review(interaction):
+        return
+    if interaction.guild is None:
+        return await reply_ephemeral(interaction, "❌ Choose a server first.")
+    from stoney_verify.tickets_new.member_context_service import get_member_context_snapshot
+    from stoney_verify.member_review_feedback import get_member_review_history
+    guild_id = int(interaction.guild.id)
+    try:
+        context_result, feedback_result = await asyncio.wait_for(
+            asyncio.gather(
+                get_member_context_snapshot(
+                    guild_id=guild_id, user_id=user_id,
+                    ticket_limit=10, event_limit=12, join_limit=8,
+                ),
+                asyncio.to_thread(
+                    get_member_review_history,
+                    guild_id=str(guild_id), user_id=str(user_id), limit=10,
+                ),
+                return_exceptions=True,
+            ),
+            timeout=20,
+        )
+    except asyncio.TimeoutError:
+        return await interaction.followup.send(
+            "⚠️ Historical records timed out. Nothing was modified; try again shortly.",
+            ephemeral=True,
+        )
+    snapshot = context_result if isinstance(context_result, dict) and context_result.get("ok") else {}
+    verdicts = feedback_result if isinstance(feedback_result, list) else []
+    if not snapshot and not verdicts:
+        return await interaction.followup.send(
+            "⚠️ Stored member records could not be read. This does not mean the user's history was deleted.",
+            ephemeral=True,
+        )
+    await interaction.followup.send(
+        embed=_historical_member_embed(user_id, snapshot, verdicts),
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+class MemberHistoryByIdModal(discord.ui.Modal, title="Stored Member Intelligence"):
     user_id = discord.ui.TextInput(
         label="Discord user ID",
         placeholder="629459300854661120",
-        max_length=20,
+        max_length=22,
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            user_id = int(str(self.user_id.value).strip())
-        except Exception:
-            await reply_ephemeral(interaction, "❌ Enter a valid numeric Discord user ID.")
-            return
-        try:
-            user = interaction.guild.get_member(user_id) or await interaction.client.fetch_user(user_id)
-        except Exception:
-            await reply_ephemeral(interaction, "❌ Discord could not resolve that user ID.")
-            return
-        from .public_member_review_feedback import review_history
-
-        await _invoke_command(review_history, interaction, user)
+        raw = str(self.user_id.value or "").strip()
+        if not raw.isascii() or not raw.isdecimal() or not 15 <= len(raw) <= 22:
+            return await reply_ephemeral(interaction, "❌ Enter a valid Discord user ID (15–22 digits).")
+        await _show_stored_member_history(interaction, int(raw))
 
 
 class OperationsSafetyMenuView(OwnedView):
@@ -735,7 +843,7 @@ class OperationsSafetyMenuView(OwnedView):
         embed = discord.Embed(
             title="🛡️ Member Center Safety Guide",
             description=(
-                "• Activity cleanup uses post-verification server evidence, not online status.\n"
+                "• Activity cleanup considers all current member types, not online status.\n"
                 "• Low-confidence evidence remains manual-review by default.\n"
                 "• Locked users stay out of future inactivity scans until unlocked.\n"
                 "• Kick and ban require a reason plus typed confirmation.\n"
@@ -983,6 +1091,9 @@ async def open_member_target(
     )
 
 async def open_member_command_center(interaction: discord.Interaction) -> None:
+    # Staff-role lookup can use guild config; defer before remote reads.
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
     if not await require_review(interaction):
         return
     view = MemberCommandCenterView(int(interaction.user.id))

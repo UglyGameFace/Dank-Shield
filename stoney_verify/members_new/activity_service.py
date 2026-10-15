@@ -64,7 +64,11 @@ _LAST_SCANS: dict[int, "InactiveScanReport"] = {}
 # do not hammer Discord when scanning.
 _RECENT_EVIDENCE_LOOKBACK_DAYS = 180
 _RECENT_EVIDENCE_MAX_CHANNELS = 75
-_RECENT_EVIDENCE_PER_CHANNEL_LIMIT = 750
+# Supplementary *positive* evidence only. Full historical absence cannot prove
+# inactivity; the durable continuous coverage gate is authoritative.
+# One Discord history page per sampled channel prevents a single manual scan
+# from consuming hundreds of API requests (75 channels x 750 was ~600 pages).
+_RECENT_EVIDENCE_PER_CHANNEL_LIMIT = 100
 _RECENT_EVIDENCE_MAX_MEMBERS_FOR_NAME_MATCH = 2000
 _RECENT_EVIDENCE_CHANNEL_CONCURRENCY = 4
 
@@ -1398,7 +1402,7 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
     recent_signals, recent_warnings, recent_read, recent_attempted = await _load_recent_discord_evidence(
         guild,
         members,
-        verified_resident_role_ids=verified_resident_role_ids,
+        verified_resident_role_ids=verified_resident_role_ids if options.verified_resident_focus else set(),
         lookback_days=min(_RECENT_EVIDENCE_LOOKBACK_DAYS, max(14, int(options.inactive_days))),
     )
     data_warnings.extend(recent_warnings)
@@ -1551,7 +1555,7 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
             inactivity_days = _days_since(last_seen_for_threshold, now)
             confidence = _calibrated_candidate_confidence(
                 signals=signals,
-                verified_at=verified_at,
+                verified_at=verified_at if is_verified_resident else joined_at,
                 verification_source=verification_source,
                 post_verification_activity_at=post_verify_activity,
                 sources_read=sources_read,
@@ -1650,7 +1654,7 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
                 >= 2
             )
 
-            if not exact_verification:
+            if candidate.verified_or_resident and not exact_verification:
                 candidate.removable = False
                 candidate.status = "Needs review"
                 candidate.reasons.append(
@@ -1658,6 +1662,27 @@ async def scan_inactive_members(guild: discord.Guild, options: Optional[Inactive
                     "Join-date fallback cannot authorize removal."
                 )
                 continue
+
+            if not candidate.verified_or_resident:
+                # A member without Verified/Resident may still be in scope, but
+                # must have direct, dated activity evidence within the trusted
+                # continuous observation window. A join date or silence alone
+                # must never authorize kicking unverified/newcomer members.
+                has_direct_proof = any(
+                    _signal_is_direct_activity(signal)
+                    and signal.timestamp is not None
+                    and coverage.continuous_since is not None
+                    and _safe_dt(signal.timestamp) >= coverage.continuous_since
+                    for signal in candidate.signals
+                )
+                if not has_direct_proof:
+                    candidate.removable = False
+                    candidate.status = "Needs review"
+                    candidate.reasons.append(
+                        "No direct activity timestamp from the verified tracking "
+                        "window; this member requires manual staff review."
+                    )
+                    continue
 
             if candidate.inactivity_days is None:
                 candidate.removable = False
