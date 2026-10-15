@@ -64,7 +64,11 @@ _LAST_SCANS: dict[int, "InactiveScanReport"] = {}
 # do not hammer Discord when scanning.
 _RECENT_EVIDENCE_LOOKBACK_DAYS = 180
 _RECENT_EVIDENCE_MAX_CHANNELS = 75
-_RECENT_EVIDENCE_PER_CHANNEL_LIMIT = 750
+# Supplementary *positive* evidence only. Full historical absence cannot prove
+# inactivity; the durable continuous coverage gate is authoritative.
+# One Discord history page per sampled channel prevents a single manual scan
+# from consuming hundreds of API requests (75 channels x 750 was ~600 pages).
+_RECENT_EVIDENCE_PER_CHANNEL_LIMIT = 100
 _RECENT_EVIDENCE_MAX_MEMBERS_FOR_NAME_MATCH = 2000
 _RECENT_EVIDENCE_CHANNEL_CONCURRENCY = 4
 
