@@ -1059,7 +1059,16 @@ class StudioReviewView(_StudioView):
             role_items = draft.get("role_actions") or []
             role_token = secrets.token_hex(16) if role_items else ""
             if role_items:
-                await _load_library(self.session.guild_id)
+                _source, current_library = await _load_library(self.session.guild_id)
+                if not self.session.post_key and len(current_library["published"]) >= 20 and all(
+                    isinstance(item, dict) and item.get("role_actions")
+                    for item in current_library["published"].values()
+                ):
+                    return await _say(
+                        interaction,
+                        "This server already has 20 active role panels tracked. "
+                        "Open Edit Posted and remove role actions from an older panel first."
+                    )
                 from .guild_config import get_guild_config
                 from .commands_ext.public_self_roles_group import _profile_cosmetic_role_blocker
                 guild_cfg = await get_guild_config(self.session.guild_id, refresh=True)
@@ -1098,9 +1107,13 @@ class StudioReviewView(_StudioView):
                 "role_token": role_token, "role_mode": draft["role_mode"],
                 "role_actions": draft["role_actions"],
             }
-            while len(lib["published"]) > 20:
-                lib["published"].pop(next(iter(lib["published"])))
-            tracked = await _save_library(self.session.guild_id, source, lib)
+            from .embed_studio_core import trim_published_history
+            try:
+                lib["published"] = trim_published_history(lib["published"], max_posts=20)
+            except StudioValidationError:
+                tracked = False
+            else:
+                tracked = await _save_library(self.session.guild_id, source, lib)
         except Exception:
             pass
         if role_items and not tracked:
