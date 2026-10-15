@@ -177,3 +177,14 @@ def test_saved_post_limit_never_evicts_active_role_panels():
     }
     with pytest.raises(StudioValidationError, match="active role panels"):
         trim_published_history(rows)
+
+
+
+def test_search_safe_role_browser_uses_existing_alias_aware_picker():
+    studio = (ROOT / "stoney_verify/embed_studio_ui.py").read_text()
+    assert "from .ui.resource_browser import DankGuildResourceBrowserView" in studio
+    assert 'resource_kinds=("role",)' in studio
+    assert "predicate=allowed" in studio
+    assert "await _add_studio_role(pick_interaction, session, resource)" in studio
+    assert 'label="Find Role"' in studio
+    assert "get_guild_config(int(guild.id), refresh=True)" in studio
