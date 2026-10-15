@@ -60,6 +60,7 @@ def test_scope_is_not_limited_to_verified_or_resident() -> None:
     assert 'if not bool(getattr(candidate, "verified_or_resident", False)):' not in source
     assert 'if candidate.verified_or_resident and not exact_verification:' in scanner
     assert "has_direct_proof = any(" in scanner
+    assert "_RECENT_EVIDENCE_PER_CHANNEL_LIMIT = 100" in scanner
     assert "coverage.continuous_since" in scanner
     assert "if len(queued) >= 20:" in source
     assert "require_confirmation = True" in source
