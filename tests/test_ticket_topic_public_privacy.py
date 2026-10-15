@@ -68,3 +68,12 @@ def test_reconciliation_keeps_db_category_ghost_and_sequence() -> None:
     assert 'category = str(existing_dict.get("category")' in sync
     assert 'is_ghost = _safe_bool(existing_dict.get("is_ghost")' in sync
     assert 'ticket_number = _safe_int(existing_dict.get("ticket_number"), 0) or None' in sync
+
+
+def test_unpersisted_public_ticket_is_not_recovered_with_guessed_owner() -> None:
+    sync = _source("stoney_verify/tickets_new/sync_service.py")
+    assert 'if is_public_ticket_topic(_safe_topic(channel)) and not isinstance(existing, dict):' in sync
+    assert '"reason": "public_topic_has_no_authoritative_ticket_row"' in sync
+    service = _source("stoney_verify/tickets_new/service.py")
+    assert 'if not str(channel.topic or "").strip():' in service
+    assert 'if channel.topic != desired_topic:' not in service
