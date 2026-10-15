@@ -1897,6 +1897,13 @@
       );
 
       const advanced = node("details", "advanced-prefs");
+      // Keep customized technical preferences visible to members who use them.
+      advanced.open = Boolean(
+        String(prefs.preferred_source || "").trim()
+        || Number(prefs.feed_min_seeds || 0) > 0
+        || ["feed_preferred_resolutions", "feed_preferred_codecs", "feed_preferred_languages"]
+          .some((key) => Array.isArray(prefs[key]) && prefs[key].length > 0)
+      );
       const advancedForm = node("div", "form-grid");
       advanced.append(
         node("summary", "", "Advanced Settings: sources & feed filters"),
@@ -2482,14 +2489,8 @@
     const card = node("article", "feed-result-card");
     const art = node("div", "feed-result-art");
     const artUrl = itemArt(result);
-    if (artUrl) {
-      const image = node("img");
-      configureArtwork(image, artUrl, "poster");
-      image.alt = itemTitle(result) + " poster";
-      image.loading = "lazy";
-      image.decoding = "async";
-      art.appendChild(image);
-    } else {
+    const showPlaceholder = () => {
+      if (art.querySelector(".feed-result-placeholder")) return;
       const placeholder = node("div", "feed-result-placeholder");
       const resultInitials = itemTitle(result)
         .split(/\s+/)
@@ -2502,6 +2503,20 @@
         node("span", "feed-result-placeholder-text", resultInitials || "DC"),
       );
       art.appendChild(placeholder);
+    };
+    if (artUrl) {
+      const image = node("img");
+      configureArtwork(image, artUrl, "poster");
+      image.alt = itemTitle(result) + " poster";
+      image.loading = "lazy";
+      image.decoding = "async";
+      image.addEventListener("error", () => {
+        image.remove();
+        showPlaceholder();
+      }, { once: true });
+      art.appendChild(image);
+    } else {
+      showPlaceholder();
     }
 
     const copy = node("div", "feed-result-copy");
@@ -2646,7 +2661,7 @@
       const title = node("div");
       title.append(
         node("h1", "", "Feed Center"),
-        node("p", "section-sub", "RSS and structured sources become personalized discovery, subscriptions, collections, alerts, and release comparisons."),
+        node("p", "section-sub", "Find new releases from your feeds, follow what you like, and discover titles you can watch."),
       );
       head.appendChild(title);
       const headActions = node("div", "hero-actions");
