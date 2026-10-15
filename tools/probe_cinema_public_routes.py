@@ -73,7 +73,7 @@ def classify(probe: Probe) -> tuple[bool, str]:
             data = json.loads(probe.body)
         except (ValueError, UnicodeDecodeError):
             return False, "health payload is not valid JSON"
-        if data.get("ok") is not True or data.get("service") != "dank_torrent_media":
+        if not isinstance(data, dict) or data.get("ok") is not True or data.get("service") != "dank_torrent_media":
             return False, "health route does not identify the Dank Cinema media backend"
         return True, "correct Cinema media backend"
     if probe.name == "auth-debug":
@@ -83,12 +83,14 @@ def classify(probe: Probe) -> tuple[bool, str]:
             data = json.loads(probe.body)
         except (ValueError, UnicodeDecodeError):
             return False, "Cinema API auth-debug response is not valid JSON"
-        if data.get("contract") != "signed-session-v8-snowflake-safe":
+        if not isinstance(data, dict) or data.get("contract") != "signed-session-v8-snowflake-safe":
             return False, "Cinema API auth contract does not match deployed code"
         return True, "Cinema API route reached, JSON contract valid"
     if probe.name == "home-anonymous":
         if probe.status == 401:
-            return True, "anonymous access denied as expected; authenticated Home NOT tested"
+            if content_type != "text/plain" or b"Sign in to Dank Cinema again." not in probe.body:
+                return False, "anonymous HTTP 401 did not match Cinema server auth error"
+            return True, "Cinema API denied anonymous access as expected; authenticated Home NOT tested"
         if probe.status == 200 and "html" in content_type:
             return False, "HTTP 200 HTML instead of Home API response; proxy/site fallback suspected"
         if probe.status == 200:
