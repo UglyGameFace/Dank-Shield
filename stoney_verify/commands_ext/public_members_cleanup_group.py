@@ -49,6 +49,7 @@ class QueuePreviewItem:
     candidate: InactiveMemberCandidate
     validation: MemberCleanupValidation
     inactive_days: int = 90
+    grace_days: int = 14
 
 
 def _trim(text: str, limit: int = 3900) -> str:
@@ -151,8 +152,6 @@ def _candidate_is_purge_all_eligible(
     server activity after verification is older than the inactive threshold.
     """
     try:
-        if not bool(getattr(candidate, "verified_or_resident", False)):
-            return False, "not verified/resident"
         if getattr(candidate, "inactivity_days", None) is None:
             return False, "quiet days unknown"
         if int(candidate.inactivity_days or 0) < int(inactive_days):
@@ -264,7 +263,7 @@ async def _load_report_for_queue(guild: discord.Guild) -> tuple[InactiveScanRepo
         guild,
         InactiveScanOptions(
             include_low_confidence=False,
-            verified_resident_focus=True,
+            verified_resident_focus=False,
             use_audit_log_fallback=True,
             skip_locked_users=True,
         ),
@@ -306,8 +305,10 @@ async def _build_queue_preview(
             guild_id=int(guild.id),
             target_user_id=int(candidate.user_id),
             actor_user_id=int(actor_user_id),
-            reason="Confirmed inactive verified/resident cleanup queue",
+            reason="Confirmed inactive cleanup queue",
             inactive_days=int(report.options.inactive_days),
+            grace_days=int(report.options.grace_days),
+            require_authoritative_inactivity=False,
         )
         validation = await validate_member_cleanup(guild, request)
         if validation.ok:
@@ -316,6 +317,7 @@ async def _build_queue_preview(
                     candidate=candidate,
                     validation=validation,
                     inactive_days=int(report.options.inactive_days),
+                    grace_days=int(report.options.grace_days),
                 )
             )
         else:
@@ -341,7 +343,7 @@ async def _build_purge_all_preview(
             include_medium_confidence=True,
             include_high_confidence=True,
             max_candidates=_PURGE_ALL_MAX_LIMIT,
-            verified_resident_focus=True,
+            verified_resident_focus=False,
             use_audit_log_fallback=True,
             skip_locked_users=True,
         ),
@@ -362,6 +364,8 @@ async def _build_purge_all_preview(
         return report, queued, skipped, validation_blocked
 
     for candidate in report.candidates:
+        if len(queued) >= 20:
+            break  # Small, explicit confirmation batches; never kick thousands in one click.
         ok, reason = _candidate_is_purge_all_eligible(
             candidate,
             inactive_days=inactive_days,
@@ -374,8 +378,10 @@ async def _build_purge_all_preview(
             guild_id=int(guild.id),
             target_user_id=int(candidate.user_id),
             actor_user_id=int(actor_user_id),
-            reason="Purge-all inactive verified/resident cleanup",
+            reason="Purge-all inactive cleanup",
             inactive_days=int(report.options.inactive_days),
+            grace_days=int(report.options.grace_days),
+            require_authoritative_inactivity=False,
         )
         validation = await validate_member_cleanup(guild, request)
         if validation.ok:
@@ -384,6 +390,7 @@ async def _build_purge_all_preview(
                     candidate=candidate,
                     validation=validation,
                     inactive_days=int(report.options.inactive_days),
+                    grace_days=int(report.options.grace_days),
                 )
             )
         else:
@@ -403,14 +410,52 @@ async def _process_queue_items(
     results: list[MemberCleanupResult] = []
     if interaction.guild is None:
         return removed, blocked, ["Guild missing while processing queue."], results
+    if not items:
+        return removed, blocked, [], results
 
-    for item in items:
+    # Exactly one action-time evidence sweep for this approved batch. Previous
+    # code rescanned up to 75 channels per *member*, making purge unreliable
+    # and potentially exhausting Discord REST budgets.
+    inactive_days = int(items[0].inactive_days)
+    grace_days = int(items[0].grace_days)
+    try:
+        fresh_report = await asyncio.wait_for(
+            scan_inactive_members(
+                interaction.guild,
+                InactiveScanOptions(
+                    inactive_days=inactive_days,
+                    grace_days=grace_days,
+                    include_low_confidence=False,
+                    include_medium_confidence=True,
+                    include_high_confidence=True,
+                    max_candidates=10000,
+                    verified_resident_focus=False,
+                    use_audit_log_fallback=True,
+                    skip_locked_users=True,
+                ),
+            ),
+            timeout=75,
+        )
+        if not fresh_report.actionable:
+            return removed, ["Activity coverage is incomplete; no one was removed."], failed, results
+    except Exception as exc:
+        return removed, [f"Final activity recheck unavailable ({type(exc).__name__}); no one was removed."], failed, results
+
+    for item in items[:20]:
+        if (
+            int(item.inactive_days) != inactive_days
+            or int(item.grace_days) != grace_days
+        ):
+            blocked.append(f"Member `{item.candidate.user_id}`: inconsistent batch thresholds.")
+            continue
         request = MemberCleanupRequest(
             guild_id=int(interaction.guild.id),
             target_user_id=int(item.candidate.user_id),
             actor_user_id=int(interaction.user.id),
             reason=reason,
-            inactive_days=int(item.inactive_days),
+            inactive_days=inactive_days,
+            grace_days=grace_days,
+            authoritative_scan_report=fresh_report,
         )
         result: MemberCleanupResult = await execute_member_cleanup(interaction.guild, request)
         results.append(result)
@@ -498,7 +543,7 @@ class ConfirmCleanupQueueView(discord.ui.View):
         super().__init__(timeout=240)
         self.actor_user_id = int(actor_user_id)
         self.items = list(items)
-        self.reason = str(reason or "Confirmed inactive verified/resident cleanup queue")[:450]
+        self.reason = str(reason or "Confirmed inactive cleanup queue")[:450]
         self.result_title = result_title
         self.done = False
 
@@ -548,7 +593,7 @@ class ConfirmCleanupQueueView(discord.ui.View):
         await interaction.response.edit_message(embed=_result_embed("Cleanup Cancelled", "No action was taken.", ok=False), view=self)
 
 
-@members_group.command(name="cleanup-user", description="Confirm cleanup for one reviewed inactive verified/resident member.")
+@members_group.command(name="cleanup-user", description="Confirm cleanup for one reviewed inactive member.")
 @app_commands.describe(
     user="The server member to review for confirmed cleanup.",
     reason="Reason stored in Discord audit log and Dank Shield activity history.",
@@ -556,7 +601,7 @@ class ConfirmCleanupQueueView(discord.ui.View):
 async def members_cleanup_user(
     interaction: discord.Interaction,
     user: discord.Member,
-    reason: str = "Confirmed inactive verified/resident cleanup",
+    reason: str = "Confirmed inactive cleanup",
 ) -> None:
     if not await _require_cleanup_permission(interaction):
         return
@@ -608,7 +653,7 @@ async def members_cleanup_queue(
     interaction: discord.Interaction,
     limit: int = 0,
     include_low_confidence: Optional[bool] = None,
-    reason: str = "Confirmed inactive verified/resident cleanup queue",
+    reason: str = "Confirmed inactive cleanup queue",
 ) -> None:
     if not await _require_cleanup_permission(interaction):
         return
@@ -672,7 +717,7 @@ async def members_cleanup_queue(
     await interaction.edit_original_response(embed=_queue_result_embed(removed=removed, blocked=blocked, failed=failed))
 
 
-@members_group.command(name="purge-all", description="Purge all eligible inactive verified/resident members except locked users.")
+@members_group.command(name="purge-all", description="Purge all eligible inactive members except locked users.")
 @app_commands.describe(
     inactive_days="Only users quiet this many days after last tracked server activity are eligible. Default 90.",
     grace_days="Protect newer members inside this many days. Default 14.",
@@ -684,7 +729,7 @@ async def members_purge_all(
     inactive_days: int = 90,
     grace_days: int = 14,
     include_low_confidence: bool = False,
-    reason: str = "Purge-all inactive verified/resident cleanup",
+    reason: str = "Purge-all inactive cleanup",
 ) -> None:
     if not await _require_cleanup_permission(interaction):
         return
@@ -695,7 +740,9 @@ async def members_purge_all(
     safe_grace = max(1, min(int(grace_days or 14), 90))
     settings = await get_cleanup_settings(int(interaction.guild.id))
     no_confirm_allowed, no_confirm_reason = await actor_can_use_no_confirm(interaction.user)
-    require_confirmation = bool(settings.require_queue_confirmation or not no_confirm_allowed)
+    # Broad member purges always require a fresh, explicit confirmation,
+    # even if this server disabled confirmation for smaller review queues.
+    require_confirmation = True
 
     await interaction.response.defer(ephemeral=True, thinking=True)
     report, queued, skipped, validation_blocked = await _build_purge_all_preview(
@@ -712,9 +759,9 @@ async def members_purge_all(
         f"Threshold: **{safe_days}d quiet after last tracked server activity** • New-member grace: **{safe_grace}d**\n"
         f"Low-confidence included: **{'Yes' if include_low_confidence else 'No'}**\n"
         f"Confirmation mode: **{settings.mode_label}**\n\n"
-        "Eligible means verified/resident, quiet past the threshold, not locked, and final safety validation passed.\n"
+        "All role types are reviewed. Only members with sufficient directly observed inactivity, no safety locks, and clean final validation can be removed.\n"
         "A few old interactions do not block purge-all; recent tracked activity does.\n\n"
-        f"**Eligible for purge ({len(queued)})**\n{_format_queue_lines(queued, limit=_PURGE_ALL_PREVIEW_LIMIT)}"
+        f"**Eligible in this batch ({len(queued)} / max 20)**\n{_format_queue_lines(queued, limit=_PURGE_ALL_PREVIEW_LIMIT)}"
     )
     if validation_blocked:
         body += "\n\n**Blocked by final validation**\n" + _trim("\n".join(f"• {_safe_name(c.display_name)} — {v.status}" for c, v in validation_blocked[:8]), 900)
