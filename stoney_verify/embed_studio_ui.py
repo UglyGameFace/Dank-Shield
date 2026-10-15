@@ -218,10 +218,56 @@ class StudioHomeView(_StudioView):
     async def edit_posted(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _published(interaction, self.session)
 
+    @discord.ui.button(label="Starter Layouts", emoji="✨", style=discord.ButtonStyle.secondary, row=2)
+    async def starter_layouts(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _starters(interaction, self.session)
+
     @discord.ui.button(label="Preview & Publish", emoji="👁️", style=discord.ButtonStyle.success, row=3)
     async def preview(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _review(interaction, self.session)
 
+
+
+class StarterSelect(discord.ui.Select):
+    def __init__(self, session: StudioSession) -> None:
+        from .embed_studio_presets import PRESETS
+        self.session = session
+        super().__init__(
+            placeholder="Pick a ready-to-edit layout…",
+            options=[discord.SelectOption(label=name, value=key) for key, name in PRESETS],
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        from .embed_studio_presets import project_for_preset
+        self.session.history.append(self.session.project)
+        self.session.history = self.session.history[-10:]
+        self.session.project = project_for_preset(self.values[0])
+        self.session.active = 0
+        self.session.post_key = ""
+        await _home(interaction, self.session, notice="Starter layout loaded. Make it yours before publishing.")
+
+
+class StarterMenu(_StudioView):
+    def __init__(self, session: StudioSession) -> None:
+        super().__init__(session)
+        self.add_item(StarterSelect(session))
+
+    @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _home(interaction, self.session)
+
+
+async def _starters(interaction: discord.Interaction, session: StudioSession) -> None:
+    await _menu(
+        interaction,
+        heading="✨ Start with a Layout",
+        description=(
+            "Choose an announcement, rules, event, server info, FAQ, "
+            "or feature showcase. Everything is editable, and nothing posts automatically."
+        ),
+        view=StarterMenu(session),
+    )
 
 class _ProjectModal(discord.ui.Modal):
     def __init__(self, session: StudioSession, title: str) -> None:
