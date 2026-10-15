@@ -153,6 +153,11 @@ jobs:
               ['chore/align-active-task-base-pr216', { kind: 'closed-record', pr: 219, replacement: 216, sha: '1565fd0b90ceedc970f8d097f97b9494b6176179' }],
               ['chore/close-interaction-ownership-audit', { kind: 'closed-record', pr: 231, replacement: 229, sha: '10562b8935ac2ac12b1e14277b76305c5c203ae1' }],
               ['chore/close-release-governance-009', { kind: 'ancestor-only', sha: '9112528e42e77ec348abe69d9207e37a64294380' }],
+              // Fifth wave: only merged temporary proof-workflows and the completed prior cleanup PR.
+              ['chore/verify-supabase-sync', { kind: 'merged', pr: 154, sha: '79f78cba5d23105869e0debde94029a91bab7ff4' }],
+              ['chore/remove-supabase-sync-verifier', { kind: 'merged', pr: 155, sha: 'ab41128b4335af29f21d9766f78bc69abee32695' }],
+              ['chore/verify-ticket-counter-production', { kind: 'merged', pr: 159, sha: '4ccbf727eb69f2ca3e11bf78a4567e6865bcbe3e' }],
+              ['chore/guarded-branch-cleanup-fourth-wave-20261015', { kind: 'merged', pr: 585, sha: 'c92fe20e89f80698f5c7b3f20dd070820853d963' }],
             ]);
             const [branches, closedPRs, openPRs] = await Promise.all([
               github.paginate(github.rest.repos.listBranches, {
