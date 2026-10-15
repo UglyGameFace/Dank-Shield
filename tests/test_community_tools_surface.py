@@ -40,7 +40,7 @@ def test_community_center_keeps_core_tools_without_command_sprawl() -> None:
     assert {
         "Sticky Messages",
         "Create Poll",
-        "Embed Builder",
+        "Embed Studio",
         "Member / Server Info",
         "Permission Check",
         "Fun & Lookup",

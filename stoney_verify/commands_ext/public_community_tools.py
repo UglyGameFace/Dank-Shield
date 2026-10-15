@@ -329,12 +329,12 @@ class CommunityToolsView(_OwnedView):
             return await _private(interaction, "❌ You need this channel's **Send Messages + poll permission** to create a poll.")
         await interaction.response.send_modal(NativePollModal())
 
-    @discord.ui.button(label="Embed Builder", emoji="🧱", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Embed Studio", emoji="🧱", style=discord.ButtonStyle.primary, row=0)
     async def embed_builder(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        if not _manage_messages(interaction):
-            return await _private(interaction, "❌ Embed Builder requires **Manage Messages in this channel**.")
-        await interaction.response.send_modal(EmbedBuilderModal())
+        from ..embed_studio_ui import open_embed_studio
+
+        await open_embed_studio(interaction)
 
     @discord.ui.button(label="Member / Server Info", emoji="👤", style=discord.ButtonStyle.secondary, row=1)
     async def info(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1105,100 +1105,8 @@ class NativePollPreviewView(_OwnedView):
         self.stop()
 
 
-def _parse_color(value: str) -> int:
-    raw = str(value or "").strip().lower().removeprefix("#").removeprefix("0x")
-    if not raw:
-        return 0x5865F2
-    if len(raw) != 6:
-        raise InvalidCommunityToolValue("Color must be exactly six hex digits, such as `5865F2`.")
-    try:
-        return int(raw, 16)
-    except ValueError as exc:
-        raise InvalidCommunityToolValue("Color must be a six-digit hex value such as `5865F2`.") from exc
-
-
-class EmbedBuilderModal(discord.ui.Modal, title="Build an embed"):
-    embed_title = discord.ui.TextInput(label="Title", required=False, max_length=256)
-    description = discord.ui.TextInput(label="Description", style=discord.TextStyle.paragraph, required=True, max_length=4000)
-    color = discord.ui.TextInput(label="Hex color", required=False, max_length=8, default="5865F2")
-    image = discord.ui.TextInput(label="Large image HTTPS URL (optional)", required=False, max_length=1000)
-    thumbnail = discord.ui.TextInput(label="Thumbnail HTTPS URL (optional)", required=False, max_length=1000)
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not _manage_messages(interaction):
-            return await _private(interaction, "❌ Embed Builder requires **Manage Messages in this channel**.")
-        channel = _text_channel(interaction)
-        if channel is None:
-            return await _private(interaction, "❌ Build embeds inside a normal text channel.")
-        try:
-            color = _parse_color(str(self.color.value))
-            image = normalize_https_url(self.image.value)
-            thumbnail = normalize_https_url(self.thumbnail.value)
-        except InvalidCommunityToolValue as exc:
-            return await _private(interaction, f"❌ {exc}")
-        embed = discord.Embed(
-            title=str(self.embed_title.value or "") or None,
-            description=str(self.description.value),
-            color=discord.Color(color),
-        )
-        if image:
-            embed.set_image(url=image)
-        if thumbnail:
-            embed.set_thumbnail(url=thumbnail)
-        embed.set_footer(text="Private preview • nothing is published until you choose a destination")
-        await _private(
-            interaction,
-            "👁️ **Private embed preview** — review it before publishing.",
-            embed=embed,
-            view=EmbedDraftView(int(interaction.user.id), int(channel.id), embed),
-        )
-
-
-class EmbedDraftView(_OwnedView):
-    def __init__(self, owner_id: int, channel_id: int, embed: discord.Embed) -> None:
-        super().__init__(owner_id, timeout=300)
-        self.channel_id = int(channel_id)
-        self.embed = embed
-
-    async def _channel(self, interaction: discord.Interaction) -> Optional[discord.TextChannel]:
-        channel = interaction.client.get_channel(self.channel_id)
-        return channel if isinstance(channel, discord.TextChannel) else None
-
-    @discord.ui.button(label="Publish Embed", emoji="✅", style=discord.ButtonStyle.success)
-    async def publish(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        channel = await self._channel(interaction)
-        if channel is None:
-            return await _private(interaction, "❌ Embed destination is unavailable.")
-        member = interaction.user
-        if not isinstance(member, discord.Member) or not channel.permissions_for(member).manage_messages:
-            return await _private(interaction, "❌ You no longer have Manage Messages in the destination channel.")
-        if not _bot_can_post(channel, embed=True):
-            return await _private(interaction, "❌ Dank Shield needs View Channel, Send Messages, and Embed Links there.")
-        try:
-            message = await channel.send(embed=self.embed, allowed_mentions=_ALLOWED_MENTIONS)
-        except (discord.Forbidden, discord.HTTPException):
-            return await _private(interaction, "❌ Dank Shield could not publish the embed.")
-        await _replace(interaction, content=f"✅ Embed posted: {message.jump_url}", embed=None, view=None)
-        self.stop()
-
-    @discord.ui.button(label="Post 30s Test", emoji="🧪", style=discord.ButtonStyle.primary)
-    async def test(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        channel = await self._channel(interaction)
-        if channel is None or not _bot_can_post(channel, embed=True):
-            return await _private(interaction, "❌ Dank Shield cannot post the temporary test in the destination channel.")
-        try:
-            await channel.send(embed=self.embed, allowed_mentions=_ALLOWED_MENTIONS, delete_after=30)
-        except (discord.Forbidden, discord.HTTPException):
-            return await _private(interaction, "❌ Temporary embed test failed.")
-        await _private(interaction, f"✅ Temporary embed posted in <#{channel.id}> for 30 seconds.")
-
-    @discord.ui.button(label="Discard", emoji="✖️", style=discord.ButtonStyle.secondary)
-    async def discard(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        _ = button
-        await _replace(interaction, content="Embed draft discarded.", embed=None, view=None)
-        self.stop()
+# Custom embeds use the single canonical Embed Studio; the old one-modal
+# Community Tools editor was removed rather than kept as a parallel writer.
 
 
 class InfoMemberSelect(discord.ui.UserSelect):
