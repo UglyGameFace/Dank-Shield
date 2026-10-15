@@ -1,0 +1,172 @@
+name: Discloud existing-app code update (manual, guarded)
+
+# Never run on push, merge, schedule, or an untrusted PR. Deliberate operator
+# action only. This updates the EXISTING app ID; it does not create/delete apps.
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "preflight only, or explicitly deploy existing app"
+        type: choice
+        options:
+          - preflight
+          - deploy_existing_app
+        default: preflight
+        required: true
+      expected_main_sha:
+        description: "Exact 40-character main commit SHA already accepted in CI"
+        type: string
+        required: true
+      off_host_backup_receipt:
+        description: "Identifier for independently restored off-Discloud backup (no tokens)"
+        type: string
+        required: false
+      database_rpc_verified:
+        description: "Verified required member activity batch RPCs on the REAL production Supabase DB"
+        type: boolean
+        default: false
+        required: true
+      app_files_persistence_verified:
+        description: "Verified Discloud code commit cannot destroy unrecoverable app files"
+        type: boolean
+        default: false
+        required: true
+      env_recovery_verified:
+        description: "Production .env is backed up securely and recovery-tested"
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: discloud-existing-stoneyverify-production-commit
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Exact-source and safety preflight (no Discloud writes)
+    runs-on: ubuntu-latest
+    outputs:
+      approved_sha: ${{ steps.guard.outputs.approved_sha }}
+    steps:
+      - name: Checkout only selected ref
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Reject wrong ref, branch drift or unsafe archive
+        id: guard
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ inputs.expected_main_sha }}
+          OPERATION: ${{ inputs.operation }}
+          OFF_HOST_BACKUP_RECEIPT: ${{ inputs.off_host_backup_receipt }}
+          RPC_VERIFIED: ${{ inputs.database_rpc_verified }}
+          FILE_PERSISTENCE_VERIFIED: ${{ inputs.app_files_persistence_verified }}
+          ENV_RECOVERY_VERIFIED: ${{ inputs.env_recovery_verified }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "::error::Only workflow_dispatch on main is permitted."; exit 1
+          fi
+          if [[ ! "${REQUESTED_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Provide the exact 40-character main commit SHA."; exit 1
+          fi
+          actual="$(git rev-parse HEAD)"
+          if [[ "${actual}" != "${REQUESTED_SHA}" ]]; then
+            echo "::error::Main advanced or the supplied SHA is wrong. Review new changes first."; exit 1
+          fi
+          [[ "$(grep -Ec '^ID=stoneyverify$' discloud.config)" == "1" ]] || {
+            echo "::error::Unexpected Discloud app identity."; exit 1;
+          }
+          [[ "$(grep -Ec '^MAIN=main.py$' discloud.config)" == "1" ]] || {
+            echo "::error::Unexpected Discloud entry point."; exit 1;
+          }
+          [[ -s main.py && -s requirements.txt ]] || {
+            echo "::error::Required runtime entry point missing."; exit 1;
+          }
+          for unexpected in .env .env.production .env.local DISCORD_TOKEN.txt data; do
+            if [[ -e "$unexpected" ]]; then
+              echo "::error::Unsafe or mutable local artifact $unexpected found in checkout."; exit 1
+            fi
+          done
+          if git ls-files | grep -Eq '(^|/)(\.env|\.env\.production|\.env\.local)$'; then
+            echo "::error::A confidential .env file is tracked in Git."; exit 1
+          fi
+          echo "approved_sha=$actual" >> "$GITHUB_OUTPUT"
+          echo "Validated exact main=$actual, existing app=stoneyverify, no production write."
+          if [[ "${OPERATION}" == "deploy_existing_app" ]]; then
+            [[ "${RPC_VERIFIED}" == "true" ]] || {
+              echo "::error::PR #540 production member-activity RPC verification is missing."; exit 1;
+            }
+            [[ "${FILE_PERSISTENCE_VERIFIED}" == "true" ]] || {
+              echo "::error::Persistent file safety for a Discloud code commit is unverified."; exit 1;
+            }
+            [[ "${ENV_RECOVERY_VERIFIED}" == "true" ]] || {
+              echo "::error::Production environment recovery is unverified."; exit 1;
+            }
+            [[ "${#OFF_HOST_BACKUP_RECEIPT}" -ge 8 ]] || {
+              echo "::error::A validated off-host backup receipt identifier is required."; exit 1;
+            }
+          fi
+
+      - name: Confirm deployment manifest is source only
+        shell: bash
+        run: |
+          set -euo pipefail
+          # DeployAction uses a ZIP upload with its own glob expansion.
+          # Discloud's retention semantics for host-only data are NOT proved
+          # by a GitHub check. Always require separately restored backups.
+          test -s discloud.config
+          test -s stoney_verify/app.py
+          test -s stoney_verify/torrent_streaming.py
+          test -s stoney_verify/members_new/activity_tracker.py
+          echo "Preflight only: NOT a Discloud backup or data-retention guarantee."
+
+  deploy:
+    name: Existing-app code COMMIT, never delete/upload
+    if: ${{ inputs.operation == 'deploy_existing_app' }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: discloud-production
+    steps:
+      - name: Checkout approved source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.approved_sha }}
+          fetch-depth: 1
+      - name: Revalidate exact approved SHA
+        shell: bash
+        env:
+          APPROVED_SHA: ${{ needs.prepare.outputs.approved_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$APPROVED_SHA"
+          test "$(grep -Ec '^ID=stoneyverify$' discloud.config)" = "1"
+      - name: Require Discloud deploy token
+        shell: bash
+        env:
+          DISCLOUD_TOKEN: ${{ secrets.DISCLOUD_TOKEN }}
+        run: |
+          if [[ -z "$DISCLOUD_TOKEN" ]]; then
+            echo "::error::DISCLOUD_TOKEN repository/environment secret is not connected."; exit 1
+          fi
+      - name: Commit approved main code to EXISTING Discloud app
+        # SHA-pinned official action, not moving @v1 tag.
+        uses: discloud/deploy-action@fae7024653d941a19daa2b6f56d2ae208e008c54
+        with:
+          token: ${{ secrets.DISCLOUD_TOKEN }}
+          app_id: stoneyverify
+          # Never pass 'env', which overwrites the live .env file.
+          # .discloudignore excludes secrets, user data, CI and tests.
+          glob: "**"
+      - name: Summarize submitted update
+        env:
+          APPROVED_SHA: ${{ needs.prepare.outputs.approved_sha }}
+        shell: bash
+        run: |
+          echo "Existing app ID: stoneyverify" >> "$GITHUB_STEP_SUMMARY"
+          echo "Submitted source SHA: $APPROVED_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "Post-deployment Discloud health, database, files and rollback must be verified separately." >> "$GITHUB_STEP_SUMMARY"
