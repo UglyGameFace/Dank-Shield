@@ -132,7 +132,7 @@ def test_cinema_browser_javascript_parses() -> None:
 def test_feed_title_cleanup_preserves_real_names_without_release_tags() -> None:
     script, _styles = _assets()
     first = script.index("  function feedSearchTitle(result) {")
-    ending = script.index("\\n  }", first) + len("\\n  }")
+    ending = script.index("\n  }", first) + len("\n  }")
     js_function = script[first:ending]
     assertions = r'''
 const cases = [
@@ -151,7 +151,7 @@ for (const [title, expected] of cases) {
 }
 '''
     result = subprocess.run(
-        ["node", "-e", js_function + "\\n" + assertions],
+        ["node", "-e", js_function + "\n" + assertions],
         capture_output=True,
         text=True,
         timeout=15,
