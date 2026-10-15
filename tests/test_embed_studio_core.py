@@ -145,7 +145,7 @@ def test_mobile_studio_has_clear_separate_sections_and_one_confirmation() -> Non
     assert {
         "Write", "Appearance", "Images", "Fields", "Link Buttons",
         "Embeds", "Undo", "Templates", "Edit Posted",
-        "Preview & Publish",
+        "Starter Layouts", "Preview & Publish",
     } <= labels
     assert any(isinstance(item, discord.ui.ChannelSelect) for item in view.children)
     review = StudioReviewView(session)
@@ -174,3 +174,15 @@ def test_one_canonical_editor_replaces_parallel_community_and_setup_modals() -> 
     assert "message.author.id != interaction.client.user.id" in studio
     assert "allowed_mentions=_MENTIONS" in studio
     assert "async def open_embed_studio(" in studio
+
+
+
+def test_all_one_tap_layouts_are_editable_and_within_limits() -> None:
+    from stoney_verify.embed_studio_presets import PRESETS, project_for_preset
+    assert len(PRESETS) == 6
+    for key, name in PRESETS:
+        project = project_for_preset(key)
+        assert project["embeds"][0]["title"]
+        assert project["embeds"][0]["description"]
+        assert isinstance(name, str)
+        assert len(render_embeds(project)) == 1
