@@ -42,7 +42,9 @@ def test_live_media_health_and_auth_debug_expect_real_json() -> None:
 
 
 def test_anonymous_home_must_never_be_html_200_or_unprotected_json() -> None:
-    assert classify(_probe("home-anonymous", 401, "text/plain", "Sign in"))[0]
+    assert classify(_probe("home-anonymous", 401, "text/plain", "Sign in to Dank Cinema again."))[0]
+    assert not classify(_probe("home-anonymous", 401, "text/html", "<html>Unauthorized</html>"))[0]
+    assert not classify(_probe("home-anonymous", 401, "text/plain", "Gateway unauthorized"))[0]
     for status, content_type, data in (
         (200, "text/html", "<html>rewritten</html>"),
         (200, "application/json", {"ok": True}),
