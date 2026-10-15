@@ -112,6 +112,14 @@ def _summary(session: StudioSession) -> discord.Embed:
         inline=False,
     )
     embed.add_field(
+        name="Role controls",
+        value=(
+            f"{len(project['role_actions'])} optional role(s)"
+            + (f" • {project['role_mode']}" if project["role_actions"] else " • none")
+        ),
+        inline=True,
+    )
+    embed.add_field(
         name="Destination",
         value=f"<#{session.channel_id}>" if session.channel_id else "Choose a channel below",
         inline=True,
@@ -121,7 +129,7 @@ def _summary(session: StudioSession) -> discord.Embed:
         value="Edit a previously published message" if session.post_key else "New draft",
         inline=True,
     )
-    embed.set_footer(text="Text • Appearance • Media • Fields • Links • Layout • Save • Preview")
+    embed.set_footer(text="Text • Appearance • Media • Fields • Links • Roles • Layout • Save • Preview")
     return embed
 
 
@@ -208,6 +216,10 @@ class StudioHomeView(_StudioView):
     @discord.ui.button(label="Embeds", emoji="🧩", style=discord.ButtonStyle.secondary, row=1)
     async def embeds(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _embeds(interaction, self.session)
+
+    @discord.ui.button(label="Role Controls", emoji="🎭", style=discord.ButtonStyle.secondary, row=1)
+    async def role_controls(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _role_controls(interaction, self.session)
 
     @discord.ui.button(label="Undo", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
     async def undo(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -537,6 +549,222 @@ async def _links(interaction: discord.Interaction, session: StudioSession) -> No
     )
 
 
+
+
+async def _add_studio_role(interaction: discord.Interaction, session: StudioSession, role: discord.Role) -> None:
+    guild = interaction.guild
+    if guild is None or guild.id != session.guild_id or not _staff(interaction) or interaction.user.id != session.owner_id:
+        return await _say(interaction, "This role editor belongs to another server or staff member.")
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    try:
+        from .guild_config import get_guild_config
+        from .commands_ext.public_self_roles_group import _profile_cosmetic_role_blocker
+        config = await get_guild_config(int(guild.id), refresh=True)
+        if str(config.get("source") or "").startswith("unavailable:"):
+            return await _say(interaction, "Cannot verify role safety right now. Nothing added.")
+        reason = _profile_cosmetic_role_blocker(guild, role, config)
+        if reason:
+            return await _say(interaction, f"That role is not eligible for optional self-selection: {reason}")
+        if any(a["role_id"] == str(role.id) for a in session.project["role_actions"]):
+            return await _say(interaction, "That role is already offered in this embed.")
+        def add(p: dict[str, Any]) -> None:
+            p["role_actions"].append({"label": role.name[:80], "role_id": str(role.id)})
+            if len(p["role_actions"]) > 5 or len(p["role_actions"]) + len(p["links"]) > 5:
+                p["role_mode"] = "dropdown"
+        session.apply(add)
+    except StudioValidationError as exc:
+        return await _say(interaction, str(exc))
+    except Exception as exc:
+        return await _say(interaction, f"Role safety could not be verified ({type(exc).__name__}). Nothing added.")
+    await _role_controls(interaction, session)
+
+
+class StudioRoleSelect(discord.ui.RoleSelect):
+    def __init__(self, session: StudioSession) -> None:
+        super().__init__(
+            placeholder="Quick pick an optional server role…",
+            min_values=1, max_values=1, row=0,
+        )
+        self.session = session
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        picked = self.values[0] if self.values else None
+        role = guild.get_role(int(getattr(picked, "id", 0))) if guild else None
+        if not isinstance(role, discord.Role):
+            return await _say(interaction, "Choose a role belonging to this server.")
+        await _add_studio_role(interaction, self.session, role)
+
+
+async def _browse_studio_roles(interaction: discord.Interaction, session: StudioSession) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return await _say(interaction, "Open the Studio inside your server.")
+    await interaction.response.defer(ephemeral=True)
+    try:
+        from .guild_config import get_guild_config
+        from .commands_ext.public_self_roles_group import _profile_cosmetic_role_blocker
+        from .ui.resource_browser import DankGuildResourceBrowserView
+        config = await get_guild_config(int(guild.id), refresh=True)
+        if str(config.get("source") or "").startswith("unavailable:"):
+            return await _say(interaction, "Role safety cannot be checked at the moment.")
+    except Exception:
+        return await _say(interaction, "Role browsing could not load. Nothing changed.")
+
+    def allowed(role: Any) -> bool:
+        return (
+            isinstance(role, discord.Role)
+            and str(role.id) not in {a["role_id"] for a in session.project["role_actions"]}
+            and not _profile_cosmetic_role_blocker(guild, role, config)
+        )
+
+    async def picked(pick_interaction: discord.Interaction, resource: Any) -> None:
+        if not isinstance(resource, discord.Role):
+            return await _say(pick_interaction, "Choose a role.")
+        await _add_studio_role(pick_interaction, session, resource)
+
+    async def back(back_interaction: discord.Interaction) -> None:
+        await _role_controls(back_interaction, session)
+
+    view = DankGuildResourceBrowserView(
+        guild=guild, author_id=session.owner_id, resource_kinds=("role",),
+        on_pick=picked, custom_id="dank:embed_studio:search_roles:v1",
+        title="Search-Safe Studio Role Picker",
+        placeholder="Search or browse safe optional roles…",
+        predicate=allowed, on_home=back,
+        home_label="Back to Role Controls",
+        empty_message="No more safe roles are available to add.",
+    )
+    await _menu(interaction, heading="🔎 Search-Safe Role Browser",
+                description="Find a safe role by normal words, styled name, previous name, mention or ID.", view=view)
+
+class StudioExistingRoleSelect(discord.ui.Select):
+    def __init__(self, session: StudioSession) -> None:
+        self.session = session
+        actions = session.project["role_actions"]
+        options = [
+            discord.SelectOption(label=f"{i+1}. {a['label'][:80]}", value=str(i))
+            for i, a in enumerate(actions)
+        ] or [discord.SelectOption(label="No roles yet", value="none")]
+        super().__init__(placeholder="Manage an existing role button…", options=options, row=1)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if self.values[0] == "none":
+            return await _say(interaction, "Add a role first.")
+        await _menu(
+            interaction,
+            heading="🎭 Role Action Settings",
+            description="Change the displayed label, move the button, or remove it. Role IDs cannot be edited manually.",
+            view=StudioRoleActionView(self.session, int(self.values[0])),
+        )
+
+
+class StudioRoleLabelModal(discord.ui.Modal, title="Rename Role Action"):
+    def __init__(self, session: StudioSession, index: int) -> None:
+        super().__init__(timeout=900)
+        self.session = session
+        self.index = index
+        action = session.project["role_actions"][index]
+        self.label_input = discord.ui.TextInput(label="Button or menu label", default=action["label"], max_length=80)
+        self.add_item(self.label_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not _staff(interaction) or interaction.user.id != self.session.owner_id:
+            return await _say(interaction, "This editor belongs to another staff member.")
+        try:
+            idx = self.index
+            text = str(self.label_input.value or "")
+            self.session.apply(lambda p: p["role_actions"][idx].update(label=text))
+        except (StudioValidationError, IndexError) as exc:
+            return await _say(interaction, str(exc))
+        await _home(interaction, self.session, notice="Role label updated.")
+
+
+class StudioRoleActionView(_StudioView):
+    def __init__(self, session: StudioSession, index: int) -> None:
+        super().__init__(session)
+        self.index = index
+
+    @discord.ui.button(label="Rename", emoji="✏️", style=discord.ButtonStyle.primary)
+    async def rename(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(StudioRoleLabelModal(self.session, self.index))
+
+    @discord.ui.button(label="Move Up", emoji="⬆️", style=discord.ButtonStyle.secondary)
+    async def up(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await self.move(interaction, -1)
+
+    @discord.ui.button(label="Move Down", emoji="⬇️", style=discord.ButtonStyle.secondary)
+    async def down(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await self.move(interaction, 1)
+
+    async def move(self, interaction: discord.Interaction, delta: int) -> None:
+        idx, target = self.index, self.index + delta
+        def change(p: dict[str, Any]) -> None:
+            items = p["role_actions"]
+            if not 0 <= idx < len(items) or not 0 <= target < len(items):
+                raise StudioValidationError("Role is already at the edge.")
+            items[idx], items[target] = items[target], items[idx]
+        try:
+            self.session.apply(change)
+        except StudioValidationError as exc:
+            return await _say(interaction, str(exc))
+        self.index = target
+        await _role_controls(interaction, self.session)
+
+    @discord.ui.button(label="Remove", emoji="🗑️", style=discord.ButtonStyle.danger)
+    async def remove(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if self.index >= len(self.session.project["role_actions"]):
+            return await _say(interaction, "That role is already gone.")
+        self.session.apply(lambda p: p["role_actions"].pop(self.index))
+        await _role_controls(interaction, self.session)
+
+    @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _role_controls(interaction, self.session)
+
+
+class StudioRolesMenu(_StudioView):
+    def __init__(self, session: StudioSession) -> None:
+        super().__init__(session)
+        self.add_item(StudioRoleSelect(session))
+        self.add_item(StudioExistingRoleSelect(session))
+
+    @discord.ui.button(label="Buttons / Dropdown", emoji="🔁", style=discord.ButtonStyle.secondary, row=2)
+    async def toggle_mode(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        target = "dropdown" if self.session.project["role_mode"] == "buttons" else "buttons"
+        try:
+            self.session.apply(lambda p: p.update(role_mode=target))
+        except StudioValidationError as exc:
+            return await _say(interaction, str(exc))
+        await _role_controls(interaction, self.session)
+
+    @discord.ui.button(label="Find Role", emoji="🔎", style=discord.ButtonStyle.primary, row=2)
+    async def search(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _browse_studio_roles(interaction, self.session)
+
+    @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _home(interaction, self.session)
+
+
+async def _role_controls(interaction: discord.Interaction, session: StudioSession) -> None:
+    mode = session.project["role_mode"]
+    items = session.project["role_actions"]
+    names = "\n".join(f"• {i+1}. {item['label']}" for i, item in enumerate(items))
+    await _menu(
+        interaction, heading="🎭 Role Buttons & Dropdown",
+        description=(
+            f"**{len(items)}/10** optional self-assignable roles • layout: **{mode}**\n"
+            "Choose a role below; Dank Shield checks permissions and safe-role rules. "
+            "Members can add or remove their own offered roles, never staff or access roles.\n"
+            "Buttons: up to five combined with link buttons. "
+            "Dropdown: up to ten options alongside link buttons.\n\n"
+            + (names or "No roles added.")
+        ),
+        view=StudioRolesMenu(session),
+    )
+
 class EmbedMenu(_StudioView):
     @discord.ui.button(label="Toggle Timestamp", emoji="🕒", style=discord.ButtonStyle.secondary, row=0)
     async def timestamp(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -829,9 +1057,20 @@ class StudioReviewView(_StudioView):
         self.preview_project = deepcopy(session.project)
         self.preview_channel_id = session.channel_id
         self.preview_post_key = session.post_key
-        # Link buttons on the preview serve as a useful live test.
+        # Link buttons really open their HTTPS target in preview. Role actions
+        # are disabled here: a private preview must never grant a public role.
         for link in session.project["links"]:
             self.add_item(discord.ui.Button(label=link["label"], url=link["url"], style=discord.ButtonStyle.link, row=1))
+        role_items = session.project.get("role_actions") or []
+        if role_items and session.project.get("role_mode") == "dropdown":
+            self.add_item(discord.ui.Select(
+                placeholder="Role dropdown (active after publishing)",
+                options=[discord.SelectOption(label=item["label"], value=str(i)) for i, item in enumerate(role_items)],
+                min_values=1, max_values=1, disabled=True, row=2,
+            ))
+        else:
+            for item in role_items:
+                self.add_item(discord.ui.Button(label=item["label"], disabled=True, style=discord.ButtonStyle.secondary, row=1))
 
     @discord.ui.button(label="Publish / Save Edit", emoji="✅", style=discord.ButtonStyle.success, row=0)
     async def publish(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -866,7 +1105,35 @@ class StudioReviewView(_StudioView):
                 return await _say(interaction, "This preview is stale. Reopen it; nothing was sent.")
             draft = validate_project(self.preview_project)
             embeds = render_embeds(draft)
-            action_view = link_view(draft)
+            # Role controls need durable server records. Storage is checked
+            # BEFORE sending, and the published message is made inert if the
+            # subsequent atomic tracking write fails.
+            from .embed_studio_roles import member_role_view
+            import secrets
+            role_items = draft.get("role_actions") or []
+            role_token = secrets.token_hex(16) if role_items else ""
+            if role_items:
+                _source, current_library = await _load_library(self.session.guild_id)
+                if not self.session.post_key and len(current_library["published"]) >= 20 and all(
+                    isinstance(item, dict) and item.get("role_actions")
+                    for item in current_library["published"].values()
+                ):
+                    return await _say(
+                        interaction,
+                        "This server already has 20 active role panels tracked. "
+                        "Open Edit Posted and remove role actions from an older panel first."
+                    )
+                from .guild_config import get_guild_config
+                from .commands_ext.public_self_roles_group import _profile_cosmetic_role_blocker
+                guild_cfg = await get_guild_config(self.session.guild_id, refresh=True)
+                for item in role_items:
+                    role = channel.guild.get_role(int(item["role_id"]))
+                    if not isinstance(role, discord.Role):
+                        return await _say(interaction, "An offered role was deleted. Remove it from the draft first.")
+                    reason = _profile_cosmetic_role_blocker(channel.guild, role, guild_cfg)
+                    if reason:
+                        return await _say(interaction, f"An offered role is no longer safe: {reason}")
+            action_view = member_role_view(draft, role_token) if role_items else link_view(draft)
             message: discord.Message
             if self.session.post_key:
                 source, lib = await _load_library(self.session.guild_id)
@@ -891,12 +1158,31 @@ class StudioReviewView(_StudioView):
             lib["published"][self.session.post_key] = {
                 "channel_id": str(channel.id), "message_id": str(message.id),
                 "by": str(interaction.user.id),
+                "role_token": role_token, "role_mode": draft["role_mode"],
+                "role_actions": draft["role_actions"],
             }
-            while len(lib["published"]) > 20:
-                lib["published"].pop(next(iter(lib["published"])))
-            tracked = await _save_library(self.session.guild_id, source, lib)
+            from .embed_studio_core import trim_published_history
+            try:
+                lib["published"] = trim_published_history(lib["published"], max_posts=20)
+            except StudioValidationError:
+                tracked = False
+            else:
+                # If the bounded history retained all live role panels, a
+                # link-only message may be published but not tracked. Do not
+                # report a successful history save for an evicted reference.
+                tracked = (
+                    self.session.post_key in lib["published"]
+                    and await _save_library(self.session.guild_id, source, lib)
+                )
         except Exception:
             pass
+        if role_items and not tracked:
+            # Missing registry means live controls cannot be authorized. Avoid
+            # showing unusable buttons, and do not pretend they are persistent.
+            try:
+                await message.edit(view=link_view(draft), allowed_mentions=_MENTIONS)
+            except (discord.Forbidden, discord.HTTPException):
+                pass  # Runtime still rejects all untracked or stale buttons.
         await _say(
             interaction,
             f"✅ {'Updated' if editing_existing else 'Published'}: {message.jump_url}"
@@ -971,6 +1257,12 @@ class TrackedPostSelect(discord.ui.Select):
             return await _say(interaction, f"Could not load this message: {_error(exc)}")
         self.session.history.append(self.session.project)
         self.session.history = self.session.history[-10:]
+        draft["role_mode"] = str(item.get("role_mode") or "buttons")
+        draft["role_actions"] = deepcopy(item.get("role_actions") or [])
+        try:
+            draft = validate_project(draft)
+        except StudioValidationError:
+            return await _say(interaction, "This tracked post has an unsupported role configuration. Ask staff to repair it.")
         self.session.project = draft
         self.session.channel_id = int(channel.id)
         self.session.post_key = key

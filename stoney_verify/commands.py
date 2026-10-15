@@ -208,6 +208,16 @@ except Exception as e:
     raise
 
 
+# One listener routes persisted Embed Studio role buttons and dropdowns by
+# guild-scoped message records. It never scans all servers on startup.
+try:
+    from .embed_studio_roles import install_embed_studio_role_runtime as _install_embed_studio_role_runtime
+    _install_embed_studio_role_runtime(bot, strict=True)
+except Exception as e:
+    print(f"❌ commands.py Embed Studio role runtime failed closed: {repr(e)}")
+    raise
+
+
 # Versioned Member Setup owns join/update access reconciliation separately from
 # slash-command registration. Install it strictly so an active gate can never be
 # left without its recovery/grant runtime after a partial command-module failure.
