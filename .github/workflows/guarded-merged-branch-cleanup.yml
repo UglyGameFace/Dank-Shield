@@ -12,10 +12,12 @@ on:
           - delete
           - preview-next
           - delete-next
+          - preview-reviewed
+          - delete-reviewed
         default: preview
         required: true
       confirmation:
-        description: "Delete: DELETE_STALE_MERGED_BRANCHES; delete-next: DELETE_VERIFIED_NEXT_BATCH"
+        description: "Confirm delete with the token for the selected batch (see run summary)"
         type: string
         required: false
 
@@ -42,13 +44,15 @@ jobs:
           script: |
             const mode = process.env.CLEANUP_MODE;
             const nextBatch = mode === 'preview-next' || mode === 'delete-next';
-            const deleting = mode === 'delete' || mode === 'delete-next';
-            if (!['preview', 'delete', 'preview-next', 'delete-next'].includes(mode)) {
+            const reviewedBatch = mode === 'preview-reviewed' || mode === 'delete-reviewed';
+            const deleting = mode === 'delete' || mode === 'delete-next' || mode === 'delete-reviewed';
+            if (!['preview', 'delete', 'preview-next', 'delete-next', 'preview-reviewed', 'delete-reviewed'].includes(mode)) {
               throw new Error('Unsupported cleanup mode');
             }
             if (
               deleting &&
               process.env.CLEANUP_CONFIRMATION !== (
+                reviewedBatch ? 'DELETE_REVIEWED_HISTORICAL_BRANCHES' :
                 nextBatch ? 'DELETE_VERIFIED_NEXT_BATCH' : 'DELETE_STALE_MERGED_BRANCHES'
               )
             ) {
@@ -117,6 +121,29 @@ jobs:
               'noop', 'noop2', 'temp-ignore', 'tmp-noop', 'tmp-noop2'
             ]);
 
+            // Third wave is reviewed individually, never inferred from prefixes.
+            // Closed-unmerged entries were explicitly superseded or validation-only.
+            // GitHub retains their PR discussion/diff, but their branches are not
+            // removed until the owner reviews a separate preview.
+            const reviewedRetirements = new Map([
+              ['feature/config-backup-version-history', { kind: 'merged', pr: 107, sha: '0934a2f37642df8b46e713fba1febc7fe4089854' }],
+              ['feature/selective-config-backup-restore', { kind: 'merged', pr: 109, sha: '8027bf061a07a1da1ff10657bda326e06d421837' }],
+              ['feat/production-welcome-cards-clean', { kind: 'merged', pr: 115, sha: 'e59cc11d6b1011ecfba2a5d871def90cf6015e9f' }],
+              ['fix/dank-stats-live-recovery', { kind: 'merged', pr: 167, sha: '5ab92f4fe1bdd8bc28cc6aa8add890d87aaa3013' }],
+              ['fix/ds-ops-021-owner-bulk-welcome', { kind: 'merged', pr: 174, sha: 'c6485bb7e7bfef552c106e5a85b273e42f9413e3' }],
+              ['fix/ds-purge-025-restore-direct-purge', { kind: 'merged', pr: 179, sha: 'ea373914c509ae2eeab47886a2333153a87a846f' }],
+              ['fix/invite-reconcile-runtime-194', { kind: 'merged', pr: 194, sha: 'a122c6273c4c38f71389f23aba1f70bac759d2f6' }],
+              ['fix/invite-reconcile-production-hardening-195', { kind: 'merged', pr: 195, sha: '25169b0800dfdf88ceaf0308209c6a2746b23e34' }],
+              ['fix/release-governance-009', { kind: 'merged', pr: 212, sha: '60a20e3b657e57ace29d092663fa8003b9e3e822' }],
+              ['fix/startup-recovery-storm', { kind: 'merged', pr: 280, sha: '979f8e4ea293f885975e64a643507d74d62ed8f1' }],
+              ['fix/408-release-first-selection', { kind: 'merged', pr: 412, sha: '957293c3ebddcb3f030e576209d8e42cf11665d8' }],
+              ['fix/408-movie-stale-recovery', { kind: 'merged', pr: 414, sha: '77c2b51cce33fd3caea640be9b19e791d85866a5' }],
+              ['fix/430-cinema-production-polish', { kind: 'merged', pr: 435, sha: '25648d5e827ffd55939eb0c7a46a7fdf15b14e04' }],
+              ['fix/runtime-startup-hygiene-spamguard-default', { kind: 'superseded', pr: 95, replacement: 94, sha: '6a1f9617320d8adc54d7a792037210beacceb63c' }],
+              ['fix/startup-spamguard-command-activity-health', { kind: 'superseded', pr: 93, replacement: 94, sha: '6dd2d71176e2b7845f1b1136fa668c442d561f1e' }],
+              ['ci/ds-setup-020-final-validation', { kind: 'superseded', pr: 173, replacement: 171, sha: '008e705cb9b59fdeaf76fc908acdfd8723c752e2' }],
+              ['ci/ds-setup-020-macos-trigger', { kind: 'superseded', pr: 172, replacement: 171, sha: '15482f01deea0ab9e439d0ed603e4f219212abfe' }],
+            ]);
             const [branches, closedPRs, openPRs] = await Promise.all([
               github.paginate(github.rest.repos.listBranches, {
                 owner, repo, per_page: 100
@@ -164,6 +191,38 @@ jobs:
               if (inUseByOpenPR.has(name)) continue;
               const segments = name.toLowerCase().split(/[\\/._-]+/);
               const prs = closedByHead.get(name) || [];
+              if (reviewedBatch) {
+                const review = reviewedRetirements.get(name);
+                if (!review || review.sha !== branch.commit.sha) continue;
+                if (review.kind === 'merged') {
+                  if (prs.some(pr => !pr.merged_at)) continue;
+                  if (!prs.some(pr =>
+                    pr.number === review.pr && pr.merged_at &&
+                    pr.base?.ref === defaultBranch &&
+                    pr.head.sha === branch.commit.sha
+                  )) continue;
+                } else if (review.kind === 'superseded') {
+                  const original = prs.find(pr =>
+                    pr.number === review.pr && !pr.merged_at &&
+                    pr.head.sha === branch.commit.sha
+                  );
+                  const replacement = closedPRs.find(pr =>
+                    pr.number === review.replacement && pr.merged_at &&
+                    pr.base?.ref === defaultBranch &&
+                    pr.head?.repo?.full_name === fullName
+                  );
+                  if (!original || !replacement) continue;
+                } else {
+                  continue;
+                }
+                candidates.push({
+                  name, sha: branch.commit.sha,
+                  reason: review.kind === 'merged'
+                    ? 'reviewed merged PR #' + review.pr
+                    : 'reviewed closed PR #' + review.pr + ' superseded by #' + review.replacement
+                });
+                continue;
+              }
               // Never discard any branch associated with a closed-unmerged PR,
               // even if another PR from this head was merged.
               if (prs.some(pr => !pr.merged_at)) continue;
@@ -237,7 +296,8 @@ jobs:
               throw new Error('Fail closed: too many candidates for reviewed batch');
             }
 
-            core.info(`Found ${branches.length} branches, ${openPRs.length} open PRs, ${candidates.length} eligible ${nextBatch ? "second-wave" : "first-wave"} branches.`);
+            const batchLabel = reviewedBatch ? 'reviewed historical' : nextBatch ? 'second-wave' : 'first-wave';
+            core.info(`Found ${branches.length} branches, ${openPRs.length} open PRs, ${candidates.length} eligible ${batchLabel} branches.`);
             for (const candidate of candidates) {
               core.info(`Candidate: ${candidate.name} (${candidate.reason}, ${candidate.sha})`);
             }
@@ -270,7 +330,7 @@ jobs:
             const lines = [
               `Mode: **${mode}**`,
               `Branches before cleanup: **${branches.length}**`,
-              `Eligible ${nextBatch ? "second-wave" : "first-wave"} branches: **${candidates.length}**`,
+              `Eligible ${batchLabel} branches: **${candidates.length}**`,
               `Deleted: **${deleted.length}**; skipped changed/protected: **${skipped.length}**; failures: **${failed.length}**`,
               '',
               ...candidates.map(c => `- \`${c.name}\` (${c.reason})`)
