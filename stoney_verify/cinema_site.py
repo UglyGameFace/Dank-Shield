@@ -1287,7 +1287,7 @@ def _safe_discord_context(guild_id: int, user_id: int) -> dict[str, Any]:
             getattr(member, "display_name", "")
             or getattr(member, "global_name", "")
             or getattr(member, "name", "")
-            or user_id
+            or "Cinema Member"
         )[:80],
         "avatar_url": avatar_url,
         "discord_url": (
