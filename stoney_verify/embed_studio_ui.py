@@ -112,6 +112,14 @@ def _summary(session: StudioSession) -> discord.Embed:
         inline=False,
     )
     embed.add_field(
+        name="Role controls",
+        value=(
+            f"{len(project['role_actions'])} optional role(s)"
+            + (f" • {project['role_mode']}" if project["role_actions"] else " • none")
+        ),
+        inline=True,
+    )
+    embed.add_field(
         name="Destination",
         value=f"<#{session.channel_id}>" if session.channel_id else "Choose a channel below",
         inline=True,
@@ -121,7 +129,7 @@ def _summary(session: StudioSession) -> discord.Embed:
         value="Edit a previously published message" if session.post_key else "New draft",
         inline=True,
     )
-    embed.set_footer(text="Text • Appearance • Media • Fields • Links • Layout • Save • Preview")
+    embed.set_footer(text="Text • Appearance • Media • Fields • Links • Roles • Layout • Save • Preview")
     return embed
 
 
@@ -208,6 +216,10 @@ class StudioHomeView(_StudioView):
     @discord.ui.button(label="Embeds", emoji="🧩", style=discord.ButtonStyle.secondary, row=1)
     async def embeds(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _embeds(interaction, self.session)
+
+    @discord.ui.button(label="Role Controls", emoji="🎭", style=discord.ButtonStyle.secondary, row=1)
+    async def role_controls(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _role_controls(interaction, self.session)
 
     @discord.ui.button(label="Undo", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
     async def undo(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -536,6 +548,168 @@ async def _links(interaction: discord.Interaction, session: StudioSession) -> No
         view=LinkMenu(session),
     )
 
+
+
+class StudioRoleSelect(discord.ui.RoleSelect):
+    def __init__(self, session: StudioSession) -> None:
+        super().__init__(
+            placeholder="Add a safe, optional self-assignable role…",
+            min_values=1, max_values=1, row=0,
+        )
+        self.session = session
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        picked = self.values[0] if self.values else None
+        role = guild.get_role(int(getattr(picked, "id", 0))) if guild else None
+        if not isinstance(role, discord.Role):
+            return await _say(interaction, "Choose a role belonging to this server.")
+        await interaction.response.defer(ephemeral=True)
+        try:
+            from .guild_config import get_guild_config
+            from .commands_ext.public_self_roles_group import _profile_cosmetic_role_blocker
+            config = await get_guild_config(int(guild.id), refresh=True)
+            if str(config.get("source") or "").startswith("unavailable:"):
+                return await _say(interaction, "Cannot verify role safety right now. Nothing added.")
+            reason = _profile_cosmetic_role_blocker(guild, role, config)
+            if reason:
+                return await _say(interaction, f"That role is not eligible for optional self-selection: {reason}")
+            idx = next((i for i, a in enumerate(self.session.project["role_actions"]) if a["role_id"] == str(role.id)), None)
+            if idx is not None:
+                return await _say(interaction, "That role is already offered in this embed.")
+            def add(p: dict[str, Any]) -> None:
+                p["role_actions"].append({"label": role.name[:80], "role_id": str(role.id)})
+                if len(p["role_actions"]) > 5 or len(p["role_actions"]) + len(p["links"]) > 5:
+                    p["role_mode"] = "dropdown"
+            self.session.apply(add)
+        except StudioValidationError as exc:
+            return await _say(interaction, str(exc))
+        except Exception as exc:
+            return await _say(interaction, f"Role safety could not be verified ({type(exc).__name__}). Nothing added.")
+        await _role_controls(interaction, self.session)
+
+
+class StudioExistingRoleSelect(discord.ui.Select):
+    def __init__(self, session: StudioSession) -> None:
+        self.session = session
+        actions = session.project["role_actions"]
+        options = [
+            discord.SelectOption(label=f"{i+1}. {a['label'][:80]}", value=str(i))
+            for i, a in enumerate(actions)
+        ] or [discord.SelectOption(label="No roles yet", value="none")]
+        super().__init__(placeholder="Manage an existing role button…", options=options, row=1)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if self.values[0] == "none":
+            return await _say(interaction, "Add a role first.")
+        await _menu(
+            interaction,
+            heading="🎭 Role Action Settings",
+            description="Change the displayed label, move the button, or remove it. Role IDs cannot be edited manually.",
+            view=StudioRoleActionView(self.session, int(self.values[0])),
+        )
+
+
+class StudioRoleLabelModal(discord.ui.Modal, title="Rename Role Action"):
+    def __init__(self, session: StudioSession, index: int) -> None:
+        super().__init__(timeout=900)
+        self.session = session
+        self.index = index
+        action = session.project["role_actions"][index]
+        self.label_input = discord.ui.TextInput(label="Button or menu label", default=action["label"], max_length=80)
+        self.add_item(self.label_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not _staff(interaction) or interaction.user.id != self.session.owner_id:
+            return await _say(interaction, "This editor belongs to another staff member.")
+        try:
+            idx = self.index
+            text = str(self.label_input.value or "")
+            self.session.apply(lambda p: p["role_actions"][idx].update(label=text))
+        except (StudioValidationError, IndexError) as exc:
+            return await _say(interaction, str(exc))
+        await _home(interaction, self.session, notice="Role label updated.")
+
+
+class StudioRoleActionView(_StudioView):
+    def __init__(self, session: StudioSession, index: int) -> None:
+        super().__init__(session)
+        self.index = index
+
+    @discord.ui.button(label="Rename", emoji="✏️", style=discord.ButtonStyle.primary)
+    async def rename(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(StudioRoleLabelModal(self.session, self.index))
+
+    @discord.ui.button(label="Move Up", emoji="⬆️", style=discord.ButtonStyle.secondary)
+    async def up(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await self.move(interaction, -1)
+
+    @discord.ui.button(label="Move Down", emoji="⬇️", style=discord.ButtonStyle.secondary)
+    async def down(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await self.move(interaction, 1)
+
+    async def move(self, interaction: discord.Interaction, delta: int) -> None:
+        idx, target = self.index, self.index + delta
+        def change(p: dict[str, Any]) -> None:
+            items = p["role_actions"]
+            if not 0 <= idx < len(items) or not 0 <= target < len(items):
+                raise StudioValidationError("Role is already at the edge.")
+            items[idx], items[target] = items[target], items[idx]
+        try:
+            self.session.apply(change)
+        except StudioValidationError as exc:
+            return await _say(interaction, str(exc))
+        self.index = target
+        await _role_controls(interaction, self.session)
+
+    @discord.ui.button(label="Remove", emoji="🗑️", style=discord.ButtonStyle.danger)
+    async def remove(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if self.index >= len(self.session.project["role_actions"]):
+            return await _say(interaction, "That role is already gone.")
+        self.session.apply(lambda p: p["role_actions"].pop(self.index))
+        await _role_controls(interaction, self.session)
+
+    @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _role_controls(interaction, self.session)
+
+
+class StudioRolesMenu(_StudioView):
+    def __init__(self, session: StudioSession) -> None:
+        super().__init__(session)
+        self.add_item(StudioRoleSelect(session))
+        self.add_item(StudioExistingRoleSelect(session))
+
+    @discord.ui.button(label="Buttons / Dropdown", emoji="🔁", style=discord.ButtonStyle.secondary, row=2)
+    async def toggle_mode(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        target = "dropdown" if self.session.project["role_mode"] == "buttons" else "buttons"
+        try:
+            self.session.apply(lambda p: p.update(role_mode=target))
+        except StudioValidationError as exc:
+            return await _say(interaction, str(exc))
+        await _role_controls(interaction, self.session)
+
+    @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _home(interaction, self.session)
+
+
+async def _role_controls(interaction: discord.Interaction, session: StudioSession) -> None:
+    mode = session.project["role_mode"]
+    items = session.project["role_actions"]
+    names = "\n".join(f"• {i+1}. {item['label']}" for i, item in enumerate(items))
+    await _menu(
+        interaction, heading="🎭 Role Buttons & Dropdown",
+        description=(
+            f"**{len(items)}/10** optional self-assignable roles • layout: **{mode}**\n"
+            "Choose a role below; Dank Shield checks permissions and safe-role rules. "
+            "Members can add or remove their own offered roles, never staff or access roles.\n"
+            "Buttons: up to five combined with link buttons. "
+            "Dropdown: up to ten options alongside link buttons.\n\n"
+            + (names or "No roles added.")
+        ),
+        view=StudioRolesMenu(session),
+    )
 
 class EmbedMenu(_StudioView):
     @discord.ui.button(label="Toggle Timestamp", emoji="🕒", style=discord.ButtonStyle.secondary, row=0)
