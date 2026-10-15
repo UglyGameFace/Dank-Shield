@@ -145,3 +145,15 @@ def test_existing_discord_embed_limits_still_apply():
     p["embeds"][0]["description"] = "x" * 4097
     with pytest.raises(StudioValidationError):
         validate_project(p)
+
+
+
+def test_click_throttle_is_bounded_and_respects_member_isolation(monkeypatch):
+    from stoney_verify import embed_studio_roles as roles
+    monkeypatch.setattr(roles, "_ROLE_LAST_CLICK", {})
+    assert not roles._rate_limited(1, 10, now=100.0)
+    assert roles._rate_limited(1, 10, now=101.0)
+    assert not roles._rate_limited(1, 11, now=101.0)
+    assert not roles._rate_limited(2, 10, now=101.0)
+    assert not roles._rate_limited(1, 10, now=103.0)
+    assert len(roles._ROLE_LAST_CLICK) == 3
