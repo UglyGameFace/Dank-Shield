@@ -57,6 +57,25 @@ guarantee of persistence. Code commit may restart the bot / web listener.
    an app crash/rate-limit incident and the target process is constrained
    to 1495 MiB. Verify all required current SHA CI checks before cutover.
 
+## Quick main release after the initial cutover
+
+Use [Discloud quick main deploy](https://github.com/UglyGameFace/Dank-Shield/actions/workflows/discloud-quick-main-deploy.yml)
+after the exact-main push CI passes. It only asks for a real off-host backup
+identifier and fresh per-run owner acceptance of unverified-recovery risk.
+The main SHA comes from GitHub, and the quick workflow calls the **same**
+hardened existing-app workflow rather than introducing another deployer.
+
+First set the repository Actions variable
+`DANK_PRODUCTION_MEMBER_RPC_VERIFIED=true` **only after verifying production
+member-activity RPC privileges**; missing/false fails closed. The existing
+`DISCLOUD_TOKEN` GitHub secret and `discloud-production` approval still apply.
+See [quick release instructions](DISCLOUD_MAIN_QUICK_RELEASE.md).
+
+**This is not unattended deployment.** Until live file persistence, environment
+restoration and independently tested backups are proven, every update still
+needs an explicit owner risk acknowledgment. Keep old Discloud Auto Deploy
+OFF; the dashboard may continue showing the obsolete linked branch.
+
 ## Manual GitHub Actions path (no delete)
 
 The workflow `.github/workflows/discloud-existing-app-manual-commit.yml`
