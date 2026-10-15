@@ -77,7 +77,7 @@ async def purge_members(
     inactive_days: app_commands.Range[int, 7, 730] = 90,
     grace_days: app_commands.Range[int, 1, 90] = 14,
     include_low_confidence: bool = False,
-    reason: str = "Purge-all inactive verified/resident cleanup",
+    reason: str = "Purge-all inactive member cleanup",
 ) -> None:
     from .public_members_cleanup_group import members_purge_all
 
@@ -106,7 +106,7 @@ def build_direct_purge_group() -> app_commands.Group:
     group.add_command(
         app_commands.Command(
             name="members",
-            description="Preview and purge strictly eligible inactive verified/resident members.",
+            description="Preview and purge strictly eligible inactive members of any role type.",
             callback=purge_members,
         )
     )
