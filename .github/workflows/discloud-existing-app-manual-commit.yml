@@ -137,6 +137,9 @@ jobs:
                 }
                 ;;
               owner_accepts_unverified_recovery)
+                [[ "${GITHUB_ACTOR}" == "UglyGameFace" ]] || {
+                  echo "::error::Only the repository owner may accept unverified Discloud recovery risk."; exit 1;
+                }
                 [[ "${OWNER_RISK_ACK}" == "I_ACCEPT_STONEYVERIFY_DATA_LOSS" ]] || {
                   echo "::error::Owner risk acknowledgement must match the exact required phrase."; exit 1;
                 }
