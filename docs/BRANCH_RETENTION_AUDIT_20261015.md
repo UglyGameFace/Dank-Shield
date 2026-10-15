@@ -21,11 +21,11 @@ Status: third wave verified executed, fourth wave awaiting PR/CI, owner preview 
 | #173 | `ci/ds-setup-020-final-validation` | Reviewed retirement; documented temporary validation for merged #171 |
 | #9 | `feature/setup-picker-wizard` | Reported superseded by `main`; hold pending file/scope comparison |
 | #10 | `scale/production-readiness-10k` | Unsafe legacy monkey patches; **do not merge**; preserve until historical requirements are triaged |
-| #45 | `hotfix/quiet-member-update-modlog` | Hold for provenance and current runtime comparison |
+| #45 | `hotfix/quiet-member-update-modlog` | Fourth-wave reviewed retirement: PR #46 merged the intended listener fix; PR #45 explicitly rejects its obsolete monkey patches |
 | #114 | `feat/native-welcome-cards` | Superseded but stacked historical PR #113 changes; hold until preservation confirmed |
-| #217 | `chore/finalize-ds-sec-045-record` | Hold pending task record supersession review |
-| #219 | `chore/align-active-task-base-pr216` | Hold pending bookkeeping/history review |
-| #231 | `chore/close-interaction-ownership-audit` | Hold pending bookkeeping/history review |
+| #217 | `chore/finalize-ds-sec-045-record` | Fourth-wave reviewed retirement: bookkeeping-only closeout; functional implementation #214 merged |
+| #219 | `chore/align-active-task-base-pr216` | Fourth-wave reviewed retirement: one-file bookkeeping alignment superseded by merged #216 |
+| #231 | `chore/close-interaction-ownership-audit` | Fourth-wave reviewed retirement: bookkeeping-only closure; canonical implementation #229 merged |
 | #237 | `chore/close-antinuke-authorized-bot-trust` | Explicitly suspended closure after ongoing AntiNuke failures; do not close task by deleting branch |
 | #263 | `fix/welcome-card-long-tail-unicode` | Hold: validation incomplete for Unicode/font rendering |
 | #285 | `fix/quiet-notice-auto-clear-recovery-20260921` | Hold: production quiet-notice behavior needs validation |
