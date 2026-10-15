@@ -157,3 +157,23 @@ def test_click_throttle_is_bounded_and_respects_member_isolation(monkeypatch):
     assert not roles._rate_limited(2, 10, now=101.0)
     assert not roles._rate_limited(1, 10, now=103.0)
     assert len(roles._ROLE_LAST_CLICK) == 3
+
+
+
+def test_saved_post_limit_never_evicts_active_role_panels():
+    from stoney_verify.embed_studio_core import trim_published_history
+    rows = {
+        str(i): {"channel_id": "11", "message_id": str(i),
+                 "role_actions": ([{"label": "Member", "role_id": "123"}] if i < 20 else [])}
+        for i in range(21)
+    }
+    trimmed = trim_published_history(rows)
+    assert len(trimmed) == 20
+    assert all(str(i) in trimmed for i in range(20))
+    assert "20" not in trimmed
+    rows = {
+        str(i): {"role_actions": [{"label": "Member", "role_id": "123"}]}
+        for i in range(21)
+    }
+    with pytest.raises(StudioValidationError, match="active role panels"):
+        trim_published_history(rows)
