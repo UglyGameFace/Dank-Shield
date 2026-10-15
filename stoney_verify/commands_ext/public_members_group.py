@@ -251,7 +251,7 @@ def _build_status_snapshot(report: InactiveScanReport) -> str:
 def _build_page_users_text(report: InactiveScanReport, *, page: int) -> str:
     page, start, end = _page_bounds(report, page)
     if not report.candidates:
-        return "✅ No verified/resident users matched this scan."
+        return "✅ No current members matched this inactivity review."
     lines = [_short_candidate_line(candidate, idx) for idx, candidate in enumerate(report.candidates[start:end], start=start + 1)]
     footer = f"\n\nShowing **{start + 1}-{end}** of **{len(report.candidates)}**. Select a user below for full details."
     return _safe_field("\n".join(lines) + footer, _SAFE_FIELD_LIMIT)
@@ -322,7 +322,7 @@ def _build_report_embed(report: InactiveScanReport, *, page: int = 0) -> discord
         title="🧹 Verified Member Review",
         description=(
             "Preview only. No action is taken here.\n"
-            "Reviews verified/resident members with no recent tracked activity after verification."
+            "Reviews all current member types using server activity, with explicit safety and evidence checks."
         ),
         color=color,
         timestamp=report.scanned_at,
@@ -1867,6 +1867,7 @@ async def _run_activity_scan(
 
     await interaction.response.defer(ephemeral=True, thinking=True)
     options = InactiveScanOptions(
+        verified_resident_focus=False,
         inactive_days=max(7, min(int(inactive_days), 730)),
         grace_days=max(1, min(int(grace_days), 90)),
         include_low_confidence=bool(include_low_confidence),
@@ -2025,7 +2026,7 @@ async def members_coverage(
     )
 
 
-@members_group.command(name="scan", description="Review verified/resident activity using safe default thresholds.")
+@members_group.command(name="scan", description="Review inactivity across all current member types.")
 async def members_scan(interaction: discord.Interaction) -> None:
     await _run_activity_scan(interaction)
 
