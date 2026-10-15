@@ -121,7 +121,7 @@ jobs:
               'noop', 'noop2', 'temp-ignore', 'tmp-noop', 'tmp-noop2'
             ]);
 
-            // Third wave is reviewed individually, never inferred from prefixes.
+            // Historical reviewed waves are individually verified, never inferred from prefixes.
             // Closed-unmerged entries were explicitly superseded or validation-only.
             // GitHub retains their PR discussion/diff, but their branches are not
             // removed until the owner reviews a separate preview.
