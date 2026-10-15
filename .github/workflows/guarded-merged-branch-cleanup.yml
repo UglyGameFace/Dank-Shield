@@ -10,10 +10,12 @@ on:
         options:
           - preview
           - delete
+          - preview-next
+          - delete-next
         default: preview
         required: true
       confirmation:
-        description: "Delete mode only: type DELETE_STALE_MERGED_BRANCHES"
+        description: "Delete: DELETE_STALE_MERGED_BRANCHES; delete-next: DELETE_VERIFIED_NEXT_BATCH"
         type: string
         required: false
 
@@ -39,12 +41,16 @@ jobs:
         with:
           script: |
             const mode = process.env.CLEANUP_MODE;
-            if (!['preview', 'delete'].includes(mode)) {
+            const nextBatch = mode === 'preview-next' || mode === 'delete-next';
+            const deleting = mode === 'delete' || mode === 'delete-next';
+            if (!['preview', 'delete', 'preview-next', 'delete-next'].includes(mode)) {
               throw new Error('Unsupported cleanup mode');
             }
             if (
-              mode === 'delete' &&
-              process.env.CLEANUP_CONFIRMATION !== 'DELETE_STALE_MERGED_BRANCHES'
+              deleting &&
+              process.env.CLEANUP_CONFIRMATION !== (
+                nextBatch ? 'DELETE_VERIFIED_NEXT_BATCH' : 'DELETE_STALE_MERGED_BRANCHES'
+              )
             ) {
               throw new Error('Delete mode requires the exact owner confirmation');
             }
@@ -69,6 +75,46 @@ jobs:
               'supabase', 'database', 'postgres', 'pg', 'main',
               'production', 'ops', 'reconcile', 'rollback', 'revert',
               'known', 'good', 'pre', 'snapshot', 'stable', 'ci', 'test'
+            ]);
+
+            // Second reviewed wave: fixed historical date, never rolls forward.
+            const nextMergedBefore = '2026-10-14T00:00:00Z';
+            const nextPrefixes = [
+              'agent/', 'audit/', 'chore/', 'feat/', 'feature/',
+              'fix/', 'hotfix/', 'improve/', 'diagnostics/',
+              'stabilization/', 'test/', 'investigate/', 'refactor/', 'revert/'
+            ];
+            // These may be real rollback/deploy targets, including the Discloud
+            // dashboard-linked branch. No branch naming alone proves redundancy.
+            const nextProtectedPrefixes = [
+              'aaa-', 'archive/', 'backup/', 'recovery/', 'integration/',
+              'reconcile/', 'rebuild/', 'ops/', 'ci/'
+            ];
+            const nextSensitiveSegments = new Set([
+              'backup', 'restore', 'recovery', 'archive', 'release', 'deploy',
+              'deployment', 'discloud', 'staging', 'migration', 'supabase',
+              'database', 'postgres', 'pg17', 'production', 'ops', 'reconcile',
+              'rollback', 'revert', 'known', 'snapshot', 'stable'
+            ]);
+            const explicitlyRetained = new Set([
+              'aaa-cinema-pre-pregateway-bind',
+              'backup/stoneyverify-stable-7fdc331-20261008',
+              'chore/guarded-merged-branch-cleanup-20261015'
+            ]);
+            // Audited no-PR refs with zero commits ahead of main. The runtime
+            // MUST still prove ancestry and unchanged SHA before deletion.
+            const checkedNoPR = new Set([
+              'audit/p0-int-verify-panel-closeout',
+              'chore/close-release-governance-009',
+              'feat/cinema-subtitles-per-viewer-20261010',
+              'feat/welcome-card-renderer',
+              'feat/517-membership-agreement-sync-20261013',
+              'fix/authoritative-stats-and-ticket-categories',
+              'fix/cinema-audio-track-selector',
+              'fix/profile-signature-compact-ui',
+              'fix/430-cinema-playback-readiness-audio',
+              'fix/430-cinema-private-invite-responsive',
+              'noop', 'noop2', 'temp-ignore', 'tmp-noop', 'tmp-noop2'
             ]);
 
             const [branches, closedPRs, openPRs] = await Promise.all([
@@ -99,40 +145,107 @@ jobs:
               }
             }
 
+            const ancestors = new Map();
+            async function ancestorOfMain(sha) {
+              if (ancestors.has(sha)) return ancestors.get(sha);
+              const { data } = await github.rest.repos.compareCommits({
+                owner, repo, base: defaultBranch, head: sha
+              });
+              const safe = data.ahead_by === 0 &&
+                (data.status === 'behind' || data.status === 'identical');
+              ancestors.set(sha, safe);
+              return safe;
+            }
+
             const candidates = [];
             for (const branch of branches) {
               const name = branch.name;
               if (name === defaultBranch || branch.protected) continue;
-              if (!eligiblePrefixes.some(prefix => name.startsWith(prefix))) continue;
-              const segments = name.toLowerCase().split(/[\/._-]+/);
-              if (segments.some(segment => reservedSegments.has(segment))) continue;
               if (inUseByOpenPR.has(name)) continue;
-
+              const segments = name.toLowerCase().split(/[\\/._-]+/);
               const prs = closedByHead.get(name) || [];
-              // A closed-unmerged PR can represent intentionally retained work.
+              // Never discard any branch associated with a closed-unmerged PR,
+              // even if another PR from this head was merged.
               if (prs.some(pr => !pr.merged_at)) continue;
+
+              if (!nextBatch) {
+                if (!eligiblePrefixes.some(prefix => name.startsWith(prefix))) continue;
+                if (segments.some(segment => reservedSegments.has(segment))) continue;
+                const merged = prs.find(pr =>
+                  pr.merged_at &&
+                  pr.merged_at < mergedBefore &&
+                  pr.base?.ref === defaultBranch &&
+                  pr.head.sha === branch.commit.sha
+                );
+                if (merged) {
+                  candidates.push({
+                    name, sha: branch.commit.sha,
+                    reason: 'merged PR #' + merged.number + ' into main'
+                  });
+                }
+                continue;
+              }
+
+              if (explicitlyRetained.has(name)) continue;
+              if (nextProtectedPrefixes.some(prefix => name.startsWith(prefix))) continue;
+              if (segments.some(segment => nextSensitiveSegments.has(segment))) continue;
+              const recognized = nextPrefixes.some(prefix => name.startsWith(prefix));
+              if (!recognized && !checkedNoPR.has(name)) continue;
+
               const merged = prs.find(pr =>
                 pr.merged_at &&
-                pr.merged_at < mergedBefore &&
-                pr.base?.ref === defaultBranch &&
-                pr.head.sha === branch.commit.sha
+                pr.merged_at < nextMergedBefore &&
+                pr.head.sha === branch.commit.sha &&
+                pr.base?.ref === defaultBranch
               );
-              if (!merged) continue;
-              candidates.push({ name, sha: branch.commit.sha, pr: merged.number });
+              if (merged) {
+                // GitHub's merged status and unchanged branch tip prove this
+                // revision was submitted; squash merges need not be ancestors.
+                candidates.push({
+                  name, sha: branch.commit.sha,
+                  reason: 'merged PR #' + merged.number + ' into main'
+                });
+                continue;
+              }
+              const mergedElsewhere = prs.find(pr =>
+                pr.merged_at &&
+                pr.merged_at < nextMergedBefore &&
+                pr.head.sha === branch.commit.sha &&
+                pr.base?.ref !== defaultBranch
+              );
+              if (mergedElsewhere) {
+                // Merged into a prior production branch: ensure that history
+                // itself is now reachable from main before deleting the ref.
+                if (await ancestorOfMain(branch.commit.sha)) {
+                  candidates.push({
+                    name, sha: branch.commit.sha,
+                    reason: 'merged PR #' + mergedElsewhere.number + ' + ancestor of main'
+                  });
+                }
+                continue;
+              }
+              if (!prs.length && checkedNoPR.has(name)) {
+                if (await ancestorOfMain(branch.commit.sha)) {
+                  candidates.push({
+                    name, sha: branch.commit.sha,
+                    reason: 'audited no-PR ancestor of main'
+                  });
+                }
+              }
             }
             if (candidates.length > 250) {
               throw new Error('Fail closed: too many candidates for reviewed batch');
             }
 
-            core.info(`Found ${branches.length} branches, ${openPRs.length} open PRs, ${candidates.length} eligible old merged branches.`);
+            core.info(`Found ${branches.length} branches, ${openPRs.length} open PRs, ${candidates.length} eligible ${nextBatch ? "second-wave" : "first-wave"} branches.`);
             for (const candidate of candidates) {
-              core.info(`Candidate: ${candidate.name} (PR #${candidate.pr}, ${candidate.sha})`);
+              core.info(`Candidate: ${candidate.name} (${candidate.reason}, ${candidate.sha})`);
             }
             const deleted = [];
             const skipped = [];
             const failed = [];
 
-            if (mode === 'delete') {
+            if (deleting) {
               for (const candidate of candidates) {
                 try {
                   // Recheck the head immediately before the destructive call.
@@ -157,10 +270,10 @@ jobs:
             const lines = [
               `Mode: **${mode}**`,
               `Branches before cleanup: **${branches.length}**`,
-              `Eligible old merged branches: **${candidates.length}**`,
+              `Eligible ${nextBatch ? "second-wave" : "first-wave"} branches: **${candidates.length}**`,
               `Deleted: **${deleted.length}**; skipped changed/protected: **${skipped.length}**; failures: **${failed.length}**`,
               '',
-              ...candidates.map(c => `- \`${c.name}\` (merged PR #${c.pr})`)
+              ...candidates.map(c => `- \`${c.name}\` (${c.reason})`)
             ];
             if (failed.length) lines.push('', 'Failures:', ...failed.map(s => `- ${s}`));
             await core.summary
