@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+import subprocess
+
+import pytest
 
 from stoney_verify import cinema_site
 
@@ -109,3 +113,16 @@ def test_missing_artwork_is_intentional_and_not_a_blank_card() -> None:
     assert '"Artwork unavailable"' in script
     assert 'image.addEventListener("error"' in script
     assert '.card-art-fallback' in styles
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js unavailable")
+def test_cinema_browser_javascript_parses() -> None:
+    script_path = Path(cinema_site.__file__).resolve().parent / "assets" / "cinema_site.js"
+    result = subprocess.run(
+        ["node", "--check", str(script_path)],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
