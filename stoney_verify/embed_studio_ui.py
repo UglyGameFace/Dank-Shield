@@ -1003,9 +1003,20 @@ class StudioReviewView(_StudioView):
         self.preview_project = deepcopy(session.project)
         self.preview_channel_id = session.channel_id
         self.preview_post_key = session.post_key
-        # Link buttons on the preview serve as a useful live test.
+        # Link buttons really open their HTTPS target in preview. Role actions
+        # are disabled here: a private preview must never grant a public role.
         for link in session.project["links"]:
             self.add_item(discord.ui.Button(label=link["label"], url=link["url"], style=discord.ButtonStyle.link, row=1))
+        role_items = session.project.get("role_actions") or []
+        if role_items and session.project.get("role_mode") == "dropdown":
+            self.add_item(discord.ui.Select(
+                placeholder="Role dropdown (active after publishing)",
+                options=[discord.SelectOption(label=item["label"], value=str(i)) for i, item in enumerate(role_items)],
+                min_values=1, max_values=1, disabled=True, row=2,
+            ))
+        else:
+            for item in role_items:
+                self.add_item(discord.ui.Button(label=item["label"], disabled=True, style=discord.ButtonStyle.secondary, row=1))
 
     @discord.ui.button(label="Publish / Save Edit", emoji="✅", style=discord.ButtonStyle.success, row=0)
     async def publish(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -1040,7 +1051,26 @@ class StudioReviewView(_StudioView):
                 return await _say(interaction, "This preview is stale. Reopen it; nothing was sent.")
             draft = validate_project(self.preview_project)
             embeds = render_embeds(draft)
-            action_view = link_view(draft)
+            # Role controls need durable server records. Storage is checked
+            # BEFORE sending, and the published message is made inert if the
+            # subsequent atomic tracking write fails.
+            from .embed_studio_roles import member_role_view
+            import secrets
+            role_items = draft.get("role_actions") or []
+            role_token = secrets.token_hex(8) if role_items else ""
+            if role_items:
+                await _load_library(self.session.guild_id)
+                from .guild_config import get_guild_config
+                from .commands_ext.public_self_roles_group import _profile_cosmetic_role_blocker
+                guild_cfg = await get_guild_config(self.session.guild_id, refresh=True)
+                for item in role_items:
+                    role = channel.guild.get_role(int(item["role_id"]))
+                    if not isinstance(role, discord.Role):
+                        return await _say(interaction, "An offered role was deleted. Remove it from the draft first.")
+                    reason = _profile_cosmetic_role_blocker(channel.guild, role, guild_cfg)
+                    if reason:
+                        return await _say(interaction, f"An offered role is no longer safe: {reason}")
+            action_view = member_role_view(draft, role_token) if role_items else link_view(draft)
             message: discord.Message
             if self.session.post_key:
                 source, lib = await _load_library(self.session.guild_id)
@@ -1065,12 +1095,21 @@ class StudioReviewView(_StudioView):
             lib["published"][self.session.post_key] = {
                 "channel_id": str(channel.id), "message_id": str(message.id),
                 "by": str(interaction.user.id),
+                "role_token": role_token, "role_mode": draft["role_mode"],
+                "role_actions": draft["role_actions"],
             }
             while len(lib["published"]) > 20:
                 lib["published"].pop(next(iter(lib["published"])))
             tracked = await _save_library(self.session.guild_id, source, lib)
         except Exception:
             pass
+        if role_items and not tracked:
+            # Missing registry means live controls cannot be authorized. Avoid
+            # showing unusable buttons, and do not pretend they are persistent.
+            try:
+                await message.edit(view=link_view(draft), allowed_mentions=_MENTIONS)
+            except (discord.Forbidden, discord.HTTPException):
+                pass  # Runtime still rejects all untracked or stale buttons.
         await _say(
             interaction,
             f"✅ {'Updated' if editing_existing else 'Published'}: {message.jump_url}"
@@ -1145,6 +1184,12 @@ class TrackedPostSelect(discord.ui.Select):
             return await _say(interaction, f"Could not load this message: {_error(exc)}")
         self.session.history.append(self.session.project)
         self.session.history = self.session.history[-10:]
+        draft["role_mode"] = str(item.get("role_mode") or "buttons")
+        draft["role_actions"] = deepcopy(item.get("role_actions") or [])
+        try:
+            draft = validate_project(draft)
+        except StudioValidationError:
+            return await _say(interaction, "This tracked post has an unsupported role configuration. Ask staff to repair it.")
         self.session.project = draft
         self.session.channel_id = int(channel.id)
         self.session.post_key = key
