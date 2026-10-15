@@ -24,17 +24,23 @@ guarantee of persistence. Code commit may restart the bot / web listener.
 
 ## Required safety evidence before a LIVE commit
 
-1. Export production `.env` and current Discloud app backup via a **secure
-   off-host destination**, not the shared 10 GB volume. Keep tokens private.
-   Verify a sample restore and record a nonsecret receipt ID. Protect any
-   local database, tickets, attachments, stream state and other durable files.
-   The reported ~13 GB `data/torrent_streams` cannot be assumed preserved or
-   counted as guaranteed within a plan until Discloud confirms quota behavior.
-2. Verify with Discloud support or a noncritical controlled app test exactly
-   what its `PUT /app/stoneyverify/commit` retains for files **not in the ZIP**.
-   If untracked files may be cleared, DO NOT COMMIT until the full required
-   data is backed up and recoverable. Neither a `.discloudignore` nor an
-   off-host backup alone changes the server's retention semantics.
+1. Preserve Discloud's dashboard-managed environment variable **values** in
+   private encrypted storage, even when there is no physical `.env` file.
+   Export the existing Discloud application backup to a device/storage **off
+   Discloud**. Inspect the archive and preserve the original ZIP. The archive
+   contains `data/` JSON/SQLite session state and may contain huge Cinema
+   torrent downloads. An extracted file list does NOT prove that all backup
+   bytes are valid or restorable.
+2. Discloud's existing-app `PUT /app/stoneyverify/commit` can update code
+   without an app DELETE/UPLOAD, but what happens to *host-only* files absent
+   from the ZIP is not guaranteed. The **verified_recovery** path requires
+   independently tested file persistence and environment recovery. If those
+   are not possible, an explicitly authorized **owner_accepts_unverified_recovery**
+   path can proceed with an off-host backup reference and exact manual
+   acknowledgement, accepting that files/stream progress/credentials may be
+   lost and may NOT be recoverable. That is a conscious risk exception, NOT
+   verified recovery. Neither `.discloudignore` nor an off-host copy guarantees
+   runtime data survival.
 3. On the **correct production Supabase project**, confirm migration from
    PR #540 and effective service_role access exist:
    `public.record_member_activity_batch(uuid,jsonb)`,
@@ -63,12 +69,33 @@ Run `preflight` first with **the full current main SHA**. This performs
 read-only repository/manifest checks. It does NOT verify backups, actual
 Discloud persistence, Supabase RPCs, or live DB state.
 
-Only after completing all evidence gates, configure `DISCLOUD_TOKEN` as
-a GitHub Actions **secret** (never put it in chat, source, or workflow input),
-and configure a protected GitHub environment `discloud-production` with
-manual reviewers. Select `deploy_existing_app`, provide the exact accepted
-SHA and a nonsecret independent backup receipt identifier, and truthfully
-confirm the three gates.
+Configure `DISCLOUD_TOKEN` as a GitHub Actions **secret** (never put it in
+chat, source, or workflow input), and configure the protected GitHub environment
+`discloud-production`. For a deploy, select `deploy_existing_app` and enter
+the **current** 40-character `main` SHA after its canonical push CI is green.
+The deploy job checks current `main` and that exact SHA's canonical CI again,
+in case `main` advanced during approval.
+
+Choose **one** recovery policy:
+
+- `verified_recovery` (default): give a nonsecret identifier for a backup that
+  has been independently restored, confirm production activity RPCs, and tick
+  both file-persistence and environment-recovery checkboxes **only if tested**.
+- `owner_accepts_unverified_recovery`: the owner has actually saved the app
+  backup off Discloud and saved dashboard environment values privately, but
+  cannot prove restoration or host-only retention. Give a nonsecret reference
+  to the saved backup (for example `bkp-stoneyverify-20261014-phone` **only if
+  it identifies the real saved archive**), confirm verified production activity
+  RPCs, and enter **exactly**
+  `I_ACCEPT_STONEYVERIFY_DATA_LOSS` in `owner_risk_acknowledgement`. Keep
+  unverified recovery checkboxes **OFF**. This path may irreversibly lose
+  untracked files, incomplete downloads, local session progress, and possibly
+  dashboard variable state. A GitHub success result is not a restore guarantee.
+
+Neither path creates a backup, verifies a ZIP's contents, provisions Cinema
+workers, guarantees current Discloud files survive, or bypasses the exact-main
+CI gate. Confirm `DANK_CINEMA_ROLLING_ENABLED` remains absent/`false` before
+the first deployment. Do not delete `stoneyverify` or its saved ZIP.
 
 The deployment action is pinned to SHA
 `fae7024653d941a19daa2b6f56d2ae208e008c54` and its app ID is
