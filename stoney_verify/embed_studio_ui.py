@@ -1057,7 +1057,7 @@ class StudioReviewView(_StudioView):
             from .embed_studio_roles import member_role_view
             import secrets
             role_items = draft.get("role_actions") or []
-            role_token = secrets.token_hex(8) if role_items else ""
+            role_token = secrets.token_hex(16) if role_items else ""
             if role_items:
                 await _load_library(self.session.guild_id)
                 from .guild_config import get_guild_config
