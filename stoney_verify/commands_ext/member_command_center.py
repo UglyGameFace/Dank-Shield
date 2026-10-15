@@ -195,6 +195,9 @@ class MemberCommandCenterView(OwnedView):
         button: discord.ui.Button,
     ) -> None:
         _ = button
+        # Role configuration may require a DB read; acknowledge on mobile
+        # before that wait so Discord doesn't mark the button failed.
+        await interaction.response.defer(ephemeral=True)
         from .public_member_role_browser import _load_quick_roles
 
         quick_roles = await _load_quick_roles(interaction.guild)
@@ -740,11 +743,12 @@ def _historical_member_embed(user_id: int, snapshot: dict[str, Any], verdicts: l
 
 async def _show_stored_member_history(interaction: discord.Interaction, user_id: int) -> None:
     """Read historical guild records without fetch_user() or a live member."""
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True, thinking=True)
     if not await require_review(interaction):
         return
     if interaction.guild is None:
         return await reply_ephemeral(interaction, "❌ Choose a server first.")
-    await interaction.response.defer(ephemeral=True, thinking=True)
     from stoney_verify.tickets_new.member_context_service import get_member_context_snapshot
     from stoney_verify.member_review_feedback import get_member_review_history
     guild_id = int(interaction.guild.id)
@@ -782,11 +786,11 @@ async def _show_stored_member_history(interaction: discord.Interaction, user_id:
     )
 
 
-class MemberHistoryByIdModal(discord.ui.Modal, title="Member verdict history"):
+class MemberHistoryByIdModal(discord.ui.Modal, title="Stored Member Intelligence"):
     user_id = discord.ui.TextInput(
         label="Discord user ID",
         placeholder="629459300854661120",
-        max_length=20,
+        max_length=22,
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -1087,6 +1091,9 @@ async def open_member_target(
     )
 
 async def open_member_command_center(interaction: discord.Interaction) -> None:
+    # Staff-role lookup can use guild config; defer before remote reads.
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
     if not await require_review(interaction):
         return
     view = MemberCommandCenterView(int(interaction.user.id))
