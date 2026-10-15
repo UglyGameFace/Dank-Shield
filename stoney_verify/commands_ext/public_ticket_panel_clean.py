@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from ..tickets_new.topic_policy import PUBLIC_TICKET_TOPIC
-
 """Clean public ticket panel flow.
 
 Single native owner for `/ticket-panel post`, `/ticket-panel health`, and the
 public Create Ticket button. No runtime patch modules are required for ticket
 creation.
 """
+
+from ..tickets_new.topic_policy import PUBLIC_TICKET_TOPIC
 
 import asyncio
 import re
