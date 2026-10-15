@@ -747,18 +747,26 @@
     const art = node("div", "card-art");
     const artUrl = itemArt(item);
     const kind = itemKind(item);
+    const fallbackArt = node("div", "card-art-fallback");
+    fallbackArt.append(uiIcon("library"), node("span", "", "Artwork unavailable"));
     if (artUrl) {
       const image = node("img");
       configureArtwork(image, artUrl, kind === "episode" ? "still" : "poster");
       image.alt = `${itemTitle(item)} artwork`;
       image.loading = "lazy";
       image.decoding = "async";
+      image.addEventListener("error", () => {
+        image.remove();
+        if (!fallbackArt.isConnected) art.appendChild(fallbackArt);
+      }, { once: true });
       art.appendChild(image);
+    } else {
+      art.appendChild(fallbackArt);
     }
     if (kind === "episode") {
       art.appendChild(node("span", "card-badge", `S${item.season_number || 0} E${item.episode_number || 0}`));
     } else if (item.available_now || item.playable) {
-      art.appendChild(node("span", "card-badge", item.available_now ? "Available" : "Playable"));
+      art.appendChild(node("span", "card-badge", item.available_now ? "Available" : "Release found"));
     }
     if (item.availability_label && !item.available_now) {
       art.appendChild(node("span", "card-badge card-badge-right", String(item.availability_label)));
@@ -1326,7 +1334,7 @@
     return episodes[0] || null;
   }
 
-  async function playOnSite(item, control = null, sourceChoice = "") {
+  async function playOnSite(item, control = null, sourceChoice = "", errorTarget = null) {
     const mediaType = itemKind(item);
     const payload = {
       media_type: mediaType,
@@ -1344,6 +1352,10 @@
     }
 
     if (control) control.disabled = true;
+    if (errorTarget) {
+      errorTarget.hidden = true;
+      errorTarget.textContent = "";
+    }
     try {
       const response = await api("/play", {
         method: "POST",
@@ -1352,7 +1364,12 @@
       if (!response?.watch_url) throw new Error("Cinema did not return a Theater link.");
       location.href = response.watch_url;
     } catch (error) {
-      toast(error.message || "Cinema playback could not start.", "error");
+      const message = error.message || "Cinema playback could not start.";
+      toast(message, "error");
+      if (errorTarget) {
+        errorTarget.textContent = message;
+        errorTarget.hidden = false;
+      }
       if (control) control.disabled = false;
     }
   }
@@ -1844,13 +1861,17 @@
       }
       profileCard.append(
         avatar,
-        node("div", "profile-name", data.discord?.user_name || "Discord User"),
+        node("div", "profile-name", data.discord?.user_name || "Cinema Member"),
         node("div", "profile-server", data.discord?.guild_name || "Discord"),
       );
+      if (!data.discord?.avatar_url && data.discord?.user_name === "Cinema Member") {
+        profileCard.appendChild(node("p", "section-sub", "Discord profile picture and name aren't available right now. Your Cinema sign-in still works."));
+      }
 
       const settings = node("section", "panel");
-      settings.appendChild(node("h1", "", "Cinema Profile"));
-      settings.appendChild(node("p", "section-sub", "These preferences are stored with your Discord-linked Cinema profile and follow you across devices."));
+      const displayName = String(data.discord?.user_name || "").trim();
+      settings.appendChild(node("h1", "", displayName && displayName !== "Cinema Member" ? `Your Cinema, ${displayName}` : "Make Cinema yours"));
+      settings.appendChild(node("p", "section-sub", "Set up Cinema your way. Your choices are saved to your Discord-linked profile and follow you between devices."));
       const prefs = data.preferences || {};
       const form = node("div", "form-grid");
 
@@ -1875,10 +1896,17 @@
         selectField("Feed alerts", "feed_notification_mode", [["instant","Instant Cinema inbox"],["daily","Daily digest"],["off","Off"]]),
       );
 
+      const advanced = node("details", "advanced-prefs");
+      const advancedForm = node("div", "form-grid");
+      advanced.append(
+        node("summary", "", "Advanced Settings: sources & feed filters"),
+        node("p", "section-sub", "Optional controls for release quality and language filtering. Leave these alone for automatic choices."),
+        advancedForm,
+      );
       for (const [label, key, placeholder] of [
-        ["Preferred source", "preferred_source", "Optional source name"],
         ["Default audio language", "default_audio_language", "Example: English"],
         ["Default subtitle language", "default_subtitle_language", "Example: English"],
+        ["Preferred source", "preferred_source", "Optional source name"],
         ["Feed minimum seeds", "feed_min_seeds", "0"],
         ["Preferred feed resolutions", "feed_preferred_resolutions", "2160p, 1080p"],
         ["Preferred feed codecs", "feed_preferred_codecs", "x265, av1"],
@@ -1893,7 +1921,11 @@
           ? prefs[key].join(", ")
           : String(prefs[key] ?? "");
         field.appendChild(input);
-        form.appendChild(field);
+        if (["default_audio_language", "default_subtitle_language"].includes(key)) {
+          form.appendChild(field);
+        } else {
+          advancedForm.appendChild(field);
+        }
       }
 
       const autoplay = node("div", "switch-row");
@@ -1905,7 +1937,7 @@
       autoplay.appendChild(check);
 
       const feedPlayable = node("div", "switch-row");
-      feedPlayable.appendChild(node("div", "", "Only show playable feed matches"));
+      feedPlayable.appendChild(node("div", "", "Show only feeds with playable-looking releases"));
       const feedPlayableCheck = node("input");
       feedPlayableCheck.type = "checkbox";
       feedPlayableCheck.checked = prefs.feed_playable_only !== false;
@@ -1945,7 +1977,7 @@
           toast(error.message || "Preferences could not be saved.", "error");
         }
       });
-      settings.append(form, autoplay, feedPlayable, queueSuggestions, save);
+      settings.append(form, autoplay, feedPlayable, queueSuggestions, advanced, save);
       layout.append(profileCard, settings);
       page.textContent = "";
       page.appendChild(layout);
@@ -2437,6 +2469,15 @@
     return `${amount.toFixed(digits)} ${units[unit]}`;
   }
 
+  function feedSearchTitle(result) {
+    // Feed titles can contain a full release filename, not a catalog title.
+    // Search by the title portion only; never claim a release was linked to
+    // a playable movie when its canonical Cinema identity is still unknown.
+    const text = String(result.title || result.release_title || "").replace(/[._]+/g, " ").trim();
+    const clean = text.split(/\s*(?:[\[(]?\b(?:19|20)\d{2}\b[\])]?|\b(?:2160p|1080p|720p|480p|webrip|web-dl|bluray|brrip|x264|x265)\b)/i)[0].trim();
+    return clean || text;
+  }
+
   function feedResultCard(result) {
     const card = node("article", "feed-result-card");
     const art = node("div", "feed-result-art");
@@ -2520,13 +2561,36 @@
 
     const actions = node("div", "feed-result-actions");
     const target = detailsTarget(result);
-    if (target) {
-      actions.appendChild(button("View Details", "btn primary", () => go(target)));
+    const status = node("p", "feed-action-status");
+    status.hidden = true;
+    status.setAttribute("role", "alert");
+    const linkedMovie = result.media_type === "movie" && Number(result.tmdb_id || 0) > 0;
+    if (linkedMovie && result.playable !== false) {
+      const play = button("▶ Play Movie", "btn primary", () => {
+        playOnSite(result, play, "", status);
+      });
+      actions.appendChild(play);
+      actions.appendChild(button("Details & Sources", "btn secondary", () => go(target)));
+    } else if (target) {
+      actions.appendChild(button(
+        result.media_type === "tv" ? "Choose Episode" : "View Details",
+        "btn primary",
+        () => go(target),
+      ));
     } else {
-      actions.appendChild(button("Search in Cinema", "btn secondary", () => {
-        go("search?q=" + encodeURIComponent(itemTitle(result)));
+      actions.appendChild(button("Find Movie or Show", "btn secondary", () => {
+        go("search?q=" + encodeURIComponent(feedSearchTitle(result)));
       }));
     }
+    const help = node(
+      "p",
+      "feed-action-help",
+      linkedMovie
+        ? "Ready to check sources. Playback starts only if a compatible release is available."
+        : target
+          ? "This is a feed discovery. Choose a specific episode or check title details to play."
+          : "A release was found, but Cinema hasn't matched it to a movie or show yet. Find its title to check playback options.",
+    );
     const follow = button(
       isFollowingFeedResult(result) ? "Following" : "Follow",
       "btn secondary",
@@ -2556,7 +2620,7 @@
         }
       }));
     }
-    copy.appendChild(actions);
+    copy.append(actions, help, status);
     card.append(art, copy);
     return card;
   }
