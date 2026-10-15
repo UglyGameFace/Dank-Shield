@@ -804,10 +804,10 @@
           go(target);
         }
       });
-    } else if (item.result_kind === "playable_source" || item.source_label) {
-      card.tabIndex = 0;
-      card.setAttribute("role", "button");
-      card.addEventListener("click", () => go(`search?q=${encodeURIComponent(itemTitle(item))}`));
+    } else if (item.result_kind === "feed_discovery" || item.result_kind === "playable_source") {
+      // Do not make a discovery card point back to itself in Search. A release
+      // without catalog identity has no Details/Play target yet.
+      copy.appendChild(node("div", "card-reason", "Release found. Choose a matched movie or episode to watch."));
     }
 
     if (["movie", "tv", "episode"].includes(kind) && Number(item.tmdb_id || 0) > 0) {
@@ -938,14 +938,20 @@
       const kicker = node("div", "feed-category", "Playable source");
       const title = node("h3", "", itemTitle(item));
       const source = node("div", "feed-meta", item.source_label || "Cinema source");
-      const action = button("View matching titles", "btn secondary", () => {
+      const hint = node("p", "section-sub", "This source has a release, but Cinema hasn't verified a matching movie yet.");
+      const action = button("Search by Movie Title", "btn secondary", () => {
         const input = document.querySelector(".search-input");
         if (!input) return;
-        input.value = itemTitle(item);
+        const cleaned = feedSearchTitle(item);
+        if (input.value.trim().toLowerCase() === cleaned.toLowerCase()) {
+          toast("No linked movie yet. Try a different title or year.", "error");
+          return;
+        }
+        input.value = cleaned;
         input.dispatchEvent(new Event("input", { bubbles: true }));
         input.focus();
       });
-      card.append(kicker, title, source, action);
+      card.append(kicker, title, source, hint, action);
       return card;
     }
     return mediaCard(item);
