@@ -216,6 +216,28 @@ def parse_library(config: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
+
+def trim_published_history(published: Mapping[str, Any], *, max_posts: int = 20) -> dict[str, Any]:
+    """Never evict live self-role controls just to fit an edit-history entry.
+
+    Ordinary posts lose Studio edit-history visibility oldest-first when full;
+    role posts require an explicit staff edit that removes their actions.
+    """
+    rows = deepcopy(dict(published))
+    while len(rows) > max_posts:
+        removable = next(
+            (key for key, value in rows.items()
+             if not isinstance(value, Mapping) or not value.get("role_actions")),
+            None,
+        )
+        if removable is None:
+            raise StudioValidationError(
+                "All saved post slots contain active role panels. Edit an older panel to remove its roles first."
+            )
+        rows.pop(removable, None)
+    return rows
+
+
 def library_payload(library: Mapping[str, Any]) -> dict[str, Any]:
     templates = library.get("templates") or {}
     published = library.get("published") or {}
