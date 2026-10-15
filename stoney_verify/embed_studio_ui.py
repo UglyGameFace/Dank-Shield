@@ -550,10 +550,40 @@ async def _links(interaction: discord.Interaction, session: StudioSession) -> No
 
 
 
+
+async def _add_studio_role(interaction: discord.Interaction, session: StudioSession, role: discord.Role) -> None:
+    guild = interaction.guild
+    if guild is None or guild.id != session.guild_id or not _staff(interaction) or interaction.user.id != session.owner_id:
+        return await _say(interaction, "This role editor belongs to another server or staff member.")
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    try:
+        from .guild_config import get_guild_config
+        from .commands_ext.public_self_roles_group import _profile_cosmetic_role_blocker
+        config = await get_guild_config(int(guild.id), refresh=True)
+        if str(config.get("source") or "").startswith("unavailable:"):
+            return await _say(interaction, "Cannot verify role safety right now. Nothing added.")
+        reason = _profile_cosmetic_role_blocker(guild, role, config)
+        if reason:
+            return await _say(interaction, f"That role is not eligible for optional self-selection: {reason}")
+        if any(a["role_id"] == str(role.id) for a in session.project["role_actions"]):
+            return await _say(interaction, "That role is already offered in this embed.")
+        def add(p: dict[str, Any]) -> None:
+            p["role_actions"].append({"label": role.name[:80], "role_id": str(role.id)})
+            if len(p["role_actions"]) > 5 or len(p["role_actions"]) + len(p["links"]) > 5:
+                p["role_mode"] = "dropdown"
+        session.apply(add)
+    except StudioValidationError as exc:
+        return await _say(interaction, str(exc))
+    except Exception as exc:
+        return await _say(interaction, f"Role safety could not be verified ({type(exc).__name__}). Nothing added.")
+    await _role_controls(interaction, session)
+
+
 class StudioRoleSelect(discord.ui.RoleSelect):
     def __init__(self, session: StudioSession) -> None:
         super().__init__(
-            placeholder="Add a safe, optional self-assignable role…",
+            placeholder="Quick pick an optional server role…",
             min_values=1, max_values=1, row=0,
         )
         self.session = session
@@ -564,30 +594,50 @@ class StudioRoleSelect(discord.ui.RoleSelect):
         role = guild.get_role(int(getattr(picked, "id", 0))) if guild else None
         if not isinstance(role, discord.Role):
             return await _say(interaction, "Choose a role belonging to this server.")
-        await interaction.response.defer(ephemeral=True)
-        try:
-            from .guild_config import get_guild_config
-            from .commands_ext.public_self_roles_group import _profile_cosmetic_role_blocker
-            config = await get_guild_config(int(guild.id), refresh=True)
-            if str(config.get("source") or "").startswith("unavailable:"):
-                return await _say(interaction, "Cannot verify role safety right now. Nothing added.")
-            reason = _profile_cosmetic_role_blocker(guild, role, config)
-            if reason:
-                return await _say(interaction, f"That role is not eligible for optional self-selection: {reason}")
-            idx = next((i for i, a in enumerate(self.session.project["role_actions"]) if a["role_id"] == str(role.id)), None)
-            if idx is not None:
-                return await _say(interaction, "That role is already offered in this embed.")
-            def add(p: dict[str, Any]) -> None:
-                p["role_actions"].append({"label": role.name[:80], "role_id": str(role.id)})
-                if len(p["role_actions"]) > 5 or len(p["role_actions"]) + len(p["links"]) > 5:
-                    p["role_mode"] = "dropdown"
-            self.session.apply(add)
-        except StudioValidationError as exc:
-            return await _say(interaction, str(exc))
-        except Exception as exc:
-            return await _say(interaction, f"Role safety could not be verified ({type(exc).__name__}). Nothing added.")
-        await _role_controls(interaction, self.session)
+        await _add_studio_role(interaction, self.session, role)
 
+
+async def _browse_studio_roles(interaction: discord.Interaction, session: StudioSession) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return await _say(interaction, "Open the Studio inside your server.")
+    await interaction.response.defer(ephemeral=True)
+    try:
+        from .guild_config import get_guild_config
+        from .commands_ext.public_self_roles_group import _profile_cosmetic_role_blocker
+        from .ui.resource_browser import DankGuildResourceBrowserView
+        config = await get_guild_config(int(guild.id), refresh=True)
+        if str(config.get("source") or "").startswith("unavailable:"):
+            return await _say(interaction, "Role safety cannot be checked at the moment.")
+    except Exception:
+        return await _say(interaction, "Role browsing could not load. Nothing changed.")
+
+    def allowed(role: Any) -> bool:
+        return (
+            isinstance(role, discord.Role)
+            and str(role.id) not in {a["role_id"] for a in session.project["role_actions"]}
+            and not _profile_cosmetic_role_blocker(guild, role, config)
+        )
+
+    async def picked(pick_interaction: discord.Interaction, resource: Any) -> None:
+        if not isinstance(resource, discord.Role):
+            return await _say(pick_interaction, "Choose a role.")
+        await _add_studio_role(pick_interaction, session, resource)
+
+    async def back(back_interaction: discord.Interaction) -> None:
+        await _role_controls(back_interaction, session)
+
+    view = DankGuildResourceBrowserView(
+        guild=guild, author_id=session.owner_id, resource_kinds=("role",),
+        on_pick=picked, custom_id="dank:embed_studio:search_roles:v1",
+        title="Search-Safe Studio Role Picker",
+        placeholder="Search or browse safe optional roles…",
+        predicate=allowed, on_home=back,
+        home_label="Back to Role Controls",
+        empty_message="No more safe roles are available to add.",
+    )
+    await _menu(interaction, heading="🔎 Search-Safe Role Browser",
+                description="Find a safe role by normal words, styled name, previous name, mention or ID.", view=view)
 
 class StudioExistingRoleSelect(discord.ui.Select):
     def __init__(self, session: StudioSession) -> None:
@@ -688,6 +738,10 @@ class StudioRolesMenu(_StudioView):
         except StudioValidationError as exc:
             return await _say(interaction, str(exc))
         await _role_controls(interaction, self.session)
+
+    @discord.ui.button(label="Find Role", emoji="🔎", style=discord.ButtonStyle.primary, row=2)
+    async def search(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _browse_studio_roles(interaction, self.session)
 
     @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
