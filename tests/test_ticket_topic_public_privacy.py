@@ -54,8 +54,8 @@ def test_reconciliation_uses_stored_owner_even_if_staff_has_overwrite() -> None:
     from stoney_verify.tickets_new.sync_service import _extract_owner_member
 
     owner = SimpleNamespace(id=123)
-    staff = SimpleNamespace(id=456)
-    guild = SimpleNamespace(get_member=lambda uid: owner if uid == owner.id else staff if uid == staff.id else None)
+    staff = object()  # Hashable simulated channel-overwrite target.
+    guild = SimpleNamespace(get_member=lambda uid: owner if uid == owner.id else None)
     channel = SimpleNamespace(topic=PUBLIC_TICKET_TOPIC, overwrites={staff: SimpleNamespace(view_channel=True)})
     assert _extract_owner_member(guild, channel, existing={"user_id": "123"}) is owner
     # Owner departed the guild: do not silently replace with a staff member.
