@@ -660,13 +660,13 @@ async def members_cleanup_queue(
     if interaction.guild is None:
         return
 
+    await interaction.response.defer(ephemeral=True, thinking=True)
     settings = await get_cleanup_settings(int(interaction.guild.id))
     no_confirm_allowed, no_confirm_reason = await actor_can_use_no_confirm(interaction.user)
     require_confirmation = bool(settings.require_queue_confirmation or not no_confirm_allowed)
     safe_limit = max(1, min(int(limit or settings.default_queue_limit or _QUEUE_DEFAULT_LIMIT), _QUEUE_MAX_LIMIT))
     include_low = bool(settings.allow_low_confidence_queue if include_low_confidence is None else include_low_confidence)
 
-    await interaction.response.defer(ephemeral=True, thinking=True)
     report, fresh_scan, queued, skipped, validation_blocked = await _build_queue_preview(
         interaction.guild,
         actor_user_id=int(interaction.user.id),
@@ -738,13 +738,13 @@ async def members_purge_all(
 
     safe_days = max(7, min(int(inactive_days or 90), 730))
     safe_grace = max(1, min(int(grace_days or 14), 90))
+    await interaction.response.defer(ephemeral=True, thinking=True)
     settings = await get_cleanup_settings(int(interaction.guild.id))
     no_confirm_allowed, no_confirm_reason = await actor_can_use_no_confirm(interaction.user)
     # Broad member purges always require a fresh, explicit confirmation,
     # even if this server disabled confirmation for smaller review queues.
     require_confirmation = True
 
-    await interaction.response.defer(ephemeral=True, thinking=True)
     report, queued, skipped, validation_blocked = await _build_purge_all_preview(
         interaction.guild,
         actor_user_id=int(interaction.user.id),
