@@ -1113,7 +1113,13 @@ class StudioReviewView(_StudioView):
             except StudioValidationError:
                 tracked = False
             else:
-                tracked = await _save_library(self.session.guild_id, source, lib)
+                # If the bounded history retained all live role panels, a
+                # link-only message may be published but not tracked. Do not
+                # report a successful history save for an evicted reference.
+                tracked = (
+                    self.session.post_key in lib["published"]
+                    and await _save_library(self.session.guild_id, source, lib)
+                )
         except Exception:
             pass
         if role_items and not tracked:
