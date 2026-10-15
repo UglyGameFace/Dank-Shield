@@ -1,0 +1,39 @@
+name: Dank Cinema public-route diagnostic (manual, read-only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      origin:
+        description: "Public Cinema origin with HTTPS, no path/query/credentials"
+        required: true
+        type: string
+        default: "https://stoneyverify.discloud.dev"
+      guild_id:
+        description: "Guild snowflake to test public Cinema routes (no user ID or signed link)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  public-route-probe:
+    name: Probe health and anonymous Cinema API routing
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository (read-only)
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: GET public health, auth-debug, and anonymous Home
+        shell: bash
+        env:
+          CINEMA_ORIGIN: ${{ inputs.origin }}
+          CINEMA_GUILD_ID: ${{ inputs.guild_id }}
+        run: |
+          set -euo pipefail
+          python tools/probe_cinema_public_routes.py \
+            --origin "$CINEMA_ORIGIN" --guild-id "$CINEMA_GUILD_ID"
