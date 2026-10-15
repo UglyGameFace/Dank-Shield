@@ -126,3 +126,35 @@ def test_cinema_browser_javascript_parses() -> None:
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js unavailable")
+def test_feed_title_cleanup_preserves_real_names_without_release_tags() -> None:
+    script, _styles = _assets()
+    first = script.index("  function feedSearchTitle(result) {")
+    ending = script.index("\\n  }", first) + len("\\n  }")
+    js_function = script[first:ending]
+    assertions = r'''
+const cases = [
+  ["Scary Movie (2026) [1080p] [WEBRip] [5.1]", "Scary Movie"],
+  ["Scary.Movie.2026.1080p.WEBRip.x265", "Scary Movie"],
+  ["The Matrix [1080p]", "The Matrix"],
+  ["A 2020 Vision (2025)", "A 2020 Vision"],
+  ["2026", "2026"],
+  ["1923 S02E02", "1923 S02E02"]
+];
+for (const [title, expected] of cases) {
+  const actual = feedSearchTitle({ title });
+  if (actual !== expected) {
+    throw new Error(JSON.stringify({ title, expected, actual }));
+  }
+}
+'''
+    result = subprocess.run(
+        ["node", "-e", js_function + "\\n" + assertions],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
