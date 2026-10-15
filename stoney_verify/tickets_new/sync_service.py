@@ -999,6 +999,16 @@ async def _sync_channel_internal(
 ) -> Dict[str, Any]:
     guild = channel.guild
     existing = await get_ticket_by_any_channel_id(channel.id)
+    if is_public_ticket_topic(_safe_topic(channel)) and not isinstance(existing, dict):
+        # Creation may still be persisting its ticket row. Without the old
+        # owner_id= topic, a staff overwrite cannot prove who requested it.
+        # Never invent a requester or insert a conflicting recovery row.
+        return {
+            "channel_id": str(channel.id),
+            "channel_name": channel.name,
+            "action": "skipped",
+            "reason": "public_topic_has_no_authoritative_ticket_row",
+        }
     owner = _extract_owner_member(guild, channel, existing=existing)
     messages = await _fetch_recent_messages(channel, limit=50)
 
