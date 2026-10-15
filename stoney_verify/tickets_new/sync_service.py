@@ -13,6 +13,7 @@ from .repository import (
     safe_optional_update_by_channel_id,
     update_ticket_by_channel_id,
 )
+from .topic_policy import is_public_ticket_topic
 from .service import (
     _extract_ticket_number_from_name,
     _parse_owner_id_from_topic,
@@ -377,7 +378,18 @@ def _extract_last_activity(messages: List[discord.Message]) -> Tuple[Optional[st
 def _extract_owner_member(
     guild: discord.Guild,
     channel: discord.TextChannel,
+    *,
+    existing: Optional[Dict[str, Any]] = None,
 ) -> Optional[discord.Member]:
+    # An existing DB row is authoritative. Never mistake a staff member's
+    # channel overwrite for ticket ownership after topic cleanup.
+    if isinstance(existing, dict):
+        saved_id = existing.get("user_id") or existing.get("owner_id") or existing.get("requester_id")
+        if saved_id:
+            try:
+                return guild.get_member(int(saved_id))
+            except (TypeError, ValueError, AttributeError):
+                return None
     owner_id = _parse_owner_id_from_topic(channel)
     if owner_id:
         try:
@@ -424,6 +436,9 @@ def _is_ticket_channel(channel: discord.TextChannel) -> bool:
     topic = _safe_topic(channel).lower()
 
     if TICKET_NAME_RE.match(name):
+        return True
+
+    if is_public_ticket_topic(topic):
         return True
 
     if _channel_in_archive_category(channel) and ("owner_id=" in topic or "ticket_number=" in topic):
@@ -656,10 +671,14 @@ def _build_core_ticket_payload(
     messages: List[discord.Message],
     existing: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    category = _guess_category_from_channel(channel)
-    is_ghost = _guess_is_ghost(channel)
+    existing_dict = existing if isinstance(existing, dict) else {}
+    # A safe channel topic does not store category, ghost or sequence metadata.
+    category = str(existing_dict.get("category") or "").strip() or _guess_category_from_channel(channel)
+    is_ghost = _safe_bool(existing_dict.get("is_ghost"), _guess_is_ghost(channel))
     guessed_status = _guess_status_from_channel(channel)
     ticket_number = _ticket_number_for_channel(channel)
+    if ticket_number is None:
+        ticket_number = _safe_int(existing_dict.get("ticket_number"), 0) or None
     claimed_by_from_messages = _extract_claimed_staff_id_from_messages(messages)
     initial_message = _extract_initial_message(messages)
     last_activity_at, last_message_id = _extract_last_activity(messages)
@@ -980,7 +999,7 @@ async def _sync_channel_internal(
 ) -> Dict[str, Any]:
     guild = channel.guild
     existing = await get_ticket_by_any_channel_id(channel.id)
-    owner = _extract_owner_member(guild, channel)
+    owner = _extract_owner_member(guild, channel, existing=existing)
     messages = await _fetch_recent_messages(channel, limit=50)
 
     core_payload = _build_core_ticket_payload(
