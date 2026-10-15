@@ -935,7 +935,7 @@
   function searchResultCard(item) {
     if (item.result_kind === "playable_source") {
       const card = node("article", "state-card");
-      const kicker = node("div", "feed-category", "Playable source");
+      const kicker = node("div", "feed-category", "Release found");
       const title = node("h3", "", itemTitle(item));
       const source = node("div", "feed-meta", item.source_label || "Cinema source");
       const hint = node("p", "section-sub", "This source has a release, but Cinema hasn't verified a matching movie yet.");
