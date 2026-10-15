@@ -18,7 +18,19 @@ on:
         type: string
         required: true
       off_host_backup_receipt:
-        description: "Identifier for independently restored off-Discloud backup (no tokens)"
+        description: "Private reference to off-Discloud backup; not a restore receipt (no secrets)"
+        type: string
+        required: false
+      recovery_policy:
+        description: "Verified recovery OR explicit owner acceptance of possible data loss"
+        type: choice
+        options:
+          - verified_recovery
+          - owner_accepts_unverified_recovery
+        default: verified_recovery
+        required: true
+      owner_risk_acknowledgement:
+        description: "Risk path only: type I_ACCEPT_STONEYVERIFY_DATA_LOSS"
         type: string
         required: false
       database_rpc_verified:
@@ -39,6 +51,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: discloud-existing-stoneyverify-production-commit
@@ -62,6 +75,8 @@ jobs:
         env:
           REQUESTED_SHA: ${{ inputs.expected_main_sha }}
           OPERATION: ${{ inputs.operation }}
+          RECOVERY_POLICY: ${{ inputs.recovery_policy }}
+          OWNER_RISK_ACK: ${{ inputs.owner_risk_acknowledgement }}
           OFF_HOST_BACKUP_RECEIPT: ${{ inputs.off_host_backup_receipt }}
           RPC_VERIFIED: ${{ inputs.database_rpc_verified }}
           FILE_PERSISTENCE_VERIFIED: ${{ inputs.app_files_persistence_verified }}
@@ -109,15 +124,28 @@ jobs:
             [[ "${RPC_VERIFIED}" == "true" ]] || {
               echo "::error::PR #540 production member-activity RPC verification is missing."; exit 1;
             }
-            [[ "${FILE_PERSISTENCE_VERIFIED}" == "true" ]] || {
-              echo "::error::Persistent file safety for a Discloud code commit is unverified."; exit 1;
-            }
-            [[ "${ENV_RECOVERY_VERIFIED}" == "true" ]] || {
-              echo "::error::Production environment recovery is unverified."; exit 1;
-            }
             [[ "${#OFF_HOST_BACKUP_RECEIPT}" -ge 8 ]] || {
-              echo "::error::A validated off-host backup receipt identifier is required."; exit 1;
+              echo "::error::Provide a nonsecret identifier for the backup actually stored off Discloud."; exit 1;
             }
+            case "${RECOVERY_POLICY}" in
+              verified_recovery)
+                [[ "${FILE_PERSISTENCE_VERIFIED}" == "true" ]] || {
+                  echo "::error::Verified recovery requires confirmed app-file persistence."; exit 1;
+                }
+                [[ "${ENV_RECOVERY_VERIFIED}" == "true" ]] || {
+                  echo "::error::Verified recovery requires tested environment recovery."; exit 1;
+                }
+                ;;
+              owner_accepts_unverified_recovery)
+                [[ "${OWNER_RISK_ACK}" == "I_ACCEPT_STONEYVERIFY_DATA_LOSS" ]] || {
+                  echo "::error::Owner risk acknowledgement must match the exact required phrase."; exit 1;
+                }
+                echo "::warning::OWNER-ACCEPTED RISK: Existing app files, sessions, Cinema downloads and dashboard environment may be lost or require manual restoration. This path does NOT verify backup integrity, recovery or Discloud file retention."
+                ;;
+              *)
+                echo "::error::Unknown recovery policy."; exit 1;
+                ;;
+            esac
           fi
 
       - name: Confirm deployment manifest is source only
@@ -153,6 +181,24 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$APPROVED_SHA"
           test "$(grep -Ec '^ID=stoneyverify$' discloud.config)" = "1"
+      - name: Require current main and successful exact-SHA CI
+        shell: bash
+        env:
+          APPROVED_SHA: ${{ needs.prepare.outputs.approved_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          if [[ "$(git rev-parse origin/main)" != "$APPROVED_SHA" ]]; then
+            echo "::error::main advanced since preflight; rerun with the new validated SHA."; exit 1
+          fi
+          runs="$(gh api --method GET -f branch=main -f event=push -f status=success -f head_sha="$APPROVED_SHA" -f per_page=100 "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs")"
+          if ! jq -e --arg sha "$APPROVED_SHA" '
+            .workflow_runs[]
+            | select(.head_sha == $sha and .head_branch == "main" and .event == "push" and .conclusion == "success")
+          ' <<<"$runs" >/dev/null; then
+            echo "::error::No successful canonical Dank Shield CI push run for current main SHA."; exit 1
+          fi
       - name: Require Discloud deploy token
         shell: bash
         env:
@@ -177,4 +223,5 @@ jobs:
         run: |
           echo "Existing app ID: stoneyverify" >> "$GITHUB_STEP_SUMMARY"
           echo "Submitted source SHA: $APPROVED_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "Recovery approval mode: ${{ inputs.recovery_policy }}" >> "$GITHUB_STEP_SUMMARY"
           echo "Post-deployment Discloud health, database, files and rollback must be verified separately." >> "$GITHUB_STEP_SUMMARY"
