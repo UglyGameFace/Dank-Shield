@@ -1,0 +1,172 @@
+name: Guarded merged-branch cleanup
+
+# This is deliberately owner-dispatched. Merging the workflow cannot delete branches.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Preview candidates first; deletion requires separate confirmation"
+        type: choice
+        options:
+          - preview
+          - delete
+        default: preview
+        required: true
+      confirmation:
+        description: "Delete mode only: type DELETE_STALE_MERGED_BRANCHES"
+        type: string
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: guarded-merged-branch-cleanup
+  cancel-in-progress: false
+
+jobs:
+  prune-stale-merged-branches:
+    if: ${{ github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Preview or prune verified old merged PR branches
+        uses: actions/github-script@v7
+        env:
+          CLEANUP_MODE: ${{ inputs.mode }}
+          CLEANUP_CONFIRMATION: ${{ inputs.confirmation }}
+        with:
+          script: |
+            const mode = process.env.CLEANUP_MODE;
+            if (!['preview', 'delete'].includes(mode)) {
+              throw new Error('Unsupported cleanup mode');
+            }
+            if (
+              mode === 'delete' &&
+              process.env.CLEANUP_CONFIRMATION !== 'DELETE_STALE_MERGED_BRANCHES'
+            ) {
+              throw new Error('Delete mode requires the exact owner confirmation');
+            }
+
+            const { owner, repo } = context.repo;
+            const fullName = `${owner}/${repo}`;
+            const defaultBranch = (await github.rest.repos.get({ owner, repo }))
+              .data.default_branch;
+            if (defaultBranch !== 'main') {
+              throw new Error('Fail closed: unexpected default branch');
+            }
+
+            // One-time historical batch. Never widen this date automatically.
+            const mergedBefore = '2026-10-01T00:00:00Z';
+            const eligiblePrefixes = [
+              'agent/', 'audit/', 'chore/', 'feat/', 'feature/',
+              'fix/', 'hotfix/', 'improve/'
+            ];
+            const reservedSegments = new Set([
+              'backup', 'restore', 'recovery', 'archive', 'release',
+              'deploy', 'deployment', 'discloud', 'staging', 'migration',
+              'supabase', 'database', 'postgres', 'pg', 'main',
+              'production', 'ops', 'reconcile', 'rollback', 'revert',
+              'known', 'good', 'pre', 'snapshot', 'stable', 'ci', 'test'
+            ]);
+
+            const [branches, closedPRs, openPRs] = await Promise.all([
+              github.paginate(github.rest.repos.listBranches, {
+                owner, repo, per_page: 100
+              }),
+              github.paginate(github.rest.pulls.list, {
+                owner, repo, state: 'closed', per_page: 100
+              }),
+              github.paginate(github.rest.pulls.list, {
+                owner, repo, state: 'open', per_page: 100
+              })
+            ]);
+            const closedByHead = new Map();
+            for (const pr of closedPRs) {
+              if (pr.head?.repo?.full_name !== fullName) continue;
+              const list = closedByHead.get(pr.head.ref) || [];
+              list.push(pr);
+              closedByHead.set(pr.head.ref, list);
+            }
+            const inUseByOpenPR = new Set();
+            for (const pr of openPRs) {
+              if (pr.head?.repo?.full_name === fullName) {
+                inUseByOpenPR.add(pr.head.ref);
+              }
+              if (pr.base?.repo?.full_name === fullName) {
+                inUseByOpenPR.add(pr.base.ref);
+              }
+            }
+
+            const candidates = [];
+            for (const branch of branches) {
+              const name = branch.name;
+              if (name === defaultBranch || branch.protected) continue;
+              if (!eligiblePrefixes.some(prefix => name.startsWith(prefix))) continue;
+              const segments = name.toLowerCase().split(/[\/._-]+/);
+              if (segments.some(segment => reservedSegments.has(segment))) continue;
+              if (inUseByOpenPR.has(name)) continue;
+
+              const prs = closedByHead.get(name) || [];
+              // A closed-unmerged PR can represent intentionally retained work.
+              if (prs.some(pr => !pr.merged_at)) continue;
+              const merged = prs.find(pr =>
+                pr.merged_at &&
+                pr.merged_at < mergedBefore &&
+                pr.base?.ref === defaultBranch &&
+                pr.head.sha === branch.commit.sha
+              );
+              if (!merged) continue;
+              candidates.push({ name, sha: branch.commit.sha, pr: merged.number });
+            }
+            if (candidates.length > 250) {
+              throw new Error('Fail closed: too many candidates for reviewed batch');
+            }
+
+            core.info(`Found ${branches.length} branches, ${openPRs.length} open PRs, ${candidates.length} eligible old merged branches.`);
+            for (const candidate of candidates) {
+              core.info(`Candidate: ${candidate.name} (PR #${candidate.pr}, ${candidate.sha})`);
+            }
+            const deleted = [];
+            const skipped = [];
+            const failed = [];
+
+            if (mode === 'delete') {
+              for (const candidate of candidates) {
+                try {
+                  // Recheck the head immediately before the destructive call.
+                  const current = (await github.rest.repos.getBranch({
+                    owner, repo, branch: candidate.name
+                  })).data;
+                  if (current.protected || current.commit.sha !== candidate.sha) {
+                    skipped.push(candidate.name);
+                    continue;
+                  }
+                  await github.rest.git.deleteRef({
+                    owner, repo, ref: `heads/${candidate.name}`
+                  });
+                  deleted.push(candidate.name);
+                  // Pace writes instead of provoking GitHub secondary rate limits.
+                  await new Promise(resolve => setTimeout(resolve, 650));
+                } catch (error) {
+                  failed.push(`${candidate.name}: ${error.message}`);
+                }
+              }
+            }
+            const lines = [
+              `Mode: **${mode}**`,
+              `Branches before cleanup: **${branches.length}**`,
+              `Eligible old merged branches: **${candidates.length}**`,
+              `Deleted: **${deleted.length}**; skipped changed/protected: **${skipped.length}**; failures: **${failed.length}**`,
+              '',
+              ...candidates.map(c => `- \`${c.name}\` (merged PR #${c.pr})`)
+            ];
+            if (failed.length) lines.push('', 'Failures:', ...failed.map(s => `- ${s}`));
+            await core.summary
+              .addHeading('Guarded merged-branch cleanup')
+              .addRaw(lines.join('\n'))
+              .write();
+            if (failed.length) {
+              core.setFailed(`Partial cleanup: ${failed.length} branch deletions failed; inspect summary`);
+            }
