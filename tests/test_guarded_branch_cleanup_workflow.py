@@ -101,7 +101,7 @@ def test_reviewed_wave_is_frozen_and_requires_supersession_evidence() -> None:
 def test_reviewed_wave_has_exact_frozen_retirement_count() -> None:
     text = _workflow()
     manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
-    assert manifest.count("kind: 'merged'") == 17
+    assert manifest.count("kind: 'merged'") == 21
     assert manifest.count("kind: 'superseded'") == 5
     assert manifest.count("kind: 'closed-record'") == 3
     assert manifest.count("kind: 'ancestor-only'") == 1
@@ -119,7 +119,7 @@ def test_fourth_wave_requires_live_git_ancestry_and_exact_records() -> None:
     assert "inUseByOpenPR.has(name)" in text
     assert "current.protected || current.commit.sha !== candidate.sha" in text
     manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
-    assert manifest.count("kind:") == 26
+    assert manifest.count("kind:") == 30
     for branch in (
         "aaa-cinema-pre-pregateway-bind",
         "feat/cinema-library-intelligence",
@@ -128,3 +128,27 @@ def test_fourth_wave_requires_live_git_ancestry_and_exact_records() -> None:
         "fix/ticket-panel-legacy-interaction-recovery-20260924",
     ):
         assert "'" + branch + "', { kind:" not in manifest
+
+
+def test_fifth_wave_only_audited_merged_verifier_and_workflow_branches() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
+    exact = {
+        "chore/verify-supabase-sync": (154, "79f78cba5d23105869e0debde94029a91bab7ff4"),
+        "chore/remove-supabase-sync-verifier": (155, "ab41128b4335af29f21d9766f78bc69abee32695"),
+        "chore/verify-ticket-counter-production": (159, "4ccbf727eb69f2ca3e11bf78a4567e6865bcbe3e"),
+        "chore/guarded-branch-cleanup-fourth-wave-20261015": (585, "c92fe20e89f80698f5c7b3f20dd070820853d963"),
+    }
+    for name, (pr, sha) in exact.items():
+        entry = f"['{name}', {{ kind: 'merged', pr: {pr}, sha: '{sha}' }}]"
+        assert manifest.count(entry) == 1
+    # No additional cleanup should target live backup, storage migration,
+    # deployment branches, or any source branch of a closed-unmerged PR.
+    for name in (
+        "chore/automate-supabase-migrations",
+        "fix/supabase-out-of-order-migrations",
+        "cleanup/schema-authority-consolidation",
+        "fix/live-captions-stable-interim-recovery-20260927",
+        "feat/native-welcome-cards",
+    ):
+        assert f"'{name}', {{ kind:" not in manifest
