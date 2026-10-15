@@ -1206,6 +1206,8 @@ async def sync_active_ticket_channels_for_guild(
                 summary["updated"] += 1
             elif action == "unchanged":
                 summary["unchanged"] += 1
+            elif action == "skipped":
+                summary["skipped"] += 1
             elif action == "error":
                 summary["errors"] += 1
 
@@ -1284,6 +1286,8 @@ async def sync_one_ticket_channel(
             result["updated"] = 1
         elif action == "unchanged":
             result["unchanged"] = 1
+        elif action == "skipped":
+            result["skipped"] = 1
         elif action == "error":
             result["errors"] = 1
 
