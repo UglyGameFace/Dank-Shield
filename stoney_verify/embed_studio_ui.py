@@ -487,6 +487,12 @@ async def _links(interaction: discord.Interaction, session: StudioSession) -> No
 
 
 class EmbedMenu(_StudioView):
+    @discord.ui.button(label="Toggle Timestamp", emoji="🕒", style=discord.ButtonStyle.secondary, row=0)
+    async def timestamp(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        idx = self.session.active
+        self.session.apply(lambda p: p["embeds"][idx].update(timestamp=not p["embeds"][idx]["timestamp"]))
+        await _home(interaction, self.session, notice="Timestamp setting changed.")
+
     @discord.ui.button(label="Previous", emoji="◀️", style=discord.ButtonStyle.secondary, row=0)
     async def previous(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         self.session.active = (self.session.active - 1) % len(self.session.project["embeds"])
@@ -559,6 +565,7 @@ class TemplateNameModal(discord.ui.Modal, title="Save Embed Template"):
         super().__init__(timeout=900)
         self.session = session
         self.name_input = discord.ui.TextInput(label="Template name", placeholder="Rules • Weekly announcement", max_length=60)
+        self.add_item(self.name_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if not _staff(interaction) or interaction.user.id != self.session.owner_id:
@@ -775,6 +782,7 @@ class StudioReviewView(_StudioView):
             return await _say(interaction, "This confirmation has already been used.")
         self.sent = True
         await interaction.response.defer(ephemeral=True, thinking=True)
+        editing_existing = bool(self.session.post_key)
         channel = _target_channel(interaction, self.session)
         if channel is None:
             return await _say(interaction, "Destination was changed or removed; nothing posted.")
@@ -820,7 +828,7 @@ class StudioReviewView(_StudioView):
             pass
         await _say(
             interaction,
-            f"✅ {'Updated' if self.session.post_key else 'Published'}: {message.jump_url}"
+            f"✅ {'Updated' if editing_existing else 'Published'}: {message.jump_url}"
             + ("" if tracked else "\n⚠️ Message sent, but saved-post tracking is unavailable. Keep the message link."),
         )
 
@@ -830,7 +838,6 @@ class StudioReviewView(_StudioView):
 
 
 def _from_message(message: discord.Message) -> dict[str, Any]:
-    from .embed_studio_core import color_hex
     project = {"version": 1, "content": str(message.content or ""), "embeds": [], "links": []}
     for embed in list(message.embeds)[:10]:
         d = embed.to_dict()
@@ -927,5 +934,9 @@ async def open_embed_studio(interaction: discord.Interaction) -> None:
     """Shared entry point; no extra app-command budget and no public changes."""
     if not _staff(interaction):
         return await _say(interaction, "❌ Embed Studio requires Manage Server or Administrator.")
+    if interaction.response.is_done():
+        # Calls from an already-acknowledged Feature Center create their own
+        # private editor; they never alter the public panel.
+        pass
     session = StudioSession(guild_id=int(interaction.guild.id), owner_id=int(interaction.user.id))
     await _home(interaction, session)
