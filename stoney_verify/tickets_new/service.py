@@ -1826,7 +1826,11 @@ async def _ensure_channel_identity(
 
     try:
         edits: Dict[str, Any] = {}
-        if channel.topic != desired_topic:
+        # Old ticket topics still hold legacy recovery fields. Do not strip
+        # them during ordinary sync before an independently verified DB-backed
+        # migration. Only fill a genuinely blank topic here; new channels
+        # already use PUBLIC_TICKET_TOPIC at creation.
+        if not str(channel.topic or "").strip():
             edits["topic"] = desired_topic
         if channel.name != desired_name and not _channel_name_exists(
             channel.guild,
