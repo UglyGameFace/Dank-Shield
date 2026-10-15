@@ -92,6 +92,14 @@ jobs:
               echo "::error::Unsafe or mutable local artifact $unexpected found in checkout."; exit 1
             fi
           done
+          [[ -f .discloudignore ]] || {
+            echo "::error::.discloudignore must exist before packaging."; exit 1;
+          }
+          for ignored in .git .github .env .env.production .env.local data tests; do
+            grep -Fxq "$ignored" .discloudignore || {
+              echo "::error::Missing exact-name Discloud archive exclusion: $ignored"; exit 1;
+            }
+          done
           if git ls-files | grep -Eq '(^|/)(\.env|\.env\.production|\.env\.local)$'; then
             echo "::error::A confidential .env file is tracked in Git."; exit 1
           fi
