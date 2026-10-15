@@ -77,3 +77,29 @@ def test_unpersisted_public_ticket_is_not_recovered_with_guessed_owner() -> None
     service = _source("stoney_verify/tickets_new/service.py")
     assert 'if not str(channel.topic or "").strip():' in service
     assert 'if channel.topic != desired_topic:' not in service
+
+
+def test_unpersisted_public_channel_deferred_without_guessing_owner(monkeypatch) -> None:
+    import asyncio
+
+    from stoney_verify.tickets_new import sync_service
+
+    async def missing_row(_channel_id):
+        return None
+
+    monkeypatch.setattr(sync_service, "get_ticket_by_any_channel_id", missing_row)
+    channel = SimpleNamespace(
+        guild=SimpleNamespace(id=1),
+        id=777,
+        name="ticket-0007",
+        topic=PUBLIC_TICKET_TOPIC,
+    )
+    result = asyncio.run(
+        sync_service._sync_channel_internal(
+            channel=channel,
+            source="privacy_regression",
+            dry_run=False,
+        )
+    )
+    assert result["action"] == "skipped"
+    assert result["reason"] == "public_topic_has_no_authoritative_ticket_row"
