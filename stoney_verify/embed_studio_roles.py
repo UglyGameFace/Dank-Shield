@@ -20,7 +20,7 @@ _ATTACHED_BOT_IDS: set[int] = set()
 def role_custom_id(token: str, index: str | int) -> str:
     token = str(token or "")
     part = str(index)
-    if len(token) != 16 or any(c not in "0123456789abcdef" for c in token):
+    if len(token) != 32 or any(c not in "0123456789abcdef" for c in token):
         raise ValueError("Invalid embed role action token")
     if part != "pick" and (not part.isdigit() or int(part) >= 10):
         raise ValueError("Invalid embed role action index")
