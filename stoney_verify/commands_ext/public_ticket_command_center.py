@@ -725,6 +725,52 @@ class TicketFindModal(discord.ui.Modal, title="Find Ticket"):
         await _invoke(command, interaction, ticket_number=number)
 
 
+class TicketTopicCleanupConfirmView(_OwnedView):
+    """Second-step confirmation for one explicitly previewed, bounded batch."""
+
+    def __init__(self, owner_id: int, guild_id: int, channel_ids: tuple[int, ...]) -> None:
+        super().__init__(owner_id, timeout=300)
+        self.guild_id = int(guild_id)
+        self.channel_ids = channel_ids
+        self.used = False
+
+    @discord.ui.button(label="Clean Verified Topics", emoji="🧹", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if self.used:
+            return await _private(interaction, "This topic repair was already submitted.")
+        guild = interaction.guild
+        member = interaction.user
+        if not await _require_staff(interaction):
+            return
+        if (
+            guild is None or int(guild.id) != self.guild_id
+            or not isinstance(member, discord.Member)
+            or not (member.guild_permissions.manage_guild or member.guild_permissions.administrator)
+        ):
+            return await _private(interaction, "❌ Only a server manager can repair ticket topics.")
+        self.used = True
+        button.disabled = True
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        from ..tickets_new.topic_repair import repair_verified_topics
+
+        result = await repair_verified_topics(guild, self.channel_ids)
+        await _private(
+            interaction,
+            "Ticket topic repair finished. "
+            f"Cleaned: **{result['cleaned']}** • "
+            f"Skipped (not safely verified): **{result['skipped']}** • "
+            f"Failed: **{result['failed']}**. "
+            "Nothing else was modified.",
+        )
+
+    @discord.ui.button(label="Cancel", emoji="✖️", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.used = True
+        for item in self.children:
+            item.disabled = True
+        await _private(interaction, "Cancelled. No ticket topics were changed.")
+
+
 class TicketPanelChannelSelect(discord.ui.ChannelSelect):
     def __init__(self, parent: "TicketPanelToolsView") -> None:
         self.parent_view = parent
@@ -773,6 +819,43 @@ class TicketPanelToolsView(_OwnedView):
         _ = button
         from .public_ticket_panel_clean import _send_health
         await _send_health(interaction)
+
+    @discord.ui.button(label="Review Old Topics", emoji="🔎", style=discord.ButtonStyle.secondary, row=2)
+    async def review_topics(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_staff(interaction):
+            return
+        guild = interaction.guild
+        member = interaction.user
+        if (
+            guild is None or not isinstance(member, discord.Member)
+            or not (member.guild_permissions.manage_guild or member.guild_permissions.administrator)
+        ):
+            return await _private(interaction, "❌ Only a server manager can review topic cleanup.")
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        from ..tickets_new.topic_repair import preview_legacy_topics
+
+        report = await preview_legacy_topics(guild)
+        count = len(report.eligible_ids)
+        summary = (
+            f"**{count}** ticket topics verified for safe cleanup (max 10 per batch). "
+            f"Checked **{report.candidates_checked}** legacy topics; "
+            f"skipped **{report.skipped}** due to missing or conflicting DB records. "
+            + ("More channels remain for another preview. " if report.remaining_unchecked else "")
+        )
+        if count == 0:
+            return await _private(
+                interaction,
+                summary + "No changes were made. Check the saved ticket categories if nothing was scanned.",
+            )
+        await _private(
+            interaction,
+            summary + "Press **Clean Verified Topics** to approve this specific batch. "
+            "Each topic and its stored owner will be checked again before editing.",
+            view=TicketTopicCleanupConfirmView(
+                int(member.id), int(guild.id), report.eligible_ids
+            ),
+        )
 
     @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
