@@ -16,7 +16,7 @@ from stoney_verify.embed_studio_roles import (
 from stoney_verify.embed_studio_ui import StudioHomeView, StudioReviewView, StudioRolesMenu, StudioSession
 
 ROOT = Path(__file__).resolve().parents[1]
-TOKEN = "0123456789abcdef"
+TOKEN = "0123456789abcdef0123456789abcdef"
 
 
 def _model(n: int = 1, mode: str = "buttons") -> dict:
