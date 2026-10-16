@@ -453,6 +453,11 @@ def test_owner_readding_known_hostile_bot_is_still_blocked(monkeypatch) -> None:
         }
 
     monkeypatch.setattr(runtime, "get_actor_reputation", reputation)
+
+    async def untrusted_target(_guild, _actor):
+        return None
+
+    monkeypatch.setattr(runtime, "_automatic_containment_blocker", untrusted_target)
     runtime._patch_guardian(fake_guardian, fake_antinuke)
 
     asyncio.run(fake_guardian._handle_bot_add(guild, entry, owner))
