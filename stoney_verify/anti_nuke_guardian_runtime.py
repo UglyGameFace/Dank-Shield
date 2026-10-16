@@ -452,8 +452,12 @@ async def _rollback_untrusted_creation(guild: discord.Guild, entry: Any, actor: 
     if action_name not in _CREATION_ROLLBACK_ACTIONS:
         return ""
     settings = await anti_nuke.get_antinuke_settings(int(guild.id))
-    if not settings["antinuke_enabled"] or settings["antinuke_mode"] != "contain":
+    if not anti_nuke._creation_containment_authorized(settings):  # noqa: SLF001
         return ""
+    # Never delete a resource without independently attributed actor and
+    # target identities, even when Strict Lockdown is explicitly selected.
+    if _safe_int(getattr(actor, "id", 0), 0) <= 0 or _target_id(entry) is None:
+        return "creation rollback skipped: incomplete audit attribution"
     if anti_nuke._actor_is_owner_or_bot(guild, actor) or anti_nuke._actor_is_configured_trusted(actor, settings):  # noqa: SLF001
         return ""
 
@@ -771,6 +775,15 @@ async def _panic_threshold_override(
 
 
 async def _process(guild: discord.Guild, entry: Any, actor: Any, action_name: str, spec: tuple[str, str, str, Optional[int]]) -> None:
+    # A routine creation must not reach punitive counters, guild-wide panic,
+    # or hostile reputation. Strict Lockdown explicitly opts into this path.
+    if action_name in _CREATION_ROLLBACK_ACTIONS:
+        try:
+            settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+        except Exception:
+            return
+        if not anti_nuke._creation_containment_authorized(settings):  # noqa: SLF001
+            return
     label, threshold_key, counter_key, override = spec
     panic_active, panic_triggered, observed = _panic_state(guild, actor, action_name, entry=entry)
     panic_override = await _panic_threshold_override(

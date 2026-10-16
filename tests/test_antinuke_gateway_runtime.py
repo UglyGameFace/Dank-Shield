@@ -102,26 +102,44 @@ def test_gateway_destructive_entry_uses_canonical_engine_without_rest_lookup(
     _reset_runtime_state()
 
 
-def test_channel_create_also_uses_gateway_fast_path(monkeypatch) -> None:
+@pytest.mark.parametrize("strict", (False, True))
+def test_channel_create_gateway_fast_path_respects_creation_policy(
+    monkeypatch, strict: bool
+) -> None:
     _reset_runtime_state()
     entry = FakeEntry(
         7002,
         "channel_create",
-        target=SimpleNamespace(id=77, name="raid-room"),
+        target=SimpleNamespace(id=77, name="ordinary-room"),
     )
     calls: list[dict] = []
+
+    async def fake_settings(_guild_id: int):
+        return {
+            "antinuke_enabled": True,
+            "antinuke_mode": "contain",
+            "antinuke_strict_lockdown": strict,
+            "antinuke_trusted_user_ids": [],
+            "antinuke_trusted_role_ids": [],
+        }
 
     async def fake_process(_guild, **kwargs):
         calls.append(kwargs)
         return True
 
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", fake_settings)
     monkeypatch.setattr(anti_nuke, "_process_claimed_destructive_event", fake_process)
 
     asyncio.run(gateway._on_audit_log_entry_create(entry))
 
-    assert len(calls) == 1
-    assert calls[0]["action_key"] == "channel_create"
-    assert calls[0]["threshold_key"] == "antinuke_channel_delete_threshold"
+    assert anti_nuke._audit_entry_seen(entry) is True
+    if strict:
+        assert len(calls) == 1
+        assert calls[0]["action_key"] == "channel_create"
+        assert calls[0]["threshold_key"] == "antinuke_channel_delete_threshold"
+    else:
+        assert calls == []
+        assert not guardian._PANIC_EVENTS.get(int(entry.guild.id))
     _reset_runtime_state()
 
 

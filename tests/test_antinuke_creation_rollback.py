@@ -66,9 +66,12 @@ def _actor(user_id: int = 7001):
 
 
 def _settings(**patch):
-    return anti_nuke.normalize_antinuke_settings(
+    settings = anti_nuke.normalize_antinuke_settings(
         {"antinuke_enabled": True, "antinuke_mode": "contain", **patch}
     )
+    if "antinuke_strict_lockdown" in patch:
+        settings["antinuke_strict_lockdown"] = patch["antinuke_strict_lockdown"]
+    return settings
 
 
 def _reset() -> None:
@@ -77,7 +80,7 @@ def _reset() -> None:
     anti_nuke._AUDIT_CLAIM_LOCKS.clear()
 
 
-def test_undelegated_channel_create_is_deleted(monkeypatch) -> None:
+def test_strict_undelegated_channel_create_is_deleted(monkeypatch) -> None:
     _reset()
     guild = FakeGuild()
     actor = _actor()
@@ -85,7 +88,7 @@ def test_undelegated_channel_create_is_deleted(monkeypatch) -> None:
     entry = FakeEntry(8001, "channel_create", guild, actor, channel)
 
     async def fake_settings(_guild_id):
-        return _settings()
+        return _settings(antinuke_strict_lockdown=True)
 
     monkeypatch.setattr(anti_nuke, "get_antinuke_settings", fake_settings)
     result = asyncio.run(
@@ -98,7 +101,7 @@ def test_undelegated_channel_create_is_deleted(monkeypatch) -> None:
     _reset()
 
 
-def test_undelegated_webhook_create_resolves_id_and_is_deleted(monkeypatch) -> None:
+def test_strict_undelegated_webhook_create_resolves_id_and_is_deleted(monkeypatch) -> None:
     _reset()
     webhook = FakeWebhook(6002)
     guild = FakeGuild(webhooks=[webhook])
@@ -107,7 +110,7 @@ def test_undelegated_webhook_create_resolves_id_and_is_deleted(monkeypatch) -> N
     entry = FakeEntry(8002, "webhook_create", guild, actor, audit_target)
 
     async def fake_settings(_guild_id):
-        return _settings()
+        return _settings(antinuke_strict_lockdown=True)
 
     monkeypatch.setattr(anti_nuke, "get_antinuke_settings", fake_settings)
     result = asyncio.run(
@@ -162,7 +165,7 @@ def test_alert_mode_never_deletes_created_resource(monkeypatch) -> None:
     _reset()
 
 
-def test_gateway_cleanup_runs_even_if_native_path_already_consumed_audit(monkeypatch) -> None:
+def test_strict_gateway_cleanup_runs_even_if_native_path_already_consumed_audit(monkeypatch) -> None:
     _reset()
     guild = FakeGuild()
     actor = _actor(7004)
@@ -171,7 +174,7 @@ def test_gateway_cleanup_runs_even_if_native_path_already_consumed_audit(monkeyp
     anti_nuke._SEEN_AUDIT_ENTRY_IDS[entry.id] = time.monotonic()
 
     async def fake_settings(_guild_id):
-        return _settings()
+        return _settings(antinuke_strict_lockdown=True)
 
     async def must_not_process(*_args, **_kwargs):
         raise AssertionError("already-consumed audit must not enforce twice")
@@ -185,7 +188,7 @@ def test_gateway_cleanup_runs_even_if_native_path_already_consumed_audit(monkeyp
     _reset()
 
 
-def test_cleanup_failure_does_not_suppress_canonical_containment(monkeypatch) -> None:
+def test_strict_cleanup_failure_does_not_suppress_canonical_containment(monkeypatch) -> None:
     _reset()
     guild = FakeGuild()
     actor = _actor(7005)
@@ -194,7 +197,7 @@ def test_cleanup_failure_does_not_suppress_canonical_containment(monkeypatch) ->
     calls: list[str] = []
 
     async def fake_settings(_guild_id):
-        return _settings()
+        return _settings(antinuke_strict_lockdown=True)
 
     async def fake_process(_guild, **kwargs):
         calls.append(kwargs["action_key"])
