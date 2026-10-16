@@ -171,6 +171,8 @@ async def _rollback_untrusted_webhook_create(
     settings = await anti_nuke.get_antinuke_settings(int(guild.id))
     if not anti_nuke._creation_containment_authorized(settings):  # noqa: SLF001
         return ""
+    if _safe_int(getattr(actor, "id", 0), 0) <= 0:
+        return "webhook rollback skipped: missing audit actor"
     if anti_nuke._actor_is_owner_or_bot(guild, actor):  # noqa: SLF001
         return ""
     if anti_nuke._actor_is_configured_trusted(actor, settings):  # noqa: SLF001
