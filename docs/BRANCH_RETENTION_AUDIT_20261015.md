@@ -1,6 +1,6 @@
 # Dank Shield branch hygiene: reviewed historical retirement
 
-Status: fourth wave owner-executed and verified; fifth wave prepared for exact-head CI, manual owner preview, and separate owner-confirmed deletion. This record belongs to the **single active GitHub branch-cleanup task**. It does not authorize merging incomplete product features or changing the Discloud database/application.
+Status: first five owner-run waves completed and verified by branch inventory; sixth wave now prepared for CI, owner preview and a separate owner-confirmed deletion. Scope remains GitHub branch references only, never the Discloud app, main, or runtime data.
 
 ## Verified checkpoint
 
@@ -92,3 +92,21 @@ A direct Git comparison shows some historical squash-merged verifier heads remai
 **Explicit retention:** `aaa-cinema-pre-pregateway-bind`, `main`, backups, archive/recovery/reconcile/integration refs, current Discloud cutover and migrations, 11 closed-unmerged product PR branches, 15 modified-after-merge heads and no-PR diverged branches. Among remaining merged PR refs, schema migrations, AntiNuke recovery, Live Captions rollback, Invite Shield repair and critical Discloud recovery are retained for now pending operator acceptance. Two clean no-PR refs are already ancestors (`audit-000-cinema-pr436-known-good` and `fix/discloud-rest-window-recovery-current-main-20261007`) but are purposefully held as named known-good/recovery checkpoints.
 
 **Gate and next action:** After fifth-wave PR exact-head CI is green, merge into `main`. Owner dispatches `preview-reviewed` to see exactly four candidates and zero deletions, inspects the list, and only then separately dispatches `delete-reviewed` with `DELETE_REVIEWED_HISTORICAL_BRANCHES`. Expect **132** branches after deleting four from the 135 checkpoint plus this PR branch (assuming no other branches are created). Verify current inventory and protected refs. No automatic cleanup, bot deploy, Discloud changes or database writes.
+
+
+## October 16 sixth-wave checkpoint: expose main in Discloud's limited branch picker
+
+- Fresh GitHub listing: **141 branches**, with `main` at **alphabetical position 120** (1-based) and no open pull requests.
+- Before writing this sixth wave, every one of the 29 proposed PR branch refs was confirmed to match its merged PR's **exact head SHA**. All merged-to-main PRs have `main` as their base.
+- Five extra older PRs (#499, #501, #504, #511, #528) originally merged into the still-linked `aaa-cinema-pre-pregateway-bind`. Each branch was independently verified as a **zero-ahead ancestor of BOTH** the linked production branch and current `main`. Both containing branch refs remain protected from cleanup.
+- This owner-reviewed wave adds **24 merged-to-main** and **five dual-ancestor production PR** exact name/SHA records to the existing manual workflow. Prior 30 records stay frozen. Only 29 presently eligible refs were added.
+- Of these 29, **23 sort alphabetically before main**. If no other branches change and the new sixth-wave PR branch is retained, deleting all 29 would bring the total to approximately **113**, with `main` near position **98**. Discloud's own picker behavior is not guaranteed; this should improve visibility if it truncates at 100.
+- The latest AntiNuke, Cinema, member, ticket, and Toke fixes are all already committed in `main`; deleting an unchanged PR branch does not roll back the merged code. The GitHub PR number and exact head SHA remain recorded in the reviewed manifest and GitHub PR records.
+
+### Retention and no-go list
+
+Preserve `main`, `aaa-cinema-pre-pregateway-bind`, all backups, recovery/archive/integration/reconcile refs, open PR branches, unmerged/changed-head branches, and ongoing Discloud/PostgreSQL migration implementation refs. Do not automatically delete any branch by name pattern or age. The fifth-wave audit's unfinished-work holds remain in force.
+
+### One-time execution
+
+After this PR's exact-head CI succeeds and it is merged, the repository owner uses **Actions → Guarded merged-branch cleanup**: run `preview-reviewed` and confirm the **29 named candidates** (older retired names should no longer exist). Separately run `delete-reviewed` with `DELETE_REVIEWED_HISTORICAL_BRANCHES`. The workflow rechecks merged PR evidence, exact head SHA, open PR usage, protected status, dual ancestry for the five historical production branches, and unchanged current head before deletion. Merging the PR does not delete anything. Verify the surviving `main` and linked production refs and actual Discloud picker afterward.
