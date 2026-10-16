@@ -158,6 +158,9 @@ jobs:
               ['chore/remove-supabase-sync-verifier', { kind: 'merged', pr: 155, sha: 'ab41128b4335af29f21d9766f78bc69abee32695' }],
               ['chore/verify-ticket-counter-production', { kind: 'merged', pr: 159, sha: '4ccbf727eb69f2ca3e11bf78a4567e6865bcbe3e' }],
               ['chore/guarded-branch-cleanup-fourth-wave-20261015', { kind: 'merged', pr: 585, sha: 'c92fe20e89f80698f5c7b3f20dd070820853d963' }],
+              // Eighth wave: completed guarded-cleanup reconciliation PRs.
+              ['chore/guarded-branch-cleanup-sixth-wave-20261015', { kind: 'merged', pr: 596, sha: '84bf0510ff971f8708c56328b5eaec62734bbbfb' }],
+              ['chore/reconcile-unicode-263-20261016', { kind: 'merged', pr: 598, sha: '48662fdb88addadb5ace05606fda23113976c328' }],
               // Seventh wave: #263's exact closed head is superseded by
               // merged #264's bundled/licensed Canadian Aboriginal font.
               // The old branch's nonessential build-time downloads must not
