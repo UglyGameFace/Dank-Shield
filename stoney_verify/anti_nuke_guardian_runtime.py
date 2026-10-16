@@ -731,6 +731,22 @@ async def _rest_reconcile(guild: discord.Guild, entry: Any, action_name: str, sp
 async def _process(guild: discord.Guild, entry: Any, actor: Any, action_name: str, spec: tuple[str, str, str, Optional[int]]) -> None:
     label, threshold_key, counter_key, override = spec
     panic_active, panic_triggered, observed = _panic_state(guild, actor, action_name, entry=entry)
+    panic_override = 1 if panic_active else override
+    if panic_active:
+        # Correlation with somebody else's actions is not proof that an
+        # explicitly trusted operator (or operational bot) turned hostile.
+        # Preserve per-actor thresholds. Strict Lockdown's own explicit
+        # first-strike override in spec remains intact.
+        if bool(getattr(actor, "bot", False)):
+            panic_override = override
+        else:
+            try:
+                settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+                if anti_nuke._actor_is_configured_trusted(actor, settings):  # noqa: SLF001
+                    panic_override = override
+            except Exception:
+                # Missing policy cannot justify a new panic-only first strike.
+                panic_override = override
     handled = await anti_nuke._process_claimed_destructive_event(  # noqa: SLF001
         guild,
         entry=entry,
@@ -738,7 +754,7 @@ async def _process(guild: discord.Guild, entry: Any, actor: Any, action_name: st
         action_label=label,
         target_label=_target_label(action_name, entry),
         threshold_key=threshold_key,
-        threshold_override=1 if panic_active else override,
+        threshold_override=panic_override,
     )
     if not handled:
         _clear_panic(int(guild.id))
