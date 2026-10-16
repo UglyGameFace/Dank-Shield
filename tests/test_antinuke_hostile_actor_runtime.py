@@ -302,6 +302,12 @@ def test_only_hard_identity_link_inherits_hostile_disposition(monkeypatch) -> No
     monkeypatch.setattr(runtime, "mark_confirmed_hostile", mark)
     monkeypatch.setattr(runtime, "_enforce_reputation_member", enforce)
 
+    # This test is about hard-linked *untrusted* identities. A separate test
+    # asserts that trusted moderators cannot inherit the hostile record.
+    async def untrusted_actor(_guild, _actor):
+        return None
+
+    monkeypatch.setattr(runtime, "_automatic_containment_blocker", untrusted_actor)
     asyncio.run(runtime._on_member_join(member))
 
     assert recorded == [(123, 66, 55)]
@@ -379,6 +385,12 @@ def test_message_backstop_does_not_exempt_known_hostile_bot(monkeypatch) -> None
     monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
     monkeypatch.setattr(runtime, "_enforce_reputation_member", enforce)
 
+    # This known-hostile bot is deliberately untrusted. Keep the regression
+    # about untrusted bot enforcement independent of the new trusted-staff gate.
+    async def untrusted_actor(_guild, _actor):
+        return None
+
+    monkeypatch.setattr(runtime, "_automatic_containment_blocker", untrusted_actor)
     message = FakeMessage()
     asyncio.run(runtime._on_message_known_hostile(message))
 
