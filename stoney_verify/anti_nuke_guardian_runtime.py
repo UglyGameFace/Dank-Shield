@@ -617,6 +617,11 @@ async def _contain_observed_peers(
         peer_id = _safe_int(getattr(peer, "id", 0), 0)
         if peer_id <= 0 or peer_id == current_id or anti_nuke._actor_is_owner_or_bot(guild, peer):  # noqa: SLF001
             continue
+        # Seeing a bot in a mixed burst is not independent evidence that it is
+        # hostile. Canonical per-event thresholds and known-hostile re-entry
+        # enforcement still apply to that bot.
+        if bool(getattr(peer, "bot", False)):
+            continue
         if anti_nuke._actor_is_configured_trusted(peer, settings):  # noqa: SLF001
             continue
         removed, failures = await _contain_peer(guild, peer)
