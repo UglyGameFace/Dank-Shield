@@ -158,6 +158,11 @@ jobs:
               ['chore/remove-supabase-sync-verifier', { kind: 'merged', pr: 155, sha: 'ab41128b4335af29f21d9766f78bc69abee32695' }],
               ['chore/verify-ticket-counter-production', { kind: 'merged', pr: 159, sha: '4ccbf727eb69f2ca3e11bf78a4567e6865bcbe3e' }],
               ['chore/guarded-branch-cleanup-fourth-wave-20261015', { kind: 'merged', pr: 585, sha: 'c92fe20e89f80698f5c7b3f20dd070820853d963' }],
+              // Seventh wave: #263's exact closed head is superseded by
+              // merged #264's bundled/licensed Canadian Aboriginal font.
+              // The old branch's nonessential build-time downloads must not
+              // replace the working no-network asset on current main.
+              ['fix/welcome-card-long-tail-unicode', { kind: 'superseded', pr: 263, replacement: 264, sha: '25047b33bd51f7f066992802ef466276ceee7056' }],
               // Sixth wave: exact-head merged PRs. Linked-production refs below
               // additionally require ancestry of BOTH current main and the
               // still-linked Discloud branch before any owner-directed deletion.
