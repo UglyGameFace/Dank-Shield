@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
-
-from discord import app_commands
-
+# The canonical DankCommandTree in command_runtime.py owns synchronization.
+# This guard may still install legacy ID verification compatibility, but it must
+# never replace discord.app_commands.CommandTree.sync process-wide.
 _READY = False
-_ORIGINAL_SYNC = None
 
 
 def _log(message: str) -> None:
@@ -24,24 +22,6 @@ def _install_panel_command() -> bool:
         return False
 
 
-def _install_sync_hook() -> bool:
-    global _ORIGINAL_SYNC
-    if getattr(app_commands.CommandTree.sync, "_verify_panel_ready", False):
-        return True
-    try:
-        _ORIGINAL_SYNC = app_commands.CommandTree.sync
-
-        async def sync_with_panel(self: app_commands.CommandTree[Any], *args: Any, **kwargs: Any):
-            _install_panel_command()
-            return await _ORIGINAL_SYNC(self, *args, **kwargs)  # type: ignore[misc]
-
-        setattr(sync_with_panel, "_verify_panel_ready", True)
-        app_commands.CommandTree.sync = sync_with_panel  # type: ignore[assignment]
-        return True
-    except Exception:
-        return False
-
-
 def _install_legacy_allowlist() -> bool:
     try:
         from stoney_verify.startup_guards import id_verify_allowlist_guard
@@ -56,13 +36,12 @@ def apply() -> bool:
     if _READY:
         _install_panel_command()
         return True
-    a = _install_legacy_allowlist()
-    c = _install_panel_command()
-    d = _install_sync_hook()
-    _READY = bool(a or c or d)
+    allowlist_ready = _install_legacy_allowlist()
+    panel_ready = _install_panel_command()
+    _READY = bool(allowlist_ready or panel_ready)
     if _READY:
         _log(
-            f"active allowlist={a} panel={c} sync={d} "
+            f"active allowlist={allowlist_ready} panel={panel_ready} "
             "basic_button_owner=native_runtime"
         )
     return _READY
