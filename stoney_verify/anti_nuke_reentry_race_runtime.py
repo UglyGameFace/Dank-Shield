@@ -410,6 +410,16 @@ async def _fast_member_join(member: Any) -> None:
     ).lower() != "contain":
         return
 
+    # This fast direct ban and canonical kick fallback bypass durable_contain.
+    # Resolve trust and fresh owner policy before irreversible enforcement.
+    blocker = await hostile._automatic_containment_blocker(guild, member)
+    if blocker is not None:
+        print(
+            "🛡️ AntiNuke fast re-entry containment suppressed "
+            f"guild={guild.id} actor={uid} reason={blocker}"
+        )
+        return
+
     classification = str(reputation.get("classification") or "confirmed_destructive_actor")
     banned, response = await hostile._ban_identity(  # noqa: SLF001
         guild,
@@ -477,6 +487,16 @@ def _patch_guardian() -> bool:
             settings.get("antinuke_mode") or ""
         ).lower() != "contain":
             return await original_bot_add(guild, entry, actor)
+
+        # Resolve the target's current trust before direct ban or integration
+        # removal. A role-less audit user is not evidence of being untrusted.
+        blocker = await hostile._automatic_containment_blocker(guild, target)
+        if blocker is not None:
+            print(
+                "🛡️ AntiNuke fast known-hostile bot containment suppressed "
+                f"guild={guild.id} target={target_id} reason={blocker}"
+            )
+            return
 
         actor_id = hostile._actor_id(actor)  # noqa: SLF001
         if actor_id > 0:
