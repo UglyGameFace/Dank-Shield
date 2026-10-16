@@ -217,3 +217,37 @@ def test_creation_policy_fails_safe_for_incomplete_settings() -> None:
         "antinuke_strict_lockdown": "false"
     }) is False
     assert anti_nuke._creation_containment_authorized(settings(strict=True)) is True
+
+
+@pytest.mark.parametrize("action", ("channel_create", "webhook_create"))
+@pytest.mark.parametrize("missing", ("actor", "target"))
+def test_strict_creation_rollback_requires_attributed_actor_and_target(
+    monkeypatch, action: str, missing: str
+) -> None:
+    resource = Resource(98000)
+    guild = Guild(resource)
+    audit = entry(guild, action, 7090)
+    if missing == "actor":
+        audit.user = SimpleNamespace(id=0, roles=[], bot=False)
+    else:
+        audit.target = SimpleNamespace(id=None, name="unknown")
+
+    async def get_settings(_guild_id: int):
+        return settings(strict=True)
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", get_settings)
+
+    if action == "channel_create":
+        result = asyncio.run(
+            guardian._rollback_untrusted_creation(
+                guild, audit, audit.user, action
+            )
+        )
+    else:
+        result = asyncio.run(
+            gateway._rollback_untrusted_webhook_create(
+                guild, audit, audit.user
+            )
+        )
+    assert "missing" in result or "incomplete" in result
+    assert resource.deleted is False
