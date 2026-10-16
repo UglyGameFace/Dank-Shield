@@ -221,3 +221,44 @@ def test_panic_peer_containment_excludes_trusted_staff_and_bots(monkeypatch) -> 
     assert contained == [505]
     assert "Peer actors contained: 505" in responses[0]
     _reset()
+
+
+def test_panic_keeps_trusted_actor_thresholds_and_explicit_strict_policy(monkeypatch) -> None:
+    import time
+
+    _reset()
+    guild = FakeGuild()
+    overrides: list[tuple[int, object]] = []
+
+    async def settings(_guild_id: int):
+        return {
+            "antinuke_enabled": True,
+            "antinuke_mode": "contain",
+            "antinuke_trusted_user_ids": [502],
+            "antinuke_trusted_role_ids": [],
+        }
+
+    async def process(_guild, **kwargs):
+        overrides.append((int(kwargs["entry"].user.id), kwargs["threshold_override"]))
+        return True
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    monkeypatch.setattr(anti_nuke, "_process_claimed_destructive_event", process)
+    guardian._PANIC_UNTIL[guild.id] = time.monotonic() + 60
+
+    def run(actor, override=None):
+        asyncio.run(
+            guardian._process(
+                guild, SimpleNamespace(user=actor, target=None),
+                actor, "role_delete",
+                ("Role deleted", "antinuke_role_delete_threshold", "role_delete", override),
+            )
+        )
+
+    run(SimpleNamespace(id=502, bot=False, roles=[]))
+    run(SimpleNamespace(id=503, bot=False, roles=[]))
+    run(SimpleNamespace(id=504, bot=True, roles=[]))
+    run(SimpleNamespace(id=502, bot=False, roles=[]), override=1)
+
+    assert overrides == [(502, None), (503, 1), (504, None), (502, 1)]
+    _reset()
