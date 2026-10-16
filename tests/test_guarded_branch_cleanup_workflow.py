@@ -101,7 +101,7 @@ def test_reviewed_wave_is_frozen_and_requires_supersession_evidence() -> None:
 def test_reviewed_wave_has_exact_frozen_retirement_count() -> None:
     text = _workflow()
     manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
-    assert manifest.count("kind: 'merged'") == 85
+    assert manifest.count("kind: 'merged'") == 89
     assert manifest.count("kind: 'superseded'") == 7
     assert manifest.count("kind: 'closed-record'") == 3
     assert manifest.count("kind: 'ancestor-only'") == 7
@@ -119,7 +119,7 @@ def test_fourth_wave_requires_live_git_ancestry_and_exact_records() -> None:
     assert "inUseByOpenPR.has(name)" in text
     assert "current.protected || current.commit.sha !== candidate.sha" in text
     manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
-    assert manifest.count("kind:") == 107
+    assert manifest.count("kind:") == 111
     for branch in (
         "aaa-cinema-pre-pregateway-bind",
         "feat/cinema-library-intelligence",
@@ -158,8 +158,8 @@ def test_sixth_wave_exact_sha_and_discloud_dual_ancestry() -> None:
     text = _workflow()
     manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
     assert manifest.count("kind: 'linked-ancestor'") == 5
-    assert manifest.count("kind: 'merged'") == 85
-    assert manifest.count("kind:") == 107
+    assert manifest.count("kind: 'merged'") == 89
+    assert manifest.count("kind:") == 111
     assert "async function ancestorOfLinkedDiscloud(sha)" in text
     assert "if (!await ancestorOfMain(branch.commit.sha)) continue;" in text
     assert "if (!await ancestorOfLinkedDiscloud(branch.commit.sha)) continue;" in text
@@ -403,3 +403,40 @@ def test_tenth_wave_merged_heads_and_archive_guard() -> None:
         "fix/ticket-panel-legacy-interaction-recovery-20260924",
     ):
         assert f"['{held}', {{ kind:" not in manifest
+
+
+def test_eleventh_wave_completed_master_audit_branches_are_exact_frozen_merged_heads() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
+    expected = [
+        ("audit/production-command-contract-stoney-legacy-20261016", 603, "5aad13f4fd158083d1d1852f94afba0766bac1f0"),
+        ("audit/retire-duplicate-usercustomize-20261016", 604, "b68733954c8ed5abc06c2abef758bc8f777cc382"),
+        ("audit/verify-sync-native-ownership-20261016", 605, "ff7e6868d3ce0d9302c3edf8b93db8d64ff2dbc0"),
+        ("chore/tag-archive-retired-merged-branches-20261016", 601, "f5bc96f3040308df17613a2a193f5b0bf2a0fe03"),
+    ]
+    assert len(expected) == 4
+    for name, pr, sha in expected:
+        assert manifest.count(
+            f"['{name}', {{ kind: 'merged', pr: {pr}, sha: '{sha}' }}]"
+        ) == 1
+    for held in (
+        "main", "aaa-cinema-pre-pregateway-bind",
+        "backup/stoneyverify-stable-7fdc331-20261008",
+        "chore/automate-supabase-migrations",
+        "fix/supabase-out-of-order-migrations",
+        "cleanup/schema-authority-consolidation",
+        "fix/live-captions-stable-interim-recovery-20260927",
+        "feat/discloud-pg-atomic-guild-config-20261013",
+        "feature/shared-dank-picker",
+        "fix/ticket-panel-legacy-interaction-recovery-20260924",
+        "feat/cinema-library-intelligence",
+    ):
+        assert f"['{held}', {{ kind:" not in manifest
+    assert "review.sha !== branch.commit.sha" in text
+    assert "prs.some(pr => !pr.merged_at)" in text
+    assert "pr.head.sha === branch.commit.sha" in text
+    assert "inUseByOpenPR.has(name)" in text
+    assert "current.protected || current.commit.sha !== candidate.sha" in text
+    assert "tags/branch-retirement-20261016/${candidate.name}" in text
+    assert "archive.object.sha !== candidate.sha" in text
+    assert text.index("github.rest.git.createRef") < text.index("github.rest.git.deleteRef")
