@@ -1,6 +1,6 @@
 # Dank Shield branch hygiene: reviewed historical retirement
 
-Status: first five owner-run waves completed and verified by branch inventory; sixth wave now prepared for CI, owner preview and a separate owner-confirmed deletion. Scope remains GitHub branch references only, never the Discloud app, main, or runtime data.
+Status: first six owner-run cleanup waves completed; the merged seventh-wave Unicode reconciliation still requires owner preview and separate confirmed branch deletion. Eighth-wave safe retirement for two finished cleanup PR heads is prepared for CI. No automatic deletion. Scope remains GitHub branch references only, never the Discloud app, main, or runtime data.
 
 ## Verified checkpoint
 
@@ -121,3 +121,14 @@ After this PR's exact-head CI succeeds and it is merged, the repository owner us
 - This is **not** a claim of all-script Unicode font coverage or deployed production validation. Any separately proven missing glyphs remain a new scoped bug, not grounds to merge the obsolete #263 wholesale.
 - Seventh-wave safe retirement adds one exact-name/head-SHA `superseded` record: closed-unmerged #263, replacement merged #264. The existing guarded workflow will recheck both PR records, branch protection, current head SHA, and open PR references. Deletion is **manual after merge and preview**.
 - Until the owner explicitly runs the verified delete workflow, the old branch remains intact; `main`, `aaa-cinema-pre-pregateway-bind`, backups, recovery, migration, and all other open/reconciliation branches remain untouched.
+
+
+## October 16 eighth-wave exact-head cleanup: merged PRs #596 and #598
+
+- Current GitHub inventory after owner-run sixth-wave retirement: **114 branches**, with `main` at alphabetical position **98**; **zero open PRs**. GitHub still holds the previous seventh-wave candidate `fix/welcome-card-long-tail-unicode` (closed-unmerged PR #263, exact unchanged head) because merging #598 alone does not delete it.
+- Verified **unchanged, unprotected, merged-to-main** PR heads for two completed reconciliation branches:
+  - PR #596 `chore/guarded-branch-cleanup-sixth-wave-20261015` at `84bf0510ff971f8708c56328b5eaec62734bbbfb` (the sixth-wave cleanup code is already merged; its branch is no longer the source of truth).
+  - PR #598 `chore/reconcile-unicode-263-20261016` at `48662fdb88addadb5ace05606fda23113976c328` (the original Unicode regression and safe cleanup guard are merged; retiring the work branch does not affect the bundled font).
+- The **same existing owner-only** reviewed cleanup manifest gains exactly these two frozen entries. It must recheck merged PR identity, exact branch SHA, protection, and open PR use. No new deletion path, no runtime/bot/DB edits.
+- The old PR #9 `feature/setup-picker-wizard` remains on **hold**: the legacy `/stoney` picker and current `/dank` picker have the same 18 saved configuration keys and corresponding validation/interaction sections, and initial picker commits `1d3551d96d6e5071f5ea8b0945d4df04698e499a` and `70243f7ac52c9d648c2c98964bd242dbe98e801e` are ancestors of `main`. However the original draft branch is diverged, and an individually verified retirement record has not yet been admitted. Do not merge or delete it in this slice.
+- **Next gate:** after this draft PR passes exact-head CI and merges, owner runs **Actions → Guarded merged-branch cleanup → preview-reviewed** and inspects the expected *up to three* new eligible candidates (#263, #596, #598). Then separately run **delete-reviewed** with `DELETE_REVIEWED_HISTORICAL_BRANCHES`. Expect 112 branches if this PR contributes one new branch and the three eligible candidates are all retired with no concurrent changes. `main`, the linked `aaa-cinema-pre-pregateway-bind`, backups, migrations, and unfinished heads remain preserved. Verify the actual Discloud branch picker after deletion; branch reduction alone does not prove `main` is selectable.
