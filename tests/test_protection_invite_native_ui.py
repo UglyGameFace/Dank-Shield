@@ -101,31 +101,81 @@ def test_scope_save_writes_canonical_and_compat_aliases(monkeypatch: pytest.Monk
     assert policy_invalidated == [42]
 
 
-def test_policy_scope_binding_augments_policy_loader_without_patching_spam_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_native_policy_load_reads_guild_config_scope_without_global_binding(monkeypatch: pytest.MonkeyPatch) -> None:
+    from stoney_verify import guild_config, spam_guard
+
     cfg = {
         scope.ALL_BOTS_KEY: True,
         scope.BOT_IDS_KEY: ["111"],
         scope.CHANNEL_IDS_KEY: ["222"],
         scope.PROTECTED_RULE_KEY: True,
     }
+    calls: list[tuple[str, int, bool]] = []
 
-    async def fake_load(guild: Any, *, refresh: bool = False):
-        _ = guild, refresh
-        return cfg, {"enabled": True}
+    async def fake_config(guild_id: int, *, refresh: bool = False):
+        calls.append(("config", guild_id, refresh))
+        return dict(cfg)
 
-    monkeypatch.setattr(invite_policy_engine, "load_invite_policy", fake_load)
-    monkeypatch.setattr(scope, "_POLICY_BOUND", False)
-    monkeypatch.setattr(scope, "_ORIGINAL_POLICY_LOAD", None)
+    async def fake_spam(guild_id: int):
+        calls.append(("spam", guild_id, False))
+        return {"enabled": True}
 
-    assert scope.install_invite_policy_scope_binding() is True
-    loaded_cfg, settings = asyncio.run(invite_policy_engine.load_invite_policy(SimpleNamespace(id=7), refresh=True))
+    monkeypatch.setattr(guild_config, "get_guild_config", fake_config)
+    monkeypatch.setattr(spam_guard, "get_spam_settings", fake_spam)
+    invite_policy_engine.invalidate_invite_policy(7001)
+    try:
+        loaded_cfg, settings = asyncio.run(
+            invite_policy_engine.load_invite_policy(SimpleNamespace(id=7001), refresh=True)
+        )
+        assert loaded_cfg == cfg
+        assert settings["enabled"] is True
+        assert settings[scope.ALL_BOTS_KEY] is True
+        assert settings[scope.BOT_IDS_KEY] == ["111"]
+        assert settings[scope.CHANNEL_IDS_KEY] == ["222"]
+        assert settings[scope.PROTECTED_RULE_KEY] is True
+        assert settings[f"spam_{scope.CHANNEL_IDS_KEY}"] == ["222"]
+        assert calls == [("config", 7001, True), ("spam", 7001, False)]
+        cached_cfg, cached_settings = asyncio.run(
+            invite_policy_engine.load_invite_policy(SimpleNamespace(id=7001))
+        )
+        assert cached_cfg == cfg
+        assert cached_settings == settings
+        assert len(calls) == 2
+    finally:
+        invite_policy_engine.invalidate_invite_policy(7001)
 
-    assert loaded_cfg is cfg
-    assert settings["enabled"] is True
-    assert settings[scope.ALL_BOTS_KEY] is True
-    assert settings[scope.BOT_IDS_KEY] == ["111"]
-    assert settings[scope.CHANNEL_IDS_KEY] == ["222"]
-    assert settings[scope.PROTECTED_RULE_KEY] is True
+
+def test_native_policy_load_preserves_per_guild_target_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
+    from stoney_verify import guild_config, spam_guard
+
+    async def fake_config(guild_id: int, *, refresh: bool = False):
+        return {
+            scope.ALL_BOTS_KEY: False,
+            scope.BOT_IDS_KEY: [str(guild_id)],
+            scope.CHANNEL_IDS_KEY: [str(guild_id + 1)],
+            scope.PROTECTED_RULE_KEY: True,
+        }
+
+    async def fake_spam(guild_id: int):
+        return {"enabled": bool(guild_id == 7002)}
+
+    monkeypatch.setattr(guild_config, "get_guild_config", fake_config)
+    monkeypatch.setattr(spam_guard, "get_spam_settings", fake_spam)
+    for gid in (7002, 7003):
+        invite_policy_engine.invalidate_invite_policy(gid)
+    try:
+        _, left = asyncio.run(invite_policy_engine.load_invite_policy(SimpleNamespace(id=7002), refresh=True))
+        _, right = asyncio.run(invite_policy_engine.load_invite_policy(SimpleNamespace(id=7003), refresh=True))
+        assert left[scope.BOT_IDS_KEY] == ["7002"]
+        assert right[scope.BOT_IDS_KEY] == ["7003"]
+        assert left[scope.CHANNEL_IDS_KEY] == ["7003"]
+        assert right[scope.CHANNEL_IDS_KEY] == ["7004"]
+        assert left["enabled"] is True
+        assert right["enabled"] is False
+    finally:
+        for gid in (7002, 7003):
+            invite_policy_engine.invalidate_invite_policy(gid)
+
 
 
 def test_native_invite_view_uses_buttons_not_raw_resource_selectors() -> None:
@@ -208,7 +258,9 @@ def test_bootstrap_binds_editor_without_stealing_toggle_ownership() -> None:
     assert "_ORIGINAL_TOGGLE = original" in ui_source
     assert "ProtectionCenterView.__init__ =" not in ui_source
     assert ".callback =" not in ui_source
-    assert "_install_invite_policy_scope_binding" in commands_source
+    assert "_install_invite_policy_scope_binding" not in commands_source
+    assert "def install_invite_policy_scope_binding" not in (Path(scope.__file__).read_text(encoding="utf-8"))
+    assert "merge_scope_settings(settings, normalize_scope(cfg))" in Path(invite_policy_engine.__file__).read_text(encoding="utf-8")
     assert "_install_native_invite_ui" in commands_source
     assert "startup_guards" not in commands_source[commands_source.index("# Invite target metadata"):commands_source.index("# The public Create Ticket button")]
 
