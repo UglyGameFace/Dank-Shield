@@ -541,6 +541,13 @@ def _guild_update_panic_weight(entry: Any) -> int:
 
 
 def _panic_weight(action_name: str, entry: Any = None) -> int:
+    if action_name == "role_create" and entry is not None:
+        role = getattr(entry, "target", None)
+        permissions = getattr(role, "permissions", None)
+        # Only a complete Discord permission snapshot can prove creation was
+        # harmless. Sparse/unknown audit targets keep their existing weight.
+        if isinstance(permissions, discord.Permissions) and not anti_nuke.role_has_dangerous_permissions(role):
+            return 0
     if action_name == "guild_update" and entry is not None:
         return _guild_update_panic_weight(entry)
     if action_name == "role_update" and entry is not None:

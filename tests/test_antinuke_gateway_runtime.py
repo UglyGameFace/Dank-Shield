@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+import discord
 import pytest
 
 from stoney_verify import anti_nuke
@@ -342,4 +343,33 @@ def test_gateway_panic_preserves_trusted_operator_thresholds(
         asyncio.run(gateway._handle_member_timeout(guild, entry, actor))
 
     assert observed == [expected_override]
+    _reset_runtime_state()
+
+
+
+def test_gateway_role_create_passes_full_audit_entry_to_panic_scoring(
+    monkeypatch,
+) -> None:
+    _reset_runtime_state()
+    entry = FakeEntry(
+        8201,
+        "role_create",
+        target=SimpleNamespace(
+            id=93, name="Cosmetic", permissions=discord.Permissions.none()
+        ),
+    )
+    observed: list[object] = []
+
+    def score(_guild, _actor, action, *, entry=None):
+        observed.append((action, entry))
+        return False, False, []
+
+    async def process(_guild, **_kwargs):
+        return True
+
+    monkeypatch.setattr(guardian, "_panic_state", score)
+    monkeypatch.setattr(anti_nuke, "_process_claimed_destructive_event", process)
+    asyncio.run(gateway._handle_role_create(entry.guild, entry))
+
+    assert observed == [("role_create", entry)]
     _reset_runtime_state()

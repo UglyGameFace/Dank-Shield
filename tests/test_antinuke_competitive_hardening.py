@@ -626,3 +626,39 @@ def test_automod_rule_creation_cannot_singlehandedly_trigger_panic() -> None:
 
     assert guild.id not in guardian._PANIC_UNTIL
     _reset()
+
+
+
+def test_verified_harmless_role_creations_cannot_trigger_peer_panic() -> None:
+    _reset()
+    guild = FakeGuild()
+    first, second = _actor(611), _actor(612)
+    entry = SimpleNamespace(
+        target=SimpleNamespace(id=901, permissions=discord.Permissions.none())
+    )
+    assert guardian._panic_weight("role_create", entry) == 0
+
+    for index in range(4):
+        actor = first if index % 2 == 0 else second
+        active, triggered, observed = guardian._panic_state(
+            guild, actor, "role_create", entry=entry
+        )
+        assert active is False
+        assert triggered is False
+        assert observed == []
+
+    assert guild.id not in guardian._PANIC_UNTIL
+    assert not guardian._PANIC_EVENTS[guild.id]
+    _reset()
+
+
+def test_dangerous_or_sparse_role_creation_retains_panic_evidence() -> None:
+    dangerous = SimpleNamespace(
+        target=SimpleNamespace(
+            id=902, permissions=discord.Permissions(administrator=True)
+        )
+    )
+    sparse = SimpleNamespace(target=SimpleNamespace(id=903))
+    assert guardian._panic_weight("role_create", dangerous) == 2
+    assert guardian._panic_weight("role_create", sparse) == 2
+    assert guardian._panic_weight("role_create", None) == 2

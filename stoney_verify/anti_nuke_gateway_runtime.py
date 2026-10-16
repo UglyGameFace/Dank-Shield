@@ -262,6 +262,7 @@ async def _handle_role_create(guild: discord.Guild, entry: Any) -> None:
             guild,
             actor,
             "role_create",
+            entry=entry,
         )
         handled = await anti_nuke._process_claimed_destructive_event(  # noqa: SLF001
             guild,
@@ -296,6 +297,7 @@ async def _handle_role_create(guild: discord.Guild, entry: Any) -> None:
         guild,
         actor,
         "role_create",
+        entry=entry,
     )
     response = "Alert-only mode: newly created dangerous role was left unchanged."
     if settings["antinuke_mode"] == "contain":
