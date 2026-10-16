@@ -257,6 +257,12 @@ async def _handle_role_create(guild: discord.Guild, entry: Any) -> None:
         return
     actor = getattr(entry, "user", None)
 
+    # A verified permission-free/cosmetic role is not destructive evidence.
+    # The same classification excludes it from coordinated panic scoring.
+    # Sparse permission snapshots still use the conservative existing path.
+    if guardian._verified_harmless_role_create(entry):  # noqa: SLF001
+        return
+
     if not anti_nuke.role_has_dangerous_permissions(role):
         panic_active, panic_triggered, observed = guardian._panic_state(  # noqa: SLF001
             guild,

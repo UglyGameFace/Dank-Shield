@@ -652,6 +652,25 @@ def test_verified_harmless_role_creations_cannot_trigger_peer_panic() -> None:
     _reset()
 
 
+def test_role_creation_safety_classification_requires_proven_permissions() -> None:
+    harmless = SimpleNamespace(
+        target=SimpleNamespace(
+            id=991, permissions=discord.Permissions.none()
+        )
+    )
+    risky = SimpleNamespace(
+        target=SimpleNamespace(
+            id=992, permissions=discord.Permissions(manage_roles=True)
+        )
+    )
+    partial = SimpleNamespace(
+        target=SimpleNamespace(id=993, permissions=SimpleNamespace())
+    )
+    assert guardian._verified_harmless_role_create(harmless) is True
+    assert guardian._verified_harmless_role_create(risky) is False
+    assert guardian._verified_harmless_role_create(partial) is False
+
+
 def test_dangerous_or_sparse_role_creation_retains_panic_evidence() -> None:
     dangerous = SimpleNamespace(
         target=SimpleNamespace(

@@ -347,16 +347,13 @@ def test_gateway_panic_preserves_trusted_operator_thresholds(
 
 
 
-def test_gateway_role_create_passes_full_audit_entry_to_panic_scoring(
+def test_gateway_sparse_role_creation_preserves_audit_proof_for_scoring(
     monkeypatch,
 ) -> None:
     _reset_runtime_state()
     entry = FakeEntry(
-        8201,
-        "role_create",
-        target=SimpleNamespace(
-            id=93, name="Cosmetic", permissions=discord.Permissions.none()
-        ),
+        8201, "role_create",
+        target=SimpleNamespace(id=93, name="Sparse", permissions=None),
     )
     observed: list[object] = []
 
@@ -372,4 +369,29 @@ def test_gateway_role_create_passes_full_audit_entry_to_panic_scoring(
     asyncio.run(gateway._handle_role_create(entry.guild, entry))
 
     assert observed == [("role_create", entry)]
+    _reset_runtime_state()
+
+
+def test_gateway_verified_harmless_role_create_skips_destructive_engine(
+    monkeypatch,
+) -> None:
+    _reset_runtime_state()
+    actor = SimpleNamespace(id=731, bot=False, roles=[])
+    entry = FakeEntry(
+        8202, "role_create", actor=actor,
+        target=SimpleNamespace(
+            id=94, name="Cosmetic", permissions=discord.Permissions.none()
+        ),
+    )
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("verified harmless role creation is non-punitive")
+
+    def no_panic(*_args, **_kwargs):
+        raise AssertionError("verified harmless role creation is not panic evidence")
+
+    monkeypatch.setattr(anti_nuke, "_process_claimed_destructive_event", forbidden)
+    monkeypatch.setattr(guardian, "_panic_state", no_panic)
+    asyncio.run(gateway._on_audit_log_entry_create(entry))
+    assert anti_nuke._audit_entry_seen(entry) is True
     _reset_runtime_state()
