@@ -709,6 +709,63 @@ async def _enforce_reputation_member(
     return True
 
 
+async def _automatic_containment_blocker(guild: Any, actor: Any) -> str | None:
+    """Fail closed before automatic ban/reputation for trusted staff.
+
+    Discord audit entries often supply a User with no role information. Never
+    interpret missing audit-event roles as proof that an actor is untrusted.
+    Refresh guild config so recent trust-list edits cannot be hidden by cache.
+    """
+    from . import anti_nuke
+
+    guild_id = _safe_int(getattr(guild, "id", 0), 0)
+    actor_id = _actor_id(actor)
+    if guild_id <= 0 or actor_id <= 0:
+        return "unresolved guild or audit actor"
+    try:
+        settings = await anti_nuke.get_antinuke_settings(guild_id, refresh=True)
+    except Exception:
+        return "current AntiNuke settings unavailable"
+    if not bool(settings.get("antinuke_enabled", False)):
+        return "AntiNuke disabled"
+    if str(settings.get("antinuke_mode") or "").lower() != "contain":
+        return "AntiNuke alert-only mode"
+
+    if anti_nuke._actor_is_configured_trusted(actor, settings):
+        return "configured trusted moderator"
+
+    trusted_roles = set(anti_nuke._safe_id_list(
+        settings.get("antinuke_trusted_role_ids")
+    ))
+    if not trusted_roles:
+        return None
+
+    # A cached guild member may already prove trust. Otherwise, fetch the
+    # up-to-date Discord member before considering irreversible punishment.
+    cached = None
+    try:
+        cached = guild.get_member(actor_id)
+    except Exception:
+        pass
+    if cached is not None and anti_nuke._actor_is_configured_trusted(
+        cached, settings
+    ):
+        return "configured trusted moderator role"
+
+    fetch_member = getattr(guild, "fetch_member", None)
+    if not callable(fetch_member):
+        return "trusted-role membership cannot be verified"
+    try:
+        current_member = await fetch_member(actor_id)
+    except Exception:
+        return "trusted-role membership cannot be verified"
+    if current_member is None:
+        return "trusted-role membership cannot be verified"
+    if anti_nuke._actor_is_configured_trusted(current_member, settings):
+        return "configured trusted moderator role"
+    return None
+
+
 def _patch_antinuke(anti_nuke: Any) -> None:
     if bool(getattr(anti_nuke, _PATCH_FLAG, False)):
         return
@@ -726,6 +783,14 @@ def _patch_antinuke(anti_nuke: Any) -> None:
         actor_id = _actor_id(actor)
         if actor_id <= 0 or _is_owner(guild, actor_id):
             return await original_contain(guild, actor, reason=reason)
+
+        blocker = await _automatic_containment_blocker(guild, actor)
+        if blocker is not None:
+            print(
+                "🛡️ AntiNuke automatic punishment suppressed "
+                f"guild={guild.id} actor={actor_id} reason={blocker}"
+            )
+            return [], [f"automatic containment skipped: {blocker}"]
 
         member = actor
         if member is None or _actor_id(member) <= 0:
