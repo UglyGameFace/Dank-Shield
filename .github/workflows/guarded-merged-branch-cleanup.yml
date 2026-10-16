@@ -161,6 +161,10 @@ jobs:
               // Eighth wave: completed guarded-cleanup reconciliation PRs.
               ['chore/guarded-branch-cleanup-sixth-wave-20261015', { kind: 'merged', pr: 596, sha: '84bf0510ff971f8708c56328b5eaec62734bbbfb' }],
               ['chore/reconcile-unicode-263-20261016', { kind: 'merged', pr: 598, sha: '48662fdb88addadb5ace05606fda23113976c328' }],
+              // Ninth wave: superseded original setup picker and completed
+              // eighth-wave cleanup PR; preserve all unrelated unmerged heads.
+              ['feature/setup-picker-wizard', { kind: 'superseded', pr: 9, replacement: 241, sha: 'a79ec6441a66de41bdab5110c5ebac2a9ab0fd81' }],
+              ['chore/guarded-branch-cleanup-eighth-wave-20261016', { kind: 'merged', pr: 599, sha: '16a7292cecfb8ff73aab2ab50c108287280da940' }],
               // Seventh wave: #263's exact closed head is superseded by
               // merged #264's bundled/licensed Canadian Aboriginal font.
               // The old branch's nonessential build-time downloads must not

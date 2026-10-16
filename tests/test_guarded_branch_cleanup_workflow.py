@@ -101,8 +101,8 @@ def test_reviewed_wave_is_frozen_and_requires_supersession_evidence() -> None:
 def test_reviewed_wave_has_exact_frozen_retirement_count() -> None:
     text = _workflow()
     manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
-    assert manifest.count("kind: 'merged'") == 47
-    assert manifest.count("kind: 'superseded'") == 6
+    assert manifest.count("kind: 'merged'") == 48
+    assert manifest.count("kind: 'superseded'") == 7
     assert manifest.count("kind: 'closed-record'") == 3
     assert manifest.count("kind: 'ancestor-only'") == 1
     for pr in (46, 94, 171, 214, 216, 229):
@@ -119,7 +119,7 @@ def test_fourth_wave_requires_live_git_ancestry_and_exact_records() -> None:
     assert "inUseByOpenPR.has(name)" in text
     assert "current.protected || current.commit.sha !== candidate.sha" in text
     manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
-    assert manifest.count("kind:") == 62
+    assert manifest.count("kind:") == 64
     for branch in (
         "aaa-cinema-pre-pregateway-bind",
         "feat/cinema-library-intelligence",
@@ -158,8 +158,8 @@ def test_sixth_wave_exact_sha_and_discloud_dual_ancestry() -> None:
     text = _workflow()
     manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
     assert manifest.count("kind: 'linked-ancestor'") == 5
-    assert manifest.count("kind: 'merged'") == 47
-    assert manifest.count("kind:") == 62
+    assert manifest.count("kind: 'merged'") == 48
+    assert manifest.count("kind:") == 64
     assert "async function ancestorOfLinkedDiscloud(sha)" in text
     assert "if (!await ancestorOfMain(branch.commit.sha)) continue;" in text
     assert "if (!await ancestorOfLinkedDiscloud(branch.commit.sha)) continue;" in text
@@ -246,7 +246,6 @@ def test_eighth_wave_exact_merged_cleanup_heads_preserved() -> None:
     for retained in (
         "main",
         "aaa-cinema-pre-pregateway-bind",
-        "feature/setup-picker-wizard",
         "feat/cinema-library-intelligence",
         "fix/source-backup-large-toc-stream-20261013",
         "backup/stoneyverify-stable-7fdc331-20261008",
@@ -255,3 +254,72 @@ def test_eighth_wave_exact_merged_cleanup_heads_preserved() -> None:
     assert "pr.head.sha === branch.commit.sha" in text
     assert "inUseByOpenPR.has(name)" in text
     assert "current.protected || current.commit.sha !== candidate.sha" in text
+
+
+def test_ninth_wave_retains_current_setup_and_exact_historical_heads() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
+    expected = {
+        "feature/setup-picker-wizard": (
+            "superseded", 9, "a79ec6441a66de41bdab5110c5ebac2a9ab0fd81",
+        ),
+        "chore/guarded-branch-cleanup-eighth-wave-20261016": (
+            "merged", 599, "16a7292cecfb8ff73aab2ab50c108287280da940",
+        ),
+    }
+    for branch, (kind, pr, sha) in expected.items():
+        if kind == "superseded":
+            expected_entry = (
+                f"['{branch}', {{ kind: 'superseded', pr: {pr}, "
+                f"replacement: 241, sha: '{sha}' }}]"
+            )
+        else:
+            expected_entry = (
+                f"['{branch}', {{ kind: 'merged', pr: {pr}, sha: '{sha}' }}]"
+            )
+        assert manifest.count(expected_entry) == 1
+    # Do not widen the manifest to held migration, production or unique-commit refs.
+    for retained in (
+        "aaa-cinema-pre-pregateway-bind",
+        "main",
+        "feat/native-welcome-cards",
+        "feat/cinema-library-intelligence",
+        "fix/ticket-panel-legacy-interaction-recovery-20260924",
+        "fix/source-backup-large-toc-stream-20261013",
+        "backup/stoneyverify-stable-7fdc331-20261008",
+    ):
+        assert f"['{retained}', {{ kind:" not in manifest
+
+
+def test_current_setup_picker_preserves_closed_pr9_configuration_contract() -> None:
+    # PR #9's old /stoney wizard is replaced by the current /dank setup picker.
+    # Do not reintroduce the older command group or its duplicate registration.
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "stoney_verify/commands_ext/public_setup_picker.py").read_text(
+        encoding="utf-8"
+    )
+    command_modules = (root / "stoney_verify/commands_ext/__init__.py").read_text(
+        encoding="utf-8"
+    )
+    assert '@dank_group.command(name="setup-picker"' in source
+    assert '("public_setup_picker", "register_public_setup_picker_commands",' in command_modules
+    assert "stoney_group.add_command" not in source
+    for key in (
+        "ticket_category_id", "ticket_archive_category_id", "staff_role_id",
+        "vc_staff_role_id", "transcripts_channel_id",
+        "verify_channel_id", "unverified_role_id", "verified_role_id",
+        "resident_role_id", "vc_verify_channel_id", "vc_verify_queue_channel_id",
+        "modlog_channel_id", "raidlog_channel_id", "join_log_channel_id",
+        "force_verify_log_channel_id", "configured_by_id",
+        "configured_by_name", "configured_at",
+    ):
+        assert f'"{key}"' in source
+    for required in (
+        "_require_setup_permission", "discord.ui.ChannelSelect",
+        "discord.ui.RoleSelect", "_validate_ticket_setup",
+        "_validate_verify_setup", "_validate_log_setup",
+        "upsert_guild_config", "invalidate_guild_config",
+        "class SetupPickerHome", "class TicketPicker",
+        "class VerifyPicker", "class VCPicker", "class LogPicker",
+    ):
+        assert required in source
