@@ -94,6 +94,12 @@ def test_antinuke_containment_bans_and_records_confirmed_actor(monkeypatch, tmp_
         bot=SimpleNamespace(user=SimpleNamespace(id=777)),
     )
 
+    # Focus these preexisting tests on the untrusted punitive execution path;
+    # dedicated tests below exercise the real fresh-state safety preflight.
+    async def permit_untrusted(_guild, _actor):
+        return None
+
+    monkeypatch.setattr(runtime, "_automatic_containment_blocker", permit_untrusted)
     runtime._patch_antinuke(fake_antinuke)
     removed, blocked = asyncio.run(
         fake_antinuke._contain_actor(
@@ -142,6 +148,12 @@ def test_antinuke_containment_keeps_canonical_fallback_when_ban_fails(
         bot=SimpleNamespace(user=SimpleNamespace(id=777)),
     )
 
+    # Focus these preexisting tests on the untrusted punitive execution path;
+    # dedicated tests below exercise the real fresh-state safety preflight.
+    async def permit_untrusted(_guild, _actor):
+        return None
+
+    monkeypatch.setattr(runtime, "_automatic_containment_blocker", permit_untrusted)
     runtime._patch_antinuke(fake_antinuke)
     removed, blocked = asyncio.run(
         fake_antinuke._contain_actor(guild, member, reason="destructive action")
@@ -564,3 +576,142 @@ def test_delegated_admin_unban_does_not_clear_hostile_record(monkeypatch) -> Non
 
     asyncio.run(runtime._on_member_unban(guild, user))
     assert clears == []
+
+
+def test_trusted_role_on_current_member_blocks_hostile_mark_and_ban(monkeypatch, tmp_path) -> None:
+    from stoney_verify import anti_nuke
+
+    _reset_runtime(monkeypatch, tmp_path)
+    member = FakeMember(55)
+    member.roles = [SimpleNamespace(id=9001)]
+    guild = FakeGuild(member)
+    member.guild = guild
+    audit_actor = FakeMember(55)
+    audit_actor.roles = []
+    audit_actor.guild = guild
+    fallback_calls = []
+
+    async def settings(_guild_id, *, refresh=False):
+        assert refresh is True
+        return {
+            "antinuke_enabled": True,
+            "antinuke_mode": "contain",
+            "antinuke_trusted_user_ids": [],
+            "antinuke_trusted_role_ids": [9001],
+        }
+
+    async def fallback(*_args, **_kwargs):
+        fallback_calls.append(True)
+        return ["removed member"], []
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    fake_antinuke = SimpleNamespace(
+        _contain_actor=fallback,
+        antinuke_permission_health=lambda *_: [],
+        normalize_antinuke_settings=lambda obj: dict(obj or {}),
+    )
+    runtime._patch_antinuke(fake_antinuke)
+    removed, blocked = asyncio.run(fake_antinuke._contain_actor(
+        guild, audit_actor, reason="dangerous role permission escalation"
+    ))
+    assert removed == []
+    assert "trusted moderator role" in blocked[0]
+    assert guild.banned == []
+    assert guild.kicked == []
+    assert fallback_calls == []
+    assert asyncio.run(runtime.get_actor_reputation(123, 55)) is None
+
+
+def test_trusted_user_id_blocks_containment_even_without_member_roles(monkeypatch, tmp_path) -> None:
+    from stoney_verify import anti_nuke
+
+    _reset_runtime(monkeypatch, tmp_path)
+    guild = FakeGuild()
+    actor = FakeMember(55, guild)
+    async def settings(_gid, *, refresh=False):
+        assert refresh is True
+        return {
+            "antinuke_enabled": True, "antinuke_mode": "contain",
+            "antinuke_trusted_user_ids": [55], "antinuke_trusted_role_ids": [],
+        }
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("trusted staff containment must not execute")
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    fake = SimpleNamespace(_contain_actor=forbidden, antinuke_permission_health=lambda *_: [],
+                           normalize_antinuke_settings=lambda obj: dict(obj or {}))
+    runtime._patch_antinuke(fake)
+    removed, blocked = asyncio.run(fake._contain_actor(guild, actor, reason="role grant"))
+    assert removed == []
+    assert "trusted moderator" in blocked[0]
+    assert guild.banned == []
+    assert asyncio.run(runtime.get_actor_reputation(123, 55)) is None
+
+
+def test_alert_only_and_disabled_never_persist_hostile_or_ban(monkeypatch, tmp_path) -> None:
+    from stoney_verify import anti_nuke
+
+    _reset_runtime(monkeypatch, tmp_path)
+    guild = FakeGuild(FakeMember(55))
+    actor = guild.get_member(55)
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("non-contain mode may not punish")
+
+    for enabled, mode in ((True, "alert"), (False, "contain")):
+        async def settings(_gid, *, refresh=False):
+            assert refresh is True
+            return {
+                "antinuke_enabled": enabled, "antinuke_mode": mode,
+                "antinuke_trusted_user_ids": [], "antinuke_trusted_role_ids": [],
+            }
+
+        monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+        fake = SimpleNamespace(_contain_actor=forbidden, antinuke_permission_health=lambda *_: [],
+                               normalize_antinuke_settings=lambda obj: dict(obj or {}))
+        runtime._patch_antinuke(fake)
+        removed, blocked = asyncio.run(fake._contain_actor(guild, actor, reason="event"))
+        assert removed == [] and blocked
+        assert guild.banned == []
+        assert asyncio.run(runtime.get_actor_reputation(123, 55)) is None
+
+
+def test_unresolved_trusted_role_membership_fails_closed(monkeypatch, tmp_path) -> None:
+    from stoney_verify import anti_nuke
+
+    _reset_runtime(monkeypatch, tmp_path)
+    guild = FakeGuild()
+    actor = FakeMember(55, guild)
+    async def settings(_gid, *, refresh=False):
+        return {
+            "antinuke_enabled": True, "antinuke_mode": "contain",
+            "antinuke_trusted_user_ids": [], "antinuke_trusted_role_ids": [9001],
+        }
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    assert asyncio.run(runtime._automatic_containment_blocker(guild, actor)) == (
+        "trusted-role membership cannot be verified"
+    )
+
+
+def test_untrusted_current_member_can_still_be_contained(monkeypatch, tmp_path) -> None:
+    from stoney_verify import anti_nuke
+
+    _reset_runtime(monkeypatch, tmp_path)
+    member = FakeMember(55)
+    member.roles = [SimpleNamespace(id=8000)]
+    guild = FakeGuild(member)
+    member.guild = guild
+
+    async def settings(_gid, *, refresh=False):
+        return {
+            "antinuke_enabled": True, "antinuke_mode": "contain",
+            "antinuke_trusted_user_ids": [], "antinuke_trusted_role_ids": [9001],
+        }
+
+    async def fetch(user_id):
+        assert user_id == 55
+        return member
+
+    monkeypatch.setattr(guild, "fetch_member", fetch, raising=False)
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    assert asyncio.run(runtime._automatic_containment_blocker(guild, member)) is None
