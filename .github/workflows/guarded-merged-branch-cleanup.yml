@@ -158,6 +158,38 @@ jobs:
               ['chore/remove-supabase-sync-verifier', { kind: 'merged', pr: 155, sha: 'ab41128b4335af29f21d9766f78bc69abee32695' }],
               ['chore/verify-ticket-counter-production', { kind: 'merged', pr: 159, sha: '4ccbf727eb69f2ca3e11bf78a4567e6865bcbe3e' }],
               ['chore/guarded-branch-cleanup-fourth-wave-20261015', { kind: 'merged', pr: 585, sha: 'c92fe20e89f80698f5c7b3f20dd070820853d963' }],
+              // Sixth wave: exact-head merged PRs. Linked-production refs below
+              // additionally require ancestry of BOTH current main and the
+              // still-linked Discloud branch before any owner-directed deletion.
+              ['fix/cinema-fullscreen-portrait-recovery-20261010', { kind: 'linked-ancestor', pr: 499, sha: '1885679d61f212108081e600b4670aed4c9a72fd' }],
+              ['fix/cinema-api-html-json-contract-discloud-20261010', { kind: 'linked-ancestor', pr: 501, sha: 'c00dc081b2dc47d999351e2caec3db669033db07' }],
+              ['fix/share-router-prod-branch-reconcile-20261010', { kind: 'linked-ancestor', pr: 504, sha: 'dbc607a8bf8f39adeb3b4cf7552a6b9922f8a044' }],
+              ['fix/verify-reminders-discloud-postgres-20261011', { kind: 'linked-ancestor', pr: 511, sha: 'e7e5b67dcd2ae0ee085e6e104a7760766caf677c' }],
+              ['fix/ticket-panel-production-parity-20261012', { kind: 'linked-ancestor', pr: 528, sha: '99a915d169aaf48667e6e82fe526ee440d89873f' }],
+              ['feat/toke-lifecycle-and-coordination-20261014', { kind: 'merged', pr: 560, sha: '4545b88395ef3837e7b48e5176a2a420ecb1ed01' }],
+              ['feat/toke-host-handoff-20261014', { kind: 'merged', pr: 561, sha: '5de1f9dd06c6e45d42074b9f2167b1a8dafd1e8e' }],
+              ['feat/toke-voice-lifecycle-20261014', { kind: 'merged', pr: 565, sha: 'db0f68fbbe79e10d4cbdda5d50d9812017ddd44b' }],
+              ['feat/toke-opt-in-reminders-20261014', { kind: 'merged', pr: 566, sha: '161bb5b0946f7be3f45be08f9b7e836b059ba165' }],
+              ['feat/toke-voice-index-and-noop-20261014', { kind: 'merged', pr: 567, sha: 'a7b05a70b5a6cdfaf1139695e96e2f962ad874b0' }],
+              ['fix/torrent-cache-crash-orphans-shared-storage-20261014', { kind: 'merged', pr: 569, sha: '160cc384a41c6677b8355199c9ba44dd2a1aec2f' }],
+              ['test/cinema-real-engine-50gib-rolling-proof-20261014', { kind: 'merged', pr: 570, sha: '8f107c1a282faba7e4006173c8e8e1afe2d32a29' }],
+              ['stabilization/cinema-public-route-smoke-20261015', { kind: 'merged', pr: 574, sha: '363f6677270cd8c6ccc08a904bc5776836f7c596' }],
+              ['stabilization/cinema-friendly-feed-profile-20261015', { kind: 'merged', pr: 575, sha: '6f1ed13517556813db5a79328b6c548675e07c88' }],
+              ['stabilization/ticket-topic-privacy-20261015', { kind: 'merged', pr: 577, sha: 'e8bbbcd053d8ca56a078dbc2f72ceed8d28804b8' }],
+              ['stabilization/ticket-topic-repair-20261015', { kind: 'merged', pr: 578, sha: '49f8e9fdca543a742a51e99ec523337ef053c166' }],
+              ['stabilization/member-center-history-universal-purge-20261015', { kind: 'merged', pr: 579, sha: 'fddcb09e6d9113a8ad7a23fce3d4ba2a2a4b8c16' }],
+              ['feat/embed-studio-mobile-20261015', { kind: 'merged', pr: 580, sha: '0fd37ca813ee16ee30508fdca9355ebf5ac4336b' }],
+              ['feat/embed-studio-persistent-role-actions-20261015', { kind: 'merged', pr: 581, sha: '335c58f532d7534214bb33eaf0cf755ef045b031' }],
+              ['chore/guarded-branch-cleanup-fifth-wave-20261015', { kind: 'merged', pr: 586, sha: '702929cd9d6ea3a92ef2637c0f397c9ca240fec7' }],
+              ['fix/antinuke-panic-containment-respects-alert-and-trust-20261015', { kind: 'merged', pr: 587, sha: '030a12b5834ec0078f356e30cd942dacc73169c7' }],
+              ['fix/antinuke-gateway-trusted-role-thresholds-20261015', { kind: 'merged', pr: 588, sha: '8f2ef03fcd0ccae1afaebaeeb0842a554b90bfc0' }],
+              ['fix/antinuke-sparse-bot-add-attribution-20261015', { kind: 'merged', pr: 589, sha: '41cc258097debb10bab6f8b94b4fd2733d3df58f' }],
+              ['fix/antinuke-invalid-self-marker-20261015', { kind: 'merged', pr: 590, sha: 'ca42ebb8b10a9d0d8327784eef11d7b3c28bb980' }],
+              ['fix/antinuke-malformed-self-marker-receipt-20261015', { kind: 'merged', pr: 591, sha: '2a1b64d19b94413f188508b6b14ad107b6d7b50e' }],
+              ['fix/antinuke-gateway-panic-trust-consistency-20261015', { kind: 'merged', pr: 592, sha: 'f6ea474d25c81db5150fb58112be0a704af04677' }],
+              ['fix/antinuke-harmless-role-create-panic-20261015', { kind: 'merged', pr: 593, sha: '67b7cd0f1a72b1809eba92f7f73e0127d7ae7580' }],
+              ['fix/antinuke-harmless-role-create-containment-20261015', { kind: 'merged', pr: 594, sha: '66804ff0cf04cc0a18595e5d82fa2e4ca6341dee' }],
+              ['fix/antinuke-safe-creation-containment-20261015', { kind: 'merged', pr: 595, sha: 'dba7d1d4ba26d2f2969de6b3136508169f167043' }],
             ]);
             const [branches, closedPRs, openPRs] = await Promise.all([
               github.paginate(github.rest.repos.listBranches, {
@@ -199,10 +231,20 @@ jobs:
               return safe;
             }
 
+            async function ancestorOfLinkedDiscloud(sha) {
+              const { data } = await github.rest.repos.compareCommits({
+                owner, repo, base: 'aaa-cinema-pre-pregateway-bind', head: sha
+              });
+              return data.ahead_by === 0 &&
+                (data.status === 'behind' || data.status === 'identical');
+            }
+
             const candidates = [];
             for (const branch of branches) {
               const name = branch.name;
               if (name === defaultBranch || branch.protected) continue;
+              // The Discloud dashboard is still linked to this branch.
+              if (name === 'aaa-cinema-pre-pregateway-bind') continue;
               if (inUseByOpenPR.has(name)) continue;
               const segments = name.toLowerCase().split(/[\\/._-]+/);
               const prs = closedByHead.get(name) || [];
@@ -216,6 +258,18 @@ jobs:
                     pr.base?.ref === defaultBranch &&
                     pr.head.sha === branch.commit.sha
                   )) continue;
+                } else if (review.kind === 'linked-ancestor') {
+                  // These PRs landed in the dashboard-linked production branch
+                  // before that history was merged into main. Require a frozen
+                  // merged PR head PLUS ancestry of both retained branch refs.
+                  if (prs.some(pr => !pr.merged_at)) continue;
+                  if (!prs.some(pr =>
+                    pr.number === review.pr && pr.merged_at &&
+                    pr.base?.ref === 'aaa-cinema-pre-pregateway-bind' &&
+                    pr.head.sha === branch.commit.sha
+                  )) continue;
+                  if (!await ancestorOfMain(branch.commit.sha)) continue;
+                  if (!await ancestorOfLinkedDiscloud(branch.commit.sha)) continue;
                 } else if (review.kind === 'superseded' || review.kind === 'closed-record') {
                   const original = prs.find(pr =>
                     pr.number === review.pr && !pr.merged_at &&
@@ -235,6 +289,8 @@ jobs:
                 }
                 const reason = review.kind === 'merged'
                   ? 'reviewed merged PR #' + review.pr
+                  : review.kind === 'linked-ancestor'
+                    ? 'reviewed production PR #' + review.pr + ' (verified ancestors of main and linked Discloud)'
                   : review.kind === 'ancestor-only'
                     ? 'reviewed no-PR ancestor of main'
                     : review.kind === 'closed-record'
