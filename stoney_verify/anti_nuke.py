@@ -1355,6 +1355,20 @@ async def _process_claimed_destructive_event(
     return True
 
 
+def _creation_containment_authorized(settings: Mapping[str, Any] | None) -> bool:
+    """Creation alone is not evidence for irreversible AntiNuke containment.
+
+    Only explicit owner-selected Strict Lockdown permits treating channel and
+    webhook creation as punitive actions; missing settings fail non-punitively.
+    """
+    return bool(
+        isinstance(settings, Mapping)
+        and settings.get("antinuke_enabled") is True
+        and settings.get("antinuke_mode") == "contain"
+        and settings.get("antinuke_strict_lockdown") is True
+    )
+
+
 async def _handle_threshold_event(
     guild: discord.Guild,
     *,
@@ -1368,6 +1382,9 @@ async def _handle_threshold_event(
 ) -> bool:
     settings = await get_antinuke_settings(int(guild.id))
     if not settings["antinuke_enabled"]:
+        return False
+    # Native fallback must not bypass the gateway's creation safety boundary.
+    if audit_action in {"channel_create", "webhook_create"} and not _creation_containment_authorized(settings):
         return False
 
     entry = await _claim_recent_audit_entry(
