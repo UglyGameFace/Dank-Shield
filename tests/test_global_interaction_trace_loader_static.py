@@ -10,7 +10,6 @@ NATIVE = (ROOT / "stoney_verify/interaction_guard.py").read_text(encoding="utf-8
 BOOT_FILES = (
     ROOT / "main.py",
     ROOT / "sitecustomize.py",
-    ROOT / "usercustomize.py",
     ROOT / "stoney_verify/app.py",
     ROOT / "stoney_verify/commands.py",
 )
@@ -22,6 +21,7 @@ def test_global_interaction_trace_guard_is_retired_not_historical_runtime_metada
 
 
 def test_production_boot_has_no_global_interaction_trace_owner() -> None:
+    assert not (ROOT / "usercustomize.py").exists()
     for path in BOOT_FILES:
         source = path.read_text(encoding="utf-8")
         assert "global_interaction_trace_guard" not in source
