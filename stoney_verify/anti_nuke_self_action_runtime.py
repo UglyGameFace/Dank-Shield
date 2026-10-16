@@ -28,6 +28,8 @@ _SIDE_EFFECT_TTL_SECONDS = 15.0
 _PROVENANCE_AMBIGUITY_SECONDS = 30.0
 _REASON_BASE_LIMIT = 380
 _MARKER_RE = re.compile(r"\[DSA:([0-9a-f]{24})\]", re.IGNORECASE)
+# A truncated or malformed reserved marker is still *present*, not reasonless.
+_MARKER_PREFIX_RE = re.compile(r"\[DSA:", re.IGNORECASE)
 _API_PREFIX_RE = re.compile(r"^/api/v\d+")
 _BOT_REMOVAL_REASON_PREFIXES = (
     "dank shield antinuke rollback: unauthorized bot addition",
@@ -634,6 +636,10 @@ def _provenance_diagnostics(
             marker_state = "unknown"
         else:
             marker_state = "known_unmatched"
+    elif _MARKER_PREFIX_RE.search(reason):
+        # Incomplete/invalid audit marker is explicit but unverifiable proof.
+        # Do not reclassify it as a reasonless local-request receipt.
+        marker_state = "malformed"
 
     recent_action_guild = 0
     recent_scope = 0
@@ -808,12 +814,11 @@ async def _audit_guard(bot: discord.Client, entry: Any) -> None:
             _consume_expected_side_effect(guild, entry, action_name)
         return
 
-    # Discord can surface message deletion audit entries without a usable reason.
-    # An invalid explicit DSA marker outranks *every* expected side effect.
-    # Previously, non-message actions could consume a matching receipt even
-    # when the audit entry carried a mismatched authorization marker.
+    # Only truly reasonless audit entries can consume a generic receipt.
+    # Valid-but-unmatched AND malformed/truncated reserved DSA markers must
+    # reach the unmatched safety gate, not inherit a separate local receipt.
     reason_has_marker = bool(
-        _MARKER_RE.search(str(getattr(entry, "reason", "") or ""))
+        _MARKER_PREFIX_RE.search(str(getattr(entry, "reason", "") or ""))
     )
     allow_reasonless_fallback = not reason_has_marker
     if (
