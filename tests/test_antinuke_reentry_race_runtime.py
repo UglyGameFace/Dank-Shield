@@ -186,6 +186,11 @@ def test_fast_member_join_bans_cached_hostile_without_network_refresh(monkeypatc
     monkeypatch.setattr(hostile, "_ban_identity", ban_identity)
     monkeypatch.setattr(hostile, "_post_reputation_incident", post)
 
+    async def untrusted_target(_guild, _actor):
+        return None
+
+    monkeypatch.setattr(hostile, "_automatic_containment_blocker", untrusted_target)
+
     try:
         asyncio.run(race._fast_member_join(member))  # noqa: SLF001
         assert bans == [77]
