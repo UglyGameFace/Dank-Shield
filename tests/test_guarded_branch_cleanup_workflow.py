@@ -101,10 +101,10 @@ def test_reviewed_wave_is_frozen_and_requires_supersession_evidence() -> None:
 def test_reviewed_wave_has_exact_frozen_retirement_count() -> None:
     text = _workflow()
     manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
-    assert manifest.count("kind: 'merged'") == 48
+    assert manifest.count("kind: 'merged'") == 85
     assert manifest.count("kind: 'superseded'") == 7
     assert manifest.count("kind: 'closed-record'") == 3
-    assert manifest.count("kind: 'ancestor-only'") == 1
+    assert manifest.count("kind: 'ancestor-only'") == 7
     for pr in (46, 94, 171, 214, 216, 229):
         assert f"replacement: {pr}" in manifest
 
@@ -119,7 +119,7 @@ def test_fourth_wave_requires_live_git_ancestry_and_exact_records() -> None:
     assert "inUseByOpenPR.has(name)" in text
     assert "current.protected || current.commit.sha !== candidate.sha" in text
     manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
-    assert manifest.count("kind:") == 64
+    assert manifest.count("kind:") == 107
     for branch in (
         "aaa-cinema-pre-pregateway-bind",
         "feat/cinema-library-intelligence",
@@ -158,8 +158,8 @@ def test_sixth_wave_exact_sha_and_discloud_dual_ancestry() -> None:
     text = _workflow()
     manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
     assert manifest.count("kind: 'linked-ancestor'") == 5
-    assert manifest.count("kind: 'merged'") == 48
-    assert manifest.count("kind:") == 64
+    assert manifest.count("kind: 'merged'") == 85
+    assert manifest.count("kind:") == 107
     assert "async function ancestorOfLinkedDiscloud(sha)" in text
     assert "if (!await ancestorOfMain(branch.commit.sha)) continue;" in text
     assert "if (!await ancestorOfLinkedDiscloud(branch.commit.sha)) continue;" in text
@@ -323,3 +323,83 @@ def test_current_setup_picker_preserves_closed_pr9_configuration_contract() -> N
         "class VerifyPicker", "class VCPicker", "class LogPicker",
     ):
         assert required in source
+
+
+def test_tenth_wave_merged_heads_and_archive_guard() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
+    expected_merged = [
+        ("chore/reconcile-setup-picker-9-retire-20261016", 600, "129004553ba30aec8381c97ecbd74faf024e1e75"),
+        ("ci/safe-discloud-main-release-20261015", 576, "94ef4408d6b4fadb3cbc62141d055786ae740c2d"),
+        ("feat/backup9-staging-candidate-inventory-20261014", 563, "a718edfcd281be7891a84a359061a527ad0ef77d"),
+        ("feat/cinema-rolling-engine-gateway-20261014", 571, "0ed28b86bc991274749187a4d9415dcbd723817d"),
+        ("feat/discloud-config-parity-gate-20261013", 551, "384d8058992b658618ac13111e41776bd5a29551"),
+        ("feat/discloud-core-config-shadow-20261013", 548, "11b858747e5776badd0f682aeb607b8f38ff64b0"),
+        ("feat/discloud-core-staging-phase1-20261013", 547, "b47901de4e2e0ac0f6c251e0a0ad26b58cb115fe"),
+        ("feat/discloud-postgres-storage-preflight-20261013", 546, "f8e9cd9cd1cc128438d157c23f3e1325c1b32308"),
+        ("feat/discloud-source-encrypted-backup-20261013", 552, "e6cefc0a93ba1f8a68616426fc55f4802d8fd101"),
+        ("feat/manual-shared-supabase-encrypted-backup-20261013", 553, "d9ca49900679c86fa9178ba20fd8c6dedd2bbd17"),
+        ("feat/verify-source-backup9-isolated-pg17-20261013", 558, "253cd70803b7cbb77e01f89e9d76f230594fc742"),
+        ("fix/access-repair-emergency-recovery-20260925", 321, "666790eef6a8635ac18cb239d2e1f16ccb329be1"),
+        ("fix/activity-batch-rpc-quoted-bodies-pg17-20261014", 568, "d32c83f1bffda100ec501652ea87e804c9db88a0"),
+        ("fix/apply-supabase-history-repair", 152, "4858bf3be52206f253d6c8dc26ca3feb41e6b562"),
+        ("fix/backup-phase-diagnostics-20261013", 556, "bd0e0eab79a0b420b3947d9b6cac5236a291b62f"),
+        ("fix/backup-safe-pgdump-errors-20261013", 554, "4b8d838114ac3f75d77a3e5e58df6eb468e7ca6c"),
+        ("fix/cold-start-recovery-quiet-window-20261007", 476, "52642543b9b6160d5402decc6640398af12328ec"),
+        ("fix/confirmed-pgrestore-toc-broken-pipe-20261013", 557, "50724b5128be5be066c99bda0a57259d5752303c"),
+        ("fix/defer-activity-recovery-outside-discloud-startup-window-20261007", 473, "85777825a29fceeda009b6a9fc1f19fcae9df22c"),
+        ("fix/discloud-explicit-owner-recovery-risk-20261014", 573, "9c1f8889fb299373090ffdca9a55284a9137a3d0"),
+        ("fix/discloud-global-rate-limit-20260921", 286, "a3d1a71f312605f2771c15810931a7aee85972b2"),
+        ("fix/discloud-shared-10gb-migration-budget-20261014", 562, "3f9c0c67ff232fe3d01fb7b70ba184859748640b"),
+        ("fix/invite-shield-generalized-recovery-20260925", 329, "16841f44f4ee302824d963b766aa3860cb72cd9b"),
+        ("fix/live-captions-revert-354-regression-20260927", 356, "52851ca4bdc7dfc13b2261c091941fb745a3060c"),
+        ("fix/migration-storage-audit-budget-parity-20261014", 564, "0a4074407b6963d1bebbc61cf4e8a513ee67a1ca"),
+        ("fix/normalize-legacy-supabase-versions", 153, "7267f3289532aea17396b3d8c041b90e28100985"),
+        ("fix/owner-authority-verify-recovery-20260925", 325, "1fc726b853b1f02ff6d5f22feb88b06d54ab8d92"),
+        ("fix/protect-live-interactions-discloud-rest-20261007", 474, "85533289ccc61e027c7a95aab6e0774754378dd2"),
+        ("fix/source-backup9-supabase-restore-20261013", 559, "c8bbcd1211d6ddf3c895b7dc9ecc3b7d4919a3a7"),
+        ("fix/supabase-history-repair-final", 151, "176633375eab8b39ade5cb66e125f7eeb218ce6d"),
+        ("fix/supabase-migration-history-drift", 150, "468aac934a51cd10dd7e9b66e6456a482c5c6200"),
+        ("fix/ticket-counter-durable-migration", 157, "71012873d8d43158b71356cb4b7c13bc3f9e4172"),
+        ("ops/discloud-existing-app-safe-main-commit-20261014", 572, "8c3acc431421fa13511aa9b57bf87b404873ccaf"),
+        ("rebuild/cinema-library-intelligence-clean", 459, "0547b354fce64a1512f018600a4d50a2d87110f9"),
+        ("reconcile/main-production-toke-20261013", 545, "33385349e268be6bfc74d90482c278da82f032e4"),
+        ("reconcile/main-reunification-20261013", 535, "eb8b6e311859d4572b02d11753c2c1180244ecb9"),
+        ("test/discloud-postgres17-real-contract-20261013", 550, "c97e86c4363c1d3a56d305df9165c82f3b5ecb28"),
+    ]
+    expected_ancestors = [
+        ("audit-000-cinema-pr436-known-good", "c785c5eefc9e9f0b1c6792e7546eca3c8f9703a5"),
+        ("fix/discloud-rest-window-recovery-current-main-20261007", "94468b19ec2b44da083de70efd87f370e7ecab1f"),
+        ("rebuild/pr460-standalone-current-main", "f68d9cb973196d57b21b041a5daf5932ce2d8765"),
+        ("reconcile/live-captions-352-c055-20260927", "b3ce99c71f0d3f98bcd26955348e44fac8b117c9"),
+        ("reconcile/405-movie-night-viewer-sync", "6a31cc9b7e154b3047a5432b45fa3a999d8bac5c"),
+        ("reconcile/410-main", "3718ef3a5c8c90c575585418f719ab74d45e48b7"),
+    ]
+    assert len(expected_merged) == 37
+    assert len(expected_ancestors) == 6
+    for name, pr, sha in expected_merged:
+        assert manifest.count(f"['{name}', {{ kind: 'merged', pr: {pr}, sha: '{sha}' }}]") == 1
+    for name, sha in expected_ancestors:
+        assert manifest.count(f"['{name}', {{ kind: 'ancestor-only', sha: '{sha}' }}]") == 1
+    assert "tags/branch-retirement-20261016/${candidate.name}" in text
+    assert "github.rest.git.createRef" in text
+    assert "github.rest.git.getRef" in text
+    assert "archive.object?.type !== 'commit'" in text
+    assert "archive.object.sha !== candidate.sha" in text
+    assert "if (error.status !== 404) throw error;" in text
+    assert text.index("github.rest.git.createRef") < text.index("github.rest.git.deleteRef")
+    assert text.index("archive.object.sha !== candidate.sha") < text.index("github.rest.git.deleteRef")
+    assert "current.protected || current.commit.sha !== candidate.sha" in text
+    for held in (
+        "main", "aaa-cinema-pre-pregateway-bind",
+        "backup/stoneyverify-stable-7fdc331-20261008",
+        "chore/automate-supabase-migrations",
+        "fix/supabase-out-of-order-migrations",
+        "cleanup/schema-authority-consolidation",
+        "fix/live-captions-stable-interim-recovery-20260927",
+        "feat/discloud-pg-atomic-guild-config-20261013",
+        "feat/cinema-library-intelligence",
+        "fix/source-backup-large-toc-stream-20261013",
+        "fix/ticket-panel-legacy-interaction-recovery-20260924",
+    ):
+        assert f"['{held}', {{ kind:" not in manifest
