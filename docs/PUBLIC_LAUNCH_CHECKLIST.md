@@ -1,6 +1,6 @@
 # Dank Shield Public Launch Checklist
 
-_Last updated: 2026-09-13_
+_Command-surface contract refreshed: 2026-10-16_
 
 This checklist is the public-release gate for the Dank Shield bot runtime and the Vercel dashboard handoff. Do not invite the bot broadly until every blocker section passes in a fresh server.
 
@@ -21,33 +21,55 @@ python tools/audit_public_launch_readiness.py
 
 ## Required public command surface
 
-Global slash commands must stay small and obvious:
+The final public Discord command tree is defined by `stoney_verify/command_surface_contract.py`. These are the ten global **slash command roots**, in canonical order:
 
 ```text
 /dank
+/captions
+/cinema
 /mod
+/movie
+/role
 /ticket
 /tickets
-/ticket-category
-/ticket-panel
+/toke
 /verify
 ```
 
-The public `/dank` group must show only:
+The eleventh global application command is the user context menu **View Dank Profile**, not a slash command.
+
+The public `/dank` group exposes these direct shortcuts only; deeper actions live in their feature managers:
 
 ```text
-cleanup
-commands
+community
+design
+diagnostics
 help
-members
+home
+logs
+pings
+profile
+protection
+purge
 setup
-spam
+share
+stats
+status
+upload
+voice-safety
+welcome
 ```
 
-These must not appear in public autocomplete:
+These old roots, aliases, and internal commands must not appear in the final public autocomplete:
 
 ```text
-/dank
+/stoney
+/ticket-panel
+/ticket-category
+/dank commands
+/dank cleanup
+/dank members
+/dank spam
 /dank scoreboard
 /dank setup-status
 /dank db-check
@@ -134,7 +156,7 @@ Run this in a brand-new test server with no old Dank Shield channels, no Ticket 
 3. Choose Fresh Server.
 4. Create Missing Defaults Now.
 5. Run Health Check.
-6. Post the ticket panel with /ticket-panel post.
+6. Open /tickets → Ticket Operations → Public Ticket Panel → Post / Update Panel.
 7. Open a test ticket.
 8. Claim, close, reopen, and delete or archive the ticket.
 9. Confirm transcript and modlog output.
@@ -148,8 +170,8 @@ Pass condition:
 ```text
 public_startup_guard blockers=0 warnings=0
 commands_ext registration complete
-local global commands: ['dank', 'mod', 'ticket', 'tickets', 'ticket-category', 'ticket-panel', 'verify']
-dank_children=['cleanup', 'commands', 'help', 'members', 'setup', 'spam']
+public command contract: 10 slash roots + View Dank Profile user context menu
+/dank only exposes the canonical direct shortcuts shown above; no old aliases
 ```
 
 ## Existing server smoke test
@@ -211,7 +233,7 @@ A normal restart should show:
 
 ```text
 process_health BOOT
-startup_guard loader complete
+native startup owners ready (no bulk startup-guard loader)
 public_startup_guard deployment=production profile=public strict=True blockers=0 warnings=0
 commands_ext registration complete
 Shard ID None has connected to Gateway
