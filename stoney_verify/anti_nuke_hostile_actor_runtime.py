@@ -672,6 +672,22 @@ async def _enforce_reputation_member(
         )
         return True
 
+    # A historical hostile row is not permission to ignore the owner's current
+    # staff trust list. This direct ban/fallback bypasses durable_contain.
+    blocker = await _automatic_containment_blocker(guild, member)
+    if blocker is not None:
+        await _post_reputation_incident(
+            anti_nuke,
+            guild,
+            title="⚠️ Hostile Reputation Requires Staff Review",
+            actor=member,
+            action_label=f"Known hostile identity observed ({source})",
+            target_label=target_label,
+            response_label=f"No automatic member removal: {blocker}.",
+            details=details,
+        )
+        return True
+
     banned, response = await _ban_identity(
         guild,
         uid,
@@ -892,6 +908,21 @@ def _patch_guardian(guardian: Any, anti_nuke: Any) -> None:
 
         response_parts: list[str] = []
         if str(settings.get("antinuke_mode") or "").lower() == "contain":
+            # The direct known-hostile bot ban and kick fallback bypass the
+            # common containment wrapper: resolve current trust first.
+            blocker = await _automatic_containment_blocker(guild, target)
+            if blocker is not None:
+                await _post_reputation_incident(
+                    anti_nuke,
+                    guild,
+                    title="⚠️ Hostile Bot Requires Staff Review",
+                    actor=actor,
+                    action_label="Previously confirmed hostile bot added again",
+                    target_label=f"{target} (`{target_id}`)",
+                    response_label=f"No automatic bot removal: {blocker}.",
+                    details=details,
+                )
+                return
             banned, result = await _ban_identity(
                 guild,
                 target_id,
@@ -1084,6 +1115,15 @@ async def _on_member_join(member: discord.Member) -> None:
     if reputation is None:
         link = await _confirmed_hostile_link(member, raidguard)
         if link is not None:
+            # Do not brand a currently trusted moderator as hostile based on
+            # an inherited identity link before considering the owner's trust.
+            blocker = await _automatic_containment_blocker(member.guild, member)
+            if blocker is not None:
+                print(
+                    "🛡️ AntiNuke linked-identity classification deferred "
+                    f"guild={gid} actor={uid} reason={blocker}"
+                )
+                return
             related_id = int(link["related_user_id"])
             evidence = str(link["evidence"])
             reputation = await mark_confirmed_hostile(
@@ -1133,6 +1173,16 @@ async def _on_message_known_hostile(message: discord.Message) -> None:
     if not bool(settings.get("antinuke_enabled")):
         return
     if str(settings.get("antinuke_mode") or "").lower() != "contain":
+        return
+
+    # Message deletion is itself punitive. Guard before deleting, rather
+    # than checking staff trust only inside later ban enforcement.
+    blocker = await _automatic_containment_blocker(guild, member)
+    if blocker is not None:
+        print(
+            "🛡️ AntiNuke known-hostile message action suppressed "
+            f"guild={gid} actor={uid} reason={blocker}"
+        )
         return
 
     try:
