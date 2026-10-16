@@ -136,11 +136,11 @@ The green button in Ticket Menu Options creates only missing recommended menu op
 ### Owners/admins
 
 ```text
+/dank home
 /dank setup
-/dank help
-/dank commands
-/dank spam panel
-/dank cleanup status
+/dank protection
+/dank diagnostics
+/dank purge
 ```
 
 ### Ticket staff
@@ -150,8 +150,6 @@ The green button in Ticket Menu Options creates only missing recommended menu op
 /ticket reopen
 /ticket delete
 /tickets
-/ticket-panel post
-/ticket-category
 ```
 
 ### Verification staff
@@ -170,8 +168,8 @@ The green button in Ticket Menu Options creates only missing recommended menu op
 
 ```text
 /mod
-/dank spam panel
-/dank spam status
+/dank protection
+/dank diagnostics
 ```
 
 ---
@@ -180,7 +178,7 @@ The green button in Ticket Menu Options creates only missing recommended menu op
 
 After setup passes health:
 
-1. Run `/ticket-panel post` in the channel where users should open tickets.
+1. Run `/tickets` → **Ticket Operations** → **Public Ticket Panel** → **Post / Update Panel** and choose the public ticket channel.
 2. Click the panel as a test user.
 3. Confirm the ticket opens in the active ticket category.
 4. Close it with `/ticket close`.
@@ -245,7 +243,7 @@ Test Your Setup
 Finish Setup
 Manage Setup → All Features & Settings → Tickets → Ticket Choices
 Confirm the intended ticket choices
-/ticket-panel post
+/tickets → Ticket Operations → Public Ticket Panel → Post / Update Panel
 Open ticket
 Close ticket
 Reopen ticket
