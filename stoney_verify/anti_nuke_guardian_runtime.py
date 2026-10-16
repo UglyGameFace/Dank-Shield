@@ -454,6 +454,10 @@ async def _rollback_untrusted_creation(guild: discord.Guild, entry: Any, actor: 
     settings = await anti_nuke.get_antinuke_settings(int(guild.id))
     if not anti_nuke._creation_containment_authorized(settings):  # noqa: SLF001
         return ""
+    # Never delete a resource without independently attributed actor and
+    # target identities, even when Strict Lockdown is explicitly selected.
+    if _safe_int(getattr(actor, "id", 0), 0) <= 0 or _target_id(entry) is None:
+        return "creation rollback skipped: incomplete audit attribution"
     if anti_nuke._actor_is_owner_or_bot(guild, actor) or anti_nuke._actor_is_configured_trusted(actor, settings):  # noqa: SLF001
         return ""
 
