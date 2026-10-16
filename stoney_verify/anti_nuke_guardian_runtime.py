@@ -12,7 +12,7 @@ across separate per-user thresholds.
 import asyncio
 import time
 from collections import defaultdict, deque
-from typing import Any, Deque, Optional
+from typing import Any, Deque, Mapping, Optional
 
 import discord
 
@@ -598,13 +598,31 @@ async def _contain_peer(guild: discord.Guild, actor: Any) -> tuple[list[str], li
         return await anti_nuke._contain_actor(guild, actor, reason="Dank Shield AntiNuke panic: coordinated destructive activity")  # noqa: SLF001
 
 
-async def _contain_observed_peers(guild: discord.Guild, current_actor: Any, observed: list[Any]) -> tuple[list[int], list[str]]:
+async def _contain_observed_peers(
+    guild: discord.Guild,
+    current_actor: Any,
+    observed: list[Any],
+    *,
+    settings: Mapping[str, Any],
+) -> tuple[list[int], list[str]]:
+    # A panic window is correlation, not proof that every actor in the window
+    # is malicious. Protect explicitly trusted operators from *peer* punishment;
+    # their own events still pass through normal/strict per-actor enforcement.
+    if not settings.get("antinuke_enabled") or settings.get("antinuke_mode") != "contain":
+        return [], []
     current_id = _safe_int(getattr(current_actor, "id", 0), 0)
     contained: list[int] = []
     blocked: list[str] = []
     for peer in observed:
         peer_id = _safe_int(getattr(peer, "id", 0), 0)
         if peer_id <= 0 or peer_id == current_id or anti_nuke._actor_is_owner_or_bot(guild, peer):  # noqa: SLF001
+            continue
+        # Seeing a bot in a mixed burst is not independent evidence that it is
+        # hostile. Canonical per-event thresholds and known-hostile re-entry
+        # enforcement still apply to that bot.
+        if bool(getattr(peer, "bot", False)):
+            continue
+        if anti_nuke._actor_is_configured_trusted(peer, settings):  # noqa: SLF001
             continue
         removed, failures = await _contain_peer(guild, peer)
         if removed and not failures:
@@ -615,8 +633,29 @@ async def _contain_observed_peers(guild: discord.Guild, current_actor: Any, obse
 
 
 async def _post_panic_incident(guild: discord.Guild, *, actor: Any, action_label: str, target_label: str, observed: list[Any]) -> None:
-    contained, blocked = await _contain_observed_peers(guild, actor, observed)
-    response = "Coordinated destructive burst detected across multiple executors. " + f"Delegated allowances are suspended for {int(_PANIC_HOLD_SECONDS)}s."
+    # Do not let the panic side path bypass the guild's Alert Only setting or
+    # enforce from an unavailable policy snapshot. The current actor is already
+    # processed by the canonical per-event engine.
+    try:
+        settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+    except Exception:
+        settings = None
+    may_contain = bool(
+        settings
+        and settings.get("antinuke_enabled")
+        and settings.get("antinuke_mode") == "contain"
+    )
+    contained: list[int] = []
+    blocked: list[str] = []
+    if may_contain:
+        contained, blocked = await _contain_observed_peers(
+            guild, actor, observed, settings=settings
+        )
+    response = "Coordinated destructive burst detected across multiple executors."
+    if may_contain:
+        response += f" Delegated allowances are suspended for {int(_PANIC_HOLD_SECONDS)}s."
+    else:
+        response += " Alert-only or unavailable policy: no peer containment attempted."
     if contained:
         response += " Peer actors contained: " + ", ".join(str(value) for value in contained) + "."
     if blocked:
@@ -692,6 +731,22 @@ async def _rest_reconcile(guild: discord.Guild, entry: Any, action_name: str, sp
 async def _process(guild: discord.Guild, entry: Any, actor: Any, action_name: str, spec: tuple[str, str, str, Optional[int]]) -> None:
     label, threshold_key, counter_key, override = spec
     panic_active, panic_triggered, observed = _panic_state(guild, actor, action_name, entry=entry)
+    panic_override = 1 if panic_active else override
+    if panic_active:
+        # Correlation with somebody else's actions is not proof that an
+        # explicitly trusted operator (or operational bot) turned hostile.
+        # Preserve per-actor thresholds. Strict Lockdown's own explicit
+        # first-strike override in spec remains intact.
+        if bool(getattr(actor, "bot", False)):
+            panic_override = override
+        else:
+            try:
+                settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+                if anti_nuke._actor_is_configured_trusted(actor, settings):  # noqa: SLF001
+                    panic_override = override
+            except Exception:
+                # Missing policy cannot justify a new panic-only first strike.
+                panic_override = override
     handled = await anti_nuke._process_claimed_destructive_event(  # noqa: SLF001
         guild,
         entry=entry,
@@ -699,7 +754,7 @@ async def _process(guild: discord.Guild, entry: Any, actor: Any, action_name: st
         action_label=label,
         target_label=_target_label(action_name, entry),
         threshold_key=threshold_key,
-        threshold_override=1 if panic_active else override,
+        threshold_override=panic_override,
     )
     if not handled:
         _clear_panic(int(guild.id))
