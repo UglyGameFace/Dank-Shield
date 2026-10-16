@@ -150,3 +150,113 @@ def test_guardian_uses_canonical_authorization_and_does_not_contain_owner(
 
     assert guild.kicked == [55]
     assert len(incidents) == 1
+
+
+def test_sparse_bot_add_never_punishes_installer_or_consumes_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Discord sparse bot-add evidence must not be promoted to a conviction."""
+    anti_nuke._SEEN_AUDIT_ENTRY_IDS.clear()
+    incidents: list[dict[str, object]] = []
+    checked_authorization: list[int] = []
+    guild = SimpleNamespace(id=10, owner_id=99)
+    installer = SimpleNamespace(id=77, bot=False, roles=[])
+    entry = SimpleNamespace(
+        id=1234,
+        action=SimpleNamespace(name="bot_add"),
+        guild=guild,
+        user=installer,
+        user_id=installer.id,
+        target=None,
+    )
+
+    async def settings(_guild_id: int):
+        return _settings()
+
+    async def no_authorization(*_args, **_kwargs):
+        checked_authorization.append(1)
+        raise AssertionError("unresolved target is not an authorization denial")
+
+    async def no_containment(*_args, **_kwargs):
+        raise AssertionError("sparse bot-add must never punish installer")
+
+    async def incident(_guild, **kwargs):
+        incidents.append(dict(kwargs))
+
+    async def actor_resolution(_guild, _entry):
+        return installer
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    monkeypatch.setattr(anti_nuke, "bot_add_authorization", no_authorization)
+    monkeypatch.setattr(guardian, "_contain_peer", no_containment)
+    monkeypatch.setattr(anti_nuke, "_post_incident", incident)
+    monkeypatch.setattr(guardian, "_resolve_actor", actor_resolution)
+
+    asyncio.run(guardian._on_audit_log_entry_create(entry))
+    assert checked_authorization == []
+    assert anti_nuke._audit_entry_seen(entry) is False
+    assert len(incidents) == 1
+    assert incidents[0]["title"] == "⚠️ AntiNuke Bot Addition Needs Attribution"
+    assert "No bot or inviter was removed" in str(incidents[0]["response_label"])
+
+    # Partially shaped audit target is equally untrusted evidence.
+    entry.target = SimpleNamespace(id=0)
+    asyncio.run(guardian._handle_bot_add(guild, entry, installer))
+    assert len(incidents) == 2
+    assert checked_authorization == []
+    anti_nuke._SEEN_AUDIT_ENTRY_IDS.clear()
+
+
+def test_resolved_bot_add_still_enforces_owner_preapproval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    anti_nuke._SEEN_AUDIT_ENTRY_IDS.clear()
+    incidents: list[dict[str, object]] = []
+    kicked: list[int] = []
+    authorized: list[int] = []
+    installer = SimpleNamespace(id=99, bot=False, roles=[])
+
+    class Guild:
+        id = 10
+        owner_id = 99
+
+        async def kick(self, target, *, reason):
+            kicked.append(int(target.id))
+
+    guild = Guild()
+    entry = SimpleNamespace(
+        id=4321,
+        action=SimpleNamespace(name="bot_add"),
+        guild=guild,
+        user=installer,
+        user_id=installer.id,
+        target=SimpleNamespace(id=55, bot=True),
+    )
+
+    async def settings(_guild_id: int):
+        return _settings()
+
+    async def reject(_guild, target, _actor, _settings):
+        authorized.append(int(target.id))
+        return False, "guild owner must pre-approve this bot ID"
+
+    async def incident(_guild, **kwargs):
+        incidents.append(dict(kwargs))
+
+    async def resolved(_guild, _entry):
+        return installer
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
+    monkeypatch.setattr(anti_nuke, "bot_add_authorization", reject)
+    monkeypatch.setattr(anti_nuke, "_post_incident", incident)
+    monkeypatch.setattr(guardian, "_resolve_actor", resolved)
+    monkeypatch.setattr(
+        guardian, "_panic_state", lambda *_args, **_kwargs: (False, False, [])
+    )
+    asyncio.run(guardian._on_audit_log_entry_create(entry))
+
+    assert authorized == [55]
+    assert kicked == [55]
+    assert len(incidents) == 1
+    assert incidents[0]["title"] == "🚨 AntiNuke Unauthorized Bot Added"
+    anti_nuke._SEEN_AUDIT_ENTRY_IDS.clear()
