@@ -1178,3 +1178,58 @@ def test_route_classifier_covers_webhook_message_and_authority_mutations() -> No
             setattr(runtime, hardening._SELF_FLAG, old_flag)  # noqa: SLF001
         elif hasattr(runtime, hardening._SELF_FLAG):  # noqa: SLF001
             delattr(runtime, hardening._SELF_FLAG)  # noqa: SLF001
+
+
+def test_invalid_non_message_marker_cannot_consume_matching_side_effect(
+    monkeypatch,
+) -> None:
+    _reset()
+    bot = FakeBot()
+    guild = FakeGuild()
+    token = runtime._expect_side_effect(  # noqa: SLF001
+        guild.id,
+        "channel_delete",
+        target_key="id:123",
+        source_action="local_channel_delete",
+    )
+    unmatched: list[str] = []
+
+    async def record_unmatched(_bot, _guild, _entry, action_name: str) -> None:
+        unmatched.append(action_name)
+
+    monkeypatch.setattr(runtime, "_unmatched_self_action", record_unmatched)
+    event = _entry(
+        guild,
+        action="channel_delete",
+        target_id=123,
+        reason="[DSA:000000000000000000000000]",
+    )
+    asyncio.run(runtime._audit_guard(bot, event))  # noqa: SLF001
+
+    assert unmatched == ["channel_delete"]
+    assert token in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+
+
+def test_reasonless_non_message_side_effect_still_accepted(monkeypatch) -> None:
+    _reset()
+    bot = FakeBot()
+    guild = FakeGuild()
+    token = runtime._expect_side_effect(  # noqa: SLF001
+        guild.id,
+        "channel_delete",
+        target_key="id:123",
+        source_action="local_channel_delete",
+    )
+    unmatched: list[str] = []
+
+    async def record_unmatched(_bot, _guild, _entry, action_name: str) -> None:
+        unmatched.append(action_name)
+
+    monkeypatch.setattr(runtime, "_unmatched_self_action", record_unmatched)
+    event = _entry(
+        guild, action="channel_delete", target_id=123, reason=""
+    )
+    asyncio.run(runtime._audit_guard(bot, event))  # noqa: SLF001
+
+    assert unmatched == []
+    assert token not in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001

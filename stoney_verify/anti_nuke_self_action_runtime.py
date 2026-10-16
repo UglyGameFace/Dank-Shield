@@ -809,16 +809,13 @@ async def _audit_guard(bot: discord.Client, entry: Any) -> None:
         return
 
     # Discord can surface message deletion audit entries without a usable reason.
-    # Only direct message-delete actions may use the one-time local-request
-    # fallback, and never when a DSA marker is present but invalid. A mismatched
-    # marker is stronger evidence that this process did not authorize the event.
+    # An invalid explicit DSA marker outranks *every* expected side effect.
+    # Previously, non-message actions could consume a matching receipt even
+    # when the audit entry carried a mismatched authorization marker.
     reason_has_marker = bool(
         _MARKER_RE.search(str(getattr(entry, "reason", "") or ""))
     )
-    allow_reasonless_fallback = (
-        action_name not in {"message_delete", "message_bulk_delete"}
-        or not reason_has_marker
-    )
+    allow_reasonless_fallback = not reason_has_marker
     if (
         allow_reasonless_fallback
         and _consume_expected_side_effect(guild, entry, action_name)
