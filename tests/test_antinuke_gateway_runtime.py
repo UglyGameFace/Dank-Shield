@@ -4,6 +4,8 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from stoney_verify import anti_nuke
 from stoney_verify import anti_nuke_gateway_runtime as gateway
 from stoney_verify import anti_nuke_guardian_runtime as guardian
@@ -288,3 +290,56 @@ def test_main_installs_gateway_runtime_through_pre_app_coordinator() -> None:
     assert main_source.index("    install_anti_nuke_pre_app(bot)") < main_source.index(
         "from stoney_verify.app import run as _run_dank_shield"
     )
+
+
+@pytest.mark.parametrize(
+    "route", ("role_create", "member_role_remove", "member_timeout")
+)
+@pytest.mark.parametrize(
+    ("actor_id", "is_bot", "expected_override"),
+    ((502, False, None), (503, False, 1), (504, True, None)),
+)
+def test_gateway_panic_preserves_trusted_operator_thresholds(
+    monkeypatch, route: str, actor_id: int, is_bot: bool, expected_override
+) -> None:
+    """All gateway non-dangerous routes must follow Guardian panic policy."""
+    import time
+
+    _reset_runtime_state()
+    guild = SimpleNamespace(id=123, owner_id=999)
+    actor = SimpleNamespace(
+        id=actor_id, bot=is_bot, roles=[], mention=f"<@{actor_id}>"
+    )
+    entry = FakeEntry(8100, "member_update", guild=guild, actor=actor)
+    observed: list[int | None] = []
+
+    async def get_settings(_guild_id: int):
+        return {
+            "antinuke_enabled": True,
+            "antinuke_mode": "contain",
+            "antinuke_trusted_user_ids": [502],
+            "antinuke_trusted_role_ids": [],
+        }
+
+    async def process(_guild, **kwargs):
+        observed.append(kwargs["threshold_override"])
+        return True
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", get_settings)
+    monkeypatch.setattr(anti_nuke, "_process_claimed_destructive_event", process)
+    guardian._PANIC_UNTIL[guild.id] = time.monotonic() + 60
+
+    if route == "role_create":
+        entry.target = SimpleNamespace(id=88, name="Cosmetic", permissions=None)
+        asyncio.run(gateway._handle_role_create(guild, entry))
+    elif route == "member_role_remove":
+        entry.before = SimpleNamespace(
+            roles=[SimpleNamespace(id=90, name="Regular", permissions=None)]
+        )
+        entry.after = SimpleNamespace(roles=[])
+        asyncio.run(gateway._handle_member_role_update(guild, entry, actor))
+    else:
+        asyncio.run(gateway._handle_member_timeout(guild, entry, actor))
+
+    assert observed == [expected_override]
+    _reset_runtime_state()

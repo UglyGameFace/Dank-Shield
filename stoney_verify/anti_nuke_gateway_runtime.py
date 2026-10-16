@@ -270,7 +270,9 @@ async def _handle_role_create(guild: discord.Guild, entry: Any) -> None:
             action_label="Role creation burst",
             target_label=_target_label(entry),
             threshold_key="antinuke_role_delete_threshold",
-            threshold_override=1 if panic_active else None,
+            threshold_override=await guardian._panic_threshold_override(  # noqa: SLF001
+                guild, actor, panic_active
+            ),
         )
         if not handled:
             guardian._clear_panic(int(guild.id))  # noqa: SLF001
@@ -573,7 +575,9 @@ async def _handle_member_role_update(
             + ", ".join(str(getattr(role, "name", role)) for role in removed_roles[:10])
         ),
         threshold_key="antinuke_role_delete_threshold",
-        threshold_override=1 if panic_active else None,
+        threshold_override=await guardian._panic_threshold_override(  # noqa: SLF001
+            guild, actor, panic_active
+        ),
     )
     if not handled:
         guardian._clear_panic(int(guild.id))  # noqa: SLF001
@@ -604,7 +608,9 @@ async def _handle_member_timeout(
         action_label="Member timeout applied or extended",
         target_label=_member_target_label(entry),
         threshold_key="antinuke_kick_threshold",
-        threshold_override=1 if panic_active else None,
+        threshold_override=await guardian._panic_threshold_override(  # noqa: SLF001
+            guild, actor, panic_active
+        ),
     )
     if not handled:
         guardian._clear_panic(int(guild.id))  # noqa: SLF001

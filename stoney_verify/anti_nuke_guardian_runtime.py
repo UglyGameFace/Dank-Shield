@@ -728,25 +728,37 @@ async def _rest_reconcile(guild: discord.Guild, entry: Any, action_name: str, sp
     await _process(guild, found_entry, actor, action_name, spec)
 
 
+async def _panic_threshold_override(
+    guild: discord.Guild,
+    actor: Any,
+    panic_active: bool,
+    explicit_override: Optional[int] = None,
+) -> Optional[int]:
+    """Share panic escalation policy across Guardian and gateway audit paths.
+
+    Panic correlation does not prove trusted staff or operational bots hostile.
+    Explicit first-strike policy still wins over delegated thresholds.
+    """
+    if not panic_active or explicit_override is not None:
+        return explicit_override
+    if bool(getattr(actor, "bot", False)):
+        return None
+    try:
+        settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+        if anti_nuke._actor_is_configured_trusted(actor, settings):  # noqa: SLF001
+            return None
+    except Exception:
+        # Missing trust evidence cannot justify panic-only destructive action.
+        return None
+    return 1
+
+
 async def _process(guild: discord.Guild, entry: Any, actor: Any, action_name: str, spec: tuple[str, str, str, Optional[int]]) -> None:
     label, threshold_key, counter_key, override = spec
     panic_active, panic_triggered, observed = _panic_state(guild, actor, action_name, entry=entry)
-    panic_override = 1 if panic_active else override
-    if panic_active:
-        # Correlation with somebody else's actions is not proof that an
-        # explicitly trusted operator (or operational bot) turned hostile.
-        # Preserve per-actor thresholds. Strict Lockdown's own explicit
-        # first-strike override in spec remains intact.
-        if bool(getattr(actor, "bot", False)):
-            panic_override = override
-        else:
-            try:
-                settings = await anti_nuke.get_antinuke_settings(int(guild.id))
-                if anti_nuke._actor_is_configured_trusted(actor, settings):  # noqa: SLF001
-                    panic_override = override
-            except Exception:
-                # Missing policy cannot justify a new panic-only first strike.
-                panic_override = override
+    panic_override = await _panic_threshold_override(
+        guild, actor, panic_active, override
+    )
     handled = await anti_nuke._process_claimed_destructive_event(  # noqa: SLF001
         guild,
         entry=entry,
