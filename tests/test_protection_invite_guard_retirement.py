@@ -54,12 +54,14 @@ def test_native_invite_owner_is_explicit_and_startup_guard_free() -> None:
     native = _text(ROOT / "stoney_verify" / "commands_ext" / "public_protection_invite_ui.py")
     scope = _text(ROOT / "stoney_verify" / "invite_scope_settings.py")
 
-    assert "_install_invite_policy_scope_binding" in commands
+    assert "_install_invite_policy_scope_binding" not in commands
     assert "_install_native_invite_ui" in commands
     assert "DankGuildResourceBrowserView" in native
     assert "scan_channel_invites" in native
     assert "save_invite_scope_settings" in native
-    assert "install_invite_policy_scope_binding" in scope
+    assert "install_invite_policy_scope_binding" not in scope
+    native_policy = _text(ROOT / "stoney_verify" / "invite_policy_engine.py")
+    assert "merge_scope_settings(settings, normalize_scope(cfg))" in native_policy
     assert "startup_guards" not in native
     assert "startup_guards" not in scope
 

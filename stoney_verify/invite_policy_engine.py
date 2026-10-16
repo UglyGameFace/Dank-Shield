@@ -414,6 +414,12 @@ async def load_invite_policy(guild: discord.Guild, *, refresh: bool = False) -> 
     except Exception:
         settings = {}
 
+    # Targeting belongs to the canonical invite policy, not a bootstrap-time
+    # replacement of this loader. These guild-config fields were historically
+    # layered onto Spam Guard settings by a process-global wrapper.
+    from .invite_scope_settings import merge_scope_settings, normalize_scope
+
+    settings = merge_scope_settings(settings, normalize_scope(cfg))
     _POLICY_CACHE[gid] = (now, cfg, dict(settings))
     return cfg, dict(settings)
 
