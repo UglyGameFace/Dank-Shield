@@ -165,6 +165,12 @@ jobs:
               // eighth-wave cleanup PR; preserve all unrelated unmerged heads.
               ['feature/setup-picker-wizard', { kind: 'superseded', pr: 9, replacement: 241, sha: 'a79ec6441a66de41bdab5110c5ebac2a9ab0fd81' }],
               ['chore/guarded-branch-cleanup-eighth-wave-20261016', { kind: 'merged', pr: 599, sha: '16a7292cecfb8ff73aab2ab50c108287280da940' }],
+              // Twelfth wave: two exact merged heads, plus one manually proven
+              // superseded no-PR documentation/audit-only head. No feature-code
+              // or production-linked/recovery refs are in this reviewed batch.
+              ['chore/master-audit-completed-branch-retirement-20261016', { kind: 'merged', pr: 606, sha: '55c56012680fe9f73f655f0d0583b36bcf631612' }],
+              ['audit/public-launch-readiness-contract-20261016', { kind: 'merged', pr: 607, sha: '773e0a5f4eddc936eba660de821e4fe2b09d4a71' }],
+              ['claude/readiness-audit-dank-branding', { kind: 'superseded-no-pr', replacement: 607, replacementSha: '773e0a5f4eddc936eba660de821e4fe2b09d4a71', onlyFile: 'tools/audit_public_launch_readiness.py', sha: '375a4dbcbc1604f3b23d09d33ab5f9fa8ef9eb4c' }],
               // Eleventh wave: completed master-audit PR heads and prior tag-first cleanup PR.
               // Frozen exact merged heads only; old recovery/migration branches stay excluded.
               ['audit/production-command-contract-stoney-legacy-20261016', { kind: 'merged', pr: 603, sha: '5aad13f4fd158083d1d1852f94afba0766bac1f0' }],
@@ -344,8 +350,36 @@ jobs:
                     pr.head?.repo?.full_name === fullName
                   );
                   if (!original || !replacement) continue;
+                } else if (review.kind === 'superseded-no-pr') {
+                  // This unique historical commit never entered a PR. Its only
+                  // changed file was independently checked against a newer,
+                  // merged replacement. The current tree's behavioral parity
+                  // is separately asserted by source-level regression tests.
+                  if (prs.length) continue;
+                  const replacement = closedPRs.find(pr =>
+                    pr.number === review.replacement && pr.merged_at &&
+                    pr.base?.ref === defaultBranch &&
+                    pr.head?.repo?.full_name === fullName &&
+                    pr.head.sha === review.replacementSha
+                  );
+                  if (!replacement) continue;
+                  const original = (await github.rest.repos.getCommit({
+                    owner, repo, ref: branch.commit.sha
+                  })).data;
+                  if (original.parents?.length !== 1 ||
+                      original.files?.length !== 1 ||
+                      original.files[0].filename !== review.onlyFile ||
+                      original.files[0].status !== 'modified') continue;
+                  const replacementFiles = await github.paginate(
+                    github.rest.pulls.listFiles, {
+                      owner, repo, pull_number: review.replacement, per_page: 100
+                    }
+                  );
+                  if (!replacementFiles.some(f =>
+                    f.filename === review.onlyFile && f.status === 'modified'
+                  )) continue;
                 } else if (review.kind === 'ancestor-only') {
-                  // For the single audited no-PR record, require real Git ancestry.
+                  // Audited no-PR refs without unique commits require ancestry.
                   if (prs.length || !await ancestorOfMain(branch.commit.sha)) continue;
                 } else {
                   continue;
@@ -356,6 +390,8 @@ jobs:
                     ? 'reviewed production PR #' + review.pr + ' (verified ancestors of main and linked Discloud)'
                   : review.kind === 'ancestor-only'
                     ? 'reviewed no-PR ancestor of main'
+                  : review.kind === 'superseded-no-pr'
+                    ? 'reviewed single-file no-PR change superseded by merged #' + review.replacement
                     : review.kind === 'closed-record'
                       ? 'reviewed closed record #' + review.pr + ' after merged implementation #' + review.replacement
                       : 'reviewed closed PR #' + review.pr + ' superseded by #' + review.replacement;
