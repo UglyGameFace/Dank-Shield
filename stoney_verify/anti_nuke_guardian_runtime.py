@@ -12,7 +12,7 @@ across separate per-user thresholds.
 import asyncio
 import time
 from collections import defaultdict, deque
-from typing import Any, Deque, Optional
+from typing import Any, Deque, Mapping, Optional
 
 import discord
 
@@ -598,13 +598,26 @@ async def _contain_peer(guild: discord.Guild, actor: Any) -> tuple[list[str], li
         return await anti_nuke._contain_actor(guild, actor, reason="Dank Shield AntiNuke panic: coordinated destructive activity")  # noqa: SLF001
 
 
-async def _contain_observed_peers(guild: discord.Guild, current_actor: Any, observed: list[Any]) -> tuple[list[int], list[str]]:
+async def _contain_observed_peers(
+    guild: discord.Guild,
+    current_actor: Any,
+    observed: list[Any],
+    *,
+    settings: Mapping[str, Any],
+) -> tuple[list[int], list[str]]:
+    # A panic window is correlation, not proof that every actor in the window
+    # is malicious. Protect explicitly trusted operators from *peer* punishment;
+    # their own events still pass through normal/strict per-actor enforcement.
+    if not settings.get("antinuke_enabled") or settings.get("antinuke_mode") != "contain":
+        return [], []
     current_id = _safe_int(getattr(current_actor, "id", 0), 0)
     contained: list[int] = []
     blocked: list[str] = []
     for peer in observed:
         peer_id = _safe_int(getattr(peer, "id", 0), 0)
         if peer_id <= 0 or peer_id == current_id or anti_nuke._actor_is_owner_or_bot(guild, peer):  # noqa: SLF001
+            continue
+        if anti_nuke._actor_is_configured_trusted(peer, settings):  # noqa: SLF001
             continue
         removed, failures = await _contain_peer(guild, peer)
         if removed and not failures:
@@ -615,8 +628,29 @@ async def _contain_observed_peers(guild: discord.Guild, current_actor: Any, obse
 
 
 async def _post_panic_incident(guild: discord.Guild, *, actor: Any, action_label: str, target_label: str, observed: list[Any]) -> None:
-    contained, blocked = await _contain_observed_peers(guild, actor, observed)
-    response = "Coordinated destructive burst detected across multiple executors. " + f"Delegated allowances are suspended for {int(_PANIC_HOLD_SECONDS)}s."
+    # Do not let the panic side path bypass the guild's Alert Only setting or
+    # enforce from an unavailable policy snapshot. The current actor is already
+    # processed by the canonical per-event engine.
+    try:
+        settings = await anti_nuke.get_antinuke_settings(int(guild.id))
+    except Exception:
+        settings = None
+    may_contain = bool(
+        settings
+        and settings.get("antinuke_enabled")
+        and settings.get("antinuke_mode") == "contain"
+    )
+    contained: list[int] = []
+    blocked: list[str] = []
+    if may_contain:
+        contained, blocked = await _contain_observed_peers(
+            guild, actor, observed, settings=settings
+        )
+    response = "Coordinated destructive burst detected across multiple executors."
+    if may_contain:
+        response += f" Delegated allowances are suspended for {int(_PANIC_HOLD_SECONDS)}s."
+    else:
+        response += " Alert-only or unavailable policy: no peer containment attempted."
     if contained:
         response += " Peer actors contained: " + ", ".join(str(value) for value in contained) + "."
     if blocked:
