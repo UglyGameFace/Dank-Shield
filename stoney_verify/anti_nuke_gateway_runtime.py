@@ -169,7 +169,7 @@ async def _rollback_untrusted_webhook_create(
     """Delete an undelegated newly-created webhook before its token can persist."""
 
     settings = await anti_nuke.get_antinuke_settings(int(guild.id))
-    if not settings["antinuke_enabled"] or settings["antinuke_mode"] != "contain":
+    if not anti_nuke._creation_containment_authorized(settings):  # noqa: SLF001
         return ""
     if anti_nuke._actor_is_owner_or_bot(guild, actor):  # noqa: SLF001
         return ""
