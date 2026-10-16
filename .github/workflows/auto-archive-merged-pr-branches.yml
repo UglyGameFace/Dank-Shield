@@ -64,10 +64,16 @@ jobs:
               pr.head.repo?.full_name === fullName
             ).map(pr => pr.head.ref));
             // Recent merged records only; not a bulk historical branch sweeper.
-            const closedPRs = (await github.rest.pulls.list({
-              owner, repo, state: 'closed', sort: 'updated',
-              direction: 'desc', per_page: 100
-            })).data;
+            // A single 100-PR page silently misses eligible merged heads once
+            // other closed PRs push them off page one. Paginate the full set;
+            // eligibility remains constrained by date, prefix, exact head and
+            // the maximum retirement batch below.
+            const closedPRs = await github.paginate(
+              github.rest.pulls.list, {
+                owner, repo, state: 'closed', sort: 'updated',
+                direction: 'desc', per_page: 100
+              }
+            );
             const byName = new Map(branches.map(item => [item.name, item]));
 
             function allowed(name) {
