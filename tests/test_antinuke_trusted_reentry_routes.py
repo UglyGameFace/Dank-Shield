@@ -65,7 +65,9 @@ def test_direct_reentry_hold_preserves_trusted_moderator(monkeypatch) -> None:
     assert result is True
     assert len(incidents) == 1
     assert "Staff Review" in incidents[0][0]
-    assert "trusted moderator role" in incidents[0][1]
+    # A full Discord Member can satisfy configured trust directly, whereas
+    # role-less audit users require a fresh member lookup. Both must be safe.
+    assert "configured trusted moderator" in incidents[0][1]
 
 
 def test_direct_reentry_still_bans_confirmed_untrusted(monkeypatch) -> None:
