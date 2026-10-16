@@ -110,3 +110,14 @@ Preserve `main`, `aaa-cinema-pre-pregateway-bind`, all backups, recovery/archive
 ### One-time execution
 
 After this PR's exact-head CI succeeds and it is merged, the repository owner uses **Actions → Guarded merged-branch cleanup**: run `preview-reviewed` and confirm the **29 named candidates** (older retired names should no longer exist). Separately run `delete-reviewed` with `DELETE_REVIEWED_HISTORICAL_BRANCHES`. The workflow rechecks merged PR evidence, exact head SHA, open PR usage, protected status, dual ancestry for the five historical production branches, and unchanged current head before deletion. Merging the PR does not delete anything. Verify the surviving `main` and linked production refs and actual Discloud picker afterward.
+
+
+## October 16 branch reconciliation #263 (issue #597)
+
+- The old unmerged PR #263 `fix/welcome-card-long-tail-unicode` is closed at pinned head `25047b33bd51f7f066992802ef466276ceee7056`, **17 ahead of current main** due to old diverged history. It is *not* merged wholesale.
+- Merged PR #264 instead bundles `stoney_verify/assets/fonts/NotoSansCanadianAboriginal-VF.ttf` plus the SIL license and registers it in `unicode_font_fallback.py`. The tracked font's exact Git blob SHA `b20ba0705bfac6e3c1655ea854522c041bd00a69` was verified in GitHub and matches the pinned upstream face in #263.
+- Existing main tests already check bundled UCAS coverage and whole-card rendering with `ᗩ ᗰ ᒪ`. A new regression protects the exact original live name `PᗩᗰƐᒪᗩ`, including fallbacks under disabled system/registry discovery; card-rendering sample coverage also includes that exact string.
+- PR #263's additional downloading of 11MB+ Unifont resources and Discloud `BUILD` override were *not* carried over. The license-covered bundled Noto already fixes the verified UCAS bug without adding build-time external network dependence or overwriting modern `discloud.config` (RAM/VLAN/ffmpeg).
+- This is **not** a claim of all-script Unicode font coverage or deployed production validation. Any separately proven missing glyphs remain a new scoped bug, not grounds to merge the obsolete #263 wholesale.
+- Seventh-wave safe retirement adds one exact-name/head-SHA `superseded` record: closed-unmerged #263, replacement merged #264. The existing guarded workflow will recheck both PR records, branch protection, current head SHA, and open PR references. Deletion is **manual after merge and preview**.
+- Until the owner explicitly runs the verified delete workflow, the old branch remains intact; `main`, `aaa-cinema-pre-pregateway-bind`, backups, recovery, migration, and all other open/reconciliation branches remain untouched.

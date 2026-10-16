@@ -102,7 +102,7 @@ def test_reviewed_wave_has_exact_frozen_retirement_count() -> None:
     text = _workflow()
     manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
     assert manifest.count("kind: 'merged'") == 45
-    assert manifest.count("kind: 'superseded'") == 5
+    assert manifest.count("kind: 'superseded'") == 6
     assert manifest.count("kind: 'closed-record'") == 3
     assert manifest.count("kind: 'ancestor-only'") == 1
     for pr in (46, 94, 171, 214, 216, 229):
@@ -119,7 +119,7 @@ def test_fourth_wave_requires_live_git_ancestry_and_exact_records() -> None:
     assert "inUseByOpenPR.has(name)" in text
     assert "current.protected || current.commit.sha !== candidate.sha" in text
     manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
-    assert manifest.count("kind:") == 59
+    assert manifest.count("kind:") == 60
     for branch in (
         "aaa-cinema-pre-pregateway-bind",
         "feat/cinema-library-intelligence",
@@ -159,7 +159,7 @@ def test_sixth_wave_exact_sha_and_discloud_dual_ancestry() -> None:
     manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
     assert manifest.count("kind: 'linked-ancestor'") == 5
     assert manifest.count("kind: 'merged'") == 45
-    assert manifest.count("kind:") == 59
+    assert manifest.count("kind:") == 60
     assert "async function ancestorOfLinkedDiscloud(sha)" in text
     assert "if (!await ancestorOfMain(branch.commit.sha)) continue;" in text
     assert "if (!await ancestorOfLinkedDiscloud(branch.commit.sha)) continue;" in text
@@ -209,3 +209,20 @@ def test_sixth_wave_exact_sha_and_discloud_dual_ancestry() -> None:
         "fix/antinuke-self-provenance-guard",
     ):
         assert f"['{excluded}', {{ kind:" not in manifest
+
+
+def test_unmerged_unicode_263_has_exact_proven_replacement() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedRetirements = new Map([", 1)[1].split("]);", 1)[0]
+    record = (
+        "['fix/welcome-card-long-tail-unicode', "
+        "{ kind: 'superseded', pr: 263, replacement: 264, "
+        "sha: '25047b33bd51f7f066992802ef466276ceee7056' }]"
+    )
+    assert manifest.count(record) == 1
+    assert "if (!original || !replacement) continue;" in text
+    assert "review.sha !== branch.commit.sha" in text
+    assert "if (inUseByOpenPR.has(name)) continue;" in text
+    # No old-build font downloads, unrelated branches, or blanket cleanup.
+    assert "tools/provision_unicode_fonts.py" not in text
+    assert "'aaa-cinema-pre-pregateway-bind', { kind:" not in manifest
