@@ -411,6 +411,10 @@ def _self_ejection_safety(
     marker_state = str(diagnostics.get("marker_state") or "missing")
     if marker_state == "known_unmatched":
         blockers.append("known-local-marker-scope-mismatch")
+    elif marker_state == "malformed":
+        # Truncated/invalid proof is ambiguous, not sufficient evidence that
+        # the Discord bot credential is compromised. Alert without self-ejecting.
+        blockers.append("malformed-self-action-marker")
     elif marker_state == "missing":
         if int(diagnostics.get("recent_scope_candidates") or 0) > 0:
             blockers.append("recent-local-request-without-audit-marker")
