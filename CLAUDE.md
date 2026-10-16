@@ -75,8 +75,9 @@ Critical, non-obvious facts (verified — do not assume otherwise):
   `/movie`, `/role`, `/ticket`, `/tickets`, `/toke`, `/verify`, plus `View Dank Profile`. Before normal ready handling,
   the native setup hook fails closed if those roots or the approved direct
   `/dank` children (`home`, `purge`, `setup`, `upload`) drift or disappear.
-- **`sitecustomize.py` and `usercustomize.py` auto-run before `main.py`.** Their
-  remaining behavior is compatibility-scoped. Do not add a fallback startup
+- **`sitecustomize.py` can auto-run before `main.py`.** Its remaining Basic Verify
+  compatibility behavior is being audited; the duplicate `usercustomize.py` hook
+  was retired because canonical `commands_ext` already registers that command. Do not add a fallback startup
   loader, application runtime patcher, or another compatibility installer there.
 - **Channel Builder routes are directly wired.** `app.py` starts
   `api_new.server.start_api(bot)`, `server.py` imports
@@ -134,7 +135,8 @@ most load-bearing code in the repo. Re-read section 4.
 These are load-bearing or dangerous to change blind:
 
 1. `main.py` — entry point, explicit process-health ownership, and guard import order.
-2. `sitecustomize.py` / `usercustomize.py` — host-level auto-run compatibility hooks.
+2. `sitecustomize.py` — remaining host-level Basic Verify compatibility hook;
+   `usercustomize.py` was removed after verifying canonical command registration.
 3. `stoney_verify/globals.py` and `stoney_verify/command_runtime.py` — the shared bot singleton, native Bot/AutoShardedBot + command-tree ownership, env config, Supabase client, and import-time invite listener.
 4. `stoney_verify/app.py` import sequence & `on_ready`.
 5. `stoney_verify/commands.py` (esp. the import-time `register_all_commands`) and `commands_ext/__init__.py` (registration pipeline and final public surface).

@@ -64,3 +64,12 @@ Focused tests execute the extracted audit logic with a simulated final command t
 ## Change-control constraints
 
 Do not modify `stoneyverify` Discloud ID, linked `aaa-cinema-pre-pregateway-bind` branch, production database, secrets, persistent Discord custom IDs or shard/startup ownership as part of this first slice. No app deletion, broad text replacement, introduction of new global import hooks, or cross-feature fixes without their own evidence. Do not claim the package rename, complete master audit, or main cutover is finished.
+
+
+## October 16, PR #604 candidate: redundant usercustomize retire-only slice
+
+- Fresh main baseline `7569da17073716e7666fd21a42772a6c40205aba` after PR #603 merged with exact-head green CI.
+- Python's optional `usercustomize.py` hook had only duplicate Basic Verify registry mutation and an eager Basic Verify import. Canonical `stoney_verify.commands_ext.COMMAND_MODULES` and `_PUBLIC_CORE_MODULES` already include `public_verify_basic_panel`, and `sitecustomize.py` independently loads the same module before the normal app entry point. Remove **only** `usercustomize.py` instead of replacing it with a no-op or alias shim.
+- The remaining `sitecustomize.py` and `startup_guards.basic_verification_mode_guard` are **not** touched. Their legacy ID allowlist and `CommandTree.sync` monkey patch must be proven redundant in another isolated owner migration, including Basic Verify button behavior and persistent posted panel IDs.
+- Update tests/tooling that previously read `usercustomize.py` to check its absence instead. Verify that canonical command spec, public/minimal/admin profiles and imported Basic Verify module still exist, and test that missing/duplicate entries fail CI. This change never touches `main.py`, app boot order, Discord sync, data, environment, Discloud app ID or the linked production branch.
+- Merging this PR does **not** deploy it to the existing Discloud app, which currently remains linked to another branch. Full exact-head CI and eventual live acceptance remain separate.

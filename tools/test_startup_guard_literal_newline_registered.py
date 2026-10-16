@@ -6,7 +6,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 startup_init = (ROOT / "stoney_verify/startup_guards/__init__.py").read_text(encoding="utf-8")
 sitecustomize = (ROOT / "sitecustomize.py").read_text(encoding="utf-8")
-usercustomize = (ROOT / "usercustomize.py").read_text(encoding="utf-8")
 main_text = (ROOT / "main.py").read_text(encoding="utf-8")
 design_text = (ROOT / "stoney_verify/services/server_design_majority_layout.py").read_text(encoding="utf-8")
 design_test = (ROOT / "tests/test_server_design_majority_layout.py").read_text(encoding="utf-8")
@@ -42,8 +41,8 @@ if "test_clean_design_text_replaces_literal_newline_artifacts" not in design_tes
 if "load_all_startup_guards" in sitecustomize or "load_startup_guards" in sitecustomize:
     bad.append("sitecustomize still exposes bulk-loader compatibility")
 
-if "panel_menu_retry_guard" in usercustomize or "panel_menu_" in usercustomize:
-    bad.append("usercustomize still tries to install the retired panel retry guard")
+if (ROOT / "usercustomize.py").exists():
+    bad.append("retired usercustomize Python auto-import hook reappeared")
 
 if (ROOT / "stoney_verify/startup_guards/panel_menu_retry_guard.py").exists():
     bad.append("retired panel_menu_retry_guard.py still exists")
