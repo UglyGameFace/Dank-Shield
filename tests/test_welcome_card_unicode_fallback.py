@@ -92,6 +92,29 @@ def test_bundled_canadian_aboriginal_fallback_covers_live_name(monkeypatch) -> N
     )
 
 
+def test_original_long_tail_member_name_uses_bundled_font(
+    tmp_path, monkeypatch
+) -> None:
+    # PR #263 was superseded by the bundled, licensed font in merged #264.
+    # Protect the *exact* original member name, not just separated UCAS glyphs.
+    original = "PᗩᗰƐᒪᗩ"
+    primary = _write_font(tmp_path, "primary-latin.ttf", "PƐ")
+    monkeypatch.setattr(fallback, "_registered_fallback_paths", lambda _bold: ())
+
+    runs = fallback.resolve_font_runs(
+        original, primary_paths=(str(primary),), bold=True
+    )
+
+    assert "".join(run.text for run in runs) == original
+    assert all(fallback.source_supports(run.source, run.text) for run in runs)
+    assert any(
+        "ᗩ" in run.text and str(run.source.path or "").endswith(
+            "NotoSansCanadianAboriginal-VF.ttf"
+        )
+        for run in runs
+    )
+
+
 def test_primary_font_falls_back_only_for_missing_grapheme(tmp_path, monkeypatch) -> None:
     primary = _write_font(tmp_path, "primary.ttf", "AB")
     unicode_face = _write_font(tmp_path, "unicode.ttf", "Λ♡")
@@ -184,6 +207,7 @@ def test_production_fallback_stack_covers_representative_discord_names() -> None
     primary = engine._family_candidates(style.family, bold=True)
     samples = (
         "PΛMELA",
+        "PᗩᗰƐᒪᗩ",
         "ᗩ ᗰ ᒪ",
         "𝓐𝓷𝓰𝓮𝓵♡",
         "José",
@@ -210,6 +234,7 @@ def test_production_fallback_stack_covers_representative_discord_names() -> None
 def test_representative_unicode_names_render_full_welcome_cards() -> None:
     for sample in (
         "PΛMELA",
+        "PᗩᗰƐᒪᗩ",
         "ᗩ ᗰ ᒪ",
         "𝓐𝓷𝓰𝓮𝓵♡",
         "José",
