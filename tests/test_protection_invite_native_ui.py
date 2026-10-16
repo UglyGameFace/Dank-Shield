@@ -262,7 +262,14 @@ def test_bootstrap_binds_editor_without_stealing_toggle_ownership() -> None:
     assert "def install_invite_policy_scope_binding" not in (Path(scope.__file__).read_text(encoding="utf-8"))
     assert "merge_scope_settings(settings, normalize_scope(cfg))" in Path(invite_policy_engine.__file__).read_text(encoding="utf-8")
     assert "_install_native_invite_ui" in commands_source
-    assert "startup_guards" not in commands_source[commands_source.index("# Invite target metadata"):commands_source.index("# The public Create Ticket button")]
+    # Check the current native Invite Shield bootstrap section, not a retired
+    # comment from the removed policy-loader replacement.
+    invite_bootstrap = commands_source.split(
+        "# Invite Shield's guild-config targets now merge", 1
+    )[1].split("# The public Create Ticket button", 1)[0]
+    assert "_install_native_invite_ui" in invite_bootstrap
+    assert "startup_guards" not in invite_bootstrap
+    assert "install_invite_policy_scope_binding" not in invite_bootstrap
 
 
 def test_protection_center_separates_invite_toggle_from_editor() -> None:
