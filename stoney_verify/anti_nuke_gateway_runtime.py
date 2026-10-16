@@ -77,10 +77,24 @@ async def _contain_or_count_role_mutation(
     threshold engine. Direct gateway containment remains for untrusted actors
     and explicit Strict Lockdown. No extra listener or patch layer is needed.
     """
-    if (
+    delegated = (
         not bool(settings.get("antinuke_strict_lockdown", False))
         and anti_nuke._actor_is_configured_trusted(actor, settings)  # noqa: SLF001
-    ):
+    )
+    if delegated:
+        # Confirmed hostile reputation outranks role/user trust. The lookup
+        # already uses cached/local security evidence during DB outages.
+        from .anti_nuke_hostile_actor_runtime import get_actor_reputation
+
+        actor_id = _safe_int(getattr(actor, "id", 0), 0)
+        try:
+            reputation = await get_actor_reputation(int(guild.id), actor_id)
+        except Exception:
+            reputation = None
+        if reputation and reputation.get("active"):
+            delegated = False
+
+    if delegated:
         await anti_nuke._process_claimed_destructive_event(  # noqa: SLF001
             guild,
             entry=entry,
