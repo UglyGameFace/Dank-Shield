@@ -1217,6 +1217,10 @@ async def _process_claimed_destructive_event(
     settings = await get_antinuke_settings(int(guild.id))
     if not settings["antinuke_enabled"]:
         return False
+    # Keep the irreversible safety boundary inside the canonical engine.
+    # Future callers cannot punish channel/webhook creation in normal Contain.
+    if action_key in {"channel_create", "webhook_create"} and not _creation_containment_authorized(settings):
+        return False
 
     actor = getattr(entry, "user", None)
     actor_id = _safe_int(getattr(actor, "id", 0), 0)
