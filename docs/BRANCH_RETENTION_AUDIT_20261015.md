@@ -1,6 +1,6 @@
 # Dank Shield branch hygiene: reviewed historical retirement
 
-Status: third wave verified executed, fourth wave awaiting PR/CI, owner preview and separate deletion. This record belongs to the **single active GitHub branch-cleanup task**. It does not authorize merging incomplete product features or changing the Discloud database/application.
+Status: fourth wave owner-executed and verified; fifth wave prepared for exact-head CI, manual owner preview, and separate owner-confirmed deletion. This record belongs to the **single active GitHub branch-cleanup task**. It does not authorize merging incomplete product features or changing the Discloud database/application.
 
 ## Verified checkpoint
 
@@ -53,7 +53,7 @@ Status: third wave verified executed, fourth wave awaiting PR/CI, owner preview 
 - Open PR references, protected refs, `main`, and changed SHAs are excluded, with a second head/protection check just before deletion.
 - Preview and invalid-confirmation simulations must pass, and repo CI must be green; actual deletion and post-run counts remain to be verified separately.
 
-**Next step:** merge the reviewed workflow PR after CI; run `preview-reviewed` and inspect all 17 intended candidates before authorizing `delete-reviewed`. Then verify GitHub count, protected refs, and linked Discloud branch, and triage the remaining unfinished PRs before proposing any further destructive work.
+**Historical third-wave instruction (completed):** This records the process for the earlier 17-candidate retirement. The current live checkpoint and next steps are in the latest section below.
 
 
 ## October 15 fourth-wave checkpoint (after PR #584 execution)
@@ -68,3 +68,27 @@ Status: third wave verified executed, fourth wave awaiting PR/CI, owner preview 
 - The linked Discloud branch and all backups, recoveries, diverged branches, and outstanding product implementation branches remain excluded. Five production-base merged PR heads are ancestors of main, but their operational acceptance remains uncertain, so they are deliberately **not** in this wave.
 - **PR #9** has a matching setup picker on current main but remains held pending deeper functional equivalence review. #10, #114, #237, #263, #285, #310, #355, #458, #544 and #555 are not silently retired. The oldest unmerged bookkeeping or topic branches were reviewed individually; no direct production code is changed.
 - Operational acceptance: no new bot deploy, CI and actual deletion are separate checks. After this PR passes CI and merges, dispatch **preview-reviewed** first and inspect the nine candidate names, then separately **delete-reviewed** with `DELETE_REVIEWED_HISTORICAL_BRANCHES`. Recheck resulting branch count and all protected names.
+
+
+## October 15 fifth-wave checkpoint (after PR #585 owner runs)
+
+The last two owner-dispatched guarded workflow runs (on PR #585 merge SHA `f3c231e7d9b854263f6f5f427d1d1559a0288624`) succeeded. Exact GitHub listing after both: **135** remaining branches. All nine fourth-wave names were absent.
+
+Remaining inventory after fourth-wave execution: 59 exact-tip merged-to-main PR refs, 8 exact-tip merged to another base, 11 closed-but-unmerged PR refs, 15 heads changed since merger, 41 refs with no matching PR, and main. This inventory is not a recommendation to bulk-delete 135 refs.
+
+**Fifth wave is limited to four exact head/SHA pairs:**
+
+| Branch | Merged PR | Basis for individually reviewed retirement |
+| --- | ---: | --- |
+| `chore/verify-supabase-sync` | #154 | July 31 temporary read-only history/dry-run verifier; merged to main, followed by removal PR #155 |
+| `chore/remove-supabase-sync-verifier` | #155 | July 31 cleanup of that temporary workflow, already merged to main |
+| `chore/verify-ticket-counter-production` | #159 | July 31 temporary read-only ticket-counter proof workflow, already merged to main |
+| `chore/guarded-branch-cleanup-fourth-wave-20261015` | #585 | Fourth-wave owner cleanup already executed successfully on merged main, no longer a working change branch |
+
+All four were confirmed on GitHub as **closed and merged into main with exact current head SHA unchanged** and no open PR references. These are retired branch refs only; the merged commits, PR records and migration/test history stay in GitHub. The script independently re-verifies before deletion.
+
+A direct Git comparison shows some historical squash-merged verifier heads remain graph-diverged from main. Their exact GitHub merged-to-main PR record, frozen SHA and owner preview are therefore the evidence used for these four, not a false claim of Git ancestry.
+
+**Explicit retention:** `aaa-cinema-pre-pregateway-bind`, `main`, backups, archive/recovery/reconcile/integration refs, current Discloud cutover and migrations, 11 closed-unmerged product PR branches, 15 modified-after-merge heads and no-PR diverged branches. Among remaining merged PR refs, schema migrations, AntiNuke recovery, Live Captions rollback, Invite Shield repair and critical Discloud recovery are retained for now pending operator acceptance. Two clean no-PR refs are already ancestors (`audit-000-cinema-pr436-known-good` and `fix/discloud-rest-window-recovery-current-main-20261007`) but are purposefully held as named known-good/recovery checkpoints.
+
+**Gate and next action:** After fifth-wave PR exact-head CI is green, merge into `main`. Owner dispatches `preview-reviewed` to see exactly four candidates and zero deletions, inspects the list, and only then separately dispatches `delete-reviewed` with `DELETE_REVIEWED_HISTORICAL_BRANCHES`. Expect **132** branches after deleting four from the 135 checkpoint plus this PR branch (assuming no other branches are created). Verify current inventory and protected refs. No automatic cleanup, bot deploy, Discloud changes or database writes.
