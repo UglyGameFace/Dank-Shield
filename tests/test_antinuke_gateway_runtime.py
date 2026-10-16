@@ -292,7 +292,7 @@ def test_main_installs_gateway_runtime_through_pre_app_coordinator() -> None:
     )
 
 
-@pytest.mark.parametrize
+@pytest.mark.parametrize(
     "route", ("role_create", "member_role_remove", "member_timeout")
 )
 @pytest.mark.parametrize(
