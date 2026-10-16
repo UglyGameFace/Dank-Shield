@@ -768,6 +768,27 @@ async def _handle_bot_add(guild: discord.Guild, entry: Any, actor: Any) -> None:
     if not settings["antinuke_enabled"]:
         return
     target = getattr(entry, "target", None)
+    # Audit events can arrive before Discord has supplied a resolvable bot
+    # target. Unknown identity is missing evidence, NOT an unauthorized bot.
+    # Do not kick the installer or count a panic strike on incomplete data.
+    if _safe_int(getattr(target, "id", 0), 0) <= 0:
+        await anti_nuke._post_incident(  # noqa: SLF001
+            guild,
+            title="⚠️ AntiNuke Bot Addition Needs Attribution",
+            actor=actor,
+            action_label="Bot-add audit target was not resolved",
+            target_label=_target_label("bot_add", entry),
+            response_label=(
+                "No bot or inviter was removed; the audit entry did not "
+                "identify which bot was added."
+            ),
+            details=(
+                "This audit event is not evidence of an unauthorized bot. "
+                "Retain it for target-correct member-join/audit reconciliation."
+            ),
+        )
+        return
+
     authorized, authorization_reason = await anti_nuke.bot_add_authorization(
         guild,
         target,
@@ -843,6 +864,11 @@ async def _on_audit_log_entry_create(entry: discord.AuditLogEntry) -> None:
         if actor is None:
             return
         claimed = _EntryProxy(entry, actor)
+        # Do not consume a sparse bot-add audit event before its target can be
+        # matched. The member-join path may still obtain the precise target ID.
+        if _safe_int(getattr(getattr(claimed, "target", None), "id", 0), 0) <= 0:
+            await _handle_bot_add(guild, claimed, actor)
+            return
         if anti_nuke._consume_audit_entry(claimed):  # noqa: SLF001
             return
         await _handle_bot_add(guild, claimed, actor)
