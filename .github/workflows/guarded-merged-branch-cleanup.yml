@@ -165,6 +165,12 @@ jobs:
               // eighth-wave cleanup PR; preserve all unrelated unmerged heads.
               ['feature/setup-picker-wizard', { kind: 'superseded', pr: 9, replacement: 241, sha: 'a79ec6441a66de41bdab5110c5ebac2a9ab0fd81' }],
               ['chore/guarded-branch-cleanup-eighth-wave-20261016', { kind: 'merged', pr: 599, sha: '16a7292cecfb8ff73aab2ab50c108287280da940' }],
+              // Eleventh wave: completed master-audit PR heads and prior tag-first cleanup PR.
+              // Frozen exact merged heads only; old recovery/migration branches stay excluded.
+              ['audit/production-command-contract-stoney-legacy-20261016', { kind: 'merged', pr: 603, sha: '5aad13f4fd158083d1d1852f94afba0766bac1f0' }],
+              ['audit/retire-duplicate-usercustomize-20261016', { kind: 'merged', pr: 604, sha: 'b68733954c8ed5abc06c2abef758bc8f777cc382' }],
+              ['audit/verify-sync-native-ownership-20261016', { kind: 'merged', pr: 605, sha: 'ff7e6868d3ce0d9302c3edf8b93db8d64ff2dbc0' }],
+              ['chore/tag-archive-retired-merged-branches-20261016', { kind: 'merged', pr: 601, sha: 'f5bc96f3040308df17613a2a193f5b0bf2a0fe03' }],
               // Tenth wave: verified exact merged heads, archived as tags before retirement.
               ['chore/reconcile-setup-picker-9-retire-20261016', { kind: 'merged', pr: 600, sha: '129004553ba30aec8381c97ecbd74faf024e1e75' }],
               ['ci/safe-discloud-main-release-20261015', { kind: 'merged', pr: 576, sha: '94ef4408d6b4fadb3cbc62141d055786ae740c2d' }],
