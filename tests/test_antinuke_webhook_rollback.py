@@ -41,18 +41,21 @@ def _entry(webhook_id: int, actor=None):
 
 
 def _settings(**patch):
-    return anti_nuke.normalize_antinuke_settings(
+    settings = anti_nuke.normalize_antinuke_settings(
         {"antinuke_enabled": True, "antinuke_mode": "contain", **patch}
     )
+    if "antinuke_strict_lockdown" in patch:
+        settings["antinuke_strict_lockdown"] = patch["antinuke_strict_lockdown"]
+    return settings
 
 
-def test_untrusted_created_webhook_is_revoked(monkeypatch) -> None:
+def test_strict_created_webhook_is_revoked(monkeypatch) -> None:
     hook = FakeWebhook(12345)
     guild = FakeGuild([hook])
     actor = _actor()
 
     async def fake_settings(_guild_id):
-        return _settings()
+        return _settings(antinuke_strict_lockdown=True)
 
     monkeypatch.setattr(anti_nuke, "get_antinuke_settings", fake_settings)
 
@@ -69,14 +72,14 @@ def test_untrusted_created_webhook_is_revoked(monkeypatch) -> None:
     assert "AntiNuke rollback" in str(hook.reason)
 
 
-def test_webhook_cleanup_matches_exact_audit_target_id(monkeypatch) -> None:
+def test_strict_webhook_cleanup_matches_exact_audit_target_id(monkeypatch) -> None:
     other = FakeWebhook(11111)
     malicious = FakeWebhook(22222)
     guild = FakeGuild([other, malicious])
     actor = _actor()
 
     async def fake_settings(_guild_id):
-        return _settings()
+        return _settings(antinuke_strict_lockdown=True)
 
     monkeypatch.setattr(anti_nuke, "get_antinuke_settings", fake_settings)
 
