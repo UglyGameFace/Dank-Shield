@@ -76,6 +76,12 @@ jobs:
                   protectedPrefixes.some(prefix => name.startsWith(prefix))) {
                 return false;
               }
+              // This single newly reviewed automation PR is itself a
+              // temporary head. Its exact merged SHA still must pass all
+              // runtime checks, including tag/readback and open-PR exclusion.
+              if (name === 'chore/auto-archive-merged-pr-heads-20261016') {
+                return true;
+              }
               return !name.split(/[\\/_-]+/).some(segment =>
                 protectedSegments.has(segment.toLowerCase())
               );
