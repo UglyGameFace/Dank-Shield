@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from stoney_verify import anti_nuke
 from stoney_verify import anti_nuke_gateway_runtime as gateway
+from stoney_verify import anti_nuke_hostile_actor_runtime as hostile
 from stoney_verify import anti_nuke_guardian_runtime as guardian
 
 
@@ -191,6 +192,10 @@ def test_gateway_trusted_operator_uses_canonical_threshold_not_first_strike(
         punished.append(int(member.id))
         return ["kicked"], []
 
+    async def clean_reputation(_guild_id: int, _actor_id: int, *, refresh: bool = False):
+        return None
+
+    monkeypatch.setattr(hostile, "get_actor_reputation", clean_reputation)
     monkeypatch.setattr(anti_nuke, "_process_claimed_destructive_event", canonical)
     monkeypatch.setattr(gateway, "_contain_actor", direct)
     monkeypatch.setattr(
@@ -232,6 +237,22 @@ def test_gateway_trusted_operator_uses_canonical_threshold_not_first_strike(
     assert (removed, blocked, counted) == (["kicked"], [], False)
     assert punished == [400, 400]
     assert recorded == [("role_update", None)]
+
+    # A confirmed hostile actor must not inherit normal trust's grace period.
+    async def hostile_reputation(_guild_id: int, _actor_id: int, *, refresh: bool = False):
+        return {"active": True}
+
+    settings["antinuke_trusted_user_ids"] = [400]
+    monkeypatch.setattr(hostile, "get_actor_reputation", hostile_reputation)
+    removed, blocked, counted = asyncio.run(
+        gateway._contain_or_count_role_mutation(
+            guild, entry, actor, settings=settings, action_key="role_update",
+            action_label="Permission escalation", target_label="Admin",
+            reason="known hostile security-sensitive change",
+        )
+    )
+    assert (removed, blocked, counted) == (["kicked"], [], False)
+    assert punished == [400, 400, 400]
     _reset()
 
 
@@ -266,6 +287,10 @@ def test_three_gateway_role_authority_paths_count_trusted_operator(
     async def resolve_target(_guild, _entry):
         return SimpleNamespace(id=800)
 
+    async def clean_reputation(_guild_id: int, _actor_id: int, *, refresh: bool = False):
+        return None
+
+    monkeypatch.setattr(hostile, "get_actor_reputation", clean_reputation)
     monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
     monkeypatch.setattr(anti_nuke, "_process_claimed_destructive_event", canonical)
     monkeypatch.setattr(gateway, "_contain_actor", unexpected_containment)
