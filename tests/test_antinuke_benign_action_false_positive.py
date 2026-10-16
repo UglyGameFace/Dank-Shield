@@ -215,6 +215,11 @@ def test_fast_reentry_still_blocks_real_hostile_identity(monkeypatch) -> None:
     monkeypatch.setattr(anti_nuke, "get_antinuke_settings", settings)
     monkeypatch.setattr(hostile, "_ban_identity", ban_identity)
     monkeypatch.setattr(hostile, "_post_reputation_incident", incident)
+
+    async def untrusted_target(_guild, _actor):
+        return None
+
+    monkeypatch.setattr(hostile, "_automatic_containment_blocker", untrusted_target)
     monkeypatch.setattr(hostile, "_is_owner", lambda _guild, _uid: False)
     monkeypatch.setattr(hostile, "_is_dank_bot", lambda _anti_nuke, _uid: False)
 
