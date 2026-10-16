@@ -62,6 +62,10 @@ def test_multiple_executors_trigger_guild_wide_circuit_breaker(monkeypatch) -> N
     async def fake_incident(_guild, **kwargs):
         incidents.append(kwargs["title"])
 
+    async def get_settings(_guild_id: int):
+        return {"antinuke_enabled": True, "antinuke_mode": "contain"}
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", get_settings)
     monkeypatch.setattr(anti_nuke, "_process_claimed_destructive_event", fake_process)
     monkeypatch.setattr(guardian, "_contain_peer", fake_contain)
     monkeypatch.setattr(anti_nuke, "_post_incident", fake_incident)
@@ -101,3 +105,119 @@ def test_security_control_and_identity_surfaces_are_present() -> None:
         "app_command_permission_update",
     }
     assert expected.issubset(guardian._ACTIONS)
+
+
+def test_alert_only_panic_never_contain_peers(monkeypatch) -> None:
+    _reset()
+    guild = FakeGuild()
+    incidents: list[str] = []
+
+    async def get_settings(_guild_id: int):
+        return {"antinuke_enabled": True, "antinuke_mode": "alert"}
+
+    async def forbidden_containment(_guild, _actor):
+        raise AssertionError("Alert Only must not kick, ban, or remove roles")
+
+    async def incident(_guild, **kwargs):
+        incidents.append(str(kwargs["response_label"]))
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", get_settings)
+    monkeypatch.setattr(guardian, "_contain_peer", forbidden_containment)
+    monkeypatch.setattr(anti_nuke, "_post_incident", incident)
+
+    asyncio.run(
+        guardian._post_panic_incident(
+            guild,
+            actor=_actor(501),
+            action_label="Channel deletion",
+            target_label="general",
+            observed=[_actor(501), _actor(502)],
+        )
+    )
+
+    assert len(incidents) == 1
+    assert "no peer containment attempted" in incidents[0]
+    _reset()
+
+
+def test_panic_does_not_contain_when_policy_unavailable_or_disabled(monkeypatch) -> None:
+    _reset()
+    guild = FakeGuild()
+    responses: list[str] = []
+
+    async def forbidden_containment(_guild, _actor):
+        raise AssertionError("Unavailable/disabled AntiNuke cannot contain peers")
+
+    async def incident(_guild, **kwargs):
+        responses.append(str(kwargs["response_label"]))
+
+    monkeypatch.setattr(guardian, "_contain_peer", forbidden_containment)
+    monkeypatch.setattr(anti_nuke, "_post_incident", incident)
+
+    async def disabled(_guild_id: int):
+        return {"antinuke_enabled": False, "antinuke_mode": "contain"}
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", disabled)
+    kwargs = dict(
+        guild=guild, actor=_actor(501), action_label="Role deletion",
+        target_label="staff", observed=[_actor(501), _actor(502)],
+    )
+    asyncio.run(guardian._post_panic_incident(**kwargs))
+
+    async def unavailable(_guild_id: int):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", unavailable)
+    asyncio.run(guardian._post_panic_incident(**kwargs))
+
+    assert len(responses) == 2
+    assert all("no peer containment attempted" in text for text in responses)
+    _reset()
+
+
+def test_panic_peer_containment_excludes_trusted_staff_and_bots(monkeypatch) -> None:
+    _reset()
+    guild = FakeGuild()
+    contained: list[int] = []
+    responses: list[str] = []
+
+    async def get_settings(_guild_id: int):
+        return {
+            "antinuke_enabled": True,
+            "antinuke_mode": "contain",
+            "antinuke_trusted_user_ids": [502],
+            "antinuke_trusted_role_ids": [77],
+        }
+
+    async def contain(_guild, actor):
+        contained.append(int(actor.id))
+        return ["removed member from server"], []
+
+    async def incident(_guild, **kwargs):
+        responses.append(str(kwargs["response_label"]))
+
+    monkeypatch.setattr(anti_nuke, "get_antinuke_settings", get_settings)
+    monkeypatch.setattr(guardian, "_contain_peer", contain)
+    monkeypatch.setattr(anti_nuke, "_post_incident", incident)
+
+    def peer(user_id: int, *, roles=(), bot=False):
+        return SimpleNamespace(
+            id=user_id, roles=[SimpleNamespace(id=r) for r in roles], bot=bot
+        )
+
+    # A configured trusted user and trusted-role member are not collateral
+    # damage. The operational bot is handled through bounded canonical
+    # enforcement. An untrusted participant remains eligible for containment.
+    observed = [
+        peer(501), peer(502), peer(503, roles=(77,)), peer(504, bot=True),
+        peer(505),
+    ]
+    asyncio.run(
+        guardian._post_panic_incident(
+            guild, actor=observed[0], action_label="Channel deletion",
+            target_label="general", observed=observed,
+        )
+    )
+    assert contained == [505]
+    assert "Peer actors contained: 505" in responses[0]
+    _reset()
