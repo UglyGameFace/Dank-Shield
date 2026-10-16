@@ -26,6 +26,7 @@ from .public_setup_group import (
     _safe_str,
     dank_group,
 )
+from ..command_surface_contract import PUBLIC_GLOBAL_COMMAND_NAMES
 from ..guild_config import get_guild_config, guild_config_cache_snapshot, public_config_isolation_enabled
 from ..globals import get_supabase
 
@@ -69,27 +70,15 @@ _REQUIRED_PUBLIC_ENV: tuple[str, ...] = (
     "BOT_API_SHARED_SECRET",
 )
 
-_REQUIRED_GLOBAL_COMMANDS: tuple[str, ...] = (
-    "stoney",
-    "mod",
-    "ticket",
-    "tickets",
-    "ticket-intake",
-    "ticket-category",
-    "ticket-panel",
+# Production audit must use the post-compaction public command surface, not
+# discarded Stoney Verify / legacy ticket roots. The context menu is not a
+# slash command and must be queried using Discord's user-command type.
+_REQUIRED_GLOBAL_COMMANDS: tuple[str, ...] = tuple(
+    name for name in PUBLIC_GLOBAL_COMMAND_NAMES if name != "View Dank Profile"
 )
-
-_REQUIRED_GROUP_SUBCOMMANDS: tuple[tuple[str, str], ...] = (
-    ("ticket-intake", "post-panel"),
-    ("ticket-intake", "post-actions"),
-    ("ticket", "close"),
-    ("ticket", "reopen"),
-    ("ticket", "claim"),
-    ("ticket", "transfer"),
-    ("ticket", "transcript"),
-    ("ticket", "delete"),
-    ("ticket-category", "list"),
-    ("ticket-category", "update"),
+_REQUIRED_CONTEXT_MENU_COMMANDS: tuple[str, ...] = ("View Dank Profile",)
+_REQUIRED_GROUP_SUBCOMMANDS: tuple[tuple[str, str], ...] = tuple(
+    ("dank", name) for name in ("home", "purge", "setup", "upload")
 )
 
 
@@ -156,6 +145,16 @@ def _tree_global_command(name: str) -> Any:
         return None
     try:
         return tree.get_command(name, guild=None)
+    except Exception:
+        return None
+
+
+def _tree_user_context_command(name: str) -> Any:
+    tree = _TREE
+    if tree is None:
+        return None
+    try:
+        return tree.get_command(name, guild=None, type=discord.AppCommandType.user)
     except Exception:
         return None
 
@@ -316,7 +315,13 @@ def _append_command_audit(blockers: list[str], warnings: list[str], ok: list[str
     if missing_global:
         blockers.append("Missing required public slash commands: " + ", ".join(f"`/{name}`" for name in missing_global) + ".")
     else:
-        ok.append("Required public slash commands are present, including `/ticket-panel`.")
+        ok.append("Required Dank Shield public slash command roots are present.")
+
+    missing_context = [name for name in _REQUIRED_CONTEXT_MENU_COMMANDS if _tree_user_context_command(name) is None]
+    if missing_context:
+        blockers.append("Missing required public user context menus: " + ", ".join(f"`{name}`" for name in missing_context) + ".")
+    else:
+        ok.append("Required Dank Shield user context menu is present.")
 
     missing_sub = [(group, sub) for group, sub in _REQUIRED_GROUP_SUBCOMMANDS if not _group_has_subcommand(group, sub)]
     if missing_sub:
@@ -326,7 +331,7 @@ def _append_command_audit(blockers: list[str], warnings: list[str], ok: list[str
             + "."
         )
     else:
-        ok.append("Required ticket workflow subcommands are present, including `/ticket-intake post-panel` and `/ticket-intake post-actions`.")
+        ok.append("Required /dank home, purge, setup and upload doorways are present.")
 
     if global_count >= 90:
         warnings.append(f"Global command count is high: `{global_count}/100`. Public bots should keep this lower and cleaner.")
