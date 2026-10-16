@@ -60,6 +60,55 @@ async def _contain_actor(guild: discord.Guild, actor: Any, *, reason: str):
         )
 
 
+async def _contain_or_count_role_mutation(
+    guild: discord.Guild,
+    entry: Any,
+    actor: Any,
+    *,
+    settings: dict[str, Any],
+    action_key: str,
+    action_label: str,
+    target_label: str,
+    reason: str,
+) -> tuple[list[str], list[str], bool]:
+    """Keep immediate authority rollback separate from actor punishment.
+
+    A trusted operator in normal Contain mode uses the canonical bounded
+    threshold engine. Direct gateway containment remains for untrusted actors
+    and explicit Strict Lockdown. No extra listener or patch layer is needed.
+    """
+    delegated = (
+        not bool(settings.get("antinuke_strict_lockdown", False))
+        and anti_nuke._actor_is_configured_trusted(actor, settings)  # noqa: SLF001
+    )
+    if delegated:
+        # Confirmed hostile reputation outranks role/user trust. The lookup
+        # already uses cached/local security evidence during DB outages.
+        from .anti_nuke_hostile_actor_runtime import get_actor_reputation
+
+        actor_id = _safe_int(getattr(actor, "id", 0), 0)
+        try:
+            reputation = await get_actor_reputation(int(guild.id), actor_id)
+        except Exception:
+            reputation = None
+        if reputation and reputation.get("active"):
+            delegated = False
+
+    if delegated:
+        await anti_nuke._process_claimed_destructive_event(  # noqa: SLF001
+            guild,
+            entry=entry,
+            action_key=action_key,
+            action_label=action_label,
+            target_label=target_label,
+            threshold_key="antinuke_role_delete_threshold",
+        )
+        return [], [], True
+
+    removed, blocked = await _contain_actor(guild, actor, reason=reason)
+    return removed, blocked, False
+
+
 async def _resolve_target_member(guild: discord.Guild, entry: Any) -> Any:
     target = getattr(entry, "target", None)
     target_id = _safe_int(getattr(target, "id", 0), 0)
@@ -264,9 +313,14 @@ async def _handle_role_create(guild: discord.Guild, entry: Any) -> None:
         except Exception:
             deleted = False
 
-        removed, blocked = await _contain_actor(
+        removed, blocked, delegated = await _contain_or_count_role_mutation(
             guild,
+            entry,
             actor,
+            settings=settings,
+            action_key="role_create",
+            action_label="Dangerous role creation",
+            target_label=_target_label(entry),
             reason="Dank Shield AntiNuke containment: dangerous role creation",
         )
         response = (
@@ -278,6 +332,8 @@ async def _handle_role_create(guild: discord.Guild, entry: Any) -> None:
             response += " Containment actions: " + ", ".join(removed) + "."
         if blocked:
             response += " Could not fully contain actor: " + ", ".join(blocked) + "."
+        if delegated:
+            response += " Delegated operator evaluated under bounded AntiNuke thresholds."
 
     await anti_nuke._post_incident(  # noqa: SLF001
         guild,
@@ -351,9 +407,14 @@ async def _handle_dangerous_role_update(
         except Exception:
             reverted = False
 
-        removed, blocked = await _contain_actor(
+        removed, blocked, delegated = await _contain_or_count_role_mutation(
             guild,
+            entry,
             actor,
+            settings=settings,
+            action_key="role_update",
+            action_label="Dangerous role permission escalation",
+            target_label=_target_label(entry),
             reason="Dank Shield AntiNuke containment: dangerous role escalation",
         )
         rollback = (
@@ -365,6 +426,8 @@ async def _handle_dangerous_role_update(
             rollback += " Containment actions: " + ", ".join(removed) + "."
         if blocked:
             rollback += " Containment blockers: " + ", ".join(blocked) + "."
+        if delegated:
+            rollback += " Delegated operator evaluated under bounded AntiNuke thresholds."
 
     await anti_nuke._post_incident(  # noqa: SLF001
         guild,
@@ -450,9 +513,14 @@ async def _handle_member_role_update(
                     blocked_roles.extend(removable)
                     removable = []
 
-            removed_actor, blocked_actor = await _contain_actor(
+            removed_actor, blocked_actor, delegated = await _contain_or_count_role_mutation(
                 guild,
+                entry,
                 actor,
+                settings=settings,
+                action_key="role_update",
+                action_label="Security-sensitive role grant",
+                target_label=_member_target_label(entry),
                 reason="Dank Shield AntiNuke containment: security-sensitive role grant",
             )
             response = "Rolled back security-sensitive role grant(s): " + names + "."
@@ -464,6 +532,8 @@ async def _handle_member_role_update(
                 response += " Containment actions: " + ", ".join(removed_actor) + "."
             if blocked_actor:
                 response += " Containment blockers: " + ", ".join(blocked_actor) + "."
+            if delegated:
+                response += " Delegated operator evaluated under bounded AntiNuke thresholds."
 
         await anti_nuke._post_incident(  # noqa: SLF001
             guild,
