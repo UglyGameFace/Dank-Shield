@@ -506,3 +506,38 @@ def test_compromise_quarantine_survives_memory_reset(monkeypatch, tmp_path: Path
 def test_discord_py_route_contract_is_pinned() -> None:
     requirements = Path("requirements.txt").read_text(encoding="utf-8")
     assert f"discord.py[voice]=={runtime.SUPPORTED_DISCORD_PY}" in requirements
+
+
+
+def test_malformed_self_provenance_is_safety_hold_not_auto_ejection(monkeypatch) -> None:
+    _reset_runtime_state()
+    guild = FakeGuild()
+    bot = _healthy_self_proof_bot()
+    entry = _entry(
+        guild, "channel_delete", target_id=123,
+        reason="automatic cleanup [DSA:truncated]",
+    )
+    blockers, diagnostics = runtime._self_ejection_safety(  # noqa: SLF001
+        bot, guild, entry, "channel_delete"
+    )
+    assert diagnostics["marker_state"] == "malformed"
+    assert "malformed-self-action-marker" in blockers
+    assert guild.leave_calls == 0
+
+    async def settings(_guild_id: int):
+        return {"antinuke_enabled": True, "antinuke_mode": "contain"}
+
+    holds: list[list[str]] = []
+
+    async def hold(_bot, _guild, _entry, _action, reasons, _diagnostics) -> None:
+        holds.append(reasons)
+
+    async def never_eject(*_args, **_kwargs):
+        raise AssertionError("truncated marker cannot justify self-ejection")
+
+    monkeypatch.setattr(runtime, "_settings_fail_closed", settings)
+    monkeypatch.setattr(runtime, "_post_provenance_safety_hold", hold)
+    monkeypatch.setattr(runtime, "attempt_quarantine_ejection", never_eject)
+    asyncio.run(runtime._unmatched_self_action(bot, guild, entry, "channel_delete"))  # noqa: SLF001
+    assert holds and "malformed-self-action-marker" in holds[0]
+    assert guild.leave_calls == 0

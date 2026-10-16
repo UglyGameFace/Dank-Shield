@@ -1233,3 +1233,46 @@ def test_reasonless_non_message_side_effect_still_accepted(monkeypatch) -> None:
 
     assert unmatched == []
     assert token not in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+
+
+
+def test_malformed_reserved_marker_cannot_use_generic_receipt(monkeypatch) -> None:
+    _reset()
+    bot = FakeBot()
+    guild = FakeGuild()
+    token = runtime._expect_side_effect(  # noqa: SLF001
+        guild.id,
+        "channel_delete",
+        target_key="id:123",
+        source_action="local_channel_delete",
+    )
+    unmatched: list[str] = []
+
+    async def record_unmatched(_bot, _guild, _entry, action_name: str) -> None:
+        unmatched.append(action_name)
+
+    monkeypatch.setattr(runtime, "_unmatched_self_action", record_unmatched)
+    for reason in (
+        "[DSA:invalid]",
+        "legitimate action [dsa:0123456789abcdef",
+        "[DSA:00000000000000000000000]",
+    ):
+        event = _entry(
+            guild, action="channel_delete", target_id=123, reason=reason
+        )
+        asyncio.run(runtime._audit_guard(bot, event))  # noqa: SLF001
+        assert runtime._provenance_diagnostics(  # noqa: SLF001
+            guild, event, "channel_delete"
+        )["marker_state"] == "malformed"
+        assert token in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+
+    assert unmatched == ["channel_delete"] * 3
+
+    # No reserved marker at all still consumes the normal reasonless receipt.
+    asyncio.run(
+        runtime._audit_guard(  # noqa: SLF001
+            bot, _entry(guild, action="channel_delete", target_id=123, reason="")
+        )
+    )
+    assert token not in runtime._EXPECTED_SIDE_EFFECTS  # noqa: SLF001
+    assert len(unmatched) == 3
