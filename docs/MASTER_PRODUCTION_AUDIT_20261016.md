@@ -1,8 +1,8 @@
 # Dank Shield production master audit: baseline and migration order
 
-**Master tracking:** [issue #602](https://github.com/UglyGameFace/Dank-Shield/issues/602).  
-**Historical branch debt and Discloud main cutover:** [issue #597](https://github.com/UglyGameFace/Dank-Shield/issues/597).  
-**Source baseline:** `main@8850e470563d14c4a10806a58a64d13af9060f93`, October 16, 2026.  
+**Master tracking:** [issue #602](https://github.com/UglyGameFace/Dank-Shield/issues/602).
+**Historical branch debt and Discloud main cutover:** [issue #597](https://github.com/UglyGameFace/Dank-Shield/issues/597).
+**Source baseline:** `main@8850e470563d14c4a10806a58a64d13af9060f93`, October 16, 2026.
 **Scope of this first slice:** repair a demonstrable legacy production-audit command-contract mismatch and establish the remaining audit plan. **Not a completed whole-repository sign-off.**
 
 ## Fresh Git-tree measurements
