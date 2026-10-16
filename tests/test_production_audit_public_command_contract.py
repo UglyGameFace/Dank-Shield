@@ -78,7 +78,7 @@ def test_requirements_match_final_public_command_contract() -> None:
         assert stale not in slash
     text = AUDIT.read_text(encoding="utf-8")
     assert "type=discord.AppCommandType.user" in text
-    assert "including \`/ticket-panel\`" not in text
+    assert "including `/ticket-panel`" not in text
 
 
 def test_correct_public_tree_does_not_trigger_legacy_false_blocker() -> None:
@@ -101,9 +101,9 @@ def test_real_missing_public_commands_are_still_blockers() -> None:
         scope, slash - {"verify"}, {"home", "setup", "upload"}, set()
     )
     messages = "\n".join(blockers)
-    assert "Missing required public slash commands: \`/verify\`" in messages
+    assert "Missing required public slash commands: `/verify`" in messages
     assert "Missing required public user context menus" in messages
     assert "View Dank Profile" in messages
-    assert "Missing required public subcommands: \`/dank purge\`" in messages
+    assert "Missing required public subcommands: `/dank purge`" in messages
     assert "/stoney" not in messages
     assert "/ticket-intake" not in messages
