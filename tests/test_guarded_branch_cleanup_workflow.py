@@ -528,3 +528,16 @@ def test_phase2_member_scan_retirement_is_exact_head_and_ui_parity_gated() -> No
     assert "original.files[0].status !== 'modified'" in text
     assert 'Users Found — Page {page + 1}/{pages}' in text
     assert "value=_build_page_users_text(report, page=page)" in text
+
+
+def test_phase3_compact_scan_retirement_requires_closed_unmerged_pr_and_parity() -> None:
+    text = _workflow()
+    assert "phase3/compact-member-scan-ui" in text
+    assert "ebee209590d27e7c60d9d7927ee21bf77274a8f6" in text
+    assert "closedPr: 30" in text
+    assert "prs.length !== 1" in text
+    assert "prs[0].state !== 'closed'" in text
+    assert "prs[0].merged_at" in text
+    assert "prs[0].head.sha !== branch.commit.sha" in text
+    assert "!uiText.includes('Page IDs')" in text
+    assert "!uiText.includes('Data Notes')" in text
