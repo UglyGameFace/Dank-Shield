@@ -2589,3 +2589,16 @@ def test_watch_player_is_the_only_durable_playback_progress_writer() -> None:
     assert 'action: "progress"' not in script
     assert 'app.router.add_post("/movie/{room_id}/progress", movie_night_progress)' in watch_source
     assert "record_progress(" in watch_source
+
+
+def test_general_cinema_source_recovery_contract() -> None:
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    server = (root / "stoney_verify" / "cinema_site.py").read_text()
+    client = (root / "stoney_verify" / "assets" / "cinema_site.js").read_text()
+    assert '"error": "no_compatible_source"' in server
+    assert '"source_choice": _source_choice_id(item.source_ref)' in server
+    assert 'for item in ranked[:10]' in server
+    assert 'failure.details = structuredError' in client
+    assert 'playOnSite(item, button, String(row.source_choice || ""), errorTarget)' in client
+    assert 'button.disabled = !row.auto_playable' in client
