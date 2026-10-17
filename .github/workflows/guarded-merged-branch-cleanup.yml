@@ -128,6 +128,11 @@ jobs:
             // Current activity_service.py integrates the same evidence sweep.
             // Historical member scan UI heads, pinned and reviewed separately.
             const reviewedMemberScanUi = new Map([
+              ['phase3/compact-member-scan-ui', {
+                sha: 'ebee209590d27e7c60d9d7927ee21bf77274a8f6',
+                onlyFile: 'stoney_verify/commands_ext/public_members_group.py',
+                closedPr: 30,
+              }],
               ['phase2/show-member-scan-users-found', {
                 sha: '939035b5ed2c94b0c0991966c4287ced4a60ecb3',
                 onlyFile: 'stoney_verify/commands_ext/public_members_group.py',
@@ -356,7 +361,16 @@ jobs:
                 }
                 const scanUiReview = reviewedMemberScanUi.get(name);
                 if (scanUiReview) {
-                  if (scanUiReview.sha !== branch.commit.sha || prs.length) continue;
+                  if (scanUiReview.sha !== branch.commit.sha) continue;
+                  if (scanUiReview.closedPr) {
+                    // A closed, unmerged historical PR is retained as an immutable
+                    // review record. Refuse if any other PR uses this branch.
+                    if (prs.length !== 1 ||
+                        prs[0].number !== scanUiReview.closedPr ||
+                        prs[0].merged_at ||
+                        prs[0].state !== 'closed' ||
+                        prs[0].head.sha !== branch.commit.sha) continue;
+                  } else if (prs.length) continue;
                   const original = (await github.rest.repos.getCommit({
                     owner, repo, ref: branch.commit.sha
                   })).data;
@@ -373,7 +387,15 @@ jobs:
                       !uiText.includes('def _candidate_display_name(') ||
                       !uiText.includes('manual-only') ||
                       !uiText.includes('No current members matched this inactivity review.') ||
-                      !uiText.includes('Preview only. No action is taken here.')) continue;
+                      !uiText.includes('Preview only. No action is taken here.') ||
+                      (scanUiReview.closedPr && (
+                        !uiText.includes('name="Data Sources"') ||
+                        !uiText.includes('Data Notes') ||
+                        !uiText.includes('Page IDs') ||
+                        !uiText.includes('30d') ||
+                        !uiText.includes('90d') ||
+                        !uiText.includes('180d')
+                      ))) continue;
                   candidates.push({ name, sha: branch.commit.sha,
                     reason: 'reviewed member scan UI branch superseded by main mobile review dashboard' });
                   continue;
