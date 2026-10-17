@@ -121,6 +121,15 @@ jobs:
               'noop', 'noop2', 'temp-ignore', 'tmp-noop', 'tmp-noop2'
             ]);
 
+            // One-time zero-ahead retirement batch, reviewed on 2026-10-16.
+            // Never add deployment, database migration, backup, or recovery refs.
+            // Ancestry is re-proven against current main at execution time.
+            const reviewedAncestorBatch = new Set([
+              'cleanup/schema-authority-consolidation',
+              'fix/live-captions-stable-interim-recovery-20260927',
+              'chore/fix-auto-archive-pr-pagination-20261016',
+            ]);
+
             // Historical reviewed waves are individually verified, never inferred from prefixes.
             // Closed-unmerged entries were explicitly superseded or validation-only.
             // GitHub retains their PR discussion/diff, but their branches are not
@@ -318,6 +327,16 @@ jobs:
               const segments = name.toLowerCase().split(/[\\/._-]+/);
               const prs = closedByHead.get(name) || [];
               if (reviewedBatch) {
+                // Explicitly reviewed zero-ahead refs: do not require an old
+                // PR head to be graph-identical after squash merges, but do
+                // require true ancestry and no unmerged PR history.
+                if (reviewedAncestorBatch.has(name)) {
+                  if (prs.some(pr => !pr.merged_at || pr.base?.ref !== defaultBranch)) continue;
+                  if (!await ancestorOfMain(branch.commit.sha)) continue;
+                  candidates.push({ name, sha: branch.commit.sha,
+                    reason: 'reviewed zero-ahead ancestor of main' });
+                  continue;
+                }
                 const review = reviewedRetirements.get(name);
                 if (!review || review.sha !== branch.commit.sha) continue;
                 if (review.kind === 'merged') {
