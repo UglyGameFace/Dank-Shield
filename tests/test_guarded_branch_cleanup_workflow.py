@@ -542,3 +542,14 @@ def test_phase3_compact_scan_retirement_requires_closed_unmerged_pr_and_parity()
     assert "prs[0].head.sha !== branch.commit.sha" in text
     assert "!uiText.includes('Page IDs')" in text
     assert "!uiText.includes('Data Notes')" in text
+
+
+def test_stale_task_lock_retirement_requires_exact_head_and_no_pr() -> None:
+    text = _workflow()
+    assert "audit/protection-picker-migration" in text
+    assert "66b3d2c1e175dd1a92ce71b58f0ce48f00b62b3b" in text
+    assert "taskLockReview.sha !== branch.commit.sha || prs.length" in text
+    assert "original.parents?.length !== 1" in text
+    assert "original.files?.length !== 1" in text
+    assert "original.files[0].status !== 'modified'" in text
+    assert "currentText.includes('DS-AUD-PROTECTION-PICKERS')" in text
