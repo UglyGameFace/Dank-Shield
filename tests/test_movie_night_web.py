@@ -2006,3 +2006,12 @@ def test_next_episode_codec_failure_returns_bounded_source_choices() -> None:
     assert '"browser_video_risk": int(variant.browser_video_risk_key())' in source
     assert 'for variant in ranked[:10]' in source
     assert '"action": "choose_another_release"' in source
+
+
+def test_next_episode_client_displays_structured_codec_alternatives() -> None:
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / "stoney_verify" / "movie_night_web.py").read_text()
+    assert 'error.details=details' in source
+    assert 'details?.error==="no_compatible_source"' in source
+    assert 'Top sources: ' in source
+    assert 'no room playback was changed.' in source
