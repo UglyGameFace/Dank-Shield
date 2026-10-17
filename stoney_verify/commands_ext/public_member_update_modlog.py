@@ -11,6 +11,7 @@ Covers the high-value moderation audit gaps that are easy to miss:
 This uses per-guild config only and never hardcodes channel IDs.
 """
 
+import os
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -23,6 +24,13 @@ _LISTENERS_REGISTERED = False
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _trim(value: Any, limit: int = 1024) -> str:
@@ -242,6 +250,11 @@ def register_public_member_update_modlog(bot, tree) -> None:
     global _LISTENERS_REGISTERED
     _ = tree
     if _LISTENERS_REGISTERED:
+        return
+    # The primary events handler already owns member-update modlogs.
+    # Opt in to this legacy fallback only for explicit diagnostics.
+    if not _env_bool("DANK_ENABLE_PUBLIC_MEMBER_UPDATE_FALLBACK_MODLOG"):
+        print("ℹ️ public_member_update_modlog: fallback disabled to prevent duplicate logs")
         return
     bot.add_listener(_on_member_update, "on_member_update")
     _LISTENERS_REGISTERED = True
