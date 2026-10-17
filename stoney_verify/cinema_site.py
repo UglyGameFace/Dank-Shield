@@ -2700,14 +2700,21 @@ async def cinema_play_api(request: web.Request) -> web.Response:
     else:
         selected = await select_preferred_variant(user_id, ranked, guild_id=int(guild_id))
     if selected is None:
-        raise web.HTTPConflict(
-            text=(
-                "Cinema found releases, but their reported video codecs or "
-                "containers are risky for browser playback (for example HEVC/MKV). "
-                "Automatic playback was stopped instead of starting a black screen. "
-                "Choose a different release or try again when compatible sources are available."
-            )
-        )
+        return web.json_response({
+            "error": "no_compatible_source",
+            "message": "No release passed automatic browser compatibility checks.",
+            "alternatives": [
+                {
+                    "source_choice": _source_choice_id(item.source_ref),
+                    "seeds": max(0, int(item.seeds or 0)),
+                    "leechers": max(0, int(item.leechers or 0)),
+                    "file_size": max(0, int(item.file_size or 0)),
+                    "browser_video_risk": int(item.browser_video_risk_key()),
+                    "auto_playable": int(item.browser_video_risk_key()) < 2,
+                }
+                for item in ranked[:10]
+            ],
+        }, status=409)
 
     try:
         if requested_source_ref:
