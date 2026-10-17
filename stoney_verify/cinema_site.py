@@ -2742,9 +2742,24 @@ async def cinema_play_api(request: web.Request) -> web.Response:
             f"guild={int(guild_id)} user={int(user_id)} media={media_type} "
             f"error_type={type(exc).__name__}"
         )
-        raise web.HTTPBadGateway(
-            text="Cinema could not start a compatible source. Try a manual release or search again."
-        ) from exc
+        # Startup retries are already bounded by the shared playback service.
+        # Return fresh, opaque choices instead of an unhelpful 502, without
+        # exposing torrent URLs or silently changing a playing room.
+        return web.json_response({
+            "error": "source_start_failed",
+            "message": "Compatible releases could not start. Review another source or retry.",
+            "alternatives": [
+                {
+                    "source_choice": _source_choice_id(item.source_ref),
+                    "seeds": max(0, int(item.seeds or 0)),
+                    "leechers": max(0, int(item.leechers or 0)),
+                    "file_size": max(0, int(item.file_size or 0)),
+                    "browser_video_risk": int(item.browser_video_risk_key()),
+                    "auto_playable": int(item.browser_video_risk_key()) < 2,
+                }
+                for item in ranked[:10]
+            ],
+        }, status=409)
 
     response_ready_at = time.monotonic()
     torrent_session = getattr(playback, "session", None)
