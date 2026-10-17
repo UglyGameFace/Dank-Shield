@@ -174,6 +174,7 @@
     }
     if (!response.ok) {
       let message = `Cinema request failed (HTTP ${response.status}).`;
+      let structuredError = null;
       if (contentType.includes("text/html")) {
         message = `Cinema received an HTML error page (HTTP ${response.status}) instead of an API response. Check the site origin or proxy.`;
       } else {
@@ -181,7 +182,8 @@
         if (isJson) {
           try {
             const data = JSON.parse(body);
-            message = String(data.error || data.message || data.detail || message).slice(0, 500);
+            structuredError = data;
+            message = String(data.message || data.error || data.detail || message).slice(0, 500);
           } catch (_error) {
             message = body.slice(0, 500) || message;
           }
@@ -197,7 +199,9 @@
         message += ` Request: ${method} ${requestPath}. Response: ${contentType || "unknown type"}.`;
       }
       const diagnostic = authDiagnosticText(await authDiagnostics());
-      throw new Error(diagnostic ? `${message}\n\n${diagnostic}` : message);
+      const failure = new Error(diagnostic ? `${message}\n\n${diagnostic}` : message);
+      failure.details = structuredError;
+      throw failure;
     }
     if (!isJson) {
       console.error("cinema_api_non_json_success", {
@@ -1377,6 +1381,25 @@
         errorTarget.hidden = false;
       }
       if (control) control.disabled = false;
+      const alternatives = error?.details?.alternatives;
+      if (errorTarget && Array.isArray(alternatives) && alternatives.length) {
+        const choices = node("div", "cinema-recovery-choices");
+        choices.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;margin-top:10px";
+        for (const row of [...alternatives].sort((a,b) =>
+          Number(b.auto_playable)-Number(a.auto_playable) ||
+          Number(b.seeds||0)-Number(a.seeds||0))) {
+          const button = node("button", "cinema-recovery-choice");
+          button.type = "button";
+          button.textContent = (row.auto_playable ? "Try " : "Codec risk: ") +
+            String(row.seeds || 0) + " seeds · " +
+            (Number(row.file_size || 0) / 1073741824).toFixed(1) + " GiB";
+          button.disabled = !row.auto_playable;
+          button.addEventListener("click", () =>
+            playOnSite(item, button, String(row.source_choice || ""), errorTarget));
+          choices.appendChild(button);
+        }
+        errorTarget.appendChild(choices);
+      }
     }
   }
 
