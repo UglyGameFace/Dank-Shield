@@ -142,6 +142,10 @@ jobs:
             ]);
 
             const reviewedAncestorBatch = new Set([
+              // Repository-wide inventory: both tips have zero commits ahead
+              // of main; retain the separate Cinema known-good checkpoints.
+              'feat/discloud-pg-atomic-guild-config-20261013',
+              'fix/supabase-out-of-order-migrations',
               'cleanup/schema-authority-consolidation',
               'fix/live-captions-stable-interim-recovery-20260927',
               'chore/fix-auto-archive-pr-pagination-20261016',
