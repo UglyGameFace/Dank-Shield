@@ -133,6 +133,7 @@ jobs:
                 sha: '9b2116dfbf68876cb3df02ac357ac7af5435fec6',
                 onlyFile: 'ACTIVE_TASK.md',
                 historicalPr: 318,
+                mergedPrHead: '123f5bf58611ab5b9f0ca4614e909a8698f67aae',
               }],
               ['audit/protection-picker-migration', {
                 sha: '66b3d2c1e175dd1a92ce71b58f0ce48f00b62b3b',
@@ -382,9 +383,21 @@ jobs:
                   if (taskLockReview.historicalPr) {
                     if (prs.length !== 1 ||
                         prs[0].number !== taskLockReview.historicalPr ||
-                        prs[0].merged_at ||
+                        !prs[0].merged_at ||
                         prs[0].state !== 'closed' ||
-                        prs[0].head.sha !== branch.commit.sha) continue;
+                        prs[0].base?.ref !== defaultBranch ||
+                        prs[0].head.sha !== taskLockReview.mergedPrHead) continue;
+                    // The merged PR's head is the parent of a later, task-record-only
+                    // validation commit. Require precisely that one-commit extension.
+                    const comparison = await github.rest.repos.compareCommits({
+                      owner, repo,
+                      base: taskLockReview.mergedPrHead,
+                      head: branch.commit.sha,
+                    });
+                    if (comparison.data.ahead_by !== 1 ||
+                        comparison.data.behind_by !== 0 ||
+                        comparison.data.files?.length !== 1 ||
+                        comparison.data.files[0].filename !== taskLockReview.onlyFile) continue;
                   } else if (prs.length) continue;
                   const original = (await github.rest.repos.getCommit({
                     owner, repo, ref: branch.commit.sha
