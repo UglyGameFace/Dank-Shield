@@ -695,6 +695,7 @@ jobs:
 
             if (deleting) {
               for (const candidate of candidates) {
+                let deletionStage = 'branch recheck';
                 try {
                   // Recheck the head immediately before the destructive call.
                   const current = (await github.rest.repos.getBranch({
@@ -707,8 +708,10 @@ jobs:
                   // Always preserve and verify a lightweight Git tag at the
                   // exact original SHA before deleting an active branch ref.
                   const tagRef = `tags/branch-retirement-20261016/${candidate.name}`;
+                  deletionStage = 'archive tag lookup';
                   let archive = null;
                   try {
+                    deletionStage = 'archive tag verification';
                     archive = (await github.rest.git.getRef({
                       owner, repo, ref: tagRef
                     })).data;
@@ -716,6 +719,7 @@ jobs:
                     if (error.status !== 404) throw error;
                   }
                   if (!archive) {
+                    deletionStage = 'archive tag creation';
                     await github.rest.git.createRef({
                       owner, repo, ref: `refs/${tagRef}`, sha: candidate.sha
                     });
@@ -729,6 +733,7 @@ jobs:
                   ) {
                     throw new Error(`Archived tag head mismatch for ${candidate.name}`);
                   }
+                  deletionStage = 'branch deletion';
                   await github.rest.git.deleteRef({
                     owner, repo, ref: `heads/${candidate.name}`
                   });
@@ -736,7 +741,7 @@ jobs:
                   // Pace writes instead of provoking GitHub secondary rate limits.
                   await new Promise(resolve => setTimeout(resolve, 650));
                 } catch (error) {
-                  failed.push(`${candidate.name}: ${error.message}`);
+                  failed.push(`${candidate.name} [${deletionStage}]: ${error.status || 'error'} ${error.message}`);
                 }
               }
             }
