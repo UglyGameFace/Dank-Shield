@@ -502,3 +502,17 @@ def test_reviewed_zero_ahead_batch_requires_main_ancestry_and_archive() -> None:
     assert 'archive.object.sha !== candidate.sha' in text
     assert "ref: `heads/${candidate.name}`" in text
     assert 'aaa-cinema-pre-pregateway-bind' in text
+
+
+def test_member_evidence_retirement_requires_exact_head_single_file_and_main_parity() -> None:
+    text = _workflow()
+    assert "phase3/recent-evidence-filter" in text
+    assert "e2286cc610b6a11e4da9d7f3657de7ccb217d376" in text
+    assert "evidenceReview.sha !== branch.commit.sha || prs.length" in text
+    assert "original.parents?.length !== 1" in text
+    assert "original.files?.length !== 1" in text
+    assert "original.files[0].status !== 'added'" in text
+    assert "async def _load_recent_discord_evidence(" in text
+    assert "activity_signals.setdefault(int(uid), []).extend(signals)" in text
+    assert "Users Found — Page" in text
+    assert "branch-retirement-20261016/" in text

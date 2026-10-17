@@ -124,6 +124,15 @@ jobs:
             // One-time zero-ahead retirement batch, reviewed on 2026-10-16.
             // Never add deployment, database migration, backup, or recovery refs.
             // Ancestry is re-proven against current main at execution time.
+            // Reviewed no-PR, single-file historical evidence prototype.
+            // Current activity_service.py integrates the same evidence sweep.
+            const reviewedMemberEvidence = new Map([
+              ['phase3/recent-evidence-filter', {
+                sha: 'e2286cc610b6a11e4da9d7f3657de7ccb217d376',
+                onlyFile: 'stoney_verify/members_new/recent_evidence_service.py',
+              }],
+            ]);
+
             const reviewedAncestorBatch = new Set([
               'cleanup/schema-authority-consolidation',
               'fix/live-captions-stable-interim-recovery-20260927',
@@ -335,6 +344,35 @@ jobs:
                   if (!await ancestorOfMain(branch.commit.sha)) continue;
                   candidates.push({ name, sha: branch.commit.sha,
                     reason: 'reviewed zero-ahead ancestor of main' });
+                  continue;
+                }
+                const evidenceReview = reviewedMemberEvidence.get(name);
+                if (evidenceReview) {
+                  if (evidenceReview.sha !== branch.commit.sha || prs.length) continue;
+                  const original = (await github.rest.repos.getCommit({
+                    owner, repo, ref: branch.commit.sha
+                  })).data;
+                  if (original.parents?.length !== 1 ||
+                      original.files?.length !== 1 ||
+                      original.files[0].filename !== evidenceReview.onlyFile ||
+                      original.files[0].status !== 'added') continue;
+                  const currentService = await github.rest.repos.getContent({
+                    owner, repo, path: 'stoney_verify/members_new/activity_service.py',
+                    ref: defaultBranch
+                  });
+                  const currentUi = await github.rest.repos.getContent({
+                    owner, repo, path: 'stoney_verify/commands_ext/public_members_group.py',
+                    ref: defaultBranch
+                  });
+                  const serviceText = Buffer.from(currentService.data.content, 'base64').toString('utf8');
+                  const uiText = Buffer.from(currentUi.data.content, 'base64').toString('utf8');
+                  if (!serviceText.includes('async def _load_recent_discord_evidence(') ||
+                      !serviceText.includes('recent_signals, recent_warnings, recent_read, recent_attempted') ||
+                      !serviceText.includes('activity_signals.setdefault(int(uid), []).extend(signals)') ||
+                      !serviceText.includes('if not is_modlog:') ||
+                      !uiText.includes('Users Found — Page')) continue;
+                  candidates.push({ name, sha: branch.commit.sha,
+                    reason: 'reviewed single-file member evidence prototype replaced in main' });
                   continue;
                 }
                 const review = reviewedRetirements.get(name);
