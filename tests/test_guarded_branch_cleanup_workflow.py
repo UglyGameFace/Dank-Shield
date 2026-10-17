@@ -553,3 +553,13 @@ def test_stale_task_lock_retirement_requires_exact_head_and_no_pr() -> None:
     assert "original.files?.length !== 1" in text
     assert "original.files[0].status !== 'modified'" in text
     assert "currentText.includes('DS-AUD-PROTECTION-PICKERS')" in text
+
+
+def test_historical_access_repair_task_record_retirement_is_pr_gated() -> None:
+    text = _workflow()
+    assert "fix/access-repair-fail-closed-20260924" in text
+    assert "9b2116dfbf68876cb3df02ac357ac7af5435fec6" in text
+    assert "historicalPr: 318" in text
+    assert "prs[0].state !== 'closed'" in text
+    assert "prs[0].merged_at" in text
+    assert "prs[0].head.sha !== branch.commit.sha" in text
