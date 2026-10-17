@@ -522,7 +522,8 @@ def test_phase2_member_scan_retirement_is_exact_head_and_ui_parity_gated() -> No
     text = _workflow()
     assert "phase2/show-member-scan-users-found" in text
     assert "939035b5ed2c94b0c0991966c4287ced4a60ecb3" in text
-    assert "scanUiReview.sha !== branch.commit.sha || prs.length" in text
+    assert "scanUiReview.sha !== branch.commit.sha" in text
+    assert "else if (prs.length) continue;" in text
     assert "original.parents?.length !== 1" in text
     assert "original.files?.length !== 1" in text
     assert "original.files[0].status !== 'modified'" in text
