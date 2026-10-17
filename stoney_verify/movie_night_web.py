@@ -4902,9 +4902,14 @@ function scheduleStreamRetry() {{
     // MEDIA_ERR_DECODE and MEDIA_ERR_SRC_NOT_SUPPORTED cannot be repaired by
     // endlessly force-loading the same bytes. Keep the session and let the
     // viewer choose a different authorized release.
+    const host=!!lastState?.is_host;
     notice.textContent=code===3
-      ?"The browser could not decode this video. Try another Cinema release."
-      :"This browser cannot play the selected source. Try another release.";
+      ?(host
+        ?"Your browser could not decode this release. Other viewers may still be watching. Select a compatible release from Cinema to change the room."
+        :"Your browser could not decode this release. The host's movie was not changed. Ask the host for a browser-compatible release or try another browser.")
+      :(host
+        ?"This browser does not support the selected video format. Select a compatible Cinema release; do not keep reloading this file."
+        :"This browser does not support the room's video format. Other viewers may still be watching. Ask the host for a compatible release.");
     return;
   }}
   if(streamRetryAttempt>=STREAM_RETRY_LIMIT) {{
