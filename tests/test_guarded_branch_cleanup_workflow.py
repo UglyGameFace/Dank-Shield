@@ -486,3 +486,19 @@ def test_twelfth_wave_excludes_incomplete_protection_picker_and_production_state
         "backup/stoneyverify-stable-7fdc331-20261008",
     ):
         assert f"['{held}', {{ kind:" not in manifest
+
+
+def test_reviewed_zero_ahead_batch_requires_main_ancestry_and_archive() -> None:
+    text = (Path(__file__).resolve().parents[1] / '.github/workflows/guarded-merged-branch-cleanup.yml').read_text(encoding='utf-8')
+    for name in (
+        'cleanup/schema-authority-consolidation',
+        'fix/live-captions-stable-interim-recovery-20260927',
+        'chore/fix-auto-archive-pr-pagination-20261016',
+    ):
+        assert "'" + name + "'" in text
+    assert 'reviewedAncestorBatch.has(name)' in text
+    assert 'prs.some(pr => !pr.merged_at || pr.base?.ref !== defaultBranch)' in text
+    assert 'if (!await ancestorOfMain(branch.commit.sha)) continue;' in text
+    assert 'archive.object.sha !== candidate.sha' in text
+    assert "ref: `heads/${candidate.name}`" in text
+    assert 'aaa-cinema-pre-pregateway-bind' in text
