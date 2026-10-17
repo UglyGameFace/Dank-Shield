@@ -4908,8 +4908,8 @@ function scheduleStreamRetry() {{
         ?"Your browser could not decode this release. Other viewers may still be watching. Select a compatible release from Cinema to change the room."
         :"Your browser could not decode this release. The host's movie was not changed. Ask the host for a browser-compatible release or try another browser.")
       :(host
-        ?"This browser does not support the selected video format. Select a compatible Cinema release; do not keep reloading this file."
-        :"This browser does not support the room's video format. Other viewers may still be watching. Ask the host for a compatible release.");
+        ?"This browser cannot play the selected source. Select a compatible Cinema release; do not keep reloading this file."
+        :"This browser cannot play the selected source. Other viewers may still be watching. Ask the host for a compatible release.");
     return;
   }}
   if(streamRetryAttempt>=STREAM_RETRY_LIMIT) {{
