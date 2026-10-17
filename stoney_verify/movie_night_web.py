@@ -3763,8 +3763,11 @@ async function jsonFetch(path, options={{}}) {{
   }});
   if(!response.ok) {{
     const body=await response.text();
-    const error=new Error(body||("HTTP "+String(response.status)));
+    let details=null;
+    try {{ details=JSON.parse(body); }} catch(_) {{}}
+    const error=new Error(String(details?.message||body||("HTTP "+String(response.status))));
     error.status=Number(response.status||0);
+    error.details=details;
     throw error;
   }}
   return response.json();
@@ -5110,7 +5113,21 @@ async function playNextEpisode(autoplay=true) {{
     await applyState(state);
     notice.textContent=autoplay?"Next episode started.":"Next episode is ready.";
   }} catch(err) {{
-    notice.textContent="Next episode could not start: "+String(err?.message||err);
+    const details=err?.details;
+    if(details?.error==="no_compatible_source" && Array.isArray(details.alternatives)) {{
+      const playable=details.alternatives.filter(row=>row.auto_playable);
+      const strongest=[...details.alternatives].sort((a,b)=>Number(b.seeds||0)-Number(a.seeds||0));
+      const summary=strongest.slice(0,3).map(row=>
+        String(row.seeds||0)+" seeds · "+(Number(row.file_size||0)/1073741824).toFixed(1)+" GiB"+
+        (row.auto_playable?" · compatible":" · codec risk")
+      ).join("; ");
+      notice.textContent="No browser-safe automatic source. "+
+        (playable.length?"Compatible alternatives available. ":"")+
+        (summary?"Top sources: "+summary+". ":"")+
+        "Open the release selector to review sources; no room playback was changed.";
+    }} else {{
+      notice.textContent="Next episode could not start: "+String(err?.message||err);
+    }}
   }} finally {{
     nextEpisodeLoading=false;
     updateNextEpisodeControl();
