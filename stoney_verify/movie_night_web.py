@@ -5131,16 +5131,43 @@ async function playNextEpisode(autoplay=true) {{
   }} catch(err) {{
     const details=err?.details;
     if(details?.error==="no_compatible_source" && Array.isArray(details.alternatives)) {{
-      const playable=details.alternatives.filter(row=>row.auto_playable);
-      const strongest=[...details.alternatives].sort((a,b)=>Number(b.seeds||0)-Number(a.seeds||0));
-      const summary=strongest.slice(0,3).map(row=>
-        String(row.seeds||0)+" seeds · "+(Number(row.file_size||0)/1073741824).toFixed(1)+" GiB"+
-        (row.auto_playable?" · compatible":" · codec risk")
-      ).join("; ");
-      notice.textContent="No browser-safe automatic source. "+
-        (playable.length?"Compatible alternatives available. ":"")+
-        (summary?"Top sources: "+summary+". ":"")+
-        "Open the release selector to review sources; no room playback was changed.";
+      notice.textContent="Automatic playback found no compatible release. Review available sources:";
+      const choices=document.createElement("div");
+      choices.style.cssText="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px";
+      const sorted=[...details.alternatives].sort((a,b)=>
+        Number(b.auto_playable)-Number(a.auto_playable) ||
+        Number(b.seeds||0)-Number(a.seeds||0));
+      for(const row of sorted.slice(0,10)) {{
+        const button=document.createElement("button");
+        button.type="button";
+        button.textContent=(row.auto_playable?"Try ":"Unsupported ")+
+          String(row.seeds||0)+" seeds · "+
+          (Number(row.file_size||0)/1073741824).toFixed(1)+" GiB";
+        button.disabled=!row.auto_playable;
+        button.title=row.auto_playable?"Start this release as host":"Browser codec not supported";
+        button.addEventListener("click",async()=>{{
+          if(!lastState?.is_host || nextEpisodeLoading) return;
+          nextEpisodeLoading=true;
+          updateNextEpisodeControl();
+          button.disabled=true;
+          try {{
+            const state=await jsonFetch("/movie/"+BOOT.roomId+"/next-episode",{{
+              method:"POST",body:JSON.stringify({{autoplay:!!autoplay,variant_id:row.variant_id}})
+            }});
+            nextEpisodeState=null;
+            lastNextEpisodeKey="";
+            await applyState(state);
+            notice.textContent="Selected release started.";
+          }} catch(choiceError) {{
+            notice.textContent="Release failed: "+String(choiceError?.message||choiceError);
+          }} finally {{
+            nextEpisodeLoading=false;
+            updateNextEpisodeControl();
+          }}
+        }});
+        choices.appendChild(button);
+      }}
+      notice.appendChild(choices);
     }} else {{
       notice.textContent="Next episode could not start: "+String(err?.message||err);
     }}
