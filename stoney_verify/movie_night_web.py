@@ -1748,6 +1748,22 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
     selected = await select_preferred_variant(
         int(uid), ranked, guild_id=int(latest.guild_id), active_voters=active_voters,
     )
+    # An explicit host choice is accepted only from the freshly resolved
+    # episode's ranked candidates, and never bypasses the codec safety gate.
+    try:
+        selection_body = await request.json()
+    except (ValueError, TypeError):
+        selection_body = {}
+    selection_body = selection_body if isinstance(selection_body, dict) else {}
+    requested_variant_id = str(selection_body.get("variant_id") or "")[:160]
+    if requested_variant_id:
+        requested = next(
+            (row for row in ranked if str(row.variant_id) == requested_variant_id),
+            None,
+        )
+        if requested is None or int(requested.browser_video_risk_key()) >= 2:
+            raise web.HTTPConflict(text="Selected release is no longer browser-safe or available.")
+        selected = requested
     if selected is None:
         # Never start an unsupported source just to avoid an error. Return
         # useful, bounded alternatives for the host to review instead.
