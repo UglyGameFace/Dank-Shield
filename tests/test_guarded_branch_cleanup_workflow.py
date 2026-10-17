@@ -516,3 +516,15 @@ def test_member_evidence_retirement_requires_exact_head_single_file_and_main_par
     assert "activity_signals.setdefault(int(uid), []).extend(signals)" in text
     assert "Users Found — Page" in text
     assert "branch-retirement-20261016/" in text
+
+
+def test_phase2_member_scan_retirement_is_exact_head_and_ui_parity_gated() -> None:
+    text = _workflow()
+    assert "phase2/show-member-scan-users-found" in text
+    assert "939035b5ed2c94b0c0991966c4287ced4a60ecb3" in text
+    assert "scanUiReview.sha !== branch.commit.sha || prs.length" in text
+    assert "original.parents?.length !== 1" in text
+    assert "original.files?.length !== 1" in text
+    assert "original.files[0].status !== 'modified'" in text
+    assert 'Users Found — Page {page + 1}/{pages}' in text
+    assert "value=_build_page_users_text(report, page=page)" in text
