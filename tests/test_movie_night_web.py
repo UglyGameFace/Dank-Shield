@@ -1996,3 +1996,23 @@ def test_cinema_audio_permission_can_be_granted_without_host_play_pause() -> Non
     assert 'hostAction("resume")' not in enabled
     assert 'hostAction("pause")' not in enabled
     assert "Tap Enable audio in Advanced Stream Details." in html
+
+
+def test_next_episode_codec_failure_returns_bounded_source_choices() -> None:
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / "stoney_verify" / "movie_night_web.py").read_text()
+    assert '"error": "no_compatible_source"' in source
+    assert '"alternatives": alternatives' in source
+    assert '"browser_video_risk": int(variant.browser_video_risk_key())' in source
+    assert 'for variant in ranked[:10]' in source
+    assert '"action": "choose_another_release"' in source
+
+
+def test_next_episode_client_displays_structured_codec_alternatives() -> None:
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / "stoney_verify" / "movie_night_web.py").read_text()
+    assert 'error.details=details' in source
+    assert 'details?.error==="no_compatible_source"' in source
+    assert 'Automatic playback found no compatible release. Review available sources:' in source
+    assert 'button.addEventListener("click",async()=>{{' in source
+    assert 'button.disabled=!row.auto_playable' in source

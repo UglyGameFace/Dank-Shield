@@ -1748,14 +1748,42 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
     selected = await select_preferred_variant(
         int(uid), ranked, guild_id=int(latest.guild_id), active_voters=active_voters,
     )
-    if selected is None:
-        raise web.HTTPConflict(
-            text=(
-                "Next-episode releases have video formats risky for browser playback. "
-                "Cinema will not automatically start an HEVC/MKV source that may show "
-                "a black screen. Try another release."
-            )
+    # An explicit host choice is accepted only from the freshly resolved
+    # episode's ranked candidates, and never bypasses the codec safety gate.
+    try:
+        selection_body = await request.json()
+    except (ValueError, TypeError):
+        selection_body = {}
+    selection_body = selection_body if isinstance(selection_body, dict) else {}
+    requested_variant_id = str(selection_body.get("variant_id") or "")[:160]
+    if requested_variant_id:
+        requested = next(
+            (row for row in ranked if str(row.variant_id) == requested_variant_id),
+            None,
         )
+        if requested is None or int(requested.browser_video_risk_key()) >= 2:
+            raise web.HTTPConflict(text="Selected release is no longer browser-safe or available.")
+        selected = requested
+    if selected is None:
+        # Never start an unsupported source just to avoid an error. Return
+        # useful, bounded alternatives for the host to review instead.
+        alternatives = []
+        for variant in ranked[:10]:
+            alternatives.append({
+                "variant_id": str(variant.variant_id),
+                "seeds": max(0, int(getattr(variant, "seeds", 0) or 0)),
+                "leechers": max(0, int(getattr(variant, "leechers", 0) or 0)),
+                "file_size": max(0, int(getattr(variant, "file_size", 0) or 0)),
+                "browser_video_risk": int(variant.browser_video_risk_key()),
+                "auto_playable": int(variant.browser_video_risk_key()) < 2,
+            })
+        return web.json_response({
+            "error": "no_compatible_source",
+            "message": "No release passed automatic browser compatibility checks.",
+            "next_episode": next_payload,
+            "alternatives": alternatives,
+            "action": "choose_another_release",
+        }, status=409)
 
     try:
         playback, selected, _fallback_attempts = await start_automatic_variant(
@@ -3751,8 +3779,11 @@ async function jsonFetch(path, options={{}}) {{
   }});
   if(!response.ok) {{
     const body=await response.text();
-    const error=new Error(body||("HTTP "+String(response.status)));
+    let details=null;
+    try {{ details=JSON.parse(body); }} catch(_) {{}}
+    const error=new Error(String(details?.message||body||("HTTP "+String(response.status))));
     error.status=Number(response.status||0);
+    error.details=details;
     throw error;
   }}
   return response.json();
@@ -5098,7 +5129,48 @@ async function playNextEpisode(autoplay=true) {{
     await applyState(state);
     notice.textContent=autoplay?"Next episode started.":"Next episode is ready.";
   }} catch(err) {{
-    notice.textContent="Next episode could not start: "+String(err?.message||err);
+    const details=err?.details;
+    if(details?.error==="no_compatible_source" && Array.isArray(details.alternatives)) {{
+      notice.textContent="Automatic playback found no compatible release. Review available sources:";
+      const choices=document.createElement("div");
+      choices.style.cssText="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px";
+      const sorted=[...details.alternatives].sort((a,b)=>
+        Number(b.auto_playable)-Number(a.auto_playable) ||
+        Number(b.seeds||0)-Number(a.seeds||0));
+      for(const row of sorted.slice(0,10)) {{
+        const button=document.createElement("button");
+        button.type="button";
+        button.textContent=(row.auto_playable?"Try ":"Unsupported ")+
+          String(row.seeds||0)+" seeds · "+
+          (Number(row.file_size||0)/1073741824).toFixed(1)+" GiB";
+        button.disabled=!row.auto_playable;
+        button.title=row.auto_playable?"Start this release as host":"Browser codec not supported";
+        button.addEventListener("click",async()=>{{
+          if(!lastState?.is_host || nextEpisodeLoading) return;
+          nextEpisodeLoading=true;
+          updateNextEpisodeControl();
+          button.disabled=true;
+          try {{
+            const state=await jsonFetch("/movie/"+BOOT.roomId+"/next-episode",{{
+              method:"POST",body:JSON.stringify({{autoplay:!!autoplay,variant_id:row.variant_id}})
+            }});
+            nextEpisodeState=null;
+            lastNextEpisodeKey="";
+            await applyState(state);
+            notice.textContent="Selected release started.";
+          }} catch(choiceError) {{
+            notice.textContent="Release failed: "+String(choiceError?.message||choiceError);
+          }} finally {{
+            nextEpisodeLoading=false;
+            updateNextEpisodeControl();
+          }}
+        }});
+        choices.appendChild(button);
+      }}
+      notice.appendChild(choices);
+    }} else {{
+      notice.textContent="Next episode could not start: "+String(err?.message||err);
+    }}
   }} finally {{
     nextEpisodeLoading=false;
     updateNextEpisodeControl();
