@@ -535,7 +535,8 @@ def test_phase3_compact_scan_retirement_requires_closed_unmerged_pr_and_parity()
     text = _workflow()
     assert "phase3/compact-member-scan-ui" in text
     assert "ebee209590d27e7c60d9d7927ee21bf77274a8f6" in text
-    assert "closedPr: 30" in text
+    assert "mergedPr: 30" in text
+    assert "mergedPrHead: 'ca1034432791172783d0b0255d1c7fd49be57df5'" in text
     assert "prs.length !== 1" in text
     assert "prs[0].state !== 'closed'" in text
     assert "!prs[0].merged_at" in text
@@ -566,3 +567,12 @@ def test_historical_access_repair_task_record_retirement_is_pr_gated() -> None:
     assert "prs[0].state !== 'closed'" in text
     assert "prs[0].merged_at" in text
     assert "prs[0].head.sha !== branch.commit.sha" in text
+
+
+def test_reviewed_modlog_hotfix_retirement_requires_main_parity() -> None:
+    text = _workflow()
+    assert "hotfix/modlog-noise-coalesce" in text
+    assert "1c9aa21dbd39c924632a544f3dff67fa798d1e0b" in text
+    assert "modlogReview.sha !== branch.commit.sha" in text
+    assert "DANK_ENABLE_PUBLIC_MEMBER_UPDATE_FALLBACK_MODLOG" in text
+    assert "original.files[0].status !== 'modified'" in text
