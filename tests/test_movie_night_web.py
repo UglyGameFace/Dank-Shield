@@ -2013,5 +2013,6 @@ def test_next_episode_client_displays_structured_codec_alternatives() -> None:
     source = (Path(__file__).resolve().parents[1] / "stoney_verify" / "movie_night_web.py").read_text()
     assert 'error.details=details' in source
     assert 'details?.error==="no_compatible_source"' in source
-    assert 'Top sources: ' in source
-    assert 'no room playback was changed.' in source
+    assert 'Automatic playback found no compatible release. Review available sources:' in source
+    assert 'button.addEventListener("click",async()=>{{' in source
+    assert 'button.disabled=!row.auto_playable' in source
