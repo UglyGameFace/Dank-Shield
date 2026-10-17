@@ -41,6 +41,9 @@ def test_only_short_lived_merged_pr_heads_are_eligible() -> None:
     assert "state: 'closed'" in text
     assert "sort: 'updated'" in text
     assert "per_page: 100" in text
+    assert "const closedPRs = await github.paginate(" in text
+    assert "github.rest.pulls.list, {" in text
+    assert "const closedPRs = (await github.rest.pulls.list(" not in text
 
 
 def test_active_pr_protected_branch_and_changed_head_fail_closed() -> None:
