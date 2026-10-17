@@ -129,6 +129,11 @@ jobs:
             // Historical member scan UI heads, pinned and reviewed separately.
             // A historical planning-only branch, not executable feature code.
             const reviewedStaleTaskLocks = new Map([
+              ['fix/access-repair-fail-closed-20260924', {
+                sha: '9b2116dfbf68876cb3df02ac357ac7af5435fec6',
+                onlyFile: 'ACTIVE_TASK.md',
+                historicalPr: 318,
+              }],
               ['audit/protection-picker-migration', {
                 sha: '66b3d2c1e175dd1a92ce71b58f0ce48f00b62b3b',
                 onlyFile: 'ACTIVE_TASK.md',
@@ -373,7 +378,14 @@ jobs:
                 }
                 const taskLockReview = reviewedStaleTaskLocks.get(name);
                 if (taskLockReview) {
-                  if (taskLockReview.sha !== branch.commit.sha || prs.length) continue;
+                  if (taskLockReview.sha !== branch.commit.sha) continue;
+                  if (taskLockReview.historicalPr) {
+                    if (prs.length !== 1 ||
+                        prs[0].number !== taskLockReview.historicalPr ||
+                        prs[0].merged_at ||
+                        prs[0].state !== 'closed' ||
+                        prs[0].head.sha !== branch.commit.sha) continue;
+                  } else if (prs.length) continue;
                   const original = (await github.rest.repos.getCommit({
                     owner, repo, ref: branch.commit.sha
                   })).data;
