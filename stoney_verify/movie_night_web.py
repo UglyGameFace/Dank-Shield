@@ -1749,13 +1749,25 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
         int(uid), ranked, guild_id=int(latest.guild_id), active_voters=active_voters,
     )
     if selected is None:
-        raise web.HTTPConflict(
-            text=(
-                "Next-episode releases have video formats risky for browser playback. "
-                "Cinema will not automatically start an HEVC/MKV source that may show "
-                "a black screen. Try another release."
-            )
-        )
+        # Never start an unsupported source just to avoid an error. Return
+        # useful, bounded alternatives for the host to review instead.
+        alternatives = []
+        for variant in ranked[:10]:
+            alternatives.append({
+                "variant_id": str(variant.variant_id),
+                "seeds": max(0, int(getattr(variant, "seeds", 0) or 0)),
+                "leechers": max(0, int(getattr(variant, "leechers", 0) or 0)),
+                "file_size": max(0, int(getattr(variant, "file_size", 0) or 0)),
+                "browser_video_risk": int(variant.browser_video_risk_key()),
+                "auto_playable": int(variant.browser_video_risk_key()) < 2,
+            })
+        return web.json_response({
+            "error": "no_compatible_source",
+            "message": "No release passed automatic browser compatibility checks.",
+            "next_episode": next_payload,
+            "alternatives": alternatives,
+            "action": "choose_another_release",
+        }, status=409)
 
     try:
         playback, selected, _fallback_attempts = await start_automatic_variant(
