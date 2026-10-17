@@ -538,8 +538,10 @@ def test_phase3_compact_scan_retirement_requires_closed_unmerged_pr_and_parity()
     assert "closedPr: 30" in text
     assert "prs.length !== 1" in text
     assert "prs[0].state !== 'closed'" in text
-    assert "prs[0].merged_at" in text
-    assert "prs[0].head.sha !== branch.commit.sha" in text
+    assert "!prs[0].merged_at" in text
+    assert "prs[0].head.sha !== taskLockReview.mergedPrHead" in text
+    assert "comparison.data.ahead_by !== 1" in text
+    assert "comparison.data.behind_by !== 0" in text
     assert "!uiText.includes('Page IDs')" in text
     assert "!uiText.includes('Data Notes')" in text
 
