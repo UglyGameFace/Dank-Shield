@@ -117,21 +117,29 @@ async def cheers_configure(
             "Could not persist CHEERS settings. No role pings were sent. Check guild-config storage.",
             ephemeral=True,
         )
+    try:
+        panel = await _publish_panel(channel, previous)
+    except discord.HTTPException as exc:
+        return await interaction.followup.send(
+            f"Role/channel saved, but the Call the Crew panel could not be posted: {type(exc).__name__}. "
+            "Check channel permissions and run /dank cheers configure again.",
+            ephemeral=True,
+        )
+    final = {**setting, "panel_message_id": str(panel.id)}
+    persisted = await _save(guild.id, final)
     return await interaction.followup.send(
-        f"CHEERS announcement configured for {role.mention} in {channel.mention}. "
-        f"Cooldown: {cooldown_minutes} minutes. Use **/dank cheers ping** to invite people to {LOBBY_URL}. "
-        "This is separate from /toke.",
+        f"CHEERS is configured for {role.mention} in {channel.mention}. "
+        f"Members can use the persistent **CALL THE CREW** button: {panel.jump_url}. "
+        f"Minimum role-ping cooldown: {cooldown_minutes} minutes. "
+        "Only the application owner can change this setup. /toke is unaffected."
+        + ("" if persisted else " ⚠️ Panel ID persistence failed; rerunning setup may repost the panel."),
         ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
 
 
-@cheers_group.command(name="ping", description="Owner only: notify your configured role to join Spark Relay.")
-async def cheers_ping(interaction: discord.Interaction) -> None:
-    if not await _only_app_owner(interaction):
-        return
-    guild = interaction.guild
-    await interaction.response.defer(ephemeral=True, thinking=True)
+async def _deliver_recruitment_ping(guild: discord.Guild) -> str:
+    """Shared command/button sender: fresh settings and one per-guild throttle."""
     lock = _locks.get(guild.id)
     if lock is None:
         lock = asyncio.Lock()
@@ -139,30 +147,33 @@ async def cheers_ping(interaction: discord.Interaction) -> None:
     async with lock:
         settings = _settings(await get_guild_config(guild.id, refresh=True))
         if not settings.get("enabled"):
-            return await interaction.followup.send("CHEERS is disabled or not configured. Use /dank cheers configure.", ephemeral=True)
-        role, channel, error = _valid_destination(
-            guild, int(settings.get("role_id", 0) or 0), int(settings.get("channel_id", 0) or 0)
-        )
+            return "CHEERS is disabled or not configured. Ask the bot owner to use /dank cheers configure."
+        try:
+            role_id = int(settings.get("role_id", 0) or 0)
+            channel_id = int(settings.get("channel_id", 0) or 0)
+            minutes = int(settings.get("cooldown_minutes", 30) or 30)
+            last_sent_at = int(settings.get("last_sent_at", 0) or 0)
+        except (TypeError, ValueError):
+            return "CHEERS setup is invalid. Owner must reconfigure its role and channel."
+        role, channel, error = _valid_destination(guild, role_id, channel_id)
         if error:
-            return await interaction.followup.send(error, ephemeral=True)
+            return error
         now = int(time.time())
-        cooldown = max(_MIN_COOLDOWN,min(_MAX_COOLDOWN,int(settings.get("cooldown_minutes",30) or 30))) * 60
-        remaining = cooldown - (now - int(settings.get("last_sent_at",0) or 0))
+        cooldown = max(_MIN_COOLDOWN, min(_MAX_COOLDOWN, minutes)) * 60
+        remaining = cooldown - (now - last_sent_at)
         if remaining > 0:
-            return await interaction.followup.send(
-                f"Next CHEERS role ping available in {(remaining+59)//60} minute(s).", ephemeral=True
-            )
+            return f"Next CHEERS role ping available in {(remaining + 59) // 60} minute(s)."
         embed = discord.Embed(
             title="🔥 CHEERS: SPARK RELAY",
             description=(
-                "Crew needed! Join a live reaction game, pass the spark, "
-                "chase the high score, and beat the timed challenges.\n\n"
-                f"**[PLAY ON THE 420 LOBBY]({LOBBY_URL})**\n"
-                "Sign in with Discord to join the live player lobby."
+                "Players wanted! Join an online reaction game, catch the spark, "
+                "and help the crew beat the high score.\\n\\n"
+                f"**[PLAY ON THE 420 LOBBY]({LOBBY_URL})**\\n"
+                "Sign in with Discord, go online in the lobby, and join a round."
             ),
             color=discord.Color.from_rgb(180, 238, 132),
         )
-        embed.set_footer(text="CHEERS website game • Separate from /toke sesh alerts")
+        embed.set_footer(text="Website CHEERS • Not a /toke sesh notification")
         try:
             sent = await channel.send(
                 content=role.mention,
@@ -170,18 +181,85 @@ async def cheers_ping(interaction: discord.Interaction) -> None:
                 allowed_mentions=discord.AllowedMentions(everyone=False, users=False, roles=[role]),
             )
         except discord.HTTPException as exc:
-            return await interaction.followup.send(
-                f"Could not post CHEERS invitation: {type(exc).__name__}. Check permissions.",
-                ephemeral=True,
-            )
-        updated = {**settings, "last_sent_at": now}
-        saved = await _save(guild.id, updated)
-        return await interaction.followup.send(
-            f"CHEERS recruitment ping sent in {channel.mention}: {sent.jump_url}"
-            + ("" if saved else " ⚠️ Cooldown persistence failed; repair guild-config storage before another ping."),
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
+            return f"Could not post CHEERS role ping: {type(exc).__name__}. Check permissions."
+        saved = await _save(guild.id, {**settings, "last_sent_at": now})
+        return (
+            f"CHEERS invitation posted in {channel.mention}: {sent.jump_url}"
+            + ("" if saved else " ⚠️ Persistent cooldown update failed. Fix guild-config storage before another ping.")
         )
+
+
+class CheersCallView(discord.ui.View):
+    """Persistent member-accessible button. No website webhook or bot token."""
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="CALL THE CREW", style=discord.ButtonStyle.success,
+        custom_id="dank_shield:cheers:call_crew:v1",
+    )
+    async def call_crew(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            return await interaction.response.send_message(
+                "Use this button inside your Discord server.", ephemeral=True
+            )
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            result = await _deliver_recruitment_ping(interaction.guild)
+        except Exception as exc:
+            print(f"⚠️ cheers_call_crew failure guild={interaction.guild.id} type={type(exc).__name__}")
+            result = "CHEERS invitations are temporarily unavailable. Try later."
+        await interaction.followup.send(
+            result, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
+        )
+
+
+def _panel_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="🔥 THE 420 LOBBY | CHEERS",
+        description=(
+            "Want other players for Spark Relay? Tap **CALL THE CREW** to invite "
+            "the server's configured CHEERS role. Shared cooldowns prevent spam.\\n\\n"
+            f"**[JOIN THE ONLINE GAME]({LOBBY_URL})**"
+        ),
+        color=discord.Color.from_rgb(185, 245, 151),
+    )
+    embed.set_footer(text="Role pings need owner configuration • /toke stays separate")
+    return embed
+
+
+async def _publish_panel(channel: discord.TextChannel, previous: Mapping) -> discord.Message:
+    previous_channel = str(previous.get("channel_id", ""))
+    previous_id = str(previous.get("panel_message_id", "") or "")
+    if previous_channel == str(channel.id) and previous_id.isdecimal():
+        try:
+            existing = await channel.fetch_message(int(previous_id))
+            await existing.edit(
+                embed=_panel_embed(), view=CheersCallView(),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return existing
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            pass
+    return await channel.send(
+        embed=_panel_embed(), view=CheersCallView(),
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+@cheers_group.command(name="ping", description="Owner only: manually call the configured role to play CHEERS.")
+async def cheers_ping(interaction: discord.Interaction) -> None:
+    if not await _only_app_owner(interaction):
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        message = await _deliver_recruitment_ping(interaction.guild)
+    except Exception as exc:
+        print(f"⚠️ cheers_owner_ping failure guild={interaction.guild.id} type={type(exc).__name__}")
+        message = "CHEERS invitation failed. Check bot permissions and guild-config storage."
+    return await interaction.followup.send(
+        message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
+    )
 
 
 @cheers_group.command(name="status", description="Owner only: show CHEERS announcement settings.")
@@ -218,4 +296,5 @@ def register_public_cheers_owner_commands(_bot, tree) -> None:
     if _registered:
         return
     dank_group.add_command(cheers_group)
+    _bot.add_view(CheersCallView())
     _registered = True
