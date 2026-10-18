@@ -1,3 +1,15 @@
+# Active Task Lock — Community Hub game-specific role notifications (2026-10-18)
+
+**Current continuation:** Issue #638, manual game-role recruitment. Base `main@02645b66009c736a59c85bed72cad159eca7b889`; one branch `feat/community-hub-game-role-pings-20261018`. Prior PRs #640 (external read-only), #641 (source/search), and #642 (play style/mic filters) merged, exact-head checks green, but live Discloud/Android acceptance and The100.io token/migration remain unverified.
+
+**Scope:** Staff-only game-to-role mapping from enabled Community & Pings Notification options, separate from /toke, CHEERS and Movie Night roles. Manual **Call Game Crew** only from an active public Community Hub group, with host/co-host/staff authorization, per-game and guild-wide CAS cooldown claim, one call per session, bounded per-hour budget, and click-time rechecks. No automatic pings, new database schema, external joining, new site files, or legacy role recreation. Production remains untouched.
+
+**Validation gates:** focused role eligibility and CAS-failure tests, Community Hub CI, full CI, app-command size, manual Discord/Discloud acceptance. Missing CAS RPC or storage must fail closed. Quiet hours are not implemented by the current Community Hub notification service, so role sends are deliberate only with strict cooldowns until a verified policy owner exists.
+
+---
+
+## Previous Community Hub LFG checkpoint
+
 # Active Task Lock — Community Hub unified Find Players discovery (2026-10-18)
 
 **Current continuation after merged PR #641:** Session play-style and mic-policy preference filters for local and approved HubLink partner groups. Branch `feat/community-hub-session-preference-filters-20261018` from `main@ca869ac4438e23a35dbdaf4b5407b0f33e92f70c`; issue #638. No modifications to The100.io credentials, native Quick Match, /toke, CHEERS, Cinema, website, or database migrations.
