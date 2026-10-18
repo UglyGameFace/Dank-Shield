@@ -297,3 +297,36 @@ def test_role_ping_game_mapping_uses_find_players_aliases():
     assert gp.notification_game_key("minecraft java") == gp.notification_game_key("Minecraft")
     assert gp.notification_game_key("GTA 5") == gp.notification_game_key("Grand Theft Auto V")
     assert gp.notification_game_key("Destiny 2") != gp.notification_game_key("Destiny")
+
+
+def test_one_call_per_session_survives_game_mapping_removal_and_readdition(monkeypatch):
+    guild, channel = _discord_setup(monkeypatch)
+    config = _config()
+    # Role assignments can be edited by staff, but cannot refund an already
+    # claimed session's ping. This guard survives restart and remapping.
+    config[gp.CONFIG_KEY]["called_sessions"] = ["1234"]
+    claimed = _wire_sender(monkeypatch, config=config)
+    result = asyncio.run(gp.call_game_crew(guild, "1234"))
+    assert "already called" in result
+    claimed.assert_not_awaited()
+    channel.send.assert_not_awaited()
+
+    config[gp.CONFIG_KEY]["games"] = {}
+    monkeypatch.setattr(gp, "get_guild_config", AsyncMock(return_value=config))
+    remove_cas = AsyncMock(return_value=(True, {}))
+    monkeypatch.setattr(gp, "compare_and_swap_guild_config_key", remove_cas)
+    assert asyncio.run(gp.configure(guild, "Minecraft", 0, remove=True))
+    assert remove_cas.await_args.kwargs["value"]["called_sessions"] == ["1234"]
+
+
+def test_claim_appends_session_id_with_bounded_persistence(monkeypatch):
+    guild, _ = _discord_setup(monkeypatch)
+    config = _config()
+    config[gp.CONFIG_KEY]["called_sessions"] = [str(i) for i in range(200)]
+    claimed = _wire_sender(monkeypatch, config=config)
+    result = asyncio.run(gp.call_game_crew(guild, "1234"))
+    assert "Called" in result
+    stored = claimed.await_args.kwargs["value"]["called_sessions"]
+    assert len(stored) == 160
+    assert stored[-1] == "1234"
+    assert "0" not in stored
