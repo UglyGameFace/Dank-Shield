@@ -2090,6 +2090,8 @@ async def _open_find_players_source(
     *,
     partner: bool,
     game_query: str = "",
+    play_style: str = "",
+    mic_preference: str = "",
 ) -> None:
     """Refresh only the selected authorized source; never merge private guild data."""
     guild_id = int(interaction.guild_id or 0)
@@ -2113,16 +2115,21 @@ async def _open_find_players_source(
             interaction, content=f"❌ {_error_text(exc)}",
             embed=None, view=CommunityHubView(owner_id),
         )
-    filtered = filter_discovery_games(sessions, game_query, limit=25)
+    filtered = filter_discovery_games(
+        sessions, game_query, limit=25,
+        play_style=play_style, mic_preference=mic_preference,
+    )
     await _edit_private_original(
         interaction, content=None,
         embed=_find_players_embed(
             filtered, partner=partner, partner_activity=activity,
             availability_summary=availability, game_query=game_query,
+            play_style=play_style, mic_preference=mic_preference,
         ),
         view=FindPlayersView(
             owner_id, filtered, partner=partner,
             availability_summary=availability, game_query=game_query,
+            play_style=play_style, mic_preference=mic_preference,
         ),
     )
 
@@ -2135,9 +2142,14 @@ class DiscoveryGameSearchModal(discord.ui.Modal, title="Find Groups by Game"):
         max_length=80,
     )
 
-    def __init__(self, owner_id: int, *, source: str, current_query: str = "") -> None:
+    def __init__(
+        self, owner_id: int, *, source: str, current_query: str = "",
+        play_style: str = "", mic_preference: str = "",
+    ) -> None:
         super().__init__()
         self.owner_id = int(owner_id)
+        self.play_style = play_style
+        self.mic_preference = mic_preference
         if source not in {"local", "partner", "external"}:
             raise ValueError("Unknown Community Hub discovery source")
         self.source = source
@@ -2151,9 +2163,14 @@ class DiscoveryGameSearchModal(discord.ui.Modal, title="Find Groups by Game"):
         if self.source == "external":
             await _open_external_sessions(interaction, self.owner_id, game_query=query)
         else:
+            kwargs = {}
+            if self.play_style:
+                kwargs["play_style"] = self.play_style
+            if self.mic_preference:
+                kwargs["mic_preference"] = self.mic_preference
             await _open_find_players_source(
                 interaction, self.owner_id,
-                partner=self.source == "partner", game_query=query,
+                partner=self.source == "partner", game_query=query, **kwargs,
             )
 
 
