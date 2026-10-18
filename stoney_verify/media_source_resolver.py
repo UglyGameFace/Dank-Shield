@@ -373,7 +373,11 @@ def _search_url(
     static_feed: bool = False,
 ) -> str:
     clean_query = " ".join(str(query or "").split())[:180]
-    if static_feed or _looks_like_static_feed_endpoint(endpoint):
+    # A feed endpoint can still be a search template (for example RSS with
+    # ?search={query}). Expand placeholders before treating it as static.
+    # Otherwise the literal braces are sent upstream and all searches fail.
+    has_template = any(token in endpoint for token in _PROVIDER_TEMPLATE_FIELDS)
+    if not has_template and (static_feed or _looks_like_static_feed_endpoint(endpoint)):
         return endpoint
 
     context = {
