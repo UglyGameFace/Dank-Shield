@@ -1470,6 +1470,11 @@ class TorrentMediaManager:
                 readahead=False,
                 time_critical=False,
             )
+        # Keep tail metadata as background priority so it cannot starve
+        # the head pieces required for first-byte playback.
+        # Inspect the file header as soon as its pieces arrive. This does not
+        # wait for the rest of the movie to download.
+        self.schedule_metadata_probe(session)
 
     async def select_file(
         self,
