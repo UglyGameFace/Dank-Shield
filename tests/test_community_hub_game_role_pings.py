@@ -330,3 +330,22 @@ def test_claim_appends_session_id_with_bounded_persistence(monkeypatch):
     assert len(stored) == 160
     assert stored[-1] == "1234"
     assert "0" not in stored
+
+
+def test_game_cooldown_survives_mapping_removal_and_new_session(monkeypatch):
+    guild, channel = _discord_setup(monkeypatch)
+    config = _config()
+    config[gp.CONFIG_KEY]["games"]["minecraft"]["last_at"] = 0
+    config[gp.CONFIG_KEY]["last_game_calls"] = {"minecraft": 1760799900}
+    claimed = _wire_sender(monkeypatch, config=config)
+    result = asyncio.run(gp.call_game_crew(guild, "other-new-session"))
+    assert "crew can be called again" in result
+    channel.send.assert_not_awaited()
+    claimed.assert_not_awaited()
+
+    config[gp.CONFIG_KEY]["games"] = {}
+    monkeypatch.setattr(gp, "get_guild_config", AsyncMock(return_value=config))
+    save = AsyncMock(return_value=(True, {}))
+    monkeypatch.setattr(gp, "compare_and_swap_guild_config_key", save)
+    assert asyncio.run(gp.configure(guild, "MC", 9))
+    assert save.await_args.kwargs["value"]["games"]["minecraft"]["last_at"] == 1760799900
