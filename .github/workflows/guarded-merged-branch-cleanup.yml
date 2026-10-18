@@ -168,6 +168,31 @@ jobs:
               }],
             ]);
 
+            // Frozen 2026-10-18 audit: each of these 17 exact HEAD commits was
+            // independently verified 0 ahead of main. Only owner-dispatched
+            // preview-reviewed/delete-reviewed may consider them. Never infer
+            // safety from age, prefix or from a branch merely being closed.
+            // Live Discloud-linked, backup/recovery and open-PR refs excluded.
+            const reviewedZeroAheadOctober18 = new Map([
+              ['feat/cheers-owner-lobby-role-pings-20261018', '1e52379c8fd14917a19accb2223d1b7fa1a0ab06'],
+              ['feat/community-hub-session-preference-filters-20261018', '08b5b17e98d73405633dba83f46cd1f87317971f'],
+              ['feat/community-hub-the100-readonly-20261018', 'a7a63adbd21dc57bbfbb5adec5171f3716de1f55'],
+              ['feat/community-hub-unified-game-search-20261018', 'bc03452c4e9014a80b3b5942b45b412a5b8c9c31'],
+              ['fix/cinema-auto-start-single-flight-20261018', '37099553cbe1f29ebb5df9c6106157292e0bae7a'],
+              ['fix/cinema-browser-capability-false-negative-20261017', '6fdc79f9630ff40bbbcaf657993d6e0240082611'],
+              ['fix/cinema-current-release-recovery-20261017', '13c37b2b75f7aa595dab34e5f953c18c2a41d4dc'],
+              ['fix/cinema-episode-card-expand-sources-20261017', '6e78872002e8f26469fffa0423d651f47aa514e0'],
+              ['fix/cinema-feed-provider-template-expansion-20261018', '44230c56ea8174398482a63520abc66d82314539'],
+              ['fix/cinema-general-source-recovery-20261017', '13c21cc343c47c130b92c3daac0ab661b8d754f7'],
+              ['fix/cinema-in-player-recovery-20261017', '64b3f77f67d42b59bed45e4c2afc1f99a08a9b8c'],
+              ['fix/cinema-next-episode-alternative-recovery-20261017', '61a402ddf8ccf3340b40e4d27582af3933626a01'],
+              ['fix/cinema-playback-discovery-reliability-20261017', '9739d79403084dfbd016a50deb5c344abb7d9219'],
+              ['fix/cinema-playback-error-guidance-20261017', '73ad8e4c3feb103a51cc9e40dfd69e95110fcee5'],
+              ['fix/cinema-probe-pending-startup-20261017', 'c44745363aab5f74c8a214b3551259f8fedeeb08'],
+              ['fix/cinema-provider-search-diagnostics-20261018', '86fbf8a46e11af9c7c0c4848c8c08981b11cec53'],
+              ['fix/cleanup-stage-specific-404-20261017', 'b8b63379b2bb2c472863b516084e857f3e042dc5'],
+            ]);
+
             const reviewedAncestorBatch = new Set([
               // Repository-wide inventory: both tips have zero commits ahead
               // of main; retain the separate Cinema known-good checkpoints.
@@ -375,6 +400,18 @@ jobs:
               const segments = name.toLowerCase().split(/[\\/._-]+/);
               const prs = closedByHead.get(name) || [];
               if (reviewedBatch) {
+                // Frozen exact-SHA Oct 18 branch retirement. Preserve no-PR and
+                // merged-PR ancestors, but never discard closed-unmerged work.
+                // Ancestor verification is redone against main at dispatch time.
+                const frozenSha = reviewedZeroAheadOctober18.get(name);
+                if (frozenSha) {
+                  if (branch.commit.sha !== frozenSha ||
+                      prs.some(pr => !pr.merged_at || pr.base?.ref !== defaultBranch) ||
+                      !await ancestorOfMain(frozenSha)) continue;
+                  candidates.push({ name, sha: frozenSha,
+                    reason: 'frozen reviewed ancestor of main (2026-10-18)' });
+                  continue;
+                }
                 // Explicitly reviewed zero-ahead refs: do not require an old
                 // PR head to be graph-identical after squash merges, but do
                 // require true ancestry and no unmerged PR history.
