@@ -1823,6 +1823,64 @@ async def movie_night_next_episode(request: web.Request) -> web.Response:
     return web.json_response(state)
 
 
+async def movie_night_recovery(request: web.Request) -> web.Response:
+    """Host-controlled alternate releases for the *current* Cinema title.
+
+    No new torrent search is required when the room already has alternatives.
+    A browser's decode error alone must never replace shared playback.
+    """
+    room, uid = await _room_and_user(request)
+    if int(uid) != int(room.host_id):
+        raise web.HTTPForbidden(text="Only the current host can change the room source.")
+    manager = get_movie_night_manager()
+    candidate_id = str(room.current_candidate_id or "")
+    candidate = room.candidates.get(candidate_id)
+    if candidate is None:
+        return web.json_response({"alternatives": [], "message": "No current title to recover."})
+    baseline = (str(room.stream_token or ""), candidate_id,
+                str(room.current_variant_id or ""))
+    ranked = manager.ranked_variants(room.room_id, candidate_id)
+    choices = [
+        row for row in ranked
+        if str(row.variant_id) != baseline[2]
+        and int(row.browser_video_risk_key()) < 2
+    ][:10]
+    if request.method == "GET":
+        return web.json_response({
+            "alternatives": [{
+                "variant_id": str(row.variant_id),
+                "seeds": max(0, int(getattr(row, "seeds", 0) or 0)),
+                "leechers": max(0, int(getattr(row, "leechers", 0) or 0)),
+                "file_size": max(0, int(getattr(row, "file_size", 0) or 0)),
+            } for row in choices],
+            "message": "Choose an alternate release. Switching changes playback for the whole room.",
+        })
+    try:
+        body = await request.json()
+    except (ValueError, TypeError):
+        body = {}
+    requested = str(body.get("variant_id") or "")[:160] if isinstance(body, dict) else ""
+    selected = next((row for row in choices if str(row.variant_id) == requested), None)
+    if selected is None:
+        raise web.HTTPConflict(text="This compatible alternate release is no longer available.")
+    latest = manager.get(room.room_id)
+    if latest is None or latest.ended or int(latest.host_id) != int(uid) or (
+        str(latest.stream_token or ""), str(latest.current_candidate_id or ""),
+        str(latest.current_variant_id or "")
+    ) != baseline:
+        raise web.HTTPConflict(text="Room playback changed. Refresh recovery choices.")
+    try:
+        playback = await start_room_variant(
+            latest.room_id, actor_id=int(uid), candidate_id=candidate_id,
+            variant_id=str(selected.variant_id),
+        )
+    except Exception as exc:
+        raise web.HTTPConflict(
+            text="This alternative could not start. Choose another compatible release."
+        ) from exc
+    return web.json_response(await _state_payload(playback.room, int(uid)))
+
+
 async def movie_night_preferences(request: web.Request) -> web.Response:
     room, uid = await _room_and_user(request)
     try:
@@ -4891,7 +4949,6 @@ function attachStream(url, force=false) {{
 }}
 
 function offerPlaybackRecovery() {{
-  // Only the host can change the shared room. Never switch media for a viewer.
   const existing=document.getElementById("cinemaRecoveryAction");
   if(existing) existing.remove();
   if(!lastState?.is_host || terminated) return;
@@ -4900,17 +4957,63 @@ function offerPlaybackRecovery() {{
   button.type="button";
   button.textContent="Find another release";
   button.style.cssText="margin:8px 0 0;display:block;min-height:40px;padding:8px 14px";
-  button.onclick=()=>{{
-    const queue=document.getElementById("queuePanel");
-    const form=document.getElementById("queueAddForm");
-    if(!queue || !form) return;
-    form.hidden=false;
-    queue.scrollIntoView({{behavior:"smooth",block:"nearest"}});
-    const search=document.getElementById("queueSearchInput");
-    if(search) {{
-      const title=String(lastState?.movie?.title||lastState?.title||"").trim();
-      if(title && !search.value) search.value=title.slice(0,180);
-      search.focus();
+  button.onclick=async()=>{{
+    button.disabled=true;
+    try {{
+      const response=await jsonFetch("/movie/"+BOOT.roomId+"/recovery");
+      const rows=Array.isArray(response.alternatives)?response.alternatives:[];
+      notice.textContent="";
+      const message=document.createElement("div");
+      message.textContent=rows.length
+        ?"Choose a compatible release. This changes playback for everyone in the room."
+        :"No other browser-compatible releases are available for this title.";
+      notice.appendChild(message);
+      for(const row of rows) {{
+        const option=document.createElement("button");
+        option.type="button";
+        option.style.cssText="margin:6px 6px 0 0;min-height:40px;padding:8px";
+        option.textContent="Try "+Number(row.seeds||0)+" seeds · "+
+          (Number(row.file_size||0)/1073741824).toFixed(1)+" GiB";
+        option.onclick=async()=>{{
+          if(!confirm("Change this release for everyone in the Cinema room?")) return;
+          option.disabled=true;
+          try {{
+            const updated=await jsonFetch("/movie/"+BOOT.roomId+"/recovery",{{
+              method:"POST",body:JSON.stringify({{variant_id:String(row.variant_id||"")}})
+            }});
+            await applyState(updated);
+            notice.textContent="Alternate release started for the room.";
+          }} catch(err) {{
+            option.disabled=false;
+            notice.textContent="Source recovery failed: "+String(err?.message||err);
+            offerPlaybackRecovery();
+          }}
+        }};
+        notice.appendChild(option);
+      }}
+      if(!rows.length) {{
+        const search=document.createElement("button");
+        search.type="button";
+        search.textContent="Search Cinema catalog";
+        search.onclick=()=>{{
+          const queue=document.getElementById("queuePanel");
+          const form=document.getElementById("queueAddForm");
+          if(!queue || !form) return;
+          form.hidden=false;
+          queue.scrollIntoView({{behavior:"smooth",block:"nearest"}});
+          const input=document.getElementById("queueSearchInput");
+          if(input) {{
+            const title=String(lastState?.movie?.title||lastState?.title||"").trim();
+            if(title && !input.value) input.value=title.slice(0,180);
+            input.focus();
+          }}
+        }};
+        notice.appendChild(search);
+      }}
+    }} catch(err) {{
+      button.disabled=false;
+      notice.textContent="Could not load alternate releases: "+String(err?.message||err);
+      notice.appendChild(button);
     }}
   }};
   notice.appendChild(button);
@@ -7375,6 +7478,8 @@ def register_movie_night_public_routes(app: web.Application) -> None:
     app.router.add_post("/movie/{room_id}/queue", movie_night_queue_action)
     app.router.add_get("/movie/{room_id}/progress", movie_night_progress)
     app.router.add_post("/movie/{room_id}/progress", movie_night_progress)
+    app.router.add_get("/movie/{room_id}/recovery", movie_night_recovery)
+    app.router.add_post("/movie/{room_id}/recovery", movie_night_recovery)
     app.router.add_get("/movie/{room_id}/next-episode", movie_night_next_episode)
     app.router.add_post("/movie/{room_id}/next-episode", movie_night_next_episode)
     app.router.add_get("/movie/{room_id}/preferences", movie_night_preferences)

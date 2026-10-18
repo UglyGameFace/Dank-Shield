@@ -772,6 +772,36 @@ async def start_room_variant(
                 "Torrent metadata selected a video format unsuitable for automatic browser playback."
             )
 
+    # A release title may mention a 4K source while the actual encode is 1080p.
+    # Enforce the cap on probed video dimensions, never on a "4K" name tag.
+    # Unknown resolution is not proof of 1080p: fail closed for new starts.
+    try:
+        torrent_manager.schedule_metadata_probe(session)
+        for _ in range(12):
+            if not bool(getattr(session, "metadata_probe_running", False)):
+                break
+            await asyncio.sleep(0.15)
+    except (RuntimeError, AttributeError):
+        pass
+    verified = getattr(session, "verified_metadata", None) or {}
+    video = verified.get("video") if isinstance(verified, Mapping) else None
+    video = video if isinstance(video, Mapping) else {}
+    try:
+        width = int(video.get("width") or 0)
+        height = int(video.get("height") or 0)
+    except (ValueError, TypeError):
+        width = height = 0
+    if width <= 0 or height <= 0 or width * height > 1920 * 1080:
+        if str(session.token) != previous:
+            await torrent_manager.release_lease(
+                session.token, lease_key, remove_if_unused=True,
+            )
+        raise CinemaPlaybackError(
+            "Cinema requires verified 1080p-or-lower video before playback."
+            if not width or not height else
+            "This release exceeds Cinema's 1080p playback limit."
+        )
+
     try:
         stream_url = torrent_manager.stream_url(session)
     except Exception:
