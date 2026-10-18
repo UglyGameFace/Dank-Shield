@@ -200,6 +200,32 @@ jobs:
             // PR #97 forwards the exact SpamGuard PR #96 merge commit into main.
             // Design v2 later gained login-backoff helpers already on main;
             // its old command patch is physically retired by native design v2.
+            // Individually audited October 18 historical refs: neither is a
+            // live deployment target. The older migration workflow was merged
+            // in PR #149 and replaced by the CI-gated current-main workflow;
+            // Toke's merged PR #382 gained post-merge role-setup UX now owned
+            // by the current Community & Pings manager and covered by tests.
+            const reviewedPostFBranches = new Map([
+              ['chore/automate-supabase-migrations', {
+                sha: '7ee642eadde8c572ba933c36414c5077fd798a94',
+                kind: 'superseded-migration-workflow',
+                pr: 149,
+                path: '.github/workflows/deploy-supabase-migrations.yml',
+              }],
+              ['fix/toke-channel-picker-pagination', {
+                sha: 'e7ca41a26e43a0b91ea63324d8e0566656b1d79e',
+                kind: 'toke-role-setup-followup',
+                pr: 382,
+                mergedHead: '0540f09710f50cca9559c2f044523421f94eee31',
+                ahead: 3,
+                files: [
+                  'ACTIVE_TASK.md',
+                  'stoney_verify/commands_ext/public_community_pings.py',
+                  'tests/test_profile_community_toke.py',
+                ],
+              }],
+            ]);
+
             const reviewedFollowupFBranches = new Map([
               ['feature/spamguard-live-stats-channels', {
                 sha: '954af766eb91c39a019c68d53e555d3a230884a3',
@@ -656,6 +682,64 @@ jobs:
                       testText.includes(token))) continue;
                   candidates.push({ name, sha: branch.commit.sha,
                     reason: 'reviewed Cinema wake recovery already included and tested on main' });
+                  continue;
+                }
+                const postF = reviewedPostFBranches.get(name);
+                if (postF) {
+                  if (branch.commit.sha !== postF.sha || prs.length !== 1) continue;
+                  const pr = prs[0];
+                  if (pr.number !== postF.pr ||
+                      !pr.merged_at || pr.state !== 'closed' ||
+                      pr.base?.ref !== defaultBranch ||
+                      !await ancestorOfMain(pr.merge_commit_sha)) continue;
+                  if (postF.kind === 'superseded-migration-workflow') {
+                    if (pr.head.sha !== branch.commit.sha) continue;
+                    const historical = (await github.rest.repos.getCommit({
+                      owner, repo, ref: branch.commit.sha
+                    })).data;
+                    if (historical.files?.length !== 1 ||
+                        historical.files[0].filename !== postF.path ||
+                        historical.files[0].status !== 'added') continue;
+                    const current = (await github.rest.repos.getContent({
+                      owner, repo, path: postF.path, ref: defaultBranch
+                    })).data;
+                    const source = Buffer.from(current.content, 'base64').toString('utf8');
+                    if (![
+                      'workflow_run:',
+                      'workflows: ["Dank Shield CI"]',
+                      'Verify immutable current-main target',
+                      'Verify manual target passed canonical CI',
+                      'supabase db push --dry-run --include-all',
+                      'supabase db push --include-all',
+                    ].every(token => source.includes(token))) continue;
+                  } else if (postF.kind === 'toke-role-setup-followup') {
+                    if (pr.head.sha !== postF.mergedHead) continue;
+                    const comparison = await github.rest.repos.compareCommits({
+                      owner, repo, base: postF.mergedHead, head: branch.commit.sha
+                    });
+                    if (comparison.data.ahead_by !== postF.ahead ||
+                        comparison.data.behind_by !== 0 ||
+                        comparison.data.files?.length !== postF.files.length ||
+                        !comparison.data.files.every(f =>
+                          f.status === 'modified' && postF.files.includes(f.filename)
+                        )) continue;
+                    const sourceFile = (await github.rest.repos.getContent({
+                      owner, repo, path: postF.files[1], ref: defaultBranch
+                    })).data;
+                    const testFile = (await github.rest.repos.getContent({
+                      owner, repo, path: postF.files[2], ref: defaultBranch
+                    })).data;
+                    const source = Buffer.from(sourceFile.content, 'base64').toString('utf8');
+                    const tests = Buffer.from(testFile.content, 'base64').toString('utf8');
+                    if (!['_assign_toke_capability(', 'Toke Starter', 'Toke Notify',
+                           'toke_start', 'toke_notify'].every(token => source.includes(token)) ||
+                        !['_assign_toke_capability(', 'Toke Starter', 'Toke Notify'].every(
+                          token => tests.includes(token))) continue;
+                  } else {
+                    continue;
+                  }
+                  candidates.push({ name, sha: branch.commit.sha,
+                    reason: 'reviewed ' + postF.kind + ' with current-main parity' });
                   continue;
                 }
                 const followup = reviewedFollowupFBranches.get(name);
