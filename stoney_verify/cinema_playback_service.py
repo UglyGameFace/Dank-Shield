@@ -791,15 +791,16 @@ async def start_room_variant(
         height = int(video.get("height") or 0)
     except (ValueError, TypeError):
         width = height = 0
-    if width <= 0 or height <= 0 or width * height > 1920 * 1080:
+    # Torrent metadata often arrives before the file's head/tail pieces.
+    # A pending probe is NOT evidence that the selected video is 4K.
+    # Do not abort every cold-start torrent just because ffprobe is not ready.
+    if width > 0 and height > 0 and width * height > 1920 * 1080:
         if str(session.token) != previous:
             await torrent_manager.release_lease(
                 session.token, lease_key, remove_if_unused=True,
             )
         raise CinemaPlaybackError(
-            "Cinema requires verified 1080p-or-lower video before playback."
-            if not width or not height else
-            "This release exceeds Cinema's 1080p playback limit."
+            "This release exceeds Cinema's verified 1080p playback limit."
         )
 
     try:
