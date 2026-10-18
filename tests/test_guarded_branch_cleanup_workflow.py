@@ -675,3 +675,29 @@ def test_reviewed_superseded_movie_source_tutorial_requires_replacement_parity()
         assert token in text
     assert "archive.object.sha !== candidate.sha" in text
     assert "current.protected || current.commit.sha !== candidate.sha" in text
+
+
+def test_retired_design_v3_branch_requires_exact_head_removed_module_native_owner() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedRetiredDesignPatch = new Map([", 1)[1].split("]);", 1)[0]
+    assert manifest.count("['fix/") == 1
+    assert "fix/dank-design-workflow-v3" in manifest
+    assert "66a9799e40ebb2cc5242f7c0cbf455e0eb58a544" in manifest
+    assert "885fe86ba97b602d4fed4a8794be68519431c5bd" in manifest
+    assert "stoney_verify/startup_guards/server_design_studio_command_guard.py" in manifest
+    assert "tests/test_server_design_workflow_language_static.py" in manifest
+    assert "prs.length || branch.commit.sha !== designPatch.sha" in text
+    assert "!await ancestorOfMain(designPatch.parent)" in text
+    assert "original.parents?.length !== 1" in text
+    assert "original.parents[0].sha !== designPatch.parent" in text
+    assert "original.files?.length !== 2" in text
+    assert "comparison.data.ahead_by !== 1" in text
+    assert "comparison.data.files?.length !== 2" in text
+    assert "if (error.status !== 404) throw error;" in text
+    assert "if (deprecatedModuleStillExists) continue;" in text
+    assert "test_retired_runtime_patch_design_modules_are_physically_absent" in text
+    assert 'groupText.includes(\'@dank_group.command(name="design"\')' in text
+    assert "groupText.includes('public_design_studio_v2')" in text
+    assert "inUseByOpenPR.has(name)" in text
+    assert "archive.object.sha !== candidate.sha" in text
+    assert "current.protected || current.commit.sha !== candidate.sha" in text
