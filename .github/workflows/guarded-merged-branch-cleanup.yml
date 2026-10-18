@@ -228,6 +228,19 @@ jobs:
             // active on main. Current stats owns bounded self-healing; the
             // canonical lifecycle router now owns click-through profile links.
             // Require both owners and their tests before archiving its exact SHA.
+            // One unique pre-extraction ticket repository commit in an old
+            // GitHub patch ref. Current tickets_new.repository owns that API,
+            // and tickets_new.service delegates persistence to it. This branch
+            // does not own deployment, ticket-number allocation or live runtime.
+            const reviewedHistoricalTicketRepoPatch = new Map([
+              ['UglyGameFace-patch-1', {
+                sha: '329d8b1ce5be14b0a258b3e413f89b7004cdeabc',
+                parent: '2fc747221d0f6ffa7dfa9c557da1a1cb7131f367',
+                oldFile: 'stoney_verify/tickets_new/service.py',
+                replacementFile: 'stoney_verify/tickets_new/repository.py',
+              }],
+            ]);
+
             const reviewedDormantStatsGuard = new Map([
               ['fix/dank-stats-profile-links', {
                 sha: 'ca74f100ca8e337a0b8f0c73273d0ad634effa22',
@@ -803,6 +816,73 @@ jobs:
                       testText.includes(token))) continue;
                   candidates.push({ name, sha: branch.commit.sha,
                     reason: 'reviewed Cinema wake recovery already included and tested on main' });
+                  continue;
+                }
+                const ticketRepoPatch = reviewedHistoricalTicketRepoPatch.get(name);
+                if (ticketRepoPatch) {
+                  if (prs.length || branch.commit.sha !== ticketRepoPatch.sha) continue;
+                  const original = (await github.rest.repos.getCommit({
+                    owner, repo, ref: branch.commit.sha
+                  })).data;
+                  if (original.parents?.length !== 1 ||
+                      original.parents[0].sha !== ticketRepoPatch.parent ||
+                      original.files?.length !== 1 ||
+                      original.files[0].filename !== ticketRepoPatch.oldFile ||
+                      original.files[0].status !== 'modified' ||
+                      !await ancestorOfMain(ticketRepoPatch.parent)) continue;
+                  const comparison = await github.rest.repos.compareCommits({
+                    owner, repo, base: defaultBranch, head: branch.commit.sha
+                  });
+                  if (comparison.data.ahead_by !== 1 ||
+                      comparison.data.files?.length !== 1 ||
+                      comparison.data.files[0].filename !== ticketRepoPatch.oldFile ||
+                      comparison.data.files[0].status !== 'modified') continue;
+                  const readText = async (path, ref) => {
+                    const file = (await github.rest.repos.getContent({
+                      owner, repo, path, ref
+                    })).data;
+                    if (Array.isArray(file) || file.type !== 'file') {
+                      throw new Error('Expected canonical ticket source: ' + path);
+                    }
+                    return Buffer.from(file.content, 'base64').toString('utf8');
+                  };
+                  const [historical, repository, service, claimTests, counterTests] =
+                    await Promise.all([
+                      readText(ticketRepoPatch.oldFile, branch.commit.sha),
+                      readText(ticketRepoPatch.replacementFile, defaultBranch),
+                      readText(ticketRepoPatch.oldFile, defaultBranch),
+                      readText('tests/test_ticket_claim_first_policy.py', defaultBranch),
+                      readText('tools/test_persistent_ticket_counter_static.py', defaultBranch)
+                    ]);
+                  const functionNames = text =>
+                    [...text.matchAll(/^(?:async )?def ([A-Za-z_]\\w*)\\(/gm)]
+                      .map(match => match[1]);
+                  const oldNames = functionNames(historical);
+                  const currentNames = new Set(functionNames(repository));
+                  const historicalLines = historical.split('\\n')
+                    .map(line => line.trim()).filter(Boolean);
+                  const repositoryLines = new Set(repository.split('\\n')
+                    .map(line => line.trim()).filter(Boolean));
+                  // Require the full 100-function old repository API and at
+                  // least 95% verbatim historical nonblank-line coverage.
+                  // Changed lifecycle-state lines were hardened on main.
+                  const commonLines = historicalLines.filter(
+                    line => repositoryLines.has(line)).length;
+                  if (oldNames.length !== 100 ||
+                      new Set(oldNames).size !== 100 ||
+                      !oldNames.every(fn => currentNames.has(fn)) ||
+                      historicalLines.length < 2000 ||
+                      commonLines / historicalLines.length < 0.95 ||
+                      !service.includes('from .repository import (') ||
+                      !service.includes('assign_ticket as repo_assign_ticket') ||
+                      !service.includes('await repo_assign_ticket(') ||
+                      !service.includes('reserve_persistent_ticket_number') ||
+                      !repository.includes('async def repository_healthcheck(') ||
+                      !claimTests.includes('test_claim_is_only_staff_action_allowed_before_claim') ||
+                      !claimTests.includes('test_delete_requires_the_claimant_and_a_separate_closed_state') ||
+                      !counterTests.includes('test_ticket_service_uses_persistent_allocator')) continue;
+                  candidates.push({ name, sha: branch.commit.sha,
+                    reason: 'reviewed old ticket repository prototype retained by canonical repository and tested service' });
                   continue;
                 }
                 const statsGuard = reviewedDormantStatsGuard.get(name);

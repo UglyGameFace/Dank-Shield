@@ -1019,3 +1019,33 @@ def test_dormant_stats_guard_retirement_requires_native_stats_and_member_links()
         "archive.object.sha !== candidate.sha",
     ):
         assert guard in text
+
+
+def test_historical_ticket_repository_patch_requires_canonical_parity_before_retirement() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedHistoricalTicketRepoPatch = new Map([", 1)[1].split("]);", 1)[0]
+    assert manifest.count("['UglyGameFace-patch-1'") == 1
+    assert "329d8b1ce5be14b0a258b3e413f89b7004cdeabc" in manifest
+    assert "2fc747221d0f6ffa7dfa9c557da1a1cb7131f367" in manifest
+    assert "stoney_verify/tickets_new/service.py" in manifest
+    assert "stoney_verify/tickets_new/repository.py" in manifest
+    for required in (
+        "prs.length || branch.commit.sha !== ticketRepoPatch.sha",
+        "original.parents?.length !== 1",
+        "original.parents[0].sha !== ticketRepoPatch.parent",
+        "original.files?.length !== 1",
+        "original.files[0].status !== 'modified'",
+        "!await ancestorOfMain(ticketRepoPatch.parent)",
+        "comparison.data.ahead_by !== 1",
+        "comparison.data.files?.length !== 1",
+        "oldNames.length !== 100",
+        "!oldNames.every(fn => currentNames.has(fn))",
+        "commonLines / historicalLines.length < 0.95",
+        "service.includes('from .repository import (')",
+        "service.includes('await repo_assign_ticket(')",
+        "counterTests.includes('test_ticket_service_uses_persistent_allocator')",
+        "inUseByOpenPR.has(name)",
+        "current.protected || current.commit.sha !== candidate.sha",
+        "archive.object.sha !== candidate.sha",
+    ):
+        assert required in text
