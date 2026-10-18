@@ -16,6 +16,8 @@ import discord
 
 from .. import community_hub_service as hub
 from .. import community_external_lfg as external
+from .. import community_hub_game_role_pings as game_pings
+from ..guild_config import get_guild_config
 from ..community_lfg_discovery import filter_discovery_games
 from ..community_hub_runtime import ensure_community_hub_runtime
 from ..community_voice_caption_runtime import (
@@ -2816,6 +2818,29 @@ class SessionControlView(_OwnedView):
         await _edit_private_original(interaction, content=None, embed=build_session_embed(session, members), view=CommunityHubView(self.owner_id))
         await _followup(interaction, "✅ Session is ending. New joins are stopped and temporary spaces will clean up after the server's grace period.")
 
+    @discord.ui.button(label="Call Game Crew", emoji="📣", style=discord.ButtonStyle.secondary, custom_id="dank:hub:manage:gameping:v1", row=2)
+    async def call_game_crew(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        if interaction.guild is None or bool(getattr(interaction.user, "bot", False)):
+            return await _followup(interaction, "Use this control as a server member.")
+        try:
+            session = await hub.get_session(self.session_id, guild_id=int(interaction.guild.id))
+            members = await hub.list_session_members(self.session_id)
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
+        mine = next(
+            (row for row in members if _safe_int(row.get("user_id")) == int(interaction.user.id)), None
+        )
+        if _safe_str((mine or {}).get("role")) not in {"host", "cohost"} and not _staff_authorized(interaction):
+            return await _followup(interaction, "Only this group's host, co-host or authorized staff can call a game role.")
+        try:
+            message = await game_pings.call_game_crew(interaction.guild, self.session_id)
+        except Exception as exc:
+            print(f"⚠️ community_hub game role call error={type(exc).__name__}")
+            message = "Game-role calls are unavailable; no successful ping was confirmed."
+        await _followup(interaction, message)
+
     @discord.ui.button(label="Back to Group", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:manage:back:v1", row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -3429,6 +3454,177 @@ class SafetyReportDetailView(_OwnedView):
         await _edit_private_original(interaction, content=None, embed=_safety_reports_embed(reports), view=SafetyReportsView(self.owner_id, reports))
 
 
+
+def _game_pings_embed(config: dict[str, Any]) -> discord.Embed:
+    state = game_pings._model(config.get(game_pings.CONFIG_KEY))
+    embed = discord.Embed(
+        title="🎮 Game Role Notifications",
+        description=(
+            "Map games to existing, **enabled Notification roles** from Community & Pings. "
+            "Role pings are **never automatic**: the active group's host/co-host or staff "
+            "must press **Call Game Crew** in that session's Manage panel. "
+            "Cooldowns are durable across bot restarts and shared between servers only within their own guild."
+        ),
+        color=discord.Color.blurple(),
+    )
+    mapped = list(state["games"].items())[:game_pings.MAX_GAMES]
+    if not mapped:
+        embed.add_field(
+            name="No game roles configured",
+            value="First create an enabled Notification role in **/dank pings**, then configure its game here.",
+            inline=False,
+        )
+    else:
+        lines = [
+            f"• **{discord.utils.escape_markdown(_safe_str(row.get('game_name'), key))}** "
+            f"→ <@&{_safe_int(row.get('role_id'))}> "
+            f"• {_safe_int(row.get('cooldown_minutes'), 30)} min"
+            for key, row in mapped
+        ]
+        embed.add_field(name=f"Game role mappings ({len(mapped)}/{game_pings.MAX_GAMES})", value="\n".join(lines)[:1024], inline=False)
+    embed.set_footer(text="No /toke or CHEERS role reuse • max 4 calls/hour/server • 5-minute global gap • one ping per session")
+    return embed
+
+
+async def _open_game_pings_manager(interaction: discord.Interaction, owner_id: int) -> None:
+    if not _staff_authorized(interaction) or interaction.guild is None:
+        return await _followup(interaction, "Only server-management staff can configure Game Role Notifications.")
+    try:
+        config = await get_guild_config(interaction.guild.id, refresh=True)
+    except Exception:
+        return await _followup(interaction, "Game-role configuration storage is unavailable.")
+    await _edit_private_original(
+        interaction, content=None, embed=_game_pings_embed(config),
+        view=GameRolePingsManagerView(owner_id),
+    )
+
+
+class GameRolePingsManagerView(_OwnedView):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not await super().interaction_check(interaction):
+            return False
+        if _staff_authorized(interaction):
+            return True
+        await _private(interaction, "Only server-management staff can configure game-role pings.")
+        return False
+
+    @discord.ui.button(label="Configure Game", emoji="🎮", style=discord.ButtonStyle.primary, custom_id="dank:hub:gamepings:configure:v1")
+    async def configure(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.send_modal(GameRoleConfigModal(self.owner_id))
+
+    @discord.ui.button(label="Remove Mapping", emoji="🗑️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:gamepings:remove:v1")
+    async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.send_modal(GameRoleRemoveModal(self.owner_id))
+
+    @discord.ui.button(label="Staff Dashboard", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:gamepings:back:v1")
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_staff_dashboard(interaction, self.owner_id)
+
+
+class GameRoleConfigModal(discord.ui.Modal, title="Configure Game Role Ping"):
+    game = discord.ui.TextInput(label="Game name", placeholder="Minecraft", min_length=1, max_length=80)
+    cooldown = discord.ui.TextInput(label="Cooldown minutes (15 to 240)", placeholder="30", default="30", max_length=3)
+
+    def __init__(self, owner_id: int) -> None:
+        super().__init__()
+        self.owner_id = int(owner_id)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id or not _staff_authorized(interaction):
+            return await _private(interaction, "Only server-management staff can map game notification roles.")
+        await _defer_ephemeral(interaction)
+        try:
+            game = hub.normalize_game_name(self.game.value)
+            minutes = int(str(self.cooldown.value))
+            if not 15 <= minutes <= 240:
+                raise ValueError("Cooldown must be between 15 and 240 minutes.")
+            config = await get_guild_config(int(interaction.guild_id or 0), refresh=True)
+            roles = game_pings.eligible_game_roles(interaction.guild, config)
+        except (ValueError, hub.CommunityHubError):
+            return await _followup(interaction, "Enter a valid game and cooldown of 15–240 minutes.")
+        except Exception:
+            return await _followup(interaction, "Could not load the current Community & Pings roles.")
+        if not roles:
+            return await _followup(
+                interaction,
+                "No eligible roles. Open **/dank pings**, create or enable a Notification role "
+                "separate from /toke, CHEERS and Movie Night, then retry.",
+            )
+        embed = discord.Embed(
+            title=f"🎮 Select a role for {discord.utils.escape_markdown(game)}",
+            description="Choose the existing Notification role to be pinged only when a group host or staff explicitly calls it.",
+            color=discord.Color.blurple(),
+        )
+        await interaction.edit_original_response(
+            embed=embed, content=None,
+            view=GameRolePickerView(self.owner_id, game, minutes, roles),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+class GameRoleOptionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, game: str, minutes: int, options: list[tuple[int, str]]) -> None:
+        self.owner_id = int(owner_id)
+        self.game = game
+        self.minutes = int(minutes)
+        super().__init__(
+            placeholder="Select an existing Community & Pings Notification role",
+            min_values=1, max_values=1,
+            options=[
+                discord.SelectOption(label=label, value=str(role_id), emoji="🔔")
+                for role_id, label in options[:25]
+            ],
+            custom_id="dank:hub:gamepings:role:v1",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id or not _staff_authorized(interaction):
+            return await _private(interaction, "Only server-management staff can map game notification roles.")
+        await _defer_update(interaction)
+        try:
+            saved = await game_pings.configure(
+                interaction.guild, self.game, int(self.values[0]),
+                cooldown_minutes=self.minutes,
+            )
+        except (ValueError, hub.CommunityHubError) as exc:
+            return await _followup(interaction, f"❌ {str(exc)[:250]}")
+        if not saved:
+            return await _followup(interaction, "Game-role settings could not be saved atomically. No changes confirmed.")
+        await _open_game_pings_manager(interaction, self.owner_id)
+
+
+class GameRolePickerView(_OwnedView):
+    def __init__(self, owner_id: int, game: str, minutes: int, roles: list[tuple[int, str]]) -> None:
+        super().__init__(owner_id)
+        self.add_item(GameRoleOptionSelect(owner_id, game, minutes, roles))
+
+
+class GameRoleRemoveModal(discord.ui.Modal, title="Remove Game Role Mapping"):
+    game = discord.ui.TextInput(label="Game name to remove", placeholder="Minecraft", min_length=1, max_length=80)
+
+    def __init__(self, owner_id: int) -> None:
+        super().__init__()
+        self.owner_id = int(owner_id)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id or not _staff_authorized(interaction):
+            return await _private(interaction, "Only server-management staff can remove game-role mappings.")
+        await _defer_ephemeral(interaction)
+        try:
+            saved = await game_pings.configure(
+                interaction.guild, str(self.game.value), 0, remove=True,
+            )
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
+        if not saved:
+            return await _followup(interaction, "Could not confirm removal. The previous mapping remains active.")
+        await _open_game_pings_manager(interaction, self.owner_id)
+
+
 class StaffDashboardView(_OwnedView):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if not await super().interaction_check(interaction):
@@ -3499,6 +3695,12 @@ class StaffDashboardView(_OwnedView):
         await _defer_update(interaction)
         links = await hub.list_partner_links(int(interaction.guild_id or 0), active_only=False)
         await _edit_private_original(interaction, content=None, embed=_partner_embed(links, int(interaction.guild_id or 0), interaction.client), view=PartnerAdminView(self.owner_id, links))
+
+    @discord.ui.button(label="Game Role Pings", emoji="📣", style=discord.ButtonStyle.secondary, custom_id="dank:hub:staff:gamepings:v1", row=1)
+    async def game_role_pings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_game_pings_manager(interaction, self.owner_id)
 
     @discord.ui.button(label="Community Hub", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:staff:back:v1", row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
