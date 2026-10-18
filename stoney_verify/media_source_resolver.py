@@ -36,7 +36,7 @@ _TIMEOUT_SECONDS = 8.0
 # Entries are bounded, expire quickly, and are scoped to provider configuration.
 _DISCOVERY_CACHE_TTL = 90.0
 _DISCOVERY_CACHE_LIMIT = 256
-_DISCOVERY_CACHE: dict[tuple[str, str, str], tuple[float, tuple[list["ResolvedMediaVariant"], str]]] = {}
+_DISCOVERY_CACHE: dict[tuple[int, str, str, str], tuple[float, tuple[list["ResolvedMediaVariant"], str]]] = {}
 
 INTERNET_ARCHIVE_SOURCE_ID = "internet-archive-feature-films"
 INTERNET_ARCHIVE_SOURCE_LABEL = "Internet Archive Feature Films"
@@ -1413,7 +1413,7 @@ async def search_custom_media_sources(
             return [], f"{source.label}: {exc}"
 
         context_key = json.dumps(dict(lookup_context or {}), sort_keys=True, default=str)
-        key = (str(source.endpoint_url), str(query).casefold().strip(), context_key)
+        key = (int(guild_id), str(source.endpoint_url), str(query).casefold().strip(), context_key)
         now = time.monotonic()
         cached = _DISCOVERY_CACHE.get(key)
         if cached and cached[0] > now:
