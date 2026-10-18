@@ -103,7 +103,9 @@ def test_new_ticket_ping_is_single_role_scoped_and_does_not_ping_users(monkeypat
         class FakeChannel:
             id = 500
             mention = "<#500>"
-            guild = guild
+
+            def __init__(self, guild_value):
+                self.guild = guild_value
 
             def permissions_for(self, member):
                 return perms
@@ -119,7 +121,7 @@ def test_new_ticket_ping_is_single_role_scoped_and_does_not_ping_users(monkeypat
 
         monkeypatch.setattr(alerts, "load_settings", settings)
         monkeypatch.setattr(alerts, "alert_channel_for_guild", no_external_channel)
-        channel = FakeChannel()
+        channel = FakeChannel(guild)
         owner = SimpleNamespace(id=89)
 
         assert await alerts.notify_new_ticket(
