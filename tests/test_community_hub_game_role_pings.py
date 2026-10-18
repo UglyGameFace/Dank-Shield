@@ -349,3 +349,10 @@ def test_game_cooldown_survives_mapping_removal_and_new_session(monkeypatch):
     monkeypatch.setattr(gp, "compare_and_swap_guild_config_key", save)
     assert asyncio.run(gp.configure(guild, "MC", 9))
     assert save.await_args.kwargs["value"]["games"]["minecraft"]["last_at"] == 1760799900
+
+
+def test_non_latin_game_names_do_not_share_one_notification_role_key():
+    first = gp.notification_game_key("最终幻想")
+    second = gp.notification_game_key("魔兽世界")
+    assert first and second and first != second
+    assert "game" not in {first, second}
