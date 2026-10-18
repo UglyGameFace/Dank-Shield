@@ -144,5 +144,5 @@ def test_hub_ui_contract_and_schema_opt_in_are_scoped() -> None:
     assert "ExternalGroupsView" in ui
     assert "read-only, no external join actions" in ui
     assert "session_id=" not in ui[ui.index("class ExternalGroupsView"):ui.index("def _my_groups_embed")]
-    ids = re.findall(r'custom_id\\s*=\\s*["\\\']([^"\\\']+)["\\\']', ui)
-    assert len(ids) == len(set(ids))
+    ids = re.findall(r'custom_id\s*=\s*["\']([^"\']+)["\']', ui)
+    assert ids and len(ids) == len(set(ids))
