@@ -703,7 +703,7 @@ class TicketOperationsView(_OwnedView):
         view = TicketCategoryToolsView(self.owner_id)
         await _replace(interaction, embed=view.embed(), view=view)
 
-    @discord.ui.button(label="Staff Alerts", emoji="🔔", style=discord.ButtonStyle.primary, row=2)
+    @discord.ui.button(label="Staff Alerts", emoji="🔔", style=discord.ButtonStyle.primary, row=3)
     async def staff_alerts(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_ticket_notification_manager(interaction):
