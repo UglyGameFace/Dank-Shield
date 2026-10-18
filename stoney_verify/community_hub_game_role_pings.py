@@ -32,6 +32,10 @@ MIN_COOLDOWN_MINUTES = 15
 MAX_COOLDOWN_MINUTES = 240
 GUILD_COOLDOWN_SECONDS = 300
 MAX_GUILD_CALLS_PER_HOUR = 4
+# Community Hub allows a hard session lifetime up to 14 days. A guild can
+# reserve at most 4 role calls per hour, so 1,400 recent session IDs cover
+# that whole window even if a server exhausts its budget continuously.
+MAX_SESSION_CLAIMS = 1400
 ALLOW_SESSION_STATES = frozenset({"open", "forming", "ready", "active"})
 _MAX_ATTEMPTS = 3
 
@@ -74,11 +78,10 @@ def _model(value: Any) -> dict[str, Any]:
         if isinstance(item, (int, float)) and 0 < item
     ] if isinstance(blob.get("recent_calls"), list) else []
     called = blob.get("called_sessions")
-    # Cross-reconfiguration duplicate guard. At four calls per hour, 160
-    # retained IDs cover at least forty hours of reservations, longer than
-    # a Community Hub session's configurable hard lifetime.
+    # Preserve the one-call-per-session invariant across role remapping for
+    # the full 14-day maximum Community Hub session lifetime.
     session_ids = [
-        str(item)[:64] for item in (called if isinstance(called, list) else [])[-160:]
+        str(item)[:64] for item in (called if isinstance(called, list) else [])[-MAX_SESSION_CLAIMS:]
         if isinstance(item, str) and 0 < len(item) <= 64
     ]
     raw_game_claims = _as_dict(blob.get("last_game_calls"))
@@ -257,7 +260,7 @@ async def call_game_crew(guild: discord.Guild, session_id: str) -> str:
             )[-24:]
         )
         state["recent_calls"] = [*history, now][-24:]
-        state["called_sessions"] = [*state["called_sessions"], str(session_id)[:64]][-160:]
+        state["called_sessions"] = [*state["called_sessions"], str(session_id)[:64]][-MAX_SESSION_CLAIMS:]
         try:
             claimed, _ = await compare_and_swap_guild_config_key(
                 gid, CONFIG_KEY, expected=before, value=state,
