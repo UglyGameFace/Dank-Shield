@@ -809,3 +809,33 @@ def test_post_f_historical_refs_are_exactly_gated_and_production_migration_is_re
     assert "inUseByOpenPR.has(name)" in text
     assert "archive.object.sha !== candidate.sha" in text
     assert "current.protected || current.commit.sha !== candidate.sha" in text
+
+
+def test_reviewed_setup_runtime_patch_requires_exact_temp_file_scope_and_owner() -> None:
+    text = _workflow()
+    manifest = text.split(
+        "const reviewedSetupRuntimePatch = new Map([", 1
+    )[1].split("]);", 1)[0]
+    assert manifest.count("['fix/") == 1
+    assert "fix/setup-runtime-integrity-200" in manifest
+    assert "5551181b3f796cfe506db5134d2571452a4de3ba" in manifest
+    assert "ahead: 4" in manifest
+    for path in (
+        ".github/workflows/_tmp_ds_setup_039_patch.yml",
+        "stoney_verify/commands_ext/public_setup_compact.py",
+        "tools/_tmp_ds_setup_039_patch.py",
+    ):
+        assert f"'{path}'" in manifest
+    assert "branch.commit.sha !== setupPatch.sha || prs.length" in text
+    assert "comparison.data.ahead_by !== setupPatch.ahead" in text
+    assert "comparison.data.files?.length !== setupPatch.files.length" in text
+    assert "setupPatch.files.includes(f.filename)" in text
+    assert "if (obsoleteTemporaryFileExists) continue;" in text
+    assert "_guided._PATCHED = False" in text
+    assert "_guided.apply_guided_test_patch()" in text
+    assert "_install_response_integrity()" in text
+    assert "_install_feature_area_integrity()" in text
+    assert "test_final_setup_runtime_has_one_deterministic_owner" in text
+    assert "inUseByOpenPR.has(name)" in text
+    assert "archive.object.sha !== candidate.sha" in text
+    assert "current.protected || current.commit.sha !== candidate.sha" in text
