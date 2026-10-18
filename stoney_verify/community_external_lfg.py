@@ -7,9 +7,11 @@ own database remains the authority for all Discord-hosted gaming groups.
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import re
+import time
 from typing import Any
 
 import aiohttp
@@ -20,6 +22,11 @@ THE100_TOKEN_ENV = "DANK_COMMUNITY_THE100_API_TOKEN"
 _MAX_BYTES = 131072
 _MAX_RESULTS = 25
 _VALID_ID = re.compile(r"[1-9][0-9]{0,18}\Z")
+_THE100_CACHE_SECONDS = 90
+_the100_cache_lock = asyncio.Lock()
+_the100_cache_key = b""
+_the100_cached_until = 0.0
+_the100_cached_rows: list[dict[str, str]] = []
 
 
 class ExternalDiscoveryError(Exception):
@@ -85,21 +92,33 @@ async def list_the100_sessions(*, limit: int = _MAX_RESULTS) -> list[dict[str, s
     if not token:
         raise ExternalDiscoveryError("The100.io is not configured on this bot host.")
 
-    timeout = aiohttp.ClientTimeout(total=7, connect=3)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(
-                THE100_API,
-                headers={"Authorization": f"Token token={token}", "Accept": "application/json"},
-            ) as response:
-                if response.status in (401, 403):
-                    raise ExternalDiscoveryError("The100.io API access was denied. Check the server-side token.")
-                if response.status != 200:
-                    raise ExternalDiscoveryError("The100.io is temporarily unavailable.")
-                raw = await response.content.read(_MAX_BYTES + 1)
-                if len(raw) > _MAX_BYTES:
-                    raise ExternalDiscoveryError("The100.io returned too much data.")
-                payload = json.loads(raw)
-    except (aiohttp.ClientError, asyncio.TimeoutError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ExternalDiscoveryError("Could not read The100.io sessions right now.") from exc
-    return normalize_the100_sessions(payload, limit=limit)
+    global _the100_cache_key, _the100_cached_until, _the100_cached_rows
+    # Only one read per host in this short window, even with many guilds.
+    key = hashlib.sha256(token.encode("utf-8")).digest()
+    safe_limit = max(1, min(int(limit), _MAX_RESULTS))
+    async with _the100_cache_lock:
+        if key == _the100_cache_key and time.monotonic() < _the100_cached_until:
+            return [dict(row) for row in _the100_cached_rows[:safe_limit]]
+
+        timeout = aiohttp.ClientTimeout(total=7, connect=3)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(
+                    THE100_API,
+                    headers={"Authorization": f"Token token={token}", "Accept": "application/json"},
+                ) as response:
+                    if response.status in (401, 403):
+                        raise ExternalDiscoveryError("The100.io API access was denied. Check the server-side token.")
+                    if response.status != 200:
+                        raise ExternalDiscoveryError("The100.io is temporarily unavailable.")
+                    raw = await response.content.read(_MAX_BYTES + 1)
+                    if len(raw) > _MAX_BYTES:
+                        raise ExternalDiscoveryError("The100.io returned too much data.")
+                    payload = json.loads(raw)
+        except (aiohttp.ClientError, asyncio.TimeoutError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ExternalDiscoveryError("Could not read The100.io sessions right now.") from exc
+        rows = normalize_the100_sessions(payload, limit=_MAX_RESULTS)
+        _the100_cache_key = key
+        _the100_cached_rows = rows
+        _the100_cached_until = time.monotonic() + _THE100_CACHE_SECONDS
+        return [dict(row) for row in rows[:safe_limit]]
