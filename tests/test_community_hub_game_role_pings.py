@@ -151,7 +151,8 @@ def test_send_requires_valid_public_live_session_and_enabled_notifications(monke
         {"notifications_enabled": False},
     ):
         _wire_sender(monkeypatch, settings=blocked)
-        assert "disabled" in asyncio.run(gp.call_game_crew(guild, "1234")).lower() or "unavailable" in asyncio.run(gp.call_game_crew(guild, "1234")).lower()
+        result = asyncio.run(gp.call_game_crew(guild, "1234")).lower()
+        assert "disabled" in result or "unavailable" in result
     for session in (
         {**_session(), "privacy": "private"},
         {**_session(), "state": "ending"},
@@ -236,3 +237,56 @@ def test_role_picker_is_native_searchless_choice_with_allowed_configured_roles()
     assert selector.options[0].value == "9"
     assert len(selector.options) <= 25
     assert selector.custom_id == "dank:hub:gamepings:role:v1"
+
+
+def test_post_claim_staff_disable_fails_closed_without_role_ping(monkeypatch):
+    guild, channel = _discord_setup(monkeypatch)
+    claimed = _wire_sender(monkeypatch)
+    settings_read = AsyncMock(side_effect=[
+        {"enabled": True, "notifications_enabled": True},
+        {"enabled": True, "notifications_enabled": False},
+    ])
+    monkeypatch.setattr(gp.hub, "get_settings", settings_read)
+    result = asyncio.run(gp.call_game_crew(guild, "1234"))
+    assert "No ping sent" in result
+    claimed.assert_awaited_once()
+    channel.send.assert_not_awaited()
+
+
+def test_post_claim_stale_session_fails_closed(monkeypatch):
+    guild, channel = _discord_setup(monkeypatch)
+    claimed = _wire_sender(monkeypatch)
+    fetch = AsyncMock(side_effect=[
+        _session(),
+        {**_session(), "state": "ended"},
+    ])
+    monkeypatch.setattr(gp.hub, "get_session", fetch)
+    result = asyncio.run(gp.call_game_crew(guild, "1234"))
+    assert "No ping sent" in result
+    claimed.assert_awaited_once()
+    channel.send.assert_not_awaited()
+
+
+def test_config_conflict_retries_but_storage_exception_fails_closed(monkeypatch):
+    guild, channel = _discord_setup(monkeypatch)
+    _wire_sender(monkeypatch)
+    cas = AsyncMock(side_effect=[(False, {}), (True, {})])
+    monkeypatch.setattr(gp, "compare_and_swap_guild_config_key", cas)
+    assert "Called" in asyncio.run(gp.call_game_crew(guild, "1234"))
+    assert cas.await_count == 2
+
+    channel.send.reset_mock()
+    failed = AsyncMock(side_effect=RuntimeError("storage unavailable"))
+    monkeypatch.setattr(gp, "compare_and_swap_guild_config_key", failed)
+    assert "No ping sent" in asyncio.run(gp.call_game_crew(guild, "1234"))
+    channel.send.assert_not_awaited()
+
+
+def test_configure_remove_is_explicit_and_does_not_reenable_role(monkeypatch):
+    guild, _ = _discord_setup(monkeypatch)
+    config = _config(enabled=False)
+    monkeypatch.setattr(gp, "get_guild_config", AsyncMock(return_value=config))
+    cas = AsyncMock(return_value=(True, {}))
+    monkeypatch.setattr(gp, "compare_and_swap_guild_config_key", cas)
+    assert asyncio.run(gp.configure(guild, "Minecraft", 0, remove=True))
+    assert cas.await_args.kwargs["value"]["games"] == {}
