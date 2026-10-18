@@ -42,7 +42,7 @@ def main() -> int:
         )
     if PUBLIC_GLOBAL_COMMAND_NAMES != expected:
         errors.append(f"public global command names drifted: {PUBLIC_GLOBAL_COMMAND_NAMES!r}")
-    if not {"home", "purge", "setup", "upload", "protection", "voice-safety", "diagnostics", "help"} <= PUBLIC_DANK_CHILDREN or len(PUBLIC_DANK_CHILDREN) != 17:
+    if not {"home", "purge", "setup", "upload", "protection", "voice-safety", "diagnostics", "help", "cheers"} <= PUBLIC_DANK_CHILDREN or len(PUBLIC_DANK_CHILDREN) != 18:
         errors.append(f"final /dank children drifted: {sorted(PUBLIC_DANK_CHILDREN)!r}")
 
     access = _read("stoney_verify/commands_ext/public_access_control.py")
