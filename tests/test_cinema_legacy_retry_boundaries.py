@@ -22,7 +22,8 @@ const attachments=[];
 const ctx={
   video,notice,terminated:false,streamRetryTimer:null,streamRetryAttempt:0,
   STREAM_RETRY_LIMIT:3,
-  lastState:{stream_url:"/signed-original",stream_token:"movie-original"},
+  lastState:{stream_url:"/signed-original",stream_token:"movie-original",is_host:false},
+  document:{getElementById(){return null;}},
   setTimeout(fn,delay){const timer={fn,delay};timers.push(timer);return timer;},
   jsonFetch:async()=>({stream_url:ctx.lastState.stream_url}),
   applyState:async()=>{},
