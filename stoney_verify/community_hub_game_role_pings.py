@@ -227,8 +227,14 @@ async def call_game_crew(guild: discord.Guild, session_id: str) -> str:
         try:
             refreshed = await hub.get_session(session_id, guild_id=gid)
             latest = await get_guild_config(gid, refresh=True)
+            latest_settings = await hub.get_settings(gid)
         except Exception:
             return "Call reserved, but the group's current state could not be verified. No ping sent."
+        # Honor a staff disable or revoked role permission even after winning
+        # the durable claim. Sending after an opt-out would be worse than
+        # consuming a cooldown with no Discord message.
+        current_perms = channel.permissions_for(me)
+        current_role_perms = channel.permissions_for(role)
         if (
             str(refreshed.get("state")) not in ALLOW_SESSION_STATES
             or str(refreshed.get("privacy")) != "public"
@@ -236,8 +242,16 @@ async def call_game_crew(guild: discord.Guild, session_id: str) -> str:
             or _as_int(refreshed.get("panel_channel_id")) != channel_id
             or _as_int(_as_dict(_model(latest.get(CONFIG_KEY))["games"].get(key)).get("role_id")) != rid
             or rid not in {rid for rid, _ in eligible_game_roles(guild, latest)}
+            or not bool(latest_settings.get("enabled", True))
+            or bool(latest_settings.get("maintenance_mode"))
+            or not bool(latest_settings.get("notifications_enabled", True))
+            or not (
+                current_perms.view_channel and current_perms.send_messages
+                and current_perms.embed_links and current_role_perms.view_channel
+                and (role.mentionable or current_perms.mention_everyone)
+            )
         ):
-            return "The group or role changed while processing the call. No ping sent."
+            return "The group, role, permissions or notification setting changed while processing the call. No ping sent."
 
         jump = f"https://discord.com/channels/{gid}/{channel_id}/{message_id}"
         embed = discord.Embed(
