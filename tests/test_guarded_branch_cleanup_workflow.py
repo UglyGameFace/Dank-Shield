@@ -839,3 +839,35 @@ def test_reviewed_setup_runtime_patch_requires_exact_temp_file_scope_and_owner()
     assert "inUseByOpenPR.has(name)" in text
     assert "archive.object.sha !== candidate.sha" in text
     assert "current.protected || current.commit.sha !== candidate.sha" in text
+
+
+def test_exact_cinema_approved_art_archived_branch_retirement() -> None:
+    workflow = _workflow()
+    manifest = workflow.split("const reviewedCinemaApprovedArt = new Map([", 1)[1].split("]);", 1)[0]
+    assert manifest.count("['fix/") == 1
+    assert "fix/430-cinema-mockup-parity" in manifest
+    assert "759f6e1d10a13d72b991a75f47bc06e4170c3875" in manifest
+    assert "mergedHead: 'a8c1aa5da0b142ffb6e090f5ad9562f3c715c7af'" in manifest
+    assert "pr: 433" in manifest
+    assert "ahead: 5" in manifest
+    assert "assetBlob: '09e7ff8c6bafffc42a37ed5bc493ad4a78afcfa1'" in manifest
+    assert "stoney_verify/assets/dank_cinema_brand_500.webp.b64" in manifest
+    assert "stoney_verify/movie_night_web.py" in manifest
+    assert "tests/test_movie_night_web.py" in manifest
+    assert "branch.commit.sha !== artReview.sha || prs.length !== 1" in workflow
+    assert "pr.head.sha !== artReview.mergedHead" in workflow
+    assert "!await ancestorOfMain(pr.merge_commit_sha)" in workflow
+    assert "comparison.data.ahead_by !== artReview.ahead" in workflow
+    assert "comparison.data.behind_by !== 0" in workflow
+    assert "comparison.data.files?.length !== artReview.files.length" in workflow
+    assert "oldArt.sha !== artReview.assetBlob" in workflow
+    assert "currentArt.sha !== artReview.assetBlob" in workflow
+    for needle in (
+        "_dank_cinema_brand_source_bytes", "_dank_cinema_brand_rgba",
+        "_dank_cinema_brand_variant", "test_dank_cinema_approved_brand_asset_is_real_webp",
+        "brand-lockup-art",
+    ):
+        assert needle in workflow
+    assert "inUseByOpenPR.has(name)" in workflow
+    assert "archive.object.sha !== candidate.sha" in workflow
+    assert "current.protected || current.commit.sha !== candidate.sha" in workflow
