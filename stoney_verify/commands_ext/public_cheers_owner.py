@@ -142,7 +142,10 @@ async def cheers_configure(
     )
 
 
-async def _deliver_recruitment_ping(guild: discord.Guild) -> str:
+async def _deliver_recruitment_ping(
+    guild: discord.Guild, *, source_channel_id: int | None = None,
+    source_message_id: int | None = None,
+) -> str:
     """Shared command/button sender: fresh settings and one per-guild throttle."""
     lock = _locks.get(guild.id)
     if lock is None:
@@ -152,6 +155,12 @@ async def _deliver_recruitment_ping(guild: discord.Guild) -> str:
         settings = _settings(await get_guild_config(guild.id, refresh=True))
         if not settings.get("enabled"):
             return "CHEERS is disabled or not configured. Ask the bot owner to use /dank cheers configure."
+        # Retired panels may remain in a previous channel after reconfiguration.
+        # They must never be allowed to ping the newly selected role.
+        if source_message_id is not None:
+            if (str(settings.get("channel_id", "")) != str(source_channel_id)
+                    or str(settings.get("panel_message_id", "")) != str(source_message_id)):
+                return "This CHEERS panel has been replaced. Use the current Call the Crew panel."
         try:
             role_id = int(settings.get("role_id", 0) or 0)
             channel_id = int(settings.get("channel_id", 0) or 0)
@@ -225,7 +234,11 @@ class CheersCallView(discord.ui.View):
             )
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            result = await _deliver_recruitment_ping(interaction.guild)
+            result = await _deliver_recruitment_ping(
+                interaction.guild,
+                source_channel_id=interaction.channel_id,
+                source_message_id=getattr(interaction.message, "id", None),
+            )
         except Exception as exc:
             print(f"⚠️ cheers_call_crew failure guild={interaction.guild.id} type={type(exc).__name__}")
             result = "CHEERS invitations are temporarily unavailable. Try later."
