@@ -290,3 +290,10 @@ def test_configure_remove_is_explicit_and_does_not_reenable_role(monkeypatch):
     monkeypatch.setattr(gp, "compare_and_swap_guild_config_key", cas)
     assert asyncio.run(gp.configure(guild, "Minecraft", 0, remove=True))
     assert cas.await_args.kwargs["value"]["games"] == {}
+
+
+def test_role_ping_game_mapping_uses_find_players_aliases():
+    assert gp.notification_game_key("MC") == gp.notification_game_key("Minecraft Bedrock")
+    assert gp.notification_game_key("minecraft java") == gp.notification_game_key("Minecraft")
+    assert gp.notification_game_key("GTA 5") == gp.notification_game_key("Grand Theft Auto V")
+    assert gp.notification_game_key("Destiny 2") != gp.notification_game_key("Destiny")
