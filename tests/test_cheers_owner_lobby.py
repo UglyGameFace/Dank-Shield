@@ -56,3 +56,68 @@ def test_member_recruitment_panel_persists_and_shares_owner_throttle():
     assert "get_guild_config(guild.id, refresh=True)" in MODULE
     assert "Next CHEERS role ping available" in MODULE
     assert "await interaction.response.defer(ephemeral=True, thinking=True)" in MODULE
+
+
+def test_member_recruitment_does_not_ping_when_durable_claim_fails(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from stoney_verify.commands_ext import public_cheers_owner as cheers
+
+    guild = SimpleNamespace(id=781929)
+    role = SimpleNamespace(mention="<@&88>")
+    channel = SimpleNamespace(mention="#party", send=AsyncMock())
+    config = {
+        cheers.KEY: {
+            "enabled": True,
+            "role_id": "88",
+            "channel_id": "99",
+            "cooldown_minutes": 15,
+            "last_sent_at": 0,
+        }
+    }
+    monkeypatch.setattr(cheers, "get_guild_config", AsyncMock(return_value=config))
+    monkeypatch.setattr(cheers, "_valid_destination", lambda *_: (role, channel, ""))
+    failed_save = AsyncMock(return_value=False)
+    monkeypatch.setattr(cheers, "_save", failed_save)
+    result = asyncio.run(cheers._deliver_recruitment_ping(guild))
+    assert "No role ping was sent" in result
+    failed_save.assert_awaited_once()
+    channel.send.assert_not_awaited()
+
+
+def test_member_recruitment_reserves_cooldown_before_sending(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from stoney_verify.commands_ext import public_cheers_owner as cheers
+
+    guild = SimpleNamespace(id=781930)
+    role = SimpleNamespace(mention="<@&88>")
+    events = []
+
+    async def send(**kwargs):
+        events.append("discord_send")
+        return SimpleNamespace(jump_url="https://discord.com/channels/1/2/3")
+
+    async def save(_guild_id, setting):
+        assert setting["last_sent_at"] > 0
+        events.append("durable_reservation")
+        return True
+
+    channel = SimpleNamespace(mention="#party", send=send)
+    config = {
+        cheers.KEY: {
+            "enabled": True,
+            "role_id": "88",
+            "channel_id": "99",
+            "cooldown_minutes": 15,
+            "last_sent_at": 0,
+        }
+    }
+    monkeypatch.setattr(cheers, "get_guild_config", AsyncMock(return_value=config))
+    monkeypatch.setattr(cheers, "_valid_destination", lambda *_: (role, channel, ""))
+    monkeypatch.setattr(cheers, "_save", save)
+    result = asyncio.run(cheers._deliver_recruitment_ping(guild))
+    assert "CHEERS invitation posted" in result
+    assert events == ["durable_reservation", "discord_send"]
