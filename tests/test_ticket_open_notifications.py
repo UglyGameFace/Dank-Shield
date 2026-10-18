@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CLEAN = (ROOT / "stoney_verify/commands_ext/public_ticket_panel_clean.py").read_text(encoding="utf-8")
 SERVICE = (ROOT / "stoney_verify/tickets_new/service.py").read_text(encoding="utf-8")
 CENTER = (ROOT / "stoney_verify/commands_ext/public_ticket_command_center.py").read_text(encoding="utf-8")
+UNVERIFIED = (ROOT / "stoney_verify/startup_guards/unverified_ticket_panel_flow.py").read_text(encoding="utf-8")
 
 
 def test_category_override_fallback_and_mute_are_isolated() -> None:
@@ -156,16 +157,19 @@ def test_disabled_role_ping_never_contacts_discord(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
-def test_both_real_creation_paths_alert_once_without_reopen_or_reuse() -> None:
+def test_all_creation_paths_alert_once_without_reopen_or_reuse() -> None:
     clean_create = CLEAN.split("async def _create_ticket(", 1)[1].split("\ndef _category_embed(", 1)[0]
     service_create = SERVICE.split("async def create_ticket_channel(", 1)[1].split("\nasync def sync_existing_ticket_channel(", 1)[0]
+    direct_create = UNVERIFIED.split("async def _create_direct_verification_ticket(", 1)[1].split("\nasync def _open_fresh_verification_ticket(", 1)[0]
     assert clean_create.count("await notify_new_ticket(") == 1
     assert service_create.count("await notify_new_ticket(") == 1
+    assert direct_create.count("await notify_new_ticket(") == 1
     assert clean_create.index("_create_synced_ticket_channel(") < clean_create.index("await notify_new_ticket(")
     assert service_create.index("repo_note_ticket_channel_opened(channel.id)") < service_create.index("await notify_new_ticket(")
     assert "return existing_channel" in service_create
     assert service_create.index("return existing_channel") < service_create.index("await notify_new_ticket(")
     assert "is_ghost=is_ghost" in service_create
+    assert direct_create.index("_insert_direct_ticket_row(") < direct_create.index("await notify_new_ticket(")
     assert "roles=False" in CLEAN and "roles=False" in SERVICE
 
 
