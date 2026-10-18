@@ -125,6 +125,22 @@ def test_provider_denial_and_bad_payload_do_not_fall_back_to_fake_results(
         asyncio.run(ext.list_the100_sessions())
 
 
+def test_provider_reuses_short_lived_results_without_refetching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(ext.THE100_TOKEN_ENV, "cache-test-token")
+    monkeypatch.setattr(ext.aiohttp, "ClientSession", _FakeSession)
+    monkeypatch.setattr(ext, "_the100_cached_until", 0.0)
+    _FakeSession.calls = []
+    _FakeSession.status = 200
+    _FakeSession.data = b'[{"id": 15, "game_name": "Halo Infinite"}]'
+    first = asyncio.run(ext.list_the100_sessions())
+    second = asyncio.run(ext.list_the100_sessions())
+    assert first == second
+    assert first is not second
+    assert len(_FakeSession.calls) == 1
+
+
 def test_hub_ui_contract_and_schema_opt_in_are_scoped() -> None:
     from pathlib import Path
     import ast
