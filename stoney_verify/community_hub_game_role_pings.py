@@ -48,7 +48,7 @@ def notification_game_key(value: str) -> str:
     # Unlike the historical ASCII-only fallback, different non-Latin game
     # names must not collapse to a shared "game" role or ping each other.
     unicode_name = unicodedata.normalize("NFKC", str(value)).casefold()
-    safe = re.sub(r"[^\\w]+", "-", unicode_name, flags=re.UNICODE).strip("-")[:80]
+    safe = re.sub(r"[^\w]+", "-", unicode_name, flags=re.UNICODE).strip("-")[:80]
     if not safe:
         raise ValueError("Game name has no searchable characters.")
     return safe
