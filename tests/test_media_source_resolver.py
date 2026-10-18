@@ -156,6 +156,24 @@ def test_provider_lookup_context_supports_season_zero_specials() -> None:
     assert context["season_episode"] == "S00E01"
 
 
+def test_feed_search_templates_expand_even_when_feed_type_is_explicit() -> None:
+    endpoint = "https://feeds.example.com/rss?search={query}"
+    assert resolver._search_url(
+        endpoint, "Blade Runner", static_feed=True,
+    ) == "https://feeds.example.com/rss?search=Blade+Runner"
+
+    xml_endpoint = "https://feeds.example.com/releases.xml?q={query}"
+    assert resolver._search_url(
+        xml_endpoint, "Alien", static_feed=True,
+    ) == "https://feeds.example.com/releases.xml?q=Alien"
+
+    episode_endpoint = "https://feeds.example.com/rss?show={imdb_id}&ep={season_episode}"
+    assert resolver._search_url(
+        episode_endpoint, "Example Show S02E04", static_feed=True,
+        lookup_context={"imdb_id": "tt1234567", "season_episode": "S02E04"},
+    ) == "https://feeds.example.com/rss?show=tt1234567&ep=S02E04"
+
+
 def test_explicit_static_feed_does_not_get_search_query_appended() -> None:
     endpoint = "https://myrss.org/eztv"
     assert resolver._search_url(
