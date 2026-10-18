@@ -73,7 +73,10 @@ def test_decode_errors_stop_retry_and_network_retries_have_budget() -> None:
     html=movie_night_web._watch_html("room-retry",42,"uid=42&exp=9999999999&sig=test")
     a=html.index("function scheduleStreamRetry() {")
     b=html.index("function safeSeek(target) {",a)
-    code=html[a:b]
+    # The extracted retry function invokes the recovery helper in the full
+    # player. Include that helper in the isolated Node harness as well.
+    helper_start=html.index("function offerPlaybackRecovery() {")
+    code=html[helper_start:b]
     result=subprocess.run(
         ["node","-e",_NODE,json.dumps(code)],
         capture_output=True,text=True,check=False,timeout=20,
