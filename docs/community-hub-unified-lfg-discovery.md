@@ -16,6 +16,14 @@ Local and partner modes re-read up to **100** recent authorized sessions from th
 
 The100.io mode filters the currently retrieved **25** source rows, then pages up to five links per embed. The100.io's backend is not queried for a game-specific dataset, so the UI describes its search as a filter of the current provider snapshot, not global provider search. No unverified platform/region/mic fields are displayed.
 
+## Manual, game-specific notification roles
+
+Staff configure up to **12 game-role mappings** in **Community Hub → Staff Dashboard → Game Role Pings**. Roles must first be created/enabled as **Notification** options in Community & Pings. Legacy, disabled, managed, /toke, CHEERS and Movie Night notification roles are not eligible. Configuration uses the canonical guild config CAS RPC; no new SQL migration is introduced.
+
+Group hosts, co-hosts, or authorized staff can press **Call Game Crew** from **Manage Session**. No ping occurs on searches, page views, session creation, external discoveries, or automatic notification dispatch. The selected session must still be a public and joinable *local guild* Community Hub group with a current Discord card. Role/channel permissions, current role opt-in option, and notification settings are re-evaluated at click time. Every allowed send reserves its durable guild state *before* calling Discord. Reservations are shared across processes: **one call per session**, per-game **15–240 minute** configurable cooldown (default 30), a **five-minute guild-wide gap**, and **four role calls/hour per guild**. An uncertain Discord send consumes the reservation rather than risking another ping. Explicit per-game opt-in DMs and /toke/CHEERS flows remain separate.
+
+No quiet-hours policy owner currently exists for Community Hub role mentions, so this release adds no automatic role delivery and does not claim quiet-hours enforcement. Later scope may add an explicit staff-configured do-not-disturb window with proven timezone handling.
+
 ## Acceptance, still required
 
 - GitHub full CI, Community Hub regression tests, app command payload checks and diff review at the exact feature-branch head.
