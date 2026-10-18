@@ -1468,8 +1468,10 @@ class TorrentMediaManager:
                 max(0, session.file_size - self.tail_probe_bytes),
                 session.file_size - 1,
                 readahead=False,
-                time_critical=True,
+                time_critical=False,
             )
+        # Keep tail metadata as background priority so it cannot starve
+        # the head pieces required for first-byte playback.
         # Inspect the file header as soon as its pieces arrive. This does not
         # wait for the rest of the movie to download.
         self.schedule_metadata_probe(session)
