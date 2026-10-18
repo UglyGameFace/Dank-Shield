@@ -1468,8 +1468,11 @@ class TorrentMediaManager:
                 max(0, session.file_size - self.tail_probe_bytes),
                 session.file_size - 1,
                 readahead=False,
-                time_critical=False,
+                time_critical=True,
             )
+        # Inspect the file header as soon as its pieces arrive. This does not
+        # wait for the rest of the movie to download.
+        self.schedule_metadata_probe(session)
 
     async def select_file(
         self,
