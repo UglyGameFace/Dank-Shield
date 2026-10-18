@@ -1,4 +1,16 @@
-# Active Task Lock — Community Hub external gaming discovery (2026-10-18)
+# Active Task Lock — Community Hub unified Find Players discovery (2026-10-18)
+
+**Current continuation:** Source-aware game searching for local sessions, approved HubLink partners, and opt-in read-only The100.io. Current main base `9daf428828a5aed190d8fef1addda0ea29e2b6b3`. One development branch: `feat/community-hub-unified-game-search-20261018`; active issue #638. No /toke, CHEERS, Cinema, website, schema or production deployment changes.
+
+**Current behavior being built:** Source navigation within Find Players (Local / Partner / External), short game-name search modal on Android and desktop, bounded server-side result reads, known game aliases, provider-only outbound links, and click-time partner consent rechecks. Native Quick Match stays local. No unverified provider features, automatic join, global pings or source mixing.
+
+**Release conditions:** exact-head full CI, Community Hub focused regressions, app-command payload audit and final diff review. Discord/Discloud canary and The100.io credential + migration status remain unverified independently. Keep any PR draft until checks pass.
+
+**Previously merged:** #640 read-only external The100.io discovery and #639 CHEERS owner controls are on main. The following first-slice history and suspended /toke checkpoint remain for traceability.
+
+---
+
+## Previous first slice: The100.io opt-in read-only discovery
 
 **Authorized FORCE SWITCH**: "Community Hub LFG Integration" with reason "Prioritize unified external gaming group discovery and matchmaking." Previous /toke overhaul is **suspended**, not completed; all original task records remain below. This is the only active coding task.
 
@@ -18,7 +30,7 @@
 - Existing Community Hub → External Groups / Find Players → External Groups member UI; read-only source-labeled paged links; staff toggle in existing settings; server and host gating.
 - Focused source and safety tests.
 
-**Current status**: branch modifications authored; validation and exact-head CI still pending. Not merged, not deployed, no source API token configured/verified, no schema migration applied to production. Do not label this live/complete.
+**First-slice historical status:** PR #640 merged into main; CI passed. Live provider authorization, migration execution, Discloud deployment and Discord mobile acceptance have not been verified. Do not label this live/complete.
 
 **Validation gates / next**: run focused pytest plus existing Community Hub, app command size, and full CI; inspect final diff for inadvertent changes; verify DB migration compatibility and missing-token/off-state fail-safe. Only after CI and explicit release gating test on Discord mobile/desktop plus Discloud host and provider authorization. No production deployment or disruptive migration authorized.
 

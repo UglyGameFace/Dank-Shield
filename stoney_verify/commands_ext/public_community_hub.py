@@ -16,6 +16,7 @@ import discord
 
 from .. import community_hub_service as hub
 from .. import community_external_lfg as external
+from ..community_lfg_discovery import filter_discovery_games
 from ..community_hub_runtime import ensure_community_hub_runtime
 from ..community_voice_caption_runtime import (
     ensure_community_voice_caption_manager,
@@ -1583,6 +1584,7 @@ def _find_players_embed(
     partner: bool,
     partner_activity: Optional[list[dict[str, Any]]] = None,
     availability_summary: Optional[dict[str, Any]] = None,
+    game_query: str = "",
 ) -> discord.Embed:
     title = "🌐 Find Players Across Partner Servers" if partner else "🔎 Find Players"
     description = (
@@ -1593,6 +1595,12 @@ def _find_players_embed(
             "automatic pairing only uses members who separately enabled Quick Match."
         )
     )
+    if game_query:
+        description += (
+            f"\n\n🎮 Game filter: **{discord.utils.escape_markdown(game_query)}** "
+            "(up to 100 recent authorized source results)."
+        )
+    description += "\n\nSources: local sessions, consented HubLink partners, or read-only The100.io listings."
     embed = discord.Embed(title=title, description=description, color=discord.Color.blurple())
     if partner and partner_activity:
         lines: list[str] = []
@@ -1644,12 +1652,16 @@ def _find_players_embed(
 
     if not sessions:
         embed.add_field(
-            name="No open groups right now",
+            name="No matching groups" if game_query else "No open groups right now",
             value=(
-                "Quick Match can form a new group when another member has explicitly enabled Quick Match "
-                "for the same game. You can also start a session yourself."
-                if not partner
-                else "No public groups are currently shared by approved partner servers."
+                "No recent groups matched that game. Clear the filter or try another game."
+                if game_query
+                else (
+                    "Quick Match can form a new group when another member has explicitly enabled Quick Match "
+                    "for the same game. You can also start a session yourself."
+                    if not partner
+                    else "No public groups are currently shared by approved partner servers."
+                )
             ),
             inline=False,
         )
@@ -1815,13 +1827,30 @@ class SessionSelect(discord.ui.Select):
         if sid == "none":
             return
         await _defer_update(interaction)
-        session = self.sessions.get(sid)
+        guild_id = int(interaction.guild_id or 0)
+        try:
+            if self.partner:
+                # Re-evaluate both HubLink sides' discovery consent on every
+                # click. A stale select must not expose a revoked partner card.
+                approved = await hub.list_partner_discovery_sessions(guild_id, limit=100)
+                session = next((row for row in approved if _safe_str(row.get("id")) == sid), None)
+            else:
+                # Local choices are snapshots too; require a current, scoped
+                # row before opening details or reading session members.
+                session = await hub.get_session(sid, guild_id=guild_id)
+                if _safe_str(session.get("state")) not in hub.ACTIVE_SESSION_STATES:
+                    session = None
+        except hub.CommunityHubError as exc:
+            return await _edit_private_original(
+                interaction, content=f"❌ {_error_text(exc)}",
+                embed=None, view=CommunityHubView(self.owner_id),
+            )
         if session is None:
-            try:
-                session = await hub.get_session(sid)
-            except hub.CommunityHubError as exc:
-                return await _edit_private_original(interaction, content=f"❌ {_error_text(exc)}", embed=None, view=CommunityHubView(self.owner_id))
-        if self.partner and int(_safe_int(session.get("guild_id"), 0)) != int(interaction.guild_id or 0):
+            return await _edit_private_original(
+                interaction, content="This group is no longer publicly available. Refresh Find Players.",
+                embed=None, view=CommunityHubView(self.owner_id),
+            )
+        if self.partner and int(_safe_int(session.get("guild_id"), 0)) != guild_id:
             embed = discord.Embed(
                 title=f"🌐 {_safe_str(session.get('game_name'), 'Partner Group')}",
                 description=(
@@ -1865,13 +1894,18 @@ class FindPlayersView(_OwnedView):
         partner: bool,
         availability_summary: Optional[dict[str, Any]] = None,
         selected_game: str = "",
+        game_query: str = "",
     ) -> None:
         super().__init__(owner_id)
         self.sessions = list(sessions)
         self.partner = bool(partner)
+        self.game_query = str(game_query or "")[:80]
         self.availability_summary = dict(availability_summary or {})
         self.selected_game = _safe_str(selected_game)
         self.add_item(SessionSelect(owner_id, sessions, partner=partner))
+        self.local_source.disabled = not self.partner
+        self.partner_source.disabled = self.partner
+        self.clear_game.disabled = not bool(self.game_query)
         if not self.partner:
             self.add_item(
                 AvailableGameSelect(
@@ -1885,43 +1919,7 @@ class FindPlayersView(_OwnedView):
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        try:
-            sessions = (
-                await hub.list_partner_discovery_sessions(int(interaction.guild_id or 0), limit=25)
-                if self.partner
-                else await hub.list_active_sessions(int(interaction.guild_id or 0), limit=25)
-            )
-            activity = (
-                await ensure_community_hub_runtime(interaction.client).partner_activity_snapshots(
-                    int(interaction.guild_id or 0),
-                    limit=10,
-                )
-                if self.partner
-                else []
-            )
-            availability = (
-                {}
-                if self.partner
-                else await hub.availability_summary(int(interaction.guild_id or 0), limit=1000)
-            )
-        except hub.CommunityHubError as exc:
-            return await _edit_private_original(interaction, content=f"❌ {_error_text(exc)}", embed=None, view=CommunityHubView(self.owner_id))
-        await _edit_private_original(
-            interaction,
-            content=None,
-            embed=_find_players_embed(
-                sessions,
-                partner=self.partner,
-                partner_activity=activity,
-                availability_summary=availability,
-            ),
-            view=FindPlayersView(
-                self.owner_id,
-                sessions,
-                partner=self.partner,
-                availability_summary=availability,
-            ),
-        )
+        await _open_find_players_source(interaction, self.owner_id, partner=self.partner, game_query=self.game_query)
 
     @discord.ui.button(label="Quick Match", emoji="⚡", style=discord.ButtonStyle.primary, custom_id="dank:hub:find:quick:v1", row=1)
     async def quick_match(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1950,11 +1948,36 @@ class FindPlayersView(_OwnedView):
             view=OpenToPlayView(self.owner_id, rows),
         )
 
+    @discord.ui.button(label="Local Groups", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:local:v1", row=3)
+    async def local_source(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_find_players_source(interaction, self.owner_id, partner=False, game_query=self.game_query)
+
+    @discord.ui.button(label="Partner Groups", emoji="🌐", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:partners:v1", row=3)
+    async def partner_source(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_find_players_source(interaction, self.owner_id, partner=True, game_query=self.game_query)
+
+    @discord.ui.button(label="Search Game", emoji="🔎", style=discord.ButtonStyle.primary, custom_id="dank:hub:find:game:v1", row=3)
+    async def search_game(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.send_modal(DiscoveryGameSearchModal(
+            self.owner_id, source="partner" if self.partner else "local", current_query=self.game_query
+        ))
+
+    @discord.ui.button(label="Clear Filter", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:clear:v1", row=3)
+    async def clear_game(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_find_players_source(interaction, self.owner_id, partner=self.partner)
+
     @discord.ui.button(label="External Groups", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:external:v1", row=3)
     async def external_groups(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        await _open_external_sessions(interaction, self.owner_id)
+        await _open_external_sessions(interaction, self.owner_id, game_query=self.game_query)
 
     @discord.ui.button(label="Community Hub", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:back:v1", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1966,8 +1989,82 @@ class FindPlayersView(_OwnedView):
         _ = button
         await _close_private_panel(interaction)
 
+async def _open_find_players_source(
+    interaction: discord.Interaction,
+    owner_id: int,
+    *,
+    partner: bool,
+    game_query: str = "",
+) -> None:
+    """Refresh only the selected authorized source; never merge private guild data."""
+    guild_id = int(interaction.guild_id or 0)
+    if guild_id <= 0:
+        return await _edit_private_original(
+            interaction, content="Community Hub requires a Discord server.",
+            embed=None, view=CommunityHubView(owner_id),
+        )
+    try:
+        sessions = (
+            await hub.list_partner_discovery_sessions(guild_id, limit=100)
+            if partner else await hub.list_active_sessions(guild_id, limit=100)
+        )
+        activity = (
+            await ensure_community_hub_runtime(interaction.client).partner_activity_snapshots(guild_id, limit=10)
+            if partner else []
+        )
+        availability = {} if partner else await hub.availability_summary(guild_id, limit=1000)
+    except hub.CommunityHubError as exc:
+        return await _edit_private_original(
+            interaction, content=f"❌ {_error_text(exc)}",
+            embed=None, view=CommunityHubView(owner_id),
+        )
+    filtered = filter_discovery_games(sessions, game_query, limit=25)
+    await _edit_private_original(
+        interaction, content=None,
+        embed=_find_players_embed(
+            filtered, partner=partner, partner_activity=activity,
+            availability_summary=availability, game_query=game_query,
+        ),
+        view=FindPlayersView(
+            owner_id, filtered, partner=partner,
+            availability_summary=availability, game_query=game_query,
+        ),
+    )
+
+
+class DiscoveryGameSearchModal(discord.ui.Modal, title="Find Groups by Game"):
+    game = discord.ui.TextInput(
+        label="Game name",
+        placeholder="Minecraft, GTA V, etc.",
+        min_length=1,
+        max_length=80,
+    )
+
+    def __init__(self, owner_id: int, *, source: str, current_query: str = "") -> None:
+        super().__init__()
+        self.owner_id = int(owner_id)
+        if source not in {"local", "partner", "external"}:
+            raise ValueError("Unknown Community Hub discovery source")
+        self.source = source
+        self.game.default = str(current_query or "")[:80] or None
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await _private(interaction, "Open your own Community Hub panel.")
+        await _defer_ephemeral(interaction)
+        query = str(self.game.value or "").strip()[:80]
+        if self.source == "external":
+            await _open_external_sessions(interaction, self.owner_id, game_query=query)
+        else:
+            await _open_find_players_source(
+                interaction, self.owner_id,
+                partner=self.source == "partner", game_query=query,
+            )
+
+
 def _external_groups_embed(
     sessions: list[dict[str, str]], *, page: int = 0, notice: str = "",
+    game_query: str = "",
 ) -> discord.Embed:
     embed = discord.Embed(
         title="🌍 External Gaming Groups • The100.io",
@@ -1978,12 +2075,23 @@ def _external_groups_embed(
         ),
         color=discord.Color.blurple(),
     )
+    if game_query:
+        embed.add_field(
+            name="🎮 Game filter",
+            value=discord.utils.escape_markdown(game_query)[:80]
+            + " • matches within the 25 most recent provider results",
+            inline=False,
+        )
     if notice:
         embed.add_field(name="Provider status", value=notice[:1024], inline=False)
     if not sessions:
         embed.add_field(
             name="No external sessions shown",
-            value="External discovery must be enabled by staff and configured on the bot host.",
+            value=(
+                "No matches for this game in the current provider snapshot. Try another game or clear the filter."
+                if game_query and not notice else
+                "External discovery must be enabled by staff and configured on the bot host."
+            ),
             inline=False,
         )
         return embed
@@ -2003,32 +2111,62 @@ def _external_groups_embed(
 
 
 class ExternalGroupsView(_OwnedView):
-    def __init__(self, owner_id: int, sessions: list[dict[str, str]], *, page: int = 0) -> None:
+    def __init__(
+        self, owner_id: int, sessions: list[dict[str, str]], *,
+        page: int = 0, game_query: str = "", notice: str = "",
+    ) -> None:
         super().__init__(owner_id)
         self.sessions = list(sessions[:25])
+        self.game_query = str(game_query or "")[:80]
+        self.notice = str(notice or "")[:300]
         self.page = max(0, min(page, max(0, (len(self.sessions) - 1) // 5)))
         self.previous.disabled = self.page == 0
         self.next_page.disabled = (self.page + 1) * 5 >= len(self.sessions)
+        self.clear_game.disabled = not bool(self.game_query)
 
     @discord.ui.button(label="Previous", emoji="◀️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:prev:v1", row=0)
     async def previous(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        page = max(0, self.page - 1)
-        await _edit_private_original(interaction, content=None, embed=_external_groups_embed(self.sessions, page=page), view=ExternalGroupsView(self.owner_id, self.sessions, page=page))
+        # Recheck guild consent and live provider health on every page action.
+        await _open_external_sessions(
+            interaction, self.owner_id,
+            game_query=self.game_query, page=max(0, self.page - 1),
+        )
 
     @discord.ui.button(label="Next", emoji="▶️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:next:v1", row=0)
     async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        page = min(max(0, (len(self.sessions) - 1) // 5), self.page + 1)
-        await _edit_private_original(interaction, content=None, embed=_external_groups_embed(self.sessions, page=page), view=ExternalGroupsView(self.owner_id, self.sessions, page=page))
+        await _open_external_sessions(
+            interaction, self.owner_id,
+            game_query=self.game_query, page=self.page + 1,
+        )
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:refresh:v1", row=0)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
+        await _open_external_sessions(interaction, self.owner_id, game_query=self.game_query)
+
+    @discord.ui.button(label="Search Game", emoji="🔎", style=discord.ButtonStyle.primary, custom_id="dank:hub:external:game:v1", row=1)
+    async def search_game(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.send_modal(
+            DiscoveryGameSearchModal(self.owner_id, source="external", current_query=self.game_query)
+        )
+
+    @discord.ui.button(label="Clear Filter", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:clear:v1", row=1)
+    async def clear_game(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
         await _open_external_sessions(interaction, self.owner_id)
+
+    @discord.ui.button(label="Find Players", emoji="🎮", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:find:v1", row=1)
+    async def local_groups(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_find_players_source(interaction, self.owner_id, partner=False, game_query=self.game_query)
 
     @discord.ui.button(label="Community Hub", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:back:v1", row=0)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2041,7 +2179,10 @@ class ExternalGroupsView(_OwnedView):
         await _close_private_panel(interaction)
 
 
-async def _open_external_sessions(interaction: discord.Interaction, owner_id: int) -> None:
+async def _open_external_sessions(
+    interaction: discord.Interaction, owner_id: int, *, game_query: str = "",
+    page: int = 0,
+) -> None:
     sessions: list[dict[str, str]] = []
     notice = ""
     try:
@@ -2056,12 +2197,14 @@ async def _open_external_sessions(interaction: discord.Interaction, owner_id: in
             sessions = await external.list_the100_sessions(limit=25)
             if not sessions:
                 notice = "The100.io returned no upcoming sessions."
+            else:
+                sessions = filter_discovery_games(sessions, game_query, external=True, limit=25)
     except (hub.CommunityHubError, external.ExternalDiscoveryError) as exc:
         notice = str(exc)[:300]
     await _edit_private_original(
         interaction, content=None,
-        embed=_external_groups_embed(sessions, notice=notice),
-        view=ExternalGroupsView(owner_id, sessions),
+        embed=_external_groups_embed(sessions, page=page, notice=notice, game_query=game_query),
+        view=ExternalGroupsView(owner_id, sessions, page=page, game_query=game_query, notice=notice),
     )
 
 
