@@ -871,3 +871,50 @@ def test_exact_cinema_approved_art_archived_branch_retirement() -> None:
     assert "inUseByOpenPR.has(name)" in workflow
     assert "archive.object.sha !== candidate.sha" in workflow
     assert "current.protected || current.commit.sha !== candidate.sha" in workflow
+
+
+def test_reviewed_picker_and_cinema_source_branches_require_exact_parity() -> None:
+    workflow = _workflow()
+    manifest = workflow.split(
+        "const reviewedPickerAndPlayback = new Map([", 1
+    )[1].split("]);", 1)[0]
+    assert manifest.count("kind:") == 2
+    assert "feature/shared-dank-picker" in manifest
+    assert "ee8a85bfe808899a1758b579eacee20f62e150b7" in manifest
+    assert "mergedHead: 'c21ab0460a2e9beb2cd565fb463b6cd6a08022e1'" in manifest
+    assert "unchangedDocBlob: '46423f00fc3258376b2f4438a321492bee4fc2b5'" in manifest
+    assert "ahead: 18" in manifest
+    assert "fix/cinema-standalone-site-playback" in manifest
+    assert "582a2f4a25055a76a037c890b95474ac54e80d58" in manifest
+    assert "mergedHead: 'f68d9cb973196d57b21b041a5daf5932ce2d8765'" in manifest
+    assert "ahead: 8" in manifest
+    for path in (
+        "docs/SHARED_PICKER_MIGRATION.md",
+        "docs/PICKER_ADOPTION_STATUS.md",
+        "stoney_verify/ui/picker.py",
+        "stoney_verify/ui/__init__.py",
+        "stoney_verify/assets/cinema_site.css",
+        "stoney_verify/assets/cinema_site.js",
+        "stoney_verify/cinema_site.py",
+        "tests/test_cinema_full_platform.py",
+    ):
+        assert f"'{path}'" in manifest
+    assert "branch.commit.sha !== review.sha || prs.length !== 1" in workflow
+    assert "pr.head.sha !== review.mergedHead" in workflow
+    assert "!await ancestorOfMain(pr.merge_commit_sha)" in workflow
+    assert "comparison.data.ahead_by !== review.ahead" in workflow
+    assert "comparison.data.behind_by !== 0" in workflow
+    assert "comparison.data.files?.length !== review.files.length" in workflow
+    assert "oldDoc.sha !== review.unchangedDocBlob" in workflow
+    assert "currentDoc.sha !== review.unchangedDocBlob" in workflow
+    assert "original.includes('class ' + token)" in workflow
+    assert "modern.includes('class ' + token)" in workflow
+    assert "exported.includes(token)" in workflow
+    assert "adoptionText.includes('Search-Safe')" in workflow
+    assert "oldTests.length < 60" in workflow
+    assert "oldTests.every(testName => currentTests.has(testName))" in workflow
+    assert "test_cinema_site_manual_source_choice_overrides_auto_rank" in workflow
+    assert "test_full_site_auto_quality_and_source_search_controls_are_real" in workflow
+    assert "inUseByOpenPR.has(name)" in workflow
+    assert "archive.object.sha !== candidate.sha" in workflow
+    assert "current.protected || current.commit.sha !== candidate.sha" in workflow
