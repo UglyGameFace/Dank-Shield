@@ -76,7 +76,7 @@ def main() -> int:
     required_surface_markers = (
         "install_compact_public_surface_v2",
         'for retired_root in ("ticket-intake", "ticket-category", "ticket-panel")',
-        'expected_children = sorted(["home", "setup", "upload"] + [name for name, _, _ in DANK_SHORTCUTS])',
+        'expected_children = sorted(["home", "setup", "upload", "cheers"] + [name for name, _, _ in DANK_SHORTCUTS])',
         'expected_roots = {"captions", "cinema", "dank", "mod", "movie", "role", "ticket", "tickets", "toke", "verify"}',
     )
     for marker in required_surface_markers:
