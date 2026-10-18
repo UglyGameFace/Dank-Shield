@@ -14,7 +14,11 @@ from collections.abc import Mapping
 import discord
 from discord import app_commands
 
-from stoney_verify.guild_config import get_guild_config, upsert_guild_config
+from stoney_verify.guild_config import (
+    compare_and_swap_guild_config_key,
+    get_guild_config,
+    upsert_guild_config,
+)
 from .public_setup_group import dank_group
 
 KEY = "cheers_lobby_v1"
@@ -167,19 +171,29 @@ async def _deliver_recruitment_ping(guild: discord.Guild) -> str:
             title="🔥 CHEERS: SPARK RELAY",
             description=(
                 "Players wanted! Join an online reaction game, catch the spark, "
-                "and help the crew beat the high score.\\n\\n"
-                f"**[PLAY ON THE 420 LOBBY]({LOBBY_URL})**\\n"
+                "and help the crew beat the high score.\n\n"
+                f"**[PLAY ON THE 420 LOBBY]({LOBBY_URL})**\n"
                 "Sign in with Discord, go online in the lobby, and join a round."
             ),
             color=discord.Color.from_rgb(180, 238, 132),
         )
         embed.set_footer(text="Website CHEERS • Not a /toke sesh notification")
-        # Reserve the shared cooldown before sending the non-idempotent
-        # Discord mention. If durable config cannot confirm the write,
-        # fail closed instead of pinging with no enforced cooldown.
-        # An uncertain Discord send outcome still consumes the reservation.
-        if not await _save(guild.id, {**settings, "last_sent_at": now}):
+        # Atomically claim the cooldown in shared guild storage before any
+        # non-idempotent Discord mention. Process-local locks alone cannot
+        # prevent a second bot worker/shard from pinging the same guild.
+        # If the RPC is missing or the claim loses a race, fail closed.
+        try:
+            reserved, _config = await compare_and_swap_guild_config_key(
+                guild.id, KEY,
+                expected=settings,
+                value={**settings, "last_sent_at": now},
+                source="cheers_role_ping_claim",
+            )
+        except Exception as exc:
+            print(f"⚠️ cheers cooldown claim guild={guild.id} error={type(exc).__name__}")
             return "CHEERS cooldown storage is unavailable. No role ping was sent."
+        if not reserved:
+            return "Another CHEERS invitation is already being handled. Try after the cooldown."
         try:
             sent = await channel.send(
                 content=role.mention,
@@ -225,7 +239,7 @@ def _panel_embed() -> discord.Embed:
         title="🔥 THE 420 LOBBY | CHEERS",
         description=(
             "Want other players for Spark Relay? Tap **CALL THE CREW** to invite "
-            "the server's configured CHEERS role. Shared cooldowns prevent spam.\\n\\n"
+            "the server's configured CHEERS role. Shared cooldowns prevent spam.\n\n"
             f"**[JOIN THE ONLINE GAME]({LOBBY_URL})**"
         ),
         color=discord.Color.from_rgb(185, 245, 151),
