@@ -610,3 +610,27 @@ def test_reviewed_non_runtime_heads_are_strictly_bounded() -> None:
     assert "current.protected || current.commit.sha !== candidate.sha" in text
     assert "archive.object.sha !== candidate.sha" in text
     assert "if (inUseByOpenPR.has(name)) continue;" in text
+
+
+def test_reviewed_document_only_historical_audit_exact_manifest() -> None:
+    text = _workflow()
+    manifest = text.split(
+        "const reviewedDocumentationOnly = new Map([", 1
+    )[1].split("]);", 1)[0]
+    assert manifest.count("['audit/") == 1
+    assert "audit/p0-int-global-patcher-closeout" in manifest
+    assert "12000de5475d99b7e62a319a3f14d3eb2536417b" in manifest
+    assert "ahead: 3" in manifest
+    for path in (
+        "ACTIVE_TASK.md",
+        "docs/PRODUCTION_READINESS_COMMAND_CENTER.md",
+        "docs/STARTUP_GUARD_RUNTIME_OWNERSHIP_AUDIT.md",
+    ):
+        assert f"'{path}'" in manifest
+    assert "branch.commit.sha !== documentary.sha || prs.length" in text
+    assert "comparison.data.ahead_by !== documentary.ahead" in text
+    assert "comparison.data.files?.length !== documentary.files.length" in text
+    assert "f.status === 'modified' && documentary.files.includes(f.filename)" in text
+    assert "inUseByOpenPR.has(name)" in text
+    assert "current.protected || current.commit.sha !== candidate.sha" in text
+    assert "archive.object.sha !== candidate.sha" in text
