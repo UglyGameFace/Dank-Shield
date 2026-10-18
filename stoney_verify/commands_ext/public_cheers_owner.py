@@ -15,6 +15,7 @@ import discord
 from discord import app_commands
 
 from stoney_verify.guild_config import get_guild_config, upsert_guild_config
+from .public_setup_group import dank_group
 
 KEY = "cheers_lobby_v1"
 LOBBY_URL = "https://the420lobby.com/#spark-relay"
@@ -118,7 +119,7 @@ async def cheers_configure(
         )
     return await interaction.followup.send(
         f"CHEERS announcement configured for {role.mention} in {channel.mention}. "
-        f"Cooldown: {cooldown_minutes} minutes. Use **/cheers ping** to invite people to {LOBBY_URL}. "
+        f"Cooldown: {cooldown_minutes} minutes. Use **/dank cheers ping** to invite people to {LOBBY_URL}. "
         "This is separate from /toke.",
         ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
@@ -138,7 +139,7 @@ async def cheers_ping(interaction: discord.Interaction) -> None:
     async with lock:
         settings = _settings(await get_guild_config(guild.id, refresh=True))
         if not settings.get("enabled"):
-            return await interaction.followup.send("CHEERS is disabled or not configured. Use /cheers configure.", ephemeral=True)
+            return await interaction.followup.send("CHEERS is disabled or not configured. Use /dank cheers configure.", ephemeral=True)
         role, channel, error = _valid_destination(
             guild, int(settings.get("role_id", 0) or 0), int(settings.get("channel_id", 0) or 0)
         )
@@ -189,7 +190,7 @@ async def cheers_status(interaction: discord.Interaction) -> None:
         return
     settings = _settings(await get_guild_config(interaction.guild.id, refresh=True))
     if not settings:
-        return await interaction.response.send_message("CHEERS is not configured. Use /cheers configure.", ephemeral=True)
+        return await interaction.response.send_message("CHEERS is not configured. Use /dank cheers configure.", ephemeral=True)
     return await interaction.response.send_message(
         f"Enabled: **{bool(settings.get('enabled'))}**\n"
         f"Role ID: `{settings.get('role_id', '')}`\nChannel ID: `{settings.get('channel_id', '')}`\n"
@@ -216,5 +217,5 @@ def register_public_cheers_owner_commands(_bot, tree) -> None:
     global _registered
     if _registered:
         return
-    tree.add_command(cheers_group)
+    dank_group.add_command(cheers_group)
     _registered = True
