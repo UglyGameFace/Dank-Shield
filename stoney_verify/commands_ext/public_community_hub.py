@@ -2128,15 +2128,20 @@ class ExternalGroupsView(_OwnedView):
     async def previous(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        page = max(0, self.page - 1)
-        await _edit_private_original(interaction, content=None, embed=_external_groups_embed(self.sessions, page=page, game_query=self.game_query, notice=self.notice), view=ExternalGroupsView(self.owner_id, self.sessions, page=page, game_query=self.game_query, notice=self.notice))
+        # Recheck guild consent and live provider health on every page action.
+        await _open_external_sessions(
+            interaction, self.owner_id,
+            game_query=self.game_query, page=max(0, self.page - 1),
+        )
 
     @discord.ui.button(label="Next", emoji="▶️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:next:v1", row=0)
     async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        page = min(max(0, (len(self.sessions) - 1) // 5), self.page + 1)
-        await _edit_private_original(interaction, content=None, embed=_external_groups_embed(self.sessions, page=page, game_query=self.game_query, notice=self.notice), view=ExternalGroupsView(self.owner_id, self.sessions, page=page, game_query=self.game_query, notice=self.notice))
+        await _open_external_sessions(
+            interaction, self.owner_id,
+            game_query=self.game_query, page=self.page + 1,
+        )
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:refresh:v1", row=0)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2176,6 +2181,7 @@ class ExternalGroupsView(_OwnedView):
 
 async def _open_external_sessions(
     interaction: discord.Interaction, owner_id: int, *, game_query: str = "",
+    page: int = 0,
 ) -> None:
     sessions: list[dict[str, str]] = []
     notice = ""
@@ -2197,8 +2203,8 @@ async def _open_external_sessions(
         notice = str(exc)[:300]
     await _edit_private_original(
         interaction, content=None,
-        embed=_external_groups_embed(sessions, notice=notice, game_query=game_query),
-        view=ExternalGroupsView(owner_id, sessions, game_query=game_query, notice=notice),
+        embed=_external_groups_embed(sessions, page=page, notice=notice, game_query=game_query),
+        view=ExternalGroupsView(owner_id, sessions, page=page, game_query=game_query, notice=notice),
     )
 
 
