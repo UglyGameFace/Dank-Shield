@@ -106,3 +106,15 @@ def test_in_player_recovery_is_host_only_and_does_not_swap_room() -> None:
     assert 'const form=document.getElementById("queueAddForm");' in source
     assert 'if(code===3 || code===4)' in source
     assert source.count("offerPlaybackRecovery();") >= 2
+
+
+def test_current_title_recovery_requires_host_and_existing_candidate() -> None:
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / "stoney_verify" / "movie_night_web.py").read_text()
+    assert "async def movie_night_recovery(" in source
+    assert 'if int(uid) != int(room.host_id):' in source
+    assert 'str(row.variant_id) != baseline[2]' in source
+    assert 'int(row.browser_video_risk_key()) < 2' in source
+    assert 'variant_id=str(selected.variant_id)' in source
+    assert 'app.router.add_post("/movie/{room_id}/recovery", movie_night_recovery)' in source
+    assert 'confirm("Change this release for everyone in the Cinema room?")' in source
