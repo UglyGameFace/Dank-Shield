@@ -864,9 +864,36 @@ jobs:
                     throw new Error(`Archived tag head mismatch for ${candidate.name}`);
                   }
                   deletionStage = 'branch deletion';
-                  await github.rest.git.deleteRef({
-                    owner, repo, ref: `heads/${candidate.name}`
-                  });
+                  // Retry only a recognized transient GitHub API failure.
+                  // Do not retry 403 permission/ruleset denial, 404 or 422:
+                  // those require investigation, not a destructive fallback.
+                  for (let attempt = 1; attempt <= 2; attempt++) {
+                    try {
+                      await github.rest.git.deleteRef({
+                        owner, repo, ref: `heads/${candidate.name}`
+                      });
+                      break;
+                    } catch (error) {
+                      const status = Number(error.status || 0);
+                      const isRateLimited = (status === 403 || status === 429) &&
+                        /secondary rate limit|rate limit exceeded|abuse detection/i.test(
+                          String(error.message || '')
+                        );
+                      const isTransient = status === 429 || status >= 500 || isRateLimited;
+                      if (!isTransient || attempt === 2) throw error;
+                      core.warning(
+                        `Transient GitHub delete failure for ${candidate.name} (${status}); retrying once`
+                      );
+                      await new Promise(resolve => setTimeout(resolve, 4000));
+                      // Preserve lease safety even on retry.
+                      const rechecked = (await github.rest.repos.getBranch({
+                        owner, repo, branch: candidate.name
+                      })).data;
+                      if (rechecked.protected || rechecked.commit.sha !== candidate.sha) {
+                        throw new Error('Branch head changed or became protected before retry');
+                      }
+                    }
+                  }
                   deleted.push(candidate.name);
                   // Pace writes instead of provoking GitHub secondary rate limits.
                   await new Promise(resolve => setTimeout(resolve, 650));
@@ -889,5 +916,10 @@ jobs:
               .addRaw(lines.join('\n'))
               .write();
             if (failed.length) {
-              core.setFailed(`Partial cleanup: ${failed.length} branch deletions failed; inspect summary`);
+              for (const failure of failed) {
+                // A failed deletion must be diagnosable from the ordinary job log.
+                // Do not require users to hunt for the separate run summary.
+                core.error(`Cleanup deletion failed: ${failure}`);
+              }
+              core.setFailed(`Partial cleanup: ${failed.length} branch deletions failed; inspect errors above`);
             }
