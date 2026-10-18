@@ -1827,13 +1827,30 @@ class SessionSelect(discord.ui.Select):
         if sid == "none":
             return
         await _defer_update(interaction)
-        session = self.sessions.get(sid)
+        guild_id = int(interaction.guild_id or 0)
+        try:
+            if self.partner:
+                # Re-evaluate both HubLink sides' discovery consent on every
+                # click. A stale select must not expose a revoked partner card.
+                approved = await hub.list_partner_discovery_sessions(guild_id, limit=100)
+                session = next((row for row in approved if _safe_str(row.get("id")) == sid), None)
+            else:
+                # Local choices are snapshots too; require a current, scoped
+                # row before opening details or reading session members.
+                session = await hub.get_session(sid, guild_id=guild_id)
+                if _safe_str(session.get("state")) not in hub.ACTIVE_SESSION_STATES:
+                    session = None
+        except hub.CommunityHubError as exc:
+            return await _edit_private_original(
+                interaction, content=f"❌ {_error_text(exc)}",
+                embed=None, view=CommunityHubView(self.owner_id),
+            )
         if session is None:
-            try:
-                session = await hub.get_session(sid)
-            except hub.CommunityHubError as exc:
-                return await _edit_private_original(interaction, content=f"❌ {_error_text(exc)}", embed=None, view=CommunityHubView(self.owner_id))
-        if self.partner and int(_safe_int(session.get("guild_id"), 0)) != int(interaction.guild_id or 0):
+            return await _edit_private_original(
+                interaction, content="This group is no longer publicly available. Refresh Find Players.",
+                embed=None, view=CommunityHubView(self.owner_id),
+            )
+        if self.partner and int(_safe_int(session.get("guild_id"), 0)) != guild_id:
             embed = discord.Embed(
                 title=f"🌐 {_safe_str(session.get('game_name'), 'Partner Group')}",
                 description=(
