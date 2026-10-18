@@ -50,8 +50,16 @@ assert.match(webm.label, /maybe/);
 const mkv = ctx.browserVideoCapability({
   video_verified: true, video_codec:"hevc", media_content_type:"video/x-matroska",
 });
-assert.equal(mkv.supported, false);
-assert.match(mkv.label, /choose another release/);
+assert.equal(mkv.supported, null);
+assert.match(mkv.label, /testing playback/);
+// Once a frame has actually decoded, a pessimistic MIME hint is overruled.
+ctx.startupTrace.events.first_frame = 1;
+const playingMkv = ctx.browserVideoCapability({
+  video_verified: true, video_codec:"hevc", media_content_type:"video/x-matroska",
+});
+assert.equal(playingMkv.supported, true);
+assert.match(playingMkv.label, /frame decoded successfully/);
+delete ctx.startupTrace.events.first_frame;
 const unknown = ctx.browserVideoCapability({
   video_verified:false, video_codec:"", media_content_type:"video/x-matroska",
 });
@@ -61,7 +69,7 @@ const missing = ctx.browserVideoCapability({
 });
 assert.equal(missing.supported, null);
 ctx.renderBrowserMediaSupport({video_verified:true, video_codec:"hevc", media_content_type:"video/x-matroska"});
-assert.match(element.textContent, /choose another release/);
+assert.match(element.textContent, /testing playback/);
 console.log("Cinema browser capability matrix verified");
 """
 
