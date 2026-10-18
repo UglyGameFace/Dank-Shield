@@ -71,9 +71,16 @@ def _model(value: Any) -> dict[str, Any]:
         str(item)[:64] for item in (called if isinstance(called, list) else [])[-160:]
         if isinstance(item, str) and 0 < len(item) <= 64
     ]
+    raw_game_claims = _as_dict(blob.get("last_game_calls"))
+    last_game_calls = {
+        key: _as_int(stamp)
+        for key, stamp in list(raw_game_claims.items())[-24:]
+        if isinstance(key, str) and len(key) <= 100 and _as_int(stamp) > 0
+    }
     return {
         "version": 1, "games": games, "recent_calls": history,
         "called_sessions": list(dict.fromkeys(session_ids)),
+        "last_game_calls": last_game_calls,
     }
 
 
@@ -143,7 +150,7 @@ async def configure(
                 "game_name": game,
                 "role_id": str(int(role_id)),
                 "cooldown_minutes": cooldown,
-                "last_at": _as_int(previous.get("last_at")),
+                "last_at": max(_as_int(previous.get("last_at")), state["last_game_calls"].get(key, 0)),
                 "last_session_id": str(previous.get("last_session_id") or "")[:64],
             }
         try:
@@ -221,7 +228,7 @@ async def call_game_crew(guild: discord.Guild, session_id: str) -> str:
         cooldown = max(MIN_COOLDOWN_MINUTES, min(MAX_COOLDOWN_MINUTES, _as_int(mapping.get("cooldown_minutes")) or DEFAULT_COOLDOWN_MINUTES)) * 60
         if mapping.get("last_session_id") == str(session_id):
             return "This group has already called its game crew. Start a new group for another call."
-        elapsed = now - _as_int(mapping.get("last_at"))
+        elapsed = now - max(_as_int(mapping.get("last_at")), state["last_game_calls"].get(key, 0))
         if elapsed < cooldown:
             return f"That game's crew can be called again in {(cooldown - elapsed + 59) // 60} minute(s)."
         history = [stamp for stamp in state["recent_calls"] if 0 <= now - stamp < 3600]
@@ -231,6 +238,14 @@ async def call_game_crew(guild: discord.Guild, session_id: str) -> str:
             return f"Another game role was called recently. Try in {(GUILD_COOLDOWN_SECONDS - now + history[-1] + 59) // 60} minute(s)."
 
         state["games"][key] = {**mapping, "last_at": now, "last_session_id": str(session_id)[:64]}
+        # Unlike an editable game mapping, claims cannot be refunded by staff
+        # removing/re-adding the role before its game cooldown expires.
+        state["last_game_calls"] = dict(
+            sorted(
+                {**state["last_game_calls"], key: now}.items(),
+                key=lambda entry: entry[1],
+            )[-24:]
+        )
         state["recent_calls"] = [*history, now][-24:]
         state["called_sessions"] = [*state["called_sessions"], str(session_id)[:64]][-160:]
         try:
