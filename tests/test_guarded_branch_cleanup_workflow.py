@@ -726,3 +726,47 @@ def test_cinema_wake_branch_retirement_requires_canonical_reconnect_parity() -> 
     assert "inUseByOpenPR.has(name)" in text
     assert "archive.object.sha !== candidate.sha" in text
     assert "current.protected || current.commit.sha !== candidate.sha" in text
+
+
+def test_followup_f_branch_retirements_keep_pr_history_and_runtime_parity_gates() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedFollowupFBranches = new Map([", 1)[1].split("]);", 1)[0]
+    assert manifest.count("['feature/") == 1
+    assert manifest.count("['fix/") == 1
+    assert "feature/spamguard-live-stats-channels" in manifest
+    assert "954af766eb91c39a019c68d53e555d3a230884a3" in manifest
+    assert "originalPr: 96, promotedPr: 97" in manifest
+    assert "promotedHead: 'a68f40500fabea77448012151fdf735f704289a9'" in manifest
+    assert "fix/dank-design-workflow-v2" in manifest
+    assert "7eb5b8ea55e8858b4ba756bde014bf760024fe84" in manifest
+    assert "originalPr: 66" in manifest
+    assert "originalHead: '1a7c439bb61a5bff2d3b7ffaa8c25d8b7392fb64'" in manifest
+    assert "ahead: 2" in manifest
+    for path in (
+        ".env.example", ".gitignore", "stoney_verify/app.py",
+        "stoney_verify/startup_guards/server_design_studio_command_guard.py",
+        "tests/test_server_design_preview_workflow_static.py",
+    ):
+        assert f"'{path}'" in manifest
+    assert "prs.length !== 1 || branch.commit.sha !== followup.sha" in text
+    assert "followup.kind === 'retired-design-and-login'" in text
+    assert "originalPr.head.sha !== reviewedPrHead" in text
+    assert "originalPr.merge_commit_sha !== followup.promotedHead" in text
+    assert "!await ancestorOfMain(promoted.merge_commit_sha)" in text
+    assert "!await ancestorOfMain(originalPr.merge_commit_sha)" in text
+    assert "comparison.data.behind_by !== 0" in text
+    assert "comparison.data.ahead_by !== followup.ahead" in text
+    assert "comparison.data.files?.length !== followup.files.length" in text
+    assert "if (retiredPatchExists || obsoleteTestExists) continue;" in text
+    assert "if (!parity) continue;" in text
+    for marker in (
+        "security_stats.refresh_security_stats_display",
+        "async def ensure_security_stats_display",
+        "async def refresh_security_stats_display",
+        "_dank_sleep_if_login_backoff_active()",
+        "test_retired_runtime_patch_design_modules_are_physically_absent",
+    ):
+        assert marker in text
+    assert "inUseByOpenPR.has(name)" in text
+    assert "archive.object.sha !== candidate.sha" in text
+    assert "current.protected || current.commit.sha !== candidate.sha" in text
