@@ -1585,6 +1585,8 @@ def _find_players_embed(
     partner_activity: Optional[list[dict[str, Any]]] = None,
     availability_summary: Optional[dict[str, Any]] = None,
     game_query: str = "",
+    play_style: str = "",
+    mic_preference: str = "",
 ) -> discord.Embed:
     title = "🌐 Find Players Across Partner Servers" if partner else "🔎 Find Players"
     description = (
@@ -1600,6 +1602,13 @@ def _find_players_embed(
             f"\n\n🎮 Game filter: **{discord.utils.escape_markdown(game_query)}** "
             "(up to 100 recent authorized source results)."
         )
+    if play_style or mic_preference:
+        preferences = []
+        if play_style:
+            preferences.append(f"Style: {play_style.replace('_', ' ').title()}")
+        if mic_preference:
+            preferences.append(f"Mic: {mic_preference.replace('_', ' ').title()}")
+        description += "\n🎚️ " + " • ".join(preferences) + " (exact session preferences)"
     description += "\n\nSources: local sessions, consented HubLink partners, or read-only The100.io listings."
     embed = discord.Embed(title=title, description=description, color=discord.Color.blurple())
     if partner and partner_activity:
@@ -1652,10 +1661,10 @@ def _find_players_embed(
 
     if not sessions:
         embed.add_field(
-            name="No matching groups" if game_query else "No open groups right now",
+            name="No matching groups" if (game_query or play_style or mic_preference) else "No open groups right now",
             value=(
-                "No recent groups matched that game. Clear the filter or try another game."
-                if game_query
+                "No recent groups matched those filters. Clear filters or adjust your search."
+                if (game_query or play_style or mic_preference)
                 else (
                     "Quick Match can form a new group when another member has explicitly enabled Quick Match "
                     "for the same game. You can also start a session yourself."
@@ -1672,7 +1681,10 @@ def _find_players_embed(
         state = _STATE_LABELS.get(_safe_str(session.get("state")), _safe_str(session.get("state"), "Open").title())
         cap = _safe_int(session.get("capacity"), 6)
         source = f" • Server {session.get('guild_id')}" if partner else ""
-        embed.add_field(name=game[:256], value=f"{state} • up to {cap} players{source}", inline=False)
+        style = _safe_str(session.get("play_style")).replace("_", " ").title()
+        mic = _safe_str(session.get("mic_preference")).replace("_", " ").title()
+        prefs = (f" • {style}" if style else "") + (f" • Mic: {mic}" if mic else "")
+        embed.add_field(name=game[:256], value=f"{state} • up to {cap} players{source}{prefs}", inline=False)
     if len(sessions) > 8:
         embed.set_footer(text=f"{len(sessions)} groups available • use the selector for the full list")
     return embed
@@ -1882,6 +1894,69 @@ class SessionSelect(discord.ui.Select):
             content=None,
             embed=build_session_embed(session, members),
             view=SessionDetailView(self.owner_id, session_id=sid, return_kind="find"),
+        )
+
+
+class SessionPreferenceSelect(discord.ui.Select):
+    """One native mobile select for both durable session preference fields."""
+
+    def __init__(
+        self, owner_id: int, *, partner: bool, game_query: str = "",
+        play_style: str = "", mic_preference: str = "",
+    ) -> None:
+        self.owner_id = int(owner_id)
+        self.partner = bool(partner)
+        self.game_query = str(game_query or "")[:80]
+        self.play_style = play_style
+        self.mic_preference = mic_preference
+        items = [
+            ("Reset session preferences", "clear", "🧹"),
+            ("Any play style", "style:off", "🎮"),
+            ("Casual", "style:casual", "🌿"),
+            ("Competitive", "style:competitive", "🏆"),
+            ("Beginner", "style:beginner", "🌱"),
+            ("No style preference", "style:any", "🎲"),
+            ("Any microphone policy", "mic:off", "🎤"),
+            ("Mic optional", "mic:optional", "🔈"),
+            ("Mic preferred", "mic:preferred", "🔊"),
+            ("Mic required", "mic:required", "🎙️"),
+            ("No microphone", "mic:no_mic", "🔇"),
+        ]
+        options = [
+            discord.SelectOption(label=label, value=value, emoji=emoji)
+            for label, value, emoji in items
+        ]
+        description = (
+            " • ".join(filter(None, (
+                f"Style: {play_style.replace('_', ' ')}" if play_style else "",
+                f"Mic: {mic_preference.replace('_', ' ')}" if mic_preference else "",
+            ))) or "All styles and mic policies"
+        )
+        super().__init__(
+            placeholder=f"🎚️ {description}"[:150],
+            options=options, min_values=1, max_values=1,
+            custom_id="dank:hub:find:preferences:v1",
+            row=4,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        choice = self.values[0]
+        style = self.play_style
+        mic = self.mic_preference
+        if choice == "clear":
+            style, mic = "", ""
+        elif choice.startswith("style:"):
+            value = choice.split(":", 1)[1]
+            style = "" if value == "off" else value
+        elif choice.startswith("mic:"):
+            value = choice.split(":", 1)[1]
+            mic = "" if value == "off" else value
+        else:
+            return await _private(interaction, "Unknown group preference filter.")
+        await _defer_update(interaction)
+        await _open_find_players_source(
+            interaction, self.owner_id, partner=self.partner,
+            game_query=self.game_query, play_style=style, mic_preference=mic,
         )
 
 
