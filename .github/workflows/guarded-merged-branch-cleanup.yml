@@ -144,6 +144,21 @@ jobs:
             // Non-runtime historical heads audited independently on 2026-10-18.
             // Preserve all unique commits under exact-SHA archive tags before
             // retiring the active refs; do not generalize by prefix or age.
+            // 2026-10-18: historical no-PR audit documentation. Unique work
+            // consists solely of superseded task/audit text, not runtime code.
+            // Preserve exact historical head in an archive tag on retirement.
+            const reviewedDocumentationOnly = new Map([
+              ['audit/p0-int-global-patcher-closeout', {
+                sha: '12000de5475d99b7e62a319a3f14d3eb2536417b',
+                ahead: 3,
+                files: [
+                  'ACTIVE_TASK.md',
+                  'docs/PRODUCTION_READINESS_COMMAND_CENTER.md',
+                  'docs/STARTUP_GUARD_RUNTIME_OWNERSHIP_AUDIT.md',
+                ],
+              }],
+            ]);
+
             const reviewedNonRuntime = new Map([
               ['chore/close-antinuke-authorized-bot-trust', {
                 sha: '15b8b1ac26761339e80cd6f42e83ca44d12a63a5',
@@ -479,6 +494,21 @@ jobs:
                       currentText.includes('DS-AUD-PROTECTION-PICKERS')) continue;
                   candidates.push({ name, sha: branch.commit.sha,
                     reason: 'reviewed stale planning-only task lock superseded by current main task' });
+                  continue;
+                }
+                const documentary = reviewedDocumentationOnly.get(name);
+                if (documentary) {
+                  if (branch.commit.sha !== documentary.sha || prs.length) continue;
+                  const comparison = await github.rest.repos.compareCommits({
+                    owner, repo, base: defaultBranch, head: branch.commit.sha,
+                  });
+                  if (comparison.data.ahead_by !== documentary.ahead ||
+                      comparison.data.files?.length !== documentary.files.length ||
+                      !comparison.data.files.every(f =>
+                        f.status === 'modified' && documentary.files.includes(f.filename)
+                      )) continue;
+                  candidates.push({ name, sha: branch.commit.sha,
+                    reason: 'reviewed no-PR documentation-only historical audit' });
                   continue;
                 }
                 const nonRuntime = reviewedNonRuntime.get(name);
