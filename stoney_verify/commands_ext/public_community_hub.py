@@ -1970,17 +1970,25 @@ class FindPlayersView(_OwnedView):
         availability_summary: Optional[dict[str, Any]] = None,
         selected_game: str = "",
         game_query: str = "",
+        play_style: str = "",
+        mic_preference: str = "",
     ) -> None:
         super().__init__(owner_id)
         self.sessions = list(sessions)
         self.partner = bool(partner)
         self.game_query = str(game_query or "")[:80]
+        self.play_style = play_style
+        self.mic_preference = mic_preference
         self.availability_summary = dict(availability_summary or {})
         self.selected_game = _safe_str(selected_game)
         self.add_item(SessionSelect(owner_id, sessions, partner=partner))
         self.local_source.disabled = not self.partner
         self.partner_source.disabled = self.partner
-        self.clear_game.disabled = not bool(self.game_query)
+        self.clear_game.disabled = not bool(self.game_query or self.play_style or self.mic_preference)
+        self.add_item(SessionPreferenceSelect(
+            owner_id, partner=self.partner, game_query=self.game_query,
+            play_style=self.play_style, mic_preference=self.mic_preference,
+        ))
         if not self.partner:
             self.add_item(
                 AvailableGameSelect(
@@ -1994,7 +2002,11 @@ class FindPlayersView(_OwnedView):
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        await _open_find_players_source(interaction, self.owner_id, partner=self.partner, game_query=self.game_query)
+        await _open_find_players_source(
+            interaction, self.owner_id, partner=self.partner,
+            game_query=self.game_query, play_style=self.play_style,
+            mic_preference=self.mic_preference,
+        )
 
     @discord.ui.button(label="Quick Match", emoji="⚡", style=discord.ButtonStyle.primary, custom_id="dank:hub:find:quick:v1", row=1)
     async def quick_match(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2027,22 +2039,30 @@ class FindPlayersView(_OwnedView):
     async def local_source(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        await _open_find_players_source(interaction, self.owner_id, partner=False, game_query=self.game_query)
+        await _open_find_players_source(
+            interaction, self.owner_id, partner=False, game_query=self.game_query,
+            play_style=self.play_style, mic_preference=self.mic_preference,
+        )
 
     @discord.ui.button(label="Partner Groups", emoji="🌐", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:partners:v1", row=3)
     async def partner_source(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        await _open_find_players_source(interaction, self.owner_id, partner=True, game_query=self.game_query)
+        await _open_find_players_source(
+            interaction, self.owner_id, partner=True, game_query=self.game_query,
+            play_style=self.play_style, mic_preference=self.mic_preference,
+        )
 
     @discord.ui.button(label="Search Game", emoji="🔎", style=discord.ButtonStyle.primary, custom_id="dank:hub:find:game:v1", row=3)
     async def search_game(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.send_modal(DiscoveryGameSearchModal(
-            self.owner_id, source="partner" if self.partner else "local", current_query=self.game_query
+            self.owner_id, source="partner" if self.partner else "local",
+            current_query=self.game_query, play_style=self.play_style,
+            mic_preference=self.mic_preference,
         ))
 
-    @discord.ui.button(label="Clear Filter", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:clear:v1", row=3)
+    @discord.ui.button(label="Clear Filters", emoji="🧹", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:clear:v1", row=3)
     async def clear_game(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
