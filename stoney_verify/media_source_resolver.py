@@ -6,6 +6,7 @@ import asyncio
 import base64
 import ipaddress
 import json
+import logging
 import re
 from decimal import Decimal, InvalidOperation
 import socket
@@ -24,6 +25,8 @@ from stoney_verify.media_source_registry import (
     enabled_structured_sources,
     load_media_source_registry,
 )
+
+_LOG = logging.getLogger(__name__)
 
 _MAX_SOURCE_RESULTS = 25
 _MAX_TOTAL_RESULTS = 100
@@ -1442,7 +1445,40 @@ async def search_custom_media_sources(
     variants: list[ResolvedMediaVariant] = []
     errors: list[str] = []
     seen: set[tuple[str, str]] = set()
+    provider_counts = {"returned": 0, "empty": 0, "skipped": 0, "failed": 0}
     for source, (rows, error) in zip(sources, results):
+        status = ("skipped" if error and ": skipped (" in error else
+                  "failed" if error else "returned" if rows else "empty")
+        provider_counts[status] += 1
+        # Only bounded classifications enter logs. Never emit raw provider
+        # errors: HTTP exception messages can contain signed URLs or secrets.
+        reason = "none"
+        if error:
+            detail = error.split(": ", 1)[-1].lower()
+            if status == "skipped":
+                reason = "missing_identifier"
+            elif "http 401" in detail or "http 403" in detail:
+                reason = "access_denied"
+            elif "http 429" in detail:
+                reason = "rate_limited"
+            elif "http 404" in detail:
+                reason = "not_found"
+            elif "http 5" in detail:
+                reason = "upstream_server_error"
+            elif "timeout" in detail:
+                reason = "timeout"
+            elif "json" in detail or "xml" in detail or "rss" in detail or "structured" in detail:
+                reason = "invalid_format"
+            elif "redirect" in detail:
+                reason = "redirect"
+            elif "dns" in detail or "connect" in detail or "certificate" in detail:
+                reason = "network"
+            else:
+                reason = "other"
+        _LOG.info(
+            "cinema_provider_search guild=%s provider=%s status=%s reason=%s results=%s",
+            int(guild_id), source.source_id, status, reason, len(rows),
+        )
         if error:
             errors.append(error)
         elif not rows:
@@ -1458,6 +1494,11 @@ async def search_custom_media_sources(
         if len(variants) >= _MAX_TOTAL_RESULTS:
             break
 
+    _LOG.info(
+        "cinema_provider_search_summary guild=%s providers=%s returned=%s empty=%s skipped=%s failed=%s releases=%s",
+        int(guild_id), len(sources), provider_counts["returned"], provider_counts["empty"],
+        provider_counts["skipped"], provider_counts["failed"], len(variants),
+    )
     variants.sort(
         key=lambda item: (
             -int(item.seeds),
