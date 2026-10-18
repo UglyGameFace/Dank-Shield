@@ -770,3 +770,42 @@ def test_followup_f_branch_retirements_keep_pr_history_and_runtime_parity_gates(
     assert "inUseByOpenPR.has(name)" in text
     assert "archive.object.sha !== candidate.sha" in text
     assert "current.protected || current.commit.sha !== candidate.sha" in text
+
+
+def test_post_f_historical_refs_are_exactly_gated_and_production_migration_is_retained() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedPostFBranches = new Map([", 1)[1].split("]);", 1)[0]
+    assert manifest.count("kind:") == 2
+    assert "chore/automate-supabase-migrations" in manifest
+    assert "7ee642eadde8c572ba933c36414c5077fd798a94" in manifest
+    assert "kind: 'superseded-migration-workflow'" in manifest
+    assert "pr: 149" in manifest
+    assert ".github/workflows/deploy-supabase-migrations.yml" in manifest
+    assert "fix/toke-channel-picker-pagination" in manifest
+    assert "e7ca41a26e43a0b91ea63324d8e0566656b1d79e" in manifest
+    assert "kind: 'toke-role-setup-followup'" in manifest
+    assert "pr: 382" in manifest
+    assert "mergedHead: '0540f09710f50cca9559c2f044523421f94eee31'" in manifest
+    assert "ahead: 3" in manifest
+    for path in (
+        "ACTIVE_TASK.md",
+        "stoney_verify/commands_ext/public_community_pings.py",
+        "tests/test_profile_community_toke.py",
+    ):
+        assert f"'{path}'" in manifest
+    assert "branch.commit.sha !== postF.sha || prs.length !== 1" in text
+    assert "!await ancestorOfMain(pr.merge_commit_sha)" in text
+    assert "historical.files?.length !== 1" in text
+    assert "historical.files[0].status !== 'added'" in text
+    assert "Verify immutable current-main target" in text
+    assert "Verify manual target passed canonical CI" in text
+    assert "pr.head.sha !== postF.mergedHead" in text
+    assert "comparison.data.ahead_by !== postF.ahead" in text
+    assert "comparison.data.behind_by !== 0" in text
+    assert "postF.files.includes(f.filename)" in text
+    assert "_assign_toke_capability(" in text
+    assert "Toke Starter" in text
+    assert "Toke Notify" in text
+    assert "inUseByOpenPR.has(name)" in text
+    assert "archive.object.sha !== candidate.sha" in text
+    assert "current.protected || current.commit.sha !== candidate.sha" in text
