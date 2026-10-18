@@ -68,10 +68,21 @@ def normalize_the100_sessions(payload: Any, *, limit: int = _MAX_RESULTS) -> lis
         sid = str(row.get("id") or "").strip()
         if not _VALID_ID.fullmatch(sid) or sid in seen:
             continue
+        group = row.get("group") if isinstance(row.get("group"), dict) else {}
+        if (
+            row.get("private") is True
+            or row.get("is_private") is True
+            or row.get("is_public") is False
+            or group.get("private") is True
+        ):
+            continue
         game_obj = row.get("game") if isinstance(row.get("game"), dict) else {}
         activity = row.get("game_activity") if isinstance(row.get("game_activity"), dict) else {}
         game = _safe_label(row.get("game_name") or game_obj.get("name") or row.get("game_title")) or "Gaming Session"
-        title = _safe_label(row.get("title") or activity.get("name") or row.get("name")) or game
+        # User-written session descriptions may reveal details from private groups.
+        # Display structured game/activity labels only; the original site
+        # remains the authority for full session details and eligibility.
+        title = _safe_label(activity.get("name")) or game
         start = _safe_label(row.get("starts_at") or row.get("start_time") or "", length=48)
         seen.add(sid)
         result.append({
