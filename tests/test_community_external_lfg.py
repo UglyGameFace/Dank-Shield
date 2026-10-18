@@ -22,6 +22,20 @@ def test_the100_normalizes_deduplicates_and_never_trusts_external_urls() -> None
     assert result[1]["title"] == "Survival"
 
 
+def test_provider_excludes_explicitly_private_sessions_and_descriptions() -> None:
+    rows = [
+        {"id": 14, "game_name": "Secret", "private": True},
+        {"id": 15, "game_name": "Hidden", "group": {"private": True}},
+        {"id": 16, "game_name": "Not public", "is_public": False},
+        {"id": 17, "game_name": "Halo Infinite", "name": "private notes",
+         "game_activity": {"name": "Custom Match"}},
+    ]
+    result = ext.normalize_the100_sessions(rows)
+    assert len(result) == 1
+    assert result[0]["title"] == "Custom Match"
+    assert "private notes" not in repr(result)
+
+
 def test_the100_rejects_unfamiliar_response_shapes() -> None:
     for payload in ({}, {"gaming_sessions": {}}, None, "bad"):
         with pytest.raises(ext.ExternalDiscoveryError):
