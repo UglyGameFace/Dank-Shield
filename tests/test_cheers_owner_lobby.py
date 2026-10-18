@@ -78,11 +78,11 @@ def test_member_recruitment_does_not_ping_when_durable_claim_fails(monkeypatch):
     }
     monkeypatch.setattr(cheers, "get_guild_config", AsyncMock(return_value=config))
     monkeypatch.setattr(cheers, "_valid_destination", lambda *_: (role, channel, ""))
-    failed_save = AsyncMock(return_value=False)
-    monkeypatch.setattr(cheers, "_save", failed_save)
+    failed_claim = AsyncMock(side_effect=RuntimeError("guild_config CAS unavailable"))
+    monkeypatch.setattr(cheers, "compare_and_swap_guild_config_key", failed_claim)
     result = asyncio.run(cheers._deliver_recruitment_ping(guild))
     assert "No role ping was sent" in result
-    failed_save.assert_awaited_once()
+    failed_claim.assert_awaited_once()
     channel.send.assert_not_awaited()
 
 
@@ -100,10 +100,13 @@ def test_member_recruitment_reserves_cooldown_before_sending(monkeypatch):
         events.append("discord_send")
         return SimpleNamespace(jump_url="https://discord.com/channels/1/2/3")
 
-    async def save(_guild_id, setting):
-        assert setting["last_sent_at"] > 0
-        events.append("durable_reservation")
-        return True
+    async def reserve(_guild_id, key, *, expected, value, source):
+        assert key == cheers.KEY
+        assert source == "cheers_role_ping_claim"
+        assert expected["last_sent_at"] == 0
+        assert value["last_sent_at"] > 0
+        events.append("atomic_reservation")
+        return True, {}
 
     channel = SimpleNamespace(mention="#party", send=send)
     config = {
@@ -117,7 +120,30 @@ def test_member_recruitment_reserves_cooldown_before_sending(monkeypatch):
     }
     monkeypatch.setattr(cheers, "get_guild_config", AsyncMock(return_value=config))
     monkeypatch.setattr(cheers, "_valid_destination", lambda *_: (role, channel, ""))
-    monkeypatch.setattr(cheers, "_save", save)
+    monkeypatch.setattr(cheers, "compare_and_swap_guild_config_key", reserve)
     result = asyncio.run(cheers._deliver_recruitment_ping(guild))
     assert "CHEERS invitation posted" in result
-    assert events == ["durable_reservation", "discord_send"]
+    assert events == ["atomic_reservation", "discord_send"]
+
+
+def test_member_recruitment_lost_cas_race_never_posts(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from stoney_verify.commands_ext import public_cheers_owner as cheers
+
+    guild = SimpleNamespace(id=781931)
+    role = SimpleNamespace(mention="<@&88>")
+    channel = SimpleNamespace(mention="#party", send=AsyncMock())
+    config = {cheers.KEY: {
+        "enabled": True, "role_id": "88", "channel_id": "99",
+        "cooldown_minutes": 15, "last_sent_at": 0,
+    }}
+    monkeypatch.setattr(cheers, "get_guild_config", AsyncMock(return_value=config))
+    monkeypatch.setattr(cheers, "_valid_destination", lambda *_: (role, channel, ""))
+    mock_claim = AsyncMock(return_value=(False, config))
+    monkeypatch.setattr(cheers, "compare_and_swap_guild_config_key", mock_claim)
+    result = asyncio.run(cheers._deliver_recruitment_ping(guild))
+    assert "already being handled" in result
+    mock_claim.assert_awaited_once()
+    channel.send.assert_not_awaited()
