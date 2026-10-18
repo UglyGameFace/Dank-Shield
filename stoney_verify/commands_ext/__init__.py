@@ -247,6 +247,7 @@ _ALLOWED_DANK_CHILDREN = {
     "modlog",
     "embed",
     "design",
+    "cheers",
 }
 
 _COMPACT_SUPPRESS_PREFIXES: Tuple[str, ...] = (
