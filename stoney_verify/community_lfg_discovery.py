@@ -62,7 +62,7 @@ def filter_discovery_games(
             continue
         # A game family query may match a specific title; an unrelated
         # title containing letters inside a word must not match.
-        if candidate == key or candidate.startswith(key + " ") or (" " + key + " ") in (" " + candidate + " "):
+        if candidate == key or candidate.startswith(key) or f" {key}" in f" {candidate}":
             matches.append(dict(row))
         if len(matches) >= safe_limit:
             break
