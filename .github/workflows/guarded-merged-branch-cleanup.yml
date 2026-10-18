@@ -662,9 +662,11 @@ jobs:
                 if (followup) {
                   if (prs.length !== 1 || branch.commit.sha !== followup.sha) continue;
                   const originalPr = prs[0];
+                  const reviewedPrHead = followup.kind === 'retired-design-and-login'
+                    ? followup.originalHead : branch.commit.sha;
                   if (originalPr.number !== followup.originalPr ||
                       !originalPr.merged_at || originalPr.state !== 'closed' ||
-                      originalPr.head.sha !== branch.commit.sha) continue;
+                      originalPr.head.sha !== reviewedPrHead) continue;
                   if (followup.kind === 'promoted-stats') {
                     const promoted = closedPRs.find(pr =>
                       pr.number === followup.promotedPr && pr.merged_at &&
