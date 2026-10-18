@@ -57,6 +57,9 @@ def test_operational_join_log_restores_useful_member_detail() -> None:
     fields = _field_map(embed)
 
     assert embed.title == "🌿 Member Joined"
+    assert embed.url == "https://discord.com/users/123"
+    assert "<@123>" not in (embed.description or "")
+    assert "member#0001 joined" in (embed.description or "")
     assert "Account Created" in fields
     assert "400" in fields["Account Created"]
     assert "Profile" in fields
@@ -71,6 +74,9 @@ def test_operational_leave_log_includes_membership_history() -> None:
     fields = _field_map(embed)
 
     assert embed.title == "🍂 Member Left"
+    assert embed.url == "https://discord.com/users/123"
+    assert "<@123>" not in (embed.description or "")
+    assert "member#0001 left" in (embed.description or "")
     assert "Account Created" in fields
     assert "Server Membership" in fields
     assert "40" in fields["Server Membership"]

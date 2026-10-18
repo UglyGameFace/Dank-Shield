@@ -257,10 +257,12 @@ def _member_lifecycle_embed(
     joined: bool,
 ) -> discord.Embed:
     action = "joined" if joined else "left"
+    profile_url = f"https://discord.com/users/{int(member.id)}"
     embed = discord.Embed(
         title="🌿 Member Joined" if joined else "🍂 Member Left",
+        url=profile_url,
         description=(
-            f"{member.mention} {action} the server.\n"
+            f"{discord.utils.escape_markdown(_safe_str(member))} {action} the server.\n"
             f"`{_safe_str(member)}` • `{member.id}`"
         ),
         color=discord.Color.green() if joined else discord.Color.dark_grey(),

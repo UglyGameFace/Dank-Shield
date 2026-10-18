@@ -996,3 +996,26 @@ def test_movie_source_ux_retirement_checks_exact_head_and_inline_search_parity()
     assert "inUseByOpenPR.has(name)" in text
     assert "archive.object.sha !== candidate.sha" in text
     assert "current.protected || current.commit.sha !== candidate.sha" in text
+
+
+def test_dormant_stats_guard_retirement_requires_native_stats_and_member_links() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedDormantStatsGuard = new Map([", 1)[1].split("]);", 1)[0]
+    assert manifest.count("['fix/") == 1
+    assert "fix/dank-stats-profile-links" in manifest
+    assert "ca74f100ca8e337a0b8f0c73273d0ad634effa22" in manifest
+    assert "dank_stats_profile_links_guard.py" in manifest
+    for guard in (
+        "branch.commit.sha !== statsGuard.sha || prs.length",
+        "original.files[0].status !== 'added'",
+        "!await ancestorOfMain(original.parents[0].sha)",
+        "comparison.data.ahead_by !== 1",
+        "comparison.data.files?.length !== 1",
+        "router.includes('url=profile_url')",
+        "routerTests.includes('assert embed.url",
+        "stats.includes('async def refresh_all_security_stats_displays()')",
+        "guardRegistry.includes('dank_stats_profile_links_guard')",
+        "if (error.status !== 404) throw error;",
+        "archive.object.sha !== candidate.sha",
+    ):
+        assert guard in text
