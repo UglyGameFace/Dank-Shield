@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable, Optional
 import discord
 
 from .. import community_hub_service as hub
+from .. import community_external_lfg as external
 from ..community_hub_runtime import ensure_community_hub_runtime
 from ..community_voice_caption_runtime import (
     ensure_community_voice_caption_manager,
@@ -1507,6 +1508,12 @@ class CommunityHubView(_OwnedView):
             view=LiveCaptionsHomeView(self.owner_id),
         )
 
+    @discord.ui.button(label="External Groups", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:v1", row=2)
+    async def external_groups(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_external_sessions(interaction, self.owner_id)
+
     @discord.ui.button(label="Staff Dashboard", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:staff:v1", row=2)
     async def staff(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1943,6 +1950,12 @@ class FindPlayersView(_OwnedView):
             view=OpenToPlayView(self.owner_id, rows),
         )
 
+    @discord.ui.button(label="External Groups", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:external:v1", row=3)
+    async def external_groups(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_external_sessions(interaction, self.owner_id)
+
     @discord.ui.button(label="Community Hub", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:back:v1", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1952,6 +1965,105 @@ class FindPlayersView(_OwnedView):
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _close_private_panel(interaction)
+
+def _external_groups_embed(
+    sessions: list[dict[str, str]], *, page: int = 0, notice: str = "",
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="🌍 External Gaming Groups • The100.io",
+        description=(
+            "Read-only upcoming sessions from an independent service. "
+            "Use its website to check availability and join there. "
+            "These are not Dank Shield sessions, and Quick Match does not include them."
+        ),
+        color=discord.Color.blurple(),
+    )
+    if notice:
+        embed.add_field(name="Provider status", value=notice[:1024], inline=False)
+    if not sessions:
+        embed.add_field(
+            name="No external sessions shown",
+            value="External discovery must be enabled by staff and configured on the bot host.",
+            inline=False,
+        )
+        return embed
+    page = max(0, min(page, (len(sessions) - 1) // 5))
+    for row in sessions[page * 5: page * 5 + 5]:
+        game = discord.utils.escape_markdown(row["game"])
+        title = discord.utils.escape_markdown(row["title"])
+        starts = discord.utils.escape_markdown(row.get("starts_at", ""))
+        detail = f"{title}" + (f" • {starts}" if starts else "")
+        embed.add_field(
+            name=f"🎮 {game}"[:256],
+            value=f"{detail[:850]}\n[View session on The100.io]({row['url']})",
+            inline=False,
+        )
+    embed.set_footer(text=f"External provider • page {page + 1}/{(len(sessions) + 4) // 5} • check live availability on The100.io")
+    return embed
+
+
+class ExternalGroupsView(_OwnedView):
+    def __init__(self, owner_id: int, sessions: list[dict[str, str]], *, page: int = 0) -> None:
+        super().__init__(owner_id)
+        self.sessions = list(sessions[:25])
+        self.page = max(0, min(page, max(0, (len(self.sessions) - 1) // 5)))
+        self.previous.disabled = self.page == 0
+        self.next_page.disabled = (self.page + 1) * 5 >= len(self.sessions)
+
+    @discord.ui.button(label="Previous", emoji="◀️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:prev:v1", row=0)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        page = max(0, self.page - 1)
+        await _edit_private_original(interaction, content=None, embed=_external_groups_embed(self.sessions, page=page), view=ExternalGroupsView(self.owner_id, self.sessions, page=page))
+
+    @discord.ui.button(label="Next", emoji="▶️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:next:v1", row=0)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        page = min(max(0, (len(self.sessions) - 1) // 5), self.page + 1)
+        await _edit_private_original(interaction, content=None, embed=_external_groups_embed(self.sessions, page=page), view=ExternalGroupsView(self.owner_id, self.sessions, page=page))
+
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:refresh:v1", row=0)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_external_sessions(interaction, self.owner_id)
+
+    @discord.ui.button(label="Community Hub", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:back:v1", row=0)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.edit_message(embed=_hub_embed(), view=CommunityHubView(self.owner_id), allowed_mentions=discord.AllowedMentions.none())
+
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="dank:hub:external:close:v1", row=0)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _close_private_panel(interaction)
+
+
+async def _open_external_sessions(interaction: discord.Interaction, owner_id: int) -> None:
+    sessions: list[dict[str, str]] = []
+    notice = ""
+    try:
+        settings = await hub.get_settings(int(interaction.guild_id or 0))
+        if not bool(settings.get("enabled", True)) or bool(settings.get("maintenance_mode")):
+            notice = "Community Hub is currently unavailable on this server."
+        elif not bool(settings.get("external_the100_enabled")):
+            notice = "Staff have not enabled The100.io discovery in Community Hub Settings."
+        elif not external.the100_configured():
+            notice = "The100.io needs a host-side API token before it can be used."
+        else:
+            sessions = await external.list_the100_sessions(limit=25)
+            if not sessions:
+                notice = "The100.io returned no upcoming sessions."
+    except (hub.CommunityHubError, external.ExternalDiscoveryError) as exc:
+        notice = str(exc)[:300]
+    await _edit_private_original(
+        interaction, content=None,
+        embed=_external_groups_embed(sessions, notice=notice),
+        view=ExternalGroupsView(owner_id, sessions),
+    )
+
 
 def _my_groups_embed(sessions: list[dict[str, Any]]) -> discord.Embed:
     embed = discord.Embed(
@@ -3267,6 +3379,15 @@ def _settings_embed(settings: dict[str, Any], bot: Any) -> discord.Embed:
         inline=False,
     )
     embed.add_field(
+        name="External groups • The100.io",
+        value=(
+            ("On" if bool(settings.get("external_the100_enabled")) else "Off")
+            + (" • API configured" if external.the100_configured() else " • host token missing")
+            + " • read-only, no external join actions"
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="Cleanup",
         value=(
             f"Grace: {_safe_int(settings.get('cleanup_grace_seconds'), 300)}s • "
@@ -3610,6 +3731,26 @@ class HubSettingsView(_OwnedView):
         modal.creations_hour.default = str(_safe_int(self.settings.get("max_session_creations_per_hour_per_member"), 10))
         modal.reports_hour.default = str(_safe_int(self.settings.get("max_reports_per_hour_per_member"), 5))
         await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="The100.io Discovery", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:the100:v1", row=4)
+    async def the100(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _staff_authorized(interaction):
+            return await _private(interaction, "Manage Server authority is required.")
+        if not bool(self.settings.get("external_the100_enabled")) and not external.the100_configured():
+            return await _private(interaction, "The100.io requires a server-side API token before enabling discovery.")
+        await _defer_update(interaction)
+        try:
+            current = await hub.get_settings(int(interaction.guild_id or 0))
+            settings = await hub.update_settings(
+                int(interaction.guild_id or 0),
+                {"external_the100_enabled": not bool(current.get("external_the100_enabled"))},
+                actor_id=int(interaction.user.id),
+            )
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
+        ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings))
 
     @discord.ui.button(label="Staff Dashboard", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:back:v1", row=3)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
