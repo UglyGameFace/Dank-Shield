@@ -91,3 +91,14 @@ def test_loaded_metadata_does_not_unbind_retry_error_budget() -> None:
     assert "streamRetryAttempt=0;" not in html[c:d]
     assert "if(attachedStreamUrl!==clean) streamRetryAttempt=0;" in html
     assert "const retryStreamToken=String(lastState.stream_token||\"\")" in html
+
+
+def test_in_player_recovery_is_host_only_and_does_not_swap_room() -> None:
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / "stoney_verify" / "movie_night_web.py").read_text()
+    assert "function offerPlaybackRecovery()" in source
+    assert "if(!lastState?.is_host || terminated) return;" in source
+    assert 'button.textContent="Find another release";' in source
+    assert 'const form=document.getElementById("queueAddForm");' in source
+    assert 'if(code===3 || code===4)' in source
+    assert source.count("offerPlaybackRecovery();") >= 2
