@@ -1450,9 +1450,34 @@ async def search_custom_media_sources(
         status = ("skipped" if error and ": skipped (" in error else
                   "failed" if error else "returned" if rows else "empty")
         provider_counts[status] += 1
+        # Only bounded classifications enter logs. Never emit raw provider
+        # errors: HTTP exception messages can contain signed URLs or secrets.
+        reason = "none"
+        if error:
+            detail = error.split(": ", 1)[-1].lower()
+            if status == "skipped":
+                reason = "missing_identifier"
+            elif "http 401" in detail or "http 403" in detail:
+                reason = "access_denied"
+            elif "http 429" in detail:
+                reason = "rate_limited"
+            elif "http 404" in detail:
+                reason = "not_found"
+            elif "http 5" in detail:
+                reason = "upstream_server_error"
+            elif "timeout" in detail:
+                reason = "timeout"
+            elif "json" in detail or "xml" in detail or "rss" in detail or "structured" in detail:
+                reason = "invalid_format"
+            elif "redirect" in detail:
+                reason = "redirect"
+            elif "dns" in detail or "connect" in detail or "certificate" in detail:
+                reason = "network"
+            else:
+                reason = "other"
         _LOG.info(
-            "cinema_provider_search guild=%s provider=%s status=%s results=%s",
-            int(guild_id), source.source_id, status, len(rows),
+            "cinema_provider_search guild=%s provider=%s status=%s reason=%s results=%s",
+            int(guild_id), source.source_id, status, reason, len(rows),
         )
         if error:
             errors.append(error)
