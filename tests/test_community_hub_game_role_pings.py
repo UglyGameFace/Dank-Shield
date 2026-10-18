@@ -322,14 +322,14 @@ def test_one_call_per_session_survives_game_mapping_removal_and_readdition(monke
 def test_claim_appends_session_id_with_bounded_persistence(monkeypatch):
     guild, _ = _discord_setup(monkeypatch)
     config = _config()
-    config[gp.CONFIG_KEY]["called_sessions"] = [str(i) for i in range(1500)]
+    config[gp.CONFIG_KEY]["called_sessions"] = [f"prior-{i}" for i in range(1500)]
     claimed = _wire_sender(monkeypatch, config=config)
     result = asyncio.run(gp.call_game_crew(guild, "1234"))
     assert "Called" in result
     stored = claimed.await_args.kwargs["value"]["called_sessions"]
     assert len(stored) == gp.MAX_SESSION_CLAIMS
     assert stored[-1] == "1234"
-    assert "0" not in stored
+    assert "prior-0" not in stored
 
 
 def test_game_cooldown_survives_mapping_removal_and_new_session(monkeypatch):
