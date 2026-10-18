@@ -9,6 +9,7 @@ import json
 import re
 from decimal import Decimal, InvalidOperation
 import socket
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
@@ -30,6 +31,12 @@ _MAX_RESPONSE_BYTES = 1024 * 1024
 _MAX_FEED_RESPONSE_BYTES = 8 * 1024 * 1024
 _MAX_CONCURRENCY = 4
 _TIMEOUT_SECONDS = 8.0
+
+# Cache only discovery metadata, never movie bytes or playable stream sessions.
+# Entries are bounded, expire quickly, and are scoped to provider configuration.
+_DISCOVERY_CACHE_TTL = 90.0
+_DISCOVERY_CACHE_LIMIT = 256
+_DISCOVERY_CACHE: dict[tuple[str, str, str], tuple[float, tuple[list["ResolvedMediaVariant"], str]]] = {}
 
 INTERNET_ARCHIVE_SOURCE_ID = "internet-archive-feature-films"
 INTERNET_ARCHIVE_SOURCE_LABEL = "Internet Archive Feature Films"
@@ -1392,14 +1399,43 @@ async def search_custom_media_sources(
     semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
 
     async def run(source: CustomMediaSource):
+        # Do not contact a provider that requires an identifier we do not have.
+        # A missing IMDb ID is a skipped source, not an authentication failure.
+        try:
+            _search_url(
+                source.endpoint_url, query,
+                lookup_context=lookup_context,
+                static_feed=source.provider_type == PROVIDER_TYPE_FEED,
+            )
+        except ValueError as exc:
+            if "source requires " in str(exc):
+                return [], f"{source.label}: skipped ({exc})."
+            return [], f"{source.label}: {exc}"
+
+        context_key = json.dumps(dict(lookup_context or {}), sort_keys=True, default=str)
+        key = (str(source.endpoint_url), str(query).casefold().strip(), context_key)
+        now = time.monotonic()
+        cached = _DISCOVERY_CACHE.get(key)
+        if cached and cached[0] > now:
+            return cached[1]
         async with semaphore:
             if lookup_context is None:
-                return await _search_one(source, query)
-            return await _search_one(
-                source,
-                query,
-                lookup_context=lookup_context,
-            )
+                outcome = await _search_one(source, query)
+            else:
+                outcome = await _search_one(
+                    source, query, lookup_context=lookup_context,
+                )
+        if not outcome[1]:
+            if len(_DISCOVERY_CACHE) >= _DISCOVERY_CACHE_LIMIT:
+                # Evict expired entries first, then the earliest expiry.
+                expired = [k for k, v in _DISCOVERY_CACHE.items() if v[0] <= now]
+                for stale in expired:
+                    _DISCOVERY_CACHE.pop(stale, None)
+                if len(_DISCOVERY_CACHE) >= _DISCOVERY_CACHE_LIMIT:
+                    oldest = min(_DISCOVERY_CACHE, key=lambda k: _DISCOVERY_CACHE[k][0])
+                    _DISCOVERY_CACHE.pop(oldest, None)
+            _DISCOVERY_CACHE[key] = (time.monotonic() + _DISCOVERY_CACHE_TTL, outcome)
+        return outcome
 
     results = await asyncio.gather(*(run(source) for source in sources))
 
