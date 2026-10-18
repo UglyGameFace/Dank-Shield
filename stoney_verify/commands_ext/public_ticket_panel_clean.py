@@ -629,6 +629,11 @@ async def _create_ticket(i: discord.Interaction, row: Dict[str, Any]) -> None:
             return await _ephemeral(i, f"❌ Failed to create ticket in **{parent.name}**: `{type(e).__name__}: {_short(e, 220)}`")
         db_warning = await _insert_row(guild, owner, channel, row, number)
         await _open_message(channel, owner, row)
+        from ..tickets_new.open_notifications import notify_new_ticket
+        await notify_new_ticket(
+            channel, owner=owner, category=_row_slug(row),
+            default_staff_role_ids=[int(staff.id)],
+        )
         verify_warning = await _maybe_post_verification_panel(channel, owner, row)
         if db_warning:
             _warn(f"ticket created but DB logging warning channel={channel.id}: {db_warning}")

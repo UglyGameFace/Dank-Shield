@@ -23,6 +23,7 @@ from stoney_verify.commands_ext.public_ticket_command_center import (
     TicketCategoryToolsView,
     TicketIntakeToolsView,
     TicketOperationsView,
+    TicketNotificationSettingsView,
 )
 from stoney_verify.commands_ext.public_verify_command_center import (
     VerifyCenterView,
@@ -106,6 +107,30 @@ def test_ticket_operations_preserve_queue_lookup_and_setup_families() -> None:
     assert _select_values(TicketCategoryToolsView(1), "dank:tickets:categories:action:v1") == {
         "sync", "create", "edit", "delete", "set-default", "reorder", "keywords"
     }
+
+
+def test_ticket_staff_alerts_fit_mobile_discord_component_rows() -> None:
+    # Discord selects consume the entire row. Construct the real views so
+    # width overflows fail before deployment, rather than relying on text checks.
+    operations = TicketOperationsView(1)
+    history = next(
+        item for item in operations.children
+        if isinstance(item, discord.ui.UserSelect)
+    )
+    alerts_button = next(
+        item for item in operations.children
+        if getattr(item, "label", None) == "Staff Alerts"
+    )
+    assert history.row == 2
+    assert alerts_button.row == 3
+
+    settings = TicketNotificationSettingsView(1, [("support", "Support")])
+    assert len(settings.children) == 8
+    for item in settings.children:
+        if isinstance(item, (discord.ui.Select, discord.ui.RoleSelect, discord.ui.ChannelSelect)):
+            assert item.row in (0, 1, 2)
+        else:
+            assert item.row == 3
 
 
 def test_verification_center_preserves_member_server_and_role_mapping_paths() -> None:

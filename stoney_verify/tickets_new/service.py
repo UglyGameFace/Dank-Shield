@@ -2229,6 +2229,13 @@ async def create_ticket_channel(
             f"create success guild={guild.id} owner={owner.id} channel={channel.id} ticket_number={ticket_number}"
         )
         repo_note_ticket_channel_opened(channel.id)
+        from .open_notifications import notify_new_ticket
+        await notify_new_ticket(
+            channel, owner=owner,
+            category=category_meta["matched_category_slug"] or category,
+            default_staff_role_ids=all_staff_role_ids,
+            is_ghost=is_ghost,
+        )
         return channel
 
 

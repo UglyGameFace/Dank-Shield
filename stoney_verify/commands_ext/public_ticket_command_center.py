@@ -703,6 +703,15 @@ class TicketOperationsView(_OwnedView):
         view = TicketCategoryToolsView(self.owner_id)
         await _replace(interaction, embed=view.embed(), view=view)
 
+    @discord.ui.button(label="Staff Alerts", emoji="🔔", style=discord.ButtonStyle.primary, row=3)
+    async def staff_alerts(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_ticket_notification_manager(interaction):
+            return
+        await interaction.response.defer()
+        view = await TicketNotificationSettingsView.create(self.owner_id, interaction.guild)
+        await _replace(interaction, embed=await view.embed(interaction.guild), view=view)
+
 
 class TicketFindModal(discord.ui.Modal, title="Find Ticket"):
     ticket_number = discord.ui.TextInput(label="Ticket number", placeholder="218", max_length=10)
@@ -723,6 +732,265 @@ class TicketFindModal(discord.ui.Modal, title="Find Ticket"):
         if command is None:
             return await _private(interaction, "❌ Ticket lookup is unavailable.")
         await _invoke(command, interaction, ticket_number=number)
+
+
+
+async def _require_ticket_notification_manager(interaction: discord.Interaction) -> bool:
+    member = interaction.user
+    if (
+        interaction.guild is not None
+        and isinstance(member, discord.Member)
+        and (member.guild_permissions.manage_guild or member.guild_permissions.administrator)
+    ):
+        return True
+    await _private(interaction, "❌ Manage Server permission is required to configure staff ticket pings.")
+    return False
+
+
+class TicketNotificationCategorySelect(discord.ui.Select):
+    def __init__(self, parent: "TicketNotificationSettingsView") -> None:
+        self.parent_view = parent
+        options = [
+            discord.SelectOption(label="All tickets (default)", value="*", description="Fallback staff roles"),
+        ]
+        for slug, name in parent.categories[:23]:
+            options.append(discord.SelectOption(label=name[:100], value=slug))
+        options.append(discord.SelectOption(label="Other custom category…", value=":custom:", emoji="✏️"))
+        super().__init__(
+            placeholder="Choose a category before selecting its staff roles…",
+            min_values=1, max_values=1, options=options,
+            custom_id="dank:tickets:notifications:category:v1", row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_ticket_notification_manager(interaction):
+            return
+        value = str(self.values[0])
+        if value == ":custom:":
+            return await interaction.response.send_modal(
+                TicketNotificationCustomCategoryModal(self.parent_view)
+            )
+        self.parent_view.category = value
+        await interaction.response.defer()
+        await _replace(
+            interaction,
+            embed=await self.parent_view.embed(interaction.guild),
+            view=self.parent_view,
+        )
+
+
+class TicketNotificationCustomCategoryModal(discord.ui.Modal, title="Custom Ticket Alert Category"):
+    slug = discord.ui.TextInput(
+        label="Existing ticket category slug", placeholder="account_access", max_length=80,
+    )
+
+    def __init__(self, parent: "TicketNotificationSettingsView") -> None:
+        super().__init__(timeout=600)
+        self.parent_view = parent
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await _require_ticket_notification_manager(interaction):
+            return
+        from ..tickets_new.open_notifications import category_key
+        self.parent_view.category = category_key(self.slug.value)
+        await interaction.response.defer(ephemeral=True)
+        await _private(
+            interaction,
+            f"Selected category **{self.parent_view.category}**. Choose its staff roles in the Staff Alerts panel.",
+        )
+
+
+class TicketNotificationRoleSelect(discord.ui.RoleSelect):
+    def __init__(self, parent: "TicketNotificationSettingsView") -> None:
+        self.parent_view = parent
+        super().__init__(
+            placeholder="Choose up to 5 staff roles to ping…",
+            min_values=1, max_values=5,
+            custom_id="dank:tickets:notifications:roles:v1", row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_ticket_notification_manager(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return
+        selected = [
+            guild.get_role(int(value.id))
+            for value in self.values
+            if int(getattr(value, "id", 0) or 0) > 0
+        ]
+        roles = [role for role in selected if isinstance(role, discord.Role) and not role.is_default()]
+        if not roles:
+            return await _private(interaction, "❌ Choose an existing staff role, not @everyone.")
+        await interaction.response.defer()
+        from ..tickets_new.open_notifications import save_settings
+        patch = (
+            {"role_ids": [role.id for role in roles]}
+            if self.parent_view.category == "*"
+            else {"category_key": self.parent_view.category, "category_role_ids": [role.id for role in roles]}
+        )
+        try:
+            await save_settings(guild.id, patch)
+        except Exception as exc:
+            return await _private(interaction, f"❌ Settings were not saved: {type(exc).__name__}. Reopen Staff Alerts.")
+        await _replace(interaction, embed=await self.parent_view.embed(guild), view=self.parent_view)
+
+
+class TicketNotificationChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self, parent: "TicketNotificationSettingsView") -> None:
+        self.parent_view = parent
+        super().__init__(
+            placeholder="Optional: private staff alert channel…",
+            min_values=1, max_values=1,
+            channel_types=[discord.ChannelType.text],
+            custom_id="dank:tickets:notifications:channel:v1", row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _require_ticket_notification_manager(interaction):
+            return
+        guild = interaction.guild
+        channel = guild.get_channel(int(self.values[0].id)) if guild and self.values else None
+        if not isinstance(channel, discord.TextChannel):
+            return await _private(interaction, "❌ Choose a text channel from this server.")
+        from ..tickets_new.open_notifications import _private_for_staff
+        if not _private_for_staff(channel):
+            return await _private(
+                interaction, "❌ The alert channel must deny @everyone View Channel. Keep staff ticket details private.",
+            )
+        perms = channel.permissions_for(guild.me) if guild.me else None
+        if perms is None or not (perms.view_channel and perms.send_messages):
+            return await _private(interaction, "❌ Dank Shield needs View Channel and Send Messages there.")
+        await interaction.response.defer()
+        from ..workers.ticket_automation_worker import upsert_ticket_automation_settings
+        if not await upsert_ticket_automation_settings(guild.id, {"staff_alert_channel_id": str(channel.id)}):
+            return await _private(interaction, "❌ Alert channel was not saved. Check database availability.")
+        await _replace(interaction, embed=await self.parent_view.embed(guild), view=self.parent_view)
+
+
+class TicketNotificationSettingsView(_OwnedView):
+    def __init__(self, owner_id: int, categories: list[tuple[str, str]]) -> None:
+        super().__init__(owner_id)
+        self.category = "*"
+        self.categories = categories
+        self.add_item(TicketNotificationCategorySelect(self))
+        self.add_item(TicketNotificationRoleSelect(self))
+        self.add_item(TicketNotificationChannelSelect(self))
+
+    @classmethod
+    async def create(
+        cls, owner_id: int, guild: discord.Guild,
+    ) -> "TicketNotificationSettingsView":
+        from .public_ticket_panel_clean import _load_rows, _row_slug, _row_name
+        from ..tickets_new.open_notifications import category_key
+        try:
+            rows, _warning = await _load_rows(guild)
+        except Exception:
+            rows = []
+        seen: set[str] = set()
+        categories: list[tuple[str, str]] = []
+        for row in rows:
+            slug = category_key(_row_slug(row))
+            if slug not in seen:
+                seen.add(slug)
+                categories.append((slug, _row_name(row)))
+        return cls(owner_id, categories)
+
+    async def embed(self, guild: discord.Guild) -> discord.Embed:
+        from ..tickets_new.open_notifications import load_settings, selected_role_ids
+        from ..workers.ticket_automation_worker import get_ticket_automation_settings
+        settings, available = await load_settings(guild.id)
+        auto = await get_ticket_automation_settings(guild.id)
+        defaults = []
+        from .public_ticket_panel_clean import _staff_role
+        staff = await _staff_role(guild)
+        if staff is not None:
+            defaults.append(int(staff.id))
+        effective = selected_role_ids(settings, self.category, defaults)
+        role_mentions = [f"<@&{role_id}>" for role_id in effective if guild.get_role(role_id)]
+        name = (
+            "All tickets (default)"
+            if self.category == "*"
+            else next((label for slug, label in self.categories if slug == self.category), self.category)
+        )
+        destination = int(auto.get("staff_alert_channel_id") or 0)
+        embed = discord.Embed(
+            title="🔔 New Ticket Staff Alerts",
+            description=(
+                "Each new ticket can ping the selected staff roles **once**. "
+                "Opening an existing ticket and ghost/test tickets do not re-ping.\n"
+                "Choose a category, then roles; choose a private alert channel or leave it unset "
+                "to ping inside the ticket. Independent of the ticket automation worker."
+            ),
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(
+            name="Enabled",
+            value="Yes" if settings["enabled"] else "No",
+            inline=True,
+        )
+        embed.add_field(name="Editing", value=name, inline=True)
+        embed.add_field(
+            name="Roles for selection",
+            value=" ".join(role_mentions) or ("Muted for this category" if self.category != "*" else "No staff role configured"),
+            inline=False,
+        )
+        embed.add_field(
+            name="Alert destination",
+            value=f"<#{destination}>" if destination else "Each private ticket",
+            inline=False,
+        )
+        if not available:
+            embed.add_field(
+                name="Storage unavailable",
+                value="Notifications are safely paused until per-server settings can be read. Changes cannot be saved.",
+                inline=False,
+            )
+        embed.set_footer(text="Manage Server permission required • @everyone never pinged")
+        return embed
+
+    async def _change(self, interaction: discord.Interaction, patch: dict[str, Any]) -> None:
+        if not await _require_ticket_notification_manager(interaction):
+            return
+        await interaction.response.defer()
+        from ..tickets_new.open_notifications import save_settings
+        try:
+            await save_settings(interaction.guild.id, patch)
+        except Exception as exc:
+            return await _private(interaction, f"❌ Staff alert settings were not saved: {type(exc).__name__}.")
+        await _replace(interaction, embed=await self.embed(interaction.guild), view=self)
+
+    @discord.ui.button(label="Enable", emoji="🔔", style=discord.ButtonStyle.success, row=3)
+    async def enable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._change(interaction, {"enabled": True})
+
+    @discord.ui.button(label="Disable", emoji="🔕", style=discord.ButtonStyle.secondary, row=3)
+    async def disable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._change(interaction, {"enabled": False})
+
+    @discord.ui.button(label="Reset Roles", emoji="↩️", style=discord.ButtonStyle.secondary, row=3)
+    async def reset_roles(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        patch = (
+            {"role_ids": []}
+            if self.category == "*"
+            else {"category_key": self.category, "remove_category": True}
+        )
+        await self._change(interaction, patch)
+
+    @discord.ui.button(label="Clear Channel", emoji="🧹", style=discord.ButtonStyle.secondary, row=3)
+    async def clear_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_ticket_notification_manager(interaction):
+            return
+        await interaction.response.defer()
+        from ..workers.ticket_automation_worker import upsert_ticket_automation_settings
+        if not await upsert_ticket_automation_settings(interaction.guild.id, {"staff_alert_channel_id": None}):
+            return await _private(interaction, "❌ Staff alert channel could not be cleared.")
+        await _replace(interaction, embed=await self.embed(interaction.guild), view=self)
+
+    @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=3)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _replace(interaction, embed=_operations_embed(), view=TicketOperationsView(self.owner_id))
 
 
 class TicketTopicCleanupConfirmView(_OwnedView):

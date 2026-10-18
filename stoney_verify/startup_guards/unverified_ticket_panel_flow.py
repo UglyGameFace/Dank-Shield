@@ -813,6 +813,11 @@ async def _create_direct_verification_ticket(guild: discord.Guild, member: disco
     )
     await _insert_direct_ticket_row(channel, member, ticket_number=ticket_number, category="verification_issue")
     await _send_direct_ticket_intro(channel, member)
+    from ..tickets_new.open_notifications import notify_new_ticket
+    await notify_new_ticket(
+        channel, owner=member, category="verification_issue",
+        default_staff_role_ids=_configured_staff_role_ids(cfg),
+    )
     return channel
 
 
