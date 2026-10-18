@@ -1635,7 +1635,10 @@ def test_full_site_episode_playback_is_direct_and_not_discord_room_scoped() -> N
     assert 'action.kind === "play"' in script
     assert 'resume.addEventListener("click", () => playOnSite(action, resume))' in script
     assert 'card.classList.add("episode-playable")' in script
-    assert 'event.target.closest("button, select, option")' in script
+    assert 'event.target.closest("button, select, option, a, input")' in script
+    assert 'chooseRelease.click();' in script
+    assert 'card.addEventListener("click", (event) =>' in script
+    assert 'playOnSite(episodeItem);' not in script
     assert 'if (sourceChoice) payload.source_choice = String(sourceChoice)' in script
     assert '"Playback Source"' in script
     assert '"Automatic • best available"' in script
