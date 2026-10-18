@@ -15,6 +15,7 @@ from typing import Any
 import discord
 
 from . import community_hub_service as hub
+from .community_lfg_discovery import game_search_key
 from .community_pings_service import (
     CAP_MOVIE_NIGHT_NOTIFY,
     CAP_TOKE_NOTIFY,
@@ -35,6 +36,12 @@ _MAX_ATTEMPTS = 3
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def notification_game_key(value: str) -> str:
+    """Use the same known game aliases as Find Players for role mapping."""
+    normalized = game_search_key(value)
+    return normalized or hub.game_key(value)
 
 
 def _as_int(value: Any) -> int:
@@ -100,7 +107,7 @@ async def configure(
 ) -> bool:
     """CAS guild-scoped setup to avoid overwriting another staff editor."""
     game = hub.normalize_game_name(game_name)
-    key = hub.game_key(game)
+    key = notification_game_key(game)
     cooldown = int(cooldown_minutes)
     if not MIN_COOLDOWN_MINUTES <= cooldown <= MAX_COOLDOWN_MINUTES:
         raise ValueError("Game call cooldown must be between 15 and 240 minutes.")
@@ -161,7 +168,7 @@ async def call_game_crew(guild: discord.Guild, session_id: str) -> str:
         return "Only current public, joinable gaming groups can call a game role."
 
     game = hub.normalize_game_name(session.get("game_name"))
-    key = hub.game_key(game)
+    key = notification_game_key(game)
     channel_id = _as_int(session.get("panel_channel_id"))
     message_id = _as_int(session.get("panel_message_id"))
     channel = guild.get_channel(channel_id)
