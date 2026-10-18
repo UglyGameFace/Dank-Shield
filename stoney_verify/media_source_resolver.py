@@ -6,6 +6,7 @@ import asyncio
 import base64
 import ipaddress
 import json
+import logging
 import re
 from decimal import Decimal, InvalidOperation
 import socket
@@ -24,6 +25,8 @@ from stoney_verify.media_source_registry import (
     enabled_structured_sources,
     load_media_source_registry,
 )
+
+_LOG = logging.getLogger(__name__)
 
 _MAX_SOURCE_RESULTS = 25
 _MAX_TOTAL_RESULTS = 100
@@ -1442,7 +1445,15 @@ async def search_custom_media_sources(
     variants: list[ResolvedMediaVariant] = []
     errors: list[str] = []
     seen: set[tuple[str, str]] = set()
+    provider_counts = {"returned": 0, "empty": 0, "skipped": 0, "failed": 0}
     for source, (rows, error) in zip(sources, results):
+        status = ("skipped" if error and ": skipped (" in error else
+                  "failed" if error else "returned" if rows else "empty")
+        provider_counts[status] += 1
+        _LOG.info(
+            "cinema_provider_search guild=%s provider=%s status=%s results=%s",
+            int(guild_id), source.source_id, status, len(rows),
+        )
         if error:
             errors.append(error)
         elif not rows:
@@ -1458,6 +1469,11 @@ async def search_custom_media_sources(
         if len(variants) >= _MAX_TOTAL_RESULTS:
             break
 
+    _LOG.info(
+        "cinema_provider_search_summary guild=%s providers=%s returned=%s empty=%s skipped=%s failed=%s releases=%s",
+        int(guild_id), len(sources), provider_counts["returned"], provider_counts["empty"],
+        provider_counts["skipped"], provider_counts["failed"], len(variants),
+    )
     variants.sort(
         key=lambda item: (
             -int(item.seeds),
