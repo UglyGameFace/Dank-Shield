@@ -855,13 +855,13 @@ jobs:
                       readText('tools/test_persistent_ticket_counter_static.py', defaultBranch)
                     ]);
                   const functionNames = text =>
-                    [...text.matchAll(/^(?:async )?def ([A-Za-z_]\\w*)\\(/gm)]
+                    [...text.matchAll(/^(?:async )?def ([A-Za-z_]\w*)\(/gm)]
                       .map(match => match[1]);
                   const oldNames = functionNames(historical);
                   const currentNames = new Set(functionNames(repository));
-                  const historicalLines = historical.split('\\n')
+                  const historicalLines = historical.split('\n')
                     .map(line => line.trim()).filter(Boolean);
-                  const repositoryLines = new Set(repository.split('\\n')
+                  const repositoryLines = new Set(repository.split('\n')
                     .map(line => line.trim()).filter(Boolean));
                   // Require the full 100-function old repository API and at
                   // least 95% verbatim historical nonblank-line coverage.
