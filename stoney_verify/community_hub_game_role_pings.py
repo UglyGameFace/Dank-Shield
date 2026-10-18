@@ -63,7 +63,18 @@ def _model(value: Any) -> dict[str, Any]:
         int(item) for item in (blob.get("recent_calls") or [])[:24]
         if isinstance(item, (int, float)) and 0 < item
     ] if isinstance(blob.get("recent_calls"), list) else []
-    return {"version": 1, "games": games, "recent_calls": history}
+    called = blob.get("called_sessions")
+    # Cross-reconfiguration duplicate guard. At four calls per hour, 160
+    # retained IDs cover at least forty hours of reservations, longer than
+    # a Community Hub session's configurable hard lifetime.
+    session_ids = [
+        str(item)[:64] for item in (called if isinstance(called, list) else [])[-160:]
+        if isinstance(item, str) and 0 < len(item) <= 64
+    ]
+    return {
+        "version": 1, "games": games, "recent_calls": history,
+        "called_sessions": list(dict.fromkeys(session_ids)),
+    }
 
 
 def eligible_game_roles(guild: discord.Guild, config: Mapping[str, Any]) -> list[tuple[int, str]]:
@@ -187,6 +198,8 @@ async def call_game_crew(guild: discord.Guild, session_id: str) -> str:
         state = _model(before)
         mapping = _as_dict(state["games"].get(key))
         rid = _as_int(mapping.get("role_id"))
+        if str(session_id) in state["called_sessions"]:
+            return "This group has already called its game crew. Start a new group for another call."
         if rid <= 0:
             return f"No game notification role is configured for {game}. Ask server staff."
         if rid not in {rid for rid, _ in eligible_game_roles(guild, raw_config)}:
@@ -219,6 +232,7 @@ async def call_game_crew(guild: discord.Guild, session_id: str) -> str:
 
         state["games"][key] = {**mapping, "last_at": now, "last_session_id": str(session_id)[:64]}
         state["recent_calls"] = [*history, now][-24:]
+        state["called_sessions"] = [*state["called_sessions"], str(session_id)[:64]][-160:]
         try:
             claimed, _ = await compare_and_swap_guild_config_key(
                 gid, CONFIG_KEY, expected=before, value=state,
