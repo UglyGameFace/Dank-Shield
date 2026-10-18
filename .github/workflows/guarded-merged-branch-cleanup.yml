@@ -179,6 +179,23 @@ jobs:
             // Exact historical Design Studio language pass, abandoned after the
             // runtime patch was physically retired in favor of native design v2.
             // Do not reintroduce the removed patch or use branch-name heuristics.
+            // 2026-10-18: Cinema first-byte PR #465 merged; subsequent
+            // reconnect commits are present in the current canonical Theater,
+            // including regression assertions. Archive the exact old tip only.
+            const reviewedCinemaWakeRecovery = new Map([
+              ['fix/cinema-first-byte-startup', {
+                sha: 'e32974e3c778e70f2e81fa7fe56442f6264a70e8',
+                originalPr: 465,
+                mergedHead: 'e407bab4a73d264fcd5c89da43cef3477fde6a3d',
+                ahead: 3,
+                files: [
+                  'ACTIVE_TASK.md',
+                  'stoney_verify/movie_night_web.py',
+                  'tests/test_movie_night_web.py',
+                ],
+              }],
+            ]);
+
             const reviewedRetiredDesignPatch = new Map([
               ['fix/dank-design-workflow-v3', {
                 sha: '66a9799e40ebb2cc5242f7c0cbf455e0eb58a544',
@@ -569,6 +586,51 @@ jobs:
                       !mainTests.includes('"HTTPS search API"')) continue;
                   candidates.push({ name, sha: branch.commit.sha,
                     reason: 'reviewed post-merge source tutorial superseded by canonical provider/feed UX' });
+                  continue;
+                }
+                const cinemaWake = reviewedCinemaWakeRecovery.get(name);
+                if (cinemaWake) {
+                  if (branch.commit.sha !== cinemaWake.sha || prs.length !== 1) continue;
+                  const pr = prs[0];
+                  if (pr.number !== cinemaWake.originalPr ||
+                      !pr.merged_at || pr.state !== 'closed' ||
+                      pr.base?.ref !== defaultBranch ||
+                      pr.head.sha !== cinemaWake.mergedHead ||
+                      !await ancestorOfMain(pr.merge_commit_sha)) continue;
+                  const comparison = await github.rest.repos.compareCommits({
+                    owner, repo, base: cinemaWake.mergedHead, head: branch.commit.sha
+                  });
+                  if (comparison.data.ahead_by !== cinemaWake.ahead ||
+                      comparison.data.behind_by !== 0 ||
+                      comparison.data.files?.length !== cinemaWake.files.length ||
+                      !comparison.data.files.every(f =>
+                        f.status === 'modified' && cinemaWake.files.includes(f.filename)
+                      )) continue;
+                  const currentWeb = (await github.rest.repos.getContent({
+                    owner, repo, path: cinemaWake.files[1], ref: defaultBranch
+                  })).data;
+                  const currentTests = (await github.rest.repos.getContent({
+                    owner, repo, path: cinemaWake.files[2], ref: defaultBranch
+                  })).data;
+                  const webText = Buffer.from(currentWeb.content, 'base64').toString('utf8');
+                  const testText = Buffer.from(currentTests.content, 'base64').toString('utf8');
+                  const requiredReconnect = [
+                    'function scheduleSessionReconnect()',
+                    'function recoverSessionConnection(forceMediaReload=false)',
+                    'function handlePageWake()',
+                    'await heartbeat(false,true,false)',
+                    'attachStream(String(fresh.stream_url),true)',
+                    'BACKGROUND_MEDIA_REFRESH_MS=30000',
+                    'if(!document.hidden) void poll()',
+                    'if(!document.hidden) void heartbeat(false)',
+                    'void heartbeat(false,false,true)',
+                    'window.addEventListener("online",()=>handlePageWake())',
+                    'window.addEventListener("pageshow",()=>handlePageWake())',
+                  ];
+                  if (!requiredReconnect.every(token => webText.includes(token) &&
+                      testText.includes(token))) continue;
+                  candidates.push({ name, sha: branch.commit.sha,
+                    reason: 'reviewed Cinema wake recovery already included and tested on main' });
                   continue;
                 }
                 const designPatch = reviewedRetiredDesignPatch.get(name);
