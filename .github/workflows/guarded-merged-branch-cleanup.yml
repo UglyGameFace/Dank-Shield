@@ -224,7 +224,7 @@ jobs:
             // retains all registry/resolver APIs and their tests on main.
             // Two legacy external-browser search helpers are intentionally
             // retired by the newer in-Discord result and source flow.
-            // No-PR, one-commit 2026-05 stats patch. The installer was never
+            // No-PR, one-commit 2026-07 stats patch. The installer was never
             // active on main. Current stats owns bounded self-healing; the
             // canonical lifecycle router now owns click-through profile links.
             // Require both owners and their tests before archiving its exact SHA.
