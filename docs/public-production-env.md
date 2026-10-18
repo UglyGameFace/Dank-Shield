@@ -103,6 +103,32 @@ does not switch back to Supabase if PostgreSQL becomes unavailable.
 table, privilege errors and unknown transaction outcomes all block reminder
 sending. Never interpret missing history as permission to send a fresh ping.
 
+## Optional Community Hub external gaming sessions (The100.io)
+
+The100.io supports read-only upcoming gaming session discovery with a personal
+supporter API token. This integration does not post or join games on anyone's
+behalf; the provider separately approves Discord bot write operations.
+
+- Apply `supabase/migrations/20261018010000_community_hub_external_the100.sql`
+  through the existing schema pipeline **before** attempting to enable it.
+- Obtain an authorized API token using
+  `https://www.the100.io/api-docs/index.html`. Store it privately on the bot
+  host as `DANK_COMMUNITY_THE100_API_TOKEN`; never commit or paste the token.
+- A server manager enables **Community Hub → Staff Dashboard → Settings →
+  The100.io Discovery**. The setting is OFF for every existing and new server
+  until explicitly enabled. Members then open **Community Hub → Find Players →
+  External Groups** or **Community Hub → External Groups**.
+- Every external result is an outbound source link, not a native Community Hub
+  session, Quick Match candidate, or member role notification. External
+  availability must be verified at the source before attempting to join.
+- Missing API token, migration, authorization, or provider outage must fail
+  safely without affecting normal Community Hub / HubLink sessions. The API
+  response is bounded to 128 KiB and 25 normalized sessions; host-local
+  successful responses are cached for 90 seconds to limit provider traffic.
+
+Do not enable the provider in production before validating a real token and
+response format on a staging host. No new Discord slash commands are needed.
+
 ## Startup health lines to expect
 
 Healthy public startup should show the normal module-registration line first, then the final UI-first compactor before Discord global sync:
