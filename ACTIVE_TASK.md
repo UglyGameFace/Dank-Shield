@@ -1,6 +1,8 @@
 # Active Task Lock — Community Hub unified Find Players discovery (2026-10-18)
 
-**Current continuation:** Source-aware game searching for local sessions, approved HubLink partners, and opt-in read-only The100.io. Current main base `9daf428828a5aed190d8fef1addda0ea29e2b6b3`. One development branch: `feat/community-hub-unified-game-search-20261018`; active issue #638. No /toke, CHEERS, Cinema, website, schema or production deployment changes.
+**Current continuation after merged PR #641:** Session play-style and mic-policy preference filters for local and approved HubLink partner groups. Branch `feat/community-hub-session-preference-filters-20261018` from `main@ca869ac4438e23a35dbdaf4b5407b0f33e92f70c`; issue #638. No modifications to The100.io credentials, native Quick Match, /toke, CHEERS, Cinema, website, or database migrations.
+
+**Current continuation history:** Source-aware game searching for local sessions, approved HubLink partners, and opt-in read-only The100.io. Current main base `9daf428828a5aed190d8fef1addda0ea29e2b6b3`. One development branch: `feat/community-hub-unified-game-search-20261018`; active issue #638. No /toke, CHEERS, Cinema, website, schema or production deployment changes.
 
 **Current behavior being built:** Source navigation within Find Players (Local / Partner / External), short game-name search modal on Android and desktop, bounded server-side result reads, known game aliases, provider-only outbound links, and click-time partner consent rechecks. Native Quick Match stays local. No unverified provider features, automatic join, global pings or source mixing.
 

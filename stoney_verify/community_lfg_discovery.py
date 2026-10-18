@@ -34,12 +34,18 @@ def game_search_key(value: Any) -> str:
     return _GAME_ALIASES.get(compact, compact)
 
 
+PLAY_STYLE_FILTERS = frozenset({"casual", "competitive", "beginner", "any"})
+MIC_PREFERENCE_FILTERS = frozenset({"optional", "preferred", "required", "no_mic"})
+
+
 def filter_discovery_games(
     rows: list[dict[str, Any]],
     query: str,
     *,
     external: bool = False,
     limit: int = 25,
+    play_style: str = "",
+    mic_preference: str = "",
 ) -> list[dict[str, Any]]:
     """Filter *only* supplied public/native-authorized source rows by game.
 
@@ -48,22 +54,43 @@ def filter_discovery_games(
     use canonical game_name, and filtering never expands the source permission
     boundary. Results retain the upstream order (normally newest first).
     """
+    style = str(play_style or "").strip()
+    mic = str(mic_preference or "").strip()
+    if style and style not in PLAY_STYLE_FILTERS:
+        raise ValueError("Unknown Community Hub play-style filter")
+    if mic and mic not in MIC_PREFERENCE_FILTERS:
+        raise ValueError("Unknown Community Hub microphone filter")
+    if external and (style or mic):
+        # The100.io's normalized public adapter has not verified these fields.
+        # Never silently claim to apply a filter the provider cannot support.
+        raise ValueError("External provider does not support session preference filters")
+
     safe_limit = max(1, min(int(limit), 25))
     key = game_search_key(query)
-    if not key:
-        return [dict(row) for row in rows[:safe_limit] if isinstance(row, dict)]
     matches: list[dict[str, Any]] = []
     for row in rows[:100]:
         if not isinstance(row, dict):
             continue
-        name = row.get("game") if external else row.get("game_name")
-        candidate = game_search_key(name)
-        if not candidate:
+        if key:
+            name = row.get("game") if external else row.get("game_name")
+            candidate = game_search_key(name)
+            if not candidate:
+                continue
+            # A game-family query may match a specific title; unrelated
+            # descriptions and free-text member notes are not searchable.
+            if not (
+                candidate == key
+                or candidate.startswith(key)
+                or f" {key}" in f" {candidate}"
+            ):
+                continue
+        # Exact-match against real, durable session metadata. Unknown values
+        # are deliberately excluded when a preference filter is active.
+        if style and row.get("play_style") != style:
             continue
-        # A game family query may match a specific title; an unrelated
-        # title containing letters inside a word must not match.
-        if candidate == key or candidate.startswith(key) or f" {key}" in f" {candidate}":
-            matches.append(dict(row))
+        if mic and row.get("mic_preference") != mic:
+            continue
+        matches.append(dict(row))
         if len(matches) >= safe_limit:
             break
     return matches

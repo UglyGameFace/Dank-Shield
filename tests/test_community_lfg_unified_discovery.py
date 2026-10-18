@@ -138,7 +138,8 @@ def test_local_and_partner_reads_stay_isolated_from_the100_native_join() -> None
     source = inspect.getsource(ui._open_find_players_source)
     assert "hub.list_active_sessions(guild_id, limit=100)" in source
     assert "hub.list_partner_discovery_sessions(guild_id, limit=100)" in source
-    assert "filter_discovery_games(sessions, game_query, limit=25)" in source
+    assert "filter_discovery_games(" in source
+    assert "play_style=play_style, mic_preference=mic_preference" in source
     assert "external.list_the100_sessions" not in source
     external_source = inspect.getsource(ui._open_external_sessions)
     assert "hub.get_settings(int(interaction.guild_id or 0))" in external_source
