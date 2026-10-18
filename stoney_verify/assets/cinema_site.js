@@ -1574,9 +1574,11 @@
       stateEl.appendChild(chooseRelease);
 
       card.classList.add("episode-playable");
+      // A card opens release choices; only explicit playback controls launch media.
+      // This prevents browsing an episode from triggering an automatic codec error.
       card.addEventListener("click", (event) => {
-        if (event.target.closest("button, select, option")) return;
-        playOnSite(episodeItem);
+        if (event.target.closest("button, select, option, a, input")) return;
+        chooseRelease.click();
       });
       if (libraryAvailable) {
         const libraryActions = node("div", "episode-library-actions");
