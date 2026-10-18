@@ -296,6 +296,7 @@ _ALLOWED_SETTINGS = frozenset(
         "analytics_enabled",
         "presence_analytics_enabled",
         "partner_discovery_enabled",
+        "external_the100_enabled",
         "detailed_retention_days",
         "aggregate_retention_days",
     }
