@@ -384,7 +384,43 @@ async def select_preferred_variant(
     )
     return rows[0] if rows else None
 
+# Fail fast rather than queueing another expensive torrent startup for the same
+# room. Locks are removed when the owner finishes, including on cancellation.
+_AUTO_START_INFLIGHT: set[str] = set()
+
+
 async def start_automatic_variant(
+    room_id: str,
+    *,
+    actor_id: int,
+    candidate_id: str,
+    selected: Any,
+    ranked: Any,
+    start_variant: Any = None,
+    max_file_bytes: int = 0,
+    manager: Any = None,
+    guild_id: int = 0,
+    active_voters: Any = None,
+) -> tuple[CinemaPlaybackResult, Any, int]:
+    """Allow only one automatic startup per room on this process."""
+    key = str(room_id)
+    if key in _AUTO_START_INFLIGHT:
+        raise CinemaPlaybackError(
+            "Cinema is already starting playback for this room. Please wait."
+        )
+    _AUTO_START_INFLIGHT.add(key)
+    try:
+        return await _start_automatic_variant_unlocked(
+            room_id, actor_id=actor_id, candidate_id=candidate_id,
+            selected=selected, ranked=ranked, start_variant=start_variant,
+            max_file_bytes=max_file_bytes, manager=manager,
+            guild_id=guild_id, active_voters=active_voters,
+        )
+    finally:
+        _AUTO_START_INFLIGHT.discard(key)
+
+
+async def _start_automatic_variant_unlocked(
     room_id: str,
     *,
     actor_id: int,
