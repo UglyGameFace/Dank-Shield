@@ -205,6 +205,21 @@ jobs:
             // in PR #149 and replaced by the CI-gated current-main workflow;
             // Toke's merged PR #382 gained post-merge role-setup UX now owned
             // by the current Community & Pings manager and covered by tests.
+            // Owner-reviewed setup-only historical branch with four unique
+            // commits. The final guided ownership fix is present in the newer
+            // canonical runtime; two temporary patch scripts no longer exist.
+            const reviewedSetupRuntimePatch = new Map([
+              ['fix/setup-runtime-integrity-200', {
+                sha: '5551181b3f796cfe506db5134d2571452a4de3ba',
+                ahead: 4,
+                files: [
+                  '.github/workflows/_tmp_ds_setup_039_patch.yml',
+                  'stoney_verify/commands_ext/public_setup_compact.py',
+                  'tools/_tmp_ds_setup_039_patch.py',
+                ],
+              }],
+            ]);
+
             const reviewedPostFBranches = new Map([
               ['chore/automate-supabase-migrations', {
                 sha: '7ee642eadde8c572ba933c36414c5077fd798a94',
@@ -682,6 +697,60 @@ jobs:
                       testText.includes(token))) continue;
                   candidates.push({ name, sha: branch.commit.sha,
                     reason: 'reviewed Cinema wake recovery already included and tested on main' });
+                  continue;
+                }
+                const setupPatch = reviewedSetupRuntimePatch.get(name);
+                if (setupPatch) {
+                  if (branch.commit.sha !== setupPatch.sha || prs.length) continue;
+                  const comparison = await github.rest.repos.compareCommits({
+                    owner, repo, base: defaultBranch, head: branch.commit.sha
+                  });
+                  if (comparison.data.ahead_by !== setupPatch.ahead ||
+                      comparison.data.files?.length !== setupPatch.files.length ||
+                      !comparison.data.files.every(f =>
+                        setupPatch.files.includes(f.filename) &&
+                        f.status === (f.filename === setupPatch.files[1] ? 'modified' : 'added')
+                      )) continue;
+                  let obsoleteTemporaryFileExists = false;
+                  for (const path of [setupPatch.files[0], setupPatch.files[2]]) {
+                    try {
+                      await github.rest.repos.getContent({
+                        owner, repo, path, ref: defaultBranch
+                      });
+                      obsoleteTemporaryFileExists = true;
+                      break;
+                    } catch (error) {
+                      if (error.status !== 404) throw error;
+                    }
+                  }
+                  if (obsoleteTemporaryFileExists) continue;
+                  const currentSetup = (await github.rest.repos.getContent({
+                    owner, repo, path: setupPatch.files[1], ref: defaultBranch
+                  })).data;
+                  const runtimeTest = (await github.rest.repos.getContent({
+                    owner, repo, path: 'tests/test_setup_runtime_integrity.py',
+                    ref: defaultBranch
+                  })).data;
+                  const navigationTest = (await github.rest.repos.getContent({
+                    owner, repo, path: 'tests/test_setup_navigation_runtime_integrity.py',
+                    ref: defaultBranch
+                  })).data;
+                  const setupText = Buffer.from(currentSetup.content, 'base64').toString('utf8');
+                  const runtimeText = Buffer.from(runtimeTest.content, 'base64').toString('utf8');
+                  const navigationText = Buffer.from(navigationTest.content, 'base64').toString('utf8');
+                  if (![
+                        '_guided._PATCHED = False',
+                        '_guided.apply_guided_test_patch()',
+                        'def apply_public_setup_runtime()',
+                        '_install_response_integrity()',
+                        '_install_feature_area_integrity()',
+                        '_assert_runtime_ownership()',
+                      ].every(token => setupText.includes(token)) ||
+                      !runtimeText.includes('test_final_setup_runtime_has_one_deterministic_owner') ||
+                      !runtimeText.includes('runtime.apply_public_setup_runtime()') ||
+                      !navigationText.includes('runtime.apply_public_setup_runtime()')) continue;
+                  candidates.push({ name, sha: branch.commit.sha,
+                    reason: 'reviewed obsolete setup patch already owned and tested by main' });
                   continue;
                 }
                 const postF = reviewedPostFBranches.get(name);
