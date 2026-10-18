@@ -199,7 +199,8 @@ class CheersCallView(discord.ui.View):
         custom_id="dank_shield:cheers:call_crew:v1",
     )
     async def call_crew(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+        if (interaction.guild is None or not isinstance(interaction.user, discord.Member)
+                or interaction.user.bot):
             return await interaction.response.send_message(
                 "Use this button inside your Discord server.", ephemeral=True
             )
