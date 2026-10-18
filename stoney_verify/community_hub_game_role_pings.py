@@ -9,6 +9,8 @@ auto-ping at session creation, or convert external groups to native sessions.
 """
 
 import time
+import re
+import unicodedata
 from collections.abc import Mapping
 from typing import Any
 
@@ -41,7 +43,15 @@ def _as_dict(value: Any) -> dict[str, Any]:
 def notification_game_key(value: str) -> str:
     """Use the same known game aliases as Find Players for role mapping."""
     normalized = game_search_key(value)
-    return normalized or hub.game_key(value)
+    if normalized:
+        return normalized
+    # Unlike the historical ASCII-only fallback, different non-Latin game
+    # names must not collapse to a shared "game" role or ping each other.
+    unicode_name = unicodedata.normalize("NFKC", str(value)).casefold()
+    safe = re.sub(r"[^\\w]+", "-", unicode_name, flags=re.UNICODE).strip("-")[:80]
+    if not safe:
+        raise ValueError("Game name has no searchable characters.")
+    return safe
 
 
 def _as_int(value: Any) -> int:
