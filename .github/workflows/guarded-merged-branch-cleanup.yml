@@ -176,6 +176,18 @@ jobs:
               }],
             ]);
 
+            // Exact historical Design Studio language pass, abandoned after the
+            // runtime patch was physically retired in favor of native design v2.
+            // Do not reintroduce the removed patch or use branch-name heuristics.
+            const reviewedRetiredDesignPatch = new Map([
+              ['fix/dank-design-workflow-v3', {
+                sha: '66a9799e40ebb2cc5242f7c0cbf455e0eb58a544',
+                parent: '885fe86ba97b602d4fed4a8794be68519431c5bd',
+                deprecatedPath: 'stoney_verify/startup_guards/server_design_studio_command_guard.py',
+                obsoleteTest: 'tests/test_server_design_workflow_language_static.py',
+              }],
+            ]);
+
             const reviewedNonRuntime = new Map([
               ['chore/close-antinuke-authorized-bot-trust', {
                 sha: '15b8b1ac26761339e80cd6f42e83ca44d12a63a5',
@@ -557,6 +569,57 @@ jobs:
                       !mainTests.includes('"HTTPS search API"')) continue;
                   candidates.push({ name, sha: branch.commit.sha,
                     reason: 'reviewed post-merge source tutorial superseded by canonical provider/feed UX' });
+                  continue;
+                }
+                const designPatch = reviewedRetiredDesignPatch.get(name);
+                if (designPatch) {
+                  if (prs.length || branch.commit.sha !== designPatch.sha) continue;
+                  if (!await ancestorOfMain(designPatch.parent)) continue;
+                  const original = (await github.rest.repos.getCommit({
+                    owner, repo, ref: branch.commit.sha
+                  })).data;
+                  if (original.parents?.length !== 1 ||
+                      original.parents[0].sha !== designPatch.parent ||
+                      original.files?.length !== 2 ||
+                      !original.files.some(f => f.filename === designPatch.deprecatedPath &&
+                        f.status === 'modified') ||
+                      !original.files.some(f => f.filename === designPatch.obsoleteTest &&
+                        f.status === 'added')) continue;
+                  const comparison = await github.rest.repos.compareCommits({
+                    owner, repo, base: defaultBranch, head: branch.commit.sha
+                  });
+                  if (comparison.data.ahead_by !== 1 ||
+                      comparison.data.files?.length !== 2 ||
+                      !comparison.data.files.some(f => f.filename === designPatch.deprecatedPath &&
+                        f.status === 'modified') ||
+                      !comparison.data.files.some(f => f.filename === designPatch.obsoleteTest &&
+                        f.status === 'added')) continue;
+                  let deprecatedModuleStillExists = false;
+                  try {
+                    await github.rest.repos.getContent({
+                      owner, repo, path: designPatch.deprecatedPath, ref: defaultBranch
+                    });
+                    deprecatedModuleStillExists = true;
+                  } catch (error) {
+                    if (error.status !== 404) throw error;
+                  }
+                  if (deprecatedModuleStillExists) continue;
+                  const tests = (await github.rest.repos.getContent({
+                    owner, repo, path: 'tests/test_dank_design_runtime_ownership_033.py',
+                    ref: defaultBranch
+                  })).data;
+                  const group = (await github.rest.repos.getContent({
+                    owner, repo, path: 'stoney_verify/commands_ext/public_design_group.py',
+                    ref: defaultBranch
+                  })).data;
+                  const testText = Buffer.from(tests.content, 'base64').toString('utf8');
+                  const groupText = Buffer.from(group.content, 'base64').toString('utf8');
+                  if (!testText.includes('test_retired_runtime_patch_design_modules_are_physically_absent') ||
+                      !testText.includes('server_design_studio_command_guard.py') ||
+                      !groupText.includes('@dank_group.command(name="design"') ||
+                      !groupText.includes('public_design_studio_v2')) continue;
+                  candidates.push({ name, sha: branch.commit.sha,
+                    reason: 'reviewed obsolete Design Studio patch removed by native v2 ownership' });
                   continue;
                 }
                 const documentary = reviewedDocumentationOnly.get(name);
