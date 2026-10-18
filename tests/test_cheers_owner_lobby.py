@@ -147,3 +147,28 @@ def test_member_recruitment_lost_cas_race_never_posts(monkeypatch):
     assert "already being handled" in result
     mock_claim.assert_awaited_once()
     channel.send.assert_not_awaited()
+
+
+def test_old_discord_panel_cannot_ping_after_owner_moves_it(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from stoney_verify.commands_ext import public_cheers_owner as cheers
+
+    guild = SimpleNamespace(id=781932)
+    config = {cheers.KEY: {
+        "enabled": True, "role_id": "88", "channel_id": "99",
+        "panel_message_id": "777",
+        "cooldown_minutes": 15, "last_sent_at": 0,
+    }}
+    monkeypatch.setattr(cheers, "get_guild_config", AsyncMock(return_value=config))
+    valid = AsyncMock()
+    monkeypatch.setattr(cheers, "_valid_destination", valid)
+    claim = AsyncMock()
+    monkeypatch.setattr(cheers, "compare_and_swap_guild_config_key", claim)
+    result = asyncio.run(cheers._deliver_recruitment_ping(
+        guild, source_channel_id=98, source_message_id=776
+    ))
+    assert "has been replaced" in result
+    valid.assert_not_awaited()
+    claim.assert_not_awaited()
