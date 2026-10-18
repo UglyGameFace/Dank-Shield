@@ -958,3 +958,41 @@ def test_reviewed_cinema_auth_mobile_branch_exact_head_and_parity() -> None:
     assert "inUseByOpenPR.has(name)" in text
     assert "archive.object.sha !== candidate.sha" in text
     assert "current.protected || current.commit.sha !== candidate.sha" in text
+
+
+def test_movie_source_ux_retirement_checks_exact_head_and_inline_search_parity() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedMovieSourceUX = new Map([", 1)[1].split("]);", 1)[0]
+    assert manifest.count("['feat/") == 1
+    assert "feat/movie-night-easy-sources" in manifest
+    assert "6ebb720421bc57cfd46973e3e6632ef2a928eede" in manifest
+    assert "mergedHead: 'eb75bacc4b479a0ed0a896cb4c1b695a068bea98'" in manifest
+    assert "pr: 396" in manifest
+    assert "ahead: 10" in manifest
+    for path in (
+        "ACTIVE_TASK.md",
+        "stoney_verify/commands_ext/public_movie_night.py",
+        "stoney_verify/media_source_registry.py",
+        "stoney_verify/media_source_resolver.py",
+        "tests/test_media_source_registry.py",
+        "tests/test_media_source_resolver.py",
+        "tests/test_movie_night_public_ui.py",
+    ):
+        assert f"'{path}'" in manifest
+    assert "prs.length !== 1 || branch.commit.sha !== movieSource.sha" in text
+    assert "pr.head.sha !== movieSource.mergedHead" in text
+    assert "!await ancestorOfMain(pr.merge_commit_sha)" in text
+    assert "comparison.data.ahead_by !== movieSource.ahead" in text
+    assert "comparison.data.behind_by !== 0" in text
+    assert "comparison.data.files?.length !== movieSource.files.length" in text
+    assert "movieSource.files.includes(f.filename)" in text
+    assert "oldNames.every(" in text
+    assert "functionNames(historical).every(name =>" in text
+    assert "'_external_provider_links', '_open_external_search_results'" in text
+    assert "test_primary_candidate_controls_never_open_provider_websites" in text
+    assert "test_search_vote_never_falls_back_to_external_browser_providers" in text
+    assert "test_movie_sources_page_separates_search_rss_and_reference_links" in text
+    assert "if (!safe) continue;" in text
+    assert "inUseByOpenPR.has(name)" in text
+    assert "archive.object.sha !== candidate.sha" in text
+    assert "current.protected || current.commit.sha !== candidate.sha" in text
