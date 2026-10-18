@@ -645,3 +645,33 @@ def test_cleanup_deletion_failure_is_visible_and_only_transient_errors_retry() -
     assert "core.error(`Cleanup deletion failed: ${failure}`)" in text
     assert "core.setFailed(`Partial cleanup: ${failed.length} branch deletions failed; inspect errors above`)" in text
     assert "archive.object.sha !== candidate.sha" in text
+
+
+def test_reviewed_superseded_movie_source_tutorial_requires_replacement_parity() -> None:
+    text = _workflow()
+    manifest = text.split(
+        "const reviewedSupersededSourceTutorial = new Map([", 1
+    )[1].split("]);", 1)[0]
+    assert manifest.count("['fix/") == 1
+    assert "fix/movie-night-source-ux-session-end" in manifest
+    assert "925706019b118c78fe62fe93d1eafd5588623049" in manifest
+    assert "originalPr: 395" in manifest
+    assert "replacementPr: 396" in manifest
+    assert "mergedHead: 'e58dc3985bac10a57d07aaffc1e9cb9d24199ee4'" in manifest
+    assert "ahead: 2" in manifest
+    assert "sourceTutorial.sha || prs.length !== 1" in text
+    assert "originalPr.head.sha !== sourceTutorial.mergedHead" in text
+    assert "!await ancestorOfMain(originalPr.merge_commit_sha)" in text
+    assert "!await ancestorOfMain(replacement.merge_commit_sha)" in text
+    assert "comparison.data.ahead_by !== sourceTutorial.ahead" in text
+    assert "comparison.data.behind_by !== 0" in text
+    assert "sourceTutorial.files.includes(f.filename)" in text
+    for token in (
+        'label="Feed name" if is_feed else "Search provider name"',
+        '"RSS / Atom feed URL" if is_feed else "HTTPS search API"',
+        'name="📡 RSS Feeds"',
+        'name="🧩 Search Providers"',
+    ):
+        assert token in text
+    assert "archive.object.sha !== candidate.sha" in text
+    assert "current.protected || current.commit.sha !== candidate.sha" in text
