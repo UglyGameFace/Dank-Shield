@@ -11,8 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_public_setup_is_a_canonical_direct_dank_child() -> None:
-    assert {"home", "purge", "setup", "upload", "protection", "voice-safety", "diagnostics", "help"} <= PUBLIC_DANK_CHILDREN
-    assert len(PUBLIC_DANK_CHILDREN) == 17
+    assert {"home", "purge", "setup", "upload", "protection", "voice-safety", "diagnostics", "help", "cheers"} <= PUBLIC_DANK_CHILDREN
+    assert len(PUBLIC_DANK_CHILDREN) == 18
     assert "setup" not in PUBLIC_HIDDEN_DANK_CHILDREN
 
 
@@ -21,7 +21,7 @@ def test_compactor_preserves_exact_canonical_setup_command() -> None:
     assert 'setup_command = dank_group.get_command("setup")' in source
     assert 'dank_group.add_command(setup_command)' in source
     assert 'canonical /dank setup is unavailable before public compaction' in source
-    assert 'expected_children = sorted(["home", "setup", "upload"] + [name for name, _, _ in DANK_SHORTCUTS])' in source
+    assert 'expected_children = sorted(["home", "setup", "upload", "cheers"] + [name for name, _, _ in DANK_SHORTCUTS])' in source
 
 
 def test_final_surface_keeps_setup_purge_and_curated_shortcuts() -> None:

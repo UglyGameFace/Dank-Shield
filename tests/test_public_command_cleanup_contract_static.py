@@ -27,8 +27,8 @@ def test_native_command_tree_owns_sync_policy() -> None:
 
 
 def test_public_command_contract_is_canonical_and_runtime_pruning_is_disabled_by_default() -> None:
-    assert {"home", "purge", "setup", "upload", "protection", "voice-safety"} <= PUBLIC_DANK_CHILDREN
-    assert len(PUBLIC_DANK_CHILDREN) == 17
+    assert {"home", "purge", "setup", "upload", "protection", "voice-safety", "cheers"} <= PUBLIC_DANK_CHILDREN
+    assert len(PUBLIC_DANK_CHILDREN) == 18
     assert "PUBLIC_DANK_CHILDREN" in RUNTIME
     assert 'DANK_DISABLE_RUNTIME_COMMAND_PRUNE", True' in COMMANDS_EXT
     assert "def _runtime_command_prune_disabled()" in COMMANDS_EXT

@@ -78,7 +78,7 @@ def main() -> int:
         failures.append(
             f"canonical global surface mismatch: count={PUBLIC_GLOBAL_COMMAND_COUNT} names={PUBLIC_GLOBAL_COMMAND_NAMES!r}"
         )
-    if not {"home", "purge", "setup", "upload", "protection", "voice-safety", "diagnostics", "help"} <= PUBLIC_DANK_CHILDREN or len(PUBLIC_DANK_CHILDREN) != 17:
+    if not {"home", "purge", "setup", "upload", "protection", "voice-safety", "diagnostics", "help", "cheers"} <= PUBLIC_DANK_CHILDREN or len(PUBLIC_DANK_CHILDREN) != 18:
         failures.append(f"canonical /dank children mismatch: {sorted(PUBLIC_DANK_CHILDREN)!r}")
 
     for path in (

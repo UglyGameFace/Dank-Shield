@@ -16,9 +16,10 @@ def test_shortcuts_are_useful_curated_registered_and_permission_owned():
         "community", "design", "diagnostics", "help", "logs", "pings",
         "profile", "protection", "share", "stats", "status", "voice-safety", "welcome",
     }
-    assert len(shortcuts) + 4 <= 25
+    assert len(shortcuts) + 5 <= 25
     assert set(shortcuts).isdisjoint(PUBLIC_HIDDEN_DANK_CHILDREN)
-    assert PUBLIC_DANK_CHILDREN == set(shortcuts) | {"home", "setup", "upload", "purge"}
+    assert PUBLIC_DANK_CHILDREN == set(shortcuts) | {"home", "setup", "upload", "purge", "cheers"}
+    assert "cheers" not in shortcuts  # CHEERS is an owner-only command group, not a regular shortcut.
     assert len(shortcuts) == len(surface.DANK_SHORTCUTS)
     for name, _, feature_key in surface.DANK_SHORTCUTS:
         assert feature_key in surface._FEATURE_ROUTE_KEYS

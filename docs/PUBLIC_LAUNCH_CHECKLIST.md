@@ -41,6 +41,7 @@ The eleventh global application command is the user context menu **View Dank Pro
 The public `/dank` group exposes these direct shortcuts only; deeper actions live in their feature managers:
 
 ```text
+cheers
 community
 design
 diagnostics
