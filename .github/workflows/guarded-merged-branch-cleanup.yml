@@ -168,12 +168,14 @@ jobs:
               }],
             ]);
 
-            // Frozen 2026-10-18 audit: each of these 17 exact HEAD commits was
+            // Frozen 2026-10-18 audit: each listed exact HEAD commit was
             // independently verified 0 ahead of main. Only owner-dispatched
             // preview-reviewed/delete-reviewed may consider them. Never infer
             // safety from age, prefix or from a branch merely being closed.
             // Live Discloud-linked, backup/recovery and open-PR refs excluded.
             const reviewedZeroAheadOctober18 = new Map([
+              ['feat/community-hub-game-role-pings-20261018', 'd98b80fa0fc1646990a15c575cd98cc412eee615'],
+              ['feat/ticket-new-staff-alerts-20261018', 'af9b51af1df9e99da40a8afa318e50bcff818f37'],
               ['feat/cheers-owner-lobby-role-pings-20261018', '1e52379c8fd14917a19accb2223d1b7fa1a0ab06'],
               ['feat/community-hub-session-preference-filters-20261018', '08b5b17e98d73405633dba83f46cd1f87317971f'],
               ['feat/community-hub-the100-readonly-20261018', 'a7a63adbd21dc57bbfbb5adec5171f3716de1f55'],
