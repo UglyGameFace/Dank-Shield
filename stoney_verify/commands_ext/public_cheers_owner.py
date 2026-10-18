@@ -174,6 +174,12 @@ async def _deliver_recruitment_ping(guild: discord.Guild) -> str:
             color=discord.Color.from_rgb(180, 238, 132),
         )
         embed.set_footer(text="Website CHEERS • Not a /toke sesh notification")
+        # Reserve the shared cooldown before sending the non-idempotent
+        # Discord mention. If durable config cannot confirm the write,
+        # fail closed instead of pinging with no enforced cooldown.
+        # An uncertain Discord send outcome still consumes the reservation.
+        if not await _save(guild.id, {**settings, "last_sent_at": now}):
+            return "CHEERS cooldown storage is unavailable. No role ping was sent."
         try:
             sent = await channel.send(
                 content=role.mention,
@@ -181,12 +187,11 @@ async def _deliver_recruitment_ping(guild: discord.Guild) -> str:
                 allowed_mentions=discord.AllowedMentions(everyone=False, users=False, roles=[role]),
             )
         except discord.HTTPException as exc:
-            return f"Could not post CHEERS role ping: {type(exc).__name__}. Check permissions."
-        saved = await _save(guild.id, {**settings, "last_sent_at": now})
-        return (
-            f"CHEERS invitation posted in {channel.mention}: {sent.jump_url}"
-            + ("" if saved else " ⚠️ Persistent cooldown update failed. Fix guild-config storage before another ping.")
-        )
+            return (
+                f"Could not confirm the CHEERS announcement: {type(exc).__name__}. "
+                "The cooldown remains reserved to prevent duplicate role pings."
+            )
+        return f"CHEERS invitation posted in {channel.mention}: {sent.jump_url}"
 
 
 class CheersCallView(discord.ui.View):
