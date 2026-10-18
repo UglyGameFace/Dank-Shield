@@ -576,3 +576,37 @@ def test_reviewed_modlog_hotfix_retirement_requires_main_parity() -> None:
     assert "modlogReview.sha !== branch.commit.sha" in text
     assert "DANK_ENABLE_PUBLIC_MEMBER_UPDATE_FALLBACK_MODLOG" in text
     assert "original.files[0].status !== 'modified'" in text
+
+
+def test_reviewed_non_runtime_heads_are_strictly_bounded() -> None:
+    """Two specifically audited historical refs cannot widen cleanup scope."""
+    text = _workflow()
+    manifest = text.split("const reviewedNonRuntime = new Map([", 1)[1].split("]);", 1)[0]
+    assert manifest.count("kind:") == 2
+    for name, sha in (
+        ("chore/close-antinuke-authorized-bot-trust", "15b8b1ac26761339e80cd6f42e83ca44d12a63a5"),
+        ("feature/shared-picker-entity-selects", "7ee337f12df9f02e3c75a3bf5a9b569dac02ada8"),
+    ):
+        assert manifest.count(f"['{name}', {{") == 1
+        assert manifest.count(f"sha: '{sha}'") == 1
+
+    assert "kind: 'closed-task-record', pr: 237, implementedPr: 236" in manifest
+    assert "onlyFile: 'ACTIVE_TASK.md', ahead: 2" in manifest
+    assert "kind: 'post-merge-audit', pr: 83" in manifest
+    assert "mergedHead: '98ad6a9cff82e6deb88875b8c44c8443fb03417e'" in manifest
+    assert "onlyFile: 'tools/audit_picker_adoption.py', ahead: 3" in manifest
+
+    assert "nonRuntime.sha !== branch.commit.sha || prs.length !== 1" in text
+    assert "pr.state !== 'closed'" in text
+    assert "pr.base?.ref !== defaultBranch" in text
+    assert "pr.merged_at || pr.head.sha !== branch.commit.sha" in text
+    assert "!implemented || !await ancestorOfMain(implemented.merge_commit_sha)" in text
+    assert "!pr.merged_at || pr.head.sha !== nonRuntime.mergedHead" in text
+    assert "comparison.data.behind_by !== 0" in text
+    assert "comparison.data.ahead_by !== nonRuntime.ahead" in text
+    assert "comparison.data.files?.length !== 1" in text
+    assert "comparison.data.files[0].filename !== nonRuntime.onlyFile" in text
+    assert "comparison.data.files[0].status !== fileStatus" in text
+    assert "current.protected || current.commit.sha !== candidate.sha" in text
+    assert "archive.object.sha !== candidate.sha" in text
+    assert "if (inUseByOpenPR.has(name)) continue;" in text
