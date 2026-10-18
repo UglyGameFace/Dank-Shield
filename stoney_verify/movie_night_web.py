@@ -4890,6 +4890,32 @@ function attachStream(url, force=false) {{
   applyUserAudioState(false);
 }}
 
+function offerPlaybackRecovery() {{
+  // Only the host can change the shared room. Never switch media for a viewer.
+  const existing=document.getElementById("cinemaRecoveryAction");
+  if(existing) existing.remove();
+  if(!lastState?.is_host || terminated) return;
+  const button=document.createElement("button");
+  button.id="cinemaRecoveryAction";
+  button.type="button";
+  button.textContent="Find another release";
+  button.style.cssText="margin:8px 0 0;display:block;min-height:40px;padding:8px 14px";
+  button.onclick=()=>{{
+    const queue=document.getElementById("queuePanel");
+    const form=document.getElementById("queueAddForm");
+    if(!queue || !form) return;
+    form.hidden=false;
+    queue.scrollIntoView({{behavior:"smooth",block:"nearest"}});
+    const search=document.getElementById("queueSearchInput");
+    if(search) {{
+      const title=String(lastState?.movie?.title||lastState?.title||"").trim();
+      if(title && !search.value) search.value=title.slice(0,180);
+      search.focus();
+    }}
+  }};
+  notice.appendChild(button);
+}}
+
 function scheduleStreamRetry() {{
   if(
     terminated ||
@@ -4910,10 +4936,12 @@ function scheduleStreamRetry() {{
       :(host
         ?"This browser cannot play the selected source. Select a compatible Cinema release; do not keep reloading this file."
         :"This browser cannot play the selected source. Other viewers may still be watching. Ask the host for a compatible release.");
+    offerPlaybackRecovery();
     return;
   }}
   if(streamRetryAttempt>=STREAM_RETRY_LIMIT) {{
     notice.textContent="The media stream failed repeatedly. Automatic reload stopped. Try another release.";
+    offerPlaybackRecovery();
     return;
   }}
   const step=Math.min(streamRetryAttempt,4);
