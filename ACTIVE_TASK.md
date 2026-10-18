@@ -1,3 +1,31 @@
+# Active Task Lock — Community Hub external gaming discovery (2026-10-18)
+
+**Authorized FORCE SWITCH**: "Community Hub LFG Integration" with reason "Prioritize unified external gaming group discovery and matchmaking." Previous /toke overhaul is **suspended**, not completed; all original task records remain below. This is the only active coding task.
+
+**Outcome / bounded slice**: extend the authoritative existing Community Hub interface with an optional *read-only* The100.io session browser. This is an independent external source; no external result becomes a Dank Shield session or can be joined through Community Hub. No role pings, automated matching, new listeners, or separate bot.
+
+**Base and branch**: `main@46a0f75458c3cf61d4e8f359c1328aa9e06de8ee`; `feat/community-hub-the100-readonly-20261018`. Backlog scope: issue #638, with later integrations, filtering, role notification wiring, and website work preserved rather than mixed into this first release slice.
+
+**Inspected execution path / authority**:
+- `public_command_surface_v2` routes to `commands_ext/public_community_hub.py`; `CommunityHubView` owns member panels, `FindPlayersView` owns local and partner selections, `HubSettingsView` owns staff settings.
+- `community_hub_service.py` reads/writes Supabase `dank_community_hub_settings` and uses RPCs for session/availability/partner authority. `community_hub_runtime.py` owns Discord session resources and recovery. None of those are replaced.
+- Existing `community_pings_v2` is not altered; /toke role, Cheers, and session mechanics stay isolated.
+- The100.io documents `GET /api/v2/gaming_sessions` with an authenticated personal or supporter token (Rails `Token token=...`); write-capable Discord Bot API requires separate approval. The adapter is deliberately read-only and must be enabled per guild.
+
+**Changes staged**:
+- Dedicated external provider adapter with HTTPS-only API and sanitized ID-derived URLs, bounded response/timeouts, invalid/denied response handling, and no external writes.
+- New `external_the100_enabled` per-guild default-off column migration and service settings allowlist.
+- Existing Community Hub → External Groups / Find Players → External Groups member UI; read-only source-labeled paged links; staff toggle in existing settings; server and host gating.
+- Focused source and safety tests.
+
+**Current status**: branch modifications authored; validation and exact-head CI still pending. Not merged, not deployed, no source API token configured/verified, no schema migration applied to production. Do not label this live/complete.
+
+**Validation gates / next**: run focused pytest plus existing Community Hub, app command size, and full CI; inspect final diff for inadvertent changes; verify DB migration compatibility and missing-token/off-state fail-safe. Only after CI and explicit release gating test on Discord mobile/desktop plus Discloud host and provider authorization. No production deployment or disruptive migration authorized.
+
+**Suspended /toke checkpoint**: PR #567 merged 2026-10-14 (head `a7b05a70b5a6cdfaf1139695e96e2f962ad874b0`). Six associated workflow runs reported success. Active-task record below still requires real Android/Discloud acceptance and work on cross-process storage, quiet hours, scale, and documented live migration blockers. Do not silently switch back, delete its work, or claim task completion.
+
+---
+
 # Active Task Lock — /toke indexed VC routing and no-op suppression (2026-10-14)
 
 **Active task:** Continue complete Dank Shield /toke overhaul, not the
