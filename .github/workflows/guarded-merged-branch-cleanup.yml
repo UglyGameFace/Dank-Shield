@@ -141,6 +141,23 @@ jobs:
               }],
             ]);
 
+            // Non-runtime historical heads audited independently on 2026-10-18.
+            // Preserve all unique commits under exact-SHA archive tags before
+            // retiring the active refs; do not generalize by prefix or age.
+            const reviewedNonRuntime = new Map([
+              ['chore/close-antinuke-authorized-bot-trust', {
+                sha: '15b8b1ac26761339e80cd6f42e83ca44d12a63a5',
+                kind: 'closed-task-record', pr: 237, implementedPr: 236,
+                onlyFile: 'ACTIVE_TASK.md', ahead: 2,
+              }],
+              ['feature/shared-picker-entity-selects', {
+                sha: '7ee337f12df9f02e3c75a3bf5a9b569dac02ada8',
+                kind: 'post-merge-audit', pr: 83,
+                mergedHead: '98ad6a9cff82e6deb88875b8c44c8443fb03417e',
+                onlyFile: 'tools/audit_picker_adoption.py', ahead: 3,
+              }],
+            ]);
+
             const reviewedModlogFallback = new Map([
               ['hotfix/modlog-noise-coalesce', {
                 sha: '1c9aa21dbd39c924632a544f3dff67fa798d1e0b',
@@ -462,6 +479,50 @@ jobs:
                       currentText.includes('DS-AUD-PROTECTION-PICKERS')) continue;
                   candidates.push({ name, sha: branch.commit.sha,
                     reason: 'reviewed stale planning-only task lock superseded by current main task' });
+                  continue;
+                }
+                const nonRuntime = reviewedNonRuntime.get(name);
+                if (nonRuntime) {
+                  if (nonRuntime.sha !== branch.commit.sha || prs.length !== 1) continue;
+                  const pr = prs[0];
+                  if (pr.number !== nonRuntime.pr ||
+                      pr.state !== 'closed' ||
+                      pr.base?.ref !== defaultBranch) continue;
+                  let fileStatus;
+                  let comparison;
+                  if (nonRuntime.kind === 'closed-task-record') {
+                    if (pr.merged_at || pr.head.sha !== branch.commit.sha) continue;
+                    const implemented = closedPRs.find(p =>
+                      p.number === nonRuntime.implementedPr &&
+                      p.merged_at && p.base?.ref === defaultBranch &&
+                      p.head?.repo?.full_name === fullName
+                    );
+                    if (!implemented || !await ancestorOfMain(implemented.merge_commit_sha)) continue;
+                    comparison = await github.rest.repos.compareCommits({
+                      owner, repo, base: defaultBranch, head: branch.commit.sha,
+                    });
+                    fileStatus = 'modified';
+                    const current = await github.rest.repos.getContent({
+                      owner, repo, path: nonRuntime.onlyFile, ref: defaultBranch,
+                    });
+                    const currentText = Buffer.from(current.data.content, 'base64').toString('utf8');
+                    if (!currentText.startsWith('# Active Task Lock')) continue;
+                  } else if (nonRuntime.kind === 'post-merge-audit') {
+                    if (!pr.merged_at || pr.head.sha !== nonRuntime.mergedHead) continue;
+                    comparison = await github.rest.repos.compareCommits({
+                      owner, repo, base: nonRuntime.mergedHead, head: branch.commit.sha,
+                    });
+                    if (comparison.data.behind_by !== 0) continue;
+                    fileStatus = 'added';
+                  } else {
+                    continue;
+                  }
+                  if (comparison.data.ahead_by !== nonRuntime.ahead ||
+                      comparison.data.files?.length !== 1 ||
+                      comparison.data.files[0].filename !== nonRuntime.onlyFile ||
+                      comparison.data.files[0].status !== fileStatus) continue;
+                  candidates.push({ name, sha: branch.commit.sha,
+                    reason: 'reviewed ' + nonRuntime.kind + ' (exact historical SHA)' });
                   continue;
                 }
                 const modlogReview = reviewedModlogFallback.get(name);
