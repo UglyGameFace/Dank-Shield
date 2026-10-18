@@ -701,3 +701,28 @@ def test_retired_design_v3_branch_requires_exact_head_removed_module_native_owne
     assert "inUseByOpenPR.has(name)" in text
     assert "archive.object.sha !== candidate.sha" in text
     assert "current.protected || current.commit.sha !== candidate.sha" in text
+
+
+def test_cinema_wake_branch_retirement_requires_canonical_reconnect_parity() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedCinemaWakeRecovery = new Map([", 1)[1].split("]);", 1)[0]
+    assert manifest.count("['fix/") == 1
+    assert "fix/cinema-first-byte-startup" in manifest
+    assert "e32974e3c778e70f2e81fa7fe56442f6264a70e8" in manifest
+    assert "originalPr: 465" in manifest
+    assert "mergedHead: 'e407bab4a73d264fcd5c89da43cef3477fde6a3d'" in manifest
+    assert "ahead: 3" in manifest
+    for path in ("ACTIVE_TASK.md", "stoney_verify/movie_night_web.py", "tests/test_movie_night_web.py"):
+        assert f"'{path}'" in manifest
+    assert "branch.commit.sha !== cinemaWake.sha || prs.length !== 1" in text
+    assert "pr.number !== cinemaWake.originalPr" in text
+    assert "pr.head.sha !== cinemaWake.mergedHead" in text
+    assert "!await ancestorOfMain(pr.merge_commit_sha)" in text
+    assert "comparison.data.ahead_by !== cinemaWake.ahead" in text
+    assert "comparison.data.behind_by !== 0" in text
+    assert "cinemaWake.files.includes(f.filename)" in text
+    assert "requiredReconnect.every(token => webText.includes(token)" in text
+    assert "testText.includes(token)" in text
+    assert "inUseByOpenPR.has(name)" in text
+    assert "archive.object.sha !== candidate.sha" in text
+    assert "current.protected || current.commit.sha !== candidate.sha" in text
