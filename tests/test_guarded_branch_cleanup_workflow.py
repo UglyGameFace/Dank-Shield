@@ -634,3 +634,14 @@ def test_reviewed_document_only_historical_audit_exact_manifest() -> None:
     assert "inUseByOpenPR.has(name)" in text
     assert "current.protected || current.commit.sha !== candidate.sha" in text
     assert "archive.object.sha !== candidate.sha" in text
+
+
+def test_cleanup_deletion_failure_is_visible_and_only_transient_errors_retry() -> None:
+    text = _workflow()
+    assert "for (let attempt = 1; attempt <= 2; attempt++)" in text
+    assert "status === 429 || status >= 500 || isRateLimited" in text
+    assert "if (!isTransient || attempt === 2) throw error;" in text
+    assert "rechecked.protected || rechecked.commit.sha !== candidate.sha" in text
+    assert "core.error(`Cleanup deletion failed: ${failure}`)" in text
+    assert "core.setFailed(`Partial cleanup: ${failed.length} branch deletions failed; inspect errors above`)" in text
+    assert "archive.object.sha !== candidate.sha" in text
