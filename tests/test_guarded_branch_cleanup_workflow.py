@@ -918,3 +918,43 @@ def test_reviewed_picker_and_cinema_source_branches_require_exact_parity() -> No
     assert "inUseByOpenPR.has(name)" in workflow
     assert "archive.object.sha !== candidate.sha" in workflow
     assert "current.protected || current.commit.sha !== candidate.sha" in workflow
+
+
+def test_reviewed_cinema_auth_mobile_branch_exact_head_and_parity() -> None:
+    text = _workflow()
+    manifest = text.split(
+        "const reviewedCinemaAuthMobile = new Map([", 1
+    )[1].split("]);", 1)[0]
+    assert manifest.count("['fix/") == 1
+    assert "fix/cinema-discord-command-surface" in manifest
+    assert "6577d8659b207fa8dc129d544fffbed1d4114da9" in manifest
+    assert "mergedHead: 'd4c8ead5322ef5816dab050e4cbe5d7f62ada9a4'" in manifest
+    assert "pr: 443" in manifest
+    assert "ahead: 6" in manifest
+    for path in (
+        "ACTIVE_TASK.md",
+        "stoney_verify/assets/cinema_site.css",
+        "stoney_verify/assets/cinema_site.js",
+        "stoney_verify/cinema_site.py",
+        "tests/test_cinema_full_platform.py",
+    ):
+        assert f"'{path}'" in manifest
+    assert "prs.length !== 1 || branch.commit.sha !== cinemaAuth.sha" in text
+    assert "pr.head.sha !== cinemaAuth.mergedHead" in text
+    assert "!await ancestorOfMain(pr.merge_commit_sha)" in text
+    assert "comparison.data.ahead_by !== cinemaAuth.ahead" in text
+    assert "comparison.data.behind_by !== 0" in text
+    assert "comparison.data.files?.length !== cinemaAuth.files.length" in text
+    assert "cinemaAuth.files.includes(f.filename)" in text
+    for marker in (
+        "_recent_oauth_guild_proof",
+        "validate_cinema_guilds",
+        "const SVG_ICON_PATHS",
+        "test_standalone_oauth_guild_proof_is_exact_guild_scoped",
+        "test_discord_signed_api_fallback_honors_member_remove_revocation",
+        "test_full_site_uses_real_navigation_icons_and_cache_busted_assets",
+    ):
+        assert marker in text
+    assert "inUseByOpenPR.has(name)" in text
+    assert "archive.object.sha !== candidate.sha" in text
+    assert "current.protected || current.commit.sha !== candidate.sha" in text
