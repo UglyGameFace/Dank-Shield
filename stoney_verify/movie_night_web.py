@@ -4492,14 +4492,20 @@ function browserVideoCapability(s) {{
     )||"").toLowerCase();
   }} catch(_) {{}}
   const detail=(codec||"unknown codec")+" / "+media;
+  const frameSeen=startupTrace.events.first_frame!==undefined;
+  // The container-level canPlayType hint is conservative (notably for MKV).
+  // An actual decoded frame overrides an empty advisory MIME response.
+  if(frameSeen && !video.error) return {{
+    supported:true,
+    label:detail+" • video frame decoded successfully in this browser"
+  }};
   if(!decision) return {{
-    supported:false,
-    label:detail+" • browser reports no native decode; choose another release"
+    supported:null,
+    label:detail+" • browser cannot confirm support from MIME alone; testing playback"
   }};
   if(!codecHint) return {{
     supported:null, label:detail+" • browser codec status uncertain"
   }};
-  const frameSeen=startupTrace.events.first_frame!==undefined;
   return {{
     supported:true,
     label:detail+" • browser reports "+decision+
