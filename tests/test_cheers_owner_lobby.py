@@ -40,3 +40,19 @@ def test_cooldown_is_persisted_per_guild_and_no_website_secrets():
     assert "if not await _save(guild.id, setting):" in MODULE
     for secret in ("DISCORD_TOKEN", "BOT_API_SHARED_SECRET", "DANK_CINEMA_"):
         assert secret not in MODULE
+
+
+def test_member_recruitment_panel_persists_and_shares_owner_throttle():
+    assert "class CheersCallView(discord.ui.View)" in MODULE
+    assert "timeout=None" in MODULE
+    assert 'custom_id="dank_shield:cheers:call_crew:v1"' in MODULE
+    assert "_bot.add_view(CheersCallView())" in MODULE
+    assert "_publish_panel(channel, previous)" in MODULE
+    assert "panel_message_id" in MODULE
+    assert "existing.edit(" in MODULE
+    assert "discord.AllowedMentions.none()" in MODULE
+    assert MODULE.count("await _deliver_recruitment_ping(") == 2
+    assert "async with lock:" in MODULE
+    assert "get_guild_config(guild.id, refresh=True)" in MODULE
+    assert "Next CHEERS role ping available" in MODULE
+    assert "await interaction.response.defer(ephemeral=True, thinking=True)" in MODULE
