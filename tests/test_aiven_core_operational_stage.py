@@ -187,6 +187,24 @@ def test_stage_verifies_original_text_and_rejects_extras_or_tampering():
         core.verify_existing(Destination([tuple(bad)]),p)
 
 
+def test_aggregate_storage_metrics_never_fetch_source_rows():
+    class Cursor:
+        def __enter__(self):
+            return self
+        def __exit__(self,*_):
+            return False
+        def execute(self,sql):
+            assert "pg_database_size(current_database())" in sql
+            assert "pg_total_relation_size" in sql
+            assert "source_json_text" not in sql
+        def fetchone(self):
+            return (10485760, 1048576, 262144)
+    class Database:
+        def cursor(self):
+            return Cursor()
+    assert core.storage_usage_mib(Database()) == (10.0, 1.0, 0.25)
+
+
 def test_workflow_is_owner_dispatch_only_without_deploy_or_sensitive_artifacts():
     wf=(Path(__file__).resolve().parents[1]/
         ".github/workflows/aiven-core-operational-staging.yml").read_text()
