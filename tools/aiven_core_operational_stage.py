@@ -117,6 +117,7 @@ def source_snapshot(source) -> Snapshot:
     raw_bytes = 0
     for table, keys in TABLE_KEYS.items():
         digest = sha256()
+        seen_keys: set[str] = set()
         count = 0
         # In-code fixed SQL identifiers, never supplied by the workflow input.
         order = ", ".join(f"t.{key}" for key in keys)
@@ -130,6 +131,9 @@ def source_snapshot(source) -> Snapshot:
                     break
                 for (row_json,) in batch:
                     item = encode_original(table, row_json)
+                    if item.record_key in seen_keys:
+                        raise RuntimeError("source has overlapping/duplicate primary keys")
+                    seen_keys.add(item.record_key)
                     originals.append(item)
                     count += 1
                     raw_bytes += item.raw_bytes
