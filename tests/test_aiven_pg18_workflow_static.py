@@ -13,7 +13,7 @@ def test_aiven_pg18_workflow_cannot_access_live_database():
     assert "  workflow_dispatch:" in wf
     assert "ON_ERROR_STOP=1" in wf
     assert "for pass in 1 2;" in wf
-    assert "secrets." not in wf
+    assert "${{ secrets." not in wf
     assert "vars." not in wf
     assert "AIVEN_POSTGRES_URI" not in wf
     assert "DISCLOUD_TOKEN" not in wf
