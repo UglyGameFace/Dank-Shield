@@ -69,9 +69,20 @@ def test_decompression_fails_closed_on_tampering_size_drift_and_bombs():
     huge = zlib.compress(b"x" * (archive.MAX_ROW_BYTES + 10))
     with pytest.raises(ValueError):
         archive.unpack_record(huge, "a" * 64, archive.MAX_ROW_BYTES + 10)
-    invalid_json = b'{"noncanonical": true}'
+    invalid_json = b'["not an object"]'
     with pytest.raises(ValueError):
         archive.unpack_record(zlib.compress(invalid_json), sha256(invalid_json).hexdigest(), len(invalid_json))
+
+
+def test_archived_json_text_retains_exact_decimal_precision():
+    original = (
+        '{"id":"event-1","guild_id":"1514374173517152418",'
+        '"created_at":"2026-10-19T12:00:00+00:00",'
+        '"exact_decimal":1234567890.12345678901234567890}'
+    )
+    record = archive.pack_record("activity_feed_events", "event-1",
+                                 "1514374173517152418", NOW, original)
+    assert archive.unpack_original_json(record[6], record[4], record[5]) == original
 
 
 def test_unapproved_tables_and_mismatched_identity_are_rejected():
