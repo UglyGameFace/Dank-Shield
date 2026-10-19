@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "scope": "Discloud PostgreSQL schema only; pre-existing Supabase data is not modified by this registry",
+  "scope": "Discloud PostgreSQL and isolated Aiven PG18 schemas; existing Supabase source remains authoritative and is not modified by this registry",
   "tables": {
     "public.dank_verify_reminder_delivery": {
       "feature": "Simple Verify per-guild reminder attempt counters",
@@ -94,6 +94,33 @@
       "migration": "postgres/migrations/202610130004_guild_config_atomic_state.sql",
       "retention_class": "guild_configuration",
       "historical_reuse": "Durable current settings, setup, verification and protected role/channel choices; monotonically increasing revision for CAS and safe rollback",
+      "review_interval_days": 180
+    },
+    "dank_archive.original_rows": {
+      "feature": "Guarded Aiven PostgreSQL 18 lossless historical data preservation",
+      "owner": "tools.aiven_history_archive; explicitly invoked owner-only GitHub Actions archive workflow",
+      "purpose": "Preserve all original Dank Shield configuration history, moderation logs, activity feed and invite-block evidence in compressed, digest-verified private storage without duplicating those payloads in future live indexes",
+      "stored_fields": [
+        "source_table",
+        "record_key",
+        "guild_id",
+        "event_at",
+        "source_sha256",
+        "payload_codec",
+        "raw_bytes",
+        "compressed_payload",
+        "archived_at"
+      ],
+      "contains_message_content": true,
+      "retention_rule": "No automatic expiration, cleanup, archive rewrites or deletion. Retain all original rows until a fresh independently restorable encrypted off-database backup, exact history parity, explicit legal/privacy retention review and separately authorized data lifecycle migration are verified.",
+      "cleanup_interval_seconds": 86400,
+      "max_candidates_per_cleanup": 100,
+      "expiry_index": "primary key (source_table, record_key) and (guild_id,event_at desc); no TTL/expiry index or active cleanup worker",
+      "preserve_when": "All original moderation/security history, incident evidence, source/target parity pending, missing backup or restore drill, source changes after snapshot, unknown consent or active guild/user dependencies",
+      "backup_class": "full_fidelity_sensitive_history_archive_pending_independent_backup",
+      "migration": "postgres/migrations/202610190001_aiven_compressed_history_archive.sql",
+      "retention_class": "durable_security_evidence",
+      "historical_reuse": "Recover original byte-exact PostgreSQL JSON text with SHA-256 and zlib verification; reconstruct original feed display metadata, config changes and security incidents without lossy deduplication",
       "review_interval_days": 180
     }
   }
