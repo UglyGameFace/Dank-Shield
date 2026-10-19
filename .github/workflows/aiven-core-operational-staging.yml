@@ -49,7 +49,10 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install isolated PostgreSQL and test clients
-        run: python -m pip install -q "psycopg[binary]>=3.2,<4" "pytest>=8,<10"
+        # The lifecycle contract imports verification_reminders, guild_config,
+        # and other production modules; match the existing PG17 contract CI.
+        run: |
+          python -m pip install -q "pytest>=8,<10" "psycopg[binary]>=3.2,<4" "discord.py>=2.6,<3" "supabase>=2.24,<3" "python-dotenv>=1,<1.1"
       - name: Verify focused operational staging contracts
         run: python -m pytest -q --tb=short tests/test_aiven_core_operational_stage.py tests/test_postgres_data_lifecycle.py
       - name: Preview, install or stage preserved originals
