@@ -36,6 +36,9 @@ on:
       - "tests/test_postgres_data_lifecycle.py"
       - "tests/test_aiven_history_archive.py"
       - "tests/test_aiven_core_operational_stage.py"
+      - "tests/test_aiven_auxiliary_original_stage.py"
+      - "tools/aiven_auxiliary_original_stage.py"
+      - ".github/workflows/aiven-auxiliary-original-staging.yml"
       - "tools/aiven_core_operational_stage.py"
       - ".github/workflows/aiven-core-operational-staging.yml"
       - "tools/aiven_history_archive.py"
@@ -124,6 +127,7 @@ jobs:
             tests/test_postgres_data_lifecycle.py \
             tests/test_aiven_history_archive.py \
             tests/test_aiven_core_operational_stage.py \
+            tests/test_aiven_auxiliary_original_stage.py \
             tests/test_activity_batch_sql_pg17_integration.py
 
   backup9-supabase-pg17:
