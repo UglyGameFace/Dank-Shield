@@ -138,6 +138,12 @@ def test_read_only_snapshot_keeps_empty_tables_and_all_source_keys():
     assert len(p.counts)==15 and len(p.originals)==3
 
 
+def test_duplicate_source_composite_keys_fail_closed():
+    duplicate=raw({"guild_id":"legacy","role_id":"same"})
+    with pytest.raises(RuntimeError,match="duplicate primary keys"):
+        core.source_snapshot(FakeSource({"guild_role_rules":[duplicate,duplicate]}))
+
+
 class DestinationCursor:
     def __init__(self,rows):
         self.rows=rows
