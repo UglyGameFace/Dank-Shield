@@ -87,8 +87,8 @@ def pack_record(table: str, key: str, guild_id: str, created_at: datetime, data:
     return (table, key, guild_id, created_at, sha256(raw).hexdigest(), len(raw), compressed)
 
 
-def unpack_record(payload: bytes, checksum: str, size: int) -> dict:
-    """Bound decompression and verify exact canonical contents on every read."""
+def unpack_original_json(payload: bytes, checksum: str, size: int) -> str:
+    """Recover *exact* source JSON text without floating-point conversion."""
     inflater = zlib.decompressobj()
     raw = inflater.decompress(payload, MAX_ROW_BYTES + 1)
     if (len(raw) > MAX_ROW_BYTES or not inflater.eof or inflater.unused_data
@@ -96,10 +96,15 @@ def unpack_record(payload: bytes, checksum: str, size: int) -> dict:
         raise ValueError("invalid or oversized compressed archive record")
     if len(raw) != size or sha256(raw).hexdigest() != checksum:
         raise ValueError("original archive record checksum mismatch")
-    value = json.loads(raw)
-    if not isinstance(value, dict):
+    original = raw.decode("utf-8")
+    if not isinstance(json.loads(original), dict):
         raise ValueError("archive contains non-object JSON")
-    return value
+    return original
+
+
+def unpack_record(payload: bytes, checksum: str, size: int) -> dict:
+    """Verified convenience decoder; for exact numeric fidelity use original JSON."""
+    return json.loads(unpack_original_json(payload, checksum, size))
 
 
 def source_preflight(connection) -> dict[str, tuple[int, int]]:
