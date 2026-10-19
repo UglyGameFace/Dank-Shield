@@ -77,6 +77,38 @@ diverge if production writes continue.
 remain in GitHub Actions; never paste PostgreSQL DSNs or certificates in
 Discord/chat, and never upload plaintext staging content to GitHub.
 
+## Shared-project table ownership, not automatically included
+
+A read-only enumeration found 87 public source tables. The current 15
+operational + 4 historical + 1 guild_configs names account for **20**
+distinct table names, not all 87. A green staging run never authorizes
+dropping Supabase or claiming all bot features have been migrated.
+
+Important candidate tables OUTSIDE this staging set include:
+
+- Tickets: ticket_messages, ticket_counters, ticket_macros,
+  ticket_panel_categories, ticket_automation_settings,
+  ticket_automation_state, and possible ticket-related operation jobs.
+- Verification/members/security: guild_members, member_events, member_joins,
+  member_activity_notices, member_activity_batch_receipts,
+  member_activity_scan_locks, vc_verify_sessions, verification_tokens,
+  verification_flags, verification_kick_timers, manual_alt_links,
+  identity_proofs, guild_security_actor_reputation, raid_events,
+  warns, audit_events, audit_logs, and staff_metrics.
+- Invite shielding and community: dank_invite_block_stats,
+  dank_community_* session/notification/event/partner/report/metric tables,
+  dank_quiet_notices, dank_stickies, dank_sticky_polls.
+- Member profiles and media: dank_profile_*,
+  dank_live_profile_cards, dank_cinema_*.
+- Operations: bot_operation_jobs and other bot-specific configuration data.
+
+This is an inventory, NOT a classification that all rows belong to Dank
+Shield. The source is shared with **Idle Grow Op**. In particular
+global_accounts, guild_profiles, guild_worlds, world, and users may be
+other-application data. Do not bulk-copy or delete other bots' records.
+Use explicit feature owners, source reference/call-site tracing and
+dependency mapping before assigning a table to the final Dank Shield schema.
+
 ## Next migration slices and cutover gates
 
 - Reconcile owner scope and possible legacy schema for source role rules
