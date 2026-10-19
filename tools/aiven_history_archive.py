@@ -53,22 +53,32 @@ def validate_mode(mode: str, confirmation: str) -> None:
         raise ValueError("invalid archive mode or missing exact owner confirmation")
 
 
-def pack_record(table: str, key: str, guild_id: str, created_at: datetime, data: dict):
-    """Encode one full source record; preserve all fields, including feed extras."""
+def pack_record(table: str, key: str, guild_id: str, created_at: datetime, data: dict | str):
+    """Preserve the exact source PostgreSQL JSONB textual representation.
+
+    Source rows arrive as to_jsonb(t)::text, NOT client-decoded JSON numbers;
+    this retains decimal precision and every original feed field.
+    Dict input exists only for deterministic unit fixtures.
+    """
     if table not in TABLE_KEYS:
         raise ValueError("unapproved source table")
     pk = TABLE_KEYS[table]
-    if not isinstance(data, dict) or str(data.get(pk)) != str(key):
+    try:
+        raw_text = data if isinstance(data, str) else canonical_json(data)
+        parsed = json.loads(raw_text)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("invalid source JSON")
+    if not isinstance(parsed, dict) or str(parsed.get(pk)) != str(key):
         raise ValueError("original row has mismatched source primary key")
     if not isinstance(key, str) or not 1 <= len(key) <= 80:
         raise ValueError("invalid source key")
     if not isinstance(guild_id, str) or not re.fullmatch(r"[1-9][0-9]{0,19}", guild_id):
         raise ValueError("invalid guild ID")
-    if str(data.get("guild_id")) != guild_id:
+    if str(parsed.get("guild_id")) != guild_id:
         raise ValueError("original row has mismatched guild ID")
     if not isinstance(created_at, datetime) or created_at.tzinfo is None:
         raise ValueError("original row is missing timestamp")
-    raw = canonical_json(data).encode("utf-8")
+    raw = raw_text.encode("utf-8")
     if not 2 <= len(raw) <= MAX_ROW_BYTES:
         raise ValueError("source record exceeds archive bounds")
     compressed = zlib.compress(raw, level=6)
@@ -87,8 +97,8 @@ def unpack_record(payload: bytes, checksum: str, size: int) -> dict:
     if len(raw) != size or sha256(raw).hexdigest() != checksum:
         raise ValueError("original archive record checksum mismatch")
     value = json.loads(raw)
-    if not isinstance(value, dict) or canonical_json(value).encode("utf-8") != raw:
-        raise ValueError("archive contains noncanonical source content")
+    if not isinstance(value, dict):
+        raise ValueError("archive contains non-object JSON")
     return value
 
 
@@ -184,7 +194,7 @@ def archive_source(connection, source, counts: dict[str, tuple[int, int]]) -> di
         with source.cursor(name=f"dank_history_{table}") as stream:
             stream.itersize = BATCH_SIZE
             stream.execute(
-                f"select t.{pk}::text, t.guild_id::text, t.created_at, to_jsonb(t) "
+                f"select t.{pk}::text, t.guild_id::text, t.created_at, to_jsonb(t)::text "
                 f"from public.{table} t order by t.{pk}"
             )
             while True:
