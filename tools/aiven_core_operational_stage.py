@@ -237,6 +237,20 @@ def insert_snapshot(connection, snapshot: Snapshot, expected_db: str) -> int:
     return len(snapshot.originals)
 
 
+def storage_usage_mib(connection) -> tuple[float, float, float]:
+    """Aggregate allocated bytes only; never read row content or member IDs."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "select pg_database_size(current_database()), "
+            "case when to_regclass('dank_archive.original_rows') is null "
+            "then 0 else pg_total_relation_size('dank_archive.original_rows') end, "
+            "case when to_regclass('dank_migration.core_staged_originals') is null "
+            "then 0 else pg_total_relation_size('dank_migration.core_staged_originals') end"
+        )
+        values = cursor.fetchone()
+    return tuple(round(int(value) / 1048576, 2) for value in values)
+
+
 def _connect_source(params):
     import psycopg
     return psycopg.connect(
@@ -331,6 +345,9 @@ def main() -> int:
                           round(snapshot.raw_bytes/1024,2))
                     print("Stage status:",
                           "SOURCE-VERIFIED" if mode=="stage" else "PREVIEW-ONLY")
+                db_mib, history_mib, core_mib = storage_usage_mib(dest)
+                print("Aiven allocated MiB (database/history/core):",
+                      db_mib, history_mib, core_mib)
                 print("Production still Supabase. Source deletions: NONE. Cutover authorized: NO")
                 return 0
         finally:
