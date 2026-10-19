@@ -1,3 +1,17 @@
+# Active Task Lock — Dank Shield Aiven PG18 operational staging (2026-10-19)
+
+**User directive:** Continue the ongoing Dank Shield Aiven PostgreSQL 18 migration, preserving every original record, minimizing quota consumption, and no unrelated project switching.
+
+**Completed:** 12/12 original guild configurations were verified in the private Aiven shadow. Compressed history workflow #5 (2026-10-19) reported SOURCE-VERIFIED for 15,674 original history/security records. Private archive schema installed. No production cutover or Supabase deletion.
+
+**Current isolated slice:** stage the 15 existing operational SOURCE_KEYS tables (997 live source rows at Oct 19 audit, ~682 KiB original JSON) into new private Aiven staging while retaining original PKs, full JSON text and digests. Preserve 10 legacy guild_role_rules with nonstandard guild IDs and 5 ticket_notes with NULL guild ID. Existing staging, shadow, guild_config_state, history archive, voice data, public schema, and Discord runtime remain untouched.
+
+**Release sequence:** PR exact-head CI + lifecycle registration -> owner-only read-only preview -> owner-confirmed private schema install -> read-only preview -> owner-confirmed staging -> verification and stage storage audit. All stage source reads remain read-only. Changes during import cause rejection; late production writes require final catch-up.
+
+**Still blocked:** no complete runtime PostgreSQL repository routing, feature-specific canonical tables, source write freeze, verified final live parity, rollback acceptance or explicit production cutover. Discloud Auto Deploy OFF. The existing optional offline guild-config state seed must be separately confirmed; this slice uses a new table so it does not interfere with that seed's no-extra-staging guard.
+
+---
+
 # Active Task Lock — Dank Shield Aiven PG18 lossless history archive (2026-10-19)
 
 **User-directed return to database migration:** On October 19 the owner explicitly redirected work back to the database migration after an unrelated Community Hub continuation. Database is now the single active task. Community Hub PR #645 was merged separately while this database slice was being prepared; its previous task record is retained below. No new Community Hub work belongs to this migration slice.
