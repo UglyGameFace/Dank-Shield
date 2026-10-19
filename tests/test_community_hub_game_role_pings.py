@@ -231,12 +231,54 @@ def test_staff_manager_and_session_controls_are_discoverable_and_bounded():
         assert max(rows.values()) <= 5
 
 
-def test_role_picker_is_native_searchless_choice_with_allowed_configured_roles():
-    view = ui.GameRolePickerView(1, "Minecraft", 30, [(9, "Minecraft Pings")])
-    selector = next(child for child in view.children if isinstance(child, ui.GameRoleOptionSelect))
-    assert selector.options[0].value == "9"
-    assert len(selector.options) <= 25
-    assert selector.custom_id == "dank:hub:gamepings:role:v1"
+def test_game_role_picker_reuses_search_safe_resource_browser(monkeypatch):
+    guild, _ = _discord_setup(monkeypatch)
+    wanted = guild.get_role(9)
+    wanted.name = "🌿・𝕄𝕚𝕟𝕖𝕔𝕣𝕒𝕗𝕥"
+    other = FakeRole(guild, role_id=10)
+    other.name = "Unrelated role"
+    guild.roles = [wanted, other]
+
+    browser = ui._game_role_browser(guild, 1, "Minecraft", 30, [(9, "Minecraft Pings")])
+    assert isinstance(browser, ui.DankGuildResourceBrowserView)
+    assert browser.resource_kinds == ("role",)
+    assert [entry.resource_id for entry in browser.candidates] == [9]
+    assert [entry.resource_id for entry in browser.clone(query="minecraft").candidates] == [9]
+    assert any(
+        getattr(child, "custom_id", "") == "dank:hub:gamepings:role_browser:v1:pick"
+        for child in browser.children
+    )
+    assert any(getattr(child, "label", None) == "Search" for child in browser.children)
+    assert browser._resolve_value("role:10") is None
+
+
+def test_game_role_search_safe_pick_keeps_authority_and_cas_owner(monkeypatch):
+    guild, _ = _discord_setup(monkeypatch)
+    role = guild.get_role(9)
+    role.name = "Minecraft Pings"
+    guild.roles = [role]
+    browser = ui._game_role_browser(guild, 1, "Minecraft", 45, [(9, "Minecraft Pings")])
+    interaction = SimpleNamespace(user=SimpleNamespace(id=1), guild=guild)
+    staff = {"allowed": False}
+    monkeypatch.setattr(ui, "_staff_authorized", lambda _: staff["allowed"])
+    denied = AsyncMock()
+    defer = AsyncMock()
+    save = AsyncMock(return_value=True)
+    manager = AsyncMock()
+    monkeypatch.setattr(ui, "_private", denied)
+    monkeypatch.setattr(ui, "_defer_update", defer)
+    monkeypatch.setattr(ui.game_pings, "configure", save)
+    monkeypatch.setattr(ui, "_open_game_pings_manager", manager)
+
+    asyncio.run(browser.pick_resource(interaction, "role:9"))
+    denied.assert_awaited_once()
+    save.assert_not_awaited()
+
+    staff["allowed"] = True
+    asyncio.run(browser.pick_resource(interaction, "role:9"))
+    save.assert_awaited_once_with(guild, "Minecraft", 9, cooldown_minutes=45)
+    manager.assert_awaited_once_with(interaction, 1)
+    assert defer.await_count == 1
 
 
 def test_post_claim_staff_disable_fails_closed_without_role_ping(monkeypatch):

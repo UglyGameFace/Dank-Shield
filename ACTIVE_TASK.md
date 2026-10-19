@@ -1,6 +1,6 @@
 # Active Task Lock — Dank Shield Aiven PG18 lossless history archive (2026-10-19)
 
-**User-directed return to database migration:** On October 19 the owner explicitly redirected work back to the database migration after an unrelated Community Hub continuation. Database is now the single active task. Community Hub PR #645 remains DRAFT/PAUSED and must not be merged, deployed or worked on during this migration slice.
+**User-directed return to database migration:** On October 19 the owner explicitly redirected work back to the database migration after an unrelated Community Hub continuation. Database is now the single active task. Community Hub PR #645 was merged separately while this database slice was being prepared; its previous task record is retained below. No new Community Hub work belongs to this migration slice.
 
 **Verified checkpoint:** Earlier Aiven shadow preview/import succeeded for 12/12 guild-config full original rows; no runtime or Discloud cutover occurred. Current main includes owner-only offline guild-state seed workflow but no evidence of successful live seed dispatch. Source Supabase remains authoritative.
 
@@ -8,7 +8,21 @@
 
 **Safety:** Source transaction is read-only repeatable-read; Aiven PG18 service/TLS identity and guild-shadow required, exact owner confirmations, 30k-row/180MiB raw/90MiB compressed limits, guarded destination disk headroom. No source delete, pruning, startup schema mutation, new bot runtime routing, shared voice data change, or Discloud Auto Deploy. No production cutover.
 
-**Acceptance:** Merge only after exact-head focused tests and full CI, then owner manual preview, schema install, preview and compressed archive import with verified counts and Aiven database size. Live source can still change after a snapshot, so late-write catch-up, fresh independent restorable encrypted backup, tickets/activity/canonical repositories, rollback and real Discord canary are still prerequisites. PR #645 remains separate and paused.
+**Acceptance:** Merge only after exact-head focused tests and full CI, then owner manual preview, schema install, preview and compressed archive import with verified counts and Aiven database size. Live source can still change after a snapshot, so late-write catch-up, fresh independent restorable encrypted backup, tickets/activity/canonical repositories, rollback and real Discord canary are still prerequisites. PR #645 is already merged and is not an active task in this slice.
+
+---
+
+# Active Task Lock — Community Hub game-role picker acceptance (2026-10-19)
+
+**Active outcome:** Close the remaining Community Hub game-role setup UX mismatch while preserving the one-active-task lock. PR #643 was merged, but Discord/Discloud production acceptance remains unverified. The merged native role dropdown did not use the shared Search-Safe resource browser required for styled/aliased custom roles.
+
+**Execution path / authority:** Staff Dashboard → Game Role Pings → Configure Game modal → shared `DankGuildResourceBrowserView` for role discovery → `community_hub_game_role_pings.configure` for click-time validation and durable guild-config CAS. No second discovery engine, native role picker, startup workaround or duplicate storage path.
+
+**Focused changes:** Use existing shared owner-locked browser with semantic current/styled/previous-name search and Back; filter to the 25-or-fewer eligible Community & Pings Notification roles from the current guild config. Preserve staff check and existing `configure()` re-read/CAS at selection. Add focused tests for decorated names, explicit eligibility, and revoked staff authority. Keep /toke, CHEERS, Movie Night, role sends, cooldown claims and database owners unchanged.
+
+**Validation:** PR #643's historical exact-head failure was a synthetic test fixture including the active session ID in its prior-claim list; current `main` already corrected that fixture, so do not reintroduce a duplicate fix. New picker tests and CI are pending; a green PR alone does not prove live Android/Discord/Discloud behavior. No production deployment, Supabase write or PostgreSQL cutover authorized.
+
+**Queued next task:** The 12/12 Aiven PostgreSQL 18 guild-config shadow checkpoint is preserved. Remaining data migration and bot runtime cutover remain queued, with Discloud Auto Deploy OFF until separately authorized and validated.
 
 ---
 

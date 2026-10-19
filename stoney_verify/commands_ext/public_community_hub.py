@@ -29,6 +29,7 @@ from ..interaction_guard import safe_defer_interaction
 from ..operation_queue import run_exclusive
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS, private_menu_lifecycle_text
 from ..permission_repair_core import community_hub_oauth_url
+from ..ui.resource_browser import DankGuildResourceBrowserView
 from .public_owner_authority import (
     interaction_has_administrator_authority,
     interaction_has_manage_guild_authority,
@@ -3554,53 +3555,55 @@ class GameRoleConfigModal(discord.ui.Modal, title="Configure Game Role Ping"):
                 "No eligible roles. Open **/dank pings**, create or enable a Notification role "
                 "separate from /toke, CHEERS and Movie Night, then retry.",
             )
-        embed = discord.Embed(
-            title=f"🎮 Select a role for {discord.utils.escape_markdown(game)}",
-            description="Choose the existing Notification role to be pinged only when a group host or staff explicitly calls it.",
-            color=discord.Color.blurple(),
-        )
+        browser = _game_role_browser(interaction.guild, self.owner_id, game, minutes, roles)
         await interaction.edit_original_response(
-            embed=embed, content=None,
-            view=GameRolePickerView(self.owner_id, game, minutes, roles),
+            embed=browser.embed(), content=None, view=browser,
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
 
-class GameRoleOptionSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, game: str, minutes: int, options: list[tuple[int, str]]) -> None:
-        self.owner_id = int(owner_id)
-        self.game = game
-        self.minutes = int(minutes)
-        super().__init__(
-            placeholder="Select an existing Community & Pings Notification role",
-            min_values=1, max_values=1,
-            options=[
-                discord.SelectOption(label=label, value=str(role_id), emoji="🔔")
-                for role_id, label in options[:25]
-            ],
-            custom_id="dank:hub:gamepings:role:v1",
-        )
+def _game_role_browser(
+    guild: discord.Guild, owner_id: int, game: str, minutes: int,
+    roles: list[tuple[int, str]],
+) -> DankGuildResourceBrowserView:
+    """Reuse the canonical Search-Safe role discovery UI; keep saves in game_pings."""
+    eligible_ids = {int(role_id) for role_id, _ in roles}
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if int(interaction.user.id) != self.owner_id or not _staff_authorized(interaction):
+    async def picked(interaction: discord.Interaction, role: Any) -> None:
+        if not _staff_authorized(interaction) or interaction.guild != guild:
             return await _private(interaction, "Only server-management staff can map game notification roles.")
+        if not isinstance(role, discord.Role) or int(role.id) not in eligible_ids:
+            return await _private(interaction, "That Notification role is no longer available. Reopen Game Role Pings.")
         await _defer_update(interaction)
         try:
+            # configure() independently reloads and verifies current Community
+            # & Pings eligibility before its existing atomic guild-config CAS.
             saved = await game_pings.configure(
-                interaction.guild, self.game, int(self.values[0]),
-                cooldown_minutes=self.minutes,
+                guild, game, int(role.id), cooldown_minutes=minutes,
             )
         except (ValueError, hub.CommunityHubError) as exc:
             return await _followup(interaction, f"❌ {str(exc)[:250]}")
         if not saved:
             return await _followup(interaction, "Game-role settings could not be saved atomically. No changes confirmed.")
-        await _open_game_pings_manager(interaction, self.owner_id)
+        await _open_game_pings_manager(interaction, owner_id)
 
+    async def back(interaction: discord.Interaction) -> None:
+        await _defer_update(interaction)
+        await _open_game_pings_manager(interaction, owner_id)
 
-class GameRolePickerView(_OwnedView):
-    def __init__(self, owner_id: int, game: str, minutes: int, roles: list[tuple[int, str]]) -> None:
-        super().__init__(owner_id)
-        self.add_item(GameRoleOptionSelect(owner_id, game, minutes, roles))
+    return DankGuildResourceBrowserView(
+        guild=guild,
+        author_id=owner_id,
+        resource_kinds=("role",),
+        on_pick=picked,
+        custom_id="dank:hub:gamepings:role_browser:v1",
+        title=f"🎮 Game Role for {game}"[:256],
+        placeholder="Choose an enabled Notification role…",
+        predicate=lambda role: isinstance(role, discord.Role) and int(role.id) in eligible_ids,
+        on_home=back,
+        home_label="Back to Game Role Pings",
+        empty_message="No eligible Notification roles match. Check /dank pings or clear the search.",
+    )
 
 
 class GameRoleRemoveModal(discord.ui.Modal, title="Remove Game Role Mapping"):
