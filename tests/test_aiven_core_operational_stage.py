@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+import os
 import json
 from pathlib import Path
 
@@ -197,12 +198,59 @@ def test_aggregate_storage_metrics_never_fetch_source_rows():
             assert "pg_database_size(current_database())" in sql
             assert "pg_total_relation_size" in sql
             assert "source_json_text" not in sql
+            assert "pg_total_relation_size(to_regclass(" in sql.replace("\\n", "")
+            assert "pg_total_relation_size('dank_archive.original_rows')" not in sql
+            assert "pg_total_relation_size('dank_migration.core_staged_originals')" not in sql
         def fetchone(self):
             return (10485760, 1048576, 262144)
     class Database:
         def cursor(self):
             return Cursor()
     assert core.storage_usage_mib(Database()) == (10.0, 1.0, 0.25)
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_PG_GUILD_CONFIG_INTEGRATION") != "1",
+    reason="requires the isolated disposable PostgreSQL integration service",
+)
+def test_storage_usage_before_and_after_optional_table_creation_on_real_postgres():
+    """Regression: an uninstalled archive/staging table must not abort preview.
+
+    DDL runs only in the isolated CI PostgreSQL service and is rolled back.
+    This test never opens Supabase or the Aiven destination.
+    """
+    import psycopg
+
+    dsn = os.environ["DANK_TEST_DATABASE_URL"]
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        archive, core_table = conn.execute(
+            "select to_regclass('dank_archive.original_rows'), "
+            "to_regclass('dank_migration.core_staged_originals')"
+        ).fetchone()
+        assert archive is None and core_table is None
+        database_mib, history_mib, core_mib = core.storage_usage_mib(conn)
+        assert database_mib > 0
+        assert history_mib == core_mib == 0
+
+        class ExpectedRollback(Exception):
+            pass
+
+        with pytest.raises(ExpectedRollback):
+            with conn.transaction():
+                conn.execute("create schema dank_archive")
+                conn.execute("create table dank_archive.original_rows (id integer)")
+                conn.execute(
+                    "create table dank_migration.core_staged_originals (id integer)"
+                )
+                database_mib, history_mib, core_mib = core.storage_usage_mib(conn)
+                assert database_mib > 0
+                assert history_mib > 0
+                assert core_mib > 0
+                raise ExpectedRollback
+        assert conn.execute(
+            "select to_regclass('dank_archive.original_rows'), "
+            "to_regclass('dank_migration.core_staged_originals')"
+        ).fetchone() == (None, None)
 
 
 def test_workflow_is_owner_dispatch_only_without_deploy_or_sensitive_artifacts():
