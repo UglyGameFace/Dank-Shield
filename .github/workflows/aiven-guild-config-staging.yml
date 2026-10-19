@@ -1,0 +1,62 @@
+name: Aiven Guild Config Staging (manual, guarded)
+
+# First migration slice ONLY: source public.guild_configs to Aiven's
+# dank_migration.staged_records. No bot runtime changes, schema changes,
+# permission changes, deletions, historical-data pruning or production deploy.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Preview reads both databases; stage copies only guild configurations"
+        required: true
+        type: choice
+        options: [preview, stage]
+        default: preview
+      confirmation:
+        description: "For stage only: STAGE_AIVEN_GUILD_CONFIGS_ONLY"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dankshield-aiven-guild-config-staging
+  cancel-in-progress: false
+
+jobs:
+  guild-config-staging:
+    if: ${{ github.repository == 'UglyGameFace/Dank-Shield' && github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Check out exact main (not production bot)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Refuse stale source revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || {
+            echo "::error::Main changed. Re-run a fresh preview on the current revision."
+            exit 1
+          }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install isolated PostgreSQL driver
+        run: python -m pip install -q "psycopg[binary]>=3.2,<4"
+      - name: Verify first-slice safety contracts
+        run: python -m pip install -q "pytest>=8,<10" && python -m pytest -q tests/test_aiven_guild_config_stage.py --tb=short
+      - name: Preview or explicitly stage guild configuration snapshots
+        env:
+          DANK_SOURCE_DATABASE_URL: ${{ secrets.DANK_SOURCE_DATABASE_URL }}
+          AIVEN_POSTGRES_URI: ${{ secrets.AIVEN_POSTGRES_URI }}
+          AIVEN_POSTGRES_CA_PEM: ${{ secrets.AIVEN_POSTGRES_CA_PEM }}
+          AIVEN_GUILD_CONFIG_MODE: ${{ inputs.mode }}
+          AIVEN_GUILD_CONFIG_CONFIRMATION: ${{ inputs.confirmation }}
+        run: python -m tools.aiven_guild_config_stage
