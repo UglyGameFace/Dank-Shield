@@ -1,0 +1,177 @@
+# Manual independent restoration of the exact Oct 19, 2026 encrypted source backup.
+# The downloaded artifact is decrypted ONLY inside an ephemeral GitHub runner,
+# and SQL is restored ONLY into a disposable PostgreSQL 17 service container.
+# Never points at the existing Discloud database or Supabase.
+name: Verify Fresh Source Backup Restore
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Restore Oct 19 encrypted source backup into disposable database only"
+        required: true
+        type: choice
+        options:
+          - VERIFY_FRESH_SOURCE_BACKUP_ISOLATED_ONLY
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: verify-source-fresh-backup-restore
+  cancel-in-progress: false
+
+jobs:
+  independent-restore:
+    name: Recover shared backup in disposable PostgreSQL 17
+    if: github.repository == 'UglyGameFace/Dank-Shield' && github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' && inputs.confirmation == 'VERIFY_FRESH_SOURCE_BACKUP_ISOLATED_ONLY'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        # Supabase's PG17 distribution includes supabase_vault and related
+        # extensions used by the real shared-source archive. Never use the
+        # standard postgres:17 image for the full-source recovery drill.
+        image: supabase/postgres:17.6.1.136
+        env:
+          POSTGRES_USER: supabase_admin
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+          POSTGRES_PORT: "5432"
+          PGPORT: "5432"
+          PGUSER: supabase_admin
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
+          PGHOST: /var/run/postgresql
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U supabase_admin -d postgres -h localhost"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CI: "true"
+      GITHUB_REPOSITORY: UglyGameFace/Dank-Shield
+      DANK_RECOVERY_DISPOSABLE_PG17: YES_ISOLATED
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: supabase_admin
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+      EXPECTED_FRESH_BACKUP_SHA256: df43be1c3a472c9c05a97f4a0ee0ad25e59c443481d76ce2db7fadfd82cb30f7
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Check out tested recovery code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up recovery-only Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install minimum offline recovery dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -q -r requirements-backup.txt "psycopg[binary]>=3.2,<4"
+
+      - name: Retrieve only encrypted artifact from successful Oct 19, 2026 backup
+        uses: actions/download-artifact@v4
+        with:
+          name: dankshield-encrypted-supabase-source
+          repository: UglyGameFace/Dank-Shield
+          run-id: 39249241539
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/supabase-source-fresh-backup
+
+      - name: Validate exact archived file without displaying its contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          archive_dir="$RUNNER_TEMP/supabase-source-fresh-backup"
+          count=$(find "$archive_dir" -maxdepth 1 -type f -name '*.dsbak' | wc -l)
+          if [[ "$count" -ne 1 ]]; then
+            echo "::error::Expected exactly one encrypted .dsbak from Oct 19, 2026 backup."
+            exit 2
+          fi
+          archive=$(find "$archive_dir" -maxdepth 1 -type f -name '*.dsbak' -print -quit)
+          chmod 0600 "$archive"
+          sha=$(sha256sum "$archive" | awk '{print $1}')
+          if [[ "$sha" != "$EXPECTED_FRESH_BACKUP_SHA256" ]]; then
+            echo "::error::Oct 19, 2026 backup SHA-256 mismatch. Abort; no restore attempted."
+            exit 2
+          fi
+          echo "Oct 19, 2026 backup encrypted checksum matches."
+
+      - name: Supply isolated PostgreSQL 17 archive-reader client
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/setup_pg17_backup_clients.sh "$RUNNER_TEMP/pg17-client"
+          echo "$RUNNER_TEMP/pg17-client" >> "$GITHUB_PATH"
+          docker pull postgres:17 >/dev/null
+          "$RUNNER_TEMP/pg17-client/pg_restore" --version
+
+      - name: Verify disposable Supabase PG17 extensions and private database logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import psycopg
+
+          with psycopg.connect(
+              host="127.0.0.1", port=5432, user="supabase_admin",
+              dbname="postgres", password="postgres", connect_timeout=10,
+              autocommit=True,
+          ) as conn:
+              version = int(conn.execute("SHOW server_version_num").fetchone()[0])
+              if version // 10000 != 17:
+                  raise SystemExit("Isolated restore requires PostgreSQL 17")
+              extension = conn.execute(
+                  "SELECT 1 FROM pg_available_extensions WHERE name = 'supabase_vault'"
+              ).fetchone()
+              if extension is None:
+                  raise SystemExit("Supabase Vault is missing in the disposable PG17 image")
+              # All restore sessions use this dedicated disposable superuser.
+              # Role settings apply atomically to fresh sessions, unlike an
+              # asynchronous ALTER SYSTEM reload. GitHub publishes container
+              # logs on teardown, so restored SQL must not appear there.
+              conn.execute("ALTER ROLE supabase_admin SET log_statement = 'none'")
+              conn.execute("ALTER ROLE supabase_admin SET log_min_error_statement = 'panic'")
+              conn.execute("ALTER ROLE supabase_admin SET log_min_messages = 'fatal'")
+          with psycopg.connect(
+              host="127.0.0.1", port=5432, user="supabase_admin",
+              dbname="postgres", password="postgres", connect_timeout=10,
+          ) as proof:
+              messages = proof.execute("SHOW log_min_messages").fetchone()[0]
+              statements = proof.execute("SHOW log_min_error_statement").fetchone()[0]
+              sql_log = proof.execute("SHOW log_statement").fetchone()[0]
+              if (messages, statements, sql_log) != ("fatal", "panic", "none"):
+                  raise SystemExit("Private restore logging safeguards not active")
+          print("Isolated Supabase PG17 extensions and private logging verified.")
+          PY
+
+      - name: Independently restore authenticated backup in ephemeral PostgreSQL 17
+        shell: bash
+        env:
+          DANK_BACKUP_PASSPHRASE: ${{ secrets.DANK_BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          archive=$(find "$RUNNER_TEMP/supabase-source-fresh-backup" -maxdepth 1 -type f -name '*.dsbak' -print -quit)
+          python -m tools.verify_source_backup_restoration \
+            --encrypted-archive "$archive" \
+            --sha256 "$EXPECTED_FRESH_BACKUP_SHA256"
+
+      - name: Interpret restore result
+        if: success()
+        run: |
+          echo "Oct 19, 2026 backup fully restored in a disposable PostgreSQL 17 database."
+          echo "Preserve the independently downloaded encrypted backup and passphrase."
+          echo "This test never contacts your live DankShield-DB or original Supabase."
+          echo "Do not deploy, delete Supabase data, or switch bot storage yet."
