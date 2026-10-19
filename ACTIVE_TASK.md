@@ -1,3 +1,17 @@
+# Active Task Lock — Community Hub game-role picker acceptance (2026-10-19)
+
+**Active outcome:** Close the remaining Community Hub game-role setup UX mismatch while preserving the one-active-task lock. PR #643 was merged, but Discord/Discloud production acceptance remains unverified. The merged native role dropdown did not use the shared Search-Safe resource browser required for styled/aliased custom roles.
+
+**Execution path / authority:** Staff Dashboard → Game Role Pings → Configure Game modal → shared `DankGuildResourceBrowserView` for role discovery → `community_hub_game_role_pings.configure` for click-time validation and durable guild-config CAS. No second discovery engine, native role picker, startup workaround or duplicate storage path.
+
+**Focused changes:** Use existing shared owner-locked browser with semantic current/styled/previous-name search and Back; filter to the 25-or-fewer eligible Community & Pings Notification roles from the current guild config. Preserve staff check and existing `configure()` re-read/CAS at selection. Add focused tests for decorated names, explicit eligibility, and revoked staff authority. Keep /toke, CHEERS, Movie Night, role sends, cooldown claims and database owners unchanged.
+
+**Validation:** PR #643's historical exact-head failure was a synthetic test fixture including the active session ID in its prior-claim list; current `main` already corrected that fixture, so do not reintroduce a duplicate fix. New picker tests and CI are pending; a green PR alone does not prove live Android/Discord/Discloud behavior. No production deployment, Supabase write or PostgreSQL cutover authorized.
+
+**Queued next task:** The 12/12 Aiven PostgreSQL 18 guild-config shadow checkpoint is preserved. Remaining data migration and bot runtime cutover remain queued, with Discloud Auto Deploy OFF until separately authorized and validated.
+
+---
+
 # Active Task Lock — Community Hub game-specific role notifications (2026-10-18)
 
 **Current continuation:** Issue #638, manual game-role recruitment. Base `main@02645b66009c736a59c85bed72cad159eca7b889`; one branch `feat/community-hub-game-role-pings-20261018`. Prior PRs #640 (external read-only), #641 (source/search), and #642 (play style/mic filters) merged, exact-head checks green, but live Discloud/Android acceptance and The100.io token/migration remain unverified.
