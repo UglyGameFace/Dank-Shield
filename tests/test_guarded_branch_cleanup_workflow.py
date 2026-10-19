@@ -1244,3 +1244,58 @@ def test_quiet_notice_historical_repair_requires_exact_replacement_and_runtime_p
         "reviewedBatch && deleting && candidates.length === 0",
     ):
         assert gate in text
+
+
+FINAL_PAIR_WORKFLOW = (
+    Path(__file__).resolve().parents[1]
+    / ".github/workflows/guarded-final-two-branches.yml"
+)
+
+
+def _final_pair_workflow() -> str:
+    return FINAL_PAIR_WORKFLOW.read_text(encoding="utf-8")
+
+
+def test_final_two_cleanup_is_owner_only_explicit_and_exact() -> None:
+    source = _final_pair_workflow()
+    assert "  workflow_dispatch:" in source
+    for event in ("push", "pull_request", "schedule", "workflow_run", "workflow_call"):
+        assert f"  {event}:" not in source
+    assert "github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace'" in source
+    assert "group: guarded-merged-branch-cleanup" in source
+    assert "cancel-in-progress: false" in source
+    assert "DELETE_VERIFIED_FINAL_PAIR" in source
+    assert "mode !== 'preview' && mode !== 'delete'" in source
+    assert "const branchNames = [" in source
+    assert source.count("'feat/cinema-library-intelligence', {") == 1
+    assert source.count("'feat/native-welcome-cards', {") == 1
+    assert "new Set(branchNames).size !== 2" in source
+    assert "new Set(validated.map(item => item.name)).size !== 2" in source
+
+
+def test_final_two_cleanup_requires_replacement_parity_and_archives_both_first() -> None:
+    source = _final_pair_workflow()
+    for token in (
+        "568b779fd1f9fbbf2604178d84b91e819a3c58e6",
+        "2be455b9aaddb81e7b5624023aeefdce3d103f42",
+        "2669db2358daf1cc1ad351d2514620698f12ee07",
+        "69f25ba46944721b2ddf9e92c6278e65ba575251",
+        "86af2c5dd799b8dd35d0c960ff8470918e6a09e1",
+        "old.head.sha !== proof.sha",
+        "successor.merge_commit_sha !== proof.replacementMerge",
+        "!await isAncestorOfMain(proof.replacementMerge)",
+        "backupGraph.data.behind_by !== 5",
+        "originalTests.sha !== newTests.sha",
+        "oldRisk.sha !== newRisk.sha",
+        "coverage(oldModlog.text, newModlog.text) !== 1",
+        "test_join_path_uses_one_canonical_studio_owned_runtime",
+        "test_group_recommendations_only_expose_aggregate_fit",
+        "openPRs.some",
+        "Preserve both exact commits BEFORE any branch deletion.",
+        "Archive preflight failed:",
+        "Branch changed after archive preflight:",
+        "Partial cleanup: failed deleting",
+        "if (newPosition > 30)",
+    ):
+        assert token in source
+    assert source.index("Preserve both exact commits BEFORE any branch deletion.") < source.index("github.rest.git.deleteRef(")
