@@ -1,3 +1,17 @@
+# Active Task Lock — Dank Shield Aiven PG18 auxiliary original staging (2026-10-19)
+
+**Scope:** Continue only the current Aiven PG18 migration. No unrelated Community Hub/Discloud branch work. Preserve all source originals, minimize Aiven disk cost and avoid blind copying of Idle Grow data from the shared source.
+
+**Latest verified checkpoints:** History workflow #5 SOURCE-VERIFIED 15,674 original config/history/moderation/invite event rows. Operational core workflow #6 SOURCE-VERIFIED 997 rows across 15 tables (Aiven allocated 48.20 MiB total, 1.11 MiB operational). Guild Config State Seed workflow #2 SUCCESS, 12/12 originals full-row matched, offline revision 0, Supabase remained production.
+
+**Current isolated candidate:** owner-only original staging for 18 *other* ticket/member/verification tables. At the Oct 19 source audit, they held 1,843 rows/3.64 MiB. Preserve raw PK/JSON/timestamps and credential-like verification/session tokens securely, but NEVER use staged tokens as live authentication. All 18 source primary key shapes were inspected from PG metadata. Use the private dank_migration.aux_staged_originals table, exact row/text SHA parity, immutable/no-prune, read-only repeatable-read source, fresh reread, disk quota bounds and manual confirmation.
+
+**Release:** PR exact-head regression+PG17 integration CI -> merge -> manually preview -> install private schema -> preview -> stage -> inspect SOURCE-VERIFIED & Aiven storage. No automatic cutover or deployment.
+
+**Still blocked:** remaining source-table ownership + canonical schema/RPC/runtime feature conversion, privilege and expiration rules, final live write delta, fresh independently stored encrypted source backup, production Discord canary, rollback, explicit owner cutover. Supabase source unchanged; Discloud Auto Deploy OFF.
+
+---
+
 # Active Task Lock — Dank Shield Aiven PG18 operational staging (2026-10-19)
 
 **User directive:** Continue the ongoing Dank Shield Aiven PostgreSQL 18 migration, preserving every original record, minimizing quota consumption, and no unrelated project switching.

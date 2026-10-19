@@ -148,6 +148,32 @@
       "retention_class": "support_record",
       "historical_reuse": "Recover original exact ticket/member/role/verification/Community Hub state from immutable per-table PK-hashed JSON text while keeping source Supabase and older guild-config/history archives separate",
       "review_interval_days": 30
+    },
+    "dank_migration.aux_staged_originals": {
+      "feature": "Offline Aiven PG18 ticket/member/verification auxiliary originals",
+      "owner": "tools.aiven_auxiliary_original_stage; explicit owner GitHub workflow",
+      "purpose": "Losslessly stage complete PG17 original source text for 18 verified Dank Shield ticket/member/verification tables, including sensitive expiring tokens, with PKs/SHAs for recovery; never use copied tokens to authenticate",
+      "stored_fields": [
+        "source_table",
+        "record_key",
+        "source_pk_json",
+        "guild_id",
+        "source_json_text",
+        "source_sha256",
+        "raw_bytes",
+        "staged_at"
+      ],
+      "contains_message_content": true,
+      "retention_rule": "Preserve all originals, including expired authentication tokens, securely while reconciliation, independent source restore, runtime conversion and owner-approved rollback remain incomplete. Never use staged tokens for authentication; no automatic pruning or exposure.",
+      "cleanup_interval_seconds": 86400,
+      "max_candidates_per_cleanup": 100,
+      "expiry_index": "primary key (source_table,record_key), partial (guild_id,source_table); no TTL, deletion or background cleanup actor",
+      "preserve_when": "Always until source and target row/hash/FK parity, independent encrypted backup, legitimate token-expiration behavior, member/ticket/verification runtime canary and rollback are verified",
+      "backup_class": "sensitive_originals_manual_migration_not_independent_backup",
+      "migration": "postgres/migrations/202610190003_aiven_auxiliary_original_staging.sql",
+      "retention_class": "durable_security_evidence",
+      "historical_reuse": "Exact original membership, ticket and verification records support recovery and audit; source token secrets must be revalidated or expired by the active authorization service, not accepted by staging",
+      "review_interval_days": 30
     }
   }
 }
