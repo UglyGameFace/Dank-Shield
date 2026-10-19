@@ -1170,3 +1170,41 @@ def test_reviewed_delete_cannot_pass_when_all_candidates_are_rejected() -> None:
     text = _workflow()
     assert "if (reviewedBatch && deleting && candidates.length === 0)" in text
     assert "zero branches deleted. Inspect preview and guards." in text
+
+
+def test_source_backup_toc_branch_requires_merged_replacement_and_full_auth_parity() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedSupersededBackupToc = new Map([", 1)[1].split("]);", 1)[0]
+    assert manifest.count("['fix/source-backup-large-toc-stream-20261013'") == 1
+    for sha in (
+        "ba2994661bba45cc2d7ea0cbf3530802fbb21ebc",
+        "c6e813e62233d3ba0f1d51117eadb010ea654cf1",
+        "50724b5128be5be066c99bda0a57259d5752303c",
+        "ac3a0fd0c52b66890e0444f3bea86ab9058f0349",
+    ):
+        assert sha in manifest
+    for condition in (
+        "branch.commit.sha !== backupToc.sha || prs.length !== 1",
+        "originalPr.number !== backupToc.originalPr",
+        "originalPr.state !== 'closed' || originalPr.merged_at",
+        "originalPr.head.sha !== backupToc.sha",
+        "replacement.merge_commit_sha !== backupToc.replacementMerge",
+        "!await ancestorOfMain(backupToc.replacementMerge)",
+        "!await ancestorOfMain(backupToc.firstParent)",
+        "history.data.ahead_by !== backupToc.ahead",
+        "history.data.behind_by !== 0",
+        "comparison.data.ahead_by !== backupToc.ahead",
+        "file.status === 'modified'",
+        "coverage(src, current[index]) >= minimum[index]",
+        "functions(previous[2]).length !== 13",
+        "except BrokenPipeError:",
+        "if check.wait(timeout=90) != 0:",
+        "test_large_archive_when_nonexecuting_toc_reader_exits_early",
+        "test_early_toc_reader_failure_still_rejects_archive",
+        "test_bad_passphrase_and_modified_ciphertext_rejected",
+        "test_backup_recovers_when_archive_toc_reader_exits_early",
+        "inUseByOpenPR.has(name)",
+        "current.protected || current.commit.sha !== candidate.sha",
+        "archive.object.sha !== candidate.sha",
+    ):
+        assert condition in text

@@ -307,6 +307,28 @@ jobs:
               }],
             ]);
 
+
+            // Closed, explicitly superseded PR #555. PR #557 ported the
+            // authenticated large-archive early-TOC fix onto main, retaining
+            // #556 diagnostics and all former regression tests.
+            const reviewedSupersededBackupToc = new Map([
+              ['fix/source-backup-large-toc-stream-20261013', {
+                sha: 'ba2994661bba45cc2d7ea0cbf3530802fbb21ebc',
+                firstParent: 'c6e813e62233d3ba0f1d51117eadb010ea654cf1',
+                originalPr: 555,
+                replacementPr: 557,
+                replacementHead: '50724b5128be5be066c99bda0a57259d5752303c',
+                replacementMerge: 'ac3a0fd0c52b66890e0444f3bea86ab9058f0349',
+                ahead: 4,
+                files: [
+                  'docs/DANKSHIELD_POSTGRES_MIGRATION.md',
+                  'stoney_verify/source_pg_backup.py',
+                  'tests/test_source_pg_backup.py',
+                  'tools/backup_dankshield_supabase_source.py',
+                ],
+              }],
+            ]);
+
             const reviewedDormantStatsGuard = new Map([
               ['fix/dank-stats-profile-links', {
                 sha: 'ca74f100ca8e337a0b8f0c73273d0ad634effa22',
@@ -1235,6 +1257,96 @@ jobs:
                       !current[0].includes('test_voice_safety_policy.py')) continue;
                   candidates.push({ name, sha: branch.commit.sha,
                     reason: 'reviewed Voice Safety #517 post-merge branch fully retained by main consent and policy owners' });
+                  continue;
+                }
+
+
+                const backupToc = reviewedSupersededBackupToc.get(name);
+                if (backupToc) {
+                  if (branch.commit.sha !== backupToc.sha || prs.length !== 1) continue;
+                  const originalPr = prs[0];
+                  const replacement = closedPRs.find(pr =>
+                    pr.number === backupToc.replacementPr &&
+                    pr.head?.repo?.full_name === fullName);
+                  if (originalPr.number !== backupToc.originalPr ||
+                      originalPr.state !== 'closed' || originalPr.merged_at ||
+                      originalPr.head.sha !== backupToc.sha ||
+                      originalPr.base?.ref !== defaultBranch ||
+                      !replacement || !replacement.merged_at ||
+                      replacement.state !== 'closed' ||
+                      replacement.base?.ref !== defaultBranch ||
+                      replacement.head.sha !== backupToc.replacementHead ||
+                      replacement.merge_commit_sha !== backupToc.replacementMerge ||
+                      !await ancestorOfMain(backupToc.replacementMerge) ||
+                      !await ancestorOfMain(backupToc.firstParent)) continue;
+                  const [history, comparison, replacementFiles] = await Promise.all([
+                    github.rest.repos.compareCommits({
+                      owner, repo, base: backupToc.firstParent, head: branch.commit.sha,
+                    }),
+                    github.rest.repos.compareCommits({
+                      owner, repo, base: defaultBranch, head: branch.commit.sha,
+                    }),
+                    github.paginate(github.rest.pulls.listFiles, {
+                      owner, repo, pull_number: backupToc.replacementPr, per_page: 100,
+                    }),
+                  ]);
+                  if (history.data.ahead_by !== backupToc.ahead ||
+                      history.data.behind_by !== 0 ||
+                      comparison.data.ahead_by !== backupToc.ahead ||
+                      comparison.data.files?.length !== backupToc.files.length ||
+                      !comparison.data.files.every(file =>
+                        backupToc.files.includes(file.filename) && file.status === 'modified') ||
+                      !replacementFiles.some(file =>
+                        file.filename === backupToc.files[1] && file.status === 'modified') ||
+                      !replacementFiles.some(file =>
+                        file.filename === backupToc.files[2] && file.status === 'modified')) continue;
+                  const read = async (path, ref) => {
+                    const response = (await github.rest.repos.getContent({
+                      owner, repo, path, ref
+                    })).data;
+                    if (Array.isArray(response) || response.type !== 'file') {
+                      throw new Error('Expected exact source backup file: ' + path);
+                    }
+                    return Buffer.from(response.content, 'base64').toString('utf8');
+                  };
+                  const [previous, current] = await Promise.all([
+                    Promise.all(backupToc.files.map(path => read(path, branch.commit.sha))),
+                    Promise.all(backupToc.files.map(path => read(path, defaultBranch))),
+                  ]);
+                  const functions = src => src.split(String.fromCharCode(10))
+                    .map(line => line.match(/^(?:async )?def ([A-Za-z_][A-Za-z0-9_]*)[(]/))
+                    .filter(Boolean).map(x => x[1]);
+                  const coverage = (historic, latest) => {
+                    const lines = x => x.split(String.fromCharCode(10))
+                      .map(line => line.trim()).filter(Boolean);
+                    const original = lines(historic);
+                    const retained = new Set(lines(latest));
+                    return original.length
+                      ? original.filter(line => retained.has(line)).length / original.length : 0;
+                  };
+                  const minimum = [0.94, 0.99, 0.999, 0.93];
+                  if (!previous.every((src, index) => {
+                    const currentFunctions = new Set(functions(current[index]));
+                    return functions(src).every(fn => currentFunctions.has(fn)) &&
+                      coverage(src, current[index]) >= minimum[index];
+                  }) ||
+                      functions(previous[1]).length !== 13 ||
+                      functions(previous[2]).length !== 13 ||
+                      functions(previous[3]).length !== 1 ||
+                      !current[1].includes('def verify_archive_toc(') ||
+                      !current[1].includes('except BrokenPipeError:') ||
+                      !current[1].includes('for data in _iter_verified_plaintext(path, passphrase):') ||
+                      !current[1].includes('if check.wait(timeout=90) != 0:') ||
+                      !current[1].includes('archive_toc_validation_passed') ||
+                      !current[2].includes('def test_large_archive_when_nonexecuting_toc_reader_exits_early(') ||
+                      !current[2].includes('def test_early_toc_reader_failure_still_rejects_archive(') ||
+                      !current[2].includes('def test_bad_passphrase_and_modified_ciphertext_rejected(') ||
+                      !current[2].includes('def test_backup_recovers_when_archive_toc_reader_exits_early(') ||
+                      !current[3].includes('"phase_at_failure": phase') ||
+                      !current[3].includes('"error_kind": kind') ||
+                      !current[0].includes('independent restore')) continue;
+                  candidates.push({ name, sha: branch.commit.sha,
+                    reason: 'reviewed closed backup TOC PR #555 superseded by merged verified repair #557' });
                   continue;
                 }
 
