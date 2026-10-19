@@ -1,0 +1,59 @@
+name: Aiven empty staging schema (guarded, manual)
+
+# Never runs on pushes or pull requests. This is not a production cutover.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Preview first; install creates only three empty staging tables"
+        required: true
+        type: choice
+        options:
+          - preview
+          - install
+        default: preview
+      confirmation:
+        description: "For install only: CREATE_EMPTY_AIVEN_STAGING_ONLY"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dankshield-aiven-empty-staging-manual
+  cancel-in-progress: false
+
+jobs:
+  guarded-staging:
+    if: ${{ github.repository == 'UglyGameFace/Dank-Shield' && github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - name: Check out exact current main revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Refuse stale revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || {
+            echo "::error::Main moved since workflow began. Retry the preview on the new head."
+            exit 1
+          }
+      - name: Prepare Python and PostgreSQL client
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install isolated PostgreSQL driver
+        run: python -m pip install -q "psycopg[binary]>=3.2,<4"
+      - name: Preview or guarded installation on dedicated Aiven service
+        env:
+          AIVEN_POSTGRES_URI: ${{ secrets.AIVEN_POSTGRES_URI }}
+          AIVEN_POSTGRES_CA_PEM: ${{ secrets.AIVEN_POSTGRES_CA_PEM }}
+          AIVEN_STAGING_MODE: ${{ inputs.mode }}
+          AIVEN_STAGING_CONFIRMATION: ${{ inputs.confirmation }}
+        run: python -m tools.aiven_empty_staging_schema
