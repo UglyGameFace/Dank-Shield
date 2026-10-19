@@ -1,0 +1,61 @@
+name: Aiven Guild Config State Seed (manual, guarded)
+
+# Preview is read-only. Seed only prepares the disabled future Aiven
+# guild_config_state repository, never live Discord routing or Supabase.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "First preview; then seed only with explicit confirmation"
+        required: true
+        type: choice
+        options: [preview, seed]
+        default: preview
+      confirmation:
+        description: "Seed only: SEED_AIVEN_OFFLINE_CONFIG_STATE_ONLY"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dankshield-aiven-offline-config-seed
+  cancel-in-progress: false
+
+jobs:
+  offline-config:
+    if: ${{ github.repository == 'UglyGameFace/Dank-Shield' && github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reject stale revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || {
+            echo "::error::Main moved; please start over with a fresh preview."
+            exit 1
+          }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install isolated clients
+        run: python -m pip install -q "pytest>=8,<10" "psycopg[binary]>=3.2,<4"
+      - name: Run offline seed safety tests
+        run: python -m pytest -q --tb=short tests/test_aiven_guild_config_state_seed.py
+      - name: Preview or explicitly seed disabled Aiven guild state
+        env:
+          DANK_SOURCE_DATABASE_URL: ${{ secrets.DANK_SOURCE_DATABASE_URL }}
+          AIVEN_POSTGRES_URI: ${{ secrets.AIVEN_POSTGRES_URI }}
+          AIVEN_POSTGRES_CA_PEM: ${{ secrets.AIVEN_POSTGRES_CA_PEM }}
+          AIVEN_OFFLINE_SEED_MODE: ${{ inputs.mode }}
+          AIVEN_OFFLINE_SEED_CONFIRMATION: ${{ inputs.confirmation }}
+        run: python -m tools.aiven_guild_config_state_seed
