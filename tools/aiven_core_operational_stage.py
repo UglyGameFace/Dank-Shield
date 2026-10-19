@@ -242,10 +242,10 @@ def storage_usage_mib(connection) -> tuple[float, float, float]:
     with connection.cursor() as cursor:
         cursor.execute(
             "select pg_database_size(current_database()), "
-            "case when to_regclass('dank_archive.original_rows') is null "
-            "then 0 else pg_total_relation_size('dank_archive.original_rows') end, "
-            "case when to_regclass('dank_migration.core_staged_originals') is null "
-            "then 0 else pg_total_relation_size('dank_migration.core_staged_originals') end"
+            "coalesce(pg_total_relation_size("
+            "to_regclass('dank_archive.original_rows')), 0), "
+            "coalesce(pg_total_relation_size("
+            "to_regclass('dank_migration.core_staged_originals')), 0)"
         )
         values = cursor.fetchone()
     return tuple(round(int(value) / 1048576, 2) for value in values)
