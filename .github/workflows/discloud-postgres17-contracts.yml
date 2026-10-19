@@ -35,6 +35,9 @@ on:
       - "tests/test_postgres_guild_config_pg17_integration.py"
       - "tests/test_postgres_data_lifecycle.py"
       - "tests/test_aiven_history_archive.py"
+      - "tests/test_aiven_core_operational_stage.py"
+      - "tools/aiven_core_operational_stage.py"
+      - ".github/workflows/aiven-core-operational-staging.yml"
       - "tools/aiven_history_archive.py"
       - ".github/workflows/aiven-compressed-history-archive.yml"
       - "supabase/migrations/20261013120000_member_activity_batch_rpc.sql"
@@ -120,6 +123,7 @@ jobs:
             tests/test_postgres_guild_config_pg17_integration.py \
             tests/test_postgres_data_lifecycle.py \
             tests/test_aiven_history_archive.py \
+            tests/test_aiven_core_operational_stage.py \
             tests/test_activity_batch_sql_pg17_integration.py
 
   backup9-supabase-pg17:
