@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   history-archive:
-    if: [object Object]{{ github.repository == 'UglyGameFace/Dank-Shield' && github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' }}
+    if: ${{ github.repository == 'UglyGameFace/Dank-Shield' && github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -53,9 +53,9 @@ jobs:
         run: python -m pytest -q --tb=short tests/test_aiven_history_archive.py
       - name: Preview or explicitly archive original history rows
         env:
-          DANK_SOURCE_DATABASE_URL: [object Object]{{ secrets.DANK_SOURCE_DATABASE_URL }}
-          AIVEN_POSTGRES_URI: [object Object]{{ secrets.AIVEN_POSTGRES_URI }}
-          AIVEN_POSTGRES_CA_PEM: [object Object]{{ secrets.AIVEN_POSTGRES_CA_PEM }}
-          AIVEN_HISTORY_MODE: [object Object]{{ inputs.mode }}
-          AIVEN_HISTORY_CONFIRMATION: [object Object]{{ inputs.confirmation }}
+          DANK_SOURCE_DATABASE_URL: ${{ secrets.DANK_SOURCE_DATABASE_URL }}
+          AIVEN_POSTGRES_URI: ${{ secrets.AIVEN_POSTGRES_URI }}
+          AIVEN_POSTGRES_CA_PEM: ${{ secrets.AIVEN_POSTGRES_CA_PEM }}
+          AIVEN_HISTORY_MODE: ${{ inputs.mode }}
+          AIVEN_HISTORY_CONFIRMATION: ${{ inputs.confirmation }}
         run: python -m tools.aiven_history_archive
