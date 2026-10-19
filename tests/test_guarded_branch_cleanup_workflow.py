@@ -1122,3 +1122,39 @@ def test_merged_movie_picker_recovery_requires_current_ui_parity_and_proofs() ->
         "archive.object.sha !== candidate.sha",
     ):
         assert required in text
+
+
+def test_voice_517_branch_retirement_requires_linked_merge_and_consent_parity() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedOldVoiceSafety517 = new Map([", 1)[1].split("]);", 1)[0]
+    assert manifest.count("['feat/517-voice-conduct-moderation-20261012'") == 1
+    for sha in (
+        "8d465fba52460d5feeb39914da89a35586fd4b6c",
+        "7c0db5ef270d8db7925f7c1007befe68f6a22b3c",
+        "4b085f8d6c7805491665b8462d74ae4b8d08d7f6",
+    ):
+        assert sha in manifest
+    for required in (
+        "branch.commit.sha !== voice517.sha || prs.length !== 1",
+        "pr.number !== voice517.pr",
+        "pr.base?.ref !== 'aaa-cinema-pre-pregateway-bind'",
+        "pr.head.sha !== voice517.mergedHead",
+        "pr.merge_commit_sha !== voice517.merge",
+        "!await ancestorOfMain(voice517.merge)",
+        "!await ancestorOfLinkedDiscloud(voice517.merge)",
+        "fromMergedHead.data.ahead_by !== voice517.ahead",
+        "fromMergedHead.data.behind_by !== 0",
+        "comparison.data.ahead_by !== voice517.ahead",
+        "voice517.files.includes(file.filename)",
+        "file.status === 'added' : file.status === 'modified'",
+        "originalFns.every(fn => currentFns.has(fn))",
+        "lineCoverage(source, current[index]) >= minimumCoverage[index]",
+        "funcs(old[6]).length !== 13",
+        "test_voice_safety_failed_optout_stops_all_review_and_revokes_immediately",
+        "test_voice_safety_revocation_during_transcriber_prewarm_cannot_admit_pcm",
+        "test_voice_safety_agreement_requires_explicit_disclosed_action",
+        "inUseByOpenPR.has(name)",
+        "current.protected || current.commit.sha !== candidate.sha",
+        "archive.object.sha !== candidate.sha",
+    ):
+        assert required in text
