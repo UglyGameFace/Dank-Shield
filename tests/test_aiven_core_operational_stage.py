@@ -237,11 +237,13 @@ def test_storage_usage_before_and_after_optional_table_creation_on_real_postgres
 
         with pytest.raises(ExpectedRollback):
             with conn.transaction():
-                conn.execute("create schema dank_archive")
+                conn.execute("create schema if not exists dank_archive")
                 conn.execute("create table dank_archive.original_rows (id integer)")
                 conn.execute(
                     "create table dank_migration.core_staged_originals (id integer)"
                 )
+                conn.execute("insert into dank_archive.original_rows values (1)")
+                conn.execute("insert into dank_migration.core_staged_originals values (1)")
                 database_mib, history_mib, core_mib = core.storage_usage_mib(conn)
                 assert database_mib > 0
                 assert history_mib > 0
