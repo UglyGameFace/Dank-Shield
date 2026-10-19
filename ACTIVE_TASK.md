@@ -1,3 +1,17 @@
+# Active Task Lock — Dank Shield Aiven PG18 lossless history archive (2026-10-19)
+
+**User-directed return to database migration:** On October 19 the owner explicitly redirected work back to the database migration after an unrelated Community Hub continuation. Database is now the single active task. Community Hub PR #645 remains DRAFT/PAUSED and must not be merged, deployed or worked on during this migration slice.
+
+**Verified checkpoint:** Earlier Aiven shadow preview/import succeeded for 12/12 guild-config full original rows; no runtime or Discloud cutover occurred. Current main includes owner-only offline guild-state seed workflow but no evidence of successful live seed dispatch. Source Supabase remains authoritative.
+
+**This bounded slice:** Full-fidelity, compressed, immutable history archive for guild_config_versions (920 source rows), staff_action_logs (3,369), activity_feed_events (4,756), and dank_invite_block_events (6,629), using a private Aiven schema and manual preview/install/archive steps. Source PK, timestamps, guild IDs, original JSON, and SHA256 verification preserved; all 3,369 moderation-feed links must be recoverable. The archive is not the canonical queryable live repository, an independent offsite backup, or a dedup deletion policy.
+
+**Safety:** Source transaction is read-only repeatable-read; Aiven PG18 service/TLS identity and guild-shadow required, exact owner confirmations, 30k-row/180MiB raw/90MiB compressed limits, guarded destination disk headroom. No source delete, pruning, startup schema mutation, new bot runtime routing, shared voice data change, or Discloud Auto Deploy. No production cutover.
+
+**Acceptance:** Merge only after exact-head focused tests and full CI, then owner manual preview, schema install, preview and compressed archive import with verified counts and Aiven database size. Live source can still change after a snapshot, so late-write catch-up, fresh independent restorable encrypted backup, tickets/activity/canonical repositories, rollback and real Discord canary are still prerequisites. PR #645 remains separate and paused.
+
+---
+
 # Active Task Lock — Community Hub game-specific role notifications (2026-10-18)
 
 **Current continuation:** Issue #638, manual game-role recruitment. Base `main@02645b66009c736a59c85bed72cad159eca7b889`; one branch `feat/community-hub-game-role-pings-20261018`. Prior PRs #640 (external read-only), #641 (source/search), and #642 (play style/mic filters) merged, exact-head checks green, but live Discloud/Android acceptance and The100.io token/migration remain unverified.
