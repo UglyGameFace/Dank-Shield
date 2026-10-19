@@ -1,0 +1,61 @@
+name: Aiven Compressed History Archive (manual, guarded)
+
+# Read-only preview; explicit schema install and archive import are owner-only.
+# No Discord runtime changes, Discloud deployment, deletion or retention job.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "preview first, then explicitly install schema and archive"
+        required: true
+        type: choice
+        options: [preview, install, archive]
+        default: preview
+      confirmation:
+        description: "For install/archive only, enter the exact confirmation documented in the migration guide"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dankshield-aiven-history-archive
+  cancel-in-progress: false
+
+jobs:
+  history-archive:
+    if: [object Object]{{ github.repository == 'UglyGameFace/Dank-Shield' && github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact current main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reject stale main revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || {
+            echo "::error::Main advanced; start again with a fresh preview."
+            exit 1
+          }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install isolated PostgreSQL/test clients
+        run: python -m pip install -q "pytest>=8,<10" "psycopg[binary]>=3.2,<4"
+      - name: Validate archive encoding, guards and workflow contract
+        run: python -m pytest -q --tb=short tests/test_aiven_history_archive.py
+      - name: Preview or explicitly archive original history rows
+        env:
+          DANK_SOURCE_DATABASE_URL: [object Object]{{ secrets.DANK_SOURCE_DATABASE_URL }}
+          AIVEN_POSTGRES_URI: [object Object]{{ secrets.AIVEN_POSTGRES_URI }}
+          AIVEN_POSTGRES_CA_PEM: [object Object]{{ secrets.AIVEN_POSTGRES_CA_PEM }}
+          AIVEN_HISTORY_MODE: [object Object]{{ inputs.mode }}
+          AIVEN_HISTORY_CONFIRMATION: [object Object]{{ inputs.confirmation }}
+        run: python -m tools.aiven_history_archive
