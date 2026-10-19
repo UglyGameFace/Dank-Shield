@@ -1208,3 +1208,39 @@ def test_source_backup_toc_branch_requires_merged_replacement_and_full_auth_pari
         "archive.object.sha !== candidate.sha",
     ):
         assert condition in text
+
+
+def test_quiet_notice_historical_repair_requires_exact_replacement_and_runtime_parity() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedSupersededQuietNotice = new Map([", 1)[1].split("]);", 1)[0]
+    assert manifest.count("['fix/quiet-notice-auto-clear-recovery-20260921'") == 1
+    for sha in (
+        "cd22001dd77154e0826b820530cf9d7331195877",
+        "732ea825af78b8f7d185cab1878fd939e1fab08f",
+        "195a2d5bd37ae17fdb4dcb587e646172bac91f16",
+    ):
+        assert sha in manifest
+    for gate in (
+        "branch.commit.sha !== quietRepair.sha || prs.length !== 1",
+        "originalPr.state !== 'closed' || originalPr.merged_at",
+        "originalPr.head.sha !== quietRepair.sha",
+        "replacement.merge_commit_sha !== quietRepair.replacementMerge",
+        "!await ancestorOfMain(quietRepair.replacementMerge)",
+        "comparison.data.ahead_by !== quietRepair.ahead",
+        "oldDiff.get(path).sha === newDiff.get(path).sha",
+        "item.sha === oldDiff.get(quietRepair.files[index]).sha",
+        "current[index].sha === historical[index].sha",
+        "coverage(item.source, current[index].source) >= thresholds[index]",
+        "functions(historical[1].source).length !== 21",
+        "functions(historical[4].source).length !== 22",
+        "record_dank_quiet_notice_activity",
+        "clear_dank_quiet_notice_delivery",
+        "test_quiet_auto_clear_deletes_before_clearing_delivery_identity",
+        "test_quiet_auto_clear_delete_failure_keeps_delivery_identity_for_retry",
+        "test_clear_quiet_delivery_uses_one_atomic_rpc_and_preserves_newer_delivery",
+        "inUseByOpenPR.has(name)",
+        "current.protected || current.commit.sha !== candidate.sha",
+        "archive.object.sha !== candidate.sha",
+        "reviewedBatch && deleting && candidates.length === 0",
+    ):
+        assert gate in text

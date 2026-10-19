@@ -329,6 +329,31 @@ jobs:
               }],
             ]);
 
+
+            // #285 is a closed, unmerged historical repair, replaced by
+            // merged #288. Both PRs have identical implementation/test blobs
+            // for six files; their ACTIVE_TASK records intentionally differ.
+            // Current main keeps the atomic database migration and service.
+            const reviewedSupersededQuietNotice = new Map([
+              ['fix/quiet-notice-auto-clear-recovery-20260921', {
+                sha: 'cd22001dd77154e0826b820530cf9d7331195877',
+                originalPr: 285,
+                replacementPr: 288,
+                replacementHead: '732ea825af78b8f7d185cab1878fd939e1fab08f',
+                replacementMerge: '195a2d5bd37ae17fdb4dcb587e646172bac91f16',
+                ahead: 28,
+                files: [
+                  '.github/workflows/smart-stickies-029.yml',
+                  'stoney_verify/community_quiet_notice_service.py',
+                  'stoney_verify/community_tools_runtime.py',
+                  'supabase/migrations/20260921042000_quiet_notice_atomic_delivery_clear.sql',
+                  'tests/test_community_tools_hardening_031.py',
+                  'tools/test_community_tools_static.py',
+                ],
+                taskRecord: 'ACTIVE_TASK.md',
+              }],
+            ]);
+
             const reviewedDormantStatsGuard = new Map([
               ['fix/dank-stats-profile-links', {
                 sha: 'ca74f100ca8e337a0b8f0c73273d0ad634effa22',
@@ -1347,6 +1372,108 @@ jobs:
                       !current[0].includes('independent restore')) continue;
                   candidates.push({ name, sha: branch.commit.sha,
                     reason: 'reviewed closed backup TOC PR #555 superseded by merged verified repair #557' });
+                  continue;
+                }
+
+
+                const quietRepair = reviewedSupersededQuietNotice.get(name);
+                if (quietRepair) {
+                  if (branch.commit.sha !== quietRepair.sha || prs.length !== 1) continue;
+                  const originalPr = prs[0];
+                  const replacement = closedPRs.find(pr =>
+                    pr.number === quietRepair.replacementPr &&
+                    pr.head?.repo?.full_name === fullName);
+                  if (originalPr.number !== quietRepair.originalPr ||
+                      originalPr.state !== 'closed' || originalPr.merged_at ||
+                      originalPr.base?.ref !== defaultBranch ||
+                      originalPr.head.sha !== quietRepair.sha ||
+                      !replacement || !replacement.merged_at ||
+                      replacement.state !== 'closed' ||
+                      replacement.base?.ref !== defaultBranch ||
+                      replacement.head.sha !== quietRepair.replacementHead ||
+                      replacement.merge_commit_sha !== quietRepair.replacementMerge ||
+                      !await ancestorOfMain(quietRepair.replacementMerge)) continue;
+                  const [comparison, oldPrFiles, replacementFiles] = await Promise.all([
+                    github.rest.repos.compareCommits({
+                      owner, repo, base: defaultBranch, head: branch.commit.sha,
+                    }),
+                    github.paginate(github.rest.pulls.listFiles, {
+                      owner, repo, pull_number: quietRepair.originalPr, per_page: 100
+                    }),
+                    github.paginate(github.rest.pulls.listFiles, {
+                      owner, repo, pull_number: quietRepair.replacementPr, per_page: 100
+                    }),
+                  ]);
+                  const permitted = new Set([...quietRepair.files, quietRepair.taskRecord]);
+                  if (comparison.data.ahead_by !== quietRepair.ahead ||
+                      comparison.data.files?.length !== permitted.size ||
+                      !comparison.data.files.every(file =>
+                        permitted.has(file.filename) &&
+                        file.status === (file.filename.includes('/migrations/')
+                          ? 'added' : 'modified')) ||
+                      oldPrFiles.length !== permitted.size ||
+                      replacementFiles.length !== permitted.size) continue;
+                  const oldDiff = new Map(oldPrFiles.map(file => [file.filename, file]));
+                  const newDiff = new Map(replacementFiles.map(file => [file.filename, file]));
+                  if (![...permitted].every(path =>
+                    oldDiff.has(path) && newDiff.has(path) &&
+                    oldDiff.get(path).status === newDiff.get(path).status) ||
+                      !quietRepair.files.every(path =>
+                        oldDiff.get(path).sha === newDiff.get(path).sha)) continue;
+                  const readFile = async (path, ref) => {
+                    const file = (await github.rest.repos.getContent({
+                      owner, repo, path, ref
+                    })).data;
+                    if (Array.isArray(file) || file.type !== 'file') {
+                      throw new Error('Expected verified Quiet Notice file: ' + path);
+                    }
+                    return {
+                      sha: file.sha,
+                      source: Buffer.from(file.content, 'base64').toString('utf8'),
+                    };
+                  };
+                  const [historical, current] = await Promise.all([
+                    Promise.all(quietRepair.files.map(path => readFile(path, branch.commit.sha))),
+                    Promise.all(quietRepair.files.map(path => readFile(path, defaultBranch))),
+                  ]);
+                  if (!historical.every((item, index) =>
+                    item.sha === oldDiff.get(quietRepair.files[index]).sha) ||
+                      ![1, 3, 4].every(index =>
+                        current[index].sha === historical[index].sha)) continue;
+                  const functions = text =>
+                    text.split(String.fromCharCode(10))
+                      .map(line => line.match(/^(?:async )?def ([A-Za-z_][A-Za-z0-9_]*)[(]/))
+                      .filter(Boolean).map(match => match[1]);
+                  const coverage = (previous, latest) => {
+                    const lines = src => src.split(String.fromCharCode(10))
+                      .map(line => line.trim()).filter(Boolean);
+                    const oldLines = lines(previous);
+                    const present = new Set(lines(latest));
+                    return oldLines.length &&
+                      oldLines.filter(line => present.has(line)).length / oldLines.length;
+                  };
+                  const thresholds = [0.97, 1, 0.99, 1, 1, 0.95];
+                  if (!historical.every((item, index) => {
+                    const retained = new Set(functions(current[index].source));
+                    return functions(item.source).every(fn => retained.has(fn)) ||
+                      (index === 5 && coverage(item.source, current[index].source) >= 0.95);
+                  }) ||
+                      !historical.every((item, index) =>
+                        coverage(item.source, current[index].source) >= thresholds[index]) ||
+                      functions(historical[1].source).length !== 21 ||
+                      functions(historical[2].source).length !== 11 ||
+                      functions(historical[4].source).length !== 22 ||
+                      !current[1].source.includes('def _clear_delivery_sync(') ||
+                      !current[1].source.includes('def _record_activity_sync(') ||
+                      !current[2].source.includes('async def') ||
+                      !current[3].source.includes('record_dank_quiet_notice_activity') ||
+                      !current[3].source.includes('clear_dank_quiet_notice_delivery') ||
+                      !current[4].source.includes('def test_quiet_auto_clear_deletes_before_clearing_delivery_identity(') ||
+                      !current[4].source.includes('def test_quiet_auto_clear_delete_failure_keeps_delivery_identity_for_retry(') ||
+                      !current[4].source.includes('def test_clear_quiet_delivery_uses_one_atomic_rpc_and_preserves_newer_delivery(') ||
+                      !current[5].source.includes('def test_quiet_notice_destination_changes_are_explicit_stale_safe_and_destructive_order_is_safe(')) continue;
+                  candidates.push({ name, sha: branch.commit.sha,
+                    reason: 'reviewed Quiet Notice #285 exact-blobs replacement by merged #288' });
                   continue;
                 }
 
