@@ -1,3 +1,17 @@
+# Active Task Lock — Dank Shield Aiven PG18 lossless history archive (2026-10-19)
+
+**User-directed return to database migration:** On October 19 the owner explicitly redirected work back to the database migration after an unrelated Community Hub continuation. Database is now the single active task. Community Hub PR #645 was merged separately while this database slice was being prepared; its previous task record is retained below. No new Community Hub work belongs to this migration slice.
+
+**Verified checkpoint:** Earlier Aiven shadow preview/import succeeded for 12/12 guild-config full original rows; no runtime or Discloud cutover occurred. Current main includes owner-only offline guild-state seed workflow but no evidence of successful live seed dispatch. Source Supabase remains authoritative.
+
+**This bounded slice:** Full-fidelity, compressed, immutable history archive for guild_config_versions (920 source rows), staff_action_logs (3,369), activity_feed_events (4,756), and dank_invite_block_events (6,629), using a private Aiven schema and manual preview/install/archive steps. Source PK, timestamps, guild IDs, original JSON, and SHA256 verification preserved; all 3,369 moderation-feed links must be recoverable. The archive is not the canonical queryable live repository, an independent offsite backup, or a dedup deletion policy.
+
+**Safety:** Source transaction is read-only repeatable-read; Aiven PG18 service/TLS identity and guild-shadow required, exact owner confirmations, 30k-row/180MiB raw/90MiB compressed limits, guarded destination disk headroom. No source delete, pruning, startup schema mutation, new bot runtime routing, shared voice data change, or Discloud Auto Deploy. No production cutover.
+
+**Acceptance:** Merge only after exact-head focused tests and full CI, then owner manual preview, schema install, preview and compressed archive import with verified counts and Aiven database size. Live source can still change after a snapshot, so late-write catch-up, fresh independent restorable encrypted backup, tickets/activity/canonical repositories, rollback and real Discord canary are still prerequisites. PR #645 is already merged and is not an active task in this slice.
+
+---
+
 # Active Task Lock — Community Hub game-role picker acceptance (2026-10-19)
 
 **Active outcome:** Close the remaining Community Hub game-role setup UX mismatch while preserving the one-active-task lock. PR #643 was merged, but Discord/Discloud production acceptance remains unverified. The merged native role dropdown did not use the shared Search-Safe resource browser required for styled/aliased custom roles.

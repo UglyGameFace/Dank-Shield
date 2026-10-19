@@ -1,3 +1,13 @@
+> **CURRENT DIRECTION (2026-10-19): Aiven PostgreSQL 18.** This
+> document below records the earlier Discloud PostgreSQL 17 design and
+> independent Backup #9 restore history. It is not the current Aiven runbook.
+> The Aiven guild-config staging/shadow now contains verified copies of
+> 12 original guild configurations. The live bot remains on Supabase,
+> production cutover has NOT been authorized, and source records are intact.
+> For ongoing byte-exact, quota-bounded historical preservation, see
+> docs/AIVEN_HISTORY_ARCHIVE_20261019.md. No new source history archive
+> has been imported yet.
+
 # Dank Shield: selective migration into the existing Discloud PostgreSQL 17
 
 **Status: design and read-only preflight only. No existing data has been copied or
