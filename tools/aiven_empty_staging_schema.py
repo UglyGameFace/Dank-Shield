@@ -143,9 +143,17 @@ def main() -> int:
                 # Source/member data stays empty; only metadata is queried.
                 with conn.cursor() as cur:
                     for relation in RELATIONS:
-                        cur.execute("select has_table_privilege('public', %s, 'SELECT')", (relation,))
+                        cur.execute(
+                            "select coalesce(bool_or(a.grantee = 0 and "
+                            "a.privilege_type = 'SELECT'), false) "
+                            "from pg_catalog.pg_class c "
+                            "cross join lateral pg_catalog.aclexplode("
+                            "coalesce(c.relacl, pg_catalog.acldefault('r', c.relowner))) a "
+                            "where c.oid = %s::regclass",
+                            (relation,),
+                        )
                         if cur.fetchone()[0]:
-                            raise RuntimeError("unexpected public table permission")
+                            raise RuntimeError("unexpected PUBLIC table permission")
             print("Aiven staging installation: SUCCESS")
             print("Three empty staging tables installed in dank_core/dank_migration.")
             print("No source rows imported. No production bot routing changed.")
