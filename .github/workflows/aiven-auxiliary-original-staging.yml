@@ -1,0 +1,64 @@
+name: Aiven Auxiliary Original Staging (manual, guarded)
+
+# This preserves the other ticket, member and verification source originals.
+# Authentication tokens are retained as OFFLINE originals only, never active.
+# No runtime database routing, Discloud deploy, source writes or cleanup.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Read-only preview, owner-confirmed schema install, or guarded staging"
+        required: true
+        type: choice
+        options: [preview, install, stage]
+        default: preview
+      confirmation:
+        description: "Exact install/stage confirmation from the runbook"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dankshield-aiven-aux-originals
+  cancel-in-progress: false
+
+jobs:
+  auxiliary-originals:
+    if: ${{ github.repository == 'UglyGameFace/Dank-Shield' && github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Refuse stale main revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || {
+            echo "::error::Main advanced. Rerun a new preview against current main."
+            exit 1
+          }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install required isolated test clients
+        run: |
+          python -m pip install -q "pytest>=8,<10" "psycopg[binary]>=3.2,<4" "discord.py>=2.6,<3" "supabase>=2.24,<3" "python-dotenv>=1,<1.1"
+      - name: Validate offline original-copy workflow
+        run: |
+          python -m pytest -q --tb=short tests/test_aiven_auxiliary_original_stage.py tests/test_postgres_data_lifecycle.py
+      - name: Preview, install or stage sensitive originals
+        env:
+          DANK_SOURCE_DATABASE_URL: ${{ secrets.DANK_SOURCE_DATABASE_URL }}
+          AIVEN_POSTGRES_URI: ${{ secrets.AIVEN_POSTGRES_URI }}
+          AIVEN_POSTGRES_CA_PEM: ${{ secrets.AIVEN_POSTGRES_CA_PEM }}
+          AIVEN_AUX_MODE: ${{ inputs.mode }}
+          AIVEN_AUX_CONFIRMATION: ${{ inputs.confirmation }}
+        run: python -m tools.aiven_auxiliary_original_stage
