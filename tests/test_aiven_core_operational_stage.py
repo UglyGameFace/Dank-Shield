@@ -214,6 +214,14 @@ def test_workflow_is_owner_dispatch_only_without_deploy_or_sensitive_artifacts()
     assert "github.actor == 'UglyGameFace'" in wf
     assert "secrets.DANK_SOURCE_DATABASE_URL" in wf
     assert "secrets.AIVEN_POSTGRES_URI" in wf
+    # This job also runs the lifecycle contract, which imports Discord/Supabase modules.
+    # Keep the manual runner dependencies aligned with the isolated PG17 CI runner.
+    for requirement in (
+        "\"discord.py>=2.6,<3\"",
+        "\"supabase>=2.24,<3\"",
+        "\"python-dotenv>=1,<1.1\"",
+    ):
+        assert requirement in wf
     for danger in ("  push:","  schedule:","  workflow_run:",
                    "actions/upload-artifact","discloud/deploy-action",
                    "SUPABASE_SERVICE_ROLE_KEY"):
