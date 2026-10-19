@@ -1085,3 +1085,40 @@ def test_old_discord_hotfix_retirement_requires_canonical_api_and_schema() -> No
         "archive.object.sha !== candidate.sha",
     ):
         assert required in text
+
+
+def test_merged_movie_picker_recovery_requires_current_ui_parity_and_proofs() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedMovieMenuRecovery = new Map([", 1)[1].split("]);", 1)[0]
+    assert manifest.count("['test/408-release-picker-dispatch'") == 1
+    for sha in (
+        "1c9e5f26c9da4cd7a77d5e97258df1d7c1cdeda8",
+        "fcc2fba2b5c62d3e0b5375294846ac7cbc31bbbe",
+        "de0b80246aa376a6b5aecf66981776bca8db0510",
+    ):
+        assert sha in manifest
+    for required in (
+        "branch.commit.sha !== movieRecovery.sha",
+        "prs.length !== 1",
+        "pr.number !== movieRecovery.pr",
+        "pr.head.sha !== movieRecovery.mergedHead",
+        "pr.merge_commit_sha !== movieRecovery.merge",
+        "!await ancestorOfMain(movieRecovery.merge)",
+        "prLineage.data.ahead_by !== movieRecovery.ahead",
+        "prLineage.data.behind_by !== 0",
+        "comparison.data.ahead_by !== movieRecovery.ahead",
+        "f.status === 'modified'",
+        "functionNames(oldMovie).length !== 46",
+        "allowedMissingUI",
+        "allowedRenamedTests",
+        "coverage(oldInteractions, interactions) < 0.99",
+        "oldLifecycle !== lifecycle",
+        "oldLifecycleTests !== lifecycleTests",
+        "coverage(oldMovieTests, movieTests) < 0.90",
+        "test_release_picker_first_ranked_value_dispatches_pick_action",
+        "test_search_results_group_releases_without_automatic_votes",
+        "inUseByOpenPR.has(name)",
+        "current.protected || current.commit.sha !== candidate.sha",
+        "archive.object.sha !== candidate.sha",
+    ):
+        assert required in text

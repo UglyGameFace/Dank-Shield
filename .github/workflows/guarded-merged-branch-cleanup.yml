@@ -261,6 +261,29 @@ jobs:
               }],
             ]);
 
+
+            // Former merged PR #413 head plus nine reviewed follow-on commits.
+            // Main retains the production interaction guard, panel lifecycle,
+            // release picker tests, and shared Cinema identity/refactor APIs.
+            const reviewedMovieMenuRecovery = new Map([
+              ['test/408-release-picker-dispatch', {
+                sha: '1c9e5f26c9da4cd7a77d5e97258df1d7c1cdeda8',
+                pr: 413,
+                mergedHead: 'fcc2fba2b5c62d3e0b5375294846ac7cbc31bbbe',
+                merge: 'de0b80246aa376a6b5aecf66981776bca8db0510',
+                ahead: 9,
+                files: [
+                  'ACTIVE_TASK.md',
+                  'stoney_verify/commands_ext/public_movie_night.py',
+                  'stoney_verify/interaction_guard.py',
+                  'stoney_verify/panel_lifecycle.py',
+                  'tests/test_interaction_guard.py',
+                  'tests/test_movie_night_public_ui.py',
+                  'tests/test_panel_lifecycle_clarity_static.py',
+                ],
+              }],
+            ]);
+
             const reviewedDormantStatsGuard = new Map([
               ['fix/dank-stats-profile-links', {
                 sha: 'ca74f100ca8e337a0b8f0c73273d0ad634effa22',
@@ -1001,6 +1024,114 @@ jobs:
                   }
                   candidates.push({ name, sha: branch.commit.sha,
                     reason: 'reviewed old Discord API/schema hotfix superseded by explicit safety owner and canonical migration' });
+                  continue;
+                }
+
+
+                const movieRecovery = reviewedMovieMenuRecovery.get(name);
+                if (movieRecovery) {
+                  if (branch.commit.sha !== movieRecovery.sha ||
+                      prs.length !== 1) continue;
+                  const pr = prs[0];
+                  if (pr.number !== movieRecovery.pr ||
+                      !pr.merged_at ||
+                      pr.base?.ref !== defaultBranch ||
+                      pr.head.sha !== movieRecovery.mergedHead ||
+                      pr.merge_commit_sha !== movieRecovery.merge ||
+                      !await ancestorOfMain(movieRecovery.merge)) continue;
+                  const [prLineage, comparison] = await Promise.all([
+                    github.rest.repos.compareCommits({
+                      owner, repo, base: movieRecovery.mergedHead,
+                      head: branch.commit.sha
+                    }),
+                    github.rest.repos.compareCommits({
+                      owner, repo, base: defaultBranch, head: branch.commit.sha
+                    }),
+                  ]);
+                  if (prLineage.data.ahead_by !== movieRecovery.ahead ||
+                      prLineage.data.behind_by !== 0 ||
+                      comparison.data.ahead_by !== movieRecovery.ahead ||
+                      comparison.data.files?.length !== movieRecovery.files.length ||
+                      !comparison.data.files.every(f =>
+                        movieRecovery.files.includes(f.filename) &&
+                        f.status === 'modified')) continue;
+                  const readText = async (path, ref) => {
+                    const file = (await github.rest.repos.getContent({
+                      owner, repo, path, ref
+                    })).data;
+                    if (Array.isArray(file) || file.type !== 'file') {
+                      throw new Error('Expected Movie Night source: ' + path);
+                    }
+                    return Buffer.from(file.content, 'base64').toString('utf8');
+                  };
+                  const checkedPaths = movieRecovery.files.slice(1);
+                  const originalFiles = await Promise.all(checkedPaths.map(p =>
+                    readText(p, branch.commit.sha)));
+                  const currentFiles = await Promise.all(checkedPaths.map(p =>
+                    readText(p, defaultBranch)));
+                  const identity = await readText(
+                    'stoney_verify/cinema_media_identity.py', defaultBranch);
+                  const functionNames = source =>
+                    source.split(String.fromCharCode(10))
+                      .map(line => line.match(/^(?:async )?def ([A-Za-z_][A-Za-z0-9_]*)[(]/))
+                      .filter(Boolean).map(match => match[1]);
+                  const missingFunctions = (older, newer) => {
+                    const present = new Set(functionNames(newer));
+                    return functionNames(older).filter(fn => !present.has(fn));
+                  };
+                  const coverage = (older, newer) => {
+                    const lines = source => source.split(String.fromCharCode(10))
+                      .map(line => line.trim()).filter(Boolean);
+                    const historic = lines(older);
+                    const current = new Set(lines(newer));
+                    return historic.length ? historic.filter(line => current.has(line)).length / historic.length : 0;
+                  };
+                  const [oldMovie, oldInteractions, oldLifecycle,
+                         oldInteractionTests, oldMovieTests, oldLifecycleTests] = originalFiles;
+                  const [movie, interactions, lifecycle,
+                         interactionTests, movieTests, lifecycleTests] = currentFiles;
+                  const allowedMissingUI = [
+                    '_normalized_movie_identity',
+                    '_release_matches_catalog',
+                    '_filter_outcome_for_catalog'
+                  ];
+                  const allowedRenamedTests = [
+                    'test_movie_night_hub_and_setup_are_mobile_sized_and_action_complete',
+                    'test_provider_deck_custom_provider_field_stays_within_discord_limit',
+                    'test_movie_provider_page_keeps_search_and_direct_media_simple',
+                    'test_provider_deck_labels_capabilities_not_implementation_jargon'
+                  ];
+                  const exactMissing = (a, b) =>
+                    a.length === b.length && a.every(x => b.includes(x));
+                  if (functionNames(oldMovie).length !== 46 ||
+                      !exactMissing(missingFunctions(oldMovie, movie), allowedMissingUI) ||
+                      coverage(oldMovie, movie) < 0.82 ||
+                      !movie.includes('from stoney_verify.cinema_media_identity import (') ||
+                      !movie.includes('release_matches_catalog as _release_matches_catalog') ||
+                      !movie.includes('filter_outcome_for_catalog as _filter_outcome_for_catalog') ||
+                      !identity.includes('def release_matches_catalog(') ||
+                      !identity.includes('def filter_outcome_for_catalog(') ||
+                      !identity.includes('def catalog_metadata(') ||
+                      functionNames(oldInteractions).length !== 35 ||
+                      missingFunctions(oldInteractions, interactions).length !== 0 ||
+                      coverage(oldInteractions, interactions) < 0.99 ||
+                      oldLifecycle !== lifecycle ||
+                      functionNames(oldInteractionTests).length !== 21 ||
+                      missingFunctions(oldInteractionTests, interactionTests).length !== 0 ||
+                      coverage(oldInteractionTests, interactionTests) < 0.99 ||
+                      functionNames(oldMovieTests).length !== 28 ||
+                      !exactMissing(missingFunctions(oldMovieTests, movieTests), allowedRenamedTests) ||
+                      coverage(oldMovieTests, movieTests) < 0.90 ||
+                      oldLifecycleTests !== lifecycleTests ||
+                      !movieTests.includes('def test_release_picker_first_ranked_value_dispatches_pick_action(') ||
+                      !movieTests.includes('def test_release_picker_does_not_preselect_first_ranked_release(') ||
+                      !movieTests.includes('def test_search_results_group_releases_without_automatic_votes(') ||
+                      !movieTests.includes('def test_catalog_filter_drops_unrelated_provider_releases(') ||
+                      !movieTests.includes('def test_movie_night_hub_and_admin_surfaces_are_progressively_disclosed(') ||
+                      !movieTests.includes('def test_movie_sources_custom_source_field_stays_within_discord_limit(') ||
+                      !movieTests.includes('def test_movie_sources_page_separates_search_rss_and_reference_links(')) continue;
+                  candidates.push({ name, sha: branch.commit.sha,
+                    reason: 'reviewed merged Movie Night picker recovery with shared Cinema parity and retained tests' });
                   continue;
                 }
 
