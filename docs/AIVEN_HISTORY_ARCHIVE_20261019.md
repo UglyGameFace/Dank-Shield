@@ -33,11 +33,13 @@ work and MUST be losslessly reversible and backed up before activation.
 
 ## Storage boundaries
 
-The original rows use canonical JSON and per-row zlib compression, stored as
+The original rows use source PostgreSQL JSONB text (without numeric rounding) and
+per-row zlib compression, stored as
 bytea in private schema dank_archive.original_rows with SHA-256 and exact
 raw length. Source row PK, guild, timestamp and type are indexed metadata.
-Restoration uses unpack_record(), which verifies compression framing, bounds,
-hash and canonical bytes before returning JSON.
+Exact recovery uses unpack_original_json(), which verifies compression framing,
+bounds and SHA-256 before returning the unmodified source JSON text.
+unpack_record() provides a decoded convenience view.
 
 The imported bytes are **not automatically a backup**. Aiven disk usage,
 index allocation, future runtime tables, transaction WAL and provider storage
