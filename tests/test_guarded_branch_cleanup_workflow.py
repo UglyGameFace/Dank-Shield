@@ -1052,3 +1052,36 @@ def test_historical_ticket_repository_patch_requires_canonical_parity_before_ret
         "archive.object.sha !== candidate.sha",
     ):
         assert required in text
+
+
+def test_old_discord_hotfix_retirement_requires_canonical_api_and_schema() -> None:
+    text = _workflow()
+    manifest = text.split("const reviewedOldDiscordStabilityHotfix = new Map([", 1)[1].split("]);", 1)[0]
+    assert manifest.count("['hotfix/discord-rate-schema-timer-safety'") == 1
+    for sha in (
+        "ae06e0007b3ede126ca3326dbab30cd3c1463957",
+        "a080244dd28bb967e94138cee9e7e91c98ce1d35",
+        "08738df47bdc29aa6522274d0a526be4ad491a21",
+        "cc14474bebf30b12d721848a29339158766ab2e5",
+    ):
+        assert sha in manifest
+    for required in (
+        "prs.length || branch.commit.sha !== oldDiscordHotfix.sha",
+        "tip.data.parents[0].sha !== oldDiscordHotfix.second",
+        "second.data.parents[0].sha !== oldDiscordHotfix.first",
+        "first.data.parents[0].sha !== oldDiscordHotfix.ancestor",
+        "!await ancestorOfMain(oldDiscordHotfix.ancestor)",
+        "comparison.data.ahead_by !== 3",
+        "oldFunctions.length !== 17",
+        "!oldFunctions.every(fn => currentFunctions.has(fn))",
+        "entrypoint.includes('import stoney_verify.startup_guards.discord_api_safety')",
+        "joins.includes('unique (guild_id, user_id)')",
+        "idx_member_joins_guild_user_joined",
+        "test_no_standalone_schema_sql_exists_outside_migration_chain",
+        "Apply canonical migration chain twice on a fresh database",
+        "if (error.status !== 404) throw error;",
+        "inUseByOpenPR.has(name)",
+        "current.protected || current.commit.sha !== candidate.sha",
+        "archive.object.sha !== candidate.sha",
+    ):
+        assert required in text

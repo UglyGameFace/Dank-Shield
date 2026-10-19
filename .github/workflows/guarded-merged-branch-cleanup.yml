@@ -241,6 +241,26 @@ jobs:
               }],
             ]);
 
+
+            // May 8 no-PR hotfix with three unique commits.
+            // Discord REST safety has a newer explicit main.py boot owner, and
+            // the old standalone schema has been superseded by canonical SQL.
+            // Historical member_joins uniqueness is intentionally NOT restored:
+            // current join history must retain multiple join events per member.
+            const reviewedOldDiscordStabilityHotfix = new Map([
+              ['hotfix/discord-rate-schema-timer-safety', {
+                sha: 'ae06e0007b3ede126ca3326dbab30cd3c1463957',
+                first: 'a080244dd28bb967e94138cee9e7e91c98ce1d35',
+                second: '08738df47bdc29aa6522274d0a526be4ad491a21',
+                ancestor: 'cc14474bebf30b12d721848a29339158766ab2e5',
+                files: [
+                  'stoney_verify/startup_guards/__init__.py',
+                  'stoney_verify/startup_guards/discord_api_safety.py',
+                  'supabase/2026-05-08_runtime_stability_schema.sql',
+                ],
+              }],
+            ]);
+
             const reviewedDormantStatsGuard = new Map([
               ['fix/dank-stats-profile-links', {
                 sha: 'ca74f100ca8e337a0b8f0c73273d0ad634effa22',
@@ -885,6 +905,105 @@ jobs:
                     reason: 'reviewed old ticket repository prototype retained by canonical repository and tested service' });
                   continue;
                 }
+
+                const oldDiscordHotfix = reviewedOldDiscordStabilityHotfix.get(name);
+                if (oldDiscordHotfix) {
+                  if (prs.length || branch.commit.sha !== oldDiscordHotfix.sha) continue;
+                  const [tip, second, first] = await Promise.all([
+                    github.rest.repos.getCommit({ owner, repo, ref: oldDiscordHotfix.sha }),
+                    github.rest.repos.getCommit({ owner, repo, ref: oldDiscordHotfix.second }),
+                    github.rest.repos.getCommit({ owner, repo, ref: oldDiscordHotfix.first }),
+                  ]);
+                  if (tip.data.parents?.length !== 1 ||
+                      tip.data.parents[0].sha !== oldDiscordHotfix.second ||
+                      second.data.parents?.length !== 1 ||
+                      second.data.parents[0].sha !== oldDiscordHotfix.first ||
+                      first.data.parents?.length !== 1 ||
+                      first.data.parents[0].sha !== oldDiscordHotfix.ancestor ||
+                      tip.data.files?.length !== 1 ||
+                      tip.data.files[0].filename !== oldDiscordHotfix.files[2] ||
+                      tip.data.files[0].status !== 'added' ||
+                      second.data.files?.length !== 1 ||
+                      second.data.files[0].filename !== oldDiscordHotfix.files[0] ||
+                      second.data.files[0].status !== 'modified' ||
+                      first.data.files?.length !== 1 ||
+                      first.data.files[0].filename !== oldDiscordHotfix.files[1] ||
+                      first.data.files[0].status !== 'added' ||
+                      !await ancestorOfMain(oldDiscordHotfix.ancestor)) continue;
+                  const comparison = await github.rest.repos.compareCommits({
+                    owner, repo, base: defaultBranch, head: branch.commit.sha,
+                  });
+                  if (comparison.data.ahead_by !== 3 ||
+                      comparison.data.files?.length !== oldDiscordHotfix.files.length ||
+                      !comparison.data.files.every(f =>
+                        oldDiscordHotfix.files.includes(f.filename) &&
+                        ((f.filename === oldDiscordHotfix.files[0] && f.status === 'modified') ||
+                         (f.filename !== oldDiscordHotfix.files[0] && f.status === 'added'))
+                      )) continue;
+                  const getText = async (path, ref) => {
+                    const file = (await github.rest.repos.getContent({
+                      owner, repo, path, ref
+                    })).data;
+                    if (Array.isArray(file) || file.type !== 'file') {
+                      throw new Error('Expected exact Discord safety source: ' + path);
+                    }
+                    return Buffer.from(file.content, 'base64').toString('utf8');
+                  };
+                  const [historicalApi, canonicalApi, entrypoint, canonicalSchema,
+                         apiTests, schemaTests, schemaSmoke, currentGuardRegistry] =
+                    await Promise.all([
+                      getText(oldDiscordHotfix.files[1], branch.commit.sha),
+                      getText(oldDiscordHotfix.files[1], defaultBranch),
+                      getText('main.py', defaultBranch),
+                      getText('supabase/migrations/20260913154500_canonical_runtime_schema_authority.sql', defaultBranch),
+                      getText('tests/test_antinuke_audit_priority.py', defaultBranch),
+                      getText('tests/test_schema_authority.py', defaultBranch),
+                      getText('.github/workflows/schema-authority-sql.yml', defaultBranch),
+                      getText(oldDiscordHotfix.files[0], defaultBranch),
+                    ]);
+                  const names = source => source.split(String.fromCharCode(10))
+                    .map(line => line.match(/^(?:async )?def ([A-Za-z_][A-Za-z0-9_]*)[(]/))
+                    .filter(Boolean).map(match => match[1]);
+                  const oldFunctions = names(historicalApi);
+                  const currentFunctions = new Set(names(canonicalApi));
+                  const sql = canonicalSchema.toLowerCase();
+                  const joins = sql.split('create table if not exists public.member_joins (')[1]
+                    ?.split(');')[0] || '';
+                  if (oldFunctions.length !== 17 ||
+                      new Set(oldFunctions).size !== 17 ||
+                      !oldFunctions.every(fn => currentFunctions.has(fn)) ||
+                      !canonicalApi.includes('install_discord_api_safety()') ||
+                      !canonicalApi.includes('async def _guarded_audit_logs(') ||
+                      !canonicalApi.includes('async def _retrying_send(') ||
+                      !canonicalApi.includes('async def _retrying_channel_edit(') ||
+                      !entrypoint.includes('import stoney_verify.startup_guards.discord_api_safety') ||
+                      !currentGuardRegistry.includes('does **not** iterate a startup-guard registry') ||
+                      !apiTests.includes('test_priority_audit_skips_only_generic_spacing') ||
+                      !apiTests.includes('test_explicit_priority_marker_is_consumed_before_discord_call') ||
+                      !sql.includes('create table if not exists public.guild_members (') ||
+                      !sql.includes('create table if not exists public.member_joins (') ||
+                      !joins.includes('join_source text') ||
+                      !joins.includes('metadata jsonb not null') ||
+                      joins.includes('unique (guild_id, user_id)') ||
+                      !sql.includes('create unique index if not exists uq_guild_members_guild_user') ||
+                      !sql.includes('create index if not exists idx_member_joins_guild_user_joined') ||
+                      !sql.includes('create index if not exists idx_member_joins_join_source') ||
+                      !schemaTests.includes('test_no_standalone_schema_sql_exists_outside_migration_chain') ||
+                      !schemaSmoke.includes('Apply canonical migration chain twice on a fresh database') ||
+                      !schemaSmoke.includes('insert into public.member_joins (')) continue;
+                  try {
+                    await github.rest.repos.getContent({
+                      owner, repo, path: oldDiscordHotfix.files[2], ref: defaultBranch,
+                    });
+                    continue;
+                  } catch (error) {
+                    if (error.status !== 404) throw error;
+                  }
+                  candidates.push({ name, sha: branch.commit.sha,
+                    reason: 'reviewed old Discord API/schema hotfix superseded by explicit safety owner and canonical migration' });
+                  continue;
+                }
+
                 const statsGuard = reviewedDormantStatsGuard.get(name);
                 if (statsGuard) {
                   if (branch.commit.sha !== statsGuard.sha || prs.length) continue;
