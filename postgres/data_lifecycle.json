@@ -122,6 +122,32 @@
       "retention_class": "durable_security_evidence",
       "historical_reuse": "Recover original byte-exact PostgreSQL JSON text with SHA-256 and zlib verification; reconstruct original feed display metadata, config changes and security incidents without lossy deduplication",
       "review_interval_days": 180
+    },
+    "dank_migration.core_staged_originals": {
+      "feature": "Offline Aiven PostgreSQL 18 operational-source staging of 15 durable ticket/member/security/Hub tables",
+      "owner": "tools.aiven_core_operational_stage; manual guarded GitHub Actions workflow",
+      "purpose": "Preserve full original per-guild ticket, member activity, role, verification and Hub settings records with original keys and exact PostgreSQL JSONB source text before tested canonical table conversion",
+      "stored_fields": [
+        "source_table",
+        "record_key",
+        "source_pk_json",
+        "guild_id",
+        "source_json_text",
+        "source_sha256",
+        "raw_bytes",
+        "staged_at"
+      ],
+      "contains_message_content": true,
+      "retention_rule": "Never automatically delete or expire staged original records; preserve exact rows until independent encrypted backup, multi-table FK/payload parity, runtime feature verification, rollback window and separately authorized manual cleanup.",
+      "cleanup_interval_seconds": 86400,
+      "max_candidates_per_cleanup": 100,
+      "expiry_index": "primary key (source_table, record_key), partial lookup index (guild_id,source_table); no TTL or cleanup runner",
+      "preserve_when": "Source snapshots diverge, legacy guild ID cannot be authoritatively resolved, ticket note guild ID is NULL, linked ticket missing, source backup is unverified, per-guild feature parity incomplete or rollback may still be required",
+      "backup_class": "lossless_sensitive_operational_staging_pending_verified_full_cutover",
+      "migration": "postgres/migrations/202610190002_aiven_core_operational_staging.sql",
+      "retention_class": "support_record",
+      "historical_reuse": "Recover original exact ticket/member/role/verification/Community Hub state from immutable per-table PK-hashed JSON text while keeping source Supabase and older guild-config/history archives separate",
+      "review_interval_days": 30
     }
   }
 }
