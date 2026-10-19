@@ -1222,7 +1222,7 @@ jobs:
                       funcs(old[4]).length !== 38 ||
                       funcs(old[5]).length !== 3 ||
                       funcs(old[6]).length !== 13 ||
-                      !current[2].includes('async def register_voice_safety_consent(') ||
+                      !current[2].includes('def register_voice_safety_consent(') ||
                       !current[3].includes('def voice_safety_host_checks(') ||
                       !current[5].includes('async def read_voice_safety_agreement(') ||
                       !current[5].includes('async def withdraw_agreement_on_leave(') ||
@@ -2180,6 +2180,9 @@ jobs:
             }
             if (candidates.length > 250) {
               throw new Error('Fail closed: too many candidates for reviewed batch');
+            }
+            if (reviewedBatch && deleting && candidates.length === 0) {
+              throw new Error('No reviewed candidates are eligible; zero branches deleted. Inspect preview and guards.');
             }
 
             const batchLabel = reviewedBatch ? 'reviewed historical' : nextBatch ? 'second-wave' : 'first-wave';

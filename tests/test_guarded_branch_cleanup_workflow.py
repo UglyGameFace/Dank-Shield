@@ -1158,3 +1158,15 @@ def test_voice_517_branch_retirement_requires_linked_merge_and_consent_parity() 
         "archive.object.sha !== candidate.sha",
     ):
         assert required in text
+
+
+def test_reviewed_voice_517_guard_uses_native_sync_registration_signature() -> None:
+    text = _workflow()
+    assert "!current[2].includes('def register_voice_safety_consent(')" in text
+    assert "!current[2].includes('async def register_voice_safety_consent(')" not in text
+
+
+def test_reviewed_delete_cannot_pass_when_all_candidates_are_rejected() -> None:
+    text = _workflow()
+    assert "if (reviewedBatch && deleting && candidates.length === 0)" in text
+    assert "zero branches deleted. Inspect preview and guards." in text
