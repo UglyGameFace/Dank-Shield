@@ -1,3 +1,17 @@
+# Active Task Lock — Dank Shield dedicated Supabase 500K-readiness slice (2026-10-20)
+
+**Single active task remains the dedicated DankShield Supabase migration.** This is a forward-compatibility sub-slice, not a shift into unrelated bot features, Aiven cutover or a production infrastructure expansion.
+
+**Current branch:** `migration/dankshield-500k-scale-prep-20261020`. This slice provides an *additive, service-role-only* capped batch heartbeat RPC for the **offline candidate** project `viamriafkbqhquvrsnua`, deterministic workload estimates, a 500K architectural blueprint, and rollback-only tests of 1/5/30/250-sized batches, continuity and process handoffs.
+
+**Small guild baseline:** Existing single-guild heartbeat RPC and synchronous/async Discord bot runtime are untouched. Do not force sharding, queues, additional databases or expensive worker infrastructure on 5–30 guilds. Future rollout remains opt-in/canary; compatibility regression is mandatory.
+
+**Not certified:** A 250-guild batch reduces HTTP calls, but still performs one PostgreSQL row update per guild; current 500K projected workload is not supported by the candidate instance. The SQL is not wired into the bot; no live Discloud settings, source Supabase data, tokens or external resources change.
+
+**Acceptance:** Isolated candidate rollback-only tests and GitHub exact-head CI -> candidate migration apply -> SQL post-apply smoke and privilege/advisors -> review PR -> owner merge -> finish missing feature contracts and source reconciliation. Do not cut over production before complete parity, independent restore, load tests, Discord canary and owner authorization.
+
+---
+
 # Active Task Lock — Dedicated DankShield Supabase migration (retention slice, 2026-10-20)
 
 **One task only:** finish moving Dank Shield onto dedicated Supabase `viamriafkbqhquvrsnua`. Phase 3 PR #653 is merged to main. The immediate bounded subtask is safe lifecycle/retention and FK indexes, not an unrelated feature or premature cutover.
