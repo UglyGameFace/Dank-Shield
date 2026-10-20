@@ -36,6 +36,12 @@ Run the deterministic budget model with:
 - Supabase connection limits: https://supabase.com/docs/guides/database/connecting-to-postgres/pooling-and-limits
 - Supabase replicas (reads only, asynchronous): https://supabase.com/docs/guides/platform/read-replicas
 
+## Small-guild compatibility (5–30 servers)
+
+The design does **not** switch on distributed infrastructure for small bots. A single gateway process, existing guild-scoped PostgREST client and guild-local workers remain the supported default; shards and external coordination must be enabled only through future explicit, measured rollout gates. The new batch RPC is optional and additive; legacy `heartbeat_member_activity_tracker` remains unchanged. Batches of **1, 5, and 30** are covered by rollback-only SQL tests, not padded to 250. The pure workload model also checks 5 and 30 guilds.
+
+No production cutover or runtime batch activation is performed here. Existing guild activity continuity and fail-closed member-removal evidence must remain intact. The target is low baseline resource use plus horizontal growth later, not an unconditional claim of flawless performance.
+
 ## What this PR does and explicitly does not
 
 **Does:** add a guarded, service-role-only, monotonic timestamp, bounded 250-guild heartbeat RPC to the *offline* candidate and rollback-only SQL regression covering 250 rows, process handoff, late heartbeat rejection, long gaps, input validation, and privilege boundaries. Provide source-controlled workload envelope model and 500K design plan.
