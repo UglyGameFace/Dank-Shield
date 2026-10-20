@@ -1,0 +1,73 @@
+name: Dedicated Supabase Member Events SQL
+
+on:
+  pull_request:
+    paths:
+      - "supabase_fresh/migrations/202610200021_dankshield_member_events.sql"
+      - "supabase_fresh/tests/member_events_smoke.sql"
+      - "tests/test_dedicated_member_events_contract.py"
+      - ".github/workflows/dankshield-member-events-sql.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  member-evidence-schema:
+    name: Source-aligned member events and feed contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: dank_member_candidate
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dank_member_candidate"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: dank_member_candidate
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client if needed
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+      - name: Prepare source-independent feed stub and private service role
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create role anon nologin;
+          create role authenticated nologin;
+          create role service_role nologin bypassrls;
+          create table public.activity_feed_events (
+             guild_id text not null,
+             related_table text not null
+          );
+          grant select,insert on public.activity_feed_events to service_role;
+          create function public.activity_feed_log(
+              p_guild_id text, p_event_family text, p_event_type text,
+              p_source text, p_actor_user_id text, p_actor_name text,
+              p_target_user_id text, p_target_name text, p_related_table text,
+              p_related_id text, p_title text, p_description text, p_reason text,
+              p_metadata jsonb, p_created_at timestamptz
+          ) returns void language sql as $function$
+            insert into public.activity_feed_events(guild_id,related_table)
+            values(p_guild_id,p_related_table)
+          $function$;
+          SQL
+      - name: Install member events source schema and trigger
+        run: psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200021_dankshield_member_events.sql
+      - name: Check service-only access, new feed events and quiet historical backfills
+        run: psql -v ON_ERROR_STOP=1 -f supabase_fresh/tests/member_events_smoke.sql
