@@ -47,3 +47,17 @@ No production cutover or runtime batch activation is performed here. Existing gu
 **Does:** add a guarded, service-role-only, monotonic timestamp, bounded 250-guild heartbeat RPC to the *offline* candidate and rollback-only SQL regression covering 250 rows, process handoff, late heartbeat rejection, long gaps, input validation, and privilege boundaries. Provide source-controlled workload envelope model and 500K design plan.
 
 **Does not:** activate the RPC in Python, replace per-guild continuity proofs, start a distributed fleet, provision machines, schedule migrations, declare 500K capacity, change existing heartbeat logic or delete any source data. The eventual performance target is **lower per-guild write amplification**, not merely a big batch size.
+
+## Branch housekeeping and the single active task
+
+**Current verified branch count (Oct 20 2026): 44 including main**. Historical owner-assisted cleanup has already reduced >500 branches. Keep `main`, the owner-reviewed historical cleanup workflow, backups, source staging, recovery and the possible Discloud-linked `aaa-cinema-pre-pregateway-bind` intact. Do not infer that unmerged, closed, no-PR, or changed-after-merge branches are disposable.
+
+Use `work/dankshield-<short-slice>-YYYYMMDD` for **new temporary PR branches**. Existing `migration/dankshield-<short-slice>-YYYYMMDD` branches also opt into daily retirement. Do not create a second parallel branch while one Dank Shield task is active. Archive or preserve snapshots under non-opt-in prefixes, never `work/`. The daily cleanup in `.github/workflows/retire-merged-temporary-branches.yml` retires an opt-in branch *only* when:
+- It belongs to this repository and is not a protected, deployment-linked or explicit reserve ref.
+- Exactly one closed PR exists, was actually merged into `main`, and its original head SHA **equals the current branch SHA**.
+- The ref is unchanged and is not used by an open PR; check both the branch and git ref immediately before deletion.
+- At most 20 opt-in candidates are present. It never reaches into `feat/`, `fix/`, `backup/`, `archive/`, `aaa-*`, Aiven source branches or other older refs by guessing at names or age.
+
+The daily job runs on GitHub `main`; the manual workflow button previews by default and permits owner-only deletion. GitHub repository variable `DANK_DISCLOUD_DEPLOY_BRANCH` may be set to the **verified** deployment branch to add an explicit protected ref, without any credentials. The previous guarded historical workflow remains separate and owner-confirmed.
+
+If 75+ branches remain, the action fails with a visible alert, not a broad deletion. This threshold is a hygiene budget, not a safety justification to delete important branches. The weekly/historical review path is still needed for non-opt-in branches. A merge is not Discord/Discloud deployment acceptance: save any truly necessary pre-cutover checkpoints in permanent recovery refs before opting in. Keep commit/tag history and PR review record.
