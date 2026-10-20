@@ -1,3 +1,11 @@
+# Active task: source-audited private warnings parity, 2026-10-20
+
+**Single active branch:** `migration/dankshield-warns-parity-20261020`. Original shared-source metadata audit #39485389338 passed. Source public.warns: 7 columns/one historical row. Restore service-role-only source-shaped `warns` table with tenant-scoped warning count index and rollback-only smoke, but do NOT fabricate/copy historical evidence until private source-row parity is possible.
+
+**Known blockers:** source/audit_events and audit_logs may be other application records (lack guild_id), 34 source staff metric rows with source/candidate nullable mismatch, 147 per-guild profile settings, 9 Hub settings and session state, Cinema preferences/watch progress, other bot operation jobs. Source still live. No Discloud switch, no pruning security records, no 500K readiness claim. Owner requested guarded retirement of merged temporary branches; previous inventory 50 before this branch.
+
+---
+
 # Active task — original-source metadata audit (2026-10-20)
 
 **One active task:** Dedicated Dank Shield Supabase migration. PR #660 merged and all six exact-head CI workflows passed; the offline dedicated candidate has 66 tables, but Community Hub, Profile and Cinema source records are still missing.
