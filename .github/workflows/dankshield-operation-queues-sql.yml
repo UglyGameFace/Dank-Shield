@@ -1,0 +1,57 @@
+name: Dedicated Supabase Queue SQL
+
+on:
+  pull_request:
+    paths:
+      - "supabase_fresh/migrations/202610200023_dankshield_operation_queues.sql"
+      - "supabase_fresh/tests/operation_queues_smoke.sql"
+      - "tests/test_dedicated_operation_queues_contract.py"
+      - ".github/workflows/dankshield-operation-queues-sql.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  queues:
+    name: Private pending/terminal queue contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: dank_queues
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dank_queues"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: dank_queues
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client if needed
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+      - name: Create isolated Supabase-compatible roles
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create role anon nologin;
+          create role authenticated nologin;
+          create role service_role nologin bypassrls;
+          SQL
+      - name: Install canonical queues on isolated database
+        run: psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200023_dankshield_operation_queues.sql
+      - name: Test private grants and safe worker transitions under rollback
+        run: psql -v ON_ERROR_STOP=1 -f supabase_fresh/tests/operation_queues_smoke.sql
