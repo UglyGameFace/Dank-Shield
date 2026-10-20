@@ -1,0 +1,156 @@
+name: Retire merged temporary branches
+
+# Only opt-in temporary branch namespaces are eligible. This is deliberately
+# separate from the owner-reviewed historical cleanup workflow.
+on:
+  schedule:
+    - cron: '37 4 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Preview only, or retire verified merged temporary branches'
+        required: true
+        type: choice
+        options:
+          - preview
+          - delete
+        default: preview
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: guarded-merged-branch-cleanup
+  cancel-in-progress: false
+
+jobs:
+  merged-ephemeral-only:
+    if: ${{ github.repository == 'UglyGameFace/Dank-Shield' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Verify merger and exact head before retiring temporary branches
+        uses: actions/github-script@v7
+        env:
+          REQUESTED_MODE: ${{ inputs.mode }}
+          LINKED_PRODUCTION_BRANCH: ${{ vars.DANK_DISCLOUD_DEPLOY_BRANCH }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const fullName = owner + '/' + repo;
+            if (fullName !== 'UglyGameFace/Dank-Shield') {
+              throw new Error('Unexpected repo');
+            }
+            const repoMetadata = (await github.rest.repos.get({ owner, repo })).data;
+            const defaultBranch = repoMetadata.default_branch;
+            if (defaultBranch !== 'main') {
+              throw new Error('Fail closed: default branch changed');
+            }
+
+            // A branch name opts in to automation. Backups, deployment,
+            // recovery, old feat/fix and all other namespaces are excluded.
+            const eligible = [
+              /^work\/dankshield-[a-z0-9-]+-20\d{6}$/,
+              /^migration\/dankshield-[a-z0-9-]+-20\d{6}$/
+            ];
+            const isEligible = name => eligible.some(pattern => pattern.test(name));
+            const protectedHeads = new Set([
+              'main',
+              'aaa-cinema-pre-pregateway-bind',
+              'backup/stoneyverify-stable-7fdc331-20261008',
+              String(process.env.LINKED_PRODUCTION_BRANCH || '').trim()
+            ]);
+            const isManual = context.eventName === 'workflow_dispatch';
+            const mode = isManual ? process.env.REQUESTED_MODE : 'delete';
+            if (!['preview', 'delete'].includes(mode)) {
+              throw new Error('Unsupported branch hygiene mode');
+            }
+            if (isManual && mode === 'delete' && context.actor !== 'UglyGameFace') {
+              throw new Error('Manual deletion requires repository owner');
+            }
+            const deleting = mode === 'delete';
+
+            const allBranches = await github.paginate(
+              github.rest.repos.listBranches, { owner, repo, per_page: 100 }
+            );
+            if (allBranches.length > 250) {
+              throw new Error('Branch count too large for automatic cleanup; use guarded owner workflow');
+            }
+            const candidates = allBranches.filter(
+              branch => !branch.protected &&
+                !protectedHeads.has(branch.name) && isEligible(branch.name)
+            );
+            if (candidates.length > 20) {
+              throw new Error('More than 20 temporary branches need review; refusing bulk deletion');
+            }
+
+            const rows = [];
+            let removed = 0;
+            for (const branch of candidates) {
+              const name = branch.name;
+              const prs = await github.paginate(
+                github.rest.pulls.list,
+                { owner, repo, head: owner + ':' + name, state: 'all', per_page: 100 }
+              );
+              // A reused branch or unmerged/closed PR has ambiguous ownership.
+              if (prs.length !== 1) {
+                rows.push([name, 'held', 'Requires exactly one PR']);
+                continue;
+              }
+              const pr = prs[0];
+              if (!pr.merged_at || pr.state !== 'closed' ||
+                  pr.base?.ref !== defaultBranch ||
+                  pr.base?.repo?.full_name !== fullName ||
+                  pr.head?.repo?.full_name !== fullName ||
+                  pr.head?.sha !== branch.commit.sha) {
+                rows.push([name, 'held', 'Unmerged, different base, or branch tip changed']);
+                continue;
+              }
+              const openPRs = await github.paginate(
+                github.rest.pulls.list,
+                { owner, repo, head: owner + ':' + name, state: 'open', per_page: 100 }
+              );
+              if (openPRs.length) {
+                rows.push([name, 'held', 'Still used by an open PR']);
+                continue;
+              }
+              const fresh = (await github.rest.repos.getBranch({ owner, repo, branch: name })).data;
+              if (fresh.protected || fresh.commit.sha !== branch.commit.sha ||
+                  protectedHeads.has(name)) {
+                rows.push([name, 'held', 'Protected or SHA changed while checking']);
+                continue;
+              }
+
+              if (deleting) {
+                // Race guard: recheck immutable Git ref immediately before delete.
+                const gitRef = (await github.rest.git.getRef({
+                  owner, repo, ref: 'heads/' + name
+                })).data;
+                if (gitRef.object.sha !== branch.commit.sha) {
+                  rows.push([name, 'held', 'Git ref changed before delete']);
+                  continue;
+                }
+                await github.rest.git.deleteRef({ owner, repo, ref: 'heads/' + name });
+                removed++;
+              }
+              rows.push([name, deleting ? 'deleted' : 'preview', 'Exact merged-to-main PR #' + pr.number]);
+            }
+
+            const after = deleting
+              ? await github.paginate(github.rest.repos.listBranches, { owner, repo, per_page: 100 })
+              : allBranches;
+            await core.summary
+              .addHeading('Guarded temporary-branch hygiene')
+              .addRaw('Mode: ' + mode + '; before: ' + allBranches.length +
+                '; after: ' + after.length + '; deleted: ' + removed + '.')
+              .addTable([
+                [{data:'Branch',header:true},{data:'Result',header:true},{data:'Evidence',header:true}],
+                ...(rows.length ? rows : [['(none)', 'no-op', 'No eligible exact-head merged branches']])
+              ]).write();
+
+            // This is an alert, not permission to delete unknown refs.
+            if (after.length >= 75) {
+              core.setFailed('Branch count is ' + after.length +
+                '; run owner-reviewed historical preview. Never prune unknown branches automatically.');
+            }
