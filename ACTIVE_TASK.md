@@ -1,3 +1,15 @@
+# Active task: guarded source-to-dedicated private member state copy (2026-10-20)
+
+**Sole task remains Dank Shield dedicated Supabase migration.** PR #662 confirmed merged and six exact-head CI workflows passed. Candidate 67 public tables, old source metadata audit #39485389338 showed 1 warning, 7 global profiles and 147 per-guild profile privacy records.
+
+**Working one temporary branch:** `migration/dankshield-private-source-copy-20261020`. Add owner-only manual preview + separate confirmed stage flow copying just these three private source tables to empty dedicated candidate. Complete exact schema+PK validation, source repeatable-read-only, candidate service-only/RLS, bounded rows/bytes, all-fields exact digest verification before destination commit. No user data/logs/artifacts, no source writes, no cutover. New secret `DANK_FRESH_DATABASE_URL` is required only after merge for source→candidate workflow; don't ask for passwords in chat.
+
+**Still blocked:** copy 9 Community Hub settings/resources, 34 source staff metrics nullable differences, Cinema library/playback preferences, other moderation/operation history, live card provenance, late source writes, load/egress tests, independent backup and restore, small guild canary, explicit owner production approval. Do not claim 500K verified.
+
+**Branches:** 51 observed prior to this branch; nightly exact-head retirement has not yet run. No mass cleanup or backup/Discloud refs modification.
+
+---
+
 # Active task: source-audited private warnings parity, 2026-10-20
 
 **Single active branch:** `migration/dankshield-warns-parity-20261020`. Original shared-source metadata audit #39485389338 passed. Source public.warns: 7 columns/one historical row. Restore service-role-only source-shaped `warns` table with tenant-scoped warning count index and rollback-only smoke, but do NOT fabricate/copy historical evidence until private source-row parity is possible.
