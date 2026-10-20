@@ -1,3 +1,15 @@
+# Active task — dedicated Supabase Community Hub contract, 2026-10-20
+
+**Only task:** Dank Shield dedicated Supabase migration. PR #657 is verified merged. Existing AntiNuke source-verified `guild_security_settings` and `guild_security_actor_reputation` have 11 rows each; do not replace them. `warns` remains missing original schema/rows and blocks cutover until source is audited.
+
+**Current one PR branch:** `migration/dankshield-community-hub-20261020`. Install original **16 Community Hub tables and 24 functions** (sessions, resources, notifications, events, partner discovery, HubLink and optional The100) on new offline Supabase candidate, preserving exact existing source contracts. Harden backend-only functions to invoker mode and locked search path. Rollback-only SQL smoke must prove actual service_role create/idempotent replay/join/transitions/HubLink/privacy boundaries and never persist synthetic guilds.
+
+**Safety:** Community Hub source settings, sessions, preferences, and resource provenance NOT YET IMPORTED and may be actively changing on old production DB. Do not route live traffic, create default real-guild settings, auto-delete Discord resources, delete moderator evidence, change Discloud, deploy a sharded fleet or authorize a cutover. Mandatory future source parity, load, rollback and small guild canary.
+
+**Branch hygiene:** 46 refs including main before this branch, existing nightly cleanup unobserved; single opt-in `migration/dankshield-*-YYYYMMDD` branch then guarded post-merge retirement.
+
+---
+
 # Active task — dedicated Supabase Invite Shield parity, 2026-10-20
 
 **Only task:** finish Dank Shield dedicated Supabase migration. PR #656 merged and new candidate staff_metrics table installed. Do not switch Discloud, old shared Supabase or Aiven backup.
