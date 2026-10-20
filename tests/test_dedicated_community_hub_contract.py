@@ -49,3 +49,16 @@ def test_hub_followup_runtime_features_not_omitted() -> None:
     assert "Session creation replay created duplicate" in smoke
     assert "cross-server sessions" in smoke
     assert "rollback;" in smoke
+
+
+def test_hub_foreign_key_index_fix_is_targeted() -> None:
+    fix=(ROOT/"supabase_fresh/migrations/202610200017_dankshield_community_hub_fk_indexes.sql").read_text(encoding="utf-8")
+    smoke=(ROOT/"supabase_fresh/tests/community_hub_fk_index_smoke.sql").read_text(encoding="utf-8")
+    for target in (
+      "dank_community_managed_resources (session_id)",
+      "dank_community_reports (session_id)",
+      "dank_community_sessions (parent_session_id)",
+    ):
+      assert target in fix
+    assert "begin;" in smoke and "rollback;" in smoke
+    assert "Expected three real source FKs" in smoke
