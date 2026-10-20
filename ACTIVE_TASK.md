@@ -1,3 +1,11 @@
+# Active task: Community Tools sticky and quiet notice DB parity (2026-10-20)
+
+Dedicated Supabase migration sole active task. PR #664 source-verified member-events schema and trigger merged into main with all six checks successful. New candidate has 632 member event rows and source-independent trigger check passed; 0 retroactive feed replays.
+
+**Current branch:** migration/dankshield-community-tools-20261020, one PR. Restore source canonical `dank_stickies`, `dank_sticky_polls`, `dank_quiet_notices` schema and atomic RPCs. Source has four sticky settings, zero polls, three quiet notices, all tied to known guilds; copy source config ONLY into new OFFLINE database, test rollback and exact source-value comparison. Do not post/delete Discord messages, source table data or Discloud credentials. Follow-up staff moderation evidence and queue contracts are still needed.
+
+---
+
 # Active task: restore member event evidence and feed trigger (2026-10-20)
 
 Single active migration task, one temporary branch: `migration/dankshield-member-events-20261020`. Source-only member_events: 632 guild-owned source rows, 13 original fields; needed by member intelligence, verification, moderation. Copy only after rollback SQL and disable replay trigger within import transaction; new events must still update activity_feed_events.
