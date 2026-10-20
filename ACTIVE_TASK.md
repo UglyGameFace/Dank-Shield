@@ -1,3 +1,15 @@
+# Active task — dedicated Supabase Profile Cards parity (2026-10-20)
+
+**Single active migration PR:** `migration/dankshield-profile-cards-20261020`. PR #658 has merged; candidate Community Hub schema/RPCs installed and source-data catch-up pending. The new offline Supabase project is the only SQL target. Original shared Supabase, Discloud, and Aiven backups remain unchanged.
+
+**This slice:** original Profile Cards schema plus its later **per-member** composite PK, private platform preferences, per-server privacy overrides and bot-authored card state. Service-role-only grants and RLS. Rollback-only smoke under real service_role. No actual member preferences copied/modified; original source row parity is pending. Do not assume missing rows mean users consented to public profiles or live captions.
+
+**Next:** profile source-row reconciliation, missing moderation warns and Cinema contracts, all current Hub state/active session parity, latest source writes, restore/load/canary, explicit production cutover approval. Preserve 5–30 guild behavior and protect live source.
+
+**Branch retirement:** owner insists on one temporary branch per slice, then verified nightly post-merge cleanup. Check success, do not assume it already happened.
+
+---
+
 # Active task — dedicated Supabase Community Hub contract, 2026-10-20
 
 **Only task:** Dank Shield dedicated Supabase migration. PR #657 is verified merged. Existing AntiNuke source-verified `guild_security_settings` and `guild_security_actor_reputation` have 11 rows each; do not replace them. `warns` remains missing original schema/rows and blocks cutover until source is audited.
