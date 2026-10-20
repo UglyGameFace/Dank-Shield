@@ -1,0 +1,57 @@
+name: Dedicated Supabase Community Tools SQL
+
+on:
+  pull_request:
+    paths:
+      - "supabase_fresh/migrations/202610200022_dankshield_community_tools.sql"
+      - "supabase_fresh/tests/community_tools_smoke.sql"
+      - "tests/test_dedicated_community_tools_contract.py"
+      - ".github/workflows/dankshield-community-tools-sql.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  community-tools-contract:
+    name: Offline sticky and quiet notice RPC contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: community_tools
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d community_tools"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: community_tools
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client if missing
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+      - name: Create Supabase-compatible private roles
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create role anon nologin;
+          create role authenticated nologin;
+          create role service_role nologin bypassrls;
+          SQL
+      - name: Install canonical sticky and quiet notice schema
+        run: psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200022_dankshield_community_tools.sql
+      - name: Test service-only schema and atomic RPCs under rollback
+        run: psql -v ON_ERROR_STOP=1 -f supabase_fresh/tests/community_tools_smoke.sql
