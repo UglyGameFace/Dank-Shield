@@ -1,3 +1,11 @@
+# Active task: restore member event evidence and feed trigger (2026-10-20)
+
+Single active migration task, one temporary branch: `migration/dankshield-member-events-20261020`. Source-only member_events: 632 guild-owned source rows, 13 original fields; needed by member intelligence, verification, moderation. Copy only after rollback SQL and disable replay trigger within import transaction; new events must still update activity_feed_events.
+
+Other known runtime source-only tables: staff_action_logs, dank_stickies, dank_quiet_notices, bot_operation_jobs, bot_commands, etc. Validate real ownership/retention before importing queues or old staff/actor logs. Source 210 verification tokens are expired, so do NOT copy tokens. 5 active scan locks and 414 recent Hub aggregates were separately verified in dedicated candidate. No cutover, source writes or Discloud changes.
+
+---
+
 # Active task: guarded source-to-dedicated private member state copy (2026-10-20)
 
 **Sole task remains Dank Shield dedicated Supabase migration.** PR #662 confirmed merged and six exact-head CI workflows passed. Candidate 67 public tables, old source metadata audit #39485389338 showed 1 warning, 7 global profiles and 147 per-guild profile privacy records.
