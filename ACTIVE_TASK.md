@@ -1,3 +1,13 @@
+# Active task: safe member cleanup and private moderator evidence (2026-10-20)
+
+**Single active workstream:** Dank Shield dedicated Supabase migration. PR #666 was verified merged to main with all six CI successes. Current one temporary branch: `migration/dankshield-staff-evidence-20261020`.
+
+**Offline dedicated Supabase:** 75 public tables, with source-verified `member_cleanup_settings` (safe default, zero source rows) and private `staff_action_logs` (11 source columns) installed; rollback-only security and CRUD smoke passed. Original staff history **3,369 rows**, ~18.7MB source JSON, IDs unique and guilds known. The dedicated staff history table is currently **EMPTY**; copied source history is NOT yet claimed. One owner-only workflow preview then separately confirmed stage will transfer all rows atomically, comparing full original JSON and digest, without PII in logs, using existing private repo secrets. No Discord actions or source deletions.
+
+**Cutover remains blocked:** owner-gated source evidence transfer; source writes/delta reconciliation; remaining legacy control plane classification; 3 voice sessions and Cinema session lifecycle; audit_events/audit_logs from shared IdleGrowOp project of unproven ownership; backup/off-host restore, low-guild canary, production confirmation and guarded nightly branch retirement. No Discloud changes.
+
+---
+
 # Active task: source-aligned operation and dashboard queue schema (2026-10-20)
 
 **Sole task:** Dank Shield dedicated Supabase migration. PR #665 confirmed merged, all six exact-head CI passed. One current branch `migration/dankshield-queue-parity-20261020`. Candidate now 73 public tables, two new backend-only queue tables empty. Original source 531 operation jobs all terminal and 50 bot commands all completed, **no old execution replay**. SQL migration+rollback smoke passed directly on dedicated Supabase. Add CI and gated PR, guarded retire only after merged.
