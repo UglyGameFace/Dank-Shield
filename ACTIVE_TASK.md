@@ -1,3 +1,13 @@
+# Active task — dedicated Supabase Invite Shield parity, 2026-10-20
+
+**Only task:** finish Dank Shield dedicated Supabase migration. PR #656 merged and new candidate staff_metrics table installed. Do not switch Discloud, old shared Supabase or Aiven backup.
+
+**Current slice:** restore durable Invite Shield stats, replay-hash ledger and 5-argument runtime RPC. Seed only 8,317 cumulative blocked counts already present in new guild config snapshot across 3 guilds; **no old invite event history**. Test hash dedupe, guild isolation, privileges and malformed inputs. Historical source totals may be newer than the snapshot and require final delta verification. Do not silently drop actor-reputation/moderation evidence or remove current RPC's exactly-once guarantee.
+
+**Branch:** `migration/dankshield-invite-stats-20261020`. Historical merged branches remain pending guarded scheduled cleanup, with source and backup refs protected. Exact-head CI required before user merge, no production cutover. After this phase: authoritative moderation/RPC data -> Community Hub/Cinema/profiles -> final source catch-up/load/canary and owner authorization.
+
+---
+
 # Active Task Lock — Dedicated Supabase staff metrics parity (2026-10-20)
 
 **Only active task:** continue dedicated DankShield Supabase migration, in scoped branch `migration/dankshield-staff-metrics-20261020`. PR #655 (500K future-proofing + guarded nightly branch retirement) is merged; all five exact-head PR workflows passed. Branch inventory prior to this new scoped PR was 44, including main. The nightly GitHub branch workflow was installed on main but its first successful actual deletion has **not yet been observed**.
