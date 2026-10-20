@@ -1,31 +1,29 @@
 # Active Task Lock — Dedicated DankShield Supabase migration (2026-10-20)
 
-**User-directed pivot:** The sole active task is moving Dank Shield from its
-shared Supabase project to the **new dedicated** Supabase project
-`viamriafkbqhquvrsnua`. User prioritized preserving current functioning
-security/moderation/verification/config/tickets/Community Hub/Cinema records,
-while explicitly allowing disposable historic logs and obsolete Idle Grow
-data to be omitted. Aiven snapshots remain untouched as backup/recovery
-candidates, not a live migration target.
+**Only active task:** Move Dank Shield from the shared Supabase project to
+dedicated project `viamriafkbqhquvrsnua`. Preserve current operational and
+security data; omit disposable historical logs and expired tokens by owner
+direction. Do not undertake unrelated feature work or create parallel
+migration branches. Aiven backups remain available for recovery, not cutover.
 
-**Merged / verified:** PR #651 clean core created three backend-only tables
-with source-verified 12 guild configs + 11 security settings + 11 confirmed
-hostile actor records. Atomic config patch/CAS passed rollback-only tests.
+**Merged:** PR #651 critical config/spam/hostile actor state (34 records);
+PR #652 ticket/panel/current audit, atomic ticket numbering (349 records).
 
-**Current slice (this branch):** 13 ticket/panel tables copied with 349/349
-full original rows verified. Original audit functions and 10 ticket/compat
-triggers restored against a **new empty**, RLS-protected activity feed.
-Atomic ticket-number allocator and meaningful uniqueness indexes added.
-Ticket audit (message/note/close) and allocator smoke tests ran inside
-transactions that were rolled back. Details in
-`supabase_fresh/PHASE2_TICKETS.md`.
+**Phase 3 branch:** Member/role/activity/verification contracts and
+current config history restored (1,638 more records). Snapshot matches source
+as documented in `supabase_fresh/PHASE3_MEMBERS_VERIFICATION.md`.
+Critical activity batching, join audit, and config-history tests pass
+inside rollback-only transactions. Fresh project now 34 tables and 2,021
+snapshot records, about 16 MB allocated.
 
-**Still blocked:** ticket category version-history trigger, remaining
-ticket/staff RPC integration audit, verification/member/role/Community Hub/
-Cinema migrations, replay-safe invitation statistics, final late-write
-delta, fresh backup and rollback, bot Discord/Discloud canary, new-org
-egress budget. **No bot environment credential switch, deployment, live
-database cutover, source delete, or destructive schema reset approved.**
+**Still blocked:** Full RPC/feature parity, latest member verification
+workflow, moderation/invite metrics, Community Hub/Cinema/profiles,
+authenticated/staff permissions, new-org bandwidth controls, any changes
+since the snapshots, live Discloud canary/rollback and owner authorization.
+
+**Safety:** Old Supabase is still live. No cutover/credential changes,
+source deletes or removal of Aiven recovery copies authorized.
+
 
 ---
 
