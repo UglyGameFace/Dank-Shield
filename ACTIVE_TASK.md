@@ -1,3 +1,11 @@
+# Active task: source-aligned operation and dashboard queue schema (2026-10-20)
+
+**Sole task:** Dank Shield dedicated Supabase migration. PR #665 confirmed merged, all six exact-head CI passed. One current branch `migration/dankshield-queue-parity-20261020`. Candidate now 73 public tables, two new backend-only queue tables empty. Original source 531 operation jobs all terminal and 50 bot commands all completed, **no old execution replay**. SQL migration+rollback smoke passed directly on dedicated Supabase. Add CI and gated PR, guarded retire only after merged.
+
+Still blocked: source-only moderation staff history archive/retention, remaining legacy control plane ownership, 3 unresolved voice verification sessions, stale Cinema sessions, late source updates, recovery drill, functional Discloud canary and explicit owner production cutover. No production changes.
+
+---
+
 # Active task: Community Tools sticky and quiet notice DB parity (2026-10-20)
 
 Dedicated Supabase migration sole active task. PR #664 source-verified member-events schema and trigger merged into main with all six checks successful. New candidate has 632 member event rows and source-independent trigger check passed; 0 retroactive feed replays.
