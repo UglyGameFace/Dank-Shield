@@ -1,3 +1,15 @@
+# Active task: dedicated Supabase Dank Cinema contracts (2026-10-20)
+
+**Single active task** remains dedicated Dank Shield Supabase migration. PR #659 verified merged, exact five GitHub CI workflows success. Previous database had 56 public tables and no `dank_cinema_*` tables.
+
+**One working PR branch:** `migration/dankshield-cinema-library-20261020`. Versioned migration 019 replays four canonical Cinema migrations, creating 10 backend-only tables, with original standalone playback support and least-privilege service grants. Rollback-only smoke exercises real service role and data contract. No Cinema user data/historical data imported or production bot settings changed. Read the Phase 8 docs before final source snapshots.
+
+**Next blocking stages:** Cinema per-table source parity, missing moderation warning schema/history, Hub current settings/active sessions, personal Profile Cards privacy choices, old staff metric history and current Invite Shield counters; full live-source delta, backup restore, runtime acceptance tests, Discloud canary and owner cutover authorization. Keep 5–30 guild behavior and enforce scalable limits without claiming 500K load readiness.
+
+**Branch hygiene:** verify scheduled retirement daily; no deletion of recovery/Discloud refs. Existing 48 branches (including main) before this single branch. Continue bounded post-merge cleanup and audit.
+
+---
+
 # Active task — dedicated Supabase Profile Cards parity (2026-10-20)
 
 **Single active migration PR:** `migration/dankshield-profile-cards-20261020`. PR #658 has merged; candidate Community Hub schema/RPCs installed and source-data catch-up pending. The new offline Supabase project is the only SQL target. Original shared Supabase, Discloud, and Aiven backups remain unchanged.
