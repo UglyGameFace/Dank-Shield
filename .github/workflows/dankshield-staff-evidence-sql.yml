@@ -1,0 +1,65 @@
+name: Dedicated Supabase Staff Evidence SQL
+
+on:
+  pull_request:
+    paths:
+      - "supabase_fresh/migrations/202610200024_dankshield_staff_evidence.sql"
+      - "supabase_fresh/tests/staff_evidence_smoke.sql"
+      - "tools/stage_dankshield_staff_evidence.py"
+      - "tests/test_dedicated_staff_evidence_contract.py"
+      - ".github/workflows/dankshield-staff-evidence-sql.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  staff-evidence:
+    name: Private staff history and safe member cleanup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: staff_evidence
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d staff_evidence"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: staff_evidence
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL CLI if missing
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+      - name: Prepare isolated Supabase private roles
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create role anon nologin;
+          create role authenticated nologin;
+          create role service_role nologin bypassrls;
+          SQL
+      - name: Install staff evidence and member cleanup private contracts
+        run: psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200024_dankshield_staff_evidence.sql
+      - name: Test service-only privacy and safe defaults under ROLLBACK
+        run: psql -v ON_ERROR_STOP=1 -f supabase_fresh/tests/staff_evidence_smoke.sql
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run source-schema and source-read-only guard tests
+        run: |
+          python -m pip install -q "pytest>=8,<10"
+          python -m pytest -q --tb=short tests/test_dedicated_staff_evidence_contract.py
