@@ -13,6 +13,8 @@ The original Community Hub schema spans four canonical source migrations, in thi
 
 The dedicated migration `202610200016_dankshield_community_hub.sql` replays the **16 tables and 24 final RPC definitions** from these sources. The only deliberate SQL adaptations are removing the source's outer transaction statements, switching 24 backend-only `SECURITY DEFINER` functions to `SECURITY INVOKER` and using a pinned `pg_catalog,public,pg_temp` search path. The existing source restricts functions and tables to `service_role`; the invoking bot already uses this backend role. We tested actual calls with `SET LOCAL ROLE service_role`.
 
+**Index follow-up:** Supabase's performance advisor identified three FK reverse lookup indexes missing from the canonical Hub source. Versioned migration `202610200017_dankshield_community_hub_fk_indexes.sql` adds indexes on managed resources' `session_id`, reports' `session_id`, and sessions' `parent_session_id`; verified in rollback-only SQL. Advisor now reports no unindexed FKs, only new unused-index INFO notices. This is a measured source-schema improvement, not an unsolicited schema redesign.
+
 The rollback-only smoke creates a session, replays its idempotency key, publishes and joins a session, verifies cross-guild isolation, generates a HubLink digest and confirms the external The100 provider flag is off by default. No synthetic rows remain. Existing 5–30 guild bot paths are unchanged; no new shards or workers.
 
 ## Important missing source data
