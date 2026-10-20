@@ -1,3 +1,19 @@
+# Active Task Lock — Dedicated DankShield Supabase migration (retention slice, 2026-10-20)
+
+**One task only:** finish moving Dank Shield onto dedicated Supabase `viamriafkbqhquvrsnua`. Phase 3 PR #653 is merged to main. The immediate bounded subtask is safe lifecycle/retention and FK indexes, not an unrelated feature or premature cutover.
+
+**Root cause:** two authoritative history triggers pruned all versions by age/rank, including staff manual restore points; the manual Python backup path did too. Expired tokens did not have a scheduled DB reclamation path. Two FK reverse lookup indexes were missing. The old DB experienced write/amplification bloat; no general event retention policy is authorized.
+
+**Branch:** `migration/dankshield-fresh-retention-20261020`. Migrations `011` and `012`; rollback-only `retention_smoke.sql`; one Python cleanup parity change with focused regression test; and retention runbook.
+
+**Validation status:** Before branch edits, 011-equivalent schema and token/manual cleanup passed on the dedicated candidate inside an explicit ROLLBACK; pg_cron 1.6.4 extension creation separately passed inside ROLLBACK. New migration smoke, cron job installation, exact-head CI, full source parity and deployment validation remain pending; do not mark complete based on these preflight checks.
+
+**Safety:** Source shared Supabase is still the live bot database. No deletion of any original data, no cutover or Discloud env changes, and no changes to Aiven recovery. This retention slice does NOT remove moderation/ticket/identity evidence or member activity history without separately verified policies.
+
+**Next:** versioned migration + smoke -> dedicated project apply and security/performance advisor retest -> PR exact-head CI -> owner merge -> remaining moderation/Community Hub/Cinema/profiles migration and final source catch-up/canary/rollback before cutover.
+
+---
+
 # Active Task Lock — Dedicated DankShield Supabase migration (2026-10-20)
 
 **Only active task:** Move Dank Shield from the shared Supabase project to

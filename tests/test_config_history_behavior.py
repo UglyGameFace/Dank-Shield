@@ -542,3 +542,60 @@ def test_restore_refuses_snapshot_from_different_config_table(
 
     with pytest.raises(RuntimeError, match="different configuration table"):
         config_history.restore_config_version_sync(123, 8)
+
+
+def test_history_prune_preserves_manual_restore_points_and_scopes_guild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stored = [
+        {"version_id": n, "guild_id": "123", "config_table": "guild_configs", "is_manual": False}
+        for n in range(1, 53)
+    ]
+    stored += [
+        {"version_id": 53, "guild_id": "123", "config_table": "guild_configs", "is_manual": True},
+        {"version_id": 54, "guild_id": "124", "config_table": "guild_configs", "is_manual": False},
+        {"version_id": 55, "guild_id": "123", "config_table": "ticket_categories", "is_manual": False},
+    ]
+    deletes: list[int] = []
+
+    class Query:
+        def __init__(self) -> None:
+            self.kind = "select"
+            self.filters: dict[str, Any] = {}
+
+        def select(self, _columns: str) -> "Query":
+            self.kind = "select"
+            return self
+
+        def delete(self) -> "Query":
+            self.kind = "delete"
+            return self
+
+        def eq(self, column: str, value: Any) -> "Query":
+            self.filters[column] = value
+            return self
+
+        def order(self, *_args: Any, **_kwargs: Any) -> "Query":
+            return self
+
+        def execute(self) -> FakeResponse:
+            if self.kind == "select":
+                matching = [row for row in stored if all(row.get(key) == val for key, val in self.filters.items())]
+                matching.sort(key=lambda row: row["version_id"], reverse=True)
+                return FakeResponse(matching)
+            matched = [row for row in stored if all(row.get(key) == val for key, val in self.filters.items())]
+            for row in matched:
+                deletes.append(row["version_id"])
+                stored.remove(row)
+            return FakeResponse([])
+
+    class Client:
+        def table(self, table_name: str) -> Query:
+            assert table_name == config_history.CONFIG_HISTORY_TABLE
+            return Query()
+
+    monkeypatch.setattr(config_history, "_require_supabase", Client)
+    config_history._prune_versions_sync(123, "guild_configs")
+    assert deletes == [2, 1]
+    assert {row["version_id"] for row in stored}.issuperset({53, 54, 55})
+    assert sum(row["guild_id"] == "123" and row["config_table"] == "guild_configs" and not row["is_manual"] for row in stored) == 50

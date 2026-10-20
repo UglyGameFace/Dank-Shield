@@ -322,6 +322,7 @@ def _prune_versions_sync(guild_id: int, config_table: str) -> None:
             .select("version_id")
             .eq("guild_id", str(int(guild_id)))
             .eq("config_table", _safe_str(config_table))
+            .eq("is_manual", False)
             .order("created_at", desc=True)
             .order("version_id", desc=True)
             .execute()
