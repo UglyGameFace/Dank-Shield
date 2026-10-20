@@ -1,3 +1,15 @@
+# Active Task Lock — Dedicated Supabase staff metrics parity (2026-10-20)
+
+**Only active task:** continue dedicated DankShield Supabase migration, in scoped branch `migration/dankshield-staff-metrics-20261020`. PR #655 (500K future-proofing + guarded nightly branch retirement) is merged; all five exact-head PR workflows passed. Branch inventory prior to this new scoped PR was 44, including main. The nightly GitHub branch workflow was installed on main but its first successful actual deletion has **not yet been observed**.
+
+**This slice:** restore missing `staff_metrics` table read/write contract used by the five-minute metrics worker and staff ticket queue UI. Add service-role-only/RLS table and tenant key, rollback-only SQL verification (30 staff in one guild + cross-guild overlap), source contract unit test and runbook.
+
+**Validated candidate:** DDL + smoke succeeded together in ROLLBACK; migration 014 applied to new offline Supabase candidate; smoke passed after apply. Candidate now 35 public tables; 12 guild configs, 815 members, 306 role rows unchanged; staff_metrics empty (no source data copied). Security advisor INFO-only, no WARNING/ERROR. Current bot still uses old shared Supabase. No production writes/cutover.
+
+**Next:** exact-head CI -> owner merge -> original staff_metric schema and source-row preservation, moderation/invite/Community Hub/Cinema/profile contract restoration -> final delta catchup and Discord canary/rollback. No blanket pruning or mass branches.
+
+---
+
 # Task hygiene — post-merge automatic branch retirement (2026-10-20)
 
 **One active task remains:** dedicated Supabase migration and 500K compatibility design. Owner explicitly requires avoiding another 500+ GitHub branch backlog. Live repository inventory is 44 branches including main.
