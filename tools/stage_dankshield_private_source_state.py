@@ -123,12 +123,20 @@ def _assert_schema(source: Any, dest: Any) -> None:
                 if not policy or not bool(policy[0]):
                     raise RuntimeError("destination private RLS disabled")
                 for blocked in ("anon", "authenticated"):
-                    priv = connection.execute(
-                        "select has_table_privilege(%s,%s,'SELECT')",
-                        (blocked, f"public.{table}"),
+                    for op in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                        priv = connection.execute(
+                            "select has_table_privilege(%s,%s,%s)",
+                            (blocked, f"public.{table}", op),
+                        ).fetchone()
+                        if bool(priv[0]):
+                            raise RuntimeError("destination would expose private data")
+                for required in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    grant = connection.execute(
+                        "select has_table_privilege('service_role',%s,%s)",
+                        (f"public.{table}", required),
                     ).fetchone()
-                    if bool(priv[0]):
-                        raise RuntimeError("destination would expose private data")
+                    if not grant or not bool(grant[0]):
+                        raise RuntimeError("dedicated private service role access missing")
 
 
 def _normal(value: Any) -> Any:
