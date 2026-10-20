@@ -27,3 +27,8 @@ def test_historical_data_must_not_replay_events():
     assert "enable trigger member_events_to_activity_feed_ai" in q
     assert "History backfill replayed stale activity" in q
     assert "set local role service_role" in q
+    wf=(ROOT/".github/workflows/dankshield-member-events-sql.yml").read_text(encoding="utf8")
+    assert "postgres:16" in wf
+    assert "pull_request:" in wf
+    assert "secrets." not in wf
+    assert "discloud/deploy-action" not in wf
