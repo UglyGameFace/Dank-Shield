@@ -1,3 +1,13 @@
+# Task hygiene — post-merge automatic branch retirement (2026-10-20)
+
+**One active task remains:** dedicated Supabase migration and 500K compatibility design. Owner explicitly requires avoiding another 500+ GitHub branch backlog. Live repository inventory is 44 branches including main.
+
+**Candidate PR #655:** add an isolated opt-in daily merged-branch retire action (only `work/dankshield-*` and `migration/dankshield-*` stamped YYYYMMDD; exact single merged-main PR + head SHA + unchanged ref + no open PR + unprotected + not production-linked). Count warning at 75, bounded max 20 per run. Keep current owner-confirmed historical cleanup workflow untouched. Run static tests and CI; do not delete any branch until this safely lands on main.
+
+**On each merged slice:** verify branch was automatically retired or explicitly archive it for a justified recovery/deployment reason. No parallel PR branch growth. Preserve backups, original source, unmerged/changed heads, and possible Discloud dashboard ref. Do not turn on GitHub's global broad auto-delete setting while linked deploy ref is uncertain.
+
+---
+
 # Active Task Lock — Dank Shield dedicated Supabase 500K-readiness slice (2026-10-20)
 
 **Single active task remains the dedicated DankShield Supabase migration.** This is a forward-compatibility sub-slice, not a shift into unrelated bot features, Aiven cutover or a production infrastructure expansion.
