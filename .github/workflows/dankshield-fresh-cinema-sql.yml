@@ -1,0 +1,74 @@
+name: Dedicated Supabase Cinema SQL
+
+on:
+  pull_request:
+    paths:
+      - "supabase_fresh/migrations/202610200019_dankshield_cinema_library.sql"
+      - "supabase_fresh/tests/cinema_library_smoke.sql"
+      - "tests/test_dedicated_cinema_library_contract.py"
+      - ".github/workflows/dankshield-fresh-cinema-sql.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-cinema-contract:
+    name: Offline Cinema schema and service-role smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: cinema_candidate
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cinema_candidate"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: cinema_candidate
+      CINEMA_MIGRATION: supabase_fresh/migrations/202610200019_dankshield_cinema_library.sql
+      CINEMA_SMOKE: supabase_fresh/tests/cinema_library_smoke.sql
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure PostgreSQL CLI exists
+        shell: bash
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+
+      - name: Prepare Supabase-compatible isolated roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create role anon nologin;
+          create role authenticated nologin;
+          create role service_role nologin bypassrls;
+          SQL
+
+      - name: Apply committed dedicated migration twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -f "$CINEMA_MIGRATION"
+          psql -v ON_ERROR_STOP=1 -f "$CINEMA_MIGRATION"
+
+      - name: Verify Cinema runtime contracts with ROLLBACK
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -f "$CINEMA_SMOKE"
