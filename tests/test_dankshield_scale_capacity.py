@@ -17,6 +17,10 @@ def test_500k_envelope_is_a_budget_not_a_benchmark() -> None:
 
 
 def test_smaller_workloads_and_partial_batches() -> None:
+    assert estimate(5).batched_heartbeat_requests_per_minute == 1
+    assert estimate(30).batched_heartbeat_requests_per_minute == 1
+    assert estimate(5).individual_heartbeat_operations_per_second == pytest.approx(5/60)
+    assert estimate(30).individual_heartbeat_operations_per_second == pytest.approx(30/60)
     assert estimate(12).batched_heartbeat_requests_per_minute == 1
     assert estimate(251).batched_heartbeat_requests_per_minute == 2
     assert estimate(10_000).illustrative_shards_at_1000_guilds == 10
