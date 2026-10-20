@@ -1,0 +1,58 @@
+name: Dedicated Supabase Warns SQL
+
+on:
+  pull_request:
+    paths:
+      - "supabase_fresh/migrations/202610200020_dankshield_warns.sql"
+      - "supabase_fresh/tests/warns_smoke.sql"
+      - "tests/test_dedicated_warns_source_contract.py"
+      - ".github/workflows/dankshield-fresh-warns-sql.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  warning-contract:
+    name: Source-aligned private warning contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: warns_candidate
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d warns_candidate"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: warns_candidate
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure PostgreSQL CLI
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+      - name: Setup isolated service and public roles
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create role anon nologin;
+          create role authenticated nologin;
+          create role service_role nologin bypassrls;
+          SQL
+      - name: Apply reviewed warnings schema
+        run: psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200020_dankshield_warns.sql
+      - name: Validate source warning schema and guild isolation with rollback
+        run: psql -v ON_ERROR_STOP=1 -f supabase_fresh/tests/warns_smoke.sql
