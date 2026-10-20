@@ -35,6 +35,13 @@ begin
     if affected<>250 or saved.continuous_since<>t0+interval '5 minutes' then
         raise exception 'long gap did not reset continuous coverage';
     end if;
+    -- Small-server workloads must work without padding or full-sized batches.
+    affected := public.heartbeat_member_activity_trackers(gids[1:1],'process-B',t0+interval '5 minutes 30 seconds',180);
+    if affected<>1 then raise exception 'one-guild batch failed';end if;
+    affected := public.heartbeat_member_activity_trackers(gids[2:6],'process-B',t0+interval '5 minutes 30 seconds',180);
+    if affected<>5 then raise exception 'five-guild batch failed';end if;
+    affected := public.heartbeat_member_activity_trackers(gids[7:36],'process-B',t0+interval '5 minutes 30 seconds',180);
+    if affected<>30 then raise exception 'thirty-guild batch failed';end if;
     begin
         perform public.heartbeat_member_activity_trackers(array[gids[1],gids[1]],'p',now(),180);
         raise exception 'TEST duplicate accepted';
