@@ -1,3 +1,13 @@
+# Active task — original-source metadata audit (2026-10-20)
+
+**One active task:** Dedicated Dank Shield Supabase migration. PR #660 merged and all six exact-head CI workflows passed; the offline dedicated candidate has 66 tables, but Community Hub, Profile and Cinema source records are still missing.
+
+**Current scoped branch:** `migration/dankshield-source-audit-20261020`. Before adding more guessed schemas, install a strict owner-only, manual, read-only original source metadata audit for `warns`, raid and audit events, staff metrics, Community Hub, Profile, Cinema and remaining scoped dependencies. Source project identity must equal the existing pinned shared project; never query Idle Grow Op tables or emit user data/IDs/secrets. Bounded row probes and schema details only. Does not read or mutate the candidate or change Discloud.
+
+**Next:** owner manually dispatches audit on GitHub main after exact-head CI and merge, enabling real source column/PK/counters to direct critical moderation schema & source state imports. All late writes, restore, canary, rollback and production authorization remain pending. Automatic branch deletion only via verified guarded schedule, not ad hoc.
+
+---
+
 # Active task: dedicated Supabase Dank Cinema contracts (2026-10-20)
 
 **Single active task** remains dedicated Dank Shield Supabase migration. PR #659 verified merged, exact five GitHub CI workflows success. Previous database had 56 public tables and no `dank_cinema_*` tables.
