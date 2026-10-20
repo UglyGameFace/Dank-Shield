@@ -1,3 +1,34 @@
+# Active Task Lock — Dedicated DankShield Supabase migration (2026-10-20)
+
+**User-directed pivot:** The sole active task is moving Dank Shield from its
+shared Supabase project to the **new dedicated** Supabase project
+`viamriafkbqhquvrsnua`. User prioritized preserving current functioning
+security/moderation/verification/config/tickets/Community Hub/Cinema records,
+while explicitly allowing disposable historic logs and obsolete Idle Grow
+data to be omitted. Aiven snapshots remain untouched as backup/recovery
+candidates, not a live migration target.
+
+**Merged / verified:** PR #651 clean core created three backend-only tables
+with source-verified 12 guild configs + 11 security settings + 11 confirmed
+hostile actor records. Atomic config patch/CAS passed rollback-only tests.
+
+**Current slice (this branch):** 13 ticket/panel tables copied with 349/349
+full original rows verified. Original audit functions and 10 ticket/compat
+triggers restored against a **new empty**, RLS-protected activity feed.
+Atomic ticket-number allocator and meaningful uniqueness indexes added.
+Ticket audit (message/note/close) and allocator smoke tests ran inside
+transactions that were rolled back. Details in
+`supabase_fresh/PHASE2_TICKETS.md`.
+
+**Still blocked:** ticket category version-history trigger, remaining
+ticket/staff RPC integration audit, verification/member/role/Community Hub/
+Cinema migrations, replay-safe invitation statistics, final late-write
+delta, fresh backup and rollback, bot Discord/Discloud canary, new-org
+egress budget. **No bot environment credential switch, deployment, live
+database cutover, source delete, or destructive schema reset approved.**
+
+---
+
 # Active Task Lock — Dank Shield Aiven PG18 auxiliary original staging (2026-10-19)
 
 **Scope:** Continue only the current Aiven PG18 migration. No unrelated Community Hub/Discloud branch work. Preserve all source originals, minimize Aiven disk cost and avoid blind copying of Idle Grow data from the shared source.
