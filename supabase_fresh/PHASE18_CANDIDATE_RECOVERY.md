@@ -30,3 +30,14 @@ The SQL backing service must never be Discloud or either existing Supabase proje
 4. Production auth/API permissions and network checks against new Supabase; do not blindly grant public table read/write access.
 5. Test selected low-volume real Discord guild commands/features on target in a reversible canary, including tickets, verification, member tracking, moderation/invite protection, Community Hub, Cinema, profiles, and side effects.
 6. Explicit owner approval to switch Discloud, then monitor and retain old DB for rollback. **100% and 10k–500k-guild load readiness not verified.**
+
+
+## Actual GitHub run failure and diagnostic hardening (2026-10-21)
+
+The owner's first dedicated-candidate restore execution [run 39538439329, job 119020402982](https://github.com/UglyGameFace/Dank-Shield/actions/runs/39538439329/job/119020402982) failed at **step 9: Encrypt dedicated candidate dump and prove isolated restore**. GitHub confirms steps 1–8, including the disposable Supabase PG17 service, pinned main checkout, PG17 CLI adapters and private database logging checks all passed. The runner emitted `DEDICATED_RECOVERY_DRILL_FAILED: RecoveryDrillError` before uploading any encrypted archive. This **does not certify recovery**, and the available logs do not identify which particular protected restore failure occurred.
+
+The pre-existing `tools.verify_source_backup_restoration.RecoveryDrillError` already uses fixed, credential-free `code` values. Unfortunately, the outer candidate wrapper discarded them and logged only the exception class. The focused hotfix restores **strict allowlisted** diagnostic codes and code-owned phases (`reading_candidate_manifest`, `creating_encrypted_backup`, `authenticating_and_restoring_to_disposable`, `comparing_restored_records`). Unexpected error content, raw SQL details, user IDs, actor data, connection URLs and passwords remain suppressed. Tests assert that sensitive arbitrary exception strings cannot appear in GitHub output.
+
+**Do not rerun the same failing workflow before this merged diagnostic hotfix**, since it will still suppress the actual recovery cause. On the next guarded owner-run, inspect its allowlisted `DEDICATED_RECOVERY_DRILL_FAILED:` code. If the classified code points to a PG17 extension, role or schema incompatibility, fix that exact problem without broadening source access or skipping the full restore/checksum gates. A diagnostic-only passing PR is NOT proof the encrypted backup or restore succeeded. The old source and Discloud are unchanged.
+
+The hotfix also classifies duplicate objects, unique conflicts, foreign-key errors and absent schema dependencies into safe fixed categories rather than printing raw pg_restore stderr. This remains diagnostic, not permission to ignore failed recovery or drop database objects blindly.
