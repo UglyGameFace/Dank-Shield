@@ -321,27 +321,35 @@ def build_fresh_join_recovery_embed(
     age = member_join_age_seconds(member)
     age_text = "unknown" if age is None else f"{int(age)}s"
     clean_action = safe_str(action, "remove").lower()
-    title = "🧷 Fresh Join Verification Role Recovered" if success else "⚠️ Fresh Join Verification Recovery Failed"
+    review_only = clean_action == "verification review"
+    title = (
+        "⚠️ Verification Status Unconfirmed • Staff Review"
+        if review_only
+        else ("🧷 Fresh Join Verification Role Recovered" if success
+              else "⚠️ Fresh Join Verification Recovery Failed")
+    )
     embed = discord.Embed(
         title=title,
         color=discord.Color.green() if success else discord.Color.gold(),
         timestamp=datetime.now(timezone.utc),
     )
     embed.add_field(name="User", value=f"{member.mention}\n`{member}`\n`{member.id}`", inline=False)
-    embed.add_field(name="Original Bot Action", value=clean_action.upper(), inline=True)
+    embed.add_field(name="Action", value="REVIEW, NO KICK" if review_only else clean_action.upper(), inline=True)
     embed.add_field(name="Joined Age", value=age_text, inline=True)
     embed.add_field(name="Reason", value=safe_str(reason, "No reason provided")[:1024], inline=False)
     embed.add_field(name="Recovery Result", value=safe_str(recovery_detail, "unknown")[:1024], inline=False)
     embed.add_field(
         name="Action Taken",
         value=(
-            "The bot assigned/recovered the safe verification role and suppressed the instant removal."
-            if success
-            else "The instant removal was still blocked. Fix the Unverified role, bot Manage Roles permission, or bot role hierarchy."
+            "No automatic kick or role downgrade was performed. Review the member's prior verified/staff status once the database is healthy."
+            if review_only
+            else ("The bot assigned/recovered the safe verification role and suppressed the instant removal."
+                  if success
+                  else "The instant removal was still blocked. Fix the Unverified role, bot Manage Roles permission, or bot role hierarchy.")
         ),
         inline=False,
     )
-    embed.set_footer(text="Fresh join verification recovery")
+    embed.set_footer(text="Verification state safety" if review_only else "Fresh join verification recovery")
     return embed
 
 
