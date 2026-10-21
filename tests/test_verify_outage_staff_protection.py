@@ -166,3 +166,26 @@ def test_trust_input_invalid_does_not_receive_saved_reply(monkeypatch):
 def test_antinuke_trusted_modal_refreshes_current_settings():
     src = inspect.getsource(protection.AntiNukeTrustedIdsModal)
     assert 'get_antinuke_settings(int(guild.id), refresh=True)' in src
+
+
+def test_native_event_boundary_audit_enforces_new_no_kick_policy():
+    from pathlib import Path
+    from tools import audit_event_boundary as audit
+
+    src = Path(removal.__file__).read_text(encoding="utf-8")
+    errors: list[str] = []
+    audit._require_review_only_watchdog(src, errors)
+    assert errors == []
+
+    # Re-introducing the old final watchdog kick must fail CI even if a source
+    # comment retains every expected marker.
+    target = '        clean_reason = safe_str(reason, "member has no safe verification role state")'
+    assert target in src
+    unsafe = src.replace(
+        target,
+        '        await live_member.kick(reason="watchdog fail-closed")\n' + target,
+        1,
+    )
+    errors = []
+    audit._require_review_only_watchdog(unsafe, errors)
+    assert any("forbidden kick" in e for e in errors)
