@@ -1,0 +1,56 @@
+name: Dedicated Supabase Activity Feed Copy (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Read-only preview or guarded offline history copy"
+        required: true
+        type: choice
+        options:
+          - preview
+          - stage
+        default: preview
+      confirmation:
+        description: "Exact owner authorization, stage mode only"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dankshield-private-activity-feed-copy
+  cancel-in-progress: false
+
+jobs:
+  historical-feed:
+    if: ${{ github.repository == 'UglyGameFace/Dank-Shield' && github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fail closed if main moved
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+            echo "::error::Main changed. Repeat preview on the current main."
+            exit 1
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install PostgreSQL driver
+        run: python -m pip install -q "psycopg[binary]>=3.2,<4"
+      - name: Compare private source history or copy atomically
+        env:
+          DANK_SOURCE_DATABASE_URL: ${{ secrets.DANK_SOURCE_DATABASE_URL }}
+          DANK_FRESH_DATABASE_URL: ${{ secrets.DANK_FRESH_DATABASE_URL }}
+          DANK_ACTIVITY_FEED_MODE: ${{ inputs.mode }}
+          DANK_ACTIVITY_FEED_CONFIRMATION: ${{ inputs.confirmation }}
+        run: python -m tools.stage_dankshield_activity_feed

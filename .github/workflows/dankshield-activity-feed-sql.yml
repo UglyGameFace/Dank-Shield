@@ -1,0 +1,80 @@
+name: Dedicated Supabase Activity Feed History SQL
+
+on:
+  pull_request:
+    paths:
+      - "supabase_fresh/migrations/202610200025_dankshield_activity_feed_source_trigger.sql"
+      - "supabase_fresh/tests/activity_feed_source_trigger_smoke.sql"
+      - "tools/stage_dankshield_activity_feed.py"
+      - "tests/test_dedicated_activity_feed_history.py"
+      - ".github/workflows/dankshield-activity-feed-sql.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  feed-history:
+    name: Original feed trigger and unchanged history
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: feed_source_parity
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d feed_source_parity"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: feed_source_parity
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client if absent
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+      - name: Prepare private isolated feed fixture
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create role anon nologin;
+          create role authenticated nologin;
+          create role service_role nologin bypassrls;
+          create table public.activity_feed_events (
+            id uuid primary key default gen_random_uuid(),
+            guild_id text not null,
+            event_family text not null,
+            event_type text not null,
+            source text not null default 'system',
+            metadata jsonb not null default '{}'::jsonb,
+            meta jsonb not null default '{}'::jsonb,
+            search_text text not null default ''
+          );
+          alter table public.activity_feed_events enable row level security;
+          revoke all on public.activity_feed_events
+            from public,anon,authenticated,service_role;
+          grant select,insert,update,delete on public.activity_feed_events
+            to service_role;
+          SQL
+      - name: Install original-compatible metadata trigger
+        run: psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200025_dankshield_activity_feed_source_trigger.sql
+      - name: Prove new event sync and exact old-event preservation
+        run: psql -v ON_ERROR_STOP=1 -f supabase_fresh/tests/activity_feed_source_trigger_smoke.sql
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check safe streaming transfer invariants
+        run: |
+          python -m pip install -q "pytest>=8,<10"
+          python -m pytest -q --tb=short tests/test_dedicated_activity_feed_history.py

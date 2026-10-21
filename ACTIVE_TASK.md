@@ -1,3 +1,13 @@
+# Sole active migration slice: exact private activity-feed history (2026-10-20)
+
+Last PR #667 merged and all six CI checks passed; 3,369 original staff_action_logs are independently verified in dedicated Supabase with full digest match. Three invite-block stats were safely repaired to exact original updated_at timestamps. 75 public tables installed, production source unchanged.
+
+**One active temporary branch:** `migration/dankshield-activity-feed-20261020`, for PR to restore original activity_feed_events write trigger and guarded historical feed copy. Original source has **4,756** feed records; 3,369 link preserved staff actions and 632 link preserved member_events. The 25 source/target columns exactly match. 1,825 original meta/metadata pairs differ. Source trigger normalizes new events, so historical copy MUST disable this trigger during import, reenable within the same target transaction, and compare full records + digest before COMMIT. The rollback and live trigger smoke already passed on offline candidate; 4,756 rows NOT YET COPIED. GitHub manual preview then explicit owner-gated stage after PR merge.
+
+Do not reimport excluded external invite-block event history or unrelated shared Idle Grow Op audit logs. Production Discloud remains on original source. Remaining: activity-feed verified source import; final source-delta, independent encrypted backup/off-host restore, voice/Cinema session lifecycle, 5–30 guild canary, explicit reversible cutover and guarded merged branch retirement.
+
+---
+
 # Active task: safe member cleanup and private moderator evidence (2026-10-20)
 
 **Single active workstream:** Dank Shield dedicated Supabase migration. PR #666 was verified merged to main with all six CI successes. Current one temporary branch: `migration/dankshield-staff-evidence-20261020`.
