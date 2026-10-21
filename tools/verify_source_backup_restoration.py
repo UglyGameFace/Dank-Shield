@@ -169,7 +169,7 @@ def _restore_error_category(buf: bytes) -> str:
         "relation", "function", "type", "schema",
     )):
         return "restore_schema_dependency_missing"
-    if "could not execute query" in msg or re.search(r"(?:^|\\n)\\s*error:\\s", msg):
+    if "could not execute query" in msg or re.search(r"(?:^|\n)\s*error:\s", msg):
         return "pg_restore_sql_failed_unclassified"
     return "pg_restore_process_failed_unclassified"
 
