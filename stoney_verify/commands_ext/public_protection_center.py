@@ -1313,6 +1313,9 @@ async def _save_antinuke_trust_lists(
     users = _parse_antinuke_id_list(trusted_users)
     roles = _parse_antinuke_id_list(trusted_roles)
     bots = _parse_antinuke_id_list(trusted_bots)
+    for raw_value, parsed in ((trusted_users, users), (trusted_bots, bots)):
+        if str(raw_value or "").strip() and not parsed:
+            raise ValueError("No valid Discord IDs were provided. Nothing was saved.")
 
     await anti_nuke_service.save_antinuke_settings(
         int(guild_id),
@@ -1360,7 +1363,7 @@ class AntiNukeTrustedIdsModal(discord.ui.Modal):
                 await _send_ephemeral(interaction, "❌ This must be used inside a server.")
                 return
 
-            current = await anti_nuke_service.get_antinuke_settings(int(guild.id))
+            current = await anti_nuke_service.get_antinuke_settings(int(guild.id), refresh=True)
             users, roles, bots = await _save_antinuke_trust_lists(
                 int(guild.id),
                 trusted_users=self.trusted_users.value,
@@ -1711,7 +1714,7 @@ async def _open_antinuke_trusted_modal(interaction: discord.Interaction) -> None
         await _send_ephemeral(interaction, "❌ This must be used inside a server.")
         return
 
-    settings = await anti_nuke_service.get_antinuke_settings(int(guild.id))
+    settings = await anti_nuke_service.get_antinuke_settings(int(guild.id), refresh=True)
     await interaction.response.send_modal(AntiNukeTrustedIdsModal(settings))
 
 

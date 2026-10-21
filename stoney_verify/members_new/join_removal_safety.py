@@ -321,27 +321,35 @@ def build_fresh_join_recovery_embed(
     age = member_join_age_seconds(member)
     age_text = "unknown" if age is None else f"{int(age)}s"
     clean_action = safe_str(action, "remove").lower()
-    title = "🧷 Fresh Join Verification Role Recovered" if success else "⚠️ Fresh Join Verification Recovery Failed"
+    review_only = clean_action == "verification review"
+    title = (
+        "⚠️ Verification Status Unconfirmed • Staff Review"
+        if review_only
+        else ("🧷 Fresh Join Verification Role Recovered" if success
+              else "⚠️ Fresh Join Verification Recovery Failed")
+    )
     embed = discord.Embed(
         title=title,
         color=discord.Color.green() if success else discord.Color.gold(),
         timestamp=datetime.now(timezone.utc),
     )
     embed.add_field(name="User", value=f"{member.mention}\n`{member}`\n`{member.id}`", inline=False)
-    embed.add_field(name="Original Bot Action", value=clean_action.upper(), inline=True)
+    embed.add_field(name="Action", value="REVIEW, NO KICK" if review_only else clean_action.upper(), inline=True)
     embed.add_field(name="Joined Age", value=age_text, inline=True)
     embed.add_field(name="Reason", value=safe_str(reason, "No reason provided")[:1024], inline=False)
     embed.add_field(name="Recovery Result", value=safe_str(recovery_detail, "unknown")[:1024], inline=False)
     embed.add_field(
         name="Action Taken",
         value=(
-            "The bot assigned/recovered the safe verification role and suppressed the instant removal."
-            if success
-            else "The instant removal was still blocked. Fix the Unverified role, bot Manage Roles permission, or bot role hierarchy."
+            "No automatic kick or role downgrade was performed. Review the member's prior verified/staff status once the database is healthy."
+            if review_only
+            else ("The bot assigned/recovered the safe verification role and suppressed the instant removal."
+                  if success
+                  else "The instant removal was still blocked. Fix the Unverified role, bot Manage Roles permission, or bot role hierarchy.")
         ),
         inline=False,
     )
-    embed.set_footer(text="Fresh join verification recovery")
+    embed.set_footer(text="Verification state safety" if review_only else "Fresh join verification recovery")
     return embed
 
 
@@ -501,12 +509,12 @@ def member_has_safe_verification_state(member: discord.Member) -> bool:
 
 
 async def handle_join_verification_failure(member: discord.Member, reason: Any) -> None:
-    """Native owner for join verification fail-closed removal handling.
+    """Native owner for uncertain join verification state (staff review only).
 
-    events.py may still invoke or be patched into this while that large module is
-    split apart. This service owns the decision and log shape: recover safe
-    verification state first; otherwise route any removal through
-    block_or_run_bot_removal so public-server fresh joins are protected.
+    events.py may still invoke or be patched into this while that large module
+    is split apart. A cache or database outage must never turn a formerly
+    verified member into an automatic kick. This handler does not remove or
+    change any member's roles and instead posts a staff review.
     """
     try:
         if not isinstance(member, discord.Member) or getattr(member, "bot", False):
@@ -519,19 +527,25 @@ async def handle_join_verification_failure(member: discord.Member, reason: Any) 
             return
 
         clean_reason = safe_str(reason, "member has no safe verification role state")
-        fail_closed_reason = f"verification fail-closed: {clean_reason}"
-
-        async def _kick_runner() -> None:
-            await live_member.kick(reason=fail_closed_reason[:512])
-            _log(f"executed verification fail-closed kick guild={guild.id} user={live_member.id}")
-
-        await block_or_run_bot_removal(
-            action="kick",
-            guild=guild,
-            member=live_member,
-            reason=fail_closed_reason,
-            runner=_kick_runner,
-            staff_confirmed=False,
+        # A missing role after a DB/cache outage is NOT evidence a returning or
+        # established member failed verification. Never remove or downgrade
+        # anyone solely because the join watchdog exhausted its retries.
+        # This does not grant access; staff review and authoritative recovery
+        # remain required before any verification role is restored.
+        _warn(
+            "verification watchdog unresolved; automatic kick disabled "
+            f"guild={guild.id} user={live_member.id} reason={clean_reason[:160]!r}"
+        )
+        await post_fresh_join_recovery_log(
+            guild,
+            live_member,
+            action="verification review",
+            reason=clean_reason,
+            recovery_detail=(
+                "Database/role state unconfirmed; no automatic kick or role "
+                "downgrade. Staff must review prior verification evidence."
+            ),
+            success=False,
         )
     except Exception as e:
         _warn(
@@ -550,6 +564,23 @@ async def block_or_run_bot_removal(
     runner: Callable[[], Awaitable[Any]],
     staff_confirmed: bool = False,
 ) -> Any:
+    # Incident 2026-10-21: the join watchdog kicked staff when Supabase/role
+    # truth was unavailable. Verification state is NOT evidence of misconduct.
+    # Neither member age nor ALLOW_BOT_FRESH_JOIN_REMOVAL may authorize an
+    # AUTOMATED verification fail-closed kick/ban. A real staff-confirmed
+    # moderation action remains separate and retains its existing guards.
+    if (
+        not staff_confirmed
+        and str(action).lower() in {"kick", "ban"}
+        and is_fail_closed_verification_reason(reason)
+    ):
+        _warn(
+            f"verification fail-closed automatic {action} suppressed; "
+            f"guild={guild.id} user={getattr(member, 'id', None)} "
+            "staff review required; no removal executed"
+        )
+        return None
+
     decision = removal_decision(member, action=action, reason=reason, staff_confirmed=staff_confirmed)
     if decision.blocked:
         recovered, recovery_detail = await try_recover_unverified_before_removal(member, action=action, reason=reason)
