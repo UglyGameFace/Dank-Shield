@@ -12,8 +12,8 @@ and tgname='trg_sync_activity_feed_meta_columns' and tgenabled='O')
 then raise exception 'New-event feed normalization trigger absent';end if;
 end $security$;
 set local role service_role;
-insert into public.activity_feed_events(guild_id,metadata,meta)
-values ('990000000000000000','{"canonical":true}'::jsonb,
+insert into public.activity_feed_events(guild_id,event_family,event_type,metadata,meta)
+values ('990000000000000000','member','test_new_event','{"canonical":true}'::jsonb,
 '{"historical":true}'::jsonb);
 do $live$
 begin
@@ -28,8 +28,8 @@ reset role;
 alter table public.activity_feed_events
 disable trigger trg_sync_activity_feed_meta_columns;
 set local role service_role;
-insert into public.activity_feed_events(guild_id,metadata,meta)
-values ('990000000000000001','{"old_metadata":1}'::jsonb,
+insert into public.activity_feed_events(guild_id,event_family,event_type,metadata,meta)
+values ('990000000000000001','member','test_historical_event','{"old_metadata":1}'::jsonb,
 '{"old_meta":2}'::jsonb);
 do $old$
 begin
