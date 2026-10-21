@@ -201,6 +201,8 @@ def test_sql_error_behind_broken_restore_pipe_is_classified_without_raw_output(
     class FailedRestore:
         stdin = ClosedInput()
         stderr = BytesIO(
+            b'pg_restore: from TOC entry 42; 3079 2132 '
+            b'EXTENSION supabase_vault postgres\n'
             b'pg_restore: error: could not execute query: ERROR: '
             b'extension "supabase_vault" is not available'
         )
@@ -226,7 +228,8 @@ def test_sql_error_behind_broken_restore_pipe_is_classified_without_raw_output(
     with pytest.raises(
         recovery.RecoveryDrillError,
         match="source_extension_not_available_on_plain_pg17",
-    ):
+    ) as failure:
         recovery._stream_restore(archive, PASS, digest)
+    assert failure.value.object_kind == "EXTENSION"
     # Even when the consumer exits, the encrypted reader must reach its end.
     assert len(seen_chunks) == 3
