@@ -33,3 +33,16 @@ The focused correction is intentionally **separate from the strictly read-only a
 The read-only delta audit now reports allowlisted code-owned failure categories and affected table names (e.g. `schema_column_contract_mismatch table=tickets`) instead of hiding everything as a bare RuntimeError. It still fails closed on a mismatch rather than excusing numeric precision, and never discloses raw SQL, member data, source URLs, passwords or row values.
 
 After PR tests pass and it merges into main, the owner must explicitly dispatch the OFFLINE precision repair and confirm its success, **then** rerun the owner-only Final Delta Audit. Even if the audit executes cleanly, its readiness may be `BLOCKED` due to genuine record changes and unfinished source sessions. No source data migration or Discloud credential cutover should be attempted automatically.
+
+
+## 2026-10-21: Expired historical VC verification statuses versus truly live work
+
+Following the owner's successful manual 34-table audit, an independent **read-only** investigation found that the remaining three original `vc_verify_sessions` status values (`2 PENDING`, `1 STAFF_ACCEPTED`) were created in May 2026. **All three** have `revoke_at` in the past, their matching verification tokens have expired, and their associated tickets are closed. No active token, current ticket, or session activity was found for these three records. The runtime itself (`vc_sessions._row_is_expired`) considers a session expired once `revoke_at` has passed.
+
+The original delta gate checked only the stored status, misclassifying expired records as active sessions. The updated gate:
+- Keeps expired status rows in the original database **unchanged** and reports them as `expired_historical_voice_sessions` in the audit.
+- Counts a status as historical only if **all three** facts are true: the VC revoke deadline passed, its linked verification token expired, and a linked ticket is closed/deleted. Missing tokens/tickets, unexpired deadlines, open tickets and all other unproven cases remain **blocking** as `unresolved_voice_verifications`.
+- Recognizes the runtime's active statuses beyond `PENDING`/`STAFF_ACCEPTED` so new sessions are not accidentally ignored.
+- Excludes strictly corroborated expired historical statuses from `blocked_by`, but does **not** transition, delete, backfill, approve, reissue or migrate sessions. They remain available for staff audit and must not be misrepresented as completed.
+
+A passing audit still produces at most `DATA_SNAPSHOT_ONLY`; **it is not a cutover authorization**. Source writer quiescence, a final same-time parity audit, auth/network permissions, a reversible guild canary, owner authorization and rollback remain mandatory. A green workflow run alone does not demonstrate a data-parity report; inspect the actual JSON output.
