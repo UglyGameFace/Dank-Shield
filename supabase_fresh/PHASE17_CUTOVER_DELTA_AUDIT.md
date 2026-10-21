@@ -20,3 +20,16 @@ The source and candidate contain matching important data, but **matching yesterd
 - Free Supabase quotas/egress, 10k/500k guild scalability and runtime Redis/provider capacity have NOT been proven by a source/target SQL snapshot. Keep current production working.
 
 **Never switch Discloud as a side effect of this audit.**
+
+
+## 2026-10-21 manual audit failure: two ticket confidence numeric precisions
+
+Owner-run [39604929630, job 119238563155](https://github.com/UglyGameFace/Dank-Shield/actions/runs/39604929630/job/119238563155) stopped at step 6 with `READ_ONLY_CUTOVER_AUDIT_FAILED: RuntimeError`; it did **not** produce a 34-table comparison result or authorize any cutover.
+
+Separate, live read-only catalog queries against both pinned Supabase projects identified a confirmed schema blocker in `public.tickets`: original `ai_category_confidence` and `mod_suggestion_confidence` are `numeric(5,2)`, while offline dedicated candidate uses unbounded `numeric` for both (from the initial dedicated ticket migration). All 33 other audited tables have matching source/target column definitions after the explicitly documented `staff_metrics` exception, and target RLS + private role grants were verified in all 34 tables. These read-only checks are informative, **not** a replacement for the credentialed streaming delta audit. Both projects had 115 ticket rows and a read-only SQL aggregate verified **zero offline confidence values requiring rounding or overflowing numeric(5,2)** at the time inspected; do not assume the source remains frozen.
+
+The focused correction is intentionally **separate from the strictly read-only audit**. The owner-only `.github/workflows/dankshield-offline-ticket-precision-repair.yml` accepts confirmation `FIX_OFFLINE_TICKET_CONFIDENCE_PRECISION_ONLY`, validates exact trusted GitHub owner/main and pins the `DANK_FRESH_DATABASE_URL` to project `viamriafkbqhquvrsnua` before any SQL write, then locks only `public.tickets` on the OFFLINE candidate, rechecks both numeric fields for representability, and transactionally sets them to `numeric(5,2)`. Unexpected schema, out-of-range or excess-scale values, or failures cause a rollback; a repeated execution on an already-exact schema is a no-op. The workflow never receives the original source secret, never contacts Discloud, and cannot authorize production cutover.
+
+The read-only delta audit now reports allowlisted code-owned failure categories and affected table names (e.g. `schema_column_contract_mismatch table=tickets`) instead of hiding everything as a bare RuntimeError. It still fails closed on a mismatch rather than excusing numeric precision, and never discloses raw SQL, member data, source URLs, passwords or row values.
+
+After PR tests pass and it merges into main, the owner must explicitly dispatch the OFFLINE precision repair and confirm its success, **then** rerun the owner-only Final Delta Audit. Even if the audit executes cleanly, its readiness may be `BLOCKED` due to genuine record changes and unfinished source sessions. No source data migration or Discloud credential cutover should be attempted automatically.

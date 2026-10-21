@@ -25,7 +25,7 @@ def test_critical_tables_are_fixed_private_allowlist():
             "denials","avg_response_minutes"
         ))
     }
-    assert "staff_metrics: unsafe source nulls" in PY.read_text(encoding="utf8")
+    assert 'AuditBlocker("source_null_unsafe", table)' in PY.read_text(encoding="utf8")
     assert "audit_logs" not in mod.TABLES
     assert "dank_invite_block_events" not in mod.TABLES
     assert "verification_tokens" not in mod.TABLES
@@ -67,3 +67,38 @@ def test_manual_workflow_only_on_owner_main_and_no_production_deploy():
     assert "on:\n  pull_request:" in ci
     assert "secrets." not in ci
     assert "discloud" not in ci.lower()
+
+
+def test_delta_contract_failure_is_precise_and_privacy_safe(monkeypatch, capsys):
+    import pytest
+    source = [
+        ("ai_category_confidence", "numeric(5,2)", False),
+        ("mod_suggestion_confidence", "numeric(5,2)", False),
+    ]
+    target = [
+        ("ai_category_confidence", "numeric", False),
+        ("mod_suggestion_confidence", "numeric", False),
+    ]
+    monkeypatch.setattr(mod, "column_contract",
+                        lambda _conn, table: source if _conn == "src" else target)
+    with pytest.raises(mod.AuditBlocker) as exc:
+        mod.table_contract("src", "dest", "tickets")
+    assert (exc.value.table, exc.value.code) == (
+        "tickets", "schema_column_contract_mismatch"
+    )
+
+    def failed_preview():
+        raise exc.value
+    monkeypatch.setattr(mod, "preview", failed_preview)
+    assert mod.main() == 2
+    log = capsys.readouterr().err
+    assert "schema_column_contract_mismatch table=tickets" in log
+    assert "numeric(" not in log
+    assert "credential" not in log
+
+
+def test_delta_diagnostics_refuse_untrusted_exception_contents():
+    err = mod.AuditBlocker("private-row-token-DONOTPRINT", "private-user-id")
+    assert err.code == "unexpected_table_audit_failure"
+    assert err.table == "unknown"
+    assert "private-row-token" not in str(err)
