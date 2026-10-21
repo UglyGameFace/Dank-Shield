@@ -1,0 +1,27 @@
+name: Dedicated Runtime Preflight Safety Tests
+
+on:
+  pull_request:
+    paths:
+      - "tools/preflight_dedicated_supabase_runtime.py"
+      - "tests/test_dedicated_runtime_preflight.py"
+      - ".github/workflows/dankshield-dedicated-runtime-preflight.yml"
+      - ".github/workflows/dankshield-dedicated-runtime-preflight-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  safety:
+    name: Offline target runtime preflight guardrails
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install no-secret test dependencies
+        run: python -m pip install -q "pytest>=8,<10"
+      - name: Verify owner-only, privacy, RPC and no-cutover guarantees
+        run: python -m pytest -q --tb=short tests/test_dedicated_runtime_preflight.py
