@@ -519,19 +519,25 @@ async def handle_join_verification_failure(member: discord.Member, reason: Any) 
             return
 
         clean_reason = safe_str(reason, "member has no safe verification role state")
-        fail_closed_reason = f"verification fail-closed: {clean_reason}"
-
-        async def _kick_runner() -> None:
-            await live_member.kick(reason=fail_closed_reason[:512])
-            _log(f"executed verification fail-closed kick guild={guild.id} user={live_member.id}")
-
-        await block_or_run_bot_removal(
-            action="kick",
-            guild=guild,
-            member=live_member,
-            reason=fail_closed_reason,
-            runner=_kick_runner,
-            staff_confirmed=False,
+        # A missing role after a DB/cache outage is NOT evidence a returning or
+        # established member failed verification. Never remove or downgrade
+        # anyone solely because the join watchdog exhausted its retries.
+        # This does not grant access; staff review and authoritative recovery
+        # remain required before any verification role is restored.
+        _warn(
+            "verification watchdog unresolved; automatic kick disabled "
+            f"guild={guild.id} user={live_member.id} reason={clean_reason[:160]!r}"
+        )
+        await post_fresh_join_recovery_log(
+            guild,
+            live_member,
+            action="verification review",
+            reason=clean_reason,
+            recovery_detail=(
+                "Database/role state unconfirmed; no automatic kick or role "
+                "downgrade. Staff must review prior verification evidence."
+            ),
+            success=False,
         )
     except Exception as e:
         _warn(
