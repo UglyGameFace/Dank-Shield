@@ -1911,6 +1911,25 @@ async def _run_startup_once_flags() -> None:
 
                 _assign_startup_task("_stale_verification_reconcile_task", _run_stale_verification_reconcile())
 
+        # Opt-in read-only candidate REST connectivity probe. Never replace
+        # get_supabase() or route any guild mutations to the candidate.
+        try:
+            from .candidate_supabase_shadow_probe import (
+                enabled as candidate_shadow_enabled,
+                run_shadow_probe_at_startup,
+            )
+            if candidate_shadow_enabled() and not getattr(
+                bot, "_candidate_shadow_rest_probe_started", False
+            ):
+                bot._candidate_shadow_rest_probe_started = True
+                if not _startup_task_running("_candidate_shadow_rest_probe_task"):
+                    _assign_startup_task(
+                        "_candidate_shadow_rest_probe_task",
+                        run_shadow_probe_at_startup(),
+                    )
+        except Exception:
+            print("DANK_CANDIDATE_REST_SHADOW_PROBE_FAILED: startup_guard_failed")
+
         try:
             started = await ensure_channel_cleanup_worker_started()
             print(f"🧹 Channel cleanup worker status: started={started}")
