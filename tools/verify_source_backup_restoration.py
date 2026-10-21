@@ -97,13 +97,26 @@ def _restore_failed_object_kind(buf: bytes) -> str:
         r"pg_restore:\s*from TOC entry \d+;\s*\d+\s+\d+\s+([^\r\n]{1,128})",
         msg, re.IGNORECASE,
     )
-    if not found:
-        return "unknown"
-    descriptor = found.group(1).upper()
-    for kind in sorted(RESTORE_OBJECT_KINDS, key=len, reverse=True):
-        if descriptor == kind or descriptor.startswith(kind + " "):
-            return kind
-    return "unknown"
+    if found:
+        descriptor = found.group(1).upper()
+        for kind in sorted(RESTORE_OBJECT_KINDS, key=len, reverse=True):
+            if descriptor == kind or descriptor.startswith(kind + " "):
+                return kind
+    # --exit-on-error may omit "from TOC entry". The existing TOC parser
+    # therefore reported unknown even for actionable SQL failures. With the
+    # restore client's --verbose output, use only the last fixed object kind;
+    # object identifiers and private SQL never leave memory.
+    last_kind = "unknown"
+    for line in msg.splitlines():
+        if re.match(r"^pg_restore:\\s*processing data for table\\b", line, re.I):
+            last_kind = "TABLE DATA"
+            continue
+        matched = re.match(r"^pg_restore:\\s*creating\\s+([A-Z ]+?)(?:\\s+[\\\"']|$)", line, re.I)
+        if matched:
+            proposed = matched.group(1).upper().strip()
+            if proposed in RESTORE_OBJECT_KINDS:
+                last_kind = proposed
+    return last_kind
 
 
 def _restore_error_category(buf: bytes) -> str:
@@ -238,7 +251,7 @@ def _stream_restore(path: Path, passphrase: str, expected_sha256: str) -> int:
         "-e", "PGHOST", "-e", "PGPORT", "-e", "PGUSER",
         "-e", "PGPASSWORD", "-e", "PGDATABASE", "-e", "PGCONNECT_TIMEOUT",
         "postgres:17",
-        "pg_restore", "--no-owner", "--no-privileges",
+        "pg_restore", "--verbose", "--no-owner", "--no-privileges",
         "--single-transaction", "--exit-on-error",
         "--dbname=" + EXPECTED_RESTORE_DB,
     ]
@@ -253,9 +266,11 @@ def _stream_restore(path: Path, passphrase: str, expected_sha256: str) -> int:
             data = proc.stderr.read(4096)
             if not data:
                 break
-            room = max(0, 65536 - len(stderr_sample))
-            if room:
-                stderr_sample.extend(data[:room])
+            # Keep the last bounded section, where the actual failure and
+            # immediate preceding verbose object-kind marker appear.
+            stderr_sample.extend(data)
+            if len(stderr_sample) > 65536:
+                del stderr_sample[:-65536]
     drain_thread = threading.Thread(target=drain, daemon=True)
     drain_thread.start()
     sent = 0
