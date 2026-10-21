@@ -6,6 +6,7 @@ on:
       - "stoney_verify/members_new/join_removal_safety.py"
       - "stoney_verify/anti_nuke.py"
       - "stoney_verify/commands_ext/public_protection_center.py"
+      - "tools/audit_event_boundary.py"
       - "tests/test_verify_outage_staff_protection.py"
       - ".github/workflows/verify-outage-staff-protection-tests.yml"
 
@@ -26,3 +27,5 @@ jobs:
         run: python -m pip install -q -r requirements.txt "pytest>=8,<10"
       - name: Test staff safety and trusted-list persistence
         run: python -m pytest -q --tb=short tests/test_verify_outage_staff_protection.py tests/test_antinuke_protection_center_trust.py
+      - name: Enforce native event ownership and no-verification-kick boundary
+        run: python tools/audit_event_boundary.py
