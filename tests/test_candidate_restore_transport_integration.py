@@ -77,6 +77,24 @@ class EncryptedPg17TransportTest(unittest.TestCase):
                 "select id, sample from public.synthetic_restore_probe"
             ).fetchone()
             self.assertEqual(row, (7, "public synthetic fixture only"))
+            # Regression: the real candidate archive includes pg_cron. A new
+            # recovery database must be able to create that extension, and
+            # restored cron jobs must remain disabled.
+            self.assertEqual(
+                conn.execute("show cron.database_name").fetchone()[0],
+                recovery.EXPECTED_RESTORE_DB,
+            )
+            self.assertEqual(
+                conn.execute("show cron.launch_active_jobs").fetchone()[0],
+                "off",
+            )
+            self.assertIsNone(conn.execute(
+                "select 1 from pg_extension where extname='pg_cron'"
+            ).fetchone())
+            conn.execute("CREATE EXTENSION pg_cron WITH SCHEMA pg_catalog")
+            self.assertIsNotNone(conn.execute(
+                "select 1 from pg_extension where extname='pg_cron'"
+            ).fetchone())
 
 
 if __name__ == "__main__":
