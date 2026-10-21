@@ -1,0 +1,128 @@
+name: Dedicated Supabase Encrypted Recovery Drill (manual)
+
+# Owner-only. Reads OFFLINE candidate and restores only in disposable runner.
+# Uploads encrypted .dsbak, never raw SQL or credentials. No production switch.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Approve encrypted offline candidate backup and isolated restore"
+        required: true
+        type: choice
+        options:
+          - RESTORE_DEDICATED_CANDIDATE_ISOLATED_ONLY
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dankshield-dedicated-candidate-recovery
+  cancel-in-progress: false
+
+jobs:
+  candidate-recovery:
+    if: ${{ github.repository == 'UglyGameFace/Dank-Shield' && github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' && inputs.confirmation == 'RESTORE_DEDICATED_CANDIDATE_ISOLATED_ONLY' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: supabase/postgres:17.6.1.136
+        env:
+          POSTGRES_USER: supabase_admin
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+          PGHOST: /var/run/postgresql
+          PGUSER: supabase_admin
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
+          PGPORT: "5432"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U supabase_admin -d postgres -h localhost"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CI: "true"
+      DANK_RECOVERY_DISPOSABLE_PG17: YES_ISOLATED
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: supabase_admin
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout trusted main without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Refuse changed main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || {
+            echo "::error::Main changed after workflow started."
+            exit 1
+          }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install encrypted backup and restore dependencies
+        run: python -m pip install -q -r requirements-backup.txt "psycopg[binary]>=3.2,<4"
+      - name: Set up isolated PG17 client binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/setup_pg17_backup_clients.sh "$RUNNER_TEMP/pg17-client"
+          echo "$RUNNER_TEMP/pg17-client" >> "$GITHUB_PATH"
+          docker pull postgres:17 >/dev/null
+          "$RUNNER_TEMP/pg17-client/pg_restore" --version
+      - name: Prevent recovered SQL content from reaching container logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import psycopg
+          dsn=dict(host="127.0.0.1",port=5432,user="supabase_admin",
+                   dbname="postgres",password="postgres",connect_timeout=10,
+                   autocommit=True)
+          with psycopg.connect(**dsn) as conn:
+              if int(conn.execute("show server_version_num").fetchone()[0])//10000 != 17:
+                  raise SystemExit("Unexpected disposable PostgreSQL version")
+              if conn.execute(
+                  "select 1 from pg_available_extensions where name='supabase_vault'"
+              ).fetchone() is None:
+                  raise SystemExit("Disposable Supabase extensions not available")
+              conn.execute("alter role supabase_admin set log_statement='none'")
+              conn.execute("alter role supabase_admin set log_min_error_statement='panic'")
+              conn.execute("alter role supabase_admin set log_min_messages='fatal'")
+          with psycopg.connect(**dsn) as conn:
+              a=conn.execute("show log_statement").fetchone()[0]
+              b=conn.execute("show log_min_error_statement").fetchone()[0]
+              c=conn.execute("show log_min_messages").fetchone()[0]
+              if (a,b,c)!=("none","panic","fatal"):
+                  raise SystemExit("Disposable logging guard not applied")
+          print("Disposable PG17 and suppressed SQL logging ready.")
+          PY
+      - name: Encrypt dedicated candidate dump and prove isolated restore
+        env:
+          DANK_FRESH_DATABASE_URL: ${{ secrets.DANK_FRESH_DATABASE_URL }}
+          DANK_BACKUP_PASSPHRASE: ${{ secrets.DANK_BACKUP_PASSPHRASE }}
+        run: python -m tools.backup_restore_dankshield_candidate
+      - name: Upload only the encrypted archive for owner retrieval
+        uses: actions/upload-artifact@v4
+        with:
+          name: dankshield-dedicated-candidate-encrypted-backup
+          path: ${{ runner.temp }}/dankshield-private-candidate-backup/*.dsbak
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Document backup limitation without revealing secrets
+        run: |
+          echo "Encrypted candidate backup/restore verified in disposable PG17."
+          echo "Download and privately retain encrypted artifact plus separate passphrase."
+          echo "GitHub artifact retention is 7 days, not a permanent off-host backup."
+          echo "SQL dump does not preserve cloud credentials, managed Storage, or full managed roles."
+          echo "Original source, Discloud, and production bot were unchanged."
