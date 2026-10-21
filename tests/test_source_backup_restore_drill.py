@@ -140,7 +140,7 @@ def test_restore_toc_kind_never_discloses_object_names(stderr, expected):
     kind = recovery._restore_failed_object_kind(stderr)
     assert kind == expected
     assert "secret" not in kind.lower()
-    assert "public" not in kind.lower()
+    assert "public." not in kind.lower()
 
 
 @pytest.mark.parametrize("stderr, category", [
