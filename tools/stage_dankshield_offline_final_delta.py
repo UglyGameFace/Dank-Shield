@@ -229,7 +229,7 @@ def reconcile(mode: str) -> dict[str, Any]:
                         raise RuntimeError("candidate_only_rows_need_review")
                     writes = difference["write_keys"]
                     stage_count += len(writes)
-                    if stage_count > MAX_CHANGED_ROWS:
+                    if mode == "stage" and stage_count > MAX_CHANGED_ROWS:
                         raise RuntimeError("changed_row_budget_exceeded")
                     if mode == "stage":
                         query = upsert_query(table, source_columns, pk)
@@ -258,6 +258,16 @@ def reconcile(mode: str) -> dict[str, Any]:
                         "changed": difference["changed"],
                     })
                 if mode == "stage":
+                    # A later table's insert/update trigger could have modified
+                    # an earlier table after its individual check. Require final
+                    # exact content parity across ALL 34 tables before commit.
+                    for table in audit.TABLES:
+                        final_rows = load_rows(
+                            target, table, keys[table], retain_payload=False
+                        )
+                        summary = describe_delta(source_snapshots[table], final_rows)
+                        if any(summary[k] for k in ("source_only", "target_only", "changed")):
+                            raise RuntimeError("final_offline_snapshot_not_equal")
                     # All SOURCE sessions in this script are READ ONLY.
                     # A new source snapshot must still match the first one.
                     recheck_original_snapshot(source_params, source_snapshots, keys)
