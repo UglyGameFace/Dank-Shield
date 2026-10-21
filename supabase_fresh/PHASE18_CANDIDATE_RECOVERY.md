@@ -52,3 +52,17 @@ The source-side candidate reports PostgreSQL 17.11, with 75 public tables and ma
 The next safe diagnostic reports a whitelisted `DEDICATED_RECOVERY_FAILED_TOC_KIND` (for example, `TABLE DATA`, `SCHEMA` or `EXTENSION`) if `pg_restore` includes a recognizable TOC entry, and recognizes additional fixed SQL failure categories (transaction, permission, dependency, collation and data constraints). It must never print source/table/role names, raw SQL, SQL errors, secrets or TOC entry numbers. `unknown` remains an allowed diagnostic response, **not permission to assume a cause or mark restore complete**. The backup/restore isolation, verification and ciphertext-only artifact gate are unchanged.
 
 The next action is an owner-only rerun **after** this diagnostic PR is validated and merged. Fix the specific SQL restore incompatibility disclosed by the next failure category and TOC type, then rerun to prove a genuinely successful restore before any production cutover. Preserve this one active recovery task; do not start unrelated cleanups during it.
+
+
+## Third failed owner drill: no TOC cause revealed (2026-10-21)
+
+Owner-run [39590159207 / 119188823728](https://github.com/UglyGameFace/Dank-Shield/actions/runs/39590159207/job/119188823728) again passed manifest collection, encrypted backup creation, and authenticated archive checks, then failed the disposable restore. Logged results:
+
+- `pg_restore_sql_failed_unclassified`
+- `DEDICATED_RECOVERY_FAILED_TOC_KIND: unknown`
+
+**An `unknown` TOC kind plus the broad legacy error classifier does not prove a failed SQL operation.** The previous classification marked any generic client `error` as failed SQL, incorrectly conflating network, archive and process failures. The actual failure is not yet determined.
+
+This targeted follow-up adds an explicit `postgres:17` Docker-to-disposable-database connection preflight, separate allowlisted client transport/archive/invocation vs SQL error categories, and an integration regression job that creates a synthetic, private-data-free custom PostgreSQL archive, authenticates an AES-GCM encrypted copy, streams it through the same isolated restore path and verifies the synthetic row. The container is the same pinned disposable `supabase/postgres:17.6.1.136` target as the owner workflow.
+
+**Required validation:** A successful synthetic CI path distinguishes local environment wiring from candidate-specific SQL objects but does not certify the live candidate archive. Do not drop schemas, skip rows, relax strict transaction/error handling, or cut over production. Wait for all PR checks to pass; then rerun only the owner-only isolated candidate drill on `main`, interpret the new concrete result, and fix its proven root. Retire the temporary branch after merge.

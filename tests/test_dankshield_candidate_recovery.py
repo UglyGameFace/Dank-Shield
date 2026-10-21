@@ -174,7 +174,7 @@ class RecoveryContractTests(TestCase):
             (b'pg_restore: error: function private_function() does not exist',
              "restore_schema_dependency_missing"),
             (b'pg_restore: error: unexpected reason with private-contents',
-             "pg_restore_sql_failed_unclassified"),
+             "pg_restore_process_failed_unclassified"),
         )
         for raw,expected in cases:
             with self.subTest(reason=expected):

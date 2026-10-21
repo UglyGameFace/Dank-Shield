@@ -7,6 +7,9 @@ on:
       - ".github/workflows/dankshield-candidate-restore-drill.yml"
       - ".github/workflows/dankshield-candidate-recovery-tests.yml"
       - "tests/test_dankshield_candidate_recovery.py"
+      - "tests/test_source_backup_restore_drill.py"
+      - "tests/test_candidate_restore_transport_integration.py"
+      - "tools/verify_source_backup_restoration.py"
 
 permissions:
   contents: read
@@ -15,7 +18,34 @@ jobs:
   recovery-guards:
     name: Candidate backup and restore workflow guardrails
     runs-on: ubuntu-24.04
-    timeout-minutes: 7
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: supabase/postgres:17.6.1.136
+        env:
+          POSTGRES_USER: supabase_admin
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+          PGHOST: /var/run/postgresql
+          PGUSER: supabase_admin
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
+          PGPORT: "5432"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U supabase_admin -d postgres -h localhost"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CI: "true"
+      DANK_RECOVERY_DISPOSABLE_PG17: YES_ISOLATED
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: supabase_admin
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,3 +53,13 @@ jobs:
           python-version: "3.11"
       - name: Test recovery identity and no production writes
         run: python -m unittest discover -s tests -p test_dankshield_candidate_recovery.py -v
+      - name: Install synthetic restore prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -q -r requirements-backup.txt "psycopg[binary]>=3.2,<4"
+          bash tools/setup_pg17_backup_clients.sh "$RUNNER_TEMP/pg17-client"
+          echo "$RUNNER_TEMP/pg17-client" >> "$GITHUB_PATH"
+          docker pull postgres:17 >/dev/null
+      - name: Prove synthetic encrypted backup and isolated restore round-trip
+        run: python -m unittest discover -s tests -p test_candidate_restore_transport_integration.py -v

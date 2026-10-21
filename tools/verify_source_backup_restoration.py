@@ -97,18 +97,53 @@ def _restore_failed_object_kind(buf: bytes) -> str:
         r"pg_restore:\s*from TOC entry \d+;\s*\d+\s+\d+\s+([^\r\n]{1,128})",
         msg, re.IGNORECASE,
     )
-    if not found:
-        return "unknown"
-    descriptor = found.group(1).upper()
-    for kind in sorted(RESTORE_OBJECT_KINDS, key=len, reverse=True):
-        if descriptor == kind or descriptor.startswith(kind + " "):
-            return kind
-    return "unknown"
+    if found:
+        descriptor = found.group(1).upper()
+        for kind in sorted(RESTORE_OBJECT_KINDS, key=len, reverse=True):
+            if descriptor == kind or descriptor.startswith(kind + " "):
+                return kind
+    # --exit-on-error may omit "from TOC entry". The existing TOC parser
+    # therefore reported unknown even for actionable SQL failures. With the
+    # restore client's --verbose output, use only the last fixed object kind;
+    # object identifiers and private SQL never leave memory.
+    last_kind = "unknown"
+    for line in msg.splitlines():
+        if re.match(r"^pg_restore:\s*processing data for table\b", line, re.I):
+            last_kind = "TABLE DATA"
+            continue
+        matched = re.match(r"^pg_restore:\s*creating\s+(.+)$", line, re.I)
+        if matched:
+            descriptor = matched.group(1).upper()
+            for kind in sorted(RESTORE_OBJECT_KINDS, key=len, reverse=True):
+                if descriptor == kind or descriptor.startswith(kind + " "):
+                    last_kind = kind
+                    break
+    return last_kind
 
 
 def _restore_error_category(buf: bytes) -> str:
-    """Categorize stdout/stderr privately. Never print raw pg_restore errors."""
+    """Categorize stderr without treating all client errors as failed SQL."""
     msg = buf[:65536].decode("utf-8", "replace").lower()
+    # Client transport/archive errors have no pg_restore TOC entry. Previously
+    # the generic word "error" mislabeled these as rejected SQL statements.
+    if any(term in msg for term in (
+        "connection to server at", "could not connect to server",
+        "connection refused", "could not translate host name",
+        "server closed the connection unexpectedly",
+        "password authentication failed", "no password supplied",
+    )):
+        return "pg_restore_connection_failed"
+    if any(term in msg for term in (
+        "did not find magic string", "input file is too short",
+        "unsupported version", "could not read from input file",
+        "could not read header", "could not read from archive",
+        "unexpected end of file",
+    )):
+        return "pg_restore_archive_read_failed"
+    if any(term in msg for term in (
+        "unrecognized option", "invalid option", "too many command-line arguments",
+    )):
+        return "pg_restore_invocation_failed"
     if "extension" in msg and any(s in msg for s in (
         "not available", "could not open extension control file", "no installation script"
     )):
@@ -149,7 +184,7 @@ def _restore_error_category(buf: bytes) -> str:
         "relation", "function", "type", "schema",
     )):
         return "restore_schema_dependency_missing"
-    if "could not execute query" in msg or "error" in msg:
+    if "could not execute query" in msg or re.search(r"(?:^|\n)\s*error:\s", msg):
         return "pg_restore_sql_failed_unclassified"
     return "pg_restore_process_failed_unclassified"
 
@@ -186,16 +221,39 @@ def _create_empty_restore_db() -> None:
         conn.execute("create database " + EXPECTED_RESTORE_DB)
 
 
+def _validate_container_restore_connection() -> None:
+    """Check the exact Docker/host-network path used by the restore client."""
+    command = [
+        "docker", "run", "--rm", "--network=host",
+        "-e", "PGHOST", "-e", "PGPORT", "-e", "PGUSER",
+        "-e", "PGPASSWORD", "-e", "PGDATABASE", "-e", "PGCONNECT_TIMEOUT",
+        "postgres:17", "psql", "--no-psqlrc", "--quiet", "--tuples-only",
+        "--no-align", "--dbname=" + EXPECTED_RESTORE_DB,
+        "--command=select 1",
+    ]
+    try:
+        result = subprocess.run(
+            command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, env=_safe_pg_env(), timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise RecoveryDrillError("restore_container_connection_unavailable") from None
+    if result.returncode != 0 or result.stdout.strip() != b"1":
+        raise RecoveryDrillError("restore_container_connection_unavailable")
+
+
 def _stream_restore(path: Path, passphrase: str, expected_sha256: str) -> int:
     """Use a disposable PG17 client and process. No plaintext archive files."""
     if _sha256_file(path) != expected_sha256:
         raise RecoveryDrillError("archive_changed_before_restore")
+    _validate_container_restore_connection()
     command = [
         "docker", "run", "--rm", "-i", "--network=host",
         "-e", "PGHOST", "-e", "PGPORT", "-e", "PGUSER",
         "-e", "PGPASSWORD", "-e", "PGDATABASE", "-e", "PGCONNECT_TIMEOUT",
         "postgres:17",
-        "pg_restore", "--no-owner", "--no-privileges",
+        "pg_restore", "--verbose", "--no-owner", "--no-privileges",
         "--single-transaction", "--exit-on-error",
         "--dbname=" + EXPECTED_RESTORE_DB,
     ]
@@ -210,9 +268,11 @@ def _stream_restore(path: Path, passphrase: str, expected_sha256: str) -> int:
             data = proc.stderr.read(4096)
             if not data:
                 break
-            room = max(0, 65536 - len(stderr_sample))
-            if room:
-                stderr_sample.extend(data[:room])
+            # Keep the last bounded section, where the actual failure and
+            # immediate preceding verbose object-kind marker appear.
+            stderr_sample.extend(data)
+            if len(stderr_sample) > 65536:
+                del stderr_sample[:-65536]
     drain_thread = threading.Thread(target=drain, daemon=True)
     drain_thread.start()
     sent = 0
@@ -252,6 +312,8 @@ def _stream_restore(path: Path, passphrase: str, expected_sha256: str) -> int:
         if proc.poll() is None:
             proc.kill()
         proc.wait(timeout=10)
+        if proc.stderr is not None:
+            proc.stderr.close()
 
 
 def _staging_candidate_inventory(conn: Any) -> dict[str, Any]:
