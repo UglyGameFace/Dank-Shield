@@ -16,6 +16,8 @@ from tools import verify_source_backup_restoration as recovery
 
 class EncryptedPg17TransportTest(unittest.TestCase):
     def test_synthetic_pg17_dump_encryption_and_restoration(self):
+        if os.getenv("DANK_RECOVERY_DISPOSABLE_PG17") != "YES_ISOLATED":
+            self.skipTest("requires dedicated synthetic disposable PostgreSQL CI")
         recovery.validate_disposable_runner()
         source_db = "dank_synthetic_restore_probe"
         dsn = {
