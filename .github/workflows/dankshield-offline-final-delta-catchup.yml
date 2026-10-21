@@ -1,0 +1,68 @@
+name: Dank Shield Offline Final Delta Catch-up (manual)
+
+# Never scheduled, never triggered by merge or a Discloud deploy.
+# Only the owner's pinned OFFLINE Supabase candidate is writable.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "PREVIEW is read-only. STAGE changes the OFFLINE candidate only."
+        type: choice
+        required: true
+        options:
+          - preview
+          - stage
+        default: preview
+      confirmation:
+        description: "For stage only, enter RECONCILE_OFFLINE_DANKSHIELD_ONLY"
+        type: string
+        required: false
+      freeze_ack:
+        description: "For stage only, enter I_PAUSED_ALL_SOURCE_WRITERS"
+        type: string
+        required: false
+      off_host_candidate_backup_receipt:
+        description: "For stage only: checked off-host backup ID (NOT a secret/password)"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dankshield-offline-final-delta-catchup
+  cancel-in-progress: false
+
+jobs:
+  offline-final-delta:
+    if: ${{ github.repository == 'UglyGameFace/Dank-Shield' && github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout trusted main (no persisted credentials)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Refuse stale or non-main checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || {
+            echo "::error::Main advanced during preparation. Restart the offline preview."
+            exit 1
+          }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install private PostgreSQL client
+        run: python -m pip install -q "psycopg[binary]>=3.2,<4"
+      - name: Preview or owner-authorized OFFLINE-only catch-up
+        env:
+          DANK_SOURCE_DATABASE_URL: ${{ secrets.DANK_SOURCE_DATABASE_URL }}
+          DANK_FRESH_DATABASE_URL: ${{ secrets.DANK_FRESH_DATABASE_URL }}
+          DANK_DELTA_CATCHUP_MODE: ${{ inputs.mode }}
+          DANK_DELTA_CATCHUP_CONFIRM: ${{ inputs.confirmation }}
+          DANK_SOURCE_WRITERS_FROZEN: ${{ inputs.freeze_ack }}
+          DANK_CANDIDATE_BACKUP_RECEIPT: ${{ inputs.off_host_candidate_backup_receipt }}
+        run: python -m tools.stage_dankshield_offline_final_delta
