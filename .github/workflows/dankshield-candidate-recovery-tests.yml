@@ -1,0 +1,25 @@
+name: Dedicated Candidate Recovery Guard Tests
+
+on:
+  pull_request:
+    paths:
+      - "tools/backup_restore_dankshield_candidate.py"
+      - ".github/workflows/dankshield-candidate-restore-drill.yml"
+      - ".github/workflows/dankshield-candidate-recovery-tests.yml"
+      - "tests/test_dankshield_candidate_recovery.py"
+
+permissions:
+  contents: read
+
+jobs:
+  recovery-guards:
+    name: Candidate backup and restore workflow guardrails
+    runs-on: ubuntu-24.04
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Test recovery identity and no production writes
+        run: python -m unittest -v tests.test_dankshield_candidate_recovery
