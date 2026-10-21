@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import os
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
 
 from tools import backup_restore_dankshield_candidate as subject
+from tools.verify_source_backup_restoration import RecoveryDrillError
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -85,3 +88,48 @@ class RecoveryContractTests(TestCase):
         self.assertNotIn("on:\n  schedule:",wf)
         self.assertNotIn("secrets.",ci)
         self.assertIn("pull_request:",ci)
+
+    def test_recovery_error_categories_are_safe_and_reliably_visible(self):
+        self.assertEqual(
+            subject.safe_failure_code(RecoveryDrillError(
+                "pg_restore_sql_failed_unclassified")),
+            "pg_restore_sql_failed_unclassified",
+        )
+        self.assertEqual(
+            subject.safe_failure_code(RecoveryDrillError(
+                "critical_dank_tables_missing_after_restore")),
+            "critical_dank_tables_missing_after_restore",
+        )
+        secret = "a-real-looking-internal-url-and-user-data-must-never-appear"
+        self.assertEqual(
+            subject.safe_failure_code(RecoveryDrillError(secret)),
+            "candidate_recovery_unclassified",
+        )
+        self.assertEqual(
+            subject.safe_failure_code(RuntimeError(secret)),
+            "candidate_recovery_unclassified",
+        )
+        for exception, expected in (
+            (RecoveryDrillError("restore_target_permissions_incompatible"),
+             "restore_target_permissions_incompatible"),
+            (RecoveryDrillError(secret), "candidate_recovery_unclassified"),
+            (RuntimeError(secret), "candidate_recovery_unclassified"),
+        ):
+            with patch.object(subject, "execute", side_effect=exception):
+                captured = StringIO()
+                with redirect_stderr(captured):
+                    self.assertEqual(subject.main(), 2)
+                self.assertIn(expected, captured.getvalue())
+                self.assertNotIn(secret, captured.getvalue())
+                self.assertNotIn("Traceback", captured.getvalue())
+
+    def test_private_phase_diagnostics_are_code_owned_and_no_data(self):
+        script=(ROOT/"tools/backup_restore_dankshield_candidate.py").read_text("utf8")
+        for phase in (
+            "reading_candidate_manifest",
+            "creating_encrypted_backup",
+            "authenticating_and_restoring_to_disposable",
+            "comparing_restored_records",
+        ):
+            self.assertIn("CANDIDATE_RECOVERY_PHASE: " + phase, script)
+        self.assertNotIn("print(str(exc))", script)
