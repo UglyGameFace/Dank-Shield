@@ -10,8 +10,8 @@ from typing import Any, Deque, Mapping, Optional
 
 import discord
 
-from .globals import bot
-from .guild_config import get_guild_config, upsert_guild_config
+from .globals import bot, get_supabase
+from .guild_config import _merge_row_settings, get_guild_config, upsert_guild_config
 from .modlog import _post_modlog
 
 
@@ -285,6 +285,49 @@ async def get_antinuke_settings(
     return normalize_antinuke_settings(cfg)
 
 
+_TRUST_LIST_KEYS = (
+    "antinuke_trusted_user_ids",
+    "antinuke_trusted_role_ids",
+    "antinuke_trusted_bot_ids",
+)
+
+
+async def _verify_persisted_trust_lists(
+    guild_id: int,
+    expected: Mapping[str, Any],
+) -> None:
+    """Read canonical source row directly; never accept cache as save proof.
+
+    During PostgREST outages, upsert_guild_config can return a previous cached
+    configuration. This verification intentionally raises instead of replying
+    'saved' for a stale read or a failed RPC. It performs no DB writes.
+    """
+    def read_canonical() -> dict[str, Any]:
+        sb = get_supabase()
+        if sb is None:
+            raise RuntimeError("AntiNuke trust list save is unverified: database unavailable")
+        response = (
+            sb.table("guild_configs")
+            .select("settings,config,metadata,meta")
+            .eq("guild_id", str(int(guild_id)))
+            .limit(1)
+            .execute()
+        )
+        rows = getattr(response, "data", None)
+        if not isinstance(rows, list) or not rows or not isinstance(rows[0], Mapping):
+            raise RuntimeError("AntiNuke trust list save is unverified: canonical row unavailable")
+        return dict(rows[0])
+
+    try:
+        canonical = await asyncio.wait_for(asyncio.to_thread(read_canonical), timeout=12.0)
+    except Exception:
+        raise RuntimeError("AntiNuke trust list save could not be verified against the database") from None
+    actual = normalize_antinuke_settings(_merge_row_settings(canonical))
+    for key in _TRUST_LIST_KEYS:
+        if key in expected and _safe_id_list(expected[key]) != actual[key]:
+            raise RuntimeError("AntiNuke trust list did not survive database read-back")
+
+
 async def save_antinuke_settings(
     guild_id: int,
     patch: Mapping[str, Any],
@@ -296,6 +339,10 @@ async def save_antinuke_settings(
         if str(key) in allowed
     }
     saved = await upsert_guild_config(int(guild_id), clean_patch)
+    if any(key in clean_patch for key in _TRUST_LIST_KEYS):
+        # Read-back from the ACTUAL source table, not a potentially stale
+        # guild_config cache or an echoed RPC result.
+        await _verify_persisted_trust_lists(int(guild_id), clean_patch)
     return normalize_antinuke_settings(saved)
 
 
