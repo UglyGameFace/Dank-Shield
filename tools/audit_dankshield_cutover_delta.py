@@ -34,6 +34,14 @@ TABLES = (
 ALLOW_DESTINATION_ONLY_COLUMNS = {
     "staff_metrics": frozenset({"created_at", "updated_at"}),
 }
+# Old staff KPIs permit NULL; dedicated candidate intentionally requires
+# these five fields. This exception is allowed only if no source row has NULL.
+ALLOW_STRICTER_TARGET_NOT_NULL = {
+    "staff_metrics": frozenset({
+        "staff_name", "tickets_handled", "approvals",
+        "denials", "avg_response_minutes",
+    }),
+}
 LIVE_SESSION_STATES = ("PENDING", "STAFF_ACCEPTED", "IN_PROGRESS", "ACTIVE")
 ACTIVE_OPERATION_STATES = ("queued", "running", "waiting_rate_limit")
 ACTIVE_COMMAND_STATES = ("pending", "processing")
@@ -94,10 +102,25 @@ def table_contract(source, target, table: str) -> tuple[str, ...]:
     excluded = ALLOW_DESTINATION_ONLY_COLUMNS.get(table, frozenset())
     without_extra = tuple(row for row in dedicated if row[0] not in excluded)
     # Deliberate schema exception only for target-only staff timestamps.
-    if not original or original != without_extra:
-        raise RuntimeError(f"{table}: source/destination schema differs")
-    if excluded and ({row[0] for row in dedicated} - {row[0] for row in original}) != excluded:
+    strict = ALLOW_STRICTER_TARGET_NOT_NULL.get(table, frozenset())
+    original_names = {name for name, _, _ in original}
+    if excluded and ({row[0] for row in dedicated} - original_names) != excluded:
         raise RuntimeError(f"{table}: unexpected target-only columns")
+    normalized = tuple(
+        (name, typ, False if name in strict else required)
+        for name, typ, required in original
+    )
+    if not original or without_extra != normalized:
+        raise RuntimeError(f"{table}: source/destination schema differs")
+    # Tightening NULL -> NOT NULL is only safe if source has no violating data.
+    if strict and table == "staff_metrics":
+        bad = source.execute(
+            "select count(*) from public.staff_metrics where "
+            "staff_name is null or tickets_handled is null or "
+            "approvals is null or denials is null or avg_response_minutes is null"
+        ).fetchone()[0]
+        if int(bad):
+            raise RuntimeError("staff_metrics: unsafe source nulls")
     pk1, pk2 = primary_key(source, table), primary_key(target, table)
     if not pk1 or pk1 != pk2:
         raise RuntimeError(f"{table}: source/destination primary key differs")
