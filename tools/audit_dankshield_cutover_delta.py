@@ -107,7 +107,7 @@ def table_contract(source, target, table: str) -> tuple[str, ...]:
     if excluded and ({row[0] for row in dedicated} - original_names) != excluded:
         raise RuntimeError(f"{table}: unexpected target-only columns")
     normalized = tuple(
-        (name, typ, False if name in strict else required)
+        (name, typ, True if name in strict else required)
         for name, typ, required in original
     )
     if not original or without_extra != normalized:
