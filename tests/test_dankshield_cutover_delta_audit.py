@@ -19,6 +19,13 @@ def test_critical_tables_are_fixed_private_allowlist():
     assert mod.ALLOW_DESTINATION_ONLY_COLUMNS=={
         "staff_metrics":frozenset(("created_at","updated_at"))
     }
+    assert mod.ALLOW_STRICTER_TARGET_NOT_NULL=={
+        "staff_metrics":frozenset((
+            "staff_name","tickets_handled","approvals",
+            "denials","avg_response_minutes"
+        ))
+    }
+    assert "staff_metrics: unsafe source nulls" in PY.read_text(encoding="utf8")
     assert "audit_logs" not in mod.TABLES
     assert "dank_invite_block_events" not in mod.TABLES
     assert "verification_tokens" not in mod.TABLES
