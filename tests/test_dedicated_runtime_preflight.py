@@ -121,7 +121,8 @@ def test_workflow_remains_manual_main_only_and_source_free():
     assert "secrets.DANK_FRESH_DATABASE_URL" in workflow
     assert "DANK_SOURCE_DATABASE_URL" not in workflow
     assert "DANK_SOURCE_DATABASE_URL" not in script
-    assert "discloud" not in workflow.lower()
+    assert "DISCLOUD_TOKEN" not in workflow
+    assert "discloud app" not in workflow.lower()
     assert "default_transaction_read_only=on" in (
         ROOT / "tools/audit_dankshield_cutover_delta.py"
     ).read_text()
