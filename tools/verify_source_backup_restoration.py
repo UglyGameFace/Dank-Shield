@@ -90,6 +90,18 @@ def _restore_error_category(buf: bytes) -> str:
         return "restore_target_permissions_incompatible"
     if "unrecognized configuration parameter" in msg:
         return "source_configuration_not_supported_by_plain_pg17"
+    # Return only fixed, audited categories. Avoid exposing role, schema,
+    # table, SQL expression, user ID or password from pg_restore stderr.
+    if "already exists" in msg or "duplicate object" in msg:
+        return "restore_object_conflicts_with_bootstrap"
+    if "duplicate key value violates unique constraint" in msg:
+        return "restore_duplicate_key_conflict"
+    if "violates foreign key constraint" in msg:
+        return "restore_foreign_key_violation"
+    if "does not exist" in msg and any(term in msg for term in (
+        "relation", "function", "type", "schema",
+    )):
+        return "restore_schema_dependency_missing"
     if "could not execute query" in msg or "error" in msg:
         return "pg_restore_sql_failed_unclassified"
     return "pg_restore_process_failed_unclassified"
