@@ -108,14 +108,16 @@ def _restore_failed_object_kind(buf: bytes) -> str:
     # object identifiers and private SQL never leave memory.
     last_kind = "unknown"
     for line in msg.splitlines():
-        if re.match(r"^pg_restore:\\s*processing data for table\\b", line, re.I):
+        if re.match(r"^pg_restore:\s*processing data for table\b", line, re.I):
             last_kind = "TABLE DATA"
             continue
-        matched = re.match(r"^pg_restore:\\s*creating\\s+([A-Z ]+?)(?:\\s+[\\\"']|$)", line, re.I)
+        matched = re.match(r"^pg_restore:\s*creating\s+(.+)$", line, re.I)
         if matched:
-            proposed = matched.group(1).upper().strip()
-            if proposed in RESTORE_OBJECT_KINDS:
-                last_kind = proposed
+            descriptor = matched.group(1).upper()
+            for kind in sorted(RESTORE_OBJECT_KINDS, key=len, reverse=True):
+                if descriptor == kind or descriptor.startswith(kind + " "):
+                    last_kind = kind
+                    break
     return last_kind
 
 
