@@ -550,6 +550,23 @@ async def block_or_run_bot_removal(
     runner: Callable[[], Awaitable[Any]],
     staff_confirmed: bool = False,
 ) -> Any:
+    # Incident 2026-10-21: the join watchdog kicked staff when Supabase/role
+    # truth was unavailable. Verification state is NOT evidence of misconduct.
+    # Neither member age nor ALLOW_BOT_FRESH_JOIN_REMOVAL may authorize an
+    # AUTOMATED verification fail-closed kick/ban. A real staff-confirmed
+    # moderation action remains separate and retains its existing guards.
+    if (
+        not staff_confirmed
+        and str(action).lower() in {"kick", "ban"}
+        and is_fail_closed_verification_reason(reason)
+    ):
+        _warn(
+            f"verification fail-closed automatic {action} suppressed; "
+            f"guild={guild.id} user={getattr(member, 'id', None)} "
+            "staff review required; no removal executed"
+        )
+        return None
+
     decision = removal_decision(member, action=action, reason=reason, staff_confirmed=staff_confirmed)
     if decision.blocked:
         recovered, recovery_detail = await try_recover_unverified_before_removal(member, action=action, reason=reason)
