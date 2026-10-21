@@ -59,6 +59,10 @@ SAFE_RECOVERY_CODES = frozenset((
     "source_configuration_not_supported_by_plain_pg17",
     "pg_restore_sql_failed_unclassified",
     "pg_restore_process_failed_unclassified",
+    "restore_object_conflicts_with_bootstrap",
+    "restore_duplicate_key_conflict",
+    "restore_foreign_key_violation",
+    "restore_schema_dependency_missing",
 ))
 SAFE_BACKUP_CODES = frozenset((
     "database_authentication_rejected",
