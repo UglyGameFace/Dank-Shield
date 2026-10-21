@@ -190,7 +190,7 @@ def reconcile(mode: str) -> dict[str, Any]:
                 source.execute("set transaction isolation level repeatable read, read only")
                 source.execute("set local timezone to 'UTC'")
                 target.execute("set transaction isolation level repeatable read, " +
-                               ("write" if mode == "stage" else "read only"))
+                               ("read write" if mode == "stage" else "read only"))
                 target.execute("set local timezone to 'UTC'")
                 if mode == "stage":
                     # Candidate ONLY. Lock all approved tables to avoid an
