@@ -1,0 +1,28 @@
+name: Candidate REST Shadow Probe Safety Tests
+
+on:
+  pull_request:
+    paths:
+      - "stoney_verify/candidate_supabase_shadow_probe.py"
+      - "stoney_verify/events.py"
+      - "tests/test_candidate_shadow_rest_probe.py"
+      - ".env.example"
+      - "supabase_fresh/PHASE20_DISCLOUD_SHADOW_API.md"
+      - ".github/workflows/dankshield-candidate-rest-shadow-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  candidate-rest-shadow-guards:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install credential-free test runner
+        run: python -m pip install -q "pytest>=8,<10"
+      - name: Assert read-only candidate routing, pinned identity and secret redaction
+        run: python -m pytest -q --tb=short tests/test_candidate_shadow_rest_probe.py
