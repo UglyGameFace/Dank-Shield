@@ -79,6 +79,10 @@ jobs:
           echo "$RUNNER_TEMP/pg17-client" >> "$GITHUB_PATH"
           docker pull postgres:17 >/dev/null
           "$RUNNER_TEMP/pg17-client/pg_restore" --version
+      - name: Align pg_cron only in disposable recovery container and disable schedules
+        env:
+          DANK_RECOVERY_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: python -m tools.prepare_disposable_pg_cron
       - name: Prevent recovered SQL content from reaching container logs
         shell: bash
         run: |
