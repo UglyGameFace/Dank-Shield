@@ -1,0 +1,28 @@
+name: Verification Outage Staff Protection Guard
+
+on:
+  pull_request:
+    paths:
+      - "stoney_verify/members_new/join_removal_safety.py"
+      - "stoney_verify/anti_nuke.py"
+      - "stoney_verify/commands_ext/public_protection_center.py"
+      - "tests/test_verify_outage_staff_protection.py"
+      - ".github/workflows/verify-outage-staff-protection-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  safety:
+    name: No automatic watchdog kicks and verified trust writes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install no-secret test dependencies
+        run: python -m pip install -q "pytest>=8,<10" "discord.py>=2.6,<3" "supabase>=2,<3"
+      - name: Test staff safety and trusted-list persistence
+        run: python -m pytest -q --tb=short tests/test_verify_outage_staff_protection.py tests/test_antinuke_protection_center_trust.py
