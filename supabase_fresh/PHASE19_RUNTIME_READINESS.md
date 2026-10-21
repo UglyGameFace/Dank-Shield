@@ -3,8 +3,8 @@
 **Status: preparation only. No Discloud switch or original source writer freeze.**
 
 Live database identity:
-- Original production writer: Supabase \`hyncpbvqyjojxhjzcdzg\`.
-- Dedicated **offline** replacement: Supabase \`viamriafkbqhquvrsnua\`.
+- Original production writer: Supabase `hyncpbvqyjojxhjzcdzg`.
+- Dedicated **offline** replacement: Supabase `viamriafkbqhquvrsnua`.
 - Discloud production remains on its original database credentials.
 
 ## Evidence so far
@@ -20,9 +20,9 @@ Additional independent read-only metadata queries found:
 
 ## New owner-only, read-only preflight
 
-Use \`.github/workflows/dankshield-dedicated-runtime-preflight.yml\` on **main** when merged. This workflow:
-- Requires exact GitHub owner, repository and branch; loads only \`DANK_FRESH_DATABASE_URL\` from a secret, never source/Discloud/Discord credentials.
-- Checks that the connection resolves only to pinned offline Supabase project \`viamriafkbqhquvrsnua\`.
+Use `.github/workflows/dankshield-dedicated-runtime-preflight.yml` on **main** when merged. This workflow:
+- Requires exact GitHub owner, repository and branch; loads only `DANK_FRESH_DATABASE_URL` from a secret, never source/Discloud/Discord credentials.
+- Checks that the connection resolves only to pinned offline Supabase project `viamriafkbqhquvrsnua`.
 - Uses a repeatable-read read-only transaction and read-only session settings, requires PostgreSQL 17.
 - Checks all public tables for private RLS/grants and service-role CRUD and public SECURITY DEFINER routines for dangerous anon/authenticated access.
 - Checks eight critical app RPCs for exact signature and privilege, and requires target-only bot command/operation queues empty.
