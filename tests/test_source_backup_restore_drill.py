@@ -126,6 +126,15 @@ def test_redacted_restore_error_categories_do_not_echo_sql(text, category):
         "unknown",
     ),
     (b'pg_restore: error: permission denied for secret_schema', "unknown"),
+    (b'pg_restore: creating TABLE "public.private_table"\n'
+     b'pg_restore: error: could not execute query: ERROR: synthetic failure',
+     "TABLE"),
+    (b'pg_restore: processing data for table "public.private_table"\n'
+     b'pg_restore: error: could not execute query: ERROR: synthetic failure',
+     "TABLE DATA"),
+    (b'pg_restore: creating PUBLICATION TABLE "public.private_table"\n'
+     b'pg_restore: error: could not execute query: ERROR: synthetic failure',
+     "PUBLICATION TABLE"),
 ])
 def test_restore_toc_kind_never_discloses_object_names(stderr, expected):
     kind = recovery._restore_failed_object_kind(stderr)
@@ -246,6 +255,7 @@ def test_sql_error_behind_broken_restore_pipe_is_classified_without_raw_output(
             assert command[0:2] == ["docker", "run"]
             assert "--single-transaction" in command
             assert "--exit-on-error" in command
+            assert "--verbose" in command
             assert kwargs["env"]["PGUSER"] == "supabase_admin"
             return FailedRestore()
 
