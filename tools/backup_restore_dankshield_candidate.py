@@ -18,7 +18,8 @@ from stoney_verify.source_pg_backup import (
     BackupFailure, create_backup, validate_source_dsn,
 )
 from tools.verify_source_backup_restoration import (
-    RecoveryDrillError, run_restore_drill, validate_disposable_runner,
+    RESTORE_OBJECT_KINDS, RecoveryDrillError, run_restore_drill,
+    validate_disposable_runner,
 )
 
 REPO = "UglyGameFace/Dank-Shield"
@@ -63,6 +64,10 @@ SAFE_RECOVERY_CODES = frozenset((
     "restore_duplicate_key_conflict",
     "restore_foreign_key_violation",
     "restore_schema_dependency_missing",
+    "restore_transaction_unsupported",
+    "restore_dependency_conflict",
+    "restore_collation_version_mismatch",
+    "restore_data_constraint_rejected",
 ))
 SAFE_BACKUP_CODES = frozenset((
     "database_authentication_rejected",
@@ -223,6 +228,13 @@ def main() -> int:
         # Discord user ID, hostname, DSN, secret or exception.__str__ in logs.
         print("DEDICATED_RECOVERY_DRILL_FAILED: " + safe_failure_code(exc),
               file=sys.stderr)
+        if isinstance(exc, RecoveryDrillError) and exc.code in SAFE_RECOVERY_CODES:
+            # Both the failure category and TOC kind are constant allowlists.
+            # Never expose pg_restore stderr, object names or archive IDs.
+            kind = (exc.object_kind if exc.object_kind in RESTORE_OBJECT_KINDS
+                    else "unknown")
+            print("DEDICATED_RECOVERY_FAILED_TOC_KIND: " + kind,
+                  file=sys.stderr)
         return 2
     print(json.dumps(outcome,sort_keys=True))
     return 0

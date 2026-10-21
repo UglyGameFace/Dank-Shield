@@ -41,3 +41,14 @@ The pre-existing `tools.verify_source_backup_restoration.RecoveryDrillError` alr
 **Do not rerun the same failing workflow before this merged diagnostic hotfix**, since it will still suppress the actual recovery cause. On the next guarded owner-run, inspect its allowlisted `DEDICATED_RECOVERY_DRILL_FAILED:` code. If the classified code points to a PG17 extension, role or schema incompatibility, fix that exact problem without broadening source access or skipping the full restore/checksum gates. A diagnostic-only passing PR is NOT proof the encrypted backup or restore succeeded. The old source and Discloud are unchanged.
 
 The hotfix also classifies duplicate objects, unique conflicts, foreign-key errors and absent schema dependencies into safe fixed categories rather than printing raw pg_restore stderr. This remains diagnostic, not permission to ignore failed recovery or drop database objects blindly.
+
+
+## Follow-up failed restore and safe object diagnostics (2026-10-21)
+
+Owner-triggered [run 39545281507, job 119041952947](https://github.com/UglyGameFace/Dank-Shield/actions/runs/39545281507/job/119041952947) completed the candidate manifest read and encrypted backup generation, then failed when restoring SQL to the disposable PG17 target. The classified error was `pg_restore_sql_failed_unclassified`. Authentication/TOC checks passed, but **no full restore or critical row comparison passed**, and the encrypted archive upload was skipped.
+
+The source-side candidate reports PostgreSQL 17.11, with 75 public tables and managed Supabase objects in other schemas. Supabase documents that raw `pg_dump` can include platform-managed objects that are difficult to replay into another instance. This is a **possible explanation, not a diagnosed SQL statement**; do not exclude managed objects or relax the atomic restore gate based only on this hypothesis.
+
+The next safe diagnostic reports a whitelisted `DEDICATED_RECOVERY_FAILED_TOC_KIND` (for example, `TABLE DATA`, `SCHEMA` or `EXTENSION`) if `pg_restore` includes a recognizable TOC entry, and recognizes additional fixed SQL failure categories (transaction, permission, dependency, collation and data constraints). It must never print source/table/role names, raw SQL, SQL errors, secrets or TOC entry numbers. `unknown` remains an allowed diagnostic response, **not permission to assume a cause or mark restore complete**. The backup/restore isolation, verification and ciphertext-only artifact gate are unchanged.
+
+The next action is an owner-only rerun **after** this diagnostic PR is validated and merged. Fix the specific SQL restore incompatibility disclosed by the next failure category and TOC type, then rerun to prove a genuinely successful restore before any production cutover. Preserve this one active recovery task; do not start unrelated cleanups during it.

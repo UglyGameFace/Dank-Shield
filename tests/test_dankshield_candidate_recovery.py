@@ -123,6 +123,34 @@ class RecoveryContractTests(TestCase):
                 self.assertNotIn(secret, captured.getvalue())
                 self.assertNotIn("Traceback", captured.getvalue())
 
+    def test_failed_restore_reports_only_allowlisted_toc_type(self):
+        private = "private_schema.user_998811 and secret password"
+        examples = (
+            (RecoveryDrillError("pg_restore_sql_failed_unclassified",
+                                object_kind="TABLE DATA"), "TABLE DATA"),
+            (RecoveryDrillError("pg_restore_sql_failed_unclassified",
+                                object_kind=private), "unknown"),
+        )
+        for error, kind in examples:
+            with self.subTest(kind=kind):
+                with patch.object(subject, "execute", side_effect=error):
+                    captured = StringIO()
+                    with redirect_stderr(captured):
+                        self.assertEqual(subject.main(), 2)
+                    logged = captured.getvalue()
+                    self.assertIn("DEDICATED_RECOVERY_DRILL_FAILED: "
+                                  "pg_restore_sql_failed_unclassified", logged)
+                    self.assertIn("DEDICATED_RECOVERY_FAILED_TOC_KIND: "
+                                  + kind, logged)
+                    self.assertNotIn(private, logged)
+                    self.assertNotIn("Traceback", logged)
+        with patch.object(subject, "execute", side_effect=RuntimeError(private)):
+            captured = StringIO()
+            with redirect_stderr(captured):
+                self.assertEqual(subject.main(), 2)
+            self.assertNotIn("DEDICATED_RECOVERY_FAILED_TOC_KIND",
+                             captured.getvalue())
+
     def test_private_phase_diagnostics_are_code_owned_and_no_data(self):
         script=(ROOT/"tools/backup_restore_dankshield_candidate.py").read_text("utf8")
         for phase in (

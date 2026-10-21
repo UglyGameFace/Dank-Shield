@@ -27,10 +27,23 @@ EXPECTED_RESTORE_DB = "dank_source_recovery_drill"
 MAX_ENCRYPTED_BYTES = 2 * 1024 * 1024 * 1024
 SENSITIVE_OUTPUT = "Restore result intentionally redacted; do not publish database output."
 
+# Only constant pg_dump TOC object classes may leave the private runner. In
+# particular, never disclose restored schema, relation, function or role names.
+RESTORE_OBJECT_KINDS = frozenset((
+    "ACL", "BLOB", "COLLATION", "COMMENT", "CONSTRAINT", "DATABASE",
+    "DEFAULT ACL", "DOMAIN", "EVENT TRIGGER", "EXTENSION", "FK CONSTRAINT",
+    "FUNCTION", "INDEX", "MATERIALIZED VIEW", "POLICY", "PROCEDURE",
+    "PUBLICATION", "PUBLICATION TABLE", "RULE", "SCHEMA", "SEQUENCE",
+    "SEQUENCE SET", "TABLE", "TABLE DATA", "TRIGGER", "TYPE", "VIEW",
+))
+
 
 class RecoveryDrillError(RuntimeError):
-    def __init__(self, code: str):
+    def __init__(self, code: str, *, object_kind: str = "unknown"):
         self.code = code
+        self.object_kind = (
+            object_kind if object_kind in RESTORE_OBJECT_KINDS else "unknown"
+        )
         super().__init__(code)
 
 
@@ -77,6 +90,22 @@ def _check_archive(path: Path, expected_sha256: str, passphrase: str) -> dict[st
     }
 
 
+def _restore_failed_object_kind(buf: bytes) -> str:
+    """Whitelisted TOC object *type* only; never log names or archive entry IDs."""
+    msg = buf[:65536].decode("utf-8", "replace")
+    found = re.search(
+        r"pg_restore:\s*from TOC entry \d+;\s*\d+\s+\d+\s+([^\r\n]{1,128})",
+        msg, re.IGNORECASE,
+    )
+    if not found:
+        return "unknown"
+    descriptor = found.group(1).upper()
+    for kind in sorted(RESTORE_OBJECT_KINDS, key=len, reverse=True):
+        if descriptor == kind or descriptor.startswith(kind + " "):
+            return kind
+    return "unknown"
+
+
 def _restore_error_category(buf: bytes) -> str:
     """Categorize stdout/stderr privately. Never print raw pg_restore errors."""
     msg = buf[:65536].decode("utf-8", "replace").lower()
@@ -86,8 +115,21 @@ def _restore_error_category(buf: bytes) -> str:
         return "source_extension_not_available_on_plain_pg17"
     if "role" in msg and "does not exist" in msg:
         return "source_role_not_available_on_plain_pg17"
-    if "permission denied" in msg or "must be owner" in msg:
+    if any(s in msg for s in (
+        "permission denied", "must be owner", "must be superuser",
+        "only superusers", "must be member of role", "is not a member of role",
+    )):
         return "restore_target_permissions_incompatible"
+    if any(s in msg for s in (
+        "cannot run inside a transaction block",
+        "cannot be executed inside a transaction block",
+        "may not be called in a transaction block",
+    )):
+        return "restore_transaction_unsupported"
+    if "cannot drop" in msg and "depend on it" in msg:
+        return "restore_dependency_conflict"
+    if "collation version mismatch" in msg:
+        return "restore_collation_version_mismatch"
     if "unrecognized configuration parameter" in msg:
         return "source_configuration_not_supported_by_plain_pg17"
     # Return only fixed, audited categories. Avoid exposing role, schema,
@@ -98,6 +140,11 @@ def _restore_error_category(buf: bytes) -> str:
         return "restore_duplicate_key_conflict"
     if "violates foreign key constraint" in msg:
         return "restore_foreign_key_violation"
+    if any(s in msg for s in (
+        "violates not-null constraint", "violates check constraint",
+        "invalid input syntax for type", "value too long for type",
+    )):
+        return "restore_data_constraint_rejected"
     if "does not exist" in msg and any(term in msg for term in (
         "relation", "function", "type", "schema",
     )):
@@ -191,7 +238,11 @@ def _stream_restore(path: Path, passphrase: str, expected_sha256: str) -> int:
         if status:
             # A SQL error closes stdin early: classify the actual PostgreSQL
             # failure before treating the pipe closure as the cause.
-            raise RecoveryDrillError(_restore_error_category(bytes(stderr_sample)))
+            errors = bytes(stderr_sample)
+            raise RecoveryDrillError(
+                _restore_error_category(errors),
+                object_kind=_restore_failed_object_kind(errors),
+            )
         if input_closed_early:
             raise RecoveryDrillError("pg_restore_closed_input_early")
         if _sha256_file(path) != expected_sha256:
