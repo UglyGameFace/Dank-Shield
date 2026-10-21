@@ -174,8 +174,10 @@ def execute() -> dict[str, Any]:
     validate_owner_and_runner()
     dsn = os.environ["DANK_FRESH_DATABASE_URL"]
     password = os.environ["DANK_BACKUP_PASSPHRASE"]
+    print("CANDIDATE_RECOVERY_PHASE: reading_candidate_manifest", flush=True)
     before = candidate_manifest(dsn)
     out = archive_directory()
+    print("CANDIDATE_RECOVERY_PHASE: creating_encrypted_backup", flush=True)
     backup = create_backup(
         dsn=dsn, source_ref=REF,
         passphrase=password, output_dir=out,
@@ -185,10 +187,12 @@ def execute() -> dict[str, Any]:
     archive = Path(backup["encrypted_path"])
     if archive.parent != out or archive.suffix != ".dsbak":
         raise RuntimeError("archive outside fixed private folder")
+    print("CANDIDATE_RECOVERY_PHASE: authenticating_and_restoring_to_disposable", flush=True)
     _ = run_restore_drill(
         archive, expected_sha256=backup["encrypted_sha256"],
         passphrase=password,
     )
+    print("CANDIDATE_RECOVERY_PHASE: comparing_restored_records", flush=True)
     after = restored_manifest()
     if before != after:
         raise RuntimeError("disposable restore does not match dedicated candidate")
