@@ -107,8 +107,28 @@ def _restore_failed_object_kind(buf: bytes) -> str:
 
 
 def _restore_error_category(buf: bytes) -> str:
-    """Categorize stdout/stderr privately. Never print raw pg_restore errors."""
+    """Categorize stderr without treating all client errors as failed SQL."""
     msg = buf[:65536].decode("utf-8", "replace").lower()
+    # Client transport/archive errors have no pg_restore TOC entry. Previously
+    # the generic word "error" mislabeled these as rejected SQL statements.
+    if any(term in msg for term in (
+        "connection to server at", "could not connect to server",
+        "connection refused", "could not translate host name",
+        "server closed the connection unexpectedly",
+        "password authentication failed", "no password supplied",
+    )):
+        return "pg_restore_connection_failed"
+    if any(term in msg for term in (
+        "did not find magic string", "input file is too short",
+        "unsupported version", "could not read from input file",
+        "could not read header", "could not read from archive",
+        "unexpected end of file",
+    )):
+        return "pg_restore_archive_read_failed"
+    if any(term in msg for term in (
+        "unrecognized option", "invalid option", "too many command-line arguments",
+    )):
+        return "pg_restore_invocation_failed"
     if "extension" in msg and any(s in msg for s in (
         "not available", "could not open extension control file", "no installation script"
     )):
@@ -149,7 +169,7 @@ def _restore_error_category(buf: bytes) -> str:
         "relation", "function", "type", "schema",
     )):
         return "restore_schema_dependency_missing"
-    if "could not execute query" in msg or "error" in msg:
+    if "could not execute query" in msg or re.search(r"(?:^|\\n)\\s*error:\\s", msg):
         return "pg_restore_sql_failed_unclassified"
     return "pg_restore_process_failed_unclassified"
 
@@ -186,10 +206,33 @@ def _create_empty_restore_db() -> None:
         conn.execute("create database " + EXPECTED_RESTORE_DB)
 
 
+def _validate_container_restore_connection() -> None:
+    """Check the exact Docker/host-network path used by the restore client."""
+    command = [
+        "docker", "run", "--rm", "--network=host",
+        "-e", "PGHOST", "-e", "PGPORT", "-e", "PGUSER",
+        "-e", "PGPASSWORD", "-e", "PGDATABASE", "-e", "PGCONNECT_TIMEOUT",
+        "postgres:17", "psql", "--no-psqlrc", "--quiet", "--tuples-only",
+        "--no-align", "--dbname=" + EXPECTED_RESTORE_DB,
+        "--command=select 1",
+    ]
+    try:
+        result = subprocess.run(
+            command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, env=_safe_pg_env(), timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise RecoveryDrillError("restore_container_connection_unavailable") from None
+    if result.returncode != 0 or result.stdout.strip() != b"1":
+        raise RecoveryDrillError("restore_container_connection_unavailable")
+
+
 def _stream_restore(path: Path, passphrase: str, expected_sha256: str) -> int:
     """Use a disposable PG17 client and process. No plaintext archive files."""
     if _sha256_file(path) != expected_sha256:
         raise RecoveryDrillError("archive_changed_before_restore")
+    _validate_container_restore_connection()
     command = [
         "docker", "run", "--rm", "-i", "--network=host",
         "-e", "PGHOST", "-e", "PGPORT", "-e", "PGUSER",
