@@ -9,7 +9,9 @@ on:
       - "tests/test_dankshield_candidate_recovery.py"
       - "tests/test_source_backup_restore_drill.py"
       - "tests/test_candidate_restore_transport_integration.py"
+      - "tests/test_candidate_pg_cron_wrong_database.py"
       - "tools/verify_source_backup_restoration.py"
+      - "tools/prepare_disposable_pg_cron.py"
 
 permissions:
   contents: read
@@ -61,5 +63,11 @@ jobs:
           bash tools/setup_pg17_backup_clients.sh "$RUNNER_TEMP/pg17-client"
           echo "$RUNNER_TEMP/pg17-client" >> "$GITHUB_PATH"
           docker pull postgres:17 >/dev/null
+      - name: Reproduce pg_cron restore failure in unconfigured disposable database
+        run: python -m unittest discover -s tests -p test_candidate_pg_cron_wrong_database.py -v
+      - name: Align pg_cron only in disposable recovery container and disable schedules
+        env:
+          DANK_RECOVERY_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: python -m tools.prepare_disposable_pg_cron
       - name: Prove synthetic encrypted backup and isolated restore round-trip
         run: python -m unittest discover -s tests -p test_candidate_restore_transport_integration.py -v

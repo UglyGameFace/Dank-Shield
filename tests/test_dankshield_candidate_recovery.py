@@ -81,11 +81,17 @@ class RecoveryContractTests(TestCase):
             "retention-days: 7",
             "persist-credentials: false",
             "tools.backup_restore_dankshield_candidate",
+            "tools.prepare_disposable_pg_cron",
+            "DANK_RECOVERY_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}",
+            "Prevent recovered SQL content from reaching container logs",
         ):
             self.assertIn(fragment,wf)
         self.assertNotIn("DANK_SOURCE_DATABASE_URL",wf)
         self.assertNotIn("DISCLOUD_TOKEN",wf)
         self.assertNotIn("on:\n  schedule:",wf)
+        self.assertIn("test_candidate_pg_cron_wrong_database.py", ci)
+        self.assertIn("tools.prepare_disposable_pg_cron", ci)
+        self.assertIn("DANK_RECOVERY_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}", ci)
         self.assertNotIn("secrets.",ci)
         self.assertIn("pull_request:",ci)
 
