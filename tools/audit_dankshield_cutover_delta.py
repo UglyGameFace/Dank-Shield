@@ -202,7 +202,29 @@ def streamed_fingerprint(conn, table: str, pk: tuple[str, ...]) -> tuple[int, st
 
 
 def live_work_gates(source, target) -> dict[str, int]:
+    # Stored status alone is NOT enough to call an old VC verification active.
+    # vc_sessions._row_is_expired() treats revoke_at <= now() as expired.
+    # A historical status is classified as safely expired only if its token is
+    # also expired AND its corresponding ticket is closed. Missing token,
+    # missing ticket, or still-open ticket remains a hard migration blocker.
     q = """
+    with voice_activity as (
+      select s.token,
+             (s.revoke_at is not null and s.revoke_at <= now()
+              and exists (
+                select 1 from public.verification_tokens v
+                where v.token=s.token and v.expires_at <= now()
+              )
+              and exists (
+                select 1 from public.tickets t
+                where t.channel_id=s.ticket_channel_id::text
+                  and t.status in ('closed','deleted')
+              )) as historical_expired
+      from public.vc_verify_sessions s
+      where status in ('PENDING','STAFF_ACCEPTED','IN_PROGRESS','ACTIVE')
+         or status in ('OWNER_CONFIRMED','READY','IN_VC','STARTED',
+                       'TAKEN_OVER','RESTARTED')
+    )
     select
       (select count(*) from public.bot_operation_jobs
        where status in ('queued','running','waiting_rate_limit')),
@@ -210,8 +232,8 @@ def live_work_gates(source, target) -> dict[str, int]:
        where status in ('pending','processing')),
       (select count(*) from public.verification_tokens
        where expires_at > now() and not used),
-      (select count(*) from public.vc_verify_sessions
-       where status in ('PENDING','STAFF_ACCEPTED','IN_PROGRESS','ACTIVE')),
+      (select count(*) from voice_activity where not historical_expired),
+      (select count(*) from voice_activity where historical_expired),
       (select count(*) from public.dank_cinema_watch_sessions
        where last_seen_at > now()-interval '90 minutes'),
       (select count(*) from public.dank_community_sessions
@@ -221,6 +243,7 @@ def live_work_gates(source, target) -> dict[str, int]:
     values = source.execute(q).fetchone()
     names = ("active_operation_jobs", "active_dashboard_commands",
              "live_verification_tokens", "unresolved_voice_verifications",
+             "expired_historical_voice_sessions",
              "recent_cinema_sessions", "unclosed_community_sessions")
     counts = dict(zip(names, (int(x) for x in values)))
     commands, operations = target.execute(
@@ -279,7 +302,10 @@ def preview() -> dict[str, Any]:
                     gates = live_work_gates(src, dest)
                 except Exception:
                     raise AuditBlocker("live_work_gate_query_failed", "live_work_gates") from None
-    unresolved = [label for label, count in gates.items() if count > 0]
+    # Preserve historical session counts as evidence, not as unexpired work.
+    # This does NOT update source statuses, discard audit history, or approve cutover.
+    unresolved = [label for label, count in gates.items()
+                  if count > 0 and label != "expired_historical_voice_sessions"]
     return {
         "result": "READ_ONLY_CANDIDATE_DELTA_AUDIT",
         "matched_tables": len(compared) - len(mismatches),

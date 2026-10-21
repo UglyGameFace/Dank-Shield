@@ -102,3 +102,46 @@ def test_delta_diagnostics_refuse_untrusted_exception_contents():
     assert err.code == "unexpected_table_audit_failure"
     assert err.table == "unknown"
     assert "private-row-token" not in str(err)
+
+
+def test_expired_voice_history_requires_deadline_token_and_closed_ticket():
+    class Cursor:
+        def __init__(self, record): self.record = record
+        def fetchone(self): return self.record
+
+    class Source:
+        def execute(self, sql):
+            assert "voice_activity" in sql
+            assert "s.revoke_at <= now()" in sql
+            assert "v.expires_at <= now()" in sql
+            assert "v.token=s.token" in sql
+            assert "t.channel_id=s.ticket_channel_id::text" in sql
+            assert "t.status in ('closed','deleted')" in sql
+            assert "where not historical_expired" in sql
+            assert "where historical_expired" in sql
+            # Three expired statuses are tracked, not counted as active.
+            return Cursor((0,0,0,0,3,0,0))
+
+    class Target:
+        def execute(self, sql):
+            assert "public.bot_commands" in sql
+            assert "public.bot_operation_jobs" in sql
+            return Cursor((0,0))
+
+    counts = mod.live_work_gates(Source(),Target())
+    assert counts["expired_historical_voice_sessions"] == 3
+    assert counts["unresolved_voice_verifications"] == 0
+    assert counts["dedicated_operation_jobs"] == 0
+    # If a verification still has an open ticket, missing token or missing
+    # expiry, it remains in unresolved_voice_verifications by SQL design.
+
+
+def test_expired_history_is_reported_not_suppressed_or_automatically_closed():
+    text = PY.read_text(encoding="utf8")
+    assert 'label != "expired_historical_voice_sessions"' in text
+    assert '"expired_historical_voice_sessions"' in text
+    assert '"unresolved_voice_verifications"' in text
+    assert '"readiness": "BLOCKED"' in text
+    assert '"production_cutover_authorized": False' in text
+    assert "update public.vc_verify_sessions" not in text.lower()
+    assert "delete from public.vc_verify_sessions" not in text.lower()
