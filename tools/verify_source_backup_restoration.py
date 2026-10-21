@@ -295,6 +295,8 @@ def _stream_restore(path: Path, passphrase: str, expected_sha256: str) -> int:
         if proc.poll() is None:
             proc.kill()
         proc.wait(timeout=10)
+        if proc.stderr is not None:
+            proc.stderr.close()
 
 
 def _staging_candidate_inventory(conn: Any) -> dict[str, Any]:
