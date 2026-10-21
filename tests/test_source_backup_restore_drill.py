@@ -134,6 +134,34 @@ def test_restore_toc_kind_never_discloses_object_names(stderr, expected):
     assert "public" not in kind.lower()
 
 
+@pytest.mark.parametrize("stderr, category", [
+    (b'pg_restore: error: connection to server at localhost failed: Connection refused',
+     "pg_restore_connection_failed"),
+    (b'pg_restore: error: input file is too short',
+     "pg_restore_archive_read_failed"),
+    (b'pg_restore: error: unrecognized option --malformed',
+     "pg_restore_invocation_failed"),
+    (b'pg_restore: error: unexpected client-side failure',
+     "pg_restore_process_failed_unclassified"),
+    (b'pg_restore: error: could not execute query: ERROR: private SQL failed',
+     "pg_restore_sql_failed_unclassified"),
+])
+def test_restore_client_and_sql_failures_are_distinct(stderr, category):
+    assert recovery._restore_error_category(stderr) == category
+
+
+def test_restore_preflight_refuses_broken_docker_transport(monkeypatch):
+    class Failed:
+        returncode = 1
+        stdout = b""
+    monkeypatch.setenv("PGUSER", "supabase_admin")
+    monkeypatch.setenv("PGPASSWORD", "synthetic-test-only")
+    monkeypatch.setattr(recovery.subprocess, "run", lambda *a, **kw: Failed())
+    with pytest.raises(recovery.RecoveryDrillError,
+                       match="restore_container_connection_unavailable"):
+        recovery._validate_container_restore_connection()
+
+
 def test_restore_failure_reports_static_code_and_never_plaintext(monkeypatch, capsys):
     def deny():
         raise recovery.RecoveryDrillError("not_disposable_runner")
@@ -224,6 +252,7 @@ def test_sql_error_behind_broken_restore_pipe_is_classified_without_raw_output(
     monkeypatch.setenv("PGUSER", "supabase_admin")
     monkeypatch.setenv("PGPASSWORD", "postgres")
     monkeypatch.setattr(recovery, "_iter_verified_plaintext", synthetic_verified_archive)
+    monkeypatch.setattr(recovery, "_validate_container_restore_connection", lambda: None)
     monkeypatch.setattr(recovery.subprocess, "Popen", Runner())
     with pytest.raises(
         recovery.RecoveryDrillError,
