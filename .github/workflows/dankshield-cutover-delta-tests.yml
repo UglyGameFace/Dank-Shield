@@ -1,0 +1,26 @@
+name: Dedicated Supabase Final Delta Audit Tests
+
+on:
+  pull_request:
+    paths:
+      - "tools/audit_dankshield_cutover_delta.py"
+      - "tests/test_dankshield_cutover_delta_audit.py"
+      - ".github/workflows/dankshield-cutover-delta-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Read-only snapshot audit invariants
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install focused test dependencies
+        run: python -m pip install -q "pytest>=8,<10"
+      - name: Test read-only source and dedicated delta guards
+        run: python -m pytest -q --tb=short tests/test_dankshield_cutover_delta_audit.py
