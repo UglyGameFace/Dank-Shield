@@ -7,6 +7,7 @@ This audit locks the boundaries that already moved so future edits do not bring
 back duplicate startup patches or event-owned removal decisions.
 """
 
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,11 +27,16 @@ REQUIRED_EVENT_SAFETY_MARKERS = (
 
 REQUIRED_JOIN_REMOVAL_SAFETY_MARKERS = (
     "async def handle_join_verification_failure",
-    "await block_or_run_bot_removal(",
+    "async def block_or_run_bot_removal(",
     "try_recover_unverified_before_removal",
     "member_has_safe_verification_state",
+    "post_fresh_join_recovery_log(",
     "handle_join_verification_failure",
 )
+
+# Do not demand that watchdog exhaustion invokes a kick as an event-boundary
+# contract. After the October 21 DB outage, that call is a SECURITY REGRESSION.
+# The native owner must instead raise a review without dispatching removal.
 
 REQUIRED_FRESH_JOIN_RECOVERY_MARKERS = (
     "async def ensure_fresh_join_unverified_role",
@@ -76,6 +82,60 @@ def _forbid_markers(text: str, markers: tuple[str, ...], label: str, failures: l
             failures.append(f"{label} must not contain duplicate ownership marker: {marker}")
 
 
+def _require_review_only_watchdog(source: str, failures: list[str]) -> None:
+    """AST contract: the native watchdog failure handler never removes people.
+
+    A syntactically present marker or a comment mentioning the old function
+    cannot satisfy this audit. These checks operate on the actual handler AST.
+    """
+    try:
+        tree = ast.parse(source, filename=str(JOIN_REMOVAL_SAFETY))
+        handler = next(
+            node for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "handle_join_verification_failure"
+        )
+        shared = next(
+            node for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "block_or_run_bot_removal"
+        )
+    except (SyntaxError, StopIteration) as exc:
+        failures.append(f"Cannot audit native verification handler: {type(exc).__name__}")
+        return
+
+    # Explicitly forbid any direct/indirect action that can kick/ban on
+    # verification uncertainty, including a regression to old removal routing.
+    for node in ast.walk(handler):
+        if isinstance(node, ast.Call):
+            target = node.func
+            called = (
+                target.attr if isinstance(target, ast.Attribute)
+                else target.id if isinstance(target, ast.Name) else ""
+            )
+            if called in {"kick", "ban", "block_or_run_bot_removal",
+                          "_block_or_run_removal"}:
+                failures.append(
+                    f"Automatic verification failure handler calls forbidden {called}"
+                )
+
+    named_calls = {
+        node.func.id if isinstance(node.func, ast.Name)
+        else node.func.attr if isinstance(node.func, ast.Attribute) else ""
+        for node in ast.walk(handler) if isinstance(node, ast.Call)
+    }
+    if "post_fresh_join_recovery_log" not in named_calls:
+        failures.append("Native watchdog must produce a staff-review record")
+
+    # The shared last-mile guard must still block automatic verification
+    # removals. Literal markers are backed by unit behavior tests in CI.
+    shared_source = ast.get_source_segment(source, shared) or ""
+    for marker in ("not staff_confirmed", "is_fail_closed_verification_reason(reason)",
+                   "staff review required; no removal executed"):
+        if marker not in shared_source:
+            failures.append("Missing verification fail-closed final guard: " + marker)
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -88,6 +148,7 @@ def main() -> int:
     _forbid_markers(event_safety, FORBIDDEN_EVENT_SAFETY_MARKERS, "startup_guards/event_safety.py", failures)
 
     _require_markers(join_removal_safety, REQUIRED_JOIN_REMOVAL_SAFETY_MARKERS, "members_new/join_removal_safety.py", failures)
+    _require_review_only_watchdog(join_removal_safety, failures)
 
     _require_markers(fresh_join_recovery, REQUIRED_FRESH_JOIN_RECOVERY_MARKERS, "startup_guards/fresh_join_role_recovery.py", failures)
     _forbid_markers(fresh_join_recovery, FORBIDDEN_FRESH_JOIN_RECOVERY_MARKERS, "startup_guards/fresh_join_role_recovery.py", failures)
