@@ -53,6 +53,26 @@ MAX_ROW_BYTES = 1024 * 1024
 MAX_TABLE_BYTES = 150 * 1024 * 1024
 MAX_TOTAL_BYTES = 350 * 1024 * 1024
 
+SAFE_AUDIT_CODES = frozenset((
+    "unexpected_target_columns", "schema_column_contract_mismatch",
+    "source_null_unsafe", "pk_contract_mismatch",
+    "target_private_rls_missing", "target_public_role_access",
+    "target_backend_crud_missing", "row_byte_cap_exceeded",
+    "table_byte_cap_exceeded", "table_row_cap_exceeded",
+    "total_byte_budget_exceeded", "unexpected_table_audit_failure",
+    "live_work_gate_query_failed",
+))
+
+
+class AuditBlocker(RuntimeError):
+    """Never include raw PostgreSQL messages, values, IDs or SQL in audit logs."""
+    def __init__(self, code: str, table: str):
+        self.code = code if code in SAFE_AUDIT_CODES else "unexpected_table_audit_failure"
+        self.table = table if table in TABLES or table == "live_work_gates" else "unknown"
+        super().__init__(self.code)
+
+
+
 
 def connection_params(parsed: dict[str, str]) -> dict[str, Any]:
     return {
@@ -105,13 +125,13 @@ def table_contract(source, target, table: str) -> tuple[str, ...]:
     strict = ALLOW_STRICTER_TARGET_NOT_NULL.get(table, frozenset())
     original_names = {name for name, _, _ in original}
     if excluded and ({row[0] for row in dedicated} - original_names) != excluded:
-        raise RuntimeError(f"{table}: unexpected target-only columns")
+        raise AuditBlocker("unexpected_target_columns", table)
     normalized = tuple(
         (name, typ, True if name in strict else required)
         for name, typ, required in original
     )
     if not original or without_extra != normalized:
-        raise RuntimeError(f"{table}: source/destination schema differs")
+        raise AuditBlocker("schema_column_contract_mismatch", table)
     # Tightening NULL -> NOT NULL is only safe if source has no violating data.
     if strict and table == "staff_metrics":
         bad = source.execute(
@@ -120,27 +140,27 @@ def table_contract(source, target, table: str) -> tuple[str, ...]:
             "approvals is null or denials is null or avg_response_minutes is null"
         ).fetchone()[0]
         if int(bad):
-            raise RuntimeError("staff_metrics: unsafe source nulls")
+            raise AuditBlocker("source_null_unsafe", table)
     pk1, pk2 = primary_key(source, table), primary_key(target, table)
     if not pk1 or pk1 != pk2:
-        raise RuntimeError(f"{table}: source/destination primary key differs")
+        raise AuditBlocker("pk_contract_mismatch", table)
     if not target.execute(
         "select relrowsecurity from pg_class where oid=%s::regclass",
         (f"public.{table}",),
     ).fetchone()[0]:
-        raise RuntimeError(f"{table}: dedicated private RLS absent")
+        raise AuditBlocker("target_private_rls_missing", table)
     for op in ("SELECT", "INSERT", "UPDATE", "DELETE"):
         for role in ("anon", "authenticated"):
             if target.execute(
                 "select has_table_privilege(%s,%s,%s)",
                 (role, f"public.{table}", op),
             ).fetchone()[0]:
-                raise RuntimeError(f"{table}: private data role exposure")
+                raise AuditBlocker("target_public_role_access", table)
         if not target.execute(
             "select has_table_privilege('service_role',%s,%s)",
             (f"public.{table}", op),
         ).fetchone()[0]:
-            raise RuntimeError(f"{table}: backend CRUD unavailable")
+            raise AuditBlocker("target_backend_crud_missing", table)
     return pk1
 
 
@@ -168,13 +188,13 @@ def streamed_fingerprint(conn, table: str, pk: tuple[str, ...]) -> tuple[int, st
             for (payload,) in chunk:
                 raw = payload.encode("utf-8")
                 if len(raw) > MAX_ROW_BYTES:
-                    raise RuntimeError(f"{table}: individual row too large")
+                    raise AuditBlocker("row_byte_cap_exceeded", table)
                 size += len(raw)
                 if size > MAX_TABLE_BYTES:
-                    raise RuntimeError(f"{table}: table exceeds audit byte cap")
+                    raise AuditBlocker("table_byte_cap_exceeded", table)
                 count += 1
                 if count > 100_000:
-                    raise RuntimeError(f"{table}: row count exceeds audit cap")
+                    raise AuditBlocker("table_row_cap_exceeded", table)
                 # Framing prevents concatenation ambiguity.
                 digest.update(len(raw).to_bytes(4, "big"))
                 digest.update(raw)
@@ -241,16 +261,24 @@ def preview() -> dict[str, Any]:
                 src.execute("set transaction isolation level repeatable read, read only")
                 dest.execute("set transaction isolation level repeatable read, read only")
                 for table in TABLES:
-                    keys = table_contract(src, dest, table)
-                    a_count, a_hash, a_bytes = streamed_fingerprint(src, table, keys)
-                    b_count, b_hash, b_bytes = streamed_fingerprint(dest, table, keys)
-                    total_bytes += a_bytes + b_bytes
-                    if total_bytes > 2 * MAX_TOTAL_BYTES:
-                        raise RuntimeError("total audit payload exceeds allowed budget")
-                    compared.append(table)
-                    if (a_count, a_hash) != (b_count, b_hash):
-                        mismatches.append(table)
-                gates = live_work_gates(src, dest)
+                    try:
+                        keys = table_contract(src, dest, table)
+                        a_count, a_hash, a_bytes = streamed_fingerprint(src, table, keys)
+                        b_count, b_hash, b_bytes = streamed_fingerprint(dest, table, keys)
+                        total_bytes += a_bytes + b_bytes
+                        if total_bytes > 2 * MAX_TOTAL_BYTES:
+                            raise AuditBlocker("total_byte_budget_exceeded", table)
+                        compared.append(table)
+                        if (a_count, a_hash) != (b_count, b_hash):
+                            mismatches.append(table)
+                    except AuditBlocker:
+                        raise
+                    except Exception:
+                        raise AuditBlocker("unexpected_table_audit_failure", table) from None
+                try:
+                    gates = live_work_gates(src, dest)
+                except Exception:
+                    raise AuditBlocker("live_work_gate_query_failed", "live_work_gates") from None
     unresolved = [label for label, count in gates.items() if count > 0]
     return {
         "result": "READ_ONLY_CANDIDATE_DELTA_AUDIT",
@@ -274,9 +302,14 @@ def main() -> int:
     try:
         report = preview()
     except Exception as exc:
-        # Never emit original data, exception arguments, DB credentials or SQL.
-        print("READ_ONLY_CUTOVER_AUDIT_FAILED: " + type(exc).__name__,
-              file=sys.stderr)
+        # Only fixed code-owned table names and enum classifications may leave
+        # the runner. Never print raw SQL, cursor errors, names or row values.
+        reason = (
+            exc.code + " table=" + exc.table
+            if isinstance(exc, AuditBlocker)
+            else type(exc).__name__
+        )
+        print("READ_ONLY_CUTOVER_AUDIT_FAILED: " + reason, file=sys.stderr)
         return 2
     print(json.dumps(report, sort_keys=True))
     return 0
