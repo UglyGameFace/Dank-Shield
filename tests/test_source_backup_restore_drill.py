@@ -113,7 +113,7 @@ def test_redacted_restore_error_categories_do_not_echo_sql(text, category):
 
 @pytest.mark.parametrize("stderr, expected", [
     (
-        b'pg_restore: from TOC entry 421; 1259 10029 TABLE DATA public.secret_user postgres\\n'
+        b'pg_restore: from TOC entry 421; 1259 10029 TABLE DATA public.secret_user postgres\n'
         b'pg_restore: error: could not execute query: ERROR: unknown private information',
         "TABLE DATA",
     ),
