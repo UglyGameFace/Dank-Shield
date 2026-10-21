@@ -133,3 +133,25 @@ class RecoveryContractTests(TestCase):
         ):
             self.assertIn("CANDIDATE_RECOVERY_PHASE: " + phase, script)
         self.assertNotIn("print(str(exc))", script)
+
+    def test_pg_restore_failures_are_grouped_without_private_stderr(self):
+        from tools.verify_source_backup_restoration import _restore_error_category
+        cases=(
+            (b'pg_restore: error: could not execute query: ERROR: relation "users" already exists',
+             "restore_object_conflicts_with_bootstrap"),
+            (b'pg_restore: error: duplicate key value violates unique constraint "private-id"',
+             "restore_duplicate_key_conflict"),
+            (b'pg_restore: error: violates foreign key constraint "secret" ',
+             "restore_foreign_key_violation"),
+            (b'pg_restore: error: function private_function() does not exist',
+             "restore_schema_dependency_missing"),
+            (b'pg_restore: error: unexpected reason with private-contents',
+             "pg_restore_sql_failed_unclassified"),
+        )
+        for raw,expected in cases:
+            with self.subTest(reason=expected):
+                code=_restore_error_category(raw)
+                self.assertEqual(code,expected)
+                self.assertEqual(subject.safe_failure_code(
+                    RecoveryDrillError(code)),expected)
+                self.assertNotIn("private-",code)
