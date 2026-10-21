@@ -509,12 +509,12 @@ def member_has_safe_verification_state(member: discord.Member) -> bool:
 
 
 async def handle_join_verification_failure(member: discord.Member, reason: Any) -> None:
-    """Native owner for join verification fail-closed removal handling.
+    """Native owner for uncertain join verification state (staff review only).
 
-    events.py may still invoke or be patched into this while that large module is
-    split apart. This service owns the decision and log shape: recover safe
-    verification state first; otherwise route any removal through
-    block_or_run_bot_removal so public-server fresh joins are protected.
+    events.py may still invoke or be patched into this while that large module
+    is split apart. A cache or database outage must never turn a formerly
+    verified member into an automatic kick. This handler does not remove or
+    change any member's roles and instead posts a staff review.
     """
     try:
         if not isinstance(member, discord.Member) or getattr(member, "bot", False):
