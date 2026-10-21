@@ -94,7 +94,7 @@ def _restore_failed_object_kind(buf: bytes) -> str:
     """Whitelisted TOC object *type* only; never log names or archive entry IDs."""
     msg = buf[:65536].decode("utf-8", "replace")
     found = re.search(
-        r"pg_restore:\\s*from TOC entry \\d+;\\s*\\d+\\s+\\d+\\s+([^\\r\\n]{1,128})",
+        r"pg_restore:\s*from TOC entry \d+;\s*\d+\s+\d+\s+([^\r\n]{1,128})",
         msg, re.IGNORECASE,
     )
     if not found:
