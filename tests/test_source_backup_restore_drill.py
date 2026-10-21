@@ -94,11 +94,44 @@ def test_encrypted_checksum_and_authentication_must_pass_before_restore(
      "source_configuration_not_supported_by_plain_pg17"),
     (b"ERROR: connection closed for other reason",
      "pg_restore_sql_failed_unclassified"),
+    (b'ERROR: must be superuser to create event trigger on private_schema',
+     "restore_target_permissions_incompatible"),
+    (b'ERROR: CREATE SUBSCRIPTION cannot run inside a transaction block',
+     "restore_transaction_unsupported"),
+    (b'ERROR: cannot drop table internal because other objects depend on it',
+     "restore_dependency_conflict"),
+    (b'ERROR: collation version mismatch in private locale',
+     "restore_collation_version_mismatch"),
+    (b'ERROR: invalid input syntax for type private_domain: secret',
+     "restore_data_constraint_rejected"),
 ])
 def test_redacted_restore_error_categories_do_not_echo_sql(text, category):
     assert recovery._restore_error_category(text) == category
     assert "supabase_admin" not in recovery._restore_error_category(text)
     assert "pg_net" not in recovery._restore_error_category(text)
+
+
+@pytest.mark.parametrize("stderr, expected", [
+    (
+        b'pg_restore: from TOC entry 421; 1259 10029 TABLE DATA public.secret_user postgres\\n'
+        b'pg_restore: error: could not execute query: ERROR: unknown private information',
+        "TABLE DATA",
+    ),
+    (
+        b'pg_restore: from TOC entry 44; 2615 9134 SCHEMA secret_schema postgres',
+        "SCHEMA",
+    ),
+    (
+        b'pg_restore: from TOC entry 44; 9999 9134 SUPER_SECRET secret_schema',
+        "unknown",
+    ),
+    (b'pg_restore: error: permission denied for secret_schema', "unknown"),
+])
+def test_restore_toc_kind_never_discloses_object_names(stderr, expected):
+    kind = recovery._restore_failed_object_kind(stderr)
+    assert kind == expected
+    assert "secret" not in kind.lower()
+    assert "public" not in kind.lower()
 
 
 def test_restore_failure_reports_static_code_and_never_plaintext(monkeypatch, capsys):
