@@ -5,4 +5,3 @@
 Retain unresolved 2 PENDING and 1 STAFF_ACCEPTED voice verification states. Candidate offline and source live. Never switch production before successful independent restore, final delta, reversible canary, explicit owner approval. Nightly retirement must clean merged temporary branches only.
 
 ---
-
