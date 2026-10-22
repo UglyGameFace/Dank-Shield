@@ -2605,8 +2605,17 @@ jobs:
               const c = (await github.rest.repos.compareCommits({
                 owner, repo, base: 'main', head: name
               })).data;
-              if (c.ahead_by !== 0 || c.behind_by < 1 || c.status !== 'behind' ||
-                  c.head_commit?.sha !== item.commit.sha) return null;
+              if (c.ahead_by !== 0 || c.behind_by < 1 || c.status !== 'behind') {
+                return null;
+              }
+              // CompareCommits returns base_commit and merge_base_commit;
+              // it does NOT supply a head_commit object. Re-read the real
+              // branch head, rather than silently rejecting every candidate.
+              const tipAfterCompare = (await github.rest.repos.getBranch({
+                owner, repo, branch: name
+              })).data;
+              if (tipAfterCompare.protected ||
+                  tipAfterCompare.commit.sha !== item.commit.sha) return null;
               return { name, sha: item.commit.sha };
             }
             const eligible = [], skipped = [];
