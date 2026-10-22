@@ -1086,6 +1086,13 @@ async def _start_workers_once() -> None:
     except Exception as e:
         print("⚠️ Verification reminder worker failed:", repr(e))
 
+    try:
+        from .somewhere_420_runtime import start_somewhere_420_worker
+        start_somewhere_420_worker(bot)
+        print("🌍 Opt-in 4:20 delivery worker started (indexed due queue)")
+    except Exception as e:
+        print("⚠️ 4:20 delivery worker failed:", type(e).__name__)
+
 
 async def _startup_background_runner() -> None:
     try:

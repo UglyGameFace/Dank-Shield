@@ -634,6 +634,26 @@ async def open_toke_command(
     upload: Optional[discord.Attachment] = None,
     voice: Optional[discord.VoiceChannel] = None,
 ) -> None:
+    """Public Discord-visible entry. Preserve the existing command parameters."""
+    await _open_toke_command_impl(
+        interaction, message=message, media=media, upload=upload, voice=voice,
+    )
+
+
+async def open_toke_quick_command(interaction: discord.Interaction, message: str) -> None:
+    """Internal UI-only text card; all canonical /toke guards still apply."""
+    await _open_toke_command_impl(interaction, message=message, quick_text_only=True)
+
+
+async def _open_toke_command_impl(
+    interaction: discord.Interaction,
+    message: Optional[str] = None,
+    media: Optional[str] = None,
+    upload: Optional[discord.Attachment] = None,
+    voice: Optional[discord.VoiceChannel] = None,
+    *,
+    quick_text_only: bool = False,
+) -> None:
     guild = interaction.guild
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
     if guild is None or member is None:
@@ -701,7 +721,7 @@ async def open_toke_command(
         return await _reply(interaction, f"Wait {_format_wait(remaining)} for {label}.")
 
     clean_message = _clean_member_message(message)
-    if upload is None and not clean_media:
+    if upload is None and not clean_media and not quick_text_only:
         if not bool(getattr(interaction.client.intents, "message_content", False)):
             return await _reply(interaction, "Dank Shield needs the Discord Message Content intent to capture normal GIFs. Use /toke upload or media instead.")
         source = interaction.channel
@@ -744,6 +764,8 @@ async def open_toke_command(
     )
 
 
+
+
 __all__ = [
     "SESH_PING_ROLE_KEY",
     "STONER_ROLE_KEY",
@@ -765,4 +787,5 @@ __all__ = [
     "open_member_community_pings",
     "open_toke_preset_setup",
     "open_toke_command",
+    "open_toke_quick_command",
 ]

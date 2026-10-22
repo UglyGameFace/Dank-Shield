@@ -1,7 +1,7 @@
 # Active task: It's 4:20 Somewhere (FORCE SWITCH, 2026-10-22)
 
 ## Active outcome
-Implement GitHub issue #687, a fun mobile-friendly worldwide 4:20 community experience with optional /toke handoff, safe manual sharing and no automatic unsolicited pings. One implementation task only; do not mix further branch retirement, migrations, or unrelated cleanup.
+Build version 2 of issue #687 after the owner merged PR #688: richer world clock, quick and join-active canonical /toke integration, opt-in server daily celebrations with quiet hours and notification-role controls, and personal city/timezone/DM preferences. This is a continuation of the SAME active 4:20 task; branch-retirement remains suspended.
 
 ## Authority and execution path
 - Current main at branch creation: `830e961eab0e2e348d4b606402aea4bfa455f691` (merged PR #686).
@@ -21,6 +21,16 @@ Implement GitHub issue #687, a fun mobile-friendly worldwide 4:20 community expe
 - Pending CI, focused tests, production-path integration canary, clean diff check. Do not claim deployed or complete before evidence.
 - Test permission errors, concurrency and config-write failures, 4:20 DST edges, and /toke integration.
 - Release through one reviewed PR; evaluate CI after each commit.
+
+## After first-release merge: version 2 work (2026-10-22)
+- PR #688 merged into main at `85896fdeafbe725acc076816c1402b064df90d12`; original 4:20 launch implementation is on main.
+- Current feature branch `feat/somewhere-420-celebrations-20261022` begins exactly at that merged SHA.
+- New `somewhere_420_schedules.py`, `somewhere_420_runtime.py`, and SQL migrations introduce service-role-only schedule storage and atomic at-most-once daily delivery claims. Worker starts only from the existing guarded background-workers path; claims due records without scanning guilds.
+- `commands_ext/public_somewhere_420_settings.py` provides Search-Safe server channel selection, explicit opt-in timezone/quiet/role settings, and personal favorite/DM options. `public_somewhere_420.py` adds next-wave focus, quick-to-text-only Toke, existing-sesh lookup, and panel links.
+- Public /toke parameters must stay unchanged; a private wrapper calls the same existing /toke handler's guard path.
+- **Migration not applied by PR:** only enable daily schedules after correct Supabase deployment, RLS/claims validation, focused CI, full regression checks and real Android Discord canary. Do not claim 10k concurrent punctual sends without load test.
+- Dedicated `.github/workflows/somewhere-420-ci.yml` validates SQL and focused Python; full CI still applies.
+- Status: work in feature branch, not yet merged/deployed. Confirm CI and schema safety before merge.
 
 ## Suspended task (preserve for resumption; NOT active)
 **Guarded retirement of remaining Dank Shield branches**, previously active in `ACTIVE_TASK.md`.

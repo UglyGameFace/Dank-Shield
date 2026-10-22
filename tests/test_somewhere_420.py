@@ -70,12 +70,17 @@ def test_420_board_and_navigation_are_discoverable_and_no_ping_by_default() -> N
     shared = ui.build_420_embed(now=at("2026-07-01T20:20:30Z"), public=True)
     assert "Run `/toke`" in str(shared.fields[-1].value)
     assert "shared snapshot" in str(shared.footer.text)
-    assert len(embed.fields) <= 4
-    assert len(str(embed.fields[1].value)) <= 1024
+    assert len(embed.fields) <= 5
+    assert all(len(str(f.value)) <= 1024 for f in embed.fields)
+    favorite = ui.build_420_embed(now=at("2026-07-01T20:20:30Z"), favorite_city="Tokyo")
+    assert "⭐ Your favorite: Tokyo" in [f.name for f in favorite.fields]
     view = ui.Somewhere420View(owner_id=123)
     labels = {item.label for item in view.children if isinstance(item, discord.ui.Button)}
-    assert labels == {"Refresh World Clock", "Switch AM / PM", "Start /toke", "Share Here (staff)"}
-    assert len(view.children) <= 5
+    assert labels == {
+        "Refresh World Clock", "Switch AM / PM", "Start /toke", "Share Here (staff)",
+        "Quick Text-Only Sesh", "Join Active Sesh", "My 4:20 Preferences", "Daily Server Settings",
+    }
+    assert len(view.children) <= 25
 
 
 def test_420_public_share_cooldown_uses_durable_claim_and_rejects_bad_state() -> None:

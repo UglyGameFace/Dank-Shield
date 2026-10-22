@@ -15,7 +15,7 @@ SHARE_STATE_KEY = "somewhere_420_share_v1"
 SHARE_COOLDOWN_SECONDS = 60 * 60
 
 
-def build_420_embed(*, now: datetime | None = None, hour: int = 16, public: bool = False) -> discord.Embed:
+def build_420_embed(*, now: datetime | None = None, hour: int = 16, public: bool = False, favorite_city: str = "") -> discord.Embed:
     current = now or datetime.now(timezone.utc)
     places = world_420(current, hour=hour)
     live = live_cities(places)
@@ -40,6 +40,21 @@ def build_420_embed(*, now: datetime | None = None, hour: int = 16, public: bool
         inline=False,
     )
     waves = next_wave(places)
+    if waves:
+        moment, cities = waves[0]
+        embed.add_field(
+            name="🚀 Next destination",
+            value=f"**{' • '.join(cities[:3])}**\n<t:{int(moment.timestamp())}:R> • <t:{int(moment.timestamp())}:t> your time",
+            inline=False,
+        )
+    if favorite_city:
+        target = next((p for p in places if p.city == favorite_city), None)
+        if target is not None:
+            embed.add_field(
+                name=f"⭐ Your favorite: {favorite_city}",
+                value=f"Local time: **{target.local_time.strftime('%I:%M %p')}** • Next 4:20: <t:{int(target.next_utc.timestamp())}:R>",
+                inline=False,
+            )
     embed.add_field(
         name="🌐 Next waves around the world",
         value=(
@@ -82,9 +97,22 @@ async def _feedback(interaction: discord.Interaction, message: str) -> None:
 
 
 async def _show_board(interaction: discord.Interaction, *, hour: int, owner_id: int) -> None:
+    # Acknowledge before optional preference DB reads; Discord allows ~3 sec.
+    if not interaction.response.is_done():
+        if interaction.message is not None:
+            await interaction.response.defer()
+        else:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+    favorite = ""
+    try:
+        from stoney_verify.somewhere_420_schedules import get_schedule
+        saved = await get_schedule("member", owner_id)
+        favorite = str((saved or {}).get("favorite_city") or "")
+    except (OSError, RuntimeError, ValueError):
+        pass  # Global world clock is usable even before optional schedule migration.
     kwargs = {
         "content": None,
-        "embed": build_420_embed(hour=hour),
+        "embed": build_420_embed(hour=hour, favorite_city=favorite),
         "view": Somewhere420View(owner_id=owner_id, hour=hour),
         "allowed_mentions": discord.AllowedMentions.none(),
     }
@@ -220,7 +248,52 @@ class Somewhere420View(discord.ui.View):
         # and opens the existing media composer. No second session/send owner.
         await open_toke_command(interaction, message="It's 4:20 somewhere! 🌍💨")
 
-    @discord.ui.button(label="Share Here (staff)", emoji="📣", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Quick Text-Only Sesh", emoji="⚡", style=discord.ButtonStyle.success, row=2)
+    async def quick(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        from .public_toke import open_toke_quick_command
+        await open_toke_quick_command(interaction, message="It's 4:20 somewhere! 🌎💨")
+
+    @discord.ui.button(label="Join Active Sesh", emoji="🔊", style=discord.ButtonStyle.primary, row=2)
+    async def join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await _feedback(interaction, "Open a server to look for an active sesh.")
+        from stoney_verify import toke_sessions
+        try:
+            candidates = await toke_sessions.all_active(guild.id)
+        except (ValueError, OSError):
+            return await _feedback(interaction, "Active sessions are temporarily unavailable.")
+        visible = []
+        for session in candidates:
+            if not session.get("active", False):
+                continue
+            channel = guild.get_channel(int(session.get("channel_id") or 0))
+            if not isinstance(channel, discord.TextChannel):
+                continue
+            if not channel.permissions_for(interaction.user).view_channel:
+                continue
+            visible.append(session)
+        if not visible:
+            return await _feedback(interaction, "No active sesh is visible to you. Use Start /toke or Quick Sesh to call one.")
+        current = max(visible, key=lambda item: float(item.get("created_at") or 0))
+        channel_id = int(current.get("channel_id") or 0)
+        message_id = int(current.get("message_id") or 0)
+        return await _feedback(
+            interaction, f"💨 A sesh is already active! Join its Cheers and Who's Coming controls:\n"
+            f"https://discord.com/channels/{guild.id}/{channel_id}/{message_id}"
+        )
+
+    @discord.ui.button(label="My 4:20 Preferences", emoji="⭐", style=discord.ButtonStyle.secondary, row=3)
+    async def personal(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        from .public_somewhere_420_settings import open_personal_420
+        await open_personal_420(interaction)
+
+    @discord.ui.button(label="Daily Server Settings", emoji="⚙️", style=discord.ButtonStyle.secondary, row=3)
+    async def staff(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        from .public_somewhere_420_settings import open_staff_420
+        await open_staff_420(interaction)
+
+    @discord.ui.button(label="Share Here (staff)", emoji="📣", style=discord.ButtonStyle.secondary, row=4)
     async def share(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await publish_420_board(interaction, hour=self.hour)
 
