@@ -57,3 +57,45 @@ are unchanged. Permission errors changing candidate triggers are NOT bypassed.
 The failure alone does not prove which code-owned RuntimeError occurred.
 Review focused CI and only retry Stage after a real writer freeze, independent
 off-host backup, and explicit owner approval. No Stage retry is automatic.
+
+## Oct 21 owner Stage failure #39712064823: replay triggers generated target-only history
+
+Direct [job 119605457970](https://github.com/UglyGameFace/Dank-Shield/actions/runs/39712064823/job/119605457970) inspection established
+`OFFLINE_DELTA_CATCHUP_STOPPED: candidate_only_rows_need_review`.
+All stage confirmation fields were accepted. **No completed candidate parity or production cutover is established.**
+The rollback left the candidate row counts unchanged and its catalog triggers enabled.
+
+An independent **read-only** comparison AFTER the aborted transaction found
+zero persistent candidate-only PKs in all 34 audited tables. It found at least
+one source-only `member_joins`, one source-only `member_events` and
+two source-only `activity_feed_events`. The pinned OFFLINE candidate's
+actual PostgreSQL trigger catalog and function definitions show that INSERTs
+into `member_joins` and `member_events` create NEW activity-feed records
+(using independent UUIDs). Those synthetic candidate-only history rows arise
+**within the stage transaction**. Thus they can trigger the later
+`candidate_only_rows_need_review` check even when the clean candidate
+has no extra records beforehand. This is the evidence-supported root cause;
+the old job's error did not include the offending table name, so the
+specific stopping table is not independently logged.
+
+The fix extends strict per-table USER-trigger handling beyond
+`guild_configs`. Only explicit, catalog-verified source-to-feed
+trigger names, ticket compatibility/version hooks and timestamp normalization
+hooks are suspended when the corresponding offline table has rows to copy,
+with all changes and trigger restoration performed in the **same single
+candidate transaction**. The `activity_feed_events` normalization trigger
+is handled as well so historical unequal `meta` and `metadata` remain
+byte-for-byte preserved. Internal/foreign-key triggers are never disabled.
+Any unexpected catalog name/state fails closed; a failure atomically restores
+all trigger states and all candidate data. Source PostgreSQL remains
+read-only and pinned.
+
+Crucially, this DOES NOT relax the original `candidate_only_rows_need_review`
+blocker. If candidate-only rows truly exist, Stage still refuses to erase
+them. Future blocked runs now print a safe allowlisted table name
+(`table=activity_feed_events` etc.), never a row, key, member ID or secret.
+
+Keep Discloud/source writers stopped for owner-authorized Stage. This
+change requires focused and full CI success and merge before another run.
+A successful Stage is followed by a separate frozen-writer 34-table
+streaming hash audit. Neither step itself deploys or switches production.
