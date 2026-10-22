@@ -15,7 +15,7 @@ SHARE_STATE_KEY = "somewhere_420_share_v1"
 SHARE_COOLDOWN_SECONDS = 60 * 60
 
 
-def build_420_embed(*, now: datetime | None = None, hour: int = 16) -> discord.Embed:
+def build_420_embed(*, now: datetime | None = None, hour: int = 16, public: bool = False) -> discord.Embed:
     current = now or datetime.now(timezone.utc)
     places = world_420(current, hour=hour)
     live = live_cities(places)
@@ -57,13 +57,19 @@ def build_420_embed(*, now: datetime | None = None, hour: int = 16) -> discord.E
     embed.add_field(
         name="💨 Take it into /toke",
         value=(
+            "Run `/toke` or open **/dank home → Community & Engagement → "
+            "It's 4:20 Somewhere** for the interactive **Start /toke** button."
+            if public else
             "Hit **Start /toke** to use the server's existing opt-in sesh "
             "roles, cooldowns, GIF composer, attendance and voice controls. "
             "The world clock never starts or pings a session on its own."
         ),
         inline=False,
     )
-    embed.set_footer(text="Dank Shield • live on refresh • no automatic pings • times adjust for DST")
+    embed.set_footer(text=(
+        "Dank Shield • shared snapshot • no automatic pings • DST-aware"
+        if public else "Dank Shield • live on refresh • no automatic pings • DST-aware"
+    ))
     return embed
 
 
@@ -163,7 +169,7 @@ async def publish_420_board(interaction: discord.Interaction, *, hour: int) -> N
 
     try:
         post = await channel.send(
-            embed=build_420_embed(hour=hour),
+            embed=build_420_embed(hour=hour, public=True),
             allowed_mentions=discord.AllowedMentions.none(),
         )
     except (discord.HTTPException, OSError) as exc:
