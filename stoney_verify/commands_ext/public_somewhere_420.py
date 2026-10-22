@@ -44,7 +44,7 @@ def build_420_embed(*, now: datetime | None = None, hour: int = 16, public: bool
         moment, cities = waves[0]
         embed.add_field(
             name="🚀 Next destination",
-            value=f"**{' • '.join(cities[:3])}**\\n<t:{int(moment.timestamp())}:R> • <t:{int(moment.timestamp())}:t> your time",
+            value=f"**{' • '.join(cities[:3])}**\n<t:{int(moment.timestamp())}:R> • <t:{int(moment.timestamp())}:t> your time",
             inline=False,
         )
     if favorite_city:
