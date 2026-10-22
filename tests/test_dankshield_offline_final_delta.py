@@ -93,3 +93,63 @@ def test_script_is_unwired_from_bot_startup():
         code in path.read_text(encoding="utf-8")
         for code in ("bot.add_listener", "on_ready", "os.environ['SUPABASE_URL'] =")
     )
+
+
+def test_guild_config_catchup_disables_only_two_known_candidate_triggers():
+    class Candidate:
+        state = "O"
+        def __init__(self):
+            self.actions = []
+
+        def execute(self, query):
+            sql = str(query.as_string()) if hasattr(query, "as_string") else str(query)
+            if sql.lower().startswith("alter table"):
+                self.actions.append(sql)
+                self.state = "D" if "DISABLE" in sql else "O"
+            return self
+
+        def fetchall(self):
+            return [(name, self.state) for name in catchup._CONFIG_COPY_TRIGGERS]
+
+    db = Candidate()
+    catchup._candidate_config_trigger_guard(db, enable=False)
+    assert db.state == "D"
+    catchup._candidate_config_trigger_guard(db, enable=True)
+    assert db.state == "O"
+    assert len(db.actions) == 4
+    assert all("public.guild_configs" in x for x in db.actions)
+    assert all("trigger" in x.lower() and "ALL" not in x for x in db.actions)
+    assert not any("DISABLE TRIGGER USER" in x for x in db.actions)
+
+
+def test_config_trigger_guard_fails_closed_on_unapproved_triggers():
+    class Unexpected:
+        def execute(self, _query): return self
+        def fetchall(self):
+            return [("unknown_trigger", "O")]
+
+    with pytest.raises(RuntimeError, match="unapproved_candidate_config_triggers"):
+        catchup._candidate_config_trigger_guard(Unexpected(), enable=False)
+
+
+def test_stage_error_output_is_allowlisted_and_never_exposes_db_secrets(
+    monkeypatch, capsys,
+):
+    monkeypatch.setenv("DANK_DELTA_CATCHUP_MODE", "preview")
+    monkeypatch.setattr(
+        catchup, "reconcile", lambda mode: (_ for _ in ()).throw(
+            RuntimeError("password=secret private-guild-user")
+        )
+    )
+    assert catchup.main() == 2
+    out = capsys.readouterr()
+    assert "unexpected_catchup_failure" in out.err
+    assert "secret" not in out.err and "private-guild" not in out.err
+
+    monkeypatch.setattr(
+        catchup, "reconcile", lambda mode: (_ for _ in ()).throw(
+            RuntimeError("offline_catchup_row_mismatch")
+        )
+    )
+    assert catchup.main() == 2
+    assert "offline_catchup_row_mismatch" in capsys.readouterr().err
