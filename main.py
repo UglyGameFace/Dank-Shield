@@ -1,5 +1,17 @@
 from __future__ import annotations
 
+# TOP-OF-FILE cutover maintenance gate: if configured, never import the
+# ordinary Discord bot, workers, process-health startup hooks or app.py.
+# Any nonempty (even invalid) opt-in blocks the production startup path.
+# This must precede all stoney_verify.startup_guards / bot imports.
+import os as _early_os
+
+if __name__ == "__main__" and _early_os.environ.get(
+    "DANK_OFFLINE_CANDIDATE_REST_PROBE_ONLY", ""
+):
+    from stoney_verify.offline_candidate_rest_probe import run_guarded as _offline_probe
+    raise SystemExit(_offline_probe())
+
 # Process health is an explicit boot owner. Install crash/signal/exit visibility
 # before loading the rest of the application, without intercepting Python imports.
 from stoney_verify.startup_guards.process_health import (
