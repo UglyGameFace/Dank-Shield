@@ -84,7 +84,8 @@ def test_420_public_share_cooldown_uses_durable_claim_and_rejects_bad_state() ->
     assert ui.share_cooldown_remaining({"last_public_at": now - 3600}, now_timestamp=now) == 0
     assert ui.share_cooldown_remaining({"last_public_at": now - 100}, now_timestamp=now) == 3500
     assert ui.share_cooldown_remaining({"last_public_at": now + 10}, now_timestamp=now) == 3600
-    assert ui.share_cooldown_remaining({"last_public_at": "bad"}, now_timestamp=now) == 3600
+    assert ui.share_cooldown_remaining({"last_public_at": now + 86400}, now_timestamp=now) == 0
+    assert ui.share_cooldown_remaining({"last_public_at": "bad"}, now_timestamp=now) == 0
 
 
 def test_420_share_denies_non_managers_before_touching_config(monkeypatch) -> None:
