@@ -101,7 +101,7 @@ def test_guild_config_catchup_disables_only_two_known_candidate_triggers():
         def __init__(self):
             self.actions = []
 
-        def execute(self, query):
+        def execute(self, query, *args):
             sql = str(query.as_string()) if hasattr(query, "as_string") else str(query)
             if sql.lower().startswith("alter table"):
                 self.actions.append(sql)
@@ -153,3 +153,76 @@ def test_stage_error_output_is_allowlisted_and_never_exposes_db_secrets(
     )
     assert catchup.main() == 2
     assert "offline_catchup_row_mismatch" in capsys.readouterr().err
+
+
+def test_historical_member_events_must_not_generate_new_feed_records():
+    """The actual candidate has AFTER INSERT triggers on both source-only tables."""
+    assert catchup._CANDIDATE_COPY_TRIGGERS["member_joins"] == (
+        "member_joins_to_activity_feed_ai",
+    )
+    assert catchup._CANDIDATE_COPY_TRIGGERS["member_events"] == (
+        "member_events_to_activity_feed_ai",
+    )
+    assert catchup._CANDIDATE_COPY_TRIGGERS["activity_feed_events"] == (
+        "trg_sync_activity_feed_meta_columns",
+    )
+    assert "tickets" in catchup._CANDIDATE_COPY_TRIGGERS
+
+
+def test_replay_trigger_guards_enforce_explicit_candidate_trigger_list():
+    class Candidate:
+        def __init__(self, names):
+            self.names = names
+            self.state = "O"
+            self.actions = []
+        def execute(self, query, *args):
+            statement = str(query.as_string()) if hasattr(query, "as_string") else str(query)
+            if statement.lower().startswith("alter table"):
+                self.actions.append(statement)
+                self.state = "D" if "DISABLE" in statement else "O"
+            return self
+        def fetchall(self):
+            return [(name, self.state) for name in self.names]
+
+    names = catchup._CANDIDATE_COPY_TRIGGERS["member_joins"]
+    db = Candidate(names)
+    catchup._candidate_copy_trigger_guard(db, "member_joins", enable=False)
+    assert db.state == "D" and len(db.actions) == 1
+    catchup._candidate_copy_trigger_guard(db, "member_joins", enable=True)
+    assert db.state == "O" and len(db.actions) == 2
+    assert all("public.\"member_joins\"" in x for x in db.actions)
+    assert all("TRIGGER USER" not in x and "TRIGGER ALL" not in x for x in db.actions)
+    assert all("member_joins_to_activity_feed_ai" in x for x in db.actions)
+
+    with pytest.raises(RuntimeError, match="unapproved_candidate_copy_triggers"):
+        catchup._candidate_copy_trigger_guard(Candidate(("unexpected_trigger",)),
+                                             "member_events", enable=False)
+    with pytest.raises(RuntimeError, match="unapproved_candidate_copy_triggers"):
+        catchup._candidate_copy_trigger_guard(Candidate(()), "guild_secrets",
+                                             enable=False)
+
+
+def test_candidate_only_failures_report_approved_table_but_never_identifier(
+    monkeypatch, capsys,
+):
+    monkeypatch.setenv("DANK_DELTA_CATCHUP_MODE", "preview")
+    monkeypatch.setattr(
+        catchup, "reconcile",
+        lambda _: (_ for _ in ()).throw(
+            catchup.StageBlocker("candidate_only_rows_need_review", "activity_feed_events")
+        ),
+    )
+    assert catchup.main() == 2
+    result = capsys.readouterr().err
+    assert "candidate_only_rows_need_review table=activity_feed_events" in result
+    assert "password" not in result
+
+
+def test_transactional_stage_toggles_only_approved_candidate_user_triggers():
+    code = inspect.getsource(catchup.reconcile)
+    assert "_candidate_copy_trigger_guard(target, table, enable=False)" in code
+    assert "_candidate_copy_trigger_guard(target, table, enable=True)" in code
+    assert "if writes and table in _CANDIDATE_COPY_TRIGGERS:" in code
+    assert "if difference[\"target_only\"] and mode == \"stage\":" in code
+    assert "final_offline_snapshot_not_equal" in code
+    assert "recheck_original_snapshot(source_params, source_snapshots, keys)" in code
