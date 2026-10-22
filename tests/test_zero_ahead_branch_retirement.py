@@ -51,7 +51,10 @@ def test_must_prove_ancestry_and_no_live_pr_again_at_delete_time():
     assert "c.ahead_by !== 0" in job
     assert "c.behind_by < 1" in job
     assert "c.status !== 'behind'" in job
-    assert "c.head_commit?.sha !== item.commit.sha" in job
+    assert "c.head_commit?.sha" not in job
+    assert "tipAfterCompare.commit.sha !== item.commit.sha" in job
+    assert "tipAfterCompare.protected" in job
+    assert job.count("await github.rest.repos.getBranch({") >= 3
     assert "if (mainNow !== mainSha)" in job
     assert "current.sha !== branch.sha" in job
     assert "stillOpen.data.some(" in job
