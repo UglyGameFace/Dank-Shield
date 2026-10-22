@@ -1,0 +1,308 @@
+"""Controlled OFFLINE catch-up for the 34 approved Dank Shield durable tables.
+
+The ORIGINAL Supabase project remains read-only from this process, including
+during an owner-confirmed stage. No automatic deployment, Discord actions,
+source deletes, source trigger changes or production credential rotation.
+
+Mode=preview is the default and runs read-only against BOTH projects.
+Mode=stage is a manual, owner-only, offline-only candidate transaction.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+from typing import Any
+
+from stoney_verify.source_pg_backup import validate_source_dsn
+from tools import audit_dankshield_cutover_delta as audit
+
+CONFIRM = "RECONCILE_OFFLINE_DANKSHIELD_ONLY"
+FROZEN = "I_PAUSED_ALL_SOURCE_WRITERS"
+MAX_CHANGED_ROWS = 5000
+MAX_CHANGED_BYTES = 40 * 1024 * 1024
+
+
+def validate_mode(mode: str, confirmation: str, frozen: str, receipt: str) -> str:
+    if mode not in {"preview", "stage"}:
+        raise ValueError("invalid_delta_mode")
+    if mode == "stage":
+        if confirmation != CONFIRM:
+            raise ValueError("missing_offline_only_confirmation")
+        if frozen != FROZEN:
+            raise ValueError("source_writers_not_acknowledged_frozen")
+        if len(receipt.strip()) < 4 or len(receipt) > 160:
+            raise ValueError("offline_backup_receipt_required")
+    return mode
+
+
+def connection_params(parsed: dict[str, str], *, readonly: bool) -> dict[str, Any]:
+    params = audit.connection_params(parsed)
+    params["application_name"] = "dankshield_offline_final_delta_catchup"
+    if not readonly:
+        # NEVER pass the original DSN here. Caller independently validates
+        # that the destination hostname and project reference are pinned.
+        params["options"] = (
+            "-c statement_timeout=180000 -c lock_timeout=4000 "
+            "-c idle_in_transaction_session_timeout=300000"
+        )
+    return params
+
+
+def approved_dsns() -> tuple[dict[str, str], dict[str, str]]:
+    # The audit validator fails if either value identifies the wrong project,
+    # including an accidental original==destination collision.
+    return audit.validate_readonly_sql_and_inputs()
+
+
+def row_query(table: str, primary_key: tuple[str, ...], *, excluded: frozenset[str]):
+    from psycopg import sql
+
+    if table not in audit.TABLES or not primary_key:
+        raise ValueError("unapproved_table")
+    key_columns = sql.SQL(", ").join(
+        sql.SQL("x.{}::text").format(sql.Identifier(k)) for k in primary_key
+    )
+    order_columns = sql.SQL(", ").join(
+        sql.SQL("x.{}").format(sql.Identifier(k)) for k in primary_key
+    )
+    expr = sql.SQL("to_jsonb(x)")
+    for column in sorted(excluded):
+        expr = sql.SQL("({} - {})").format(expr, sql.Literal(column))
+    return sql.SQL(
+        "select {}, {}::text from public.{} x order by {}"
+    ).format(key_columns, expr, sql.Identifier(table), order_columns)
+
+
+def load_rows(
+    conn: Any, table: str, primary_key: tuple[str, ...], *, retain_payload: bool
+) -> dict[tuple[str, ...], tuple[str, str | None]]:
+    excluded = audit.ALLOW_DESTINATION_ONLY_COLUMNS.get(table, frozenset())
+    rows: dict[tuple[str, ...], tuple[str, str | None]] = {}
+    size = 0
+    with conn.cursor(name="catchup_" + table) as cur:
+        cur.itersize = 100
+        cur.execute(row_query(table, primary_key, excluded=excluded))
+        while True:
+            page = cur.fetchmany(100)
+            if not page:
+                break
+            for record in page:
+                pk_values = tuple(str(v) for v in record[:-1])
+                raw = str(record[-1])
+                raw_size = len(raw.encode("utf-8"))
+                size += raw_size
+                if (raw_size > audit.MAX_ROW_BYTES
+                        or size > audit.MAX_TABLE_BYTES
+                        or len(rows) >= 100_000):
+                    raise ValueError("bounded_table_limit_exceeded")
+                if pk_values in rows:
+                    raise ValueError("duplicate_primary_key")
+                digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+                rows[pk_values] = (digest, raw if retain_payload else None)
+    return rows
+
+
+def describe_delta(
+    source: dict[tuple[str, ...], tuple[str, str | None]],
+    target: dict[tuple[str, ...], tuple[str, str | None]],
+) -> dict[str, Any]:
+    source_keys, target_keys = set(source), set(target)
+    source_only = source_keys - target_keys
+    target_only = target_keys - source_keys
+    changed = {
+        key for key in source_keys & target_keys
+        if source[key][0] != target[key][0]
+    }
+    return {
+        "source_only": len(source_only),
+        "target_only": len(target_only),
+        "changed": len(changed),
+        "write_keys": source_only | changed,
+    }
+
+
+def upsert_query(table: str, columns: tuple[str, ...], primary_key: tuple[str, ...]):
+    from psycopg import sql
+
+    if table not in audit.TABLES or not primary_key or not columns:
+        raise ValueError("unapproved_table")
+    if not set(primary_key).issubset(set(columns)):
+        raise ValueError("primary_key_not_in_column_contract")
+    update_columns = [name for name in columns if name not in primary_key]
+    if not update_columns:
+        raise ValueError("cannot_update_pk_only_table")
+    fields = sql.SQL(", ").join(map(sql.Identifier, columns))
+    selected = sql.SQL(", ").join(
+        sql.SQL("r.{}").format(sql.Identifier(c)) for c in columns
+    )
+    conflict = sql.SQL(", ").join(map(sql.Identifier, primary_key))
+    setters = sql.SQL(", ").join(
+        sql.SQL("{} = excluded.{}").format(sql.Identifier(c), sql.Identifier(c))
+        for c in update_columns
+    )
+    return sql.SQL(
+        "insert into public.{} ({}) "
+        "select {} from jsonb_populate_record(null::public.{}, %s::jsonb) r "
+        "on conflict ({}) do update set {}"
+    ).format(
+        sql.Identifier(table), fields, selected, sql.Identifier(table),
+        conflict, setters,
+    )
+
+
+def recheck_original_snapshot(
+    source_params: dict[str, Any],
+    first: dict[str, dict[tuple[str, ...], tuple[str, str | None]]],
+    keys: dict[str, tuple[str, ...]],
+) -> None:
+    """Independently sample a NEW read-only snapshot before candidate commit."""
+    import psycopg
+
+    with psycopg.connect(**source_params) as source:
+        with source.transaction():
+            source.execute("set transaction isolation level repeatable read, read only")
+            source.execute("set local timezone to 'UTC'")
+            for table in audit.TABLES:
+                latest = load_rows(source, table, keys[table], retain_payload=False)
+                original = first[table]
+                if len(latest) != len(original) or any(
+                    key not in original or item[0] != original[key][0]
+                    for key, item in latest.items()
+                ):
+                    raise RuntimeError("source_changed_during_offline_catchup")
+
+
+def reconcile(mode: str) -> dict[str, Any]:
+    import psycopg
+    from psycopg import sql
+
+    src_dsn, dst_dsn = approved_dsns()
+    source_params = connection_params(src_dsn, readonly=True)
+    dest_params = connection_params(dst_dsn, readonly=False)
+    summaries: list[dict[str, Any]] = []
+    stage_count = 0
+    changed_bytes = 0
+    with psycopg.connect(**source_params) as source:
+        with psycopg.connect(**dest_params) as target:
+            with source.transaction(), target.transaction():
+                source.execute("set transaction isolation level repeatable read, read only")
+                source.execute("set local timezone to 'UTC'")
+                target.execute("set transaction isolation level repeatable read, " +
+                               ("read write" if mode == "stage" else "read only"))
+                target.execute("set local timezone to 'UTC'")
+                if mode == "stage":
+                    # Candidate ONLY. Lock all approved tables to avoid an
+                    # accidental conflicting candidate writer during staging.
+                    target.execute(sql.SQL(
+                        "lock table {} in share row exclusive mode"
+                    ).format(sql.SQL(", ").join(
+                        sql.SQL("public.{}").format(sql.Identifier(t))
+                        for t in audit.TABLES
+                    )))
+                keys: dict[str, tuple[str, ...]] = {}
+                source_snapshots: dict[str, dict] = {}
+                for table in audit.TABLES:
+                    pk = audit.table_contract(source, target, table)
+                    keys[table] = pk
+                    source_columns = tuple(
+                        name for name, _, _ in audit.column_contract(source, table)
+                    )
+                    # Generated columns or identity-always semantics should
+                    # require a reviewed table-specific migration instead.
+                    if source.execute(
+                        "select count(*) from pg_attribute where "
+                        "attrelid=%s::regclass and attnum>0 and not attisdropped "
+                        "and attgenerated<>''",
+                        (f"public.{table}",),
+                    ).fetchone()[0]:
+                        raise RuntimeError("unapproved_generated_column")
+                    src = load_rows(
+                        source, table, pk, retain_payload=mode == "stage"
+                    )
+                    dst = load_rows(target, table, pk, retain_payload=False)
+                    source_snapshots[table] = src
+                    difference = describe_delta(src, dst)
+                    if difference["target_only"] and mode == "stage":
+                        # Never silently delete candidate evidence.
+                        raise RuntimeError("candidate_only_rows_need_review")
+                    writes = difference["write_keys"]
+                    stage_count += len(writes)
+                    if mode == "stage" and stage_count > MAX_CHANGED_ROWS:
+                        raise RuntimeError("changed_row_budget_exceeded")
+                    if mode == "stage":
+                        query = upsert_query(table, source_columns, pk)
+                        for key in sorted(writes):
+                            payload = src[key][1]
+                            if not isinstance(payload, str):
+                                raise RuntimeError("source_payload_missing")
+                            changed_bytes += len(payload.encode("utf-8"))
+                            if changed_bytes > MAX_CHANGED_BYTES:
+                                raise RuntimeError("changed_byte_budget_exceeded")
+                            target.execute(query, (payload,))
+                        # Triggers, type conversion, constraints and the
+                        # destination write itself must preserve EXACT rows.
+                        revised = load_rows(target, table, pk, retain_payload=False)
+                        if describe_delta(src, revised)["source_only"] or (
+                            describe_delta(src, revised)["target_only"]
+                            or describe_delta(src, revised)["changed"]
+                        ):
+                            raise RuntimeError("offline_catchup_row_mismatch")
+                    summaries.append({
+                        "table": table,
+                        "source_rows": len(src),
+                        "candidate_rows_before": len(dst),
+                        "source_only": difference["source_only"],
+                        "candidate_only": difference["target_only"],
+                        "changed": difference["changed"],
+                    })
+                if mode == "stage":
+                    # A later table's insert/update trigger could have modified
+                    # an earlier table after its individual check. Require final
+                    # exact content parity across ALL 34 tables before commit.
+                    for table in audit.TABLES:
+                        final_rows = load_rows(
+                            target, table, keys[table], retain_payload=False
+                        )
+                        summary = describe_delta(source_snapshots[table], final_rows)
+                        if any(summary[k] for k in ("source_only", "target_only", "changed")):
+                            raise RuntimeError("final_offline_snapshot_not_equal")
+                    # All SOURCE sessions in this script are READ ONLY.
+                    # A new source snapshot must still match the first one.
+                    recheck_original_snapshot(source_params, source_snapshots, keys)
+
+    changed = [s for s in summaries if s["source_only"] or
+               s["candidate_only"] or s["changed"]]
+    return {
+        "status": "OFFLINE_ONLY_CATCHUP_COMMITTED" if mode == "stage" else "PREVIEW_ONLY",
+        "audited_tables": len(summaries),
+        "drifted_tables": len(changed),
+        "changes": changed,
+        "candidate_rows_inserted_or_updated": stage_count if mode == "stage" else 0,
+        "original_source_writes": 0,
+        "discord_or_discloud_mutations": 0,
+        "production_cutover_authorized": False,
+        "requires_final_frozen_writer_audit": True,
+    }
+
+
+def main() -> int:
+    try:
+        mode = validate_mode(
+            os.getenv("DANK_DELTA_CATCHUP_MODE", "preview").strip(),
+            os.getenv("DANK_DELTA_CATCHUP_CONFIRM", "").strip(),
+            os.getenv("DANK_SOURCE_WRITERS_FROZEN", "").strip(),
+            os.getenv("DANK_CANDIDATE_BACKUP_RECEIPT", "").strip(),
+        )
+        report = reconcile(mode)
+    except Exception as exc:
+        # Never disclose SQL, source IDs, usernames, passwords, DSNs or row data.
+        print("OFFLINE_DELTA_CATCHUP_STOPPED: " + type(exc).__name__, file=sys.stderr)
+        return 2
+    print(json.dumps(report, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
