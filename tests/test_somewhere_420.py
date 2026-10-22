@@ -111,3 +111,93 @@ def test_420_clock_stays_on_demand_without_unapproved_scheduler() -> None:
     # startup guard or registered slash-command root.
     assert not hasattr(ui, "register_somewhere_420_worker")
     assert ui.SHARE_COOLDOWN_SECONDS >= 3600
+
+
+def test_420_staff_share_is_one_post_per_guild_cooldown(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from stoney_verify import guild_config
+
+    class FakeMember:
+        pass
+
+    class FakeChannel:
+        def __init__(self):
+            self.mention = "#sesh"
+            self.sent = []
+
+        def permissions_for(self, member):
+            return SimpleNamespace(view_channel=True, send_messages=True, embed_links=True)
+
+        async def send(self, **kwargs):
+            self.sent.append(kwargs)
+            return SimpleNamespace(jump_url="https://discord.com/channels/111/222/333")
+
+    class FakeResponse:
+        def __init__(self):
+            self.deferred = False
+
+        def is_done(self):
+            return self.deferred
+
+        async def defer(self, **kwargs):
+            self.deferred = True
+
+    class FakeFollowup:
+        def __init__(self):
+            self.responses = []
+
+        async def send(self, **kwargs):
+            self.responses.append(kwargs)
+
+    monkeypatch.setattr(ui.discord, "Member", FakeMember)
+    monkeypatch.setattr(ui.discord, "TextChannel", FakeChannel)
+    monkeypatch.setattr(ui, "interaction_has_manage_guild_authority", lambda _: True)
+
+    state = {}
+    claims = []
+
+    async def load(gid, *, refresh=False):
+        return dict(state, source="guild_configs")
+
+    async def cas(gid, key, *, expected, value, source):
+        claims.append((expected, value, source))
+        if state.get(key) != expected:
+            return False, {}
+        state[key] = value
+        return True, state.copy()
+
+    monkeypatch.setattr(guild_config, "get_guild_config", load)
+    monkeypatch.setattr(guild_config, "compare_and_swap_guild_config_key", cas)
+    channel = FakeChannel()
+    guild = SimpleNamespace(id=1234, me=FakeMember())
+
+    async def fire():
+        interaction = SimpleNamespace(
+            guild=guild, channel=channel, response=FakeResponse(), followup=FakeFollowup(),
+        )
+        await ui.publish_420_board(interaction, hour=16)
+        return interaction.followup.responses
+
+    first = asyncio.run(fire())
+    second = asyncio.run(fire())
+    assert len(channel.sent) == 1
+    assert "No roles were pinged" in first[0]["content"]
+    assert "Try again" in second[0]["content"]
+    assert channel.sent[0]["allowed_mentions"].roles is False
+    assert len(claims) == 1
+
+
+def test_420_button_hands_off_to_authoritative_toke(monkeypatch) -> None:
+    from stoney_verify.commands_ext import public_toke
+
+    recorded = []
+
+    async def canonical(interaction, *, message):
+        recorded.append((interaction, message))
+
+    monkeypatch.setattr(public_toke, "open_toke_command", canonical)
+    view = ui.Somewhere420View(owner_id=42)
+    button = next(item for item in view.children if getattr(item, "label", None) == "Start /toke")
+    interaction = object()
+    asyncio.run(button.callback(interaction))
+    assert recorded == [(interaction, "It's 4:20 somewhere! 🌍💨")]
