@@ -621,6 +621,30 @@ async def publish_toke_from_draft(
     )
 
 
+@app_commands.describe(
+    message="Optional short message to include with the sesh ping.",
+    media="Optional image/GIF URL (Discord CDN, direct media, Tenor/Giphy share link).",
+    upload="Optional PNG/JPG/GIF/WEBP upload to place on the Toke card.",
+    voice="Optional voice room for this session; otherwise use your current/default VC.",
+)
+async def open_toke_command(
+    interaction: discord.Interaction,
+    message: Optional[str] = None,
+    media: Optional[str] = None,
+    upload: Optional[discord.Attachment] = None,
+    voice: Optional[discord.VoiceChannel] = None,
+) -> None:
+    """Public Discord-visible entry. Preserve the existing command parameters."""
+    await _open_toke_command_impl(
+        interaction, message=message, media=media, upload=upload, voice=voice,
+    )
+
+
+async def open_toke_quick_command(interaction: discord.Interaction, message: str) -> None:
+    """Internal UI-only text card; all canonical /toke guards still apply."""
+    await _open_toke_command_impl(interaction, message=message, quick_text_only=True)
+
+
 async def _open_toke_command_impl(
     interaction: discord.Interaction,
     message: Optional[str] = None,
@@ -740,28 +764,6 @@ async def _open_toke_command_impl(
     )
 
 
-@app_commands.describe(
-    message="Optional short message to include with the sesh ping.",
-    media="Optional image/GIF URL (Discord CDN, direct media, Tenor/Giphy share link).",
-    upload="Optional PNG/JPG/GIF/WEBP upload to place on the Toke card.",
-    voice="Optional voice room for this session; otherwise use your current/default VC.",
-)
-async def open_toke_command(
-    interaction: discord.Interaction,
-    message: Optional[str] = None,
-    media: Optional[str] = None,
-    upload: Optional[discord.Attachment] = None,
-    voice: Optional[discord.VoiceChannel] = None,
-) -> None:
-    """Public Discord-visible entry. Preserve the existing command parameters."""
-    await _open_toke_command_impl(
-        interaction, message=message, media=media, upload=upload, voice=voice,
-    )
-
-
-async def open_toke_quick_command(interaction: discord.Interaction, message: str) -> None:
-    """Internal UI-only text card; all canonical /toke guards still apply."""
-    await _open_toke_command_impl(interaction, message=message, quick_text_only=True)
 
 
 __all__ = [
