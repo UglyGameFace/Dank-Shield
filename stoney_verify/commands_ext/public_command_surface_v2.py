@@ -199,6 +199,7 @@ _FEATURE_ROUTE_KEYS = frozenset(
         "share_router",
         "share_downloads",
         "toke_settings",
+        "somewhere_420",
         "community_hub",
         "movie_night",
         "tickets",
@@ -397,6 +398,10 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
     if key == "toke_settings":
         from stoney_verify.toke_live_ui import open_toke_settings
         return await open_toke_settings(interaction, replace=True)
+
+    if key == "somewhere_420":
+        from .public_somewhere_420 import open_somewhere_420
+        return await open_somewhere_420(interaction)
 
     if key == "community_hub":
         from .public_community_hub import open_community_hub
