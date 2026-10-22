@@ -97,6 +97,12 @@ async def _feedback(interaction: discord.Interaction, message: str) -> None:
 
 
 async def _show_board(interaction: discord.Interaction, *, hour: int, owner_id: int) -> None:
+    # Acknowledge before optional preference DB reads; Discord allows ~3 sec.
+    if not interaction.response.is_done():
+        if interaction.message is not None:
+            await interaction.response.defer()
+        else:
+            await interaction.response.defer(ephemeral=True, thinking=True)
     favorite = ""
     try:
         from stoney_verify.somewhere_420_schedules import get_schedule
