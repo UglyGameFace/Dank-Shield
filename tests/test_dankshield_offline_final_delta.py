@@ -117,14 +117,14 @@ def test_guild_config_catchup_disables_only_two_known_candidate_triggers():
     catchup._candidate_config_trigger_guard(db, enable=True)
     assert db.state == "O"
     assert len(db.actions) == 4
-    assert all("public.guild_configs" in x for x in db.actions)
+    assert all('public."guild_configs"' in x for x in db.actions)
     assert all("trigger" in x.lower() and "ALL" not in x for x in db.actions)
     assert not any("DISABLE TRIGGER USER" in x for x in db.actions)
 
 
 def test_config_trigger_guard_fails_closed_on_unapproved_triggers():
     class Unexpected:
-        def execute(self, _query): return self
+        def execute(self, _query, *args): return self
         def fetchall(self):
             return [("unknown_trigger", "O")]
 
