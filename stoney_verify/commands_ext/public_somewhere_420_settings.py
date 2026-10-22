@@ -67,7 +67,7 @@ def _settings_embed(kind: str, data: dict | None) -> discord.Embed:
         )
         embed.add_field(
             name="Quiet hours",
-            value=f"{saved.get('quiet_start', 22):02}:00 to {saved.get('quiet_end', 8):02}:00 (24h local). Same start/end disables quiet hours.",
+            value=f"{int(saved.get('quiet_start', 22)):02}:00 to {int(saved.get('quiet_end', 8)):02}:00 (24h local). Same start/end disables quiet hours.",
         )
         embed.set_footer(text="A daily event never automatically starts /toke. Only staff enable posting.")
     else:
@@ -89,6 +89,11 @@ class _OwnedView(discord.ui.View):
 
 
 async def open_personal_420(interaction: discord.Interaction) -> None:
+    if not interaction.response.is_done():
+        if interaction.message is not None:
+            await interaction.response.defer()
+        else:
+            await interaction.response.defer(ephemeral=True, thinking=True)
     try:
         saved = await get_schedule("member", interaction.user.id)
     except Somewhere420StorageUnavailable:
@@ -173,6 +178,11 @@ def _can_post(guild: discord.Guild, channel: discord.TextChannel) -> bool:
 async def open_staff_420(interaction: discord.Interaction) -> None:
     if not interaction_has_manage_guild_authority(interaction) or interaction.guild is None:
         return await _reply(interaction, "Only server owners and managers can change scheduled announcements.")
+    if not interaction.response.is_done():
+        if interaction.message is not None:
+            await interaction.response.defer()
+        else:
+            await interaction.response.defer(ephemeral=True, thinking=True)
     try:
         data = await get_schedule("guild", interaction.guild.id)
     except Somewhere420StorageUnavailable:
@@ -236,6 +246,8 @@ class Staff420View(_OwnedView):
         async def chosen(pick: discord.Interaction, channel: discord.TextChannel) -> None:
             if not interaction_has_manage_guild_authority(pick) or not _can_post(guild, channel):
                 return await _reply(pick, "Dank Shield lacks the required channel permissions.")
+            if not pick.response.is_done():
+                await pick.response.defer()
             try:
                 old = await get_schedule("guild", guild.id) or {}
                 saved = await save_schedule(
