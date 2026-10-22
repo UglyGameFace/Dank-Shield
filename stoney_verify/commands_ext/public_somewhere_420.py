@@ -244,8 +244,8 @@ class Somewhere420View(discord.ui.View):
 
     @discord.ui.button(label="Quick Text-Only Sesh", emoji="⚡", style=discord.ButtonStyle.success, row=2)
     async def quick(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        from .public_toke import open_toke_command
-        await open_toke_command(interaction, message="It's 4:20 somewhere! 🌎💨", quick_text_only=True)
+        from .public_toke import open_toke_quick_command
+        await open_toke_quick_command(interaction, message="It's 4:20 somewhere! 🌎💨")
 
     @discord.ui.button(label="Join Active Sesh", emoji="🔊", style=discord.ButtonStyle.primary, row=2)
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
