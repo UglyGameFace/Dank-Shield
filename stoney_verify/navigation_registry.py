@@ -247,6 +247,14 @@ FEATURES: tuple[NavigationFeature, ...] = (
         True,
     ),
     NavigationFeature(
+        "somewhere_420",
+        "It's 4:20 Somewhere",
+        "🌎",
+        "community",
+        "Explore live 4:20 world clocks, share a safe celebration, or start a /toke sesh.",
+        ("420", "4:20", "four twenty", "somewhere", "world clock", "worldwide 420", "420 time"),
+    ),
+    NavigationFeature(
         "community_hub",
         "Community Hub",
         "🎮",
@@ -406,6 +414,7 @@ _FEATURE_BY_KEY = {item.key: item for item in FEATURES}
 # Curated entry points updated when a public feature ships. These are registry
 # references, not a second router or permission mechanism.
 RECENT_FEATURE_KEYS: tuple[str, ...] = (
+    "somewhere_420",
     "voice_safety",
     "share_downloads",
     "toke_settings",
