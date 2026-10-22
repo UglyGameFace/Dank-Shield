@@ -112,7 +112,8 @@ def share_cooldown_remaining(state: Any, *, now_timestamp: int) -> int:
         return 0  # Invalid legacy state is replaced by the next atomic claim.
     if last <= 0 or last > now_timestamp + 5 * 60:
         return 0  # Clearly corrupt future timestamps must not lock a guild forever.
-    age = now_timestamp - last
+    # A small forward clock skew must never lengthen the one-hour limit.
+    age = max(0, now_timestamp - last)
     return max(0, SHARE_COOLDOWN_SECONDS - age)
 
 
