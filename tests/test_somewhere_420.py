@@ -67,6 +67,9 @@ def test_420_board_and_navigation_are_discoverable_and_no_ping_by_default() -> N
     assert "New York" in str(embed.fields[0].value)
     assert "4:20" in str(embed.title)
     assert "Start /toke" in str(embed.fields[-1].value)
+    shared = ui.build_420_embed(now=at("2026-07-01T20:20:30Z"), public=True)
+    assert "Run `/toke`" in str(shared.fields[-1].value)
+    assert "shared snapshot" in str(shared.footer.text)
     assert len(embed.fields) <= 4
     assert len(str(embed.fields[1].value)) <= 1024
     view = ui.Somewhere420View(owner_id=123)
