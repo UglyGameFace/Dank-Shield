@@ -45,7 +45,7 @@ begin
     update public.dank_somewhere_420_schedules s
        set last_local_date = (s.next_fire_at at time zone s.timezone)::date,
            next_fire_at = (((s.next_fire_at at time zone s.timezone)::date
-                            + interval '1 day' + time '16:20') at time zone s.timezone),
+                            + 1 + time '16:20') at time zone s.timezone),
            updated_at = now()
      where s.enabled and s.next_fire_at < now() - interval '3 minutes';
 
@@ -64,7 +64,7 @@ begin
     update public.dank_somewhere_420_schedules s
        set last_local_date = (s.next_fire_at at time zone s.timezone)::date,
            next_fire_at = (((s.next_fire_at at time zone s.timezone)::date
-                            + interval '1 day' + time '16:20') at time zone s.timezone),
+                            + 1 + time '16:20') at time zone s.timezone),
            last_claimed_at = now(), updated_at = now()
       from eligible e where s.id = e.id
     returning s.*;
