@@ -174,6 +174,80 @@ def recheck_original_snapshot(
                     raise RuntimeError("source_changed_during_offline_catchup")
 
 
+# The OFFLINE candidate's BEFORE UPDATE trigger overwrites updated_at with
+# now(), making an exact original source snapshot impossible to stage. Its
+# version-history trigger would also manufacture new (excluded) history from
+# the migration itself. Suspend JUST these two known candidate USER triggers
+# during the guild_configs copy; restore in the same transaction before commit.
+# A database failure rolls back ALTER TABLE as well as all data changes.
+_CONFIG_COPY_TRIGGERS = (
+    "trg_capture_guild_config_version",
+    "trg_guild_configs_updated_at",
+)
+
+SAFE_STOP_CODES = frozenset((
+    "invalid_delta_mode",
+    "missing_offline_only_confirmation",
+    "source_writers_not_acknowledged_frozen",
+    "offline_backup_receipt_required",
+    "unapproved_table",
+    "unapproved_generated_column",
+    "candidate_only_rows_need_review",
+    "changed_row_budget_exceeded",
+    "changed_byte_budget_exceeded",
+    "source_payload_missing",
+    "offline_catchup_row_mismatch",
+    "final_offline_snapshot_not_equal",
+    "source_changed_during_offline_catchup",
+    "unapproved_candidate_config_triggers",
+    "candidate_config_trigger_toggle_failed",
+    "candidate_config_triggers_not_restored",
+    "primary_key_not_in_column_contract",
+    "cannot_update_pk_only_table",
+    "bounded_table_limit_exceeded",
+    "duplicate_primary_key",
+))
+
+
+def _candidate_config_trigger_guard(conn: Any, *, enable: bool) -> None:
+    from psycopg import sql
+
+    # On a brand-new project/changed trigger contract, STOP rather than
+    # broadly disabling triggers or changing FK constraints.
+    expected = "D" if enable else "O"
+    observed = conn.execute(
+        "select tgname, tgenabled from pg_trigger where "
+        "tgrelid='public.guild_configs'::regclass and not tgisinternal "
+        "order by tgname"
+    ).fetchall()
+    if sorted((str(name), str(state)) for name, state in observed) != [
+        (name, expected) for name in _CONFIG_COPY_TRIGGERS
+    ]:
+        raise RuntimeError("unapproved_candidate_config_triggers")
+
+    command = "ENABLE" if enable else "DISABLE"
+    for name in _CONFIG_COPY_TRIGGERS:
+        try:
+            conn.execute(
+                sql.SQL("alter table public.guild_configs {} trigger {}").format(
+                    sql.SQL(command), sql.Identifier(name)
+                )
+            )
+        except Exception:
+            raise RuntimeError("candidate_config_trigger_toggle_failed") from None
+
+    check = conn.execute(
+        "select tgname, tgenabled from pg_trigger where "
+        "tgrelid='public.guild_configs'::regclass and not tgisinternal "
+        "order by tgname"
+    ).fetchall()
+    state = "O" if enable else "D"
+    if sorted((str(name), str(mode)) for name, mode in check) != [
+        (name, state) for name in _CONFIG_COPY_TRIGGERS
+    ]:
+        raise RuntimeError("candidate_config_triggers_not_restored")
+
+
 def reconcile(mode: str) -> dict[str, Any]:
     import psycopg
     from psycopg import sql
@@ -232,6 +306,12 @@ def reconcile(mode: str) -> dict[str, Any]:
                     if mode == "stage" and stage_count > MAX_CHANGED_ROWS:
                         raise RuntimeError("changed_row_budget_exceeded")
                     if mode == "stage":
+                        # The source's explicit updated_at must survive. The
+                        # candidate's normal runtime updated_at and historical
+                        # snapshot triggers are not appropriate during a
+                        # one-time exact offline data transfer.
+                        if table == "guild_configs" and writes:
+                            _candidate_config_trigger_guard(target, enable=False)
                         query = upsert_query(table, source_columns, pk)
                         for key in sorted(writes):
                             payload = src[key][1]
@@ -249,6 +329,8 @@ def reconcile(mode: str) -> dict[str, Any]:
                             or describe_delta(src, revised)["changed"]
                         ):
                             raise RuntimeError("offline_catchup_row_mismatch")
+                        if table == "guild_configs" and writes:
+                            _candidate_config_trigger_guard(target, enable=True)
                     summaries.append({
                         "table": table,
                         "source_rows": len(src),
@@ -297,8 +379,16 @@ def main() -> int:
         )
         report = reconcile(mode)
     except Exception as exc:
-        # Never disclose SQL, source IDs, usernames, passwords, DSNs or row data.
-        print("OFFLINE_DELTA_CATCHUP_STOPPED: " + type(exc).__name__, file=sys.stderr)
+        # Print ONLY code-owned, fixed diagnostic codes; never arbitrary
+        # database exceptions, raw SQL, user IDs, URLs or credentials.
+        code = str(exc)
+        if code not in SAFE_STOP_CODES:
+            code = (
+                "audit_contract_blocked"
+                if isinstance(exc, audit.AuditBlocker)
+                else "unexpected_catchup_failure"
+            )
+        print("OFFLINE_DELTA_CATCHUP_STOPPED: " + code, file=sys.stderr)
         return 2
     print(json.dumps(report, sort_keys=True))
     return 0
