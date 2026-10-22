@@ -43,7 +43,8 @@ def test_saved_preferences_are_disabled_by_default_and_prevalidated(monkeypatch)
 
     async def store(label, operation):
         class Response:
-            data = [dict(saved[-1])] if saved else []
+            def __init__(self):
+                self.data = [dict(saved[-1])] if saved else []
         # The closure expects DB table.upsert(...).execute().
         class Table:
             def upsert(self, payload, on_conflict):
