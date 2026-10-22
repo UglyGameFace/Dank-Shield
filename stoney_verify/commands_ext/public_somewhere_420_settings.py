@@ -110,7 +110,7 @@ class PersonalSettingsModal(discord.ui.Modal, title="Personal 4:20 Preferences")
         super().__init__(timeout=300)
         self.owner_id = owner_id
         cfg = previous or {}
-        self.zone.default = str(cfg.get("timezone") or "America/New_York")
+        self.zone.default = str(cfg.get("timezone") or "UTC")
         self.city.default = str(cfg.get("favorite_city") or "")
         self.dms.default = "on" if cfg.get("enabled") else "off"
 
@@ -199,7 +199,7 @@ class ServerSettingsModal(discord.ui.Modal, title="Daily Server 4:20 Settings"):
         super().__init__(timeout=300)
         self.owner_id = owner_id
         self.saved = saved or {}
-        self.zone.default = str(self.saved.get("timezone") or "America/New_York")
+        self.zone.default = str(self.saved.get("timezone") or "UTC")
         self.quiet.default = f"{int(self.saved.get('quiet_start',22)):02}-{int(self.saved.get('quiet_end',8)):02}"
         self.ping.default = "on" if self.saved.get("notify_role") else "off"
 
