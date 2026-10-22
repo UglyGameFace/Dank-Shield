@@ -14,6 +14,8 @@ on:
           - delete-next
           - preview-reviewed
           - delete-reviewed
+          - preview-zero-ahead
+          - delete-zero-ahead
         default: preview
         required: true
       confirmation:
@@ -31,7 +33,7 @@ concurrency:
 
 jobs:
   prune-stale-merged-branches:
-    if: ${{ github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' }}
+    if: ${{ github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' && inputs.mode != 'preview-zero-ahead' && inputs.mode != 'delete-zero-ahead' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -2533,3 +2535,142 @@ jobs:
               }
               core.setFailed(`Partial cleanup: ${failed.length} branch deletions failed; inspect errors above`);
             }
+
+  retire-reviewed-zero-ahead-20261022:
+    if: ${{ github.ref == 'refs/heads/main' && github.actor == 'UglyGameFace' && (inputs.mode == 'preview-zero-ahead' || inputs.mode == 'delete-zero-ahead') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Verify and optionally retire exact 22 zero-ahead refs
+        uses: actions/github-script@v7
+        env:
+          CLEANUP_MODE: ${{ inputs.mode }}
+          CLEANUP_CONFIRMATION: ${{ inputs.confirmation }}
+        with:
+          script: |
+            const mode = process.env.CLEANUP_MODE;
+            const deleting = mode === 'delete-zero-ahead';
+            if (mode !== 'preview-zero-ahead' && !deleting) throw Error('Unsupported mode');
+            if (deleting && process.env.CLEANUP_CONFIRMATION !==
+                'DELETE_VERIFIED_ZERO_AHEAD_BRANCHES') throw Error('Missing exact owner confirmation');
+            const { owner, repo } = context.repo;
+            const meta = await github.rest.repos.get({ owner, repo });
+            if (meta.data.default_branch !== 'main') throw Error('Unexpected default branch');
+            // Frozen list established by Oct 22 GitHub main...branch ancestry checks.
+            const manifest = [
+              'feat/dankshield-offline-discloud-rest-readiness-probe',
+              'feat/dankshield-offline-final-delta-catchup',
+              'feat/dedicated-runtime-readiness-preflight',
+              'feat/discloud-shadow-candidate-rest-probe',
+              'feat/fresh-supabase-core-20261020',
+              'feat/fresh-supabase-member-verification-20261020',
+              'feat/fresh-supabase-tickets-20261020',
+              'fix/offline-catchup-guild-config-trigger-parity',
+              'fix/offline-delta-activity-feed-trigger-replay',
+              'fix/candidate-recovery-pg-cron-target',
+              'fix/dedicated-ticket-precision-audit',
+              'fix/cutover-expired-voice-session-gate',
+              'fix/candidate-recovery-failure-code-20261020',
+              'fix/candidate-restore-safe-toc-diagnostics',
+              'fix/recovery-restore-path-preflight',
+              'feat/aiven-compressed-history-archive-20261019',
+              'feat/aiven-core-operational-staging-20261019',
+              'feat/aiven-guild-config-runtime-adapter-20261019',
+              'feat/aiven-ticket-member-verification-aux-20261019',
+              'fix/aiven-core-preview-uninstalled-table-20261019',
+              'fix/aiven-core-staging-ci-dependencies-20261019',
+              'fix/community-hub-game-role-search-safe-picker-20261019',
+            ];
+            if (manifest.length !== 22 || new Set(manifest).size !== 22) {
+              throw Error('Unexpected reviewed manifest change');
+            }
+            const mainSha = (await github.rest.repos.getBranch({
+              owner, repo, branch: 'main'
+            })).data.commit.sha;
+            const activePRs = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', per_page: 100
+            });
+            const hasActivePR = name => activePRs.some(pr =>
+              pr.head?.repo?.full_name === owner + '/' + repo &&
+              pr.head?.ref === name);
+            async function verify(name) {
+              let item;
+              try {
+                item = (await github.rest.repos.getBranch({ owner, repo, branch: name })).data;
+              } catch (error) {
+                if (error.status === 404) return null;
+                throw error;
+              }
+              if (item.protected || hasActivePR(name)) return null;
+              const c = (await github.rest.repos.compareCommits({
+                owner, repo, base: 'main', head: name
+              })).data;
+              if (c.ahead_by !== 0 || c.behind_by < 1 || c.status !== 'behind' ||
+                  c.head_commit?.sha !== item.commit.sha) return null;
+              return { name, sha: item.commit.sha };
+            }
+            const eligible = [], skipped = [];
+            for (const name of manifest) {
+              const v = await verify(name);
+              if (v) eligible.push(v);
+              else skipped.push(name);
+            }
+            const retired = [], failures = [];
+            if (deleting) for (const branch of eligible) {
+              try {
+                // Fail closed on main movement, changed tips, new open PRs.
+                const mainNow = (await github.rest.repos.getBranch({
+                  owner, repo, branch: 'main'
+                })).data.commit.sha;
+                if (mainNow !== mainSha) throw Error('main moved during cleanup');
+                const current = await verify(branch.name);
+                const stillOpen = await github.rest.pulls.list({
+                  owner, repo, state: 'open', per_page: 100
+                });
+                if (!current || current.sha !== branch.sha ||
+                    stillOpen.data.some(pr =>
+                      pr.head?.repo?.full_name === owner + '/' + repo &&
+                      pr.head?.ref === branch.name)) {
+                  skipped.push(branch.name);
+                  continue;
+                }
+                // Every deletion preserves the exact commit under a durable tag.
+                const tag = 'tags/branch-retirement-20261022/' + branch.name;
+                let archive;
+                try {
+                  archive = (await github.rest.git.getRef({
+                    owner, repo, ref: tag
+                  })).data;
+                } catch (error) {
+                  if (error.status !== 404) throw error;
+                  await github.rest.git.createRef({
+                    owner, repo, ref: 'refs/' + tag, sha: branch.sha
+                  });
+                  archive = (await github.rest.git.getRef({
+                    owner, repo, ref: tag
+                  })).data;
+                }
+                if (archive.object?.type !== 'commit' ||
+                    archive.object.sha !== branch.sha) throw Error('Archive SHA mismatch');
+                await github.rest.git.deleteRef({
+                  owner, repo, ref: 'heads/' + branch.name
+                });
+                retired.push(branch.name);
+                await new Promise(resolve => setTimeout(resolve, 650));
+              } catch (e) {
+                failures.push(branch.name + ': ' + String(e.status || 'guard') +
+                  ' ' + String(e.message || 'unknown'));
+                if (String(e.message || '').includes('main moved')) break;
+              }
+            }
+            core.info('Reviewed=22 eligible=' + eligible.length +
+              ' retired=' + retired.length + ' skipped=' + skipped.length +
+              ' failed=' + failures.length);
+            eligible.forEach(b => core.info('Eligible: ' + b.name + ' ' + b.sha));
+            retired.forEach(b => core.info('Retired: ' + b));
+            failures.forEach(b => core.error('Failed: ' + b));
+            await core.summary.addHeading('Reviewed zero-ahead retirement')
+              .addRaw('Mode: ' + mode + '; candidates: ' + eligible.length +
+                '; retired: ' + retired.length + '; skipped: ' + skipped.length +
+                '; failures: ' + failures.length).write();
+            if (failures.length) core.setFailed('Partial retirement; inspect failures');
