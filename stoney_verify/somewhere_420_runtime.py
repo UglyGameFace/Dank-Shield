@@ -117,9 +117,11 @@ async def _loop(bot: Any) -> None:
             if claimed:
                 await asyncio.gather(*(one(item) for item in claimed))
         except Somewhere420StorageUnavailable:
-            # Migration or service connection not installed. Other bot workers
-            # continue normally. Never fall back to unauthenticated DB access.
-            pass
+            # Missing migration or quota outage must not cause a 20-second
+            # API-spam loop. All other workers stay alive; retry conservatively.
+            print("[somewhere420] schedule storage unavailable; retrying in five minutes")
+            await asyncio.sleep(300)
+            continue
         except asyncio.CancelledError:
             raise
         except Exception as exc:
