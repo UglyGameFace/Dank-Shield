@@ -73,7 +73,7 @@ def test_420_board_and_navigation_are_discoverable_and_no_ping_by_default() -> N
     assert len(embed.fields) <= 5
     assert all(len(str(f.value)) <= 1024 for f in embed.fields)
     favorite = ui.build_420_embed(now=at("2026-07-01T20:20:30Z"), favorite_city="Tokyo")
-    assert "Your favorite: Tokyo" in [f.name for f in favorite.fields]
+    assert "⭐ Your favorite: Tokyo" in [f.name for f in favorite.fields]
     view = ui.Somewhere420View(owner_id=123)
     labels = {item.label for item in view.children if isinstance(item, discord.ui.Button)}
     assert labels == {
