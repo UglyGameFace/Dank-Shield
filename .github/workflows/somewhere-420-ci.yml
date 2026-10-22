@@ -1,0 +1,83 @@
+name: It's 4:20 Somewhere CI
+
+on:
+  pull_request:
+    paths:
+      - 'stoney_verify/somewhere_420_*.py'
+      - 'stoney_verify/commands_ext/public_somewhere_420*.py'
+      - 'stoney_verify/commands_ext/public_toke.py'
+      - 'stoney_verify/app.py'
+      - 'tests/test_somewhere_420*.py'
+      - 'supabase/migrations/*somewhere_420*.sql'
+      - 'supabase_fresh/migrations/*somewhere_420*.sql'
+      - '.github/workflows/somewhere-420-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'stoney_verify/somewhere_420_*.py'
+      - 'stoney_verify/commands_ext/public_somewhere_420*.py'
+      - 'tests/test_somewhere_420*.py'
+      - 'supabase/migrations/*somewhere_420*.sql'
+      - 'supabase_fresh/migrations/*somewhere_420*.sql'
+      - '.github/workflows/somewhere-420-ci.yml'
+
+jobs:
+  focused-and-sql:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGDATABASE: postgres
+      PGUSER: postgres
+      PGPASSWORD: test-only-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install test requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Compile and test feature and navigation
+        run: |
+          python -m compileall -q stoney_verify/somewhere_420_clock.py stoney_verify/somewhere_420_schedules.py stoney_verify/somewhere_420_runtime.py stoney_verify/commands_ext/public_somewhere_420.py stoney_verify/commands_ext/public_somewhere_420_settings.py stoney_verify/commands_ext/public_toke.py
+          python -m pytest tests/test_somewhere_420.py tests/test_somewhere_420_v2.py tests/test_navigation_registry_runtime.py -q --tb=short
+      - name: Validate SQL migration twice and atomic once-per-day claim
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create role anon;
+          create role authenticated;
+          create role service_role bypassrls;
+          SQL
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200026_dankshield_somewhere_420.sql
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200026_dankshield_somewhere_420.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          set role service_role;
+          insert into public.dank_somewhere_420_schedules
+            (id,kind,guild_id,timezone,channel_id,enabled,next_fire_at)
+          values ('g:123','guild','123','UTC','456',true,now()-interval '30 seconds');
+          do $test$
+          declare n int;
+          begin
+            select count(*) into n from public.dank_420_claim_due(5);
+            if n <> 1 then raise exception 'First due claim should return 1, got %', n; end if;
+            select count(*) into n from public.dank_420_claim_due(5);
+            if n <> 0 then raise exception 'Repeated due claim must not replay, got %', n; end if;
+          end $test$;
+          SQL
