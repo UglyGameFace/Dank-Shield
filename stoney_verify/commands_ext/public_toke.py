@@ -633,6 +633,8 @@ async def open_toke_command(
     media: Optional[str] = None,
     upload: Optional[discord.Attachment] = None,
     voice: Optional[discord.VoiceChannel] = None,
+    *,
+    quick_text_only: bool = False,
 ) -> None:
     guild = interaction.guild
     member = interaction.user if isinstance(interaction.user, discord.Member) else None
@@ -701,7 +703,7 @@ async def open_toke_command(
         return await _reply(interaction, f"Wait {_format_wait(remaining)} for {label}.")
 
     clean_message = _clean_member_message(message)
-    if upload is None and not clean_media:
+    if upload is None and not clean_media and not quick_text_only:
         if not bool(getattr(interaction.client.intents, "message_content", False)):
             return await _reply(interaction, "Dank Shield needs the Discord Message Content intent to capture normal GIFs. Use /toke upload or media instead.")
         source = interaction.channel
