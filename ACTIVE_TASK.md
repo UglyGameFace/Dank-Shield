@@ -1,34 +1,38 @@
-# Active task: guarded retirement of remaining Dank Shield branches (2026-10-22)
+# Active task: It's 4:20 Somewhere (FORCE SWITCH, 2026-10-22)
 
-## Outcome and scope
-Reduce historical GitHub branch clutter without losing user work, live deployment fallbacks, or unique unmerged commits. Do not touch Discloud, database credentials, media runtime or Discord command behavior. Single active implementation task: branch hygiene; Discord compatibility improvements are backlog only.
+## Active outcome
+Implement GitHub issue #687, a fun mobile-friendly worldwide 4:20 community experience with optional /toke handoff, safe manual sharing and no automatic unsolicited pings. One implementation task only; do not mix further branch retirement, migrations, or unrelated cleanup.
 
-## Current state and source of truth
-- Main at audit: `c68547d9e81f13cb3954aec920149e975f2a362c`, following merged PR #685.
-- 34 branches remained at audit: `main`, 9 branches with zero commits ahead of main, 24 diverged branches with unique commit history; no open PRs.
-- Exact-head `fix/zero-ahead-retirement-compare-head-20261022` is 0 commits ahead, 1 behind, merged PR #685 tip `94d087f5281a8738ba245732f17da877714985e4`. This is the ONLY new deletion candidate in the current PR.
-- Eight other ancestor-only refs include backup / known-good / recovery names; retain until each live deploy/rollback dependency and archive preservation are assessed. Unique-commit refs remain held; do not delete based on age or label.
-- Example hold: `feat/cinema-rolling-supervised-worker-20261014` has one unique commit and introduces `stoney_verify/cinema_supervised_start.py`, which is absent from current main.
-- The manual cleanup run #39801196415 succeeded on attempt 2 and retired the previously reviewed 22-ref batch. The scheduled ephemeral PR workflow also succeeded earlier.
-- Prior recovery-drill failure was superseded: run #39721416434 passed isolated encrypted candidate PG17 backup, restore and record comparison. This does **not** authorize production cutover.
+## Authority and execution path
+- Current main at branch creation: `830e961eab0e2e348d4b606402aea4bfa455f691` (merged PR #686).
+- `commands_ext/public_command_surface_v2.py` owns the public 11-item application-command tree and the canonical /dank home router. `navigation_registry.py` owns discoverability.
+- `commands_ext/public_toke.py:open_toke_command` owns existing per-guild starter/ping authorization, permission validation, durable cooldowns, media composer, and session posting. Never replicate its outbound session path.
+- `guild_config.get_guild_config` and `compare_and_swap_guild_config_key` own safe per-guild feature state writes.
+- **Requirement interpretation:** separate world-time activity integrated via existing /toke, not a new slash command. On-demand board with manager-controlled non-pinging public share. Auto announcements are deliberately not enabled; no scalable scheduler exists for this feature and the owner did not choose a cadence or consent model.
 
-## Execution owner
-Existing `.github/workflows/guarded-merged-branch-cleanup.yml` manual `preview-zero-ahead` / `delete-zero-ahead` job owns this retirement, not a new deletion tool, cron, or bot startup shim. It checks ancestry, main/tip stability, open PRs, exact owner and confirmation, then archives each verified exact SHA in a Git tag before deleting the branch ref.
+## Changes in feature branch
+- Pure `stoney_verify/somewhere_420_clock.py`: DST-aware 4:20 AM/PM in IANA cities, grouped next waves.
+- `stoney_verify/commands_ext/public_somewhere_420.py`: on-demand world-board, private refresh/toggle, canonical /toke handoff and staff-only public sharing guarded by atomic per-guild one-hour claim.
+- Add feature to canonical registry and compact nav router, without adding command roots or startup workers.
+- Regression tests `tests/test_somewhere_420.py`; product/acceptance documentation `docs/ITS_420_SOMEWHERE.md`.
+- No production database migration or Discloud changes.
 
-## Changes in this task branch
-- Preserve the original frozen 22-name manifest and add a separately pinned follow-up candidate for merged PR #685.
-- Reconfirm exact merged PR identity and SHA on execution. All existing safety gates stay active.
-- Add focused regression assertions for the extra candidate and original freeze.
-- Record current audit and holds here. No branch has been deleted by this PR.
+## Validation status
+- Pending CI, focused tests, production-path integration canary, clean diff check. Do not claim deployed or complete before evidence.
+- Test permission errors, concurrency and config-write failures, 4:20 DST edges, and /toke integration.
+- Release through one reviewed PR; evaluate CI after each commit.
 
-## Validation and completion gates
-- **Pending:** focused tests, workflow static checks, CI and final changed-file/diff review.
-- Merge only after checks pass, then the repository owner must dispatch `preview-zero-ahead` on `main`, review its eligible/held list, and separately dispatch `delete-zero-ahead` with existing exact confirmation `DELETE_VERIFIED_ZERO_AHEAD_BRANCHES`.
-- Verify the tag SHA equals `94d087f5281a8738ba245732f17da877714985e4`, the reviewed fix branch is absent afterward, and the remaining branch count reflects exactly one deletion. Do not rerun a broad deletion mode on unreconciled heads.
-- Continue one-by-one audit of diverged history afterward. Do not claim overall branch cleanup complete.
+## Suspended task (preserve for resumption; NOT active)
+**Guarded retirement of remaining Dank Shield branches**, previously active in `ACTIVE_TASK.md`.
+- Last reviewed main `830e961eab0e2e348d4b606402aea4bfa455f691`; existing PR #686 merged and GitHub Action runs #39847982721 (preview) and #39848036329 (delete) succeeded. 33 branches remained after completed deletion.
+- Previous active branch was `chore/retire-last-proven-ancestor-20261022`, merged in #686; reviewed original 22-ref batch had already retired. No unfinished proposed branch-retirement PR remains.
+- Next work: independently evaluate 24 diverged branches carrying unique code and 8 zero-ahead known-good/backup/recovery refs before archive-first retirement; protect `main` and live Discloud rollback refs. Example held unique branch: `feat/cinema-rolling-supervised-worker-20261014` adds a file not on main. Do not delete by age/name or run broad deletion modes until proof.
+- Branch-cleanup tests and exact-SHA archive safeguards remain in `.github/workflows/guarded-merged-branch-cleanup.yml`; suspended validation/cleanup status: reviewed 22+1 batch succeeded; remaining 32 non-main historical heads unreviewed for safe retirement.
+- Discloud bot, source/candidate DB, and all recovery credentials remain untouched. Dedicated recovery drill #39721416434 passed, but no database production cutover authorized.
+- Backlog: resume this retirement only after current 4:20 feature reaches its full Definition of Done, or another explicit FORCE SWITCH.
 
-## Backlog
-Discord compatibility tracker is scheduled weekly. Future bot/API compatibility changes wait until branch-retirement task is closed.
+## Additional backlog
+Discord developer compatibility tracker is scheduled weekly, read-only; do not start improvements mid-feature.
 
-## Risks and blockers
-Actions-dispatch and Git ref deletion are not available directly through the connected GitHub interface in this chat; owner-authorized manual workflow is the supported deletion path. Protected/runtime-linked and unmerged-content branches must not be removed without separate evidence. Recheck live state before destructive operations.
+## Risk/blockers/next step
+Current code is on a temporary feature branch, no merge/deploy. Need confirm all CI suites, verify user-facing navigation route from /dank home, and run a real Discord test where reasonably possible. Automatic scheduled announcements remain intentionally out of scope.
