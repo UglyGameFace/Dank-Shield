@@ -185,6 +185,45 @@ _CONFIG_COPY_TRIGGERS = (
     "trg_guild_configs_updated_at",
 )
 
+# Verified against the actual pinned OFFLINE candidate's pg_trigger catalog.
+# Data migration is not a new Discord event. In particular, replaying a
+# historical member join/event with its normal AFTER INSERT trigger creates
+# a NEW activity_feed_events UUID which is absent from the source snapshot.
+# That synthetic destination-only row caused the confirmed Oct 21 Stage abort.
+# Keep FK/internal triggers enabled. Switch ONLY these named USER triggers,
+# ONLY for a table with changed rows, and restore within the SAME transaction.
+# Activity-feed sync rewrites historical meta/metadata pairs; it must also be
+# suppressed while copying exact original feed records.
+_CANDIDATE_COPY_TRIGGERS: dict[str, tuple[str, ...]] = {
+    "guild_configs": _CONFIG_COPY_TRIGGERS,
+    "member_joins": ("member_joins_to_activity_feed_ai",),
+    "member_events": ("member_events_to_activity_feed_ai",),
+    "ticket_messages": ("ticket_messages_to_activity_feed_ai",),
+    "ticket_notes": ("ticket_notes_to_activity_feed_ai",),
+    "tickets": (
+        "tickets_insert_to_activity_feed_ai",
+        "tickets_update_to_activity_feed_au",
+        "trg_sync_ticket_compat_columns",
+    ),
+    "ticket_categories": (
+        "trg_capture_ticket_category_version",
+        "trg_ticket_categories_updated_at",
+    ),
+    "ticket_panel_presets": ("set_ticket_panel_presets_updated_at",),
+    "ticket_panel_rules": ("set_ticket_panel_rules_updated_at",),
+    "ticket_panels": ("set_ticket_panels_updated_at",),
+    "activity_feed_events": ("trg_sync_activity_feed_meta_columns",),
+}
+
+
+class StageBlocker(RuntimeError):
+    """Fixed code and approved table only; never include source record data."""
+
+    def __init__(self, code: str, table: str):
+        self.code = code if code in SAFE_STOP_CODES else "unexpected_catchup_failure"
+        self.table = table if table in audit.TABLES else "unknown"
+        super().__init__(self.code)
+
 SAFE_STOP_CODES = frozenset((
     "invalid_delta_mode",
     "missing_offline_only_confirmation",
@@ -202,6 +241,9 @@ SAFE_STOP_CODES = frozenset((
     "unapproved_candidate_config_triggers",
     "candidate_config_trigger_toggle_failed",
     "candidate_config_triggers_not_restored",
+    "unapproved_candidate_copy_triggers",
+    "candidate_copy_trigger_toggle_failed",
+    "candidate_copy_triggers_not_restored",
     "primary_key_not_in_column_contract",
     "cannot_update_pk_only_table",
     "bounded_table_limit_exceeded",
@@ -209,43 +251,62 @@ SAFE_STOP_CODES = frozenset((
 ))
 
 
-def _candidate_config_trigger_guard(conn: Any, *, enable: bool) -> None:
+def _candidate_copy_trigger_guard(conn: Any, table: str, *, enable: bool) -> None:
     from psycopg import sql
 
-    # On a brand-new project/changed trigger contract, STOP rather than
-    # broadly disabling triggers or changing FK constraints.
-    expected = "D" if enable else "O"
+    names = _CANDIDATE_COPY_TRIGGERS.get(table)
+    if not names or table not in audit.TABLES:
+        raise RuntimeError("unapproved_candidate_copy_triggers")
+
+    # Guard both the exact names AND their current enabled state. The source
+    # never calls this; the verified candidate is the only write connection.
+    # This ensures unexpected triggers never fire during historical replay.
+    state_before = "D" if enable else "O"
     observed = conn.execute(
         "select tgname, tgenabled from pg_trigger where "
-        "tgrelid='public.guild_configs'::regclass and not tgisinternal "
-        "order by tgname"
+        "tgrelid=%s::regclass and not tgisinternal order by tgname",
+        (f"public.{table}",),
     ).fetchall()
     if sorted((str(name), str(state)) for name, state in observed) != [
-        (name, expected) for name in _CONFIG_COPY_TRIGGERS
+        (name, state_before) for name in sorted(names)
     ]:
-        raise RuntimeError("unapproved_candidate_config_triggers")
+        raise RuntimeError(
+            "unapproved_candidate_config_triggers"
+            if table == "guild_configs" else "unapproved_candidate_copy_triggers"
+        )
 
     command = "ENABLE" if enable else "DISABLE"
-    for name in _CONFIG_COPY_TRIGGERS:
+    for name in names:
         try:
             conn.execute(
-                sql.SQL("alter table public.guild_configs {} trigger {}").format(
-                    sql.SQL(command), sql.Identifier(name)
+                sql.SQL("alter table public.{} {} trigger {}").format(
+                    sql.Identifier(table), sql.SQL(command), sql.Identifier(name)
                 )
             )
         except Exception:
-            raise RuntimeError("candidate_config_trigger_toggle_failed") from None
+            raise RuntimeError(
+                "candidate_config_trigger_toggle_failed"
+                if table == "guild_configs" else "candidate_copy_trigger_toggle_failed"
+            ) from None
 
-    check = conn.execute(
+    observed_after = conn.execute(
         "select tgname, tgenabled from pg_trigger where "
-        "tgrelid='public.guild_configs'::regclass and not tgisinternal "
-        "order by tgname"
+        "tgrelid=%s::regclass and not tgisinternal order by tgname",
+        (f"public.{table}",),
     ).fetchall()
-    state = "O" if enable else "D"
-    if sorted((str(name), str(mode)) for name, mode in check) != [
-        (name, state) for name in _CONFIG_COPY_TRIGGERS
+    state_after = "O" if enable else "D"
+    if sorted((str(name), str(state)) for name, state in observed_after) != [
+        (name, state_after) for name in sorted(names)
     ]:
-        raise RuntimeError("candidate_config_triggers_not_restored")
+        raise RuntimeError(
+            "candidate_config_triggers_not_restored"
+            if table == "guild_configs" else "candidate_copy_triggers_not_restored"
+        )
+
+
+def _candidate_config_trigger_guard(conn: Any, *, enable: bool) -> None:
+    """Backward-compatible narrow wrapper for the existing config audit."""
+    _candidate_copy_trigger_guard(conn, "guild_configs", enable=enable)
 
 
 def reconcile(mode: str) -> dict[str, Any]:
@@ -299,8 +360,9 @@ def reconcile(mode: str) -> dict[str, Any]:
                     source_snapshots[table] = src
                     difference = describe_delta(src, dst)
                     if difference["target_only"] and mode == "stage":
-                        # Never silently delete candidate evidence.
-                        raise RuntimeError("candidate_only_rows_need_review")
+                        # Never silently delete candidate evidence or silently
+                        # treat fresh trigger-generated rows as source data.
+                        raise StageBlocker("candidate_only_rows_need_review", table)
                     writes = difference["write_keys"]
                     stage_count += len(writes)
                     if mode == "stage" and stage_count > MAX_CHANGED_ROWS:
@@ -310,8 +372,8 @@ def reconcile(mode: str) -> dict[str, Any]:
                         # candidate's normal runtime updated_at and historical
                         # snapshot triggers are not appropriate during a
                         # one-time exact offline data transfer.
-                        if table == "guild_configs" and writes:
-                            _candidate_config_trigger_guard(target, enable=False)
+                        if writes and table in _CANDIDATE_COPY_TRIGGERS:
+                            _candidate_copy_trigger_guard(target, table, enable=False)
                         query = upsert_query(table, source_columns, pk)
                         for key in sorted(writes):
                             payload = src[key][1]
@@ -329,8 +391,8 @@ def reconcile(mode: str) -> dict[str, Any]:
                             or describe_delta(src, revised)["changed"]
                         ):
                             raise RuntimeError("offline_catchup_row_mismatch")
-                        if table == "guild_configs" and writes:
-                            _candidate_config_trigger_guard(target, enable=True)
+                        if writes and table in _CANDIDATE_COPY_TRIGGERS:
+                            _candidate_copy_trigger_guard(target, table, enable=True)
                     summaries.append({
                         "table": table,
                         "source_rows": len(src),
@@ -381,13 +443,15 @@ def main() -> int:
     except Exception as exc:
         # Print ONLY code-owned, fixed diagnostic codes; never arbitrary
         # database exceptions, raw SQL, user IDs, URLs or credentials.
-        code = str(exc)
+        code = exc.code if isinstance(exc, StageBlocker) else str(exc)
         if code not in SAFE_STOP_CODES:
             code = (
                 "audit_contract_blocked"
                 if isinstance(exc, audit.AuditBlocker)
                 else "unexpected_catchup_failure"
             )
+        if isinstance(exc, StageBlocker):
+            code += " table=" + exc.table
         print("OFFLINE_DELTA_CATCHUP_STOPPED: " + code, file=sys.stderr)
         return 2
     print(json.dumps(report, sort_keys=True))
