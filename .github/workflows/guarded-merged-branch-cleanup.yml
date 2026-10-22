@@ -2541,7 +2541,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Verify and optionally retire exact 22 zero-ahead refs
+      - name: Verify and optionally retire frozen zero-ahead refs plus pinned merged followup
         uses: actions/github-script@v7
         env:
           CLEANUP_MODE: ${{ inputs.mode }}
@@ -2584,6 +2584,19 @@ jobs:
             if (manifest.length !== 22 || new Set(manifest).size !== 22) {
               throw Error('Unexpected reviewed manifest change');
             }
+            // Keep the completed 22-ref manifest frozen. A later merged PR
+            // branch gets its own exact-SHA, exact-PR review rather than
+            // silently broadening the original historical batch.
+            const reviewedFollowup = new Map([
+              ['fix/zero-ahead-retirement-compare-head-20261022', {
+                sha: '94d087f5281a8738ba245732f17da877714985e4',
+                mergedPr: 685,
+              }],
+            ]);
+            if (reviewedFollowup.size !== 1 ||
+                [...reviewedFollowup.keys()].some(name => manifest.includes(name))) {
+              throw Error('Unexpected pinned followup manifest change');
+            }
             const mainSha = (await github.rest.repos.getBranch({
               owner, repo, branch: 'main'
             })).data.commit.sha;
@@ -2602,6 +2615,18 @@ jobs:
                 throw error;
               }
               if (item.protected || hasActivePR(name)) return null;
+              const followup = reviewedFollowup.get(name);
+              if (followup) {
+                if (item.commit.sha !== followup.sha) return null;
+                const pr = (await github.rest.pulls.get({
+                  owner, repo, pull_number: followup.mergedPr,
+                })).data;
+                if (!pr.merged_at || pr.state !== 'closed' ||
+                    pr.base?.ref !== 'main' ||
+                    pr.head?.ref !== name ||
+                    pr.head?.sha !== followup.sha ||
+                    pr.head?.repo?.full_name !== owner + '/' + repo) return null;
+              }
               const c = (await github.rest.repos.compareCommits({
                 owner, repo, base: 'main', head: name
               })).data;
@@ -2619,7 +2644,7 @@ jobs:
               return { name, sha: item.commit.sha };
             }
             const eligible = [], skipped = [];
-            for (const name of manifest) {
+            for (const name of [...manifest, ...reviewedFollowup.keys()]) {
               const v = await verify(name);
               if (v) eligible.push(v);
               else skipped.push(name);
@@ -2672,7 +2697,8 @@ jobs:
                 if (String(e.message || '').includes('main moved')) break;
               }
             }
-            core.info('Reviewed=22 eligible=' + eligible.length +
+            core.info('Reviewed=' + (manifest.length + reviewedFollowup.size) +
+              ' eligible=' + eligible.length +
               ' retired=' + retired.length + ' skipped=' + skipped.length +
               ' failed=' + failures.length);
             eligible.forEach(b => core.info('Eligible: ' + b.name + ' ' + b.sha));
