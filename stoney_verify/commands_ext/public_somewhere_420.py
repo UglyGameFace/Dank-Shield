@@ -109,12 +109,10 @@ def share_cooldown_remaining(state: Any, *, now_timestamp: int) -> int:
     try:
         last = int(state.get("last_public_at", 0))
     except (TypeError, ValueError, OverflowError):
-        return SHARE_COOLDOWN_SECONDS
-    if last <= 0:
-        return 0
+        return 0  # Invalid legacy state is replaced by the next atomic claim.
+    if last <= 0 or last > now_timestamp + 5 * 60:
+        return 0  # Clearly corrupt future timestamps must not lock a guild forever.
     age = now_timestamp - last
-    if age < 0:
-        return SHARE_COOLDOWN_SECONDS
     return max(0, SHARE_COOLDOWN_SECONDS - age)
 
 
