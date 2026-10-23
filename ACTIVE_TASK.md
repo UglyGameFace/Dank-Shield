@@ -3,6 +3,14 @@
 ## Current single-task lock
 The owner explicitly FORCE SWITCHED to **Issue #367, Action & Reminder Center**, after PR #691 merged. The previous 4:20 task and guarded branch-retirement task are now both paused. Do not mix further 4:20 work, branch cleanup, Cinema, or unrelated verification framework implementation into this slice.
 
+## Slice 4C: Scheduling and anti-spam safety policy (active, 2026-10-23)
+- PR #693 (4B) merged into `c3a5ba5852a44a460e8120681da3b4b20591ff0e`. Active branch `feat/action-reminder-center-4c-safety-20261023` starts at that exact SHA.
+- 4C writes **only preview-only scheduling limits**, not enabled reminder automation: first wait, repeat cooldown, max attempts, quiet hours in a validated IANA timezone, per-guild daily cap.
+- New `stoney_verify/action_schedule_policy.py` is the separate CAS-saved guild schedule namespace, strict `enabled: false`, source-backed dry-run decision; `public_action_schedule.py` offers staff-only edit and personal preview through existing Action Builder.
+- Staged **manual-only** private PostgreSQL DDL and dormant transactional claim adapter for future Member Setup revision reminders in `postgres/migrations/202610230001_action_center_delivery_reservations.sql` / `stoney_verify/action_center_postgres.py`. The existing verify reminder worker/ledger remain canonical; there is **no new worker, production migration, or live notification** in 4C.
+- Validate exact PR head, fast and full regressions, staged SQL smoke, Android mobile click-time authority, Discloud deployed SHA. Do not claim 4C is live or start 4D delivery before explicit post-merge acceptance.
+- All unrelated tasks remain paused by single active task lock.
+
 ## Slice 4B: Action Builder and Conditions (active, 2026-10-23)
 - PR #692 (4A) merged in `8ed1455321ef52c80b15ada83db4f7bb53c38fbb` with all eight CI workflows passing. Discord/Discloud acceptance remains a deployment gate.
 - New active branch: `feat/action-reminder-center-4b-policy-20261023` from that exact merged main.
