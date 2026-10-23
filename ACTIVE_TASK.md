@@ -3,6 +3,16 @@
 ## Current single-task lock
 The owner explicitly FORCE SWITCHED to **Issue #367, Action & Reminder Center**, after PR #691 merged. The previous 4:20 task and guarded branch-retirement task are now both paused. Do not mix further 4:20 work, branch cleanup, Cinema, or unrelated verification framework implementation into this slice.
 
+## Slice 4D.5A: Non-sending deployment and database preflight (active, 2026-10-23)
+- PR #698 (4D.4) is VERIFIED MERGED at `1d12e05d408bd5e7198d607422aad44a80c71927` and all seven workflows passed. No open PRs existed at the start of this slice. This does NOT prove Discloud deployed that SHA.
+- Active branch `feat/action-center-4d5-live-readiness-20261023` starts from that exact merged main; single active task remains **Action & Reminder Center** only.
+- Add app-owner `Readiness Report` inside existing Owner Canary Console, accessible even when exact-target flags are disabled. Read-only source fingerprint/declared SHA observation, private claims and audit schema SELECT readiness, dedicated PG DSN presence boolean, target flags matched-to-guild boolean; no secrets/user IDs exposed.
+- Expand runtime source fingerprint to include action canary, audit, claim, consent and permission-critical files; print equivalent CI fingerprint so owner can compare with Discloud. A runtime SHA/fingerprint remains **unverified against current GitHub main** until actual deployed release evidence is supplied.
+- Fix owner console button authority: Discord application ownership is canonical; no unrelated guild staff-role prerequisite inside the owner-only view. Entry navigation remains staff-scoped.
+- New CI tests cover default-off/DB-unconfigured behavior, wrong-target rejection, failures without private data exposure, read-only proof and owner permission. No server scan, new worker, migration, auto-DM, Discloud deploy or env variable changes.
+- **Production gates still pending:** verify deployed SHA/fingerprint from Discloud; separately approve the private 4C claim and 4D.4 audit migrations; verify a genuinely opted-in, non-exempt member with pending published Member Setup revision; separately approve exact recipient and live one-shot canary. No production actions from this PR.
+- Paused: 4E/4F, 4:20, Cinema, Verification Framework, member lifecycle and branch retirement.
+
 ## Slice 4D.4: app-owner manual canary console + durable audit (active, 2026-10-23)
 - Verified PR #697 (4D.3) merged as `cc98488482da22e505b089e931ee8e8c1618d1ba` with 6/6 checks green. Current branch: `feat/action-center-4d4-owner-canary-console-20261023` on that exact main.
 - Expose **Owner Canary Console** only from Action Builder → Safety Schedule; actual Dank Shield application owner verified via `interaction.client.is_owner(user)`, not a configured staff role or server Administrator. Typed confirmation `SEND guild/user/revision` is one-shot, and all 4 target-locked process-local canary gates still have to match. None of those gates are set by this PR.
