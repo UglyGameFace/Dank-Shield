@@ -142,7 +142,12 @@ def test_no_new_worker_ledger_or_root_slash_command() -> None:
     surface_code = Path(surface.__file__).read_text(encoding="utf-8")
     ui_source = Path(ui.__file__).read_text(encoding="utf-8")
     assert "create_task(" not in source + ui_source
-    assert ".send(" not in source + ui_source
+    # Private interaction replies are legitimate. What must be forbidden is
+    # outbound member/channel delivery or a second database write engine.
+    assert "member.send(" not in source + ui_source
+    assert "channel.send(" not in source + ui_source
+    assert ".rpc(" not in source + ui_source
+    assert ".upsert(" not in source + ui_source
     assert ".insert(" not in source + ui_source
     assert "member_is_pending_verification" in source
     assert "_member_payload" in source
