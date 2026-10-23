@@ -3,6 +3,14 @@
 ## Current single-task lock
 The owner explicitly FORCE SWITCHED to **Issue #367, Action & Reminder Center**, after PR #691 merged. The previous 4:20 task and guarded branch-retirement task are now both paused. Do not mix further 4:20 work, branch cleanup, Cinema, or unrelated verification framework implementation into this slice.
 
+## Slice 4D.5B: Operator-approved live source lock (active, 2026-10-23)
+- PR #699 (4D.5A) verified merged at `8b5ab0e27c807c0fcbd4c8b420bd84d9077b4e3b`, all six workflows successful; Discloud deployed commit and private migrations remain **unverified/unapplied**.
+- Active branch `feat/action-center-4d5b-release-lock-20261023`; the single-task FORCE SWITCH lock remains Action & Reminder Center, with all unrelated projects paused.
+- Add absent-by-default `DANK_ACTION_CENTER_CANARY_APPROVED_SOURCE_FP` exact lowercase 16-character CI-source fingerprint requirement to the existing four send/guild/member/revision gates. Must match actual running source digest, including before claim and immediately prior to DM, or refuse send. Approval must come from independently reviewed exact-release CI, never from the self-reported bot value alone.
+- Owner-only Readiness Report displays the source-approval match **separately** from external GitHub main attestation, which remains unverified until deployment proof. Missing, uppercase or stale source lock cannot authorize a DM.
+- Extend existing focused canary/owner/readiness regressions. No new workers, scheduler, Supabase or private PostgreSQL migration, Discloud config, secrets, claims or live DMs.
+- **Still blocked**: verify stoneyverify deployed SHA/fingerprint, review and explicitly authorize the two private PostgreSQL migrations on the actual private Discloud PG database, opt in one non-exempt pending member, configure the exact one-person canary gates and approve a single monitored DM. No implicit production authorization in a GitHub merge.
+
 ## Slice 4D.5A: Non-sending deployment and database preflight (active, 2026-10-23)
 - PR #698 (4D.4) is VERIFIED MERGED at `1d12e05d408bd5e7198d607422aad44a80c71927` and all seven workflows passed. No open PRs existed at the start of this slice. This does NOT prove Discloud deployed that SHA.
 - Active branch `feat/action-center-4d5-live-readiness-20261023` starts from that exact merged main; single active task remains **Action & Reminder Center** only.
