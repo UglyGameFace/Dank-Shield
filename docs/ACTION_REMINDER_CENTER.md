@@ -356,9 +356,10 @@ It can report, without showing credentials or target IDs:
   are now covered by that fingerprint.
 - Whether the dedicated `DANK_VERIFY_REMINDER_DATABASE_URL` is configured.
   Only a boolean is shown. Neither the DSN nor any database errors appear.
-- **Read-only SELECT** readiness for both the 4C atomic Member Setup claim
-  tables and 4D.4 canary operator audit table, checking required columns
-  and permissions. Missing/unmigrated/private-VLAN-unreachable tables are
+- **Read-only database permission probes** for both the 4C atomic Member Setup
+  claim tables and the 4D.4 operator audit table, checking columns and all
+  three privileges **SELECT, INSERT and UPDATE individually**, without
+  executing a write. Missing/unmigrated/private-VLAN-unreachable tables are
   visibly blocked. No DDL, INSERT, UPDATE or DELETE is run.
 - Whether all four canary flags are syntactically complete and the configured
   guild matches the server where the owner opened the panel. It does **not**
