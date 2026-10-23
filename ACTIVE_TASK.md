@@ -3,6 +3,15 @@
 ## Current single-task lock
 The owner explicitly FORCE SWITCHED to **Issue #367, Action & Reminder Center**, after PR #691 merged. The previous 4:20 task and guarded branch-retirement task are now both paused. Do not mix further 4:20 work, branch cleanup, Cinema, or unrelated verification framework implementation into this slice.
 
+## Slice 4D.3: disconnected manual single-member canary (active, 2026-10-23)
+- Verified PR #696 (4D.2) merged as `688e0c600a16bab5579b10c7f5d3e73a098b312b`, all six checks green. Branch `feat/action-center-4d3-canary-dispatch-20261023` starts from that exact main.
+- Add **unwired** `action_canary_delivery.py` for one Member Setup user/revision only, requiring exact 4-way process-local canary gates before any claim, cached membership proof, 4D.2 durable readiness and atomic private PostgreSQL reservation. After reservation, recheck user opt-in, canonical Member Setup completion, guild schedule/quiet hours, same recipient/revision and environment gate; cancel any uncertain outcome without retry.
+- Canary limits strictly ONE attempt per member/revision and ONE per guild-local day. DM text is fixed, minimal and mention-free. Existing verification reminder worker is unchanged.
+- No public slash/button, guild scan, startup hook, scheduled worker, deployment configuration, secrets, live DMs or private PostgreSQL migrations in this slice. The 4C claim tables remain **not applied** to production.
+- Focused tests and CI cover opt-out/completion after claim, exact gate revoke, day rollover, failed Discord send, no callers, denied claims, isolated real PG17 concurrency.
+- **Single active task remains Action & Reminder Center 4D.3.** Paused: 4:20, Cinema, wider Verification Framework and branch-retirement work. Post-merge approval for any true canary rollout requires a separate, audited human-authorized invocation and live DB migration review.
+- See `docs/ACTION_REMINDER_CENTER.md`.
+
 ## Slice 4D.2: actual private ledger readiness (active, 2026-10-23)
 - PR #695 (4D.1) merged into `86d44bb9e135d6862c61c3becc10f0cdb58f7f00`, with all six checks green. Member consent remains explicitly opt-in per guild; zero automatic Action Center reminder DMs enabled.
 - Branch `feat/action-center-4d2-ledger-readiness-20261023` starts from that exact merged main; this is the **only active development task**.

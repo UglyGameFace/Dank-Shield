@@ -237,3 +237,58 @@ member** (never a guild-wide member scan) and cannot activate reminder DMs.
 No work on 4:20, Cinema, branch retirement or the verification reminder
 worker is included. Android Discord canary and actual Discloud deployed
 SHA remain separate acceptance gates before claiming production readiness.
+
+
+## Slice 4D.3: disconnected, manually authorized single-user canary dispatcher
+
+This slice introduces `stoney_verify/action_canary_delivery.py` as an
+**internal, unconnected dispatcher** for a single Member Setup revision.
+It has no Discord button, slash command, scheduled worker, startup hook or
+bulk member fetch. **Merging it cannot start sending messages.**
+
+Before an explicitly reviewed canary **in a later rollout**, the operator
+would need to: migrate and verify the already-staged private PostgreSQL 4C
+claim tables, verify production credentials, confirm a real target member's
+affirmative and fresh per-server DM consent, ensure the server draft includes
+Member Setup revisions, and then deliberately set ALL FOUR exact-match
+process-local settings:
+
+- `DANK_ACTION_CENTER_CANARY_SEND=1` (absent/off by default)
+- `DANK_ACTION_CENTER_CANARY_GUILD_ID` = an explicitly selected guild ID
+- `DANK_ACTION_CENTER_CANARY_USER_ID` = an explicitly selected member ID
+- `DANK_ACTION_CENTER_CANARY_REVISION` = that member's current **published**
+  Member Setup revision number
+
+These are gates, **not secrets**. They have not been configured or deployed
+by this PR. This slice intentionally does **not** expose an invocation path
+even when all four values exist. A later PR must approve and wire a manual
+invocation only for an authorized canary, with an auditable staff action.
+
+If that later manual invocation happens, the internal API first enforces exact
+gates and current cached Discord membership, then checks private consent,
+canonical current Member Setup completion and schedule, durable real claim
+history, guild-local quiet hours, attempt and daily budgets. Before Discord
+delivery it reserves the per-revision attempt **atomically** on the private
+PostgreSQL ledger and limits a canary to **one attempt per revision and one
+attempt per guild-local day** regardless of more permissive guild draft caps.
+
+Following the committed claim it independently rereads owner status,
+preference, policy, and exact-guild/recipient/revision gates. Any opt-out,
+completion, rule revision, local-day rollover, missing source or uncertain send
+consumes the attempt but **does not send or retry**. No automatic retry is
+possible in this API. Discord DM text has no staff-defined content, roles,
+mentions or external links. Verification reminder DMs remain owned entirely
+by the existing worker.
+
+Important limitations: there is no transactional lock across Discord and
+Supabase, so a preference could theoretically change between the final fresh
+read and the Discord API send. The post-claim check reduces this window but
+cannot offer perfect atomic cancellation. A future real rollout must explicitly
+accept/mitigate that residual race, add operational delivery result auditing,
+and confirm privacy-aware ledger cleanup, monitoring and human rollback.
+
+**Acceptance gates:** exact-head CI, disposable PostgreSQL 17 concurrency and
+idempotency tests, no automatic caller/static audit, safe failed-send behavior,
+real Discloud release SHA, reviewed private ledger migration and explicit
+operator canary approval. None of these PR changes perform a migration, add a
+production environment variable, or send a DM.
