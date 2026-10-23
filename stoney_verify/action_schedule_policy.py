@@ -141,6 +141,7 @@ class ScheduleDecision:
 def preview_candidate(
     policy: ActionSchedule, *, condition: str, owner_status: str,
     now: datetime, joined_at: datetime | None,
+    condition_started_at: datetime | None = None,
     last_claimed_at: datetime | None = None, attempts: int = 0,
     guild_claims_today: int = 0, included: bool = True,
 ) -> ScheduleDecision:
@@ -157,6 +158,10 @@ def preview_candidate(
         return ScheduleDecision("excluded", reason="not included in this guild draft")
     if now.tzinfo is None or joined_at is None or joined_at.tzinfo is None:
         return ScheduleDecision("blocked", reason="missing timezone-aware join date")
+    if condition == "member_setup_revision" and (
+        condition_started_at is None or condition_started_at.tzinfo is None
+    ):
+        return ScheduleDecision("blocked", reason="published revision timestamp unavailable")
     if last_claimed_at is not None and last_claimed_at.tzinfo is None:
         return ScheduleDecision("blocked", reason="invalid claim timestamp")
     if attempts < 0 or guild_claims_today < 0:
@@ -166,7 +171,12 @@ def preview_candidate(
     if guild_claims_today >= policy.max_guild_per_day:
         return ScheduleDecision("capped", reason="guild daily cap")
     instant = now.astimezone(timezone.utc)
-    due = joined_at.astimezone(timezone.utc) + timedelta(hours=policy.first_delay_hours)
+    start = joined_at.astimezone(timezone.utc)
+    if condition == "member_setup_revision":
+        # An old member must not be nudged because a revision was published
+        # today. Wait until the later of actual joining and publishing.
+        start = max(start, condition_started_at.astimezone(timezone.utc))
+    due = start + timedelta(hours=policy.first_delay_hours)
     if last_claimed_at is not None:
         due = max(due, last_claimed_at.astimezone(timezone.utc) + timedelta(hours=policy.repeat_hours))
     if instant < due:
