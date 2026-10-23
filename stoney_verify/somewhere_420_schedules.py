@@ -32,16 +32,21 @@ def valid_timezone(value: str) -> str:
     return name
 
 
-def next_daily_fire(zone_name: str, *, now: datetime | None = None) -> datetime:
+def next_daily_fire(zone_name: str, *, now: datetime | None = None, reminder_minutes: int = 0) -> datetime:
+    if reminder_minutes not in (0, 5, 10, 15):
+        raise ValueError("Choose 0, 5, 10 or 15 minutes before 4:20.")
     instant = now or datetime.now(timezone.utc)
     if instant.tzinfo is None:
         raise ValueError("now must have a timezone")
     local = instant.astimezone(ZoneInfo(valid_timezone(zone_name)))
     day = local.date()
     candidate = datetime.combine(day, time(hour=16, minute=20), tzinfo=local.tzinfo)
-    if candidate.astimezone(timezone.utc) <= instant.astimezone(timezone.utc):
-        candidate = datetime.combine(day + timedelta(days=1), time(16, 20), tzinfo=local.tzinfo)
-    return candidate.astimezone(timezone.utc)
+    candidate = candidate.astimezone(timezone.utc) - timedelta(minutes=reminder_minutes)
+    if candidate <= instant.astimezone(timezone.utc):
+        candidate = datetime.combine(
+            day + timedelta(days=1), time(16, 20), tzinfo=local.tzinfo
+        ).astimezone(timezone.utc) - timedelta(minutes=reminder_minutes)
+    return candidate
 
 
 def quiet_at(hour: int, start: int, end: int) -> bool:
@@ -90,8 +95,11 @@ async def save_schedule(
     kind: str, item_id: int, *, zone_name: str, enabled: bool,
     channel_id: int = 0, favorite_city: str = "",
     notify_role: bool = False, quiet_start: int = 22, quiet_end: int = 8,
+    reminder_minutes: int = 0, reminder_once: bool = False,
 ) -> dict[str, Any]:
     zone = valid_timezone(zone_name)
+    if reminder_minutes not in (0, 5, 10, 15):
+        raise ValueError("Heads-up must be off, 5, 10 or 15 minutes.")
     if kind not in ("guild", "member") or int(item_id) <= 0:
         raise ValueError("Invalid 4:20 schedule owner")
     if not (0 <= int(quiet_start) <= 23 and 0 <= int(quiet_end) <= 23):
@@ -111,7 +119,11 @@ async def save_schedule(
         "notify_role": bool(notify_role) if kind == "guild" else False,
         "quiet_start": int(quiet_start), "quiet_end": int(quiet_end),
         "enabled": bool(enabled),
-        "next_fire_at": next_daily_fire(zone).isoformat(),
+        "reminder_minutes": reminder_minutes if kind == "member" else 0,
+        "reminder_once": bool(reminder_once) if kind == "member" else False,
+        "next_fire_at": next_daily_fire(
+            zone, reminder_minutes=reminder_minutes if kind == "member" else 0
+        ).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     response = await _execute(
