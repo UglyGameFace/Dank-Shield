@@ -25,6 +25,21 @@ create table if not exists public.dank_somewhere_420_role_delivery (
 );
 create index if not exists idx_dank_420_role_delivery_age
   on public.dank_somewhere_420_role_delivery(claimed_at);
+
+-- Bind a bot-authored private DM's message ID to the originating guild.
+-- The button can look up ownership without leaking guild IDs in visible
+-- embed footers or trusting text supplied by a member.
+create table if not exists public.dank_somewhere_420_role_dm_links (
+  dm_message_id text primary key,
+  guild_id text not null,
+  user_id text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_dank_420_role_dm_links_member
+  on public.dank_somewhere_420_role_dm_links(user_id,created_at);
+alter table public.dank_somewhere_420_role_dm_links enable row level security;
+revoke all on public.dank_somewhere_420_role_dm_links from public,anon,authenticated;
+grant select,insert on public.dank_somewhere_420_role_dm_links to service_role;
 alter table public.dank_somewhere_420_role_optouts enable row level security;
 alter table public.dank_somewhere_420_role_delivery enable row level security;
 revoke all on public.dank_somewhere_420_role_optouts from public,anon,authenticated;
