@@ -164,6 +164,53 @@ class ScheduleView(_OwnedStaffView):
         embed.set_footer(text="Read only • No automatic reminders enabled")
         await _replace(interaction, embed=embed, view=SchedulePreviewView(self.user_id, self.guild_id))
 
+    @discord.ui.button(label="Check Delivery Readiness", emoji="🛡️", style=discord.ButtonStyle.secondary)
+    async def inspect_readiness(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """Inspect only the staff member's own status and real claim history."""
+        if not isinstance(interaction.user, discord.Member):
+            return await _msg(interaction, "Open your own private readiness check in this server.")
+        await _defer(interaction)
+        try:
+            from stoney_verify.member_setup_service import load_guild_setup_state
+            from stoney_verify.action_delivery_readiness import inspect_member_setup_readiness
+            guild_state = await load_guild_setup_state(self.guild_id, refresh=True)
+            revision = int(guild_state.get("current_revision") or 0)
+            result = await inspect_member_setup_readiness(
+                interaction.user, expected_revision=revision,
+            )
+        except Exception:
+            return await _msg(interaction, "Couldn't verify delivery readiness. No reminder is authorized.")
+        embed = discord.Embed(
+            title="🛡️ Action Delivery Readiness • Private Check",
+            description=(
+                "**Your own Member Setup status only.** This uses current consent, "
+                "canonical completion, and (where applicable) actual private "
+                "PostgreSQL attempt history. Staff exemptions may apply.\\n\\n"
+                f"**Status:** `{result.status}`\\n"
+                f"**Reason:** {result.reason}\\n\\n"
+                "🔒 **Automatic Action Center DMs remain disabled.**"
+            ),
+            color=discord.Color.blurple(),
+        )
+        if result.ledger_checked:
+            embed.add_field(
+                name="Observed counters",
+                value=f"Member attempts for this revision: **{result.attempts}**\\n"
+                      f"Guild claims today: **{result.daily_count}**",
+                inline=False,
+            )
+        if result.next_at is not None:
+            embed.add_field(
+                name="Preview timing",
+                value=f"<t:{int(result.next_at.timestamp())}:F>",
+                inline=False,
+            )
+        embed.set_footer(text="No delivery • No claim reserved • No other members inspected")
+        await _replace(
+            interaction, embed=embed,
+            view=SchedulePreviewView(self.user_id, self.guild_id),
+        )
+
     @discord.ui.button(label="Back to Action Builder", emoji="↩️", style=discord.ButtonStyle.secondary)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         from .public_action_builder import open_action_builder
