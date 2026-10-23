@@ -59,7 +59,14 @@ class MemberActionPreferencesView(discord.ui.View):
         except Exception:
             return await _msg(
                 interaction,
-                "Your new choice couldn't be verified. No new reminder permission was granted. Try again.",
+                (
+                    "Couldn't confirm that **Stop Setup DMs** was saved. "
+                    "Your previous opt-in may still be stored. Retry the setting. "
+                    "Automatic Action Center DMs are not currently active."
+                    if not enabled else
+                    "Couldn't verify your opt-in. Future reminder delivery is not authorized. "
+                    "Try again."
+                ),
             )
         await _replace(
             interaction, embed=_embed(confirmed),
