@@ -39,8 +39,10 @@ def setup(monkeypatch, member, *, flags=True, readiness="preview_due", reserved=
         monkeypatch.setenv(canary.GUILD_ENV, "501")
         monkeypatch.setenv(canary.USER_ENV, "601")
         monkeypatch.setenv(canary.REVISION_ENV, "3")
+        monkeypatch.setattr(canary, "runtime_source_fingerprint", lambda: "a" * 16)
+        monkeypatch.setenv(canary.APPROVED_SOURCE_ENV, "a" * 16)
     else:
-        for env in (canary.ENABLE_ENV, canary.GUILD_ENV, canary.USER_ENV, canary.REVISION_ENV):
+        for env in (canary.ENABLE_ENV, canary.GUILD_ENV, canary.USER_ENV, canary.REVISION_ENV, canary.APPROVED_SOURCE_ENV):
             monkeypatch.delenv(env, raising=False)
 
     events = []
@@ -111,6 +113,20 @@ def test_unconfigured_or_wrong_target_blocks_without_db_or_send(monkeypatch):
     monkeypatch.setenv(canary.USER_ENV, "602")
     assert deliver(member).status == "disabled"
     assert member.sent == []
+
+
+def test_matching_targets_with_unapproved_or_stale_source_cannot_claim(monkeypatch):
+    member = fake_member(monkeypatch)
+    events = setup(monkeypatch, member)
+    monkeypatch.delenv(canary.APPROVED_SOURCE_ENV, raising=False)
+    assert deliver(member).status == "disabled"
+    assert events == [] and not member.sent
+    monkeypatch.setenv(canary.APPROVED_SOURCE_ENV, "b" * 16)
+    assert deliver(member).status == "disabled"
+    assert events == [] and not member.sent
+    monkeypatch.setenv(canary.APPROVED_SOURCE_ENV, "a" * 16)
+    assert deliver(member).status == "sent"
+    assert events.count("claim") == 1
 
 
 def test_sends_exactly_one_member_setup_canary_after_atomic_reservation(monkeypatch):
