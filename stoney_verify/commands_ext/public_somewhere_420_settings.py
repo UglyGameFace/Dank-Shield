@@ -11,6 +11,9 @@ from stoney_verify.somewhere_420_schedules import (
     Somewhere420StorageUnavailable, get_schedule, next_daily_fire, save_schedule, valid_timezone,
 )
 from stoney_verify.ui.resource_browser import DankGuildResourceBrowserView
+from stoney_verify.somewhere_420_role_headsup import (
+    configure_role_heads_up, get_role_optout, set_role_optout,
+)
 from .public_owner_authority import interaction_has_manage_guild_authority
 
 def _truth(value: str) -> bool:
@@ -58,6 +61,14 @@ def _settings_embed(kind: str, data: dict | None) -> discord.Embed:
     embed.add_field(name="Timezone", value=str(saved.get("timezone") or "Not chosen"), inline=True)
     embed.add_field(name="Next 4:20", value=_time_summary(data), inline=False)
     if kind == "guild":
+        rid = int(saved.get("role_reminder_role_id") or 0)
+        embed.add_field(
+            name="🌿 Stoners heads-up (5 min early)",
+            value=("✅ On" if saved.get("role_reminder_enabled") else "▫️ Off")
+            + (f" • <@&{rid}>" if rid else " • Choose a role first")
+            + "\\nAll role holders are included automatically; individual Stop reminders is available.",
+            inline=False,
+        )
         cid = int(saved.get("channel_id") or 0)
         embed.add_field(name="Channel", value=f"<#{cid}>" if cid else "Choose a channel", inline=True)
         embed.add_field(
@@ -98,7 +109,20 @@ async def open_personal_420(interaction: discord.Interaction) -> None:
         saved = await get_schedule("member", interaction.user.id)
     except Somewhere420StorageUnavailable:
         return await _reply(interaction, "Personal settings need the private 4:20 schedule migration before they can save.")
-    await _panel(interaction, _settings_embed("member", saved), Personal420View(interaction.user.id, saved))
+    embed = _settings_embed("member", saved)
+    gid = int(interaction.guild.id) if interaction.guild is not None else 0
+    if gid:
+        try:
+            muted = await get_role_optout(gid, int(interaction.user.id))
+            embed.add_field(
+                name="🌿 @Stoners heads-up (this server)",
+                value=("🔕 Muted" if muted else "✅ Automatic while you have the selected role")
+                + "\\nAt most one private DM per day, five minutes early; opt out anytime.",
+                inline=False,
+            )
+        except Somewhere420StorageUnavailable:
+            embed.add_field(name="Stoners heads-up", value="Settings database unavailable.", inline=False)
+    await _panel(interaction, embed, Personal420View(interaction.user.id, saved, guild_id=gid))
 
 
 class PersonalSettingsModal(discord.ui.Modal, title="Personal 4:20 Preferences"):
@@ -136,32 +160,50 @@ class PersonalSettingsModal(discord.ui.Modal, title="Personal 4:20 Preferences")
             )
         except (Somewhere420StorageUnavailable, ValueError):
             return await _reply(interaction, "Couldn't save private reminders. Check the 4:20 database migration.")
-        await _panel(interaction, _settings_embed("member", saved), Personal420View(interaction.user.id, saved))
+        await open_personal_420(interaction)
+
 
 
 class Personal420View(_OwnedView):
-    def __init__(self, owner_id: int, saved: dict | None):
+    def __init__(self, owner_id: int, saved: dict | None, *, guild_id: int = 0):
         super().__init__(owner_id)
         self.saved = saved
+        self.guild_id = int(guild_id)
 
     @discord.ui.button(label="Edit Timezone, City & DMs", emoji="🕓", style=discord.ButtonStyle.primary)
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.send_modal(PersonalSettingsModal(self.owner_id, self.saved))
 
-    @discord.ui.button(label="Stop My DMs", emoji="🔕", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Stop My Daily DMs", emoji="🔕", style=discord.ButtonStyle.danger)
     async def stop(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         cfg = self.saved or {}
         try:
-            saved = await save_schedule(
-                "member", self.owner_id, zone_name=str(cfg.get("timezone") or "UTC"),
-                enabled=False, favorite_city=str(cfg.get("favorite_city") or ""),
-            )
-            await _panel(interaction, _settings_embed("member", saved), Personal420View(self.owner_id, saved))
+            await save_schedule("member", self.owner_id, zone_name=str(cfg.get("timezone") or "UTC"),
+                                enabled=False, favorite_city=str(cfg.get("favorite_city") or ""))
         except (Somewhere420StorageUnavailable, ValueError):
-            await _reply(interaction, "Couldn't save the opt-out. Try again when database access is restored.")
+            return await _reply(interaction, "Couldn't save your daily DM opt-out. Try again when the database returns.")
+        await open_personal_420(interaction)
 
-    @discord.ui.button(label="Back to World Clock", emoji="🌍", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Stop Stoners Heads-Up", emoji="🔕", style=discord.ButtonStyle.danger, row=1)
+    async def mute_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._set_role_muted(interaction, True)
+
+    @discord.ui.button(label="Resume Stoners Heads-Up", emoji="🔔", style=discord.ButtonStyle.secondary, row=1)
+    async def unmute_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._set_role_muted(interaction, False)
+
+    async def _set_role_muted(self, interaction: discord.Interaction, muted: bool) -> None:
+        if not self.guild_id or interaction.guild is None or interaction.guild.id != self.guild_id:
+            return await _reply(interaction, "Open My 4:20 Preferences inside your server.")
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            await set_role_optout(self.guild_id, self.owner_id, opted_out=muted)
+        except (Somewhere420StorageUnavailable, ValueError):
+            return await _reply(interaction, "Couldn't save your Stoners preference. Check the database migration.")
+        await open_personal_420(interaction)
+
+    @discord.ui.button(label="Back to World Clock", emoji="🌍", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         from .public_somewhere_420 import open_somewhere_420
         await open_somewhere_420(interaction)
@@ -228,6 +270,11 @@ class ServerSettingsModal(discord.ui.Modal, title="Daily Server 4:20 Settings"):
                 "guild", interaction.guild.id, zone_name=zone, enabled=active,
                 channel_id=channel_id, notify_role=ping, quiet_start=start, quiet_end=end,
             )
+            if latest.get("role_reminder_enabled"):
+                data = await configure_role_heads_up(
+                    interaction.guild.id, role_id=int(latest.get("role_reminder_role_id") or 0),
+                    enabled=True, zone_name=zone,
+                )
         except (Somewhere420StorageUnavailable, ValueError):
             return await _reply(interaction, "Could not save 4:20 settings. No announcement was enabled.")
         await _panel(interaction, _settings_embed("guild", data), Staff420View(self.owner_id, data))
@@ -316,7 +363,68 @@ class Staff420View(_OwnedView):
             return await _reply(interaction, "Unable to safely update the scheduled announcement.")
         await _panel(interaction, _settings_embed("guild", saved), Staff420View(self.owner_id, saved))
 
-    @discord.ui.button(label="Back to World Clock", emoji="🌍", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Choose Stoners Role", emoji="🌿", style=discord.ButtonStyle.primary, row=2)
+    async def choose_stoners(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        guild = interaction.guild
+        if guild is None or not interaction_has_manage_guild_authority(interaction):
+            return await _reply(interaction, "Manage Server permission is required.")
+        async def picked(pick: discord.Interaction, role: discord.Role) -> None:
+            if not interaction_has_manage_guild_authority(pick):
+                return await _reply(pick, "Manage Server permission is required.")
+            if not pick.response.is_done():
+                await pick.response.defer()
+            try:
+                old = await get_schedule("guild", guild.id) or {}
+                await configure_role_heads_up(
+                    guild.id, role_id=role.id, enabled=bool(old.get("role_reminder_enabled")),
+                    zone_name=str(old.get("timezone") or "UTC"),
+                )
+            except (Somewhere420StorageUnavailable, ValueError):
+                return await _reply(pick, "Couldn't save Stoners role; check the database migration.")
+            await open_staff_420(pick)
+        browser = DankGuildResourceBrowserView(
+            guild=guild, author_id=self.owner_id, resource_kinds=("role",),
+            on_pick=picked, custom_id="dank:420:stoners-role",
+            title="Choose Stoners Heads-Up Role", on_home=open_staff_420,
+        )
+        await _panel(interaction, browser.embed(), browser)
+
+    @discord.ui.button(label="Enable Stoners Heads-Up", emoji="✅", style=discord.ButtonStyle.success, row=3)
+    async def enable_stoners(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._set_stoners_enabled(interaction, True)
+
+    @discord.ui.button(label="Disable Stoners Heads-Up", emoji="🛑", style=discord.ButtonStyle.danger, row=3)
+    async def disable_stoners(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._set_stoners_enabled(interaction, False)
+
+    async def _set_stoners_enabled(self, interaction: discord.Interaction, enabled: bool) -> None:
+        guild = interaction.guild
+        if guild is None or not interaction_has_manage_guild_authority(interaction):
+            return await _reply(interaction, "Manage Server permission is required.")
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            old = await get_schedule("guild", guild.id) or {}
+            role_id = int(old.get("role_reminder_role_id") or 0)
+            if enabled and role_id <= 0:
+                # Reuse the existing configured Stoners /toke starter role
+                # before requiring an extra picker step on customized servers.
+                from stoney_verify.guild_config import get_guild_config
+                from stoney_verify.community_pings_service import parse_community_pings, toke_role_ids
+                cfg = await get_guild_config(guild.id, refresh=True)
+                if str(cfg.get("source", "")).startswith("unavailable:"):
+                    return await _reply(interaction, "Community & Pings settings are unavailable. Try later.")
+                role_id, _notify = toke_role_ids(parse_community_pings(cfg), cfg)
+            if not isinstance(guild.get_role(role_id), discord.Role):
+                return await _reply(interaction, "Choose your Stoners role first using Search-Safe.")
+            await configure_role_heads_up(
+                guild.id, role_id=role_id, enabled=enabled,
+                zone_name=str(old.get("timezone") or "UTC"),
+            )
+        except (Somewhere420StorageUnavailable, ValueError):
+            return await _reply(interaction, "Couldn't save Stoners reminder setting; check the database migration.")
+        await open_staff_420(interaction)
+
+    @discord.ui.button(label="Back to World Clock", emoji="🌍", style=discord.ButtonStyle.secondary, row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         from .public_somewhere_420 import open_somewhere_420
         await open_somewhere_420(interaction)
