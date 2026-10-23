@@ -2,8 +2,29 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
+from urllib.parse import urlsplit
+import os
 
 import psycopg
+import pytest
+
+# This suite uses real, mutating SQL against a disposable GitHub Actions
+# PostgreSQL 17 service. Standard unit CI does NOT provision that service.
+# An explicit opt-in prevents missing-DB failures and protects real databases.
+pytestmark = pytest.mark.skipif(
+    os.getenv("DANK_ACTION_CENTER_TEST_PG") != "1",
+    reason="Real PostgreSQL contract tests run only in dedicated Action Center CI",
+)
+
+
+@pytest.fixture(autouse=True)
+def require_disposable_postgres_only():
+    url = urlsplit(os.getenv("DANK_VERIFY_REMINDER_DATABASE_URL", ""))
+    if url.hostname not in ("127.0.0.1", "localhost") or url.path != "/postgres":
+        pytest.fail(
+            "PostgreSQL integration tests require a disposable local postgres database"
+        )
+
 
 from stoney_verify import action_center_postgres as claims
 
