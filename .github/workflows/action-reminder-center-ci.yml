@@ -79,4 +79,8 @@ jobs:
           psql -v ON_ERROR_STOP=1 -f postgres/migrations/202610230001_action_center_delivery_reservations.sql
           psql -v ON_ERROR_STOP=1 -f postgres/migrations/202610230001_action_center_delivery_reservations.sql
       - name: Verify atomic claim, cooldown, daily cap, rollback and no verify collision
+        # Only this isolated job provisions disposable PostgreSQL and executes
+        # mutating integration assertions. The broad bot unit suite does not.
+        env:
+          DANK_ACTION_CENTER_TEST_PG: "1"
         run: python -m pytest -q tests/test_action_center_postgres_live.py --tb=short --disable-warnings
