@@ -99,6 +99,8 @@ class ActionCenterView(discord.ui.View):
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         if guild is None or member is None:
             return await _feedback(interaction, "Open this in your server.")
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
         # Fresh click-time guild config/channel permissions, never a guessed
         # channel by name. Discord itself applies permission checks to links.
         try:
@@ -140,8 +142,8 @@ class ActionCenterView(discord.ui.View):
 
     @discord.ui.button(label="Home", emoji="🏠", style=discord.ButtonStyle.secondary, row=2)
     async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        from .public_command_surface_v2 import open_compact_dank_home
-        await open_compact_dank_home(interaction)
+        from .public_command_surface_v2 import _open_home
+        await _open_home(interaction)
 
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=2)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
