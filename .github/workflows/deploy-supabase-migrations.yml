@@ -120,18 +120,65 @@ jobs:
         with:
           version: latest
 
-      - name: Link production project
+      - name: Verify linked project is current DankShield production
         shell: bash
-        run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
+        run: |
+          set -euo pipefail
+          # This is a public project reference, not a key or secret. The
+          # immutable allowlist prevents successful writes to the old project
+          # even if somebody forgets to rotate the Actions secret.
+          expected_live_project="viamriafkbqhquvrsnua"
+          if [ "$SUPABASE_PROJECT_ID" != "$expected_live_project" ]; then
+            echo "::error title=Wrong production database::GitHub SUPABASE_PROJECT_ID does not match the live DankShield project. Migration cancelled before any link or SQL."
+            exit 1
+          fi
+          echo "DankShield live project identity verified."
 
-      - name: Show migration status
+      - name: Initialize isolated live migration directory
         shell: bash
-        run: supabase migration list
+        run: |
+          set -euo pipefail
+          workdir="$RUNNER_TEMP/dankshield-live-migration-workdir"
+          mkdir -p "$workdir"
+          (cd "$workdir" && supabase init)
+          echo "LIVE_WORKDIR=$workdir" >> "$GITHUB_ENV"
 
-      - name: Preview pending migrations
+      - name: Link ONLY the approved live DankShield project
         shell: bash
-        run: supabase db push --dry-run --include-all
+        run: |
+          set -euo pipefail
+          cd "$LIVE_WORKDIR"
+          supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
-      - name: Apply pending migrations
+      - name: Fetch already applied live migrations (read-only)
         shell: bash
-        run: supabase db push --include-all
+        run: |
+          set -euo pipefail
+          cd "$LIVE_WORKDIR"
+          supabase migration fetch --linked
+
+      - name: Verify live migration baseline and stage only new SQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/verify_live_supabase_migrations.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --workdir "$LIVE_WORKDIR"
+
+      - name: Show LIVE migration status
+        shell: bash
+        run: |
+          cd "$LIVE_WORKDIR"
+          supabase migration list
+
+      - name: Preview LIVE pending migrations
+        shell: bash
+        run: |
+          cd "$LIVE_WORKDIR"
+          supabase db push --dry-run --include-all
+
+      - name: Apply only reviewed LIVE pending migrations
+        shell: bash
+        run: |
+          cd "$LIVE_WORKDIR"
+          supabase db push --include-all

@@ -1,9 +1,12 @@
 # DankShield fresh Supabase migration (separate production candidate)
 
 **Target:** new dedicated organization `Dank Shield`, project `viamriafkbqhquvrsnua`, US East.
-**Source:** prior shared Supabase project, still the only production writer.
-**Safety:** never run these files against the old project. The old repo's
-`supabase/migrations` directory and its deployment automation are independent.
+**Source:** prior shared Supabase project `hyncpbvqyjojxhjzcdzg`, now legacy/rollback.
+**Safety:** this document describes the **historical bootstrap** completed before
+Dank Shield began writing to the dedicated project. Do not replay the old
+`supabase/migrations` chain against the live project.
+Future production SQL must be committed under `supabase_live/migrations/`
+and deployed with the hard-targeted workflow.
 
 ## Phase 1, verified 2026-10-20
 
@@ -42,4 +45,4 @@
    Supabase credentials, observe startup and guild operations, and preserve
    the previous database for rollback.
 
-**No cutover, no changes to Discloud, no deletion of source records.**
+**Historical note:** The original bootstrap had no cutover. The live Discloud bot was subsequently verified using the dedicated DankShield project. The old project remains untouched here; production migration ownership is documented in `docs/RELEASE_GOVERNANCE.md`.
