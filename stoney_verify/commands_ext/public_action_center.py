@@ -144,6 +144,11 @@ class ActionCenterView(discord.ui.View):
         from .public_action_builder import open_action_builder
         await open_action_builder(interaction)
 
+    @discord.ui.button(label="My Reminder Preferences", emoji="🔔", style=discord.ButtonStyle.secondary, row=2)
+    async def my_preferences(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        from .public_action_preferences import open_member_action_preferences
+        await open_member_action_preferences(interaction)
+
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=2)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await open_action_center(interaction)
