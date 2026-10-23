@@ -31,6 +31,14 @@ _FINGERPRINT_PATHS: tuple[str, ...] = (
     "stoney_verify/verification_new/basic_verify.py",
     "stoney_verify/commands_ext/public_owner_authority.py",
     "stoney_verify/commands_ext/public_self_roles_group.py",
+    # Action Center 4D.5: changes to canary safety must alter release proof.
+    "stoney_verify/action_canary_delivery.py",
+    "stoney_verify/action_canary_audit.py",
+    "stoney_verify/action_canary_readiness_report.py",
+    "stoney_verify/action_center_postgres.py",
+    "stoney_verify/commands_ext/public_action_canary.py",
+    "stoney_verify/action_member_consent.py",
+    "stoney_verify/action_delivery_preflight.py",
 )
 
 

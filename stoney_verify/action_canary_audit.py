@@ -26,8 +26,10 @@ def audit_ready_sync() -> bool:
                 "from public.dank_action_center_canary_audit limit 0"
             )
             cur.execute(
-                "select has_table_privilege(current_user,"
-                "'public.dank_action_center_canary_audit','SELECT,INSERT,UPDATE')"
+                "select "
+                "has_table_privilege(current_user, 'public.dank_action_center_canary_audit', 'SELECT') "
+                "and has_table_privilege(current_user, 'public.dank_action_center_canary_audit', 'INSERT') "
+                "and has_table_privilege(current_user, 'public.dank_action_center_canary_audit', 'UPDATE')"
             )
             row = cur.fetchone()
             return bool(row and row[0] is True)

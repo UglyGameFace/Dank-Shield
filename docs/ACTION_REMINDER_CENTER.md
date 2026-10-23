@@ -339,3 +339,64 @@ This is a **single manual canary**, NOT recurring reminder delivery.
 and approval, observability, private audit retention/cleanup, a safe Discloud
 release verification, and a narrow end-to-end canary before permitting
 scheduling. The existing verification reminder worker remains untouched.
+
+
+## Slice 4D.5A: non-sending live readiness diagnostics and deployment proof
+
+A merged PR is not proof that the `stoneyverify` process is executing it.
+This slice creates an app-owner-only **Readiness Report** from
+`/dank home → Action & Reminder Center → Action Builder (Draft) →
+Safety Schedule (Draft) → Owner Canary Console → Readiness Report`.
+
+This report is available **even when canary environment gates are disabled**.
+It can report, without showing credentials or target IDs:
+
+- The runtime's declared release SHA (if supplied), and a local source
+  fingerprint. Critical Action Center canary, audit, consent and claim files
+  are now covered by that fingerprint.
+- Whether the dedicated `DANK_VERIFY_REMINDER_DATABASE_URL` is configured.
+  Only a boolean is shown. Neither the DSN nor any database errors appear.
+- **Read-only database permission probes** for both the 4C atomic Member Setup
+  claim tables and the 4D.4 operator audit table, checking columns and all
+  three privileges **SELECT, INSERT and UPDATE individually**, without
+  executing a write. Missing/unmigrated/private-VLAN-unreachable tables are
+  visibly blocked. No DDL, INSERT, UPDATE or DELETE is run.
+- Whether all four canary flags are syntactically complete and the configured
+  guild matches the server where the owner opened the panel. It does **not**
+  print private target IDs and does not authorize a send.
+
+**IMPORTANT: Source identification is not source attestation.**
+A declared SHA can be absent or incorrectly set. The report always marks
+GitHub-main equivalence unverified, because the deployed bot has no trusted
+live GitHub-main comparison. The dedicated Action Center CI now prints the
+same source fingerprint for that PR. An operator must compare the fingerprint
+of the **exact approved merged release** with the running Discloud result,
+and independently verify the deployment method and actual release SHA.
+If fingerprints differ, treat runtime version as unverified and stop.
+
+The owner console now uses actual **Discord application ownership** on its
+own buttons, without incorrectly requiring a separate staff-role membership
+for an app owner. It remains accessible *through* the existing staff Action
+Center navigation: no new root command, no public owner bypass.
+
+### Current blocking state / next production gate
+
+- GitHub main after PR #698 was confirmed at
+  `1d12e05d408bd5e7198d607422aad44a80c71927`.
+  This is a **repository fact**, not evidence that Discloud runs that SHA.
+  Any newer PR merge will advance it, so use current main when validating.
+- The 4C and 4D.4 PostgreSQL migrations are staged, not applied by any Action
+  Center PR. An independently approved migration to the *correct private*
+  PostgreSQL database (not Supabase) remains required.
+- The guarded existing-app Discloud workflow has release-safety inputs.
+  Do not bypass its backup/data-recovery approvals or assume an automatic
+  deploy occurred. A separate deployment check is required.
+- No exact guild/member/revision canary flags have been configured here.
+  Only an explicitly opted-in non-exempt member genuinely pending the
+  published revision can be the pilot; the application owner confirms once.
+- No production schema writes, Discloud deploys, new environment settings,
+  claims or Discord DMs are performed by this slice.
+- Live end-to-end acceptance and any later recurring scheduler require fresh
+  human authorization after this read-only gate has been verified.
+
+This diagnostics stage remains under the **single active task** lock.

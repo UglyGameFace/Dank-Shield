@@ -102,7 +102,17 @@ def ledger_ready_sync() -> bool:
             cur.execute(
                 "select guild_id,local_day,claims from public.dank_action_center_daily_budget limit 0"
             )
-            return True
+            cur.execute(
+                "select "
+                "has_table_privilege(current_user, 'public.dank_action_center_delivery', 'SELECT') "
+                "and has_table_privilege(current_user, 'public.dank_action_center_delivery', 'INSERT') "
+                "and has_table_privilege(current_user, 'public.dank_action_center_delivery', 'UPDATE') "
+                "and has_table_privilege(current_user, 'public.dank_action_center_daily_budget', 'SELECT') "
+                "and has_table_privilege(current_user, 'public.dank_action_center_daily_budget', 'INSERT') "
+                "and has_table_privilege(current_user, 'public.dank_action_center_daily_budget', 'UPDATE')"
+            )
+            row = cur.fetchone()
+            return bool(row and row[0] is True)
     except Exception:
         return False
 
