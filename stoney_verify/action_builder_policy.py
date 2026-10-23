@@ -112,8 +112,10 @@ def default_rule(condition: str) -> DraftActionRule:
 
 def parse_action_builder(raw_config: Mapping[str, Any]) -> ActionBuilderDraft:
     blob = raw_config.get(ACTION_BUILDER_KEY)
-    if not isinstance(blob, Mapping) or blob.get("version") != ACTION_BUILDER_VERSION:
+    if blob is None:
         return ActionBuilderDraft()
+    if not isinstance(blob, Mapping) or blob.get("version") != ACTION_BUILDER_VERSION:
+        raise ValueError("Unknown draft-rule schema. Refusing to overwrite it.")
     found: dict[str, DraftActionRule] = {}
     raw_rules = blob.get("rules")
     if not isinstance(raw_rules, list) or len(raw_rules) > MAX_RULES:
