@@ -1,0 +1,36 @@
+name: Live Supabase Migration Safety
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/deploy-supabase-migrations.yml'
+      - '.github/workflows/live-supabase-migration-safety.yml'
+      - 'supabase_live/**'
+      - 'tools/verify_live_supabase_migrations.py'
+      - 'tests/test_live_supabase_migration_target.py'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-supabase-migrations.yml'
+      - '.github/workflows/live-supabase-migration-safety.yml'
+      - 'supabase_live/**'
+      - 'tools/verify_live_supabase_migrations.py'
+      - 'tests/test_live_supabase_migration_target.py'
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Check live-only schema promotion
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install focused test runner
+        run: python -m pip install -q pytest
+      - name: Verify project identity, history drift, and no replay
+        run: python -m pytest -q tests/test_live_supabase_migration_target.py --tb=short
