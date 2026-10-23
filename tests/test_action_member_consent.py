@@ -82,8 +82,28 @@ def test_member_private_view_does_not_expose_another_members_settings():
     assert on.stop.disabled is False
     labels = {v.label for v in on.children if isinstance(v, discord.ui.Button)}
     assert labels == {"Enable Future Setup DMs", "Stop Setup DMs", "Back to Action Inbox"}
-    assert "not live" in ui._embed(on and prefs.MemberReminderConsent()).description
+    assert "not live" in ui._embed(prefs.MemberReminderConsent()).description
     assert "Verification reminders have separate controls" in ui._embed(prefs.MemberReminderConsent()).description
+
+
+def test_failed_stop_explicitly_warns_that_prior_opt_in_may_remain(monkeypatch):
+    messages = []
+    async def deferred(_interaction):
+        return None
+    async def failed(*args, **kwargs):
+        raise RuntimeError("Storage offline")
+    async def capture(_interaction, content):
+        messages.append(content)
+    monkeypatch.setattr(ui, "_defer", deferred)
+    monkeypatch.setattr(ui, "save_member_consent", failed)
+    monkeypatch.setattr(ui, "_msg", capture)
+    view = ui.MemberActionPreferencesView(
+        42, 123, prefs.MemberReminderConsent(True, "2026-10-23T12:00:00+00:00")
+    )
+    asyncio.run(view._save(SimpleNamespace(), enabled=False))
+    assert len(messages) == 1
+    assert "previous opt-in may still be stored" in messages[0]
+    assert "not currently active" in messages[0]
 
 
 def test_static_no_background_worker_new_slash_or_auto_dm():
