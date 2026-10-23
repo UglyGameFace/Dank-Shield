@@ -56,8 +56,8 @@ jobs:
           pip install -r requirements.txt pytest
       - name: Compile and test feature and navigation
         run: |
-          python -m compileall -q stoney_verify/somewhere_420_clock.py stoney_verify/somewhere_420_schedules.py stoney_verify/somewhere_420_runtime.py stoney_verify/commands_ext/public_somewhere_420.py stoney_verify/commands_ext/public_somewhere_420_settings.py stoney_verify/commands_ext/public_toke.py
-          python -m pytest tests/test_somewhere_420.py tests/test_somewhere_420_v2.py tests/test_navigation_registry_runtime.py -q --tb=short
+          python -m compileall -q stoney_verify/somewhere_420_clock.py stoney_verify/somewhere_420_schedules.py stoney_verify/somewhere_420_runtime.py stoney_verify/somewhere_420_role_headsup.py stoney_verify/commands_ext/public_somewhere_420.py stoney_verify/commands_ext/public_somewhere_420_settings.py stoney_verify/commands_ext/public_toke.py
+          python -m pytest tests/test_somewhere_420.py tests/test_somewhere_420_v2.py tests/test_somewhere_420_role_headsup.py tests/test_navigation_registry_runtime.py -q --tb=short
       - name: Validate SQL migration twice and atomic once-per-day claim
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
@@ -67,6 +67,8 @@ jobs:
           SQL
           psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200026_dankshield_somewhere_420.sql
           psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200026_dankshield_somewhere_420.sql
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200027_dankshield_somewhere_420_role_heads_up.sql
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200027_dankshield_somewhere_420_role_heads_up.sql
           psql -v ON_ERROR_STOP=1 <<'SQL'
           set role service_role;
           insert into public.dank_somewhere_420_schedules
@@ -80,4 +82,32 @@ jobs:
             select count(*) into n from public.dank_420_claim_due(5);
             if n <> 0 then raise exception 'Repeated due claim must not replay, got %', n; end if;
           end $test$;
+          -- Role reminder opt-out and at-most-once global DM ledger.
+          insert into public.dank_somewhere_420_schedules
+             (id,kind,guild_id,timezone,role_reminder_role_id,
+              role_reminder_enabled,role_reminder_next_at,enabled,next_fire_at)
+          values ('g:123456789012345678','guild','123456789012345678','UTC',
+                  '777777777777777777',true,now()-interval '30 seconds',false,
+                  now()+interval '1 day');
+          do $rolecheck$
+          declare n int; first boolean; second boolean;
+          begin
+            select count(*) into n from public.dank_420_claim_role_waves(8);
+            if n<>1 then raise exception 'First Stoners wave should claim once: %', n; end if;
+            select count(*) into n from public.dank_420_claim_role_waves(8);
+            if n<>0 then raise exception 'Duplicate wave was claimed'; end if;
+            insert into public.dank_somewhere_420_role_optouts(guild_id,user_id,opted_out)
+              values('123456789012345678','234567890123456789',true);
+            select public.dank_420_claim_role_member(
+              '123456789012345678','234567890123456789',current_date) into first;
+            if first then raise exception 'Opted-out member was claimed'; end if;
+            update public.dank_somewhere_420_role_optouts
+              set opted_out=false where guild_id='123456789012345678'
+                and user_id='234567890123456789';
+            select public.dank_420_claim_role_member(
+              '123456789012345678','234567890123456789',current_date) into first;
+            select public.dank_420_claim_role_member(
+              '123456789012345678','234567890123456789',current_date) into second;
+            if not first or second then raise exception 'At-most-once DM claim failed'; end if;
+          end $rolecheck$;
           SQL
