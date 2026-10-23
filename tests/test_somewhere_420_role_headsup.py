@@ -103,3 +103,60 @@ def test_role_migrations_safe_and_identical():
     assert "revoke all" in a.lower()
     assert "security invoker" in a.lower()
     assert "security definer" not in a.lower()
+
+
+def test_reminder_footer_is_human_only_and_ownership_is_private():
+    import ast
+    import inspect
+    source = inspect.getsource(headsup)
+    assert "Stoners reminder • Opt out anytime below" in source
+    assert "Stoners reminder | guild" not in source
+    assert "source_guild_for_role_dm" in source
+    assert "record_role_dm" in source
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "set_footer":
+            for kw in node.keywords:
+                if kw.arg == "text":
+                    assert isinstance(kw.value, ast.Constant)
+                    assert isinstance(kw.value.value, str)
+                    assert "guild_id" not in kw.value.value
+
+
+def test_private_reminder_ownership_rejects_wrong_user(monkeypatch):
+    rows = {}
+    async def fake_execute(label, operation):
+        class Table:
+            filters = {}
+            def upsert(self, value, on_conflict):
+                rows[value["dm_message_id"]] = dict(value)
+                self.value = dict(value)
+                return self
+            def select(self, columns):
+                return self
+            def eq(self, key, value):
+                self.filters[key] = str(value)
+                return self
+            def limit(self, n):
+                return self
+            def execute(self):
+                if label == "role DM ownership write":
+                    return SimpleNamespace(data=[self.value])
+                matched = [
+                    row for row in rows.values()
+                    if all(str(row.get(key)) == value for key, value in self.filters.items())
+                ]
+                return SimpleNamespace(data=matched)
+        class DB:
+            def table(self, name):
+                assert name == "dank_somewhere_420_role_dm_links"
+                return Table()
+        return operation(DB())
+    monkeypatch.setattr(schedules, "_execute", fake_execute)
+    message_id = 345678901234567890
+    guild_id = 456789012345678901
+    author_id = 567890123456789012
+    asyncio.run(headsup.record_role_dm(message_id, guild_id, author_id))
+    assert asyncio.run(headsup.source_guild_for_role_dm(message_id, author_id)) == guild_id
+    assert asyncio.run(headsup.source_guild_for_role_dm(message_id, 678901234567890123)) == 0
+    assert asyncio.run(headsup.source_guild_for_role_dm(message_id + 1, author_id)) == 0
