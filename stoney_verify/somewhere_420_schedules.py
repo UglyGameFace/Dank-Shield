@@ -119,11 +119,7 @@ async def save_schedule(
         "notify_role": bool(notify_role) if kind == "guild" else False,
         "quiet_start": int(quiet_start), "quiet_end": int(quiet_end),
         "enabled": bool(enabled),
-        "reminder_minutes": reminder_minutes if kind == "member" else 0,
-        "reminder_once": bool(reminder_once) if kind == "member" else False,
-        "next_fire_at": next_daily_fire(
-            zone, reminder_minutes=reminder_minutes if kind == "member" else 0
-        ).isoformat(),
+        "next_fire_at": next_daily_fire(zone).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     response = await _execute(
