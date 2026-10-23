@@ -19,7 +19,7 @@ Production-changing work follows this order:
 5. Merge the validated PR.
 6. Let **Dank Shield CI** validate the resulting `main` SHA.
 7. Only while that CI-green SHA is still the current `main` head may production promotion run.
-8. If `supabase/migrations/` contains pending migrations, the production migration workflow previews them and then applies them through the Supabase CLI.
+8. If `supabase_live/migrations/` contains pending migrations, the production migration workflow first checks the **live DankShield project ID**, imports only that project's already-applied migration history into an isolated temporary directory, then previews and applies only the reviewed new SQL through the Supabase CLI. The old `supabase/migrations/` folder is retained strictly as historical old-project source and must never be pushed to live DankShield.
 9. Runtime/deployment acceptance evidence is recorded against the same `main` SHA.
 
 A PR being green does not authorize production mutation by itself. The merged `main` SHA must also pass canonical CI because the merge result is the release candidate. A successful CI result also expires for promotion if a newer commit becomes the canonical `main` head before the deployment job reaches its gate.
@@ -37,6 +37,9 @@ Automatic production migration runs must satisfy all of these conditions:
 - The target SHA is still the exact current canonical `main` head when deployment begins; stale successful CI runs are rejected.
 - The `production` GitHub environment is used.
 - Production migration runs remain serialized with `cancel-in-progress: false`.
+- The GitHub Actions `SUPABASE_PROJECT_ID` secret must match the live DankShield project `viamriafkbqhquvrsnua`; **all other project IDs fail before link or SQL**.
+- A throwaway CLI project directory is initialized in the runner and populated with the **live database's own previously applied** migration SQL, not `supabase/migrations/` or `supabase_fresh/migrations/`.
+- The exact remotely applied baseline versions recorded in `supabase_live/production_baseline_versions.txt` must be present. No unreviewed remote history is accepted. Only new, version-unique migration SQL from `supabase_live/migrations/` is allowed for production.
 - `supabase migration list` and `supabase db push --dry-run --include-all` run before the real `supabase db push --include-all`.
 
 The deploy workflow intentionally runs after every successful canonical `main` CI completion. When no migrations are pending, the Supabase migration commands are a no-op. If a newer commit reaches `main` before an older CI run completes, the older deployment attempt fails closed as stale and the newer current-head CI run owns promotion.
@@ -104,3 +107,33 @@ For each production-impacting PR, retain enough evidence to answer exactly what 
 Do not fix a production incident by pushing unreviewed code directly to `main` or by applying ad-hoc schema SQL outside the migration chain. Use a focused emergency branch/PR, run the same required checks, and promote the resulting current `main` SHA through the same gate.
 
 A faster emergency path may reduce review scope, but it does not remove CI, exact-SHA provenance, current-head validation, or the migration owner.
+
+
+## Former Supabase project's migration boundary (2026-10-22)
+
+The Discloud app `stoneyverify` now uses the dedicated DankShield Supabase project
+`viamriafkbqhquvrsnua`. The old project `hyncpbvqyjojxhjzcdzg`
+still exists and retains historic data; **do not delete it, migrate its data,
+or replay its migrations** as part of this GitHub workflow correction.
+
+The previous GitHub deployment secret pointed at the old project and reported
+a successful schema deployment there, even while the live bot continued to
+receive missing-table errors from the new project. Both 4:20 migrations were
+subsequently applied and verified on the live project, under their actual remote
+migration versions `20261023014508` and `20261023014518`. These versions
+are part of the immutable checked baseline.
+
+After merging the workflow fix, the repo owner must set the **GitHub Actions
+`production` environment** values to the actual live project credentials:
+`SUPABASE_PROJECT_ID` exactly `viamriafkbqhquvrsnua`,
+`SUPABASE_DB_PASSWORD` for that project, and a
+`SUPABASE_ACCESS_TOKEN` authorized on the Dank Shield organization.
+If the secrets are repository-level rather than environment-level, update
+those instead; an environment secret with the same name can override a
+repository secret. Never paste keys into PRs, commit files, or the chat.
+
+Code guardrails prevent any old-project write even if the secret is accidentally
+left pointing to the retired project. CI history and live migration history
+must pass their independently enforced checks before automatic SQL promotion.
+The old project may later be retired separately after all runtime consumers and
+rollback dependencies have been audited.
