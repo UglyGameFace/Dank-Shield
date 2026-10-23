@@ -205,6 +205,8 @@ class AppOwnerCanaryView(discord.ui.View):
             value=(
                 "Declared SHA: `" + (details.declared_sha or "not exposed") + "`\n"
                 "Source fingerprint: `" + details.source_fingerprint + "`\n"
+                "Operator-approved CI fingerprint: "
+                + status(details.approved_source_matches) + "\n"
                 "GitHub main match: **not independently verified**"
             ),
             inline=False,
