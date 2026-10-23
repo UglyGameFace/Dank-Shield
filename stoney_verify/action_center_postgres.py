@@ -12,6 +12,80 @@ from datetime import date, datetime, timezone
 
 from .verification_reminder_postgres import _connect
 
+from dataclasses import dataclass
+from datetime import date
+
+class ActionLedgerUnavailable(RuntimeError):
+    """Safe, scrubbed failure: the private 4C claim tables aren't ready."""
+
+
+@dataclass(frozen=True)
+class ClaimSnapshot:
+    """Read-only one member/revision + one guild/day, never a send permit."""
+    attempts: int = 0
+    last_claimed_at: datetime | None = None
+    guild_claims_today: int = 0
+
+    def __post_init__(self) -> None:
+        if type(self.attempts) is not int or not 0 <= self.attempts <= 3:
+            raise ValueError("Invalid claim count")
+        if type(self.guild_claims_today) is not int or not 0 <= self.guild_claims_today <= 10:
+            raise ValueError("Invalid guild daily count")
+        if self.last_claimed_at is not None and (
+            not isinstance(self.last_claimed_at, datetime)
+            or self.last_claimed_at.tzinfo is None
+            or self.attempts == 0
+        ):
+            raise ValueError("Invalid last claim timestamp")
+        if self.attempts and self.last_claimed_at is None:
+            raise ValueError("Missing last claim timestamp")
+
+
+def read_member_setup_claim_snapshot_sync(
+    guild_id: int, user_id: int, revision: int, *, local_day: date,
+) -> ClaimSnapshot:
+    """Read only the configured private PostgreSQL ledger, no claim or send.
+
+    Missing migrations, insufficient SELECT grants, connection errors or
+    malformed rows always return a scrubbed failure. Never infer zero attempts
+    from a failed query. This is only a snapshot, not a lock or authorization.
+    """
+    if (
+        type(guild_id) is not int or type(user_id) is not int
+        or type(revision) is not int or type(local_day) is not date
+        or min(guild_id, user_id, revision) <= 0
+    ):
+        raise ValueError("Valid member, revision and local day required")
+    try:
+        with _connect() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "select attempts, last_claimed_at "
+                    "from public.dank_action_center_delivery "
+                    "where guild_id=%s and user_id=%s and condition=%s "
+                    "and condition_token=%s",
+                    (str(guild_id), str(user_id), MEMBER_SETUP_CONDITION, str(revision)),
+                )
+                row = cur.fetchone()
+                cur.execute(
+                    "select claims from public.dank_action_center_daily_budget "
+                    "where guild_id=%s and local_day=%s",
+                    (str(guild_id), local_day),
+                )
+                budget = cur.fetchone()
+        if row is not None and (len(row) != 2):
+            raise ValueError("Malformed claim row")
+        if budget is not None and len(budget) != 1:
+            raise ValueError("Malformed guild budget row")
+        return ClaimSnapshot(
+            attempts=row[0] if row else 0,
+            last_claimed_at=row[1] if row else None,
+            guild_claims_today=budget[0] if budget else 0,
+        )
+    except Exception as exc:
+        raise ActionLedgerUnavailable("Private claim history unavailable; no delivery authorized") from None
+
+
 MEMBER_SETUP_CONDITION = "member_setup_revision"
 
 class _BudgetFull(RuntimeError):
