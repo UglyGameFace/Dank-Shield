@@ -135,6 +135,12 @@ async def dispatch_single_member_setup_canary(
         if not _canary_enabled(guild_id, user_id, expected_revision) or not _still_in_guild(member):
             return CanaryDeliveryResult("cancelled", "Canary revoked or member departed", claimed=True)
         now = _utcnow()
+        # The claim's local calendar day cannot silently spill into another
+        # day's quiet window or daily budget after a slow database commit.
+        if now.astimezone(ZoneInfo(schedule.timezone)).date() != before_now.astimezone(
+            ZoneInfo(schedule.timezone)
+        ).date():
+            return CanaryDeliveryResult("cancelled", "Guild-local day changed after claim", claimed=True)
         cfg_final, schedule_final = await load_schedule(guild_id, refresh=True)
         rule_final = parse_action_builder(cfg_final).rule_for("member_setup_revision")
         if schedule_final != schedule or rule_final != rule or not rule_final.included:
