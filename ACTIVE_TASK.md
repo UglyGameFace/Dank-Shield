@@ -3,6 +3,14 @@
 ## Current single-task lock
 The owner explicitly FORCE SWITCHED to **Issue #367, Action & Reminder Center**, after PR #691 merged. The previous 4:20 task and guarded branch-retirement task are now both paused. Do not mix further 4:20 work, branch cleanup, Cinema, or unrelated verification framework implementation into this slice.
 
+## Slice 4D.4: app-owner manual canary console + durable audit (active, 2026-10-23)
+- Verified PR #697 (4D.3) merged as `cc98488482da22e505b089e931ee8e8c1618d1ba` with 6/6 checks green. Current branch: `feat/action-center-4d4-owner-canary-console-20261023` on that exact main.
+- Expose **Owner Canary Console** only from Action Builder → Safety Schedule; actual Dank Shield application owner verified via `interaction.client.is_owner(user)`, not a configured staff role or server Administrator. Typed confirmation `SEND guild/user/revision` is one-shot, and all 4 target-locked process-local canary gates still have to match. None of those gates are set by this PR.
+- Require durable `requested` PostgreSQL audit record *before* calling the existing strict single-user claim dispatcher, and final audit status after; fail closed if either 4C claims ledger or separately staged 4D.4 audit schema is missing. No message content in audit.
+- The additive `postgres/migrations/202610230002_action_center_canary_audit.sql` plus `tools/migrate_action_canary_audit_postgres.py` are staged but **never applied automatically to production**. Original 4C claim migration remains unapplied. No auto-DMs, schedulers, root slash commands or broad member fetches.
+- Extend focused and isolated PostgreSQL CI, owner permission and confirmation replay regression, lifecycle/retention ownership; verify full CI at PR head before merge, then Android/Discloud/real DB rollout via separate explicit owner authorization. Keep owner 4D.5 canary rollout and general 4E/4F feature work paused.
+- Single active task lock remains Action & Reminder Center 4D.4. All unrelated tasks paused.
+
 ## Slice 4D.3: disconnected manual single-member canary (active, 2026-10-23)
 - Verified PR #696 (4D.2) merged as `688e0c600a16bab5579b10c7f5d3e73a098b312b`, all six checks green. Branch `feat/action-center-4d3-canary-dispatch-20261023` starts from that exact main.
 - Add **unwired** `action_canary_delivery.py` for one Member Setup user/revision only, requiring exact 4-way process-local canary gates before any claim, cached membership proof, 4D.2 durable readiness and atomic private PostgreSQL reservation. After reservation, recheck user opt-in, canonical Member Setup completion, guild schedule/quiet hours, same recipient/revision and environment gate; cancel any uncertain outcome without retry.
