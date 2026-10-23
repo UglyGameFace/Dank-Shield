@@ -3,6 +3,15 @@
 ## Current single-task lock
 The owner explicitly FORCE SWITCHED to **Issue #367, Action & Reminder Center**, after PR #691 merged. The previous 4:20 task and guarded branch-retirement task are now both paused. Do not mix further 4:20 work, branch cleanup, Cinema, or unrelated verification framework implementation into this slice.
 
+## Slice 4D.1: private member reminder consent and no-send preflight (active, 2026-10-23)
+- PR #694 (4C) merged as `311d4890e920b279348c71125e2c868f6e20c08b`, with all seven workflows passing. The manual private PostgreSQL DDL has **not** been applied, and no Action Center automatic delivery has been activated.
+- Active branch: `feat/action-reminder-center-4d-member-consent-20261023`, based on the exact merged main.
+- Member-owned per-server, default-OFF Member Setup DM preference uses existing private `profile_guild_settings` and verified write/reread. The Action Inbox gains a private My Reminder Preferences page with enable/stop controls and click-time owner identity checks.
+- `stoney_verify/action_delivery_preflight.py` rechecks canonical Member Setup exemption/completion/revision date, per-member consent, draft inclusion and schedule preview. Its `delivery_authorized` is always false: no sender, no runtime claim, no new worker, no schema or secrets change.
+- Focused regressions check per-guild privacy, failed writes/reads, unknown schema, stale/complete requirements, no double verification reminder ownership, and never-authorized sends.
+- **Single active task remains Action & Reminder Center 4D.1.** Previous 4:20, Cinema, full Verification Framework, member lifecycle and guarded branch cleanup remain paused. Do not enable a sender in this PR; independent 4D.2 delivery rollout needs explicit migration and canary.
+- Validate exact-head focused/full CI and Discord Android member UX before merge. Discloud SHA still needs real-world acceptance.
+
 ## Slice 4C: Scheduling and anti-spam safety policy (active, 2026-10-23)
 - PR #693 (4B) merged into `c3a5ba5852a44a460e8120681da3b4b20591ff0e`. Active branch `feat/action-reminder-center-4c-safety-20261023` starts at that exact SHA.
 - 4C writes **only preview-only scheduling limits**, not enabled reminder automation: first wait, repeat cooldown, max attempts, quiet hours in a validated IANA timezone, per-guild daily cap.
