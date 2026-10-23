@@ -32,6 +32,16 @@ Build version 2 of issue #687 after the owner merged PR #688: richer world clock
 - Dedicated `.github/workflows/somewhere-420-ci.yml` validates SQL and focused Python; full CI still applies.
 - Status: work in feature branch, not yet merged/deployed. Confirm CI and schema safety before merge.
 
+## Version 3: role-only gentle heads-up (October 22)
+- The owner confirmed merged PR #689 is running in Discord but Daily Server Settings reports missing database migration. Connected read-only queries confirmed neither known Supabase project has `dank_somewhere_420_schedules`; deployment migrations are blocked by two remote-only historic schema-migration versions, which MUST NOT be removed blindly.
+- Active feature branch `feat/420-gentle-headsup-20261022` starts at merged main `252ccc08b7d7c24e8586b4c373ce8d5e74ca663e`.
+- **Owner update:** eligible people are automatically included while holding the exact server-selected @Stoners role, with a prominent DM Stop reminders button and member menu Stop/Resume. Staff still explicitly enable this role-based server program; other guilds are not automatically opted in.
+- One at-most-once 4:15 PM server-local reminder wave, no 4:20 repeat, no public pings, at most one DM per user per local day even across multiple servers. All durable opt-outs/claims are private tables; role resolution uses shared Search-Safe picker, not native Discord pickers, and actual role membership checked at send time. No mass guild fetch.
+- A second migration `20261022201500_somewhere_420_role_heads_up.sql` depends on v2 schedule table and must be applied on the actual active production DB before staff can enable the feature. Merging code does not apply it.
+- Conservative wave limit 80 cached members per guild per day for Discloud REST safety. Large-guild delivery and cache-completeness requirements remain acceptance gates, not solved by optimistic claims.
+- CI and mobile canary required. No migrations or production data writes are authorized through this documentation; do not silently repair unrelated migration history.
+- **Single task lock remains 4:20 improvement**, guarded branch retirement stays paused.
+
 ## Suspended task (preserve for resumption; NOT active)
 **Guarded retirement of remaining Dank Shield branches**, previously active in `ACTIVE_TASK.md`.
 - Last reviewed main `830e961eab0e2e348d4b606402aea4bfa455f691`; existing PR #686 merged and GitHub Action runs #39847982721 (preview) and #39848036329 (delete) succeeded. 33 branches remained after completed deletion.
