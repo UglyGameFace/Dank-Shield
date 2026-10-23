@@ -174,6 +174,51 @@
       "retention_class": "durable_security_evidence",
       "historical_reuse": "Exact original membership, ticket and verification records support recovery and audit; source token secrets must be revalidated or expired by the active authorization service, not accepted by staging",
       "review_interval_days": 30
+    },
+    "public.dank_action_center_delivery": {
+      "feature": "Action & Reminder Center 4C (dormant Member Setup delivery protection)",
+      "owner": "stoney_verify.action_center_postgres / future reviewed Action Center lifecycle owner",
+      "purpose": "Bounded transactionally reserved future Member Setup reminder attempts; no worker active",
+      "contains_message_content": false,
+      "cleanup_interval_seconds": 86400,
+      "max_candidates_per_cleanup": 50,
+      "preserve_when": "Delivery disabled until explicit 4D; once active, preserve while membership/revision remains relevant, guild is unavailable, or ownership cannot be verified",
+      "backup_class": "operational_counters",
+      "migration": "postgres/migrations/202610230001_action_center_delivery_reservations.sql",
+      "retention_class": "operational_control",
+      "historical_reuse": "Avoid duplicate reminders across bot restarts, repeated revisions and guild daily limits; never infer behavior or moderation actions",
+      "review_interval_days": 90,
+      "stored_fields": [
+        "guild_id",
+        "user_id",
+        "condition",
+        "condition_token",
+        "last_claimed_at",
+        "attempts"
+      ],
+      "retention_rule": "No automatic row deletion in dormant 4C. Before any 4D sends are authorized, add bounded verified cleanup of claims at least 90 days old only when original guild/member/revision retention can be safely established; retain unresolved records, never reset active caps.",
+      "expiry_index": "idx_dank_action_delivery_age"
+    },
+    "public.dank_action_center_daily_budget": {
+      "feature": "Action & Reminder Center 4C (dormant Member Setup delivery protection)",
+      "owner": "stoney_verify.action_center_postgres / future reviewed Action Center lifecycle owner",
+      "purpose": "Prevent burst of future Member Setup reminders per guild per local day; schema dormant",
+      "contains_message_content": false,
+      "cleanup_interval_seconds": 86400,
+      "max_candidates_per_cleanup": 50,
+      "preserve_when": "Delivery disabled until explicit 4D; once active, preserve while membership/revision remains relevant, guild is unavailable, or ownership cannot be verified",
+      "backup_class": "operational_counters",
+      "migration": "postgres/migrations/202610230001_action_center_delivery_reservations.sql",
+      "retention_class": "operational_control",
+      "historical_reuse": "Avoid duplicate reminders across bot restarts, repeated revisions and guild daily limits; never infer behavior or moderation actions",
+      "review_interval_days": 90,
+      "stored_fields": [
+        "guild_id",
+        "local_day",
+        "claims"
+      ],
+      "retention_rule": "No active writes in 4C; before any live 4D sends, implement bounded cleanup of days older than 90 days, leaving current and recent daily budgets intact.",
+      "expiry_index": "idx_dank_action_budget_expiry"
     }
   }
 }
