@@ -158,3 +158,48 @@ Open `/dank home → Onboarding & Access → Action & Reminder Center
 Acceptance: focused scheduling and DST rollover tests, dangerous config
 rejection, saved-config CAS/stale modal tests, CI SQL smoke and private Android
 panel canary; full bot regressions and Discloud deployed commit verification.
+
+
+## Slice 4D.1: member-owned reminder preferences and delivery preflight
+
+This slice establishes the **member consent boundary** for any future Member
+Setup revision DM, but does not activate delivery. A member opens
+`/dank home → Onboarding & Access → Action & Reminder Center
+→ My Reminder Preferences` inside a guild.
+
+- **Off by default**, stored per **member + guild** under
+  `action_member_reminders_v1` in the existing private
+  `profile_guild_settings` namespace. Explicit **Enable Future Setup DMs**
+  and **Stop Setup DMs** controls are both member-owned and user-ID/guild-ID
+  checked on every interaction. This is not a server-wide consent setting.
+- Every choice is written and reread with the canonical profile namespace
+  owner. A failed read, unknown schema or unconfirmed write blocks enabling
+  future delivery; the UI never says a save succeeded before verification.
+  Previous verification reminders and 4:20 DM opt-outs remain independent.
+- `action_delivery_preflight.inspect_member_setup_candidate` is a
+  **read-only, single-member** check. It reuses canonical Member Setup
+  grandfathering, revisions and exemption logic, evaluates explicit private
+  preference, draft inclusion and a matching published revision, then applies
+  timing/quiet-hour rules. Stale, exempt, complete, opted-out, inaccessible
+  or malformed state never passes.
+- The preflight's `delivery_authorized` value is permanently **false** in
+  this version, including for otherwise due candidates. Its planning result
+  does **not** read actual PostgreSQL claim history, reserve a claim, send
+  a DM or give any other module permission to deliver.
+- No new table, schema migration, background worker, broadcast, new slash
+  root, permission mutation or Discloud secret accompanies this slice.
+
+### Required before 4D delivery activation
+
+An independent follow-on slice must provision and verify the staged private
+PostgreSQL 4C migration, read real claim attempts and daily budgets, provide
+member opt-out before *and after* reservation, re-fetch Member Setup
+completion and guild policy immediately before/after the atomic claim, prevent
+multiple workers racing, bound REST fetch volume, perform only explicitly
+authorized sends, and add privacy-aware lifecycle cleanup. Run a small,
+auditable guild canary, verify actual deployed release/Discloud access, and
+keep all reminder delivery disabled until these gates are met.
+
+These controls should never make a pending verification reminder eligible
+for a duplicate send: that feature's own verified worker retains sole
+delivery authority.
