@@ -23,7 +23,9 @@ from stoney_verify.action_canary_delivery import (
 )
 from stoney_verify.action_center_postgres import ledger_ready_sync
 from stoney_verify.action_delivery_readiness import inspect_member_setup_readiness
-from .public_action_builder import _defer, _msg, _replace, _OwnedStaffView
+from stoney_verify.action_canary_readiness_report import read_canary_readiness
+from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
+from .public_action_builder import _defer, _msg, _replace
 
 OPERATOR_TIMEOUT_SECONDS = 8.0
 
@@ -160,11 +162,74 @@ class ConfirmSingleCanaryModal(discord.ui.Modal, title="Confirm One Member Setup
         )
 
 
-class AppOwnerCanaryView(_OwnedStaffView):
+class AppOwnerCanaryView(discord.ui.View):
     def __init__(self, user_id: int, guild_id: int, target_id: int, revision: int):
-        super().__init__(user_id, guild_id)
-        self.target_id = target_id
-        self.revision = revision
+        super().__init__(timeout=PRIVATE_MENU_TTL_SECONDS)
+        self.user_id = int(user_id)
+        self.guild_id = int(guild_id)
+        self.target_id = int(target_id)
+        self.revision = int(revision)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # Application ownership is the authority; a guild staff role is NOT
+        # an additional prerequisite. Still bind this private view to opener.
+        if (
+            interaction.user.id != self.user_id
+            or interaction.guild_id != self.guild_id
+            or not await _is_app_owner(interaction)
+        ):
+            await _msg(interaction, "Only the original Dank Shield application owner can use this console.")
+            return False
+        return True
+
+    @discord.ui.button(label="Readiness Report", emoji="🛡️", style=discord.ButtonStyle.secondary, row=0)
+    async def report(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _defer(interaction)
+        try:
+            details = await read_canary_readiness(self.guild_id)
+        except Exception:
+            return await _msg(interaction, "Read-only readiness checks could not be completed.")
+        def status(ok: bool) -> str:
+            return "✅ verified by runtime" if ok else "⛔ not verified"
+        e = discord.Embed(
+            title="🛡️ One-Member Canary • Read-only Preflight",
+            description=(
+                "**No migration, no claim, no DM.** This checks the deployed process "
+                "and its existing PostgreSQL permissions. A runtime SHA is NOT "
+                "independent proof of what GitHub currently has on main."
+            ),
+            color=discord.Color.blurple(),
+        )
+        e.add_field(
+            name="Deployed source observation",
+            value=(
+                "Declared SHA: `" + (details.declared_sha or "not exposed") + "`\n"
+                "Source fingerprint: `" + details.source_fingerprint + "`\n"
+                "GitHub main match: **not independently verified**"
+            ),
+            inline=False,
+        )
+        e.add_field(
+            name="Private prerequisites",
+            value=(
+                "PostgreSQL configured: " + status(details.db_configured) + "\n"
+                "Claim tables accessible: " + status(details.claims_ready) + "\n"
+                "Audit table accessible: " + status(details.audit_ready) + "\n"
+                "Exact target switches: " + status(details.flags_complete and details.target_guild_match)
+            ),
+            inline=False,
+        )
+        e.add_field(
+            name="Remaining blockers",
+            value="\n".join("• " + issue for issue in details.blockers)[:1024]
+                  if details.blockers else "None identified by these limited checks.",
+            inline=False,
+        )
+        e.set_footer(text="Read-only • App owner only • Never authorizes sending")
+        await _replace(
+            interaction, embed=e,
+            view=AppOwnerCanaryView(self.user_id, self.guild_id, self.target_id, self.revision),
+        )
 
     @discord.ui.button(label="Review & Confirm One DM", emoji="🔐", style=discord.ButtonStyle.danger, row=0)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
