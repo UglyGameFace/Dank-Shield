@@ -64,6 +64,7 @@ def test_quiet_hours_handle_cross_midnight_and_dst():
         decision = policy.preview_candidate(
             cfg,condition="member_setup_revision", owner_status="pending",
             now=dt(utc),joined_at=dt("2026-10-30T00:00:00Z"),
+            condition_started_at=dt("2026-10-30T00:00:00Z"),
         )
         assert decision.status == "quiet"
         assert decision.next_at and decision.next_at > dt(utc)
@@ -78,6 +79,7 @@ def test_canonical_completion_and_unavailable_never_suggest_due():
     kwargs = dict(
         condition="member_setup_revision", now=dt("2026-10-23T20:00:00Z"),
         joined_at=dt("2026-10-20T01:00:00Z"),
+        condition_started_at=dt("2026-10-21T01:00:00Z"),
     )
     assert policy.preview_candidate(schedule, owner_status="complete", **kwargs).status=="complete"
     assert policy.preview_candidate(schedule, owner_status="unavailable", **kwargs).status=="blocked"
@@ -92,7 +94,8 @@ def test_canonical_completion_and_unavailable_never_suggest_due():
 def test_delay_and_repeat_cooldown_are_distinct():
     cfg = policy.ActionSchedule(timezone="UTC", quiet_start=0, quiet_end=0)
     base = dict(condition="member_setup_revision", owner_status="pending",
-                joined_at=dt("2026-10-20T00:00:00Z"))
+                joined_at=dt("2026-10-20T00:00:00Z"),
+                condition_started_at=dt("2026-10-20T00:00:00Z"))
     early = policy.preview_candidate(cfg,now=dt("2026-10-20T12:00:00Z"),**base)
     assert early.status == "waiting"
     assert early.next_at == dt("2026-10-21T00:00:00Z")
@@ -103,6 +106,21 @@ def test_delay_and_repeat_cooldown_are_distinct():
     result=policy.preview_candidate(cfg,now=dt("2026-10-27T12:00:00Z"),**base)
     assert result.status == "preview_due"
     assert "no sending" in result.reason
+
+
+def test_new_member_setup_revision_starts_after_publication_not_join():
+    cfg = policy.ActionSchedule(timezone="UTC",quiet_start=0,quiet_end=0)
+    base = dict(condition="member_setup_revision",owner_status="pending",
+                joined_at=dt("2025-01-01T00:00:00Z"))
+    decision=policy.preview_candidate(
+        cfg,now=dt("2026-10-23T12:00:00Z"),
+        condition_started_at=dt("2026-10-23T10:00:00Z"),**base,
+    )
+    assert decision.status=="waiting"
+    assert decision.next_at==dt("2026-10-24T10:00:00Z")
+    missing=policy.preview_candidate(cfg,now=dt("2026-10-23T12:00:00Z"),**base)
+    assert missing.status=="blocked"
+    assert "published" in missing.reason
 
 
 def test_per_guild_schedule_uses_atomic_cas(monkeypatch):
