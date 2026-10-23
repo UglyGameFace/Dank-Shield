@@ -120,18 +120,121 @@ jobs:
         with:
           version: latest
 
-      - name: Link production project
+      - name: Verify linked project is current DankShield production
         shell: bash
-        run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
+        run: |
+          set -euo pipefail
+          # This is a public project reference, not a key or secret. The
+          # immutable allowlist prevents successful writes to the old project
+          # even if somebody forgets to rotate the Actions secret.
+          expected_live_project="viamriafkbqhquvrsnua"
+          if [ "$SUPABASE_PROJECT_ID" != "$expected_live_project" ]; then
+            echo "::error title=Wrong production database::GitHub SUPABASE_PROJECT_ID does not match the live DankShield project. Migration cancelled before any link or SQL."
+            exit 1
+          fi
+          echo "DankShield live project identity verified."
 
-      - name: Show migration status
+      - name: Initialize isolated live migration directory
         shell: bash
-        run: supabase migration list
+        run: |
+          set -euo pipefail
+          workdir="$RUNNER_TEMP/dankshield-live-migration-workdir"
+          mkdir -p "$workdir"
+          (cd "$workdir" && supabase init)
+          echo "LIVE_WORKDIR=$workdir" >> "$GITHUB_ENV"
 
-      - name: Preview pending migrations
+      - name: Link ONLY the approved live DankShield project
         shell: bash
-        run: supabase db push --dry-run --include-all
+        run: |
+          set -euo pipefail
+          cd "$LIVE_WORKDIR"
+          supabase link --project-ref "$SUPABASE_PROJECT_ID"
 
-      - name: Apply pending migrations
+      - name: Fetch already applied live migrations (read-only)
         shell: bash
-        run: supabase db push --include-all
+        run: |
+          set -euo pipefail
+          cd "$LIVE_WORKDIR"
+          supabase migration fetch --linked
+
+      - name: Verify live migration baseline and stage only new SQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          import shutil
+          from pathlib import Path
+
+          root = Path(os.environ["GITHUB_WORKSPACE"])
+          destination = Path(os.environ["LIVE_WORKDIR"]) / "supabase" / "migrations"
+          baseline_file = root / "supabase_live" / "production_baseline_versions.txt"
+          incoming_dir = root / "supabase_live" / "migrations"
+          baseline = {
+              line.strip()
+              for line in baseline_file.read_text(encoding="utf-8").splitlines()
+              if line.strip() and not line.lstrip().startswith("#")
+          }
+          if len(baseline) < 25 or any(not re.fullmatch(r"\d{14}", x) for x in baseline):
+              raise SystemExit("Invalid known-safe production migration baseline")
+          if not {"20261023014508", "20261023014518"}.issubset(baseline):
+              raise SystemExit("Missing known live 4:20 production migration history")
+          last_initial = max(baseline)
+          def version(path: Path) -> str:
+              match = re.fullmatch(r"(\d{14})_[A-Za-z0-9_]+\.sql", path.name)
+              if match is None:
+                  raise SystemExit(f"Invalid migration filename: {path.name}")
+              return match.group(1)
+
+          remote_files = list(destination.glob("*.sql"))
+          remote = {version(path): path for path in remote_files}
+          if len(remote) != len(remote_files):
+              raise SystemExit("Duplicate migration versions in fetched history")
+          future_files = list(incoming_dir.glob("*.sql"))
+          future = {version(path): path for path in future_files}
+          if len(future) != len(future_files):
+              raise SystemExit("Duplicate versions in reviewed live migrations")
+          if set(future) & baseline:
+              raise SystemExit("Future migrations overlap already-applied baseline")
+          if any(v <= last_initial for v in future):
+              raise SystemExit("New migration timestamp predates live baseline")
+          missing = baseline - set(remote)
+          unknown = set(remote) - baseline - set(future)
+          if missing or unknown:
+              raise SystemExit(
+                  f"Live migration history drift: missing={sorted(missing)} "
+                  f"unreviewed_remote={sorted(unknown)}. No push attempted."
+              )
+          for v, local_file in sorted(future.items()):
+              if v in remote:
+                  if remote[v].read_bytes().rstrip() != local_file.read_bytes().rstrip():
+                      raise SystemExit(
+                          f"Already-applied migration {v} differs from committed SQL"
+                      )
+              else:
+                  shutil.copyfile(local_file, destination / local_file.name)
+          print(
+              f"Verified {len(baseline)} original applied versions; "
+              f"{len(future)} reviewed future migrations; "
+              f"{len(set(future) - set(remote))} pending. Legacy project files excluded."
+          )
+          PY
+
+      - name: Show LIVE migration status
+        shell: bash
+        run: |
+          cd "$LIVE_WORKDIR"
+          supabase migration list
+
+      - name: Preview LIVE pending migrations
+        shell: bash
+        run: |
+          cd "$LIVE_WORKDIR"
+          supabase db push --dry-run --include-all
+
+      - name: Apply only reviewed LIVE pending migrations
+        shell: bash
+        run: |
+          cd "$LIVE_WORKDIR"
+          supabase db push --include-all
