@@ -162,7 +162,7 @@ def test_wrong_confirmation_never_writes_audit_or_dispatches(monkeypatch):
     modal = _modal(monkeypatch, match=False)
     asyncio.run(modal.on_submit(event))
     assert "begin" not in events and "dispatch" not in events
-    assert any("rejected" in m for _, m in events if isinstance(m, str))
+    assert any("rejected" in event[1] for event in events if isinstance(event, tuple))
 
 
 def test_owner_permission_revoked_and_audit_insert_failure_block(monkeypatch):
