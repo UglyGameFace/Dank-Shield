@@ -203,3 +203,37 @@ keep all reminder delivery disabled until these gates are met.
 These controls should never make a pending verification reminder eligible
 for a duplicate send: that feature's own verified worker retains sole
 delivery authority.
+
+
+## Slice 4D.2: real private ledger readiness, NO sending
+
+Staff can open `Action Builder (Draft) → Safety Schedule (Draft) →
+Check Delivery Readiness`. This **only inspects the requesting staff
+member** (never a guild-wide member scan) and cannot activate reminder DMs.
+
+- The 4C private PostgreSQL ledger is **still not migrated to production**
+  by merging this PR. A missing table, secret, permission, network connection
+  or malformed row is displayed as **ledger_unavailable**, not "zero claims"
+  or safe to deliver. No automatic DMs, PostgreSQL inserts, claim reservations,
+  new workers, new environment flags or public commands.
+- The read-only adapter queries one `(guild,user,member-setup-revision)`
+  attempt row and one server-local `(guild,date)` counter. The status can
+  explain actual retry cooldown, maximum attempts, daily server cap, and
+  DST-aware quiet hours once the ledger is separately provisioned.
+- Candidate eligibility is checked **before and after** the ledger read, using
+  fresh member opt-in, real Member Setup status, canonical grandfathering/
+  exemptions, exact published revision and per-guild policy. If consent is
+  withdrawn, a newer revision is published or the safety policy changes,
+  the check blocks instead of assuming a prior pass is still valid.
+- The UI confirms its results are **informational**. No status is an
+  authorization to send, and `delivery_authorized` is immutable False.
+  A snapshot cannot replace an atomic claim transaction and final
+  fresh owner/opt-out/Discord membership checks in future 4D.3 delivery.
+- Real PostgreSQL regression runs on a disposable PostgreSQL 17 service
+  **with explicit opt-in**, never the broad bot suite or the live Discloud
+  database. Tests prove two snapshot reads do not consume extra claims,
+  revision isolation, daily-cap isolation and fail-closed offlines.
+
+No work on 4:20, Cinema, branch retirement or the verification reminder
+worker is included. Android Discord canary and actual Discloud deployed
+SHA remain separate acceptance gates before claiming production readiness.

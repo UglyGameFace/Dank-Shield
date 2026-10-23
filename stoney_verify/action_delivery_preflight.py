@@ -25,6 +25,7 @@ class DeliveryPreflight:
     reason: str
     revision: int = 0
     candidate_at: datetime | None = None
+    condition_started_at: datetime | None = None
     delivery_authorized: bool = False
 
     def __post_init__(self) -> None:
@@ -92,6 +93,7 @@ async def inspect_member_setup_candidate(
             reason="Owner checked; no real delivery or ledger authorization" if decision.status == "preview_due" else decision.reason,
             revision=revision,
             candidate_at=decision.next_at,
+            condition_started_at=started_at,
         )
     except Exception:
         return DeliveryPreflight("unavailable", "Authoritative state unavailable; no delivery authorized")
