@@ -211,6 +211,13 @@ class ScheduleView(_OwnedStaffView):
             view=SchedulePreviewView(self.user_id, self.guild_id),
         )
 
+    @discord.ui.button(label="Owner Canary Console", emoji="🔐", style=discord.ButtonStyle.secondary)
+    async def canary_console(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        # Not normal staff/administrator authority: actual application owner
+        # is independently verified by the destination console at click-time.
+        from .public_action_canary import open_app_owner_canary_console
+        await open_app_owner_canary_console(interaction)
+
     @discord.ui.button(label="Back to Action Builder", emoji="↩️", style=discord.ButtonStyle.secondary)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         from .public_action_builder import open_action_builder
