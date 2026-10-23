@@ -120,6 +120,14 @@ FEATURES: tuple[NavigationFeature, ...] = (
         True,
     ),
     NavigationFeature(
+        "action_reminder_center",
+        "Action & Reminder Center",
+        "📋",
+        "access",
+        "View your pending verification and Member Setup actions, with staff links to existing reminder controls.",
+        ("my actions", "action inbox", "reminder center", "tasks", "pending actions", "required actions", "to do"),
+    ),
+    NavigationFeature(
         "verification_reminders",
         "Verification Reminders",
         "📩",
