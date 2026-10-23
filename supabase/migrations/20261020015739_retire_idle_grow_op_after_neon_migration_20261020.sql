@@ -57,4 +57,3 @@ drop schema idle restrict;
 drop table public.app_schema_migrations, public.global_accounts,
   public.guild_profiles, public.guild_worlds, public.users,
   public.world restrict;
-
