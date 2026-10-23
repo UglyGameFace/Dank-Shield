@@ -134,3 +134,33 @@ def test_read_only_member_revision_and_guild_day_snapshot_matches_claims():
     )
     assert other_revision.attempts == 0
     assert other_revision.guild_claims_today == 1
+
+
+def test_operator_canary_audit_requires_durable_request_before_final_status():
+    from uuid import uuid4
+    from stoney_verify import action_canary_audit as audit
+
+    assert audit.audit_ready_sync()
+    operation = uuid4()
+    assert audit.begin_canary_audit_sync(operation, 99877, 88776, 77665, 12)
+    assert not audit.begin_canary_audit_sync(operation, 99877, 88776, 77665, 12)
+    with claims._connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "select status,claimed,sent,finished_at from public.dank_action_center_canary_audit "
+            "where operation_id=%s", (operation,),
+        )
+        assert cur.fetchone() == ("requested", False, False, None)
+    assert audit.finish_canary_audit_sync(
+        operation, status="cancelled", claimed=True, sent=False
+    )
+    assert not audit.finish_canary_audit_sync(
+        operation, status="sent", claimed=True, sent=True
+    )
+    with claims._connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "select status,claimed,sent,finished_at from public.dank_action_center_canary_audit "
+            "where operation_id=%s", (operation,),
+        )
+        status, claimed, sent, finished_at = cur.fetchone()
+        assert (status, claimed, sent) == ("cancelled", True, False)
+        assert finished_at is not None
