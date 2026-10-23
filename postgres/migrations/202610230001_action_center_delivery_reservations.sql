@@ -18,6 +18,8 @@ create table if not exists public.dank_action_center_daily_budget (
     claims integer not null default 0 check (claims between 0 and 10),
     primary key(guild_id,local_day)
 );
+create index if not exists idx_dank_action_budget_expiry
+    on public.dank_action_center_daily_budget(local_day,guild_id);
 -- No RPC, scheduled task, REST send or public privileges are created.
 -- A later reviewed 4D implementation must reserve per-member and per-guild
 -- budgets in ONE transaction, before send, and recheck owner completion.
