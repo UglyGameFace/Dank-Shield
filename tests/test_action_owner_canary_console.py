@@ -43,6 +43,8 @@ def _env(monkeypatch):
     monkeypatch.setenv(dispatcher.GUILD_ENV, "501")
     monkeypatch.setenv(dispatcher.USER_ENV, "601")
     monkeypatch.setenv(dispatcher.REVISION_ENV, "3")
+    monkeypatch.setenv(dispatcher.APPROVED_SOURCE_ENV, "a" * 16)
+    monkeypatch.setattr(dispatcher, "runtime_source_fingerprint", lambda: "a" * 16)
 
 
 def test_unconfigured_wrong_guild_or_non_member_never_selects_anyone(monkeypatch):

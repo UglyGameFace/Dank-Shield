@@ -16,6 +16,7 @@ def test_default_off_preflight_never_opens_private_db(monkeypatch):
     for key in (
         report.DATABASE_URL_ENV,
         report.ENABLE_ENV, report.GUILD_ENV, report.USER_ENV, report.REVISION_ENV,
+        report.APPROVED_SOURCE_ENV,
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(report, "runtime_release_snapshot", lambda: {
@@ -45,6 +46,7 @@ def test_only_read_only_queries_and_exact_guild_target_match(monkeypatch):
     monkeypatch.setenv(report.GUILD_ENV, "501")
     monkeypatch.setenv(report.USER_ENV, "601")
     monkeypatch.setenv(report.REVISION_ENV, "3")
+    monkeypatch.setenv(report.APPROVED_SOURCE_ENV, "1234567890abcdef")
     calls = []
     def claim():
         calls.append("claim_select")
@@ -59,12 +61,33 @@ def test_only_read_only_queries_and_exact_guild_target_match(monkeypatch):
     assert result.declared_sha == sha
     assert result.db_configured and result.claims_ready and result.audit_ready
     assert result.flags_complete and result.target_guild_match
+    assert result.approved_source_matches
     assert not result.release_verified  # local SHA is not a GitHub attestation
     assert not result.delivery_activated
     assert "do-not-print" not in str(result)
     mismatch = asyncio.run(report.read_canary_readiness(502))
     assert not mismatch.target_guild_match
     assert "do-not-print" not in str(mismatch)
+
+
+def test_source_approval_is_separate_from_reported_release_sha(monkeypatch):
+    monkeypatch.setattr(report, "runtime_release_snapshot", lambda: {
+        "declared_sha": "a" * 40,
+        "source_fingerprint": "abcdef1234567890",
+    })
+    monkeypatch.delenv(report.DATABASE_URL_ENV, raising=False)
+    monkeypatch.delenv(report.APPROVED_SOURCE_ENV, raising=False)
+    missing = asyncio.run(report.read_canary_readiness(501))
+    assert not missing.approved_source_matches
+    assert not missing.release_verified
+    monkeypatch.setenv(report.APPROVED_SOURCE_ENV, "abcdef1234567890")
+    matched = asyncio.run(report.read_canary_readiness(501))
+    assert matched.approved_source_matches
+    assert not matched.release_verified
+    assert not matched.delivery_activated
+    monkeypatch.setenv(report.APPROVED_SOURCE_ENV, "ABCDEF1234567890")
+    invalid = asyncio.run(report.read_canary_readiness(501))
+    assert not invalid.approved_source_matches
 
 
 def test_missing_schema_and_failure_are_blockers_without_leaking_db_error(monkeypatch):

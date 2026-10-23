@@ -400,3 +400,41 @@ Center navigation: no new root command, no public owner bypass.
   human authorization after this read-only gate has been verified.
 
 This diagnostics stage remains under the **single active task** lock.
+
+
+## Slice 4D.5B: human-approved exact source lock (dormant by default)
+
+The one-recipient dispatcher additionally requires
+`DANK_ACTION_CENTER_CANARY_APPROVED_SOURCE_FP` to equal the running
+`runtime_source_fingerprint()` **exactly**. This is a new,
+absent-by-default, non-secret rollout gate in addition to the existing
+four exact guild/member/revision/send gates.
+
+An operator must independently examine the **full CI result for the exact
+release intended for Discloud**, record the 16-character lowercase source
+fingerprint printed by its dedicated Action Reminder Center CI, and compare
+it to the bot's Readiness Report after a safely approved deployment. Only
+after that review, and after confirming the rest of the private database
+and member opt-in gates, can the operator explicitly set this approved
+fingerprint in the live bot environment. Never take the approved value
+straight from the running bot without independently comparing GitHub CI;
+a compromised or stale runtime is not its own release authority.
+
+The owner-only Readiness Report shows **approved fingerprint match** as
+a separate boolean. This is a process-local lock, **not independent proof**
+the running process corresponds to the current GitHub main commit; the
+independently verified deployment evidence remains a manual prerequisite.
+A blank, uppercase, malformed, or stale approval blocks the console and
+dispatcher from sending, even when all four original target fields match.
+The dispatcher rechecks the release lock before claims and immediately
+before the Discord DM, preserving the cancellation-on-revocation path.
+
+The Action Reminder Center CI still prints the fingerprint for the current
+PR and exercises stale/absent/mismatched source gating. Since this PR changes
+critical source files, **use its newly emitted fingerprint after merge**, not
+the previous 4D.5A value `ee70d969f61b59e7`.
+
+**No production schema writes, Discloud env changes, credentials, REST sends
+or automatic reminders accompany 4D.5B.** The two separately staged private
+PostgreSQL migrations and single opted-in-member canary still require a
+subsequent explicit owner-approved production operation.
