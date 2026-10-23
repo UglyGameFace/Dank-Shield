@@ -17,8 +17,8 @@ import discord
 from . import somewhere_420_schedules as schedules
 
 ROLE_MINUTES_BEFORE = 5
-MAX_RECIPIENTS_PER_GUILD_WAVE = 80
-DM_SPACING_SECONDS = 0.35
+MAX_RECIPIENTS_PER_GUILD_WAVE = 250
+DM_SPACING_SECONDS = 0.7
 FOOTER_PREFIX = "Dank Shield 4:20 heads-up | guild "
 
 def _id(value: Any) -> int:
@@ -191,8 +191,8 @@ async def deliver_role_wave(bot: Any, claimed: Mapping[str, Any]) -> str:
         # Re-check role, status, and guild opt-out before each DM.
         if role_id not in {r.id for r in member.roles}:
             continue
-        if await get_role_optout(guild_id, member.id):
-            continue
+        # The atomic claim itself checks the server opt-out; don't double
+        # the database request load with a separate per-member read.
         if not await claim_member(guild_id, member.id, due_date.isoformat()):
             continue
         embed = discord.Embed(
