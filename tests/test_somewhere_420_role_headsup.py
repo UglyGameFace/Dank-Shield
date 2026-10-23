@@ -21,7 +21,7 @@ def test_five_minute_headsup_is_dst_aware_and_no_immediate_repeat():
     assert schedules.next_daily_fire("America/New_York", now=at("2026-07-01T12:00:00Z"), reminder_minutes=5) == at("2026-07-01T20:15:00Z")
     assert schedules.next_daily_fire("America/New_York", now=at("2026-01-01T12:00:00Z"), reminder_minutes=5) == at("2026-01-01T21:15:00Z")
     assert schedules.next_daily_fire("America/New_York", now=at("2026-03-07T22:00:00Z"), reminder_minutes=5) == at("2026-03-08T20:15:00Z")
-    assert schedules.next_daily_fire("Asia/Kathmandu", now=at("2026-04-01T10:16:00Z"), reminder_minutes=5) == at("2026-04-02T10:30:00Z")
+    assert schedules.next_daily_fire("Asia/Kathmandu", now=at("2026-04-01T10:31:00Z"), reminder_minutes=5) == at("2026-04-02T10:30:00Z")
     with pytest.raises(ValueError):
         schedules.next_daily_fire("UTC", reminder_minutes=30)
     assert headsup.ROLE_MINUTES_BEFORE == 5
