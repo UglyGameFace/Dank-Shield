@@ -76,3 +76,38 @@ the condition. Preview/impact first, targeted audience, no unsolicited mass DMs.
    as a result of this slice.
 5. Close this slice without claiming that the entire Issue #367 Action &
    Reminder Center (scheduled/durable coordination) has shipped.
+
+
+## Slice 4B: Action Builder / conditions (draft-only)
+
+Staff access: `/dank home → Onboarding & Access → Action & Reminder Center
+→ Action Builder (Draft)`. Existing guild-specific staff authority is checked
+again on every interaction; ordinary members cannot see or edit the builder.
+
+- Staff can configure **pending verification** and **Member Setup revision**
+  rules for *members that the existing owner says are pending*. These are the
+  two supported conditions, not a free-form expression interpreter.
+- Each rule stores whether to include it **in the draft preview**, severity,
+  and an optional short note (160 characters max). Verification cannot be
+  downgraded below Required. Member Setup access-gated actions are still
+  Required even when the draft labels them Recommended.
+- Clicking **Preview Conditions** inspects only the requesting staff member's
+  live authoritative Action Inbox. No member list sweeps, DMs or channel posts.
+  An inaccessible source displays **unavailable**, not completed.
+- Each guild draft is stored under its own `action_reminder_builder_v1`
+  namespace in existing `guild_configs` using
+  `compare_and_swap_guild_config_key`. Saves carry a revision; stale changes
+  fail safely and require reopening the builder. Unconfigured defaults are
+  empty and excluded; malformed/future versions refuse overwrites.
+- Every serialized policy includes `delivery_enabled: false`,
+  `schedule: manual_preview`, and `delivery: preview_only`. It is **not a
+  new verification policy, role mutation, or message-delivery opt-in**.
+
+**What this does not ship:** any active custom reminders, recurring event
+timers, bulk audience targeting, membership-wide impact scans, or staff
+follow-up queues. These need a separately reviewed 4C persistence/delivery
+contract, durable idempotent claims, opt-in controls, quiet hours, and stop on
+canonical completion. No database migration or new env secret is required.
+
+Acceptance: focused builder+inbox+navigation tests, full runtime regression,
+Android staff/ordinary member UI, stale modal conflict, and Discloud SHA proof.
