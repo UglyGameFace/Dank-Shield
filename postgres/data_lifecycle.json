@@ -219,6 +219,34 @@
       ],
       "retention_rule": "No active writes in 4C; before any live 4D sends, implement bounded cleanup of days older than 90 days, leaving current and recent daily budgets intact.",
       "expiry_index": "idx_dank_action_budget_expiry"
+    },
+    "public.dank_action_center_canary_audit": {
+      "feature": "Action & Reminder Center 4D.4 single-recipient operator canary",
+      "owner": "stoney_verify.action_canary_audit / future reviewed Action Center lifecycle owner",
+      "purpose": "Audit the application owner's explicit one-target Member Setup reminder canary confirmation before any claim, and final send/denial outcome without message text",
+      "contains_message_content": false,
+      "cleanup_interval_seconds": 86400,
+      "max_candidates_per_cleanup": 50,
+      "preserve_when": "Retain all operator delivery proofs until a separately reviewed audit retention, backup and expiry plan is implemented; preserve records during unresolved incidents",
+      "backup_class": "security_audit",
+      "migration": "postgres/migrations/202610230002_action_center_canary_audit.sql",
+      "retention_class": "durable_security_evidence",
+      "historical_reuse": "Reconstruct whether an application owner initiated a narrowly scoped DM canary, whether the PostgreSQL claim was consumed, and whether Discord delivery was confirmed",
+      "review_interval_days": 90,
+      "stored_fields": [
+        "operation_id",
+        "guild_id",
+        "target_user_id",
+        "operator_user_id",
+        "revision",
+        "requested_at",
+        "finished_at",
+        "status",
+        "claimed",
+        "sent"
+      ],
+      "retention_rule": "No automatic cleanup in dormant 4D.4. Before any live canary, approve retention window and bounded backup-first audit cleanup, never delete incomplete or disputed delivery records.",
+      "expiry_index": "idx_action_canary_audit_requested"
     }
   }
 }

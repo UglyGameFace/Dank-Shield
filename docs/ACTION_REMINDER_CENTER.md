@@ -292,3 +292,50 @@ idempotency tests, no automatic caller/static audit, safe failed-send behavior,
 real Discloud release SHA, reviewed private ledger migration and explicit
 operator canary approval. None of these PR changes perform a migration, add a
 production environment variable, or send a DM.
+
+
+## Slice 4D.4: application-owner manual canary console and durable audit
+
+The existing **Safety Schedule (Draft)** gains **Owner Canary Console**.
+The console is deliberately visible inside staff controls but remains strictly
+restricted to the **Dank Shield application owner** (Discord bot-owner API)
+at open, confirmation and execution. Server ownership or Administrator
+permission alone never authorizes a canary.
+
+**No production delivery is activated by this PR.** The console reports
+`Locked` unless ALL prerequisites already exist:
+
+1. A current, safely cached guild member whose **per-server Member Setup
+   revision DM preference was explicitly enabled**, the action is still due,
+   and neither exemption nor canonical completion cancels eligibility.
+2. All four exact-match process-local environment gates documented under
+   4D.3. No values are configured, generated or changed by this PR.
+3. The separately staged 4C private **claim** tables and this 4D.4 private
+   **audit** table both exist, with appropriate SELECT/INSERT/UPDATE grants
+   and the existing private reminder PostgreSQL DSN. Their migrations are
+   intentionally never executed by startup or this PR.
+4. An actual application-owner tap, followed by a **typed confirmation**
+   `SEND guild_id/user_id/revision`. The confirmation can be submitted
+   only once. All operator and recipient identities are rechecked afterward.
+
+The owner console first commits a durable `requested` audit record with a
+fresh UUID. If it cannot prove that write succeeded, **no claim or DM is
+attempted**. Then the existing 4D.3 dispatcher rechecks source/consent,
+reserves exactly one atomic per-member/revision, per-guild/day claim, and
+rechecks conditions again before a single mention-free DM. A final audit write
+records whether the attempt was claimed or a message was confirmed. If the
+final audit update fails after a possible send, operators are instructed
+**NOT to retry** because the claim may already be consumed.
+
+Private additive SQL: `postgres/migrations/202610230002_action_center_canary_audit.sql`.
+An explicit no-write-by-default helper
+`tools/migrate_action_canary_audit_postgres.py` exists for a separately
+authorized private-DB operation. It must not be run against Supabase or an
+unverified database DSN. Audit records contain IDs, timestamps and status,
+**no DM text**, attachments, secrets, or member profile data.
+
+This is a **single manual canary**, NOT recurring reminder delivery.
+4D.5 must provide a reviewed production migration, explicit one-user target
+and approval, observability, private audit retention/cleanup, a safe Discloud
+release verification, and a narrow end-to-end canary before permitting
+scheduling. The existing verification reminder worker remains untouched.
