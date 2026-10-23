@@ -111,3 +111,50 @@ canonical completion. No database migration or new env secret is required.
 
 Acceptance: focused builder+inbox+navigation tests, full runtime regression,
 Android staff/ordinary member UI, stale modal conflict, and Discloud SHA proof.
+
+
+## Slice 4C: Scheduling limits and durable-claim readiness (draft only)
+
+Open `/dank home → Onboarding & Access → Action & Reminder Center
+→ Action Builder (Draft) → Safety Schedule (Draft)` as server staff.
+
+- Configure a validated **first wait** after server joining (12/24/48/72 hours),
+  **repeat spacing** (48/72/168 hours), **maximum attempts** (1–3), local
+  **quiet hours** (default 22:00–08:00; same start/end means no quiet window),
+  **IANA timezone** (DST-aware), and **server daily cap** (1–10).
+- Saved as `action_reminder_schedule_v1` in the existing per-server
+  `guild_configs` namespace, with exact per-key compare-and-swap and revision.
+  An unknown schema or concurrent/stale save is rejected. Default policy
+  disallows delivery; the serialized payload always contains
+  `enabled: false` and `delivery: preview_only`.
+- **Preview Timing** inspects only the requesting staff member and the canonical
+  Action Inbox source results. Unknown or completed conditions never become
+  eligible. No member sweep, no notifications or access changes. Preview uses
+  the member's real join date for verification and the later of join date
+  and the **canonical Member Setup revision publication timestamp** for setup.
+  If the publication timestamp is missing, the preview is blocked rather
+  than falsely treating a new revision as overdue. It **assumes no previous
+  claims**, so it is not a production delivery promise.
+- A new, separate `postgres/migrations/202610230001_action_center_delivery_reservations.sql`
+  declares only the future **Member Setup** per-revision attempt ledger and
+  per-guild/day budget. It **does not change the existing** verification
+  reminder ledger. The offline, fail-closed claim adapter reserves both
+  membership and daily attempts in one PostgreSQL transaction; when the
+  guild cap is reached, the entire transaction rolls back. Failure is treated
+  as "no send", not a retry. `tools/migrate_action_center_postgres.py` is
+  manual-only, does nothing by default and is never called on bot startup.
+- **Important architecture boundary:** existing Simple Verify notifications
+  still exclusively belong to `verification_reminders`. Action Center must
+  not reserve a second verification reminder claim or deliver a duplicate DM.
+  Scheduled Member Setup delivery itself is **NOT implemented or enabled** in
+  4C. A separate 4D authorization/migration/live canary is required. Its worker
+  must reread the canonical setup revision before AND after reserving, respect
+  per-user opt-out/delivery preference, and avoid unbounded guild scans.
+- This is **not a new active reminder system**. No production schema was
+  changed by this PR. The staged SQL needs separate private-DB review,
+  validated deploy credentials, test provisioning and an explicit migration
+  operation before it can serve any future sender.
+
+Acceptance: focused scheduling and DST rollover tests, dangerous config
+rejection, saved-config CAS/stale modal tests, CI SQL smoke and private Android
+panel canary; full bot regressions and Discloud deployed commit verification.

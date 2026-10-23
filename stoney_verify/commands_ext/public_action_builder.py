@@ -216,7 +216,12 @@ class ActionBuilderView(_OwnedStaffView):
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await open_action_builder(interaction)
 
-    @discord.ui.button(label="Back to Action Inbox", emoji="📋", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Safety Schedule (Draft)", emoji="🕓", style=discord.ButtonStyle.secondary, row=2)
+    async def schedule(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        from .public_action_schedule import open_schedule_panel
+        await open_schedule_panel(interaction)
+
+    @discord.ui.button(label="Back to Action Inbox", emoji="📋", style=discord.ButtonStyle.secondary, row=3)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         from .public_action_center import open_action_center
         await open_action_center(interaction)

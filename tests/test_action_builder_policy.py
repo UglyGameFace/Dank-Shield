@@ -138,7 +138,7 @@ def test_staff_builder_private_buttons_without_member_exposure() -> None:
     labels = {x.label for x in panel.children if isinstance(x, discord.ui.Button)}
     assert labels == {
         "Verification Rule", "Member Setup Rule", "Preview Conditions",
-        "Refresh Draft", "Back to Action Inbox",
+        "Refresh Draft", "Safety Schedule (Draft)", "Back to Action Inbox",
     }
     assert len(panel.children) <= 25
     snapshot = inbox.ActionSnapshot(
