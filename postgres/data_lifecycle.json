@@ -230,7 +230,7 @@
       "preserve_when": "Retain all operator delivery proofs until a separately reviewed audit retention, backup and expiry plan is implemented; preserve records during unresolved incidents",
       "backup_class": "security_audit",
       "migration": "postgres/migrations/202610230002_action_center_canary_audit.sql",
-      "retention_class": "operator_delivery_audit",
+      "retention_class": "durable_security_evidence",
       "historical_reuse": "Reconstruct whether an application owner initiated a narrowly scoped DM canary, whether the PostgreSQL claim was consumed, and whether Discord delivery was confirmed",
       "review_interval_days": 90,
       "stored_fields": [
