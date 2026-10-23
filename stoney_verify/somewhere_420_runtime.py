@@ -11,6 +11,7 @@ import discord
 from .community_pings_service import parse_community_pings, toke_role_ids
 from .guild_config import get_guild_config
 from .somewhere_420_schedules import Somewhere420StorageUnavailable, claim_due, get_schedule, quiet_at
+from .somewhere_420_role_headsup import claim_role_waves, deliver_role_wave, install_optout_view
 
 _TASK: asyncio.Task[None] | None = None
 POLL_SECONDS = 20
@@ -116,6 +117,18 @@ async def _loop(bot: Any) -> None:
                         print(f"[somewhere420] delivery failed safely: {type(exc).__name__}")
             if claimed:
                 await asyncio.gather(*(one(item) for item in claimed))
+            # Separate indexed guild waves. Only the designated role's cached
+            # members are candidates; each DM is reserved by the DB before send.
+            waves = await claim_role_waves(limit=8)
+            if waves:
+                async def send_wave(row: dict[str, Any]) -> None:
+                    async with semaphore:
+                        try:
+                            outcome = await deliver_role_wave(bot, row)
+                            print(f"[somewhere420] role heads-up guild={row.get('guild_id')} outcome={outcome}")
+                        except (Somewhere420StorageUnavailable, ValueError, KeyError, OSError, TypeError) as exc:
+                            print(f"[somewhere420] role heads-up safely stopped: {type(exc).__name__}")
+                await asyncio.gather(*(send_wave(row) for row in waves))
         except Somewhere420StorageUnavailable:
             # Missing migration or quota outage must not cause a 20-second
             # API-spam loop. All other workers stay alive; retry conservatively.
@@ -133,5 +146,6 @@ def start_somewhere_420_worker(bot: Any) -> asyncio.Task[None]:
     global _TASK
     if _TASK is not None and not _TASK.done():
         return _TASK
+    install_optout_view(bot)
     _TASK = asyncio.create_task(_loop(bot), name="somewhere-420-opt-in")
     return _TASK
