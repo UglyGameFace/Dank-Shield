@@ -83,6 +83,7 @@ class ActionCenterView(discord.ui.View):
         if not is_staff:
             self.remove_item(self.staff_reminders)
             self.remove_item(self.staff_setup)
+            self.remove_item(self.staff_builder)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if (
@@ -135,6 +136,13 @@ class ActionCenterView(discord.ui.View):
             return await _feedback(interaction, "Server staff only.")
         from .public_member_setup import open_member_setup_admin
         await open_member_setup_admin(interaction)
+
+    @discord.ui.button(label="Action Builder (Draft)", emoji="🛠️", style=discord.ButtonStyle.secondary, row=1)
+    async def staff_builder(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not scoped_interaction_is_staff(interaction):
+            return await _feedback(interaction, "Server staff only.")
+        from .public_action_builder import open_action_builder
+        await open_action_builder(interaction)
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=2)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
