@@ -22,11 +22,13 @@ from .action_center_postgres import reserve_member_setup_sync
 from .action_delivery_preflight import inspect_member_setup_candidate
 from .action_delivery_readiness import inspect_member_setup_readiness
 from .action_schedule_policy import load_schedule
+from .runtime_release import runtime_source_fingerprint
 
 ENABLE_ENV = "DANK_ACTION_CENTER_CANARY_SEND"
 GUILD_ENV = "DANK_ACTION_CENTER_CANARY_GUILD_ID"
 USER_ENV = "DANK_ACTION_CENTER_CANARY_USER_ID"
 REVISION_ENV = "DANK_ACTION_CENTER_CANARY_REVISION"
+APPROVED_SOURCE_ENV = "DANK_ACTION_CENTER_CANARY_APPROVED_SOURCE_FP"
 CLAIM_TIMEOUT_SECONDS = 8.0
 
 def _utcnow() -> datetime:
@@ -46,12 +48,21 @@ class CanaryDeliveryResult:
 
 
 def _canary_enabled(guild_id: int, user_id: int, revision: int) -> bool:
-    """All four exact environment gates must match, not a general enable flag."""
+    """All four target locks AND independently approved source must match.
+
+    Fingerprint value comes from GitHub CI after the exact release is reviewed,
+    never from untrusted user input or a generic enable switch. This is a
+    process-local guard, not proof GitHub's current main matches Discloud.
+    """
+    approved = os.getenv(APPROVED_SOURCE_ENV, "")
     return (
         os.getenv(ENABLE_ENV, "") == "1"
         and os.getenv(GUILD_ENV, "") == str(guild_id)
         and os.getenv(USER_ENV, "") == str(user_id)
         and os.getenv(REVISION_ENV, "") == str(revision)
+        and len(approved) == 16
+        and all(character in "0123456789abcdef" for character in approved)
+        and approved == runtime_source_fingerprint()
     )
 
 
