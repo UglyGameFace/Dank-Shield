@@ -1,4 +1,20 @@
-# Active task: It's 4:20 Somewhere (FORCE SWITCH, 2026-10-22)
+# Active task: Action & Reminder Center (FORCE SWITCH, 2026-10-22)
+
+## Current single-task lock
+The owner explicitly FORCE SWITCHED to **Issue #367, Action & Reminder Center**, after PR #691 merged. The previous 4:20 task and guarded branch-retirement task are now both paused. Do not mix further 4:20 work, branch cleanup, Cinema, or unrelated verification framework implementation into this slice.
+
+## Slice 4A: one authoritative private Action Inbox
+- Baseline `main` SHA: `7f2c981b8952341c3556f71136cc752ca0968fac`.
+- Feature branch: `feat/action-reminder-center-foundation-20261022`.
+- `action_center_service.py` reads pending verification from canonical role truth and review-needed Member Setup from `public_member_setup._member_payload` so access-gate grandfathering, exemption, and completion truth are retained. Recompute at each open; unknown sources fail closed.
+- `commands_ext/public_action_center.py` renders the owner's private mobile inbox with only source-derived actions. Staff shortcuts delegate to existing Verification Reminders and Member Setup managers after click-time staff checks.
+- Register one canonical `action_reminder_center` route in `navigation_registry.py` and `public_command_surface_v2.py`. No new slash root, independent worker, database table, scheduler, unsolicited ping, persisted completion, or access mutation.
+- Action contract: Target → Condition → Schedule → Delivery → Action → Completion. Slice 4A restricts to member pending conditions, on-open read-only private delivery, and completion exclusively in original owners.
+- Rollout gates: fast focused tests, exact-head full CI, registry parity, Android Discord canary with 2 pending/cleared cases and role changes, Discloud live SHA evidence. No production data/secrets changes.
+- Future slices after explicit completion: validated shared action-adapter policy, configured schedule & throttle, durable claims/recheck at delivery, staff tasks, events, notifications. Do not call this full Action & Reminder Center complete just because the inbox ships.
+
+## Paused preceding 4:20 work, retained verbatim for audit
+
 
 ## Active outcome
 Build version 2 of issue #687 after the owner merged PR #688: richer world clock, quick and join-active canonical /toke integration, opt-in server daily celebrations with quiet hours and notification-role controls, and personal city/timezone/DM preferences. This is a continuation of the SAME active 4:20 task; branch-retirement remains suspended.
