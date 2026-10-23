@@ -188,6 +188,7 @@ _FEATURE_ROUTE_KEYS = frozenset(
         "setup_center",
         "verification",
         "verification_reminders",
+        "action_reminder_center",
         "welcome",
         "member_setup_manager",
         "protection",
@@ -339,6 +340,10 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
     if key == "verification":
         from .public_verify_command_center import open_verify_command_center
         return await open_verify_command_center(interaction)
+
+    if key == "action_reminder_center":
+        from .public_action_center import open_action_center
+        return await open_action_center(interaction)
 
     if key == "verification_reminders":
         from .public_verify_reminder_ui import open_reminder_settings

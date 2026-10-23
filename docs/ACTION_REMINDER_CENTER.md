@@ -1,0 +1,78 @@
+# Action & Reminder Center (Issue #367, Slice 4A)
+
+## Scope of this first slice
+
+Find it under **/dank home → Onboarding & Access → Action & Reminder Center**,
+or use **Find Feature → reminder center / my actions**.
+
+This initial center is a **private, read-only inbox**, not a replacement for the
+existing verification reminders or an automatic notification system.
+
+### Member experience
+
+- Open your own inbox inside a server.
+- Pending **verification** comes from the existing per-guild configuration and
+  canonical `role_truth.member_is_pending_verification`, never role-name guessing
+  or a duplicated verifier. Choose **Find Verification** to get the actual,
+  permission-checked verification-channel link; no stale panel message ID.
+- Pending **Member Setup** uses the existing `public_member_setup._member_payload`
+  checkpoint which already applies the canonical member setup revision, access
+  gate, grandfathering, and staff exemptions. Choose **Review Member Setup** to
+  open the native setup/confirm UI.
+- An unknown/offline backend source is clearly marked **Not checked**; the inbox
+  must not claim "all done" on incomplete evidence.
+- Refresh reruns both owning sources. No global per-member scan, persistent
+  cache of completion state, or new background listener.
+
+### Staff experience
+
+Authorized staff can open the existing **Verification Reminder Settings** and
+**Member Setup Manager** directly from the same panel. Permission checks occur
+at click-time in both this view and the canonical owner. The existing verified
+reminder worker and its Discloud PostgreSQL claim ledger remain the sole owners
+of verification nudges. The new inbox never sends an unsolicited DM.
+
+### Data ownership and model
+
+Each action has a stable source-derived ID, severity
+(`required` / `recommended` / `announcement`), member target, canonical
+source, pending condition, action route, schedule and delivery fields.
+
+For slice 4A, schedule is `on_open` and delivery is `private_panel`.
+No policy/database migration is needed. The immutable action model forbids
+pretending a future schedule or automatic delivery exists. Only owners may
+evaluate and complete their own conditions:
+
+- Verification -> `role_truth` and existing Verify UI
+- Member Setup -> `member_setup_service` and native Member Setup UI
+- Reminder delivery -> existing `verification_reminders` worker and policy
+
+This keeps a future Action & Reminder Center from competing with underlying
+guild role truth, access gates, or reminder delivery. `ACTION_ROUTES` is a
+bounded explicit dispatcher allowlist.
+
+## Deliberately not in this PR
+
+- Recurring generic events, staff follow-up queues, arbitrary member task
+  creation, automated notifications, new opt-ins, role mentions or new schedulers.
+- New tables/RPCs, Supabase or Discloud migrations, role/access mutations.
+- Writing to Member Setup revision completion or verification state.
+- Member Activity & Reverification, still a separate issue #367 slice 5.
+
+Those require subsequent small slices with a validated source adapter contract,
+durable claim/expiry queues, owner-controlled opt-in, quiet-hours/limits, and
+delivery-state proof. No action should keep nudging after its owner has completed
+the condition. Preview/impact first, targeted audience, no unsolicited mass DMs.
+
+## Rollout and acceptance
+
+1. Merge only after exact-head focused checks, full CI, navigation checks, and
+   production safety audits are green.
+2. Verify source availability and both pending/complete cases in a real guild,
+   on Android Discord, including the offline-source status.
+3. Test staff vs ordinary member access and confirm staff-only controls cannot
+   be opened by another member or after staff permissions are revoked.
+4. Verify the deployed SHA in Discloud. No DB or secrets change should occur
+   as a result of this slice.
+5. Close this slice without claiming that the entire Issue #367 Action &
+   Reminder Center (scheduled/durable coordination) has shipped.
