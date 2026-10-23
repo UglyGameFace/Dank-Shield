@@ -405,8 +405,17 @@ class Staff420View(_OwnedView):
         try:
             old = await get_schedule("guild", guild.id) or {}
             role_id = int(old.get("role_reminder_role_id") or 0)
+            if enabled and role_id <= 0:
+                # Reuse the existing configured Stoners /toke starter role
+                # before requiring an extra picker step on customized servers.
+                from stoney_verify.guild_config import get_guild_config
+                from stoney_verify.community_pings_service import parse_community_pings, toke_role_ids
+                cfg = await get_guild_config(guild.id, refresh=True)
+                if str(cfg.get("source", "")).startswith("unavailable:"):
+                    return await _reply(interaction, "Community & Pings settings are unavailable. Try later.")
+                role_id, _notify = toke_role_ids(parse_community_pings(cfg), cfg)
             if not isinstance(guild.get_role(role_id), discord.Role):
-                return await _reply(interaction, "Choose your Stoners role first.")
+                return await _reply(interaction, "Choose your Stoners role first using Search-Safe.")
             await configure_role_heads_up(
                 guild.id, role_id=role_id, enabled=enabled,
                 zone_name=str(old.get("timezone") or "UTC"),
