@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass
 
 from .action_canary_audit import audit_ready_sync
-from .action_canary_delivery import ENABLE_ENV, GUILD_ENV, USER_ENV, REVISION_ENV
+from .action_canary_delivery import ENABLE_ENV, GUILD_ENV, USER_ENV, REVISION_ENV, APPROVED_SOURCE_ENV
 from .action_center_postgres import ledger_ready_sync
 from .runtime_release import runtime_release_snapshot
 from .verification_reminder_postgres import DATABASE_URL_ENV
@@ -33,6 +33,7 @@ class CanaryReadinessReport:
     flags_complete: bool
     target_guild_match: bool
     delivery_activated: bool = False
+    approved_source_matches: bool = False
 
     def __post_init__(self) -> None:
         if self.delivery_activated is not False:
@@ -42,7 +43,9 @@ class CanaryReadinessReport:
     def blockers(self) -> tuple[str, ...]:
         blockers: list[str] = []
         if not self.release_verified:
-            blockers.append("Deployed source has not been matched to approved GitHub main")
+            blockers.append("Deployed source has not been independently verified against GitHub main")
+        if not self.approved_source_matches:
+            blockers.append("Running source fingerprint does not match the separately approved CI value")
         if not self.db_configured:
             blockers.append("Private reminder PostgreSQL connection not configured")
         if not self.claims_ready:
@@ -68,6 +71,13 @@ async def read_canary_readiness(guild_id: int) -> CanaryReadinessReport:
     declared = str(release.get("declared_sha") or "")
     sha = declared if _SHA_RE.fullmatch(declared) else ""
     fingerprint = str(release.get("source_fingerprint") or "unavailable")
+    approved = os.getenv(APPROVED_SOURCE_ENV, "")
+    approved_match = bool(
+        len(fingerprint) == 16
+        and len(approved) == 16
+        and all(char in "0123456789abcdef" for char in approved)
+        and approved == fingerprint
+    )
     db_configured = bool(os.getenv(DATABASE_URL_ENV, "").strip())
     all_flags = (
         os.getenv(ENABLE_ENV, "") == "1"
@@ -101,4 +111,5 @@ async def read_canary_readiness(guild_id: int) -> CanaryReadinessReport:
         audit_ready=audit,
         flags_complete=bool(all_flags),
         target_guild_match=guild_matches,
+        approved_source_matches=approved_match,
     )
