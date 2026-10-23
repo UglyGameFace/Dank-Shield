@@ -104,6 +104,7 @@ async def deliver_claim(bot: Any, claimed: dict[str, Any]) -> str:
 async def _loop(bot: Any) -> None:
     await bot.wait_until_ready()
     semaphore = asyncio.Semaphore(MAX_PARALLEL)
+    role_semaphore = asyncio.Semaphore(2)  # Global role-DM rate budget.
     while not bot.is_closed():
         try:
             claimed = await claim_due(limit=MAX_BATCH)
@@ -122,7 +123,7 @@ async def _loop(bot: Any) -> None:
             waves = await claim_role_waves(limit=8)
             if waves:
                 async def send_wave(row: dict[str, Any]) -> None:
-                    async with semaphore:
+                    async with role_semaphore:
                         try:
                             outcome = await deliver_role_wave(bot, row)
                             print(f"[somewhere420] role heads-up guild={row.get('guild_id')} outcome={outcome}")
