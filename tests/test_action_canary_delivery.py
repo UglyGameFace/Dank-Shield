@@ -193,7 +193,8 @@ def test_policy_change_and_day_boundary_block_canary(monkeypatch):
     assert "claim" not in events
     events = setup(monkeypatch, member, day_jump=True)
     result = deliver(member)
-    assert result.status == "send_failed" if False else result.status in {"cancelled", "sent"}
+    assert result.status == "cancelled" and result.claimed and not result.sent
+    assert member.sent == []
     # A race after claim does not authorize retries or a second claim.
     assert events.count("claim") == 1
 
