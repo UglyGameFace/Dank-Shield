@@ -8,7 +8,6 @@ and takes effect without removing the role. No member fetches and no role pings.
 """
 
 import asyncio
-import re
 from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 from typing import Any, Mapping
@@ -20,7 +19,6 @@ from . import somewhere_420_schedules as schedules
 ROLE_MINUTES_BEFORE = 5
 MAX_RECIPIENTS_PER_GUILD_WAVE = 250
 DM_SPACING_SECONDS = 0.7
-FOOTER_PREFIX = "Dank Shield 4:20 heads-up | guild "
 
 def _id(value: Any) -> int:
     try:
@@ -111,8 +109,39 @@ async def claim_member(guild_id: int, user_id: int, local_day: str) -> bool:
     return data is True
 
 
+async def record_role_dm(message_id: int, guild_id: int, user_id: int) -> None:
+    """Durably bind bot-authored DM to source server without exposing raw IDs."""
+    if min(_id(message_id), _id(guild_id), _id(user_id)) <= 0:
+        raise ValueError("Invalid DM ownership identifiers")
+    response = await schedules._execute(
+        "role DM ownership write",
+        lambda db: db.table("dank_somewhere_420_role_dm_links").upsert({
+            "dm_message_id": str(message_id),
+            "guild_id": str(guild_id),
+            "user_id": str(user_id),
+        }, on_conflict="dm_message_id").execute(),
+    )
+    row = schedules._row(response)
+    if row is None or str(row.get("user_id")) != str(user_id):
+        raise schedules.Somewhere420StorageUnavailable("DM ownership write unconfirmed")
+
+
+async def source_guild_for_role_dm(message_id: int, user_id: int) -> int:
+    """Server mapping stays private. Never trust embed text or footer identifiers."""
+    if min(_id(message_id), _id(user_id)) <= 0:
+        return 0
+    response = await schedules._execute(
+        "role DM ownership read",
+        lambda db: db.table("dank_somewhere_420_role_dm_links")
+        .select("guild_id,user_id").eq("dm_message_id", str(message_id))
+        .eq("user_id", str(user_id)).limit(1).execute(),
+    )
+    row = schedules._row(response)
+    return _id(row.get("guild_id")) if row else 0
+
+
 class StonersHeadsUpOptOut(discord.ui.View):
-    """Persistent fixed button; guild is read from our own DM embed footer."""
+    """Persistent button; source guild comes only from private message ownership."""
     def __init__(self) -> None:
         super().__init__(timeout=None)
 
@@ -121,21 +150,28 @@ class StonersHeadsUpOptOut(discord.ui.View):
         custom_id="dank:420:stoners:stop:v1",
     )
     async def stop(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        footer = ""
         msg = interaction.message
-        if msg and msg.embeds:
-            footer = str(getattr(msg.embeds[0].footer, "text", "") or "")
-        match = re.fullmatch(r"Stoners reminder \| guild ([0-9]{5,22})", footer)
-        if not match:
+        bot_user = getattr(interaction.client, "user", None)
+        if (msg is None or interaction.guild_id is not None or bot_user is None
+                or getattr(msg.author, "id", None) != bot_user.id):
             return await interaction.response.send_message(
-                "This reminder is too old to identify its server. Open /dank home to stop reminders.",
+                "Only the original private reminder can change these settings.",
                 ephemeral=True,
             )
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            await set_role_optout(int(match.group(1)), int(interaction.user.id), opted_out=True)
+            guild_id = await source_guild_for_role_dm(msg.id, interaction.user.id)
+            if not guild_id:
+                return await interaction.followup.send(
+                    "This reminder couldn't be verified. Open My 4:20 Preferences to stop reminders.",
+                    ephemeral=True,
+                )
+            await set_role_optout(guild_id, int(interaction.user.id), opted_out=True)
         except schedules.Somewhere420StorageUnavailable:
-            return await interaction.followup.send("Unable to save your opt-out right now. Try again in /dank home.", ephemeral=True)
+            return await interaction.followup.send(
+                "Unable to save your opt-out right now. Try again in /dank home.",
+                ephemeral=True,
+            )
         await interaction.followup.send(
             "🔕 Stoners heads-up reminders are off for this server. You keep your Stoners role. "
             "You can re-enable them in My 4:20 Preferences.",
@@ -222,11 +258,22 @@ async def deliver_role_wave(bot: Any, claimed: Mapping[str, Any]) -> str:
             ),
             color=discord.Color.green(),
         )
-        embed.set_footer(text=f"Stoners reminder | guild {guild_id}")
+        embed.set_footer(text="Stoners reminder • Opt out anytime below")
         try:
-            await member.send(embed=embed, view=StonersHeadsUpOptOut(),
-                              allowed_mentions=discord.AllowedMentions.none())
-            delivered += 1
+            sent = await member.send(
+                embed=embed, view=StonersHeadsUpOptOut(),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            try:
+                await record_role_dm(sent.id, guild_id, member.id)
+                delivered += 1
+            except (schedules.Somewhere420StorageUnavailable, ValueError):
+                # Never leave behind a broken Stop button after ownership
+                # persistence fails. Delivery was already claimed once.
+                try:
+                    await sent.delete()
+                except (discord.Forbidden, discord.HTTPException):
+                    print("[somewhere420] could not remove untracked reminder DM")
         except (discord.Forbidden, discord.HTTPException):
             pass  # No repeat DM; claim is consumed.
         await asyncio.sleep(DM_SPACING_SECONDS)
