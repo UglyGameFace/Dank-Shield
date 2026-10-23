@@ -3,6 +3,14 @@
 ## Current single-task lock
 The owner explicitly FORCE SWITCHED to **Issue #367, Action & Reminder Center**, after PR #691 merged. The previous 4:20 task and guarded branch-retirement task are now both paused. Do not mix further 4:20 work, branch cleanup, Cinema, or unrelated verification framework implementation into this slice.
 
+## Slice 4D.2: actual private ledger readiness (active, 2026-10-23)
+- PR #695 (4D.1) merged into `86d44bb9e135d6862c61c3becc10f0cdb58f7f00`, with all six checks green. Member consent remains explicitly opt-in per guild; zero automatic Action Center reminder DMs enabled.
+- Branch `feat/action-center-4d2-ledger-readiness-20261023` starts from that exact merged main; this is the **only active development task**.
+- A safe per-user/revision per-guild/day PostgreSQL claim **read-only** adapter returns zero counters only for a successful empty query, never a failed/missing DB/migration. Existing 4C claim schema is **not** installed to production through this PR.
+- `action_delivery_readiness.py` performs the 4D.1 canonical preflight before and after actual ledger reads, comparing guild schedule/draft and applying true retry cooldown, attempts and guild daily budget. **delivery_authorized always False**; no atomic reservation, new worker, notifications or broad member sweep.
+- Existing Action Builder → Safety Schedule gains staff-only `Check Delivery Readiness` for the requesting staff member, via existing authorization checks. Staff exemptions and unprovisioned ledger produce honest blocked results.
+- Focused CI, real disposable PG17 tests, full bot tests, mobile UX and Discloud commit verification remain gates. Other tasks (4:20, Cinema, verification framework, branch retirement) remain paused.
+
 ## Slice 4D.1: private member reminder consent and no-send preflight (active, 2026-10-23)
 - PR #694 (4C) merged as `311d4890e920b279348c71125e2c868f6e20c08b`, with all seven workflows passing. The manual private PostgreSQL DDL has **not** been applied, and no Action Center automatic delivery has been activated.
 - Active branch: `feat/action-reminder-center-4d-member-consent-20261023`, based on the exact merged main.
