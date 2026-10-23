@@ -130,8 +130,11 @@ Open `/dank home → Onboarding & Access → Action & Reminder Center
 - **Preview Timing** inspects only the requesting staff member and the canonical
   Action Inbox source results. Unknown or completed conditions never become
   eligible. No member sweep, no notifications or access changes. Preview uses
-  the member's real join date but **assumes no previous claims**, so it is not
-  a production delivery promise.
+  the member's real join date for verification and the later of join date
+  and the **canonical Member Setup revision publication timestamp** for setup.
+  If the publication timestamp is missing, the preview is blocked rather
+  than falsely treating a new revision as overdue. It **assumes no previous
+  claims**, so it is not a production delivery promise.
 - A new, separate `postgres/migrations/202610230001_action_center_delivery_reservations.sql`
   declares only the future **Member Setup** per-revision attempt ledger and
   per-guild/day budget. It **does not change the existing** verification
