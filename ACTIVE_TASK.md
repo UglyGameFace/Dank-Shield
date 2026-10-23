@@ -3,6 +3,15 @@
 ## Current single-task lock
 The owner explicitly FORCE SWITCHED to **Issue #367, Action & Reminder Center**, after PR #691 merged. The previous 4:20 task and guarded branch-retirement task are now both paused. Do not mix further 4:20 work, branch cleanup, Cinema, or unrelated verification framework implementation into this slice.
 
+## Slice 4B: Action Builder and Conditions (active, 2026-10-23)
+- PR #692 (4A) merged in `8ed1455321ef52c80b15ada83db4f7bb53c38fbb` with all eight CI workflows passing. Discord/Discloud acceptance remains a deployment gate.
+- New active branch: `feat/action-reminder-center-4b-policy-20261023` from that exact merged main.
+- Per-guild **draft-only** policy in `action_builder_policy.py`: allowed source conditions `pending_verification` and `member_setup_revision`; strict pending-member scope; preview-only/manual schedule; authoritative severity never downgraded.
+- Config stored in the existing `guild_configs` feature namespace `action_reminder_builder_v1`, validated and saved via atomic `compare_and_swap_guild_config_key`; revision conflicts and unknown schema fail closed. No new table, migration, worker or secret.
+- Staff-only mobile `commands_ext/public_action_builder.py` linked from the canonical private Action Inbox, with edit, preview, refresh and back; recheck staff authority at click-time; preview only the requesting staff member's live canonical truth. New stored flags always `delivery_enabled: false`.
+- **Single active task lock** remains Action & Reminder Center 4B. Verification Framework, 4:20 follow-ups, Cinema, member lifecycle and branch-retirement work stay suspended. Do not start 4C scheduled delivery until this PR passes full CI and mobile acceptance.
+- See `docs/ACTION_REMINDER_CENTER.md` and `tests/test_action_builder_policy.py`.
+
 ## Slice 4A: one authoritative private Action Inbox
 - Baseline `main` SHA: `7f2c981b8952341c3556f71136cc752ca0968fac`.
 - Feature branch: `feat/action-reminder-center-foundation-20261022`.
