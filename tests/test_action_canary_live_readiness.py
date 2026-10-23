@@ -112,6 +112,26 @@ def test_application_owner_not_required_to_have_separate_guild_staff_role(monkey
     )))
 
 
+def test_database_readiness_requires_each_read_and_write_privilege():
+    # SELECT-only production roles must never be reported ready to reserve a
+    # claim or persist an audit. These are read-only permission probes.
+    from stoney_verify import action_center_postgres, action_canary_audit
+    claim = Path(action_center_postgres.__file__).read_text()
+    audit = Path(action_canary_audit.__file__).read_text()
+    for table in (
+        "public.dank_action_center_delivery",
+        "public.dank_action_center_daily_budget",
+    ):
+        for permission in ("SELECT", "INSERT", "UPDATE"):
+            assert f"has_table_privilege(current_user, '{table}', '{permission}')" in claim
+    for permission in ("SELECT", "INSERT", "UPDATE"):
+        assert (
+            "has_table_privilege(current_user, "
+            f"'public.dank_action_center_canary_audit', '{permission}')"
+        ) in audit
+    assert "SELECT,INSERT,UPDATE" not in audit
+
+
 def test_critical_action_delivery_files_affect_runtime_fingerprint_and_report_is_unwired():
     root = Path(__file__).resolve().parents[1]
     for relative in (
