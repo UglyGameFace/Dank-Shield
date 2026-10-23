@@ -9,7 +9,8 @@ and takes effect without removing the role. No member fetches and no role pings.
 
 import asyncio
 import re
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Mapping
 
 import discord
@@ -178,6 +179,20 @@ async def deliver_role_wave(bot: Any, claimed: Mapping[str, Any]) -> str:
         due_date = datetime.strptime(due_text, "%Y-%m-%d").date()
     except ValueError:
         return "invalid-day"
+    try:
+        target_utc = datetime.combine(
+            due_date, time(16, 20), tzinfo=ZoneInfo(str(current.get("timezone") or "UTC"))
+        ).astimezone(timezone.utc)
+    except (ValueError, KeyError):
+        return "bad-timezone"
+    if datetime.now(timezone.utc) >= target_utc:
+        return "past-420"
+    from .somewhere_420_schedules import quiet_at
+    local_hour = datetime.now(timezone.utc).astimezone(
+        ZoneInfo(str(current.get("timezone") or "UTC"))
+    ).hour
+    if quiet_at(local_hour, int(current.get("quiet_start", 22)), int(current.get("quiet_end", 8))):
+        return "quiet-hours"
     eligible = _role_members(guild, role_id)
     if not eligible:
         return "no-cached-stoners"
@@ -188,6 +203,8 @@ async def deliver_role_wave(bot: Any, claimed: Mapping[str, Any]) -> str:
         )
     delivered = 0
     for member in eligible[:MAX_RECIPIENTS_PER_GUILD_WAVE]:
+        if datetime.now(timezone.utc) >= target_utc:
+            break  # Never send a "prepare" alert once 4:20 has arrived.
         # Re-check role, status, and guild opt-out before each DM.
         if role_id not in {r.id for r in member.roles}:
             continue
@@ -196,9 +213,9 @@ async def deliver_role_wave(bot: Any, claimed: Mapping[str, Any]) -> str:
         if not await claim_member(guild_id, member.id, due_date.isoformat()):
             continue
         embed = discord.Embed(
-            title="🌿 Just a heads-up: 4:20 in 5 minutes",
+            title="🌿 Heads-up: 4:20 is coming up",
             description=(
-                f"Time to get ready if you're joining the sesh in **{discord.utils.escape_markdown(guild.name)}**. "
+                f"**4:20 <t:{int(target_utc.timestamp())}:R>** in **{discord.utils.escape_markdown(guild.name)}**. "
                 "No pressure. This is your one heads-up today.\n\n"
                 "You received this because you have the designated Stoners role. "
                 "You can stop future reminders below without losing the role."
