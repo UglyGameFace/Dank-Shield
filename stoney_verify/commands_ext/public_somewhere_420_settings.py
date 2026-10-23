@@ -160,7 +160,7 @@ class PersonalSettingsModal(discord.ui.Modal, title="Personal 4:20 Preferences")
             )
         except (Somewhere420StorageUnavailable, ValueError):
             return await _reply(interaction, "Couldn't save private reminders. Check the 4:20 database migration.")
-        await _panel(interaction, _settings_embed("member", saved), Personal420View(interaction.user.id, saved))
+        await open_personal_420(interaction)
 
 
 
@@ -270,6 +270,11 @@ class ServerSettingsModal(discord.ui.Modal, title="Daily Server 4:20 Settings"):
                 "guild", interaction.guild.id, zone_name=zone, enabled=active,
                 channel_id=channel_id, notify_role=ping, quiet_start=start, quiet_end=end,
             )
+            if latest.get("role_reminder_enabled"):
+                data = await configure_role_heads_up(
+                    interaction.guild.id, role_id=int(latest.get("role_reminder_role_id") or 0),
+                    enabled=True, zone_name=zone,
+                )
         except (Somewhere420StorageUnavailable, ValueError):
             return await _reply(interaction, "Could not save 4:20 settings. No announcement was enabled.")
         await _panel(interaction, _settings_embed("guild", data), Staff420View(self.owner_id, data))
