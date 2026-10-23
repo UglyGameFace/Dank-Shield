@@ -97,3 +97,40 @@ def test_nonexistent_migration_or_lost_connection_means_no_delivery(monkeypatch)
         123,456,1,local_day=date(2026,10,23),
         cooldown_hours=72,max_attempts=2,max_guild_per_day=1,
     )
+
+
+def test_read_only_member_revision_and_guild_day_snapshot_matches_claims():
+    """4D.2 must see real counters and cooldown without consuming a claim."""
+    today = date(2026, 10, 23)
+    before = claims.read_member_setup_claim_snapshot_sync(
+        33110, 44220, 5, local_day=today
+    )
+    assert before.attempts == 0
+    assert before.last_claimed_at is None
+    assert before.guild_claims_today == 0
+    assert claims.reserve_member_setup_sync(
+        33110, 44220, 5, local_day=today,
+        cooldown_hours=72, max_attempts=2, max_guild_per_day=2,
+    )
+    after = claims.read_member_setup_claim_snapshot_sync(
+        33110, 44220, 5, local_day=today
+    )
+    assert after.attempts == 1
+    assert after.last_claimed_at is not None
+    assert after.last_claimed_at.tzinfo is not None
+    assert after.guild_claims_today == 1
+    # Observing the snapshot again cannot consume an additional attempt.
+    repeated = claims.read_member_setup_claim_snapshot_sync(
+        33110, 44220, 5, local_day=today
+    )
+    assert repeated == after
+    tomorrow = claims.read_member_setup_claim_snapshot_sync(
+        33110, 44220, 5, local_day=date(2026, 10, 24),
+    )
+    assert tomorrow.attempts == 1
+    assert tomorrow.guild_claims_today == 0
+    other_revision = claims.read_member_setup_claim_snapshot_sync(
+        33110, 44220, 6, local_day=today,
+    )
+    assert other_revision.attempts == 0
+    assert other_revision.guild_claims_today == 1
