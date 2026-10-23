@@ -115,6 +115,26 @@ class ScheduleView(_OwnedStaffView):
             _, builder = await load_action_builder(self.guild_id, refresh=True)
             snapshot = await load_member_actions(interaction.user)
             cases = preview_rules(builder, snapshot)
+            published_at = None
+            # The canonical Member Setup owner records revision publication.
+            # Use it, not a member's age, as the reminder starting point.
+            if any(item.condition == "member_setup_revision" and item.status == "pending"
+                   and item.included for item in cases):
+                from stoney_verify.member_setup_service import load_guild_setup_state, latest_revision
+                setup_state = await load_guild_setup_state(self.guild_id, refresh=True)
+                latest = latest_revision(setup_state)
+                if latest is not None and any(
+                    action.key == f"member_setup:revision:{latest['revision']}"
+                    for action in snapshot.items
+                ):
+                    raw_date = latest.get("published_at")
+                    if isinstance(raw_date, str):
+                        try:
+                            parsed = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+                            if parsed.tzinfo is not None:
+                                published_at = parsed
+                        except ValueError:
+                            pass
         except Exception:
             return await _msg(interaction, "Authoritative conditions unavailable. No preview was generated.")
         embed = discord.Embed(
@@ -130,6 +150,7 @@ class ScheduleView(_OwnedStaffView):
                 schedule, condition=item.condition, owner_status=item.status,
                 now=datetime.now(timezone.utc),
                 joined_at=interaction.user.joined_at,
+                condition_started_at=published_at if item.condition == "member_setup_revision" else None,
                 included=item.included,
             )
             timing = (
