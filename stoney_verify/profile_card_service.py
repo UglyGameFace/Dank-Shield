@@ -587,6 +587,63 @@ async def list_profile_guild_settings(
     return list(await _execute(f"list profile guild settings {gid}", read_all) or [])
 
 
+async def list_profile_guild_settings_namespace_page(
+    guild_id: int, *, namespace: str, enabled_key: str,
+    after_user_id: int = 0, limit: int = 10,
+) -> list[dict[str, Any]]:
+    """One bounded, server-filtered page of explicit opt-in settings.
+
+    This uses the existing profile guild settings table/connection; it never
+    reads all guild member rows, calls Discord REST, or changes preferences.
+    The JSONB containment filter is executed by PostgREST, not in Python.
+    Caller MUST parse the full versioned consent AND re-read it immediately
+    before any later sending. This page alone is never delivery authority.
+    """
+    if type(guild_id) is not int or guild_id <= 0:
+        raise ValueError("Valid guild required")
+    if type(after_user_id) is not int or after_user_id < 0:
+        raise ValueError("Invalid pagination cursor")
+    if type(limit) is not int or not 1 <= limit <= 10:
+        raise ValueError("Opt-in page must contain 1–10 rows")
+    if (
+        not isinstance(namespace, str) or not namespace.isidentifier()
+        or not isinstance(enabled_key, str) or not enabled_key.isidentifier()
+    ):
+        raise ValueError("Invalid namespaced opt-in key")
+
+    def read_page(client: Any):
+        query = (
+            client.table(PROFILE_GUILD_SETTINGS_TABLE)
+            .select("guild_id,user_id,settings")
+            .eq("guild_id", str(guild_id))
+            .contains("settings", {namespace: {enabled_key: True}})
+        )
+        if after_user_id:
+            query = query.gt("user_id", str(after_user_id))
+        return query.order("user_id").limit(limit).execute()
+
+    rows = _rows(await _execute(
+        f"read namespaced guild opt-in page {guild_id}", read_page,
+    ))
+    if len(rows) > limit:
+        raise ProfileStorageUnavailable("Malformed opt-in page")
+    previous = after_user_id
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            gid, uid = int(row["guild_id"]), int(row["user_id"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise ProfileStorageUnavailable("Malformed opt-in page") from None
+        if gid != guild_id or uid <= previous or not isinstance(row.get("settings"), Mapping):
+            raise ProfileStorageUnavailable("Malformed opt-in page")
+        setting = row["settings"].get(namespace)
+        if not isinstance(setting, Mapping) or setting.get(enabled_key) is not True:
+            raise ProfileStorageUnavailable("Opt-in filter returned unverified settings")
+        previous = uid
+        result.append(dict(row))
+    return result
+
+
 async def upsert_profile_guild_namespace(
     guild_id: int,
     user_id: int,
@@ -981,6 +1038,7 @@ __all__ = [
     "get_effective_profile_settings",
     "get_live_card_state",
     "get_profile_guild_settings",
+    "list_profile_guild_settings_namespace_page",
     "get_profile_user",
     "invalidate_profile_cache",
     "list_live_card_states",
