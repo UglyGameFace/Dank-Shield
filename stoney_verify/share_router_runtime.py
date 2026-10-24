@@ -2083,6 +2083,15 @@ async def route_message(message: discord.Message) -> None:
             await enqueue_download_request(message)
             return
         route = route_for_source(routes, int(message.channel.id))
+        # An ordinary existing channel may receive webhooks from other bots.
+        # Do not relay those to a second channel, creating recursive copies.
+        # Temporary proxy sources keep the original webhook share semantics.
+        if (
+            route is not None
+            and not route_deletes_source(message.channel, route)
+            and getattr(message, "webhook_id", None) is not None
+        ):
+            return
         if route is None:
             if is_share_router_design_resource(message.channel):
                 await _route_rejection_log(
