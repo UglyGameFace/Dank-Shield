@@ -462,6 +462,8 @@ class ShareRouterTargetLandingView(_OwnedView):
         self.source = source
         self.browser = browser
         self.delete_source = delete_source
+        if not delete_source:
+            self.back.label = "Back to Existing Channels"
 
     @discord.ui.button(label="Search Destination", emoji="🔎", style=discord.ButtonStyle.primary, row=0)
     async def search_destination(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -590,7 +592,10 @@ async def _open_existing_source_picker(interaction: discord.Interaction) -> None
             or pick_interaction.guild_id != guild.id
         ):
             return
-        if not allowed_source(resource) or guild.get_channel(resource.id) is not resource:
+        if (
+            not allowed_source(resource)
+            or not isinstance(guild.get_channel(resource.id), discord.TextChannel)
+        ):
             return await _private(pick_interaction, "❌ That ordinary channel is no longer available.")
         await _open_target_browser(pick_interaction, resource, delete_source=False)
 
@@ -629,7 +634,10 @@ async def _open_target_browser(
             return
         if pick_interaction.guild_id != guild.id:
             return await _private(pick_interaction, "❌ Reopen Share Router in this server.")
-        if guild.get_channel(source.id) is not source:
+        if (
+            source.guild.id != guild.id
+            or not isinstance(guild.get_channel(source.id), discord.TextChannel)
+        ):
             return await _private(pick_interaction, "❌ Source channel no longer exists.")
         source_ids = await available_share_source_ids(guild)
         if delete_source and int(source.id) not in source_ids:
