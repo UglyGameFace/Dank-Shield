@@ -105,6 +105,65 @@ def test_media_mobile_control_rows_and_confirmation_are_safe():
     assert "Back to Studio" in {item.label for item in SmartTextHelp(session).children}
 
 
+def test_media_picker_paginates_fifty_links_without_ever_exceeding_discord_limits():
+    from stoney_verify.embed_studio_ui import MEDIA_PAGE_SIZE
+
+    assert MAX_MEDIA_ITEMS == 50
+    assert MEDIA_PAGE_SIZE <= 25
+    session = StudioSession(guild_id=5, owner_id=10)
+    lib = parse_library(None)
+    for index in range(MAX_MEDIA_ITEMS):
+        lib["media"][str(index)] = {
+            "name": f"Artwork {index:02}", "url": f"https://example.com/{index}.png",
+        }
+    labels = []
+    for page, expected in ((0, 20), (1, 20), (2, 10)):
+        view = MediaLibraryMenu(session, lib, page=page)
+        pickers = [child for child in view.children if isinstance(child, MediaLinkSelect)]
+        assert len(pickers) == 1
+        assert pickers[0].row == 0
+        assert len(pickers[0].options) == expected
+        labels.extend(option.label for option in pickers[0].options)
+        assert view.pages == 3 and view.page == page
+        assert view.previous.disabled == (page == 0)
+        assert view.next.disabled == (page == 2)
+        assert max(sum(1 for child in view.children if child.row == row)
+                   for row in range(5)) <= 5
+    assert len(set(labels)) == 50
+    assert "Artwork 00" in labels and "Artwork 49" in labels
+    assert MediaLibraryMenu(session, lib, page=200).page == 2
+    assert MediaLibraryMenu(session, lib, page=-15).page == 0
+
+    no_media = MediaLibraryMenu(session, parse_library(None))
+    assert no_media.pages == 1
+    assert no_media.previous.disabled and no_media.next.disabled
+
+
+def test_expanded_capacity_still_enforces_a_bounded_shared_guild_library():
+    from stoney_verify.embed_studio_core import MAX_TEMPLATES_BYTES, MAX_TEMPLATES
+    assert MAX_TEMPLATES_BYTES == 256 * 1024
+    lib = parse_library(None)
+    # Fifty legal max-length HTTPS links still fit with legacy saved metadata.
+    for i in range(MAX_MEDIA_ITEMS):
+        lib["media"][str(i)] = {
+            "name": f"Gallery {i}",
+            "url": "https://cdn.example.com/" + str(i) + "/" + ("a" * 1900),
+        }
+    library_payload(lib)
+    # Replicate legal, relatively large designs to fill the shared library.
+    for i in range(MAX_TEMPLATES):
+        project = new_project()
+        project["embeds"][0]["description"] = "D" * 3500
+        project["embeds"][0]["footer"] = "F" * 1500
+        project["embeds"][0]["image"] = "https://example.com/" + "a" * 1700
+        project["embeds"][0]["thumbnail"] = "https://example.com/" + "b" * 1700
+        lib["templates"][str(i)] = {"name": f"Template {i}", "project": project}
+    # A limited shared library must fail with an explicit actionable error.
+    # No template, draft or media record is silently truncated on writes.
+    with pytest.raises(StudioValidationError, match="256 KiB"):
+        library_payload(lib)
+
+
 def test_smart_text_only_replaces_known_tokens_and_never_changes_source():
     original = new_project()
     original["content"] = "{server.name}: {server.member_count} people"
