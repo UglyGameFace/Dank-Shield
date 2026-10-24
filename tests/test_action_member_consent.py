@@ -221,7 +221,7 @@ def test_member_setup_status_is_read_only_and_uses_authoritative_adapter(monkeyp
     status = asyncio.run(ui._read_my_setup_dm_status(member))
     assert seen == [("setup", 901, True), ("eligibility", 902, 8)]
     assert "owners" in status and "exempt" in status.lower()
-    assert "No Action Center DM is scheduled or authorized" in status
+    assert "Eligibility is a preview, not a send authorization" in status
     assert "🛡️ Current Member Setup DM status" in {
         field.name for field in ui._embed(prefs.MemberReminderConsent(), status=status).fields
     }
