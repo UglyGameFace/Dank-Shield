@@ -828,6 +828,24 @@ def test_content_filter_matcher_ignores_chat_and_classifies_media_without_networ
     assert router.route_content_matches(msg("https://www.tiktok.com/@member/video/7654321"), "videos")
     assert router.route_content_matches(msg("https://instagram.com/reel/abc123"), "videos")
     assert router.route_content_matches(msg("https://facebook.com/watch?v=123"), "videos")
+    for facebook_video_share in (
+        "https://www.facebook.com/share/v/Abc123_-/?mibextid=something",
+        "https://m.facebook.com/share/r/ABCabc123/?mibextid=foo",
+        "https://web.facebook.com/share/video/ABCabc123/",
+        "https://facebook.com/share/reel/abc123/",
+        "https://www.facebook.com/video.php?v=123456789",
+        "https://fb.watch/AbC123/",
+    ):
+        assert router.route_content_matches(msg(facebook_video_share), "videos"), facebook_video_share
+    for facebook_not_known_video in (
+        "https://www.facebook.com/share/p/photo123/",
+        "https://www.facebook.com/share/post/post123/",
+        "https://www.facebook.com/groups/123/permalink/456/",
+        "https://www.facebook.com/profile.php?id=123",
+    ):
+        assert not router.route_content_matches(
+            msg(facebook_not_known_video), "videos"
+        ), facebook_not_known_video
     assert not router.route_content_matches(msg("https://instagram.com/p/photo123"), "videos")
     assert not router.route_content_matches(msg("https://x.com/someone/status/123"), "videos")
     assert not router.route_content_matches(msg("https://example.com/news"), "videos")
