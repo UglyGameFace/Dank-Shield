@@ -102,8 +102,9 @@ def _home_embed() -> discord.Embed:
             "**CONTROL CENTER**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             f"🧭 **{len(CATEGORIES)} sections**  •  ✨ **{len(FEATURES)} destinations**\n\n"
-            "Choose where you want to go. Can't remember where something lives? "
-            "Use **🔎 Find Feature**."
+            "Pick a topic below, then choose what you want to do. "
+            "Not sure where to start? Use **Find Feature** and type everyday words.\n"
+            "Tap **New & Updated** to see what changed recently."
         ),
         color=discord.Color.blurple(),
     )
@@ -237,30 +238,28 @@ if _FEATURE_ROUTE_KEYS != _REGISTRY_ROUTE_KEYS:
 
 
 def _category_embed(category: NavigationCategory) -> discord.Embed:
-    features = features_for_category(category.key)
     embed = discord.Embed(
         title=f"{category.emoji} {category.label}",
-        description=f"**Home › {category.label}**\n{category.description}",
+        description=(
+            f"**Home › {category.label}**\n{category.description}\n\n"
+            "Choose a button below. 🔒 means server staff must open it."
+        ),
         color=discord.Color.blurple(),
     )
-    lines = []
-    for feature in features:
-        lock = "🔒 " if feature.manager_only else ""
-        lines.append(f"{feature.emoji} **{feature.label}** — {lock}{feature.description}")
-    embed.add_field(
-        name="Features",
-        value="\n".join(lines)[:1024] if lines else "No features are registered here yet.",
-        inline=False,
-    )
-    embed.add_field(
-        name="Permissions",
-        value=(
-            "Manager-only destinations stay visible so nothing becomes a hidden treasure hunt. "
-            "The feature itself checks your live Discord authority when you open it."
-        ),
-        inline=False,
-    )
-    embed.set_footer(text=f"Dank Shield • Home › {category.label}")
+    for group_name, features in grouped_features(category.key):
+        lines = []
+        for feature in features:
+            lock = " 🔒" if feature.manager_only else ""
+            lines.append(
+                f"{feature.emoji} **{feature.label}**{lock}\n"
+                f"  {feature.description}"
+            )
+        embed.add_field(
+            name=group_name,
+            value="\n\n".join(lines)[:1024],
+            inline=False,
+        )
+    embed.set_footer(text="Blue = main tool • Grey = browse • Green = confirm • Red = delete")
     return embed
 
 
@@ -313,25 +312,32 @@ def _search_embed(query: str, results: list[NavigationFeature]) -> discord.Embed
 
 
 def _recent_embed() -> discord.Embed:
-    features = recent_features()
     embed = discord.Embed(
-        title="✨ New & Updated Dank Shield Features",
+        title="✨ What's New in Dank Shield",
         description=(
             "**Home › New & Updated**\n"
-            "These shortcuts reflect existing feature owners, not duplicate controls. "
-            "Select a destination to open the current setup or member flow."
+            "These improvements are merged into the bot's code. "
+            "They appear in your server after its bot deployment is updated. "
+            "Tap a button to open the feature."
         ),
         color=discord.Color.blurple(),
     )
-    embed.add_field(
-        name="Updated destinations",
-        value="\n".join(
-            f"{feature.emoji} **{feature.label}** — {feature.description}"
-            for feature in features
-        )[:1024],
-        inline=False,
-    )
-    embed.set_footer(text="Dank Shield • Feature availability depends on server configuration and permissions")
+    grouped: dict[str, list[str]] = {}
+    for update in RECENT_UPDATES:
+        feature = feature_by_key(update.key)
+        if feature is None:
+            continue
+        grouped.setdefault(update.merged_date, []).append(
+            f"{feature.emoji} **{feature.label}: {update.headline}**\n"
+            f"  {update.detail}"
+        )
+    for date, lines in grouped.items():
+        embed.add_field(
+            name=f"Updated {date}",
+            value="\n\n".join(lines)[:1024],
+            inline=False,
+        )
+    embed.set_footer(text="Only merged updates • Features not yet merged are not listed")
     return embed
 
 
