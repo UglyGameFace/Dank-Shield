@@ -258,3 +258,14 @@ def test_member_setup_status_unknown_result_fails_closed_without_exposing_reason
     assert "Eligibility could not be verified" in status
     assert "private password" not in status
     assert "Delivery remains disabled" in status
+
+
+def test_malformed_published_revision_cannot_be_reported_as_clear(monkeypatch):
+    from stoney_verify import member_setup_service
+    async def malformed(guild_id, *, refresh):
+        return {"current_revision": "invalid"}
+    monkeypatch.setattr(member_setup_service, "load_guild_setup_state", malformed)
+    with pytest.raises(RuntimeError, match="Invalid published"):
+        asyncio.run(ui._read_my_setup_dm_status(
+            SimpleNamespace(guild=SimpleNamespace(id=901), id=902),
+        ))
