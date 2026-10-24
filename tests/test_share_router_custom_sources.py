@@ -831,6 +831,9 @@ def test_content_filter_matcher_ignores_chat_and_classifies_media_without_networ
     assert not router.route_content_matches(msg("https://instagram.com/p/photo123"), "videos")
     assert not router.route_content_matches(msg("https://x.com/someone/status/123"), "videos")
     assert not router.route_content_matches(msg("https://example.com/news"), "videos")
+    assert not router.route_content_matches(msg("https://www.tiktok.com/@somebody"), "videos")
+    assert not router.route_content_matches(msg("https://vimeo.com/user123"), "videos")
+    assert not router.route_content_matches(msg("https://streamable.com/login"), "videos")
     assert router.route_content_matches(msg("https://example.com/photo.webp"), "images")
     assert router.route_content_matches(msg("https://example.com/clip.mp4"), "videos")
     assert router.route_content_matches(msg("https://example.com/news"), "links")
@@ -982,3 +985,68 @@ def test_content_filter_ui_has_selectable_four_modes_and_preserves_proxy_default
     saved_code = Path(ui.__file__).read_text()
     assert "content_filter=content_filter" in saved_code
     assert "save = save_managed_share_route if delete_source else save_existing_share_route" in saved_code
+
+
+
+def test_filtered_proxy_mismatch_does_not_delete_source_or_attempt_delivery(
+    isolated_router, monkeypatch,
+):
+    from types import SimpleNamespace as SN
+    guild, source, target, member = _ordinary_route_fixture(monkeypatch, router, guild_id=1673)
+    deleted = []
+    calls = []
+
+    async def delete():
+        deleted.append(True)
+
+    async def fail_torrent(*_args, **_kwargs):
+        calls.append("torrent")
+        raise AssertionError("Ignored messages cannot reach the torrent engine")
+
+    async def fail_relay(*_args, **_kwargs):
+        calls.append("relay")
+        raise AssertionError("Ignored messages cannot reach the video engine")
+
+    monkeypatch.setattr(router, "_route_torrent_media", fail_torrent)
+    monkeypatch.setattr(router, "_relay_native_video_upload", fail_relay)
+
+    async def check():
+        await router.save_route(
+            guild.id, source_channel_id=source.id,
+            target_channel_id=target.id, delete_source=True,
+            content_filter="videos",
+        )
+        msg = SN(id=1, guild=guild, channel=source, author=member,
+                 content="Just checking in", attachments=[], embeds=[],
+                 webhook_id=None, delete=delete)
+        await router.route_message(msg)
+        assert calls == []
+        assert deleted == []
+        assert target.sent == []
+
+    asyncio.run(check())
+
+
+def test_invalid_saved_filter_is_never_due_to_forward_and_health_flags_it(
+    isolated_router, monkeypatch,
+):
+    from types import SimpleNamespace as SN
+    guild, source, target, member = _ordinary_route_fixture(monkeypatch, router, guild_id=1674)
+
+    async def check():
+        await router.save_route(
+            guild.id, source_channel_id=source.id,
+            target_channel_id=target.id, delete_source=False,
+            content_filter="videos",
+        )
+        data = router._load_all_unlocked()
+        data[str(guild.id)]["routes"][0]["content_filter"] = "bad-version"
+        router._save_all_unlocked(data)
+        route = (await router.guild_routes(guild.id))[0]
+        assert "Invalid saved content filter" in router.route_health(guild, route).blockers
+        msg = SN(id=1, guild=guild, channel=source, author=member,
+                 content="https://youtu.be/video123", attachments=[], embeds=[],
+                 webhook_id=None)
+        await router.route_message(msg)
+        assert target.sent == []
+    asyncio.run(check())
