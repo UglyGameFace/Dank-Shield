@@ -38,9 +38,18 @@ registered, or synced. A staff member needs **Manage Server** or Administrator.
 
 ## Storage, safety and limits
 
-- Drafts are per staff-member Discord session. They don't live in a
-  shared global cache; save a template for durable recovery across bot
-  restarts. Unsaved local edits are intentionally not promised durable.
+- Staff edits now autosave after successful validated editor mutations into the
+  existing per-guild Studio config; reopening the Studio after a Discord timeout
+  or bot restart restores that staff member's most recent saved draft. **Reload
+  Saved** explicitly abandons the current unsaved local editor state to load
+  the persisted version. Saving never sends a public message.
+- Autosave is limited to eight staff drafts per server and the existing 100KB
+  shared Studio library limit. Inactive other-member draft slots older than
+  thirty days may be reclaimed. Each staff draft has an optimistic revision,
+  so two open sessions cannot silently overwrite each other's work. If the
+  database is offline, full, or a saved draft changed elsewhere, the editor
+  displays a warning; the unsaved local draft remains usable but is **not**
+  durable until autosave succeeds.
 - Saved templates: maximum 12 per server, server-specific config blob
   limit 100KB, each project limited to 40KB, twenty tracked post
   references. A missing/unhealthy DB blocks saving rather than pretending
@@ -85,3 +94,19 @@ only when its backup/recovery gates have been satisfied. On Android test:
   re-evaluated if the target channel permissions change.
 - Test cross-guild isolation, invalid URLs, no-permission users,
   bot missing Embed Links, CAS conflict, and a full storage quota.
+
+## Draft recovery acceptance (new)
+
+- Open the Studio, edit text/fields/role controls, and verify an autosaved draft
+  persists after reopening the Studio without selecting Save Template.
+- Confirm another staff member cannot load that private draft. Two active
+  editor sessions for the same user must reject the stale writer; Reload Saved
+  must explicitly recover the newer saved version.
+- Simulate a storage outage, full shared 100KB quota, template update CAS race,
+  session expiry and restart. No unavailable save may be reported as durable.
+- When editing a tracked post, restore the edit target only while the tracked
+  message record still exists; publishing still rechecks bot authorship,
+  channel permissions and safe guild action guards before changing anything.
+- Existing role actions, templates, and tracked posts must survive library
+  migration unchanged. Real Android Discord and Discloud canaries remain
+  required before describing the feature as production-verified.
