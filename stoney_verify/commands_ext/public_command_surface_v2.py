@@ -115,16 +115,16 @@ def _home_embed() -> discord.Embed:
 def _help_embed() -> discord.Embed:
     embed = discord.Embed(
         title="❓ Dank Shield Help",
-        description="Use the category pages, **Find**, or the complete **Directory**. Feature owners still enforce their own permissions.",
+        description="Pick a section, search by what you need, or browse every tool. Each feature checks your server permissions before making changes.",
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="Normal entry",
+        name="Start here",
         value="`/dank home` — categorized control center\n**🔎 Find** — search by normal words and aliases\n**📚 Directory** — complete categorized feature list",
         inline=False,
     )
     embed.add_field(
-        name="Optional fast doorways",
+        name="Quick commands",
         value=(
             "`/captions` — ordinary server voice captions and personal consent\n"
             "`/cinema` — Dank Cinema session, queue, info, and vote shortcuts\n"
@@ -139,7 +139,7 @@ def _help_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
-        name="Direct /dank shortcuts",
+        name="Other shortcuts",
         value=(
             "`/dank protection` • `/dank voice-safety` • `/dank diagnostics` • "
             "`/dank stats` • `/dank status` • `/dank logs`\n"
@@ -267,8 +267,8 @@ def _directory_embed() -> discord.Embed:
     embed = discord.Embed(
         title="📚 All Dank Shield Features",
         description=(
-            "Complete registry of the current public UI. Choose a category below, "
-            "or use **🔎 Find** from Home when you know the name or purpose."
+            "Every available tool, grouped by what it helps you do. "
+            "Choose a section below or use **Find Feature** on Home."
         ),
         color=discord.Color.blurple(),
     )
@@ -307,7 +307,7 @@ def _search_embed(query: str, results: list[NavigationFeature]) -> discord.Embed
             category_name = category.label if category is not None else feature.category
             lines.append(f"{feature.emoji} **{feature.label}** — {category_name}")
         embed.add_field(name=f"Matches • {len(results)}", value="\n".join(lines)[:1024], inline=False)
-    embed.set_footer(text="Search opens the existing canonical feature owner; it does not duplicate feature logic.")
+    embed.set_footer(text="Select the tool you want. Each tool checks permissions before making changes.")
     return embed
 
 
