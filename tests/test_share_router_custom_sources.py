@@ -751,3 +751,48 @@ def test_existing_source_uses_shared_search_safe_browser_and_real_ui_controls():
     assert "route_permission_blockers(" in text
     assert "save_existing_share_route" in text
     assert "discord.ui.ChannelSelect" not in text
+
+
+
+def test_inflight_legacy_cleanup_honors_newly_saved_keep_original_mode(
+    isolated_router,
+):
+    from types import SimpleNamespace
+
+    guild = FakeGuild(1670)
+    ordinary = FakeCategory(55100, "Public Posts", guild)
+    source = FakeTextChannel(guild, "my-existing-source", ordinary, 55155)
+    guild.channels[source.id] = source
+    deleted = []
+
+    async def delete():
+        deleted.append(source.id)
+
+    message = SimpleNamespace(
+        id=31337, guild=guild, channel=source, delete=delete,
+    )
+
+    async def check():
+        # An in-flight legacy route had previously captured delete_source=True.
+        await router.save_route(
+            guild.id, source_channel_id=source.id,
+            target_channel_id=888, delete_source=True,
+        )
+        # Staff switched the channel to Keep Original before delivery ended.
+        await router.save_route(
+            guild.id, source_channel_id=source.id,
+            target_channel_id=999, delete_source=False,
+        )
+        await router._cleanup_delivered_proxy_post(message, enabled=True)
+        assert deleted == []
+        assert await router.guild_pending_source_cleanup_count(guild.id) == 0
+
+        # An actual still-destructive legacy route can preserve its old behavior.
+        await router.save_route(
+            guild.id, source_channel_id=source.id,
+            target_channel_id=888, delete_source=True,
+        )
+        await router._cleanup_delivered_proxy_post(message, enabled=True)
+        assert deleted == [source.id]
+
+    asyncio.run(check())
