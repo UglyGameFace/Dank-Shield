@@ -157,15 +157,17 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
     embed = discord.Embed(
         title="🔗 Share Router",
         description=(
-            "Use private, plain proxy channels as mobile share-sheet destinations, then let Dank Shield "
-            "forward the post into the real channel. This is useful when Discord does not list an "
-            "age-restricted destination in the phone share sheet."
+            "**Two forwarding modes:** Use Existing Channel to forward from an ordinary "
+            "channel **without deleting its posts**, or Create Proxy for a private "
+            "mobile share-sheet drop-off that cleans successful posts. Both use "
+            "Search-Safe destination selection."
+
         ),
         color=discord.Color.blurple(),
     )
 
     if category is None:
-        hub_status = "❌ Missing. Use Create / Repair Hub."
+        hub_status = "ℹ️ No proxy hub. Optional for Use Existing Channel; Create / Repair Hub enables private mobile drop-offs."
     elif str(category.name) != SHARE_ROUTER_CATEGORY_NAME:
         hub_status = f"⚠️ Found styled/legacy hub: {category.name}. Repair will restore the plain name."
     else:
@@ -229,7 +231,13 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
         icon = "✅" if health.ok else "⚠️"
         source_text = f"#{source.name}" if isinstance(source, discord.TextChannel) else f"source {source_id}"
         target_text = _target_label(target if isinstance(target, discord.TextChannel) else None)
-        line = f"{icon} {source_text} → {target_text}"
+        keep_original = (
+            isinstance(source, discord.TextChannel)
+            and not is_share_router_design_resource(source)
+            and route.get("delete_source") is False
+        )
+        mode = "🛡️ Keep Original" if keep_original else "🧹 Proxy cleanup"
+        line = f"{icon} {source_text} → {target_text} • {mode}"
         if health.blockers:
             line += f" • {health.blockers[0]}"
         elif health.warnings:
@@ -247,16 +255,17 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
     else:
         embed.add_field(
             name="Saved routes",
-            value="None yet. Create or repair the hub, then choose Add / Change Route.",
+            value="None yet. Use Existing Channel for a non-destructive route, or Create / Repair Hub for private share-sheet proxies.",
             inline=False,
         )
 
     embed.add_field(
         name="Safety boundary",
         value=(
-            "Proxy sources stay non-age-restricted and hidden from @everyone. Dank Shield also checks "
-            "that the sender has normal View Channel + Send Messages permission in the destination "
-            "before forwarding. Discord still controls who can view age-restricted destinations."
+            "Proxies stay hidden, non-age-restricted, and clean delivered source posts. "
+            "Existing channels keep original posts and can be public. An age-restricted "
+            "source never forwards to a non-age-restricted destination. All routes "
+            "require the sender to have normal destination View + Send permissions."
         )[:1024],
         inline=False,
     )
