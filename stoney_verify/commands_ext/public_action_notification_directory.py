@@ -21,10 +21,10 @@ def _directory_embed() -> discord.Embed:
     e = discord.Embed(
         title="🧭 Notification Systems • Owner Directory",
         description=(
-            "**Action & Reminder Center › Existing notification systems**\\n"
+            "**Action & Reminder Center › Existing notification systems**\n"
             "These systems already have their own workers, policies and data. "
             "Select a system to open its **existing** control panel. "
-            "This directory does not check live enablement or merge delivery engines.\\n\\n"
+            "This directory does not check live enablement or merge delivery engines.\n\n"
             "🔒 **Action Center Member Setup DMs remain disabled.**"
         ),
         color=discord.Color.blurple(),
@@ -32,7 +32,7 @@ def _directory_embed() -> discord.Embed:
     for item in NOTIFICATION_OWNERS:
         e.add_field(
             name=f"{item.emoji} {item.label}",
-            value=f"{item.description}\\n*{item.delivery_contract}*",
+            value=f"{item.description}\n*{item.delivery_contract}*",
             inline=False,
         )
     e.set_footer(text="Staff only • Navigation, not a status probe • No sends or database writes")
