@@ -239,7 +239,10 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
         )
         mode = "🛡️ Keep Original" if keep_original else "🧹 Proxy cleanup"
         raw_filter = route.get("content_filter", "everything")
-        display_filter = _FILTER_LABELS.get(raw_filter, "⚠️ Invalid filter")
+        display_filter = (
+            _FILTER_LABELS.get(raw_filter, "⚠️ Invalid filter")
+            if isinstance(raw_filter, str) else "⚠️ Invalid filter"
+        )
         line = f"{icon} {source_text} → {target_text} • {mode} • {display_filter}"
         if health.blockers:
             line += f" • {health.blockers[0]}"
