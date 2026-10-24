@@ -1,3 +1,9 @@
+## Studio media capacity revision (2026-10-24)
+
+- Owner correctly challenged conservative 12-link/100-KB caps. Inspection confirms Supabase RPC mirrors config keys into four JSONB compatibility columns and Studio submits a full-library CAS blob on writes. Inactive PostgreSQL guild-config repo has a 2-MiB row guard and 32-KiB patch guard; it must be redesigned before ever routing large Studio writes there.
+- This PR expands media to **50 reusable links with 20-item dropdown pagination**, and shared Studio storage from 100,000 bytes to **256 KiB**. Bound is interim, *not* Supabase's maximum capacity. Do not imply 50 images are uploaded or hosted. Future durable/high-volume content requires per-record storage and indexed retrieval, not megabyte-sized guild configuration writes.
+- Extend exact-head tests to check 20/20/10 browse pages, last-page navigation, storage bounds, legacy library compatibility, no unintentional data loss, and all published message protections. One active task remains Embed Studio; #713 is untouched.
+
 ## Current checkpoint: Larger Embed Studio Media Library + Smart Text PR (2026-10-24)
 
 - **Only active implementation task remains Embed Studio.** Owner merged #714 (verified main `2b04b598a70cf67984d1b52aec86680f30f9d873`; 9 applicable checks passed). #713 Bump Manager remains backlog; Share Router remains suspended.
