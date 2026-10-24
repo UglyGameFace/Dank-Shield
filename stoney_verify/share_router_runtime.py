@@ -1526,8 +1526,8 @@ def route_health(guild: discord.Guild, route: Mapping[str, Any]) -> RouteHealth:
     except Exception:
         warnings.append("Could not verify destination Embed Links / Attach Files permissions.")
 
-    if not is_share_router_design_resource(source):
-        warnings.append("This is a legacy/custom proxy source outside the canonical Share Routes hub.")
+    if not is_share_router_design_resource(source) and delete_source:
+        warnings.append("This is a legacy temporary proxy outside the canonical Share Routes hub.")
 
     return RouteHealth(tuple(dict.fromkeys(blockers)), tuple(dict.fromkeys(warnings)))
 
