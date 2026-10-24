@@ -10,14 +10,16 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Callable
 from datetime import datetime, timezone
+import asyncio
 import secrets
+import time
 
 import discord
 
 from .embed_studio_core import (
     STUDIO_KEY, MAX_EMBEDS, MAX_FIELDS, MAX_TEMPLATES,
     StudioValidationError, new_project, validate_project, render_embeds,
-    link_view, default_embed, parse_library, library_payload, https_url,
+    link_view, default_embed, parse_library, library_payload, https_url, draft_snapshot,
 )
 
 _MENTIONS = discord.AllowedMentions.none()
@@ -32,6 +34,9 @@ class StudioSession:
     active: int = 0
     post_key: str = ""
     history: list[dict[str, Any]] = field(default_factory=list)
+    saved_version: int = 0
+    dirty: bool = False
+    save_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def apply(self, mutation: Callable[[dict[str, Any]], None]) -> None:
         candidate = deepcopy(self.project)
@@ -40,12 +45,14 @@ class StudioSession:
         self.history.append(self.project)
         self.history = self.history[-10:]
         self.project = checked
+        self.dirty = True
         self.active = min(self.active, len(self.project["embeds"]) - 1)
 
     def undo(self) -> bool:
         if not self.history:
             return False
         self.project = self.history.pop()
+        self.dirty = True
         self.active = min(self.active, len(self.project["embeds"]) - 1)
         return True
 
@@ -183,6 +190,7 @@ class DestinationSelect(discord.ui.ChannelSelect):
         if not isinstance(channel, discord.TextChannel) or channel.guild.id != self.session.guild_id:
             return await _say(interaction, "Choose a normal text channel in this server.")
         self.session.channel_id = int(channel.id)
+        self.session.dirty = True
         if self.session.post_key:
             self.session.post_key = ""  # Never edit a post after switching destination.
         await _home(interaction, self.session, notice="Destination selected.")
@@ -260,6 +268,7 @@ class StarterSelect(discord.ui.Select):
         self.session.history.append(self.session.project)
         self.session.history = self.session.history[-10:]
         self.session.project = project_for_preset(self.values[0])
+        self.session.dirty = True
         self.session.active = 0
         self.session.post_key = ""
         await _home(interaction, self.session, notice="Starter layout loaded. Make it yours before publishing.")
@@ -894,6 +903,7 @@ class TemplateSelect(discord.ui.Select):
         self.session.history.append(self.session.project)
         self.session.history = self.session.history[-10:]
         self.session.project = draft
+        self.session.dirty = True
         self.session.active = 0
         self.session.post_key = ""
         await _home(interaction, self.session, notice="Template loaded. Nothing posted.")
@@ -1151,6 +1161,7 @@ class StudioReviewView(_StudioView):
         except Exception as exc:
             return await _say(interaction, f"❌ Could not complete publish: {type(exc).__name__}. Verify the destination.")
         self.session.post_key = f"{channel.id}:{message.id}"
+        self.session.dirty = True
         tracked = False
         try:
             source, lib = await _load_library(self.session.guild_id)
@@ -1264,6 +1275,7 @@ class TrackedPostSelect(discord.ui.Select):
         except StudioValidationError:
             return await _say(interaction, "This tracked post has an unsupported role configuration. Ask staff to repair it.")
         self.session.project = draft
+        self.session.dirty = True
         self.session.channel_id = int(channel.id)
         self.session.post_key = key
         self.session.active = 0
