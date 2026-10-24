@@ -51,6 +51,7 @@ from stoney_verify.share_router_runtime import (
     save_managed_share_route,
     save_existing_share_route,
     route_source_blockers,
+    validate_route_content_filter,
     _share_video_limit_bytes,
     source_age_blocker,
     source_privacy_blocker,
@@ -237,7 +238,9 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
             and route.get("delete_source") is False
         )
         mode = "🛡️ Keep Original" if keep_original else "🧹 Proxy cleanup"
-        line = f"{icon} {source_text} → {target_text} • {mode}"
+        raw_filter = route.get("content_filter", "everything")
+        display_filter = _FILTER_LABELS.get(raw_filter, "⚠️ Invalid filter")
+        line = f"{icon} {source_text} → {target_text} • {mode} • {display_filter}"
         if health.blockers:
             line += f" • {health.blockers[0]}"
         elif health.warnings:
@@ -427,8 +430,17 @@ class _OwnedView(discord.ui.View):
         return False
 
 
+_FILTER_LABELS = {
+    "everything": "Everything",
+    "videos": "Videos Only",
+    "images": "Images Only",
+    "links": "Links Only",
+}
+
+
 def _target_options_embed(
     source: discord.TextChannel, *, delete_source: bool = True,
+    content_filter: str = "everything",
 ) -> discord.Embed:
     embed = discord.Embed(
         title=f"🔗 Destination for #{source.name}",
@@ -443,6 +455,17 @@ def _target_options_embed(
             )
         ),
         color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Content to forward",
+        value=(
+            f"**{_FILTER_LABELS[content_filter]}**. Change the filter below, then "
+            "choose your destination. Videos Only includes video attachments, "
+            "playable embeds and recognized video links; Images Only includes "
+            "pictures/GIFs; Links Only includes messages with web links. "
+            "Other messages remain in the original source."
+        ),
+        inline=False,
     )
     embed.add_field(
         name="Recommended",
@@ -466,13 +489,46 @@ class ShareRouterTargetLandingView(_OwnedView):
         source: discord.TextChannel,
         browser: DankGuildResourceBrowserView,
         delete_source: bool = True,
+        content_filter: str = "everything",
     ) -> None:
         super().__init__(owner_id)
         self.source = source
         self.browser = browser
         self.delete_source = delete_source
+        self.content_filter = validate_route_content_filter(content_filter)
+        for option in self.content_choice.options:
+            option.default = option.value == self.content_filter
         if not delete_source:
             self.back.label = "Back to Existing Channels"
+
+    @discord.ui.select(
+        placeholder="Content filter • choose what gets forwarded",
+        row=2,
+        min_values=1,
+        max_values=1,
+        options=[
+            discord.SelectOption(label="Videos Only", value="videos", emoji="🎬",
+                                 description="Video uploads, video embeds & recognized video links"),
+            discord.SelectOption(label="Images Only", value="images", emoji="🖼️",
+                                 description="Image uploads, GIFs & direct image links"),
+            discord.SelectOption(label="Links Only", value="links", emoji="🔗",
+                                 description="Messages containing URLs (including video links)"),
+            discord.SelectOption(label="Everything", value="everything", emoji="📋",
+                                 description="All qualifying messages, including conversations"),
+        ],
+    )
+    async def content_choice(self, interaction: discord.Interaction, select: discord.ui.Select) -> None:
+        if not await _require_manage(interaction) or interaction.guild_id != self.source.guild.id:
+            return
+        try:
+            chosen = validate_route_content_filter(select.values[0])
+        except (IndexError, ValueError):
+            return await _private(interaction, "❌ Select one supported content filter.")
+        await _open_target_browser(
+            interaction, self.source,
+            delete_source=self.delete_source,
+            content_filter=chosen,
+        )
 
     @discord.ui.button(label="Search Destination", emoji="🔎", style=discord.ButtonStyle.primary, row=0)
     async def search_destination(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -626,14 +682,22 @@ async def _open_existing_source_picker(interaction: discord.Interaction) -> None
 async def _open_target_browser(
     interaction: discord.Interaction,
     source: discord.TextChannel,
-    *, delete_source: bool = True,
+    *, delete_source: bool = True, content_filter: str | None = None,
 ) -> None:
+    content_filter = validate_route_content_filter(
+        content_filter if content_filter is not None else (
+            "everything" if delete_source else "videos"
+        )
+    )
     guild = interaction.guild
     if guild is None:
         return await _private(interaction, "❌ Use Share Router inside a server.")
 
     async def back(back_interaction: discord.Interaction) -> None:
-        await _open_target_browser(back_interaction, source, delete_source=delete_source)
+        await _open_target_browser(
+            back_interaction, source,
+            delete_source=delete_source, content_filter=content_filter,
+        )
 
     async def picked_target(
         pick_interaction: discord.Interaction,
@@ -692,6 +756,7 @@ async def _open_target_browser(
                 source_channel_id=int(source.id),
                 target_channel_id=int(resource.id),
                 created_by_id=int(pick_interaction.user.id),
+                content_filter=content_filter,
             )
         except (OSError, ValueError) as exc:
             return await _private(pick_interaction, f"❌ Share route could not be saved: {exc}")
@@ -722,12 +787,16 @@ async def _open_target_browser(
     )
     await _replace(
         interaction,
-        embed=_target_options_embed(source, delete_source=delete_source),
+        embed=_target_options_embed(
+            source, delete_source=delete_source,
+            content_filter=content_filter,
+        ),
         view=ShareRouterTargetLandingView(
             int(interaction.user.id),
             source=source,
             browser=browser,
             delete_source=delete_source,
+            content_filter=content_filter,
         ),
     )
 
