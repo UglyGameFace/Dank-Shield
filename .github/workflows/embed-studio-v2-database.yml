@@ -1,0 +1,105 @@
+name: Embed Studio v2 PostgreSQL Contract
+
+on:
+  pull_request:
+    paths:
+      - 'supabase_fresh/migrations/202610200028_dankshield_embed_studio_v2.sql'
+      - 'stoney_verify/embed_studio_storage_v2.py'
+      - 'tests/test_embed_studio_storage_v2.py'
+      - '.github/workflows/embed-studio-v2-database.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  postgres:
+    name: Studio v2 transactional and RLS schema smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_PASSWORD: testonly
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 15
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: testonly
+      PGDATABASE: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL client
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+      - name: Install migration twice, proving idempotent schema
+        run: |
+          psql -v ON_ERROR_STOP=1 -c "do \$\$ begin if not exists(select 1 from pg_roles where rolname='service_role') then create role service_role; end if; end \$\$;"
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200028_dankshield_embed_studio_v2.sql
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200028_dankshield_embed_studio_v2.sql
+      - name: Check atomic CAS and individual item durability
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $checks$
+          declare
+              answer jsonb;
+              blocks jsonb := '{"drafts":{},"templates":{},"themes":{},"media":{},"published":{}}';
+              new_blocks jsonb := '{"drafts":{},"templates":{},"themes":{},"media":{"logo":{"name":"Logo","url":"https://example.com/a.png"}},"published":{}}';
+          begin
+              if (select count(*) from pg_class where relname in
+                  ('dank_embed_studio_libraries','dank_embed_studio_items')
+                  and relrowsecurity) <> 2 then
+                  raise exception 'RLS not enabled on both Studio tables';
+              end if;
+              answer := public.dank_embed_studio_write('123',-1,blocks,'{}');
+              if answer->>'applied' <> 'true' then raise exception 'initial seed refused'; end if;
+              answer := public.dank_embed_studio_write('123',-1,blocks,'{}');
+              if answer->>'applied' <> 'false' then raise exception 'repeated seed overwrote a library'; end if;
+              answer := public.dank_embed_studio_write('123',1,new_blocks,'{}');
+              if answer->>'applied' <> 'true' then raise exception 'CAS update refused'; end if;
+              answer := public.dank_embed_studio_write('123',1,blocks,'{}');
+              if answer->>'applied' <> 'false' then raise exception 'stale writer overwritten newer media'; end if;
+              if (select count(*) from public.dank_embed_studio_items
+                  where guild_id='123' and section='media' and item_id='logo') <> 1 then
+                  raise exception 'media item missing';
+              end if;
+              answer := public.dank_embed_studio_write('123',2,blocks,'{}');
+              if answer->>'applied' <> 'true' then raise exception 'delete failed'; end if;
+              if exists(select 1 from public.dank_embed_studio_items where guild_id='123') then
+                  raise exception 'obsolete item was retained';
+              end if;
+              if (select revision from public.dank_embed_studio_libraries where guild_id='123') <> 3 then
+                  raise exception 'revision did not advance';
+              end if;
+          end;
+          $checks$;
+          SQL
+      - name: Confirm anon cannot inspect rows or call writer
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $checks$
+          declare
+              public_read boolean;
+              public_execute boolean;
+          begin
+              select has_table_privilege('public','public.dank_embed_studio_items','select') into public_read;
+              select has_function_privilege('public','public.dank_embed_studio_write(text,bigint,jsonb,jsonb)','execute') into public_execute;
+              if public_read or public_execute then
+                  raise exception 'Studio storage is publicly accessible';
+              end if;
+              if not has_function_privilege('service_role',
+                   'public.dank_embed_studio_write(text,bigint,jsonb,jsonb)','execute') then
+                  raise exception 'Service role cannot invoke Studio RPC';
+              end if;
+          end;
+          $checks$;
+          SQL
