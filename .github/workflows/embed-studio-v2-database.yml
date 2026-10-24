@@ -5,6 +5,7 @@ on:
     paths:
       - 'supabase_fresh/migrations/202610200028_dankshield_embed_studio_v2.sql'
       - 'supabase_fresh/migrations/202610200029_dankshield_embed_studio_assets.sql'
+      - 'supabase_fresh/migrations/202610200030_dankshield_embed_studio_scheduling.sql'
       - 'stoney_verify/embed_studio_storage_v2.py'
       - 'tests/test_embed_studio_storage_v2.py'
       - '.github/workflows/embed-studio-v2-database.yml'
@@ -143,6 +144,39 @@ jobs:
               end if;
               if has_table_privilege('anon','public.dank_embed_studio_assets','insert') then
                   raise exception 'Public may write Studio asset metadata';
+              end if;
+          end;
+          $verify$;
+          SQL
+
+      - name: Verify durable schedules, claim-once semantics and permissions
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200030_dankshield_embed_studio_scheduling.sql
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200030_dankshield_embed_studio_scheduling.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $verify$
+          declare
+              first_claim integer;
+              second_claim integer;
+          begin
+              insert into public.dank_embed_studio_scheduled_posts
+                  (guild_id,channel_id,scheduled_by,project,execute_at)
+                  values('123','456','789','{}',now()-interval '1 minute');
+              select count(*) into first_claim from public.dank_embed_studio_claim_due(8);
+              select count(*) into second_claim from public.dank_embed_studio_claim_due(8);
+              if first_claim <> 1 or second_claim <> 0 then
+                  raise exception 'Studio scheduled job was not claimed exactly once';
+              end if;
+              if (select count(*) from public.dank_embed_studio_scheduled_posts
+                  where status='claimed' and claimed_at is not null) <> 1 then
+                  raise exception 'Studio claimed job is not durable';
+              end if;
+              if has_table_privilege('anon','public.dank_embed_studio_scheduled_posts','select') then
+                  raise exception 'Studio scheduled payload exposed to public';
+              end if;
+              if not (select relrowsecurity from pg_class
+                      where oid='public.dank_embed_studio_scheduled_posts'::regclass) then
+                  raise exception 'Studio scheduled data has no RLS';
               end if;
           end;
           $verify$;
