@@ -9,7 +9,6 @@ authorizes this *Member Setup only* worker; members still individually opt in.
 """
 
 import asyncio
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -32,6 +31,7 @@ STARTUP_DELAY_SECONDS = 120
 GUILDS_PER_PASS = 8
 MAX_CLAIMS_PER_PASS = 4
 MAX_CLAIMS_PER_GUILD = 2
+MAX_TARGETED_MEMBER_FETCHES_PER_PASS = 8
 OPT_IN_PAGE_SIZE = 5
 READ_TIMEOUT_SECONDS = 12
 CLAIM_TIMEOUT_SECONDS = 8
@@ -76,16 +76,18 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _member_valid(guild: discord.Guild, member: object, uid: int) -> bool:
+    """Only a known cached or freshly fetched member of exactly this guild."""
+    return (
+        isinstance(member, discord.Member)
+        and member.guild is guild and int(member.id) == uid
+        and not member.bot
+    )
+
+
 def _cached_member(guild: discord.Guild, uid: int) -> discord.Member | None:
-    """No REST member fetch, and cache absence never proves a member left."""
     member = guild.get_member(uid)
-    if (
-        not isinstance(member, discord.Member)
-        or member.guild is not guild or int(member.id) != uid
-        or member.bot
-    ):
-        return None
-    return member
+    return member if _member_valid(guild, member, uid) else None
 
 
 async def _eligible(guild_id: int, member: discord.Member, revision: int):
@@ -112,6 +114,7 @@ async def _eligible(guild_id: int, member: discord.Member, revision: int):
 
 async def dispatch_member_setup_automatic(
     member: discord.Member, *, expected_revision: int,
+    fetched_from_discord: bool = False,
 ) -> AutoDeliveryResult:
     """Revalidate fresh owner and consent before/after PostgreSQL reservation.
 
@@ -122,7 +125,9 @@ async def dispatch_member_setup_automatic(
         return AutoDeliveryResult("invalid")
     guild = member.guild
     gid, uid = int(guild.id), int(member.id)
-    if _cached_member(guild, uid) is not member:
+    if not _member_valid(guild, member, uid):
+        return AutoDeliveryResult("not_current_member")
+    if not fetched_from_discord and _cached_member(guild, uid) is not member:
         return AutoDeliveryResult("not_cached")
     began = _utcnow()
     try:
@@ -131,7 +136,8 @@ async def dispatch_member_setup_automatic(
             return AutoDeliveryResult("not_due")
         schedule, rule = found
         local_day = began.astimezone(ZoneInfo(schedule.timezone)).date()
-        if not (await _eligible(gid, member, expected_revision)):
+        rechecked = await _eligible(gid, member, expected_revision)
+        if rechecked != (schedule, rule):
             return AutoDeliveryResult("stale")
         if _utcnow().astimezone(ZoneInfo(schedule.timezone)).date() != local_day:
             return AutoDeliveryResult("day_changed")
@@ -153,7 +159,14 @@ async def dispatch_member_setup_automatic(
         return AutoDeliveryResult("unavailable")
 
     try:
-        if _cached_member(guild, uid) is not member:
+        target = member
+        if fetched_from_discord:
+            # A cache miss must NEVER become proof of current membership.
+            # A second bounded REST get after claim verifies still in guild.
+            target = await asyncio.wait_for(guild.fetch_member(uid), READ_TIMEOUT_SECONDS)
+            if not _member_valid(guild, target, uid):
+                return AutoDeliveryResult("cancelled", claimed=True)
+        elif _cached_member(guild, uid) is not member:
             return AutoDeliveryResult("cancelled", claimed=True)
         cfg, active = await asyncio.wait_for(load_automation(gid), READ_TIMEOUT_SECONDS)
         cfg_latest, schedule_latest = await asyncio.wait_for(
@@ -169,18 +182,19 @@ async def dispatch_member_setup_automatic(
         # Source-of-truth refresh after claim verifies present revision, consent,
         # completion, exemptions, quiet hours. Claim remains consumed on denial.
         final = await asyncio.wait_for(
-            inspect_member_setup_candidate(member, expected_revision=expected_revision),
+            inspect_member_setup_candidate(target, expected_revision=expected_revision),
             READ_TIMEOUT_SECONDS,
         )
         if (
             final.status != "candidate_preview"
             or final.revision != expected_revision
-            or _cached_member(guild, uid) is not member
+            or not _member_valid(guild, target, uid)
+            or (not fetched_from_discord and _cached_member(guild, uid) is not member)
         ):
             return AutoDeliveryResult("cancelled", claimed=True)
         # Minimal link-free, mention-free Discord DM. Only this path sends.
         await asyncio.wait_for(
-            member.send(DM_TEXT, allowed_mentions=discord.AllowedMentions.none()),
+            target.send(DM_TEXT, allowed_mentions=discord.AllowedMentions.none()),
             READ_TIMEOUT_SECONDS,
         )
         return AutoDeliveryResult("sent", claimed=True, sent=True)
@@ -197,6 +211,8 @@ class MemberSetupReminderWorker:
         self.guild_cursor = 0
         self.member_cursors: dict[int, int] = {}
         self.counters = RuntimeCounters()
+        self.guild_counters: dict[int, RuntimeCounters] = {}
+        self.remaining_targeted_fetches = MAX_TARGETED_MEMBER_FETCHES_PER_PASS
 
     def start(self) -> asyncio.Task[None]:
         if self.task is None or self.task.done():
@@ -231,27 +247,47 @@ class MemberSetupReminderWorker:
             budget = min(remaining, MAX_CLAIMS_PER_GUILD)
             claims = 0
             last_seen = cursor
+            guild_stats = self.guild_counters.setdefault(gid, RuntimeCounters())
             for uid in page.user_ids:
                 if claims >= budget:
                     break
                 last_seen = uid
                 member = _cached_member(guild, uid)
+                fetched = False
                 if member is None:
-                    continue
+                    # Only REST fetch an ID from an explicit opt-in page,
+                    # never a guild-wide member list. Reserve 2 of the 8
+                    # per-pass calls so a post-claim recheck is guaranteed.
+                    if self.remaining_targeted_fetches < 2:
+                        last_seen = cursor if uid == page.user_ids[0] else last_seen
+                        break
+                    self.remaining_targeted_fetches -= 2
+                    try:
+                        member = await asyncio.wait_for(guild.fetch_member(uid), READ_TIMEOUT_SECONDS)
+                    except (discord.HTTPException, asyncio.TimeoutError):
+                        continue
+                    if not _member_valid(guild, member, uid):
+                        continue
+                    fetched = True
                 result = await dispatch_member_setup_automatic(
-                    member, expected_revision=revision,
+                    member, expected_revision=revision, fetched_from_discord=fetched,
                 )
                 if result.claimed:
                     claims += 1
                     self.counters.attempted_claims += 1
+                    guild_stats.attempted_claims += 1
                     if result.sent:
                         self.counters.sent += 1
+                        guild_stats.sent += 1
                     elif result.status == "send_failed":
                         self.counters.send_failed += 1
+                        guild_stats.send_failed += 1
                     else:
                         self.counters.cancelled_after_claim += 1
+                        guild_stats.cancelled_after_claim += 1
                 elif result.status == "unavailable":
                     self.counters.unavailable += 1
+                    guild_stats.unavailable += 1
                     # Back-end uncertainty: abort pass rather than amplify load.
                     break
                 await asyncio.sleep(0)
@@ -261,6 +297,8 @@ class MemberSetupReminderWorker:
                 0 if last_seen == page.user_ids[-1] and len(page.user_ids) < OPT_IN_PAGE_SIZE
                 else last_seen
             )
+            guild_stats.passes += 1
+            guild_stats.last_pass_at = _utcnow().isoformat()
             return claims
         except asyncio.CancelledError:
             raise
@@ -275,6 +313,7 @@ class MemberSetupReminderWorker:
         if not guilds:
             self.counters.passes += 1
             return 0
+        self.remaining_targeted_fetches = MAX_TARGETED_MEMBER_FETCHES_PER_PASS
         start = self.guild_cursor % len(guilds)
         total = min(GUILDS_PER_PASS, len(guilds))
         count = 0
@@ -315,5 +354,8 @@ def start_member_setup_automatic_worker(bot: Any) -> asyncio.Task[None]:
     return _WORKER.start()
 
 
-def get_member_setup_automation_runtime() -> RuntimeCounters | None:
-    return _WORKER.counters if _WORKER is not None else None
+def get_member_setup_automation_runtime(guild_id: int) -> RuntimeCounters | None:
+    """Only return this guild's non-durable aggregate operational counters."""
+    if type(guild_id) is not int or guild_id <= 0 or _WORKER is None:
+        return None
+    return _WORKER.guild_counters.get(guild_id)
