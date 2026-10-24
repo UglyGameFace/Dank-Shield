@@ -1,3 +1,13 @@
+## Embed Studio implementation sequence (2026-10-24)
+
+- **Single active task: Embed Studio.** Three cohesive dependency-ordered PRs exist: #716 normalized private Storage v2 with per-guild CAS and manual legacy parity, #717 native mobile image/GIF uploads with separate Supabase object bucket, #718 indexed at-most-once one-shot scheduled announcements with owner-only cancellation and due-time staff/permissions rechecks. Merge in order **716 → 717 → 718**.
+- The newly verified DankShield Supabase project `viamriafkbqhquvrsnua` was ACTIVE_HEALTHY with ~93 MB database data, 12 guild config rows, zero saved Studio blobs and zero Storage objects/buckets at the read-only audit. No migration was executed by drafting these PRs. Actual Discloud free storage has not been remotely measured.
+- The durable private v2 library has a 1 MiB backend-aware validation budget, while the legacy guild config remains at 256 KiB. V2 currently retains per-section UI caps (50 media shortcuts, 12 templates, 8 draft owners). Future indexed page-level APIs are required before offering large unrestricted catalogs.
+- All new operational functionality defaults OFF: `DANK_EMBED_STUDIO_V2_ENABLED`, `DANK_EMBED_STUDIO_UPLOADS_ENABLED`, `DANK_EMBED_STUDIO_SCHEDULING_ENABLED`. No live DB table/bucket, deployed runtime config or actual scheduled message is changed until migration, restores and canary checks pass.
+- Exact-head checks, per-guild migration parity and Android permission tests remain **gates**; do not claim feature production complete before those checks.
+- **Remaining feature work within the same task:** forms/action builder with persistent custom_id/RLS/intake destination safeguards, multi-moderator shared draft review/co-editing with versioned conflicts, optional live-refresh policies and indexed page-level catalog growth, asset quota/orphan auditing. Keep unbuilt features out of current New/Updated release announcements.
+- Bump Manager #713 and paused Share Router remain strictly outside this workstream.
+
 ## Active Embed Studio checkpoint: guarded Storage v2 (2026-10-24)
 
 - Merged PR #715 is on `main` at `d8974edf89edf7d848d9b8a3e9c171882c7e7a62`. Only active implementation task is **Embed Studio**. Bump Manager #713 and Share Router stay deferred.
