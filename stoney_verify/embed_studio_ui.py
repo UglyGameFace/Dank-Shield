@@ -1175,13 +1175,24 @@ async def _embeds(interaction: discord.Interaction, session: StudioSession) -> N
 
 async def _load_library(guild_id: int) -> tuple[Any, dict[str, Any]]:
     from .guild_config import get_guild_config
+    from .embed_studio_storage_v2 import storage_v2_enabled, read_library
     source = await get_guild_config(guild_id, refresh=True)
     if str(source.get("source") or "").startswith("unavailable:"):
-        raise StudioValidationError("Template storage is offline. Draft and preview still work.")
+        raise StudioValidationError("Studio storage is offline. Draft and preview still work.")
+    if storage_v2_enabled():
+        # Deliberate, fail-closed cutover. Legacy guild settings remain untouched.
+        return await read_library(guild_id, source)
     return source, parse_library(source)
 
 
 async def _save_library(guild_id: int, source: Any, lib: dict[str, Any]) -> bool:
+    from .embed_studio_storage_v2 import StudioV2Source, storage_v2_enabled, save_library
+    if storage_v2_enabled():
+        if not isinstance(source, StudioV2Source) or int(source.guild_id) != int(guild_id):
+            raise StudioValidationError("Studio storage backend changed. Reopen the editor; no write attempted.")
+        return await save_library(source, lib)
+    if isinstance(source, StudioV2Source):
+        raise StudioValidationError("Studio storage backend changed. Reopen the editor; no write attempted.")
     from .guild_config import compare_and_swap_guild_config_key
     value = library_payload(lib)
     ok, _saved = await compare_and_swap_guild_config_key(
