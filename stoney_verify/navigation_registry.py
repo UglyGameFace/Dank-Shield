@@ -258,7 +258,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
             "sticky",
             "stickies",
             "poll",
-            "embed builder",
+            "server tools",
             "permission check",
             "weather",
             "wikipedia",
