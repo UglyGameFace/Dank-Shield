@@ -1,5 +1,13 @@
 # Active task: Action & Reminder Center (FORCE SWITCH, 2026-10-22)
 
+## Current checkpoint: 4H saved notification policy status (2026-10-23)
+
+- Owner reported PR #704 merged. Verified main is `67fd502e3471e9c5f6ea9eb6354d9ec01c7a08e1` and all eight exact-PR tests passed.
+- **Only active task:** Action & Reminder Center, read-only saved policy checks from its existing **Notification Systems** directory. Source-of-truth stays with each existing notification owner.
+- This slice reads only three per-guild policies through canonical existing readers: Simple Verify, Quiet Server Notice, and **guild-wide** It's 4:20 Somewhere. Member Activity, Ticket Automation and /toke remain explicitly "owner-managed / not inspected" until source-owned read-only status adapters can truthfully distinguish outages from off states. No member subscriptions, recipients, message histories or other guilds scanned.
+- Show saved enabled/disabled/not configured/unavailable, **never "worker running" or "delivery healthy"**. Independent 8-second timeouts fail closed; exception text and DB credentials are not shown to staff.
+- No new scheduler, reminder worker, claim, DB write, REST send, secret, migration or new Discord slash command. The live one-person canary remains deferred with all Action Center delivery gates off.
+
 ## Current checkpoint: 4E member self-status (2026-10-23)
 
 - **Only active development task:** Action & Reminder Center, 4E member-facing read-only setup DM eligibility. Branch `feat/action-center-4e-member-status-20261023` starts from verified main `92dc95c062847ee9ab2c1cef926d24bf1df248ec`. No other epic work or branch cleanup.

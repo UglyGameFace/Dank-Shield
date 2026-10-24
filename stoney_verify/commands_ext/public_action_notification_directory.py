@@ -12,12 +12,15 @@ import discord
 from stoney_verify.action_notification_owners import (
     NOTIFICATION_OWNERS, find_notification_owner,
 )
+from stoney_verify.action_notification_status import (
+    NotificationPolicyStatus, inspect_saved_notification_status,
+)
 from stoney_verify.panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from .public_action_builder import _defer, _msg, _replace
 from .public_staff_scope import scoped_interaction_is_staff
 
 
-def _directory_embed() -> discord.Embed:
+def _directory_embed(statuses: tuple[NotificationPolicyStatus, ...] | None = None) -> discord.Embed:
     e = discord.Embed(
         title="🧭 Notification Systems • Owner Directory",
         description=(
@@ -29,13 +32,32 @@ def _directory_embed() -> discord.Embed:
         ),
         color=discord.Color.blurple(),
     )
+    by_key = {entry.key: entry for entry in statuses or ()}
+    status_labels = {
+        "saved_enabled": "✅ Saved enabled",
+        "saved_disabled": "🔕 Saved disabled",
+        "not_configured": "⚪ Not configured",
+        "unavailable": "⚠️ Unavailable",
+        "owner_managed": "🧭 Owner-managed / not inspected",
+    }
     for item in NOTIFICATION_OWNERS:
+        status = by_key.get(item.key)
+        status_text = ""
+        if status is not None:
+            label = status_labels.get(status.state, "⚠️ Unverified")
+            status_text = f"\n**Saved policy:** {label}\n{status.detail}"
         e.add_field(
             name=f"{item.emoji} {item.label}",
-            value=f"{item.description}\n*{item.delivery_contract}*",
+            value=f"{item.description}\n*{item.delivery_contract}*{status_text}",
             inline=False,
         )
-    e.set_footer(text="Staff only • Navigation, not a status probe • No sends or database writes")
+    e.set_footer(
+        text=(
+            "Read-only saved-policy snapshot • Not delivery or worker health"
+            if statuses is not None else
+            "Staff only • Navigation, not a status probe • No sends or database writes"
+        )
+    )
     return e
 
 
@@ -87,6 +109,20 @@ class NotificationOwnerDirectoryView(discord.ui.View):
             await _msg(interaction, "Open your own staff notification directory in this server.")
             return False
         return True
+
+    @discord.ui.button(label="Check Saved Status", emoji="🔎", style=discord.ButtonStyle.secondary, row=1)
+    async def check_saved_status(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if interaction.guild_id != self.guild_id or not scoped_interaction_is_staff(interaction):
+            return await _msg(interaction, "Open your own staff notification directory in this server.")
+        await _defer(interaction)
+        try:
+            statuses = await inspect_saved_notification_status(self.guild_id)
+        except Exception:
+            return await _msg(interaction, "Notification status could not be checked. No policies were changed.")
+        await _replace(
+            interaction, embed=_directory_embed(statuses),
+            view=NotificationOwnerDirectoryView(self.user_id, self.guild_id),
+        )
 
     @discord.ui.button(label="Back to Action Center", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
