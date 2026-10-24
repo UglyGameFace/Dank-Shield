@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import re
+from datetime import datetime, timezone
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 
@@ -14,6 +16,7 @@ import discord
 STUDIO_KEY = "embed_studio_v1"
 MAX_TEMPLATES = 12
 MAX_THEMES = 8
+MAX_MEDIA_ITEMS = 12
 MAX_DRAFTS = 8
 MAX_DRAFT_AGE_SECONDS = 30 * 86400
 MAX_EMBEDS = 10
@@ -215,6 +218,73 @@ def theme_name(value: Any) -> str:
     return name
 
 
+# Saved media are reusable HTTPS references, not copies of uploaded files.
+MEDIA_FIELDS = frozenset(("image", "thumbnail", "author_icon", "footer_icon"))
+SMART_TEXT_TOKENS = (
+    ("{server.name}", "Your server's name"),
+    ("{channel.name}", "The posting channel"),
+    ("{server.member_count}", "Discord-reported member count"),
+    ("{today.utc}", "Today's date in UTC"),
+)
+SMART_TEXT_PATTERN = re.compile(r"\\{(?:server\\.name|channel\\.name|server\\.member_count|today\\.utc)\\}")
+
+
+def validate_media_item(item: Mapping[str, Any]) -> dict[str, str]:
+    if not isinstance(item, Mapping) or set(item) != {"name", "url"}:
+        raise StudioValidationError("A saved image needs a name and an HTTPS link.")
+    name = item.get("name")
+    if not isinstance(name, str) or not name.strip() or len(name.strip()) > 60 or not name.strip().isprintable():
+        raise StudioValidationError("Media name must contain 1–60 visible characters.")
+    url = https_url(item.get("url"), "Saved image link")
+    if not url:
+        raise StudioValidationError("Provide a direct HTTPS image link.")
+    return {"name": name.strip(), "url": url}
+
+
+def apply_media_url(project: Mapping[str, Any], *, embed_index: int, target: str, url: str) -> dict[str, Any]:
+    if target not in MEDIA_FIELDS:
+        raise StudioValidationError("Choose an image or icon position.")
+    draft = validate_project(project)
+    if not 0 <= embed_index < len(draft["embeds"]):
+        raise StudioValidationError("The selected embed no longer exists.")
+    media = https_url(url, "Image link")
+    if not media:
+        raise StudioValidationError("Choose a saved image link.")
+    draft["embeds"][embed_index][target] = media
+    return validate_project(draft)
+
+
+def resolve_smart_text(
+    project: Mapping[str, Any], *, guild_name: str, channel_name: str,
+    member_count: int | None, now: datetime | None = None,
+) -> dict[str, Any]:
+    """Produce one validated preview snapshot; no expression evaluation or live worker."""
+    draft = validate_project(project)
+    date = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).date().isoformat()
+    safe = lambda name: discord.utils.escape_mentions("".join(c for c in str(name) if c.isprintable())[:100])
+    values = {
+        "{server.name}": safe(guild_name),
+        "{channel.name}": safe(channel_name),
+        "{today.utc}": date,
+    }
+    if type(member_count) is int and member_count >= 0:
+        values["{server.member_count}"] = str(member_count)
+
+    def fill(value: str) -> str:
+        if "{server.member_count}" in value and "{server.member_count}" not in values:
+            raise StudioValidationError("Discord member count is unavailable. Remove that token or try later.")
+        return SMART_TEXT_PATTERN.sub(lambda m: values.get(m.group(), m.group()), value)
+
+    draft["content"] = fill(draft["content"])
+    for embed in draft["embeds"]:
+        for key in ("title", "description", "author_name", "footer"):
+            embed[key] = fill(embed[key])
+        for field in embed["fields"]:
+            field["name"] = fill(field["name"])
+            field["value"] = fill(field["value"])
+    return validate_project(draft)
+
+
 def export_portable_project(project: Mapping[str, Any], *, guild_id: int) -> bytes:
     """Export a strictly validated editor project, never a published post or config.
 
@@ -324,12 +394,15 @@ def parse_library(config: Mapping[str, Any] | None) -> dict[str, Any]:
         raw = {}
     templates = raw.get("templates")
     themes = raw.get("themes")
+    media = raw.get("media")
     published = raw.get("published")
     drafts = raw.get("drafts")
     if not isinstance(templates, dict):
         templates = {}
     if not isinstance(themes, dict):
         themes = {}
+    if not isinstance(media, dict):
+        media = {}
     if not isinstance(published, dict):
         published = {}
     if not isinstance(drafts, dict):
@@ -338,6 +411,7 @@ def parse_library(config: Mapping[str, Any] | None) -> dict[str, Any]:
         "revision": int(raw.get("revision") or 0),
         "templates": deepcopy(dict(list(templates.items())[:MAX_TEMPLATES])),
         "themes": deepcopy(dict(list(themes.items())[:MAX_THEMES])),
+        "media": deepcopy(dict(list(media.items())[:MAX_MEDIA_ITEMS])),
         "published": deepcopy(dict(list(published.items())[-20:])),
         "drafts": deepcopy(dict(list(drafts.items())[:MAX_DRAFTS])),
     }
@@ -416,10 +490,16 @@ def trim_published_history(published: Mapping[str, Any], *, max_posts: int = 20)
 def library_payload(library: Mapping[str, Any]) -> dict[str, Any]:
     templates = library.get("templates") or {}
     themes = library.get("themes") or {}
+    media = library.get("media") or {}
     published = library.get("published") or {}
     drafts = library.get("drafts") or {}
-    if len(templates) > MAX_TEMPLATES or len(themes) > MAX_THEMES or len(published) > 20 or len(drafts) > MAX_DRAFTS:
+    if (len(templates) > MAX_TEMPLATES or len(themes) > MAX_THEMES or len(media) > MAX_MEDIA_ITEMS
+            or len(published) > 20 or len(drafts) > MAX_DRAFTS):
         raise StudioValidationError("Studio library is full.")
+    for key, item in media.items():
+        if not isinstance(key, str) or not key or len(key) > 40:
+            raise StudioValidationError("Invalid saved image key.")
+        validate_media_item(item)
     for key, item in themes.items():
         if not isinstance(key, str) or not key or len(key) > 40 or not isinstance(item, Mapping):
             raise StudioValidationError("Invalid saved brand theme.")
@@ -439,6 +519,7 @@ def library_payload(library: Mapping[str, Any]) -> dict[str, Any]:
         "revision": int(library.get("revision") or 0) + 1,
         "templates": deepcopy(templates),
         "themes": deepcopy(themes),
+        "media": deepcopy(media),
         "published": deepcopy(published),
         "drafts": deepcopy(drafts),
     }
