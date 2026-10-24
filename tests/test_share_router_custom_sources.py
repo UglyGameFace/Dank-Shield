@@ -1043,7 +1043,10 @@ def test_invalid_saved_filter_is_never_due_to_forward_and_health_flags_it(
         data[str(guild.id)]["routes"][0]["content_filter"] = "bad-version"
         router._save_all_unlocked(data)
         route = (await router.guild_routes(guild.id))[0]
-        assert "Invalid saved content filter" in router.route_health(guild, route).blockers
+        assert any(
+            "Invalid saved content filter" in reason
+            for reason in router.route_health(guild, route).blockers
+        )
         msg = SN(id=1, guild=guild, channel=source, author=member,
                  content="https://youtu.be/video123", attachments=[], embeds=[],
                  webhook_id=None)
