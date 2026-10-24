@@ -705,6 +705,14 @@ def test_actual_existing_forwarding_keeps_original_even_on_duplicate_and_error(
         assert deleted == []
         assert cleaned == [False, False]
 
+        # Existing sources never recursively copy webhook-originated posts.
+        webhook = message(content="Webhook copy", message_id=125)
+        webhook.webhook_id = 92827
+        await router.route_message(webhook)
+        assert len(target.sent) == 1
+        assert deleted == []
+        assert cleaned == [False, False]
+
         target.fail = True
         await router.route_message(message(content="Something else", message_id=123))
         assert len(target.sent) == 1
