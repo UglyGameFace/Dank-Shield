@@ -131,7 +131,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "📋",
         "actions",
         "Open your private Action Inbox and the existing reminder controls, without enabling new delivery.",
-        ("my actions", "action inbox", "reminder center", "tasks", "pending actions", "required actions", "to do"),
+        ("my actions", "action inbox", "reminder center", "actions and notifications", "actions & notifications", "tasks", "pending actions", "required actions", "to do"),
     ),
     NavigationFeature(
         "action_notification_systems",
