@@ -167,30 +167,36 @@ def _center_embed() -> discord.Embed:
     embed = discord.Embed(
         title="🧰 Community Tools",
         description=(
-            "Useful server tools without turning `/dank` into a phone book: durable stickies, polls, embeds, "
-            "server diagnostics, and lightweight lookups."
+            "Choose what you want to do below. Use **Embed Studio** to make "
+            "announcements, rules, and event posts. Nothing is posted without "
+            "your review."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="Persistent messages",
+        name="✏️ Make a post",
         value=(
-            "📌 Message/embed stickies • 📊 sticky polls • 👁️ preview + temporary test • 🌙 quiet notices • "
-            "safe cadence • optional managed sender"
+            "**Sticky Messages:** Keep a message visible in a channel.\n"
+            "**Create Poll:** Let members vote.\n"
+            "**Embed Studio:** Build a custom announcement with images and buttons."
         ),
         inline=False,
     )
     embed.add_field(
-        name="Community",
-        value="📊 Native Discord polls • 🧱 reviewed embed builder • 👤 member/server info • 🔐 permission check • 🔗 Share Router",
+        name="🔗 Share & manage",
+        value=(
+            "**Share Router:** Move or copy matching videos, photos, and links.\n"
+            "**Member / Server Info:** View useful account or server facts.\n"
+            "**Permission Check:** See what Dank Shield can access."
+        ),
         inline=False,
     )
     embed.add_field(
-        name="Fun & lookup",
-        value="🌦️ Weather • 📚 Wikipedia • 🛠️ WikiHow • 🔞 Urban Dictionary • 🎲 custom dice • 🪙 coin flip • 💘 compatibility",
+        name="🎲 Explore",
+        value="Weather, useful lookups, dice, coin flips, and community games.",
         inline=False,
     )
-    embed.set_footer(text="Community Tools • previews stay private until you publish or post a test")
+    embed.set_footer(text="Blue: start a task • Grey: browse or go back • Red: remove only")
     return embed
 
 
@@ -373,7 +379,7 @@ class CommunityToolsView(_OwnedView):
 
         await _replace(interaction, embed=_home_embed(), view=CompactDankHomeView(self.owner_id))
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, row=2)
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=2)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _replace(interaction, content="Community Tools closed.", embed=None, view=None)
