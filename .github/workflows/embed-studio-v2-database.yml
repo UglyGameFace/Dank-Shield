@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'supabase_fresh/migrations/202610200028_dankshield_embed_studio_v2.sql'
+      - 'supabase_fresh/migrations/202610200029_dankshield_embed_studio_assets.sql'
       - 'stoney_verify/embed_studio_storage_v2.py'
       - 'tests/test_embed_studio_storage_v2.py'
       - '.github/workflows/embed-studio-v2-database.yml'
@@ -116,4 +117,33 @@ jobs:
               end if;
           end;
           $checks$;
+          SQL
+
+      - name: Install and validate the Supabase Storage bucket migration
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create schema if not exists storage;
+          create table if not exists storage.buckets(
+              id text primary key, name text not null, public boolean not null default false,
+              file_size_limit bigint, allowed_mime_types text[]
+          );
+          SQL
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200029_dankshield_embed_studio_assets.sql
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200029_dankshield_embed_studio_assets.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $verify$
+          begin
+              if not exists(select 1 from storage.buckets where id='dank-studio-artwork'
+                  and public and file_size_limit=6291456) then
+                  raise exception 'Studio upload bucket not installed';
+              end if;
+              if not (select relrowsecurity from pg_class
+                       where oid='public.dank_embed_studio_assets'::regclass) then
+                  raise exception 'Studio asset metadata RLS missing';
+              end if;
+              if has_table_privilege('anon','public.dank_embed_studio_assets','insert') then
+                  raise exception 'Public may write Studio asset metadata';
+              end if;
+          end;
+          $verify$;
           SQL
