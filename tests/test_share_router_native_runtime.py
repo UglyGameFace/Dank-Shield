@@ -631,7 +631,8 @@ def test_share_router_destination_selection_is_search_first_on_mobile() -> None:
     assert 'placeholder="Choose a destination channel…"' in target_region
     assert 'home_label="Destination options"' in target_region
 
-    assert "embed=_target_options_embed(source, delete_source=delete_source)" in target_region
+    assert "embed=_target_options_embed(" in target_region
+    assert "content_filter=content_filter" in target_region
     assert "view=ShareRouterTargetLandingView(" in target_region
     assert "await _open_target_browser(back_interaction, source, delete_source=delete_source)" in target_region
 
