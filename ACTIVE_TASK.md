@@ -1,5 +1,14 @@
 # Active task: Complete Embed Studio (owner FORCE SWITCH, 2026-10-24)
 
+## Current checkpoint: Mobile navigation quality and release notes (2026-10-24)
+
+- **Owner feedback:** “New & Updated” omitted newly shipped work, button colors stopped communicating actions, features were poorly grouped, and explanations assumed a developer audience. Treat this as a visible acceptance failure of the same active Embed Studio discovery/UX release. Share Router's separate implementation task remains paused.
+- **Verified root causes:** `RECENT_FEATURE_KEYS` was manually stale (7 legacy shortcuts); feature buttons used `manager_only` to choose blue, and Close used destructive red; Embed Studio had no direct Design & Branding registry entry. Category descriptions and Community Tools panel contained technical language and lacked practical task grouping.
+- **Changes on same PR #712:** Add one canonical direct Embed Studio route into Design, keeping its Community Tools and Setup shortcuts; switch to dated `RECENT_UPDATES` for **merged** features only (#711, #709, #710, #708 and other confirmed built entrypoints), never claim #712 is deployed; group visible category descriptions by moderator jobs; simplify novice language and help/search copy; use blue for primary task, grey for browse/back/close, green for final public confirmation, red only for actual destructive actions. Reorganize Studio editor into create/buttons/saved-work/preview stages without changing owner permissions.
+- **Future regression guard:** PR-only standalone `tools/test_recent_feature_nav_contract.py` requires a navigation registry review with public menu changes. `docs/NAVIGATION_ARCHITECTURE.md` records release-note truth, mobile layout and semantic-color policy. New targeted tests check recent notes, role-safe routing, main views and Discord component limits. This guard is a review reminder, not a runtime GitHub feed.
+- **Safety/acceptance:** No new slash roots, duplicated routes, background listener, DM sender, DB migration, public post, role grant or Discloud change. Complete exact-head CI, compare against latest main, merge PR only when green, then check Android Discord menu and running Discloud SHA. Previously rendered Discord ephemeral messages must be reopened after deploy.
+- **Remain within active Embed Studio task:** Finish validated portable JSON and its mobile upload canary, then advanced scheduling, assets, themes, dynamic content, and collaboration. Do not imply the entire product is completed by this PR.
+
 ## Current checkpoint: Portable JSON import/export (2026-10-24)
 
 - **Still one active task:** Complete canonical Embed Studio. User merged PR #711; GitHub `main` merge `ac6034142db593ed588aface72ced5f6e5229d32`. Its five exact-head PR workflows (Dank Shield CI, Profile Runtime, Dank Design, Ticket Owner Emergency, Command Size) all passed. Real Discord/Discloud autosave acceptance remains unverified.
