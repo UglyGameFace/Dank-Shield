@@ -6,6 +6,7 @@ on:
       - 'supabase_fresh/migrations/202610200028_dankshield_embed_studio_v2.sql'
       - 'supabase_fresh/migrations/202610200029_dankshield_embed_studio_assets.sql'
       - 'supabase_fresh/migrations/202610200030_dankshield_embed_studio_scheduling.sql'
+      - 'supabase_fresh/migrations/202610200031_dankshield_embed_studio_reviews.sql'
       - 'stoney_verify/embed_studio_storage_v2.py'
       - 'tests/test_embed_studio_storage_v2.py'
       - '.github/workflows/embed-studio-v2-database.yml'
@@ -180,4 +181,44 @@ jobs:
               end if;
           end;
           $verify$;
+          SQL
+
+      - name: Install staff review schema and verify two-person decision
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200031_dankshield_embed_studio_reviews.sql
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200031_dankshield_embed_studio_reviews.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $checks$
+          declare
+              review_id uuid;
+              result_count integer;
+          begin
+              insert into public.dank_embed_studio_reviews
+                  (guild_id,submitted_by,channel_id,title,project)
+                  values ('12','34','56','Welcome','{}'::jsonb) returning id into review_id;
+              select count(*) into result_count
+                  from public.dank_embed_studio_review_decide(review_id,'12','34','approved');
+              if result_count <> 0 then
+                  raise exception 'Self-approval was allowed';
+              end if;
+              select count(*) into result_count
+                  from public.dank_embed_studio_review_decide(review_id,'13','99','approved');
+              if result_count <> 0 then
+                  raise exception 'Cross-server approval was allowed';
+              end if;
+              select count(*) into result_count
+                  from public.dank_embed_studio_review_decide(review_id,'12','99','approved');
+              if result_count <> 1 then
+                  raise exception 'Valid second moderator approval was refused';
+              end if;
+              select count(*) into result_count
+                  from public.dank_embed_studio_review_decide(review_id,'12','88','rejected');
+              if result_count <> 0 then
+                  raise exception 'An approved review was rewritten';
+              end if;
+              if has_table_privilege('anon','public.dank_embed_studio_reviews','select') then
+                  raise exception 'Private staff reviews exposed to public';
+              end if;
+          end;
+          $checks$;
           SQL
