@@ -4,12 +4,19 @@ Entry: **/dank → Design & Branding → Embed Studio**. These features extend t
 canonical editor and existing server-scoped atomic config, not a second app.
 
 ## Media Library
-Use **Media Library → Save Media Link** to store up to 12 named direct HTTPS
-image/GIF URLs per server. Choose a saved link and select **Large Image**,
+Use **Media Library → Save Media Link** to store up to 50 named direct HTTPS
+image/GIF URLs per server. Browse pages of up to 20 links using Previous/Next. Choose a saved link and select **Large Image**,
 **Thumbnail**, **Author Icon** or **Footer Icon**. The selected image is added
 to the active embed in your private draft; Undo and autosave still work.
 Removing a saved URL requires a second confirmation and never deletes any
 published message or rewrites older drafts.
+
+The existing Studio library now has a **256 KiB shared safety budget** for
+media links, templates, themes, drafts and tracked posts. The limit protects
+full-library CAS writes through Supabase, where configuration data is mirrored
+into multiple JSONB fields. For much larger asset and draft collections, a
+normalized media/template storage table will be needed rather than simply
+removing limits from the shared guild-config blob.
 
 These are **links, not uploaded files**. If a third-party URL expires, the
 image may disappear. No new file storage, CDN proxy, credentials, workers,
