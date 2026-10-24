@@ -848,6 +848,78 @@ async def _save_library(guild_id: int, source: Any, lib: dict[str, Any]) -> bool
     return bool(ok)
 
 
+
+async def _autosave(interaction: discord.Interaction, session: StudioSession) -> str:
+    """Persist validated per-staff drafts through the existing guild CAS."""
+    if not session.dirty:
+        return ""
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    async with session.save_lock:
+        if not session.dirty:
+            return ""
+        snapshot = deepcopy(session.project)
+        channel_id, active, post_key = session.channel_id, session.active, session.post_key
+        prior_version = session.saved_version
+        try:
+            # Retry only whole-library CAS conflicts caused by unrelated
+            # templates, post-history or other staff drafts. Never overwrite
+            # this editor owner's newer draft revision.
+            for _attempt in range(3):
+                source, lib = await _load_library(session.guild_id)
+                next_version = draft_snapshot(
+                    lib, owner_id=session.owner_id, expected_version=prior_version,
+                    project=snapshot, channel_id=channel_id, active=active,
+                    post_key=post_key, now=int(time.time()),
+                )
+                if await _save_library(session.guild_id, source, lib):
+                    session.saved_version = next_version
+                    if (session.project == snapshot and session.channel_id == channel_id
+                        and session.active == active and session.post_key == post_key):
+                        session.dirty = False
+                    return ""
+            return "Autosave collided with another server edit. Changes remain in this open editor."
+        except StudioValidationError as exc:
+            return str(exc)
+        except Exception:
+            return "Autosave unavailable. Changes remain only in this open editor."
+
+
+def _restore_snapshot(session: StudioSession, lib: dict[str, Any]) -> bool:
+    saved = lib.get("drafts", {}).get(str(session.owner_id))
+    if not isinstance(saved, dict):
+        return False
+    project = validate_project(saved.get("project") or {})
+    version = int(saved.get("version") or 0)
+    if version <= 0:
+        raise StudioValidationError("Saved draft revision is invalid.")
+    channel_id = max(0, int(saved.get("channel_id") or 0))
+    active = max(0, min(int(saved.get("active") or 0), len(project["embeds"]) - 1))
+    key = str(saved.get("post_key") or "")
+    session.project = project
+    session.saved_version = version
+    session.channel_id = channel_id
+    session.active = active
+    # A deleted or evicted published post must not become an edit target.
+    session.post_key = key if key in lib["published"] else ""
+    session.history.clear()
+    session.dirty = False
+    return True
+
+
+async def _reload_saved(interaction: discord.Interaction, session: StudioSession) -> None:
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    try:
+        _, lib = await _load_library(session.guild_id)
+        found = _restore_snapshot(session, lib)
+    except (StudioValidationError, ValueError, TypeError):
+        return await _say(interaction, "Saved draft could not be restored. Your current editor was not published.")
+    except Exception:
+        return await _say(interaction, "Saved draft storage is unavailable. No changes were published.")
+    await _home(interaction, session, notice="Saved draft restored." if found else "No saved draft found for your account.")
+
+
 class TemplateNameModal(discord.ui.Modal, title="Save Embed Template"):
     def __init__(self, session: StudioSession) -> None:
         super().__init__(timeout=900)
