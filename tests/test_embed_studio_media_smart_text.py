@@ -223,7 +223,9 @@ def test_real_private_review_uses_resolved_exact_preview_and_frozen_project(monk
     asyncio.run(ui._review(interaction, session))
     assert output["embeds"][0].description == "Welcome to The Community"
     assert "900 community members" in output["content"]
-    assert output["allowed_mentions"] == discord.AllowedMentions.none()
+    assert output["allowed_mentions"].everyone is False
+    assert output["allowed_mentions"].roles is False
+    assert output["allowed_mentions"].users is False
     confirmation = output["view"]
     assert confirmation.preview_project["content"] == "{server.member_count} community members"
     assert confirmation.preview_resolved_project["content"] == "900 community members"
