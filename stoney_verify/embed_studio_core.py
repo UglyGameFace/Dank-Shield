@@ -226,7 +226,7 @@ SMART_TEXT_TOKENS = (
     ("{server.member_count}", "Discord-reported member count"),
     ("{today.utc}", "Today's date in UTC"),
 )
-SMART_TEXT_PATTERN = re.compile(r"\\{(?:server\\.name|channel\\.name|server\\.member_count|today\\.utc)\\}")
+SMART_TEXT_PATTERN = re.compile(r"\{(?:server\.name|channel\.name|server\.member_count|today\.utc)\}")
 
 
 def validate_media_item(item: Mapping[str, Any]) -> dict[str, str]:
