@@ -145,8 +145,10 @@ def _preview_embed(session: StudioSession) -> discord.Embed:
 
 
 async def _home(interaction: discord.Interaction, session: StudioSession, *, notice: str = "") -> None:
+    autosave_warning = await _autosave(interaction, session)
     message = (
         ("✅ " + notice + "\n" if notice else "")
+        + ("⚠️ " + autosave_warning + "\n" if autosave_warning else "")
         + "Private editor • choose a section; Publish requires confirmation."
     )
     current = _preview_embed(session)
@@ -246,6 +248,10 @@ class StudioHomeView(_StudioView):
     @discord.ui.button(label="Starter Layouts", emoji="✨", style=discord.ButtonStyle.secondary, row=2)
     async def starter_layouts(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _starters(interaction, self.session)
+
+    @discord.ui.button(label="Reload Saved", emoji="📂", style=discord.ButtonStyle.secondary, row=3)
+    async def reload_saved(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _reload_saved(interaction, self.session)
 
     @discord.ui.button(label="Preview & Publish", emoji="👁️", style=discord.ButtonStyle.success, row=3)
     async def preview(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -375,6 +381,11 @@ class StudioImagesModal(_ProjectModal):
 
 
 async def _menu(interaction: discord.Interaction, *, heading: str, description: str, view: discord.ui.View) -> None:
+    session = getattr(view, "session", None)
+    if isinstance(session, StudioSession):
+        warning = await _autosave(interaction, session)
+        if warning:
+            description = "⚠️ " + warning + "\n\n" + description
     embed = discord.Embed(title=heading, description=description[:3900], color=discord.Color.blurple())
     kwargs = {"content": None, "embed": embed, "view": view, "allowed_mentions": _MENTIONS}
     if interaction.response.is_done():
@@ -1385,5 +1396,16 @@ async def open_embed_studio(interaction: discord.Interaction) -> None:
         # Calls from an already-acknowledged Feature Center create their own
         # private editor; they never alter the public panel.
         pass
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
     session = StudioSession(guild_id=int(interaction.guild.id), owner_id=int(interaction.user.id))
-    await _home(interaction, session)
+    notice = ""
+    try:
+        _, lib = await _load_library(session.guild_id)
+        if _restore_snapshot(session, lib):
+            notice = "Recovered your last autosaved draft. Nothing was published."
+    except (StudioValidationError, ValueError, TypeError):
+        notice = "Saved draft could not be read; starting a new local draft."
+    except Exception:
+        notice = "Storage unavailable; editing works, but autosave will need to recover."
+    await _home(interaction, session, notice=notice)
