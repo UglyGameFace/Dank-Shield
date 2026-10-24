@@ -77,7 +77,7 @@ CATEGORIES: tuple[NavigationCategory, ...] = (
         "design",
         "Design & Branding",
         "🎨",
-        "Server naming/design, card appearance, artwork, fonts, and visual settings.",
+        "Make announcement embeds, style server names, and manage welcome artwork.",
     ),
     NavigationCategory(
         "voice",
@@ -130,7 +130,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Action & Reminder Center",
         "📋",
         "actions",
-        "Open your private Action Inbox and the existing reminder controls, without enabling new delivery.",
+        "See what needs attention and open reminder settings. Messages send only when enabled.",
         ("my actions", "action inbox", "reminder center", "actions and notifications", "actions & notifications", "tasks", "pending actions", "required actions", "to do"),
     ),
     NavigationFeature(
@@ -138,7 +138,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Notification Systems",
         "🧭",
         "actions",
-        "Staff directory of six existing notification systems; each keeps its own controls and sender.",
+        "Find the settings for verification, member activity, tickets, events, and other messages.",
         ("existing reminders", "notification owners", "notification systems", "notification directory", "reminder systems"),
         True,
     ),
@@ -147,7 +147,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Action Builder (Draft)",
         "🛠️",
         "actions",
-        "Manage draft verification and Member Setup action rules; automated delivery remains disabled.",
+        "Review which members should receive a reminder. Preview rules before using them.",
         ("action builder", "reminder builder", "action rules", "draft actions"),
         True,
     ),
@@ -156,7 +156,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Schedule & Readiness (Draft)",
         "🕓",
         "actions",
-        "Staff-only timing, quiet hours, limits and read-only delivery readiness; no scheduler activated.",
+        "Choose safe reminder times and limits. Staff can enable automatic Member Setup messages after setup.",
         ("safety schedule", "reminder schedule", "delivery readiness", "quiet hours reminder", "reminder timing"),
         True,
     ),
@@ -165,7 +165,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "My Reminder Preferences",
         "🔔",
         "actions",
-        "Manage your own per-server future Member Setup DM opt-in and inspect eligibility.",
+        "Choose whether you want optional Member Setup reminders, and check your status.",
         ("my reminder preferences", "setup dm opt in", "stop setup dms", "reminder opt out", "my notification preferences"),
     ),
     NavigationFeature(
@@ -173,7 +173,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Verification Reminders",
         "📩",
         "access",
-        "Manage opt-in reminders for unverified members and delivery health.",
+        "Remind members who have not verified yet. They do not need to opt in individually.",
         ("verify reminders", "unverified reminders", "verification notices", "verification database", "pending members"),
         True,
     ),
@@ -244,7 +244,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Community & Pings Manager",
         "🌿",
         "community",
-        "Configure community, session starter, and notification ping roles.",
+        "Choose optional server roles that members can join for events and notifications.",
         ("community pings", "ping roles", "notification roles", "stoner", "sesh pings", "toke setup"),
         True,
     ),
@@ -253,7 +253,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Community Tools",
         "🧰",
         "community",
-        "Open stickies, polls, embeds, lookups, permission checks, and community utilities.",
+        "Create polls or pinned messages, check permissions, and use handy server tools.",
         (
             "sticky",
             "stickies",
@@ -273,7 +273,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Share Router",
         "🔗",
         "community",
-        "Configure share proxies, supported social videos, and inline delivery.",
+        "Choose which channels share videos, photos, or links. Keep original posts if you prefer.",
         ("share", "share route", "share router", "memes", "share sheet", "proxy channel", "facebook videos", "inline media"),
         True,
     ),
@@ -282,7 +282,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Share Router Downloads",
         "📥",
         "community",
-        "Set up private video downloads, expiring Watch links, and delivery tests.",
+        "Manage video downloads, private viewing links, and test troublesome social links.",
         ("downloads", "download channel", "download settings", "watch link", "download link", "facebook download", "video hosting", "download expiry", "share router download"),
         True,
     ),
@@ -343,6 +343,15 @@ FEATURES: tuple[NavigationFeature, ...] = (
         True,
     ),
     NavigationFeature(
+        "embed_studio",
+        "Embed Studio",
+        "🧱",
+        "design",
+        "Create announcements, rules, and event posts with images and buttons. Save or resume drafts.",
+        ("embed", "embed builder", "embed studio", "announcement builder", "create announcement", "message designer", "design a message", "embed editor", "custom embed", "json embed", "save embed"),
+        True,
+    ),
+    NavigationFeature(
         "server_design",
         "Server Design",
         "🎨",
@@ -391,7 +400,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Server Stats",
         "📊",
         "ops",
-        "Manage live counters with deleted-ticket reconciliation and fresh member counts.",
+        "Set up member and ticket counters. Repair counters if a channel was deleted.",
         ("stats", "server stats", "counters", "member count", "ticket count"),
         True,
     ),
@@ -425,7 +434,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "My Member Setup",
         "🧭",
         "my",
-        "Review or complete the current Member Setup requirements for your account.",
+        "See what you still need to finish to access the server.",
         ("my setup", "member setup", "review setup", "account setup", "access setup"),
     ),
     NavigationFeature(
@@ -460,21 +469,87 @@ _FEATURE_BY_KEY = {item.key: item for item in FEATURES}
 
 
 
-# Curated entry points updated when a public feature ships. These are registry
-# references, not a second router or permission mechanism.
-RECENT_FEATURE_KEYS: tuple[str, ...] = (
-    "somewhere_420",
-    "voice_safety",
-    "share_downloads",
-    "toke_settings",
-    "verification_reminders",
-    "server_stats",
-    "movie_night",
+# Ship notes describe *merged* public improvements, not unmerged pull requests.
+# This remains metadata only: every button uses the canonical feature owner.
+# Update this list whenever a visible feature changes, and keep its claim true.
+@dataclass(frozen=True)
+class RecentFeatureUpdate:
+    key: str
+    headline: str
+    detail: str
+    merged_date: str
+
+
+RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
+    RecentFeatureUpdate(
+        "embed_studio", "Drafts now remember your work",
+        "Come back after a restart without losing your last saved design.", "2026-10-24",
+    ),
+    RecentFeatureUpdate(
+        "share_router", "Share videos from regular channels",
+        "Keep original posts and choose videos, images, links, or everything.", "2026-10-24",
+    ),
+    RecentFeatureUpdate(
+        "share_downloads", "More reliable social video links",
+        "Better Facebook link detection and backup video formats where supported.", "2026-10-24",
+    ),
+    RecentFeatureUpdate(
+        "action_safety_schedule", "Optional setup reminders can send automatically",
+        "Staff choose when to turn on Member Setup messages; off until enabled.", "2026-10-23",
+    ),
+    RecentFeatureUpdate(
+        "action_reminder_center", "Reminders have their own home",
+        "Open your to-dos, message preferences, and reminder settings in one area.", "2026-10-23",
+    ),
+    RecentFeatureUpdate(
+        "verification_reminders", "Reminders for unverified members",
+        "Server owners can send verification reminders without member opt-in.", "2026-10-23",
+    ),
+    RecentFeatureUpdate(
+        "somewhere_420", "See where it's 4:20",
+        "Browse the world clock and jump into a sesh with the existing /toke flow.", "2026-10-22",
+    ),
 )
+RECENT_FEATURE_KEYS: tuple[str, ...] = tuple(item.key for item in RECENT_UPDATES)
 
 
 def recent_features() -> tuple[NavigationFeature, ...]:
     return tuple(_FEATURE_BY_KEY[key] for key in RECENT_FEATURE_KEYS)
+
+
+# Short task-based headings, not backend module names. All feature keys retain
+# their original route, access checks, and persisted configuration.
+FEATURE_GROUPS: dict[str, str] = {
+    "action_reminder_center": "Your reminders",
+    "action_my_preferences": "Your reminders",
+    "action_notification_systems": "For server moderators",
+    "action_builder": "For server moderators",
+    "action_safety_schedule": "For server moderators",
+    "community_pings_manager": "Roles & notifications",
+    "community_tools": "Server tools",
+    "share_router": "Share photos & videos",
+    "share_downloads": "Share photos & videos",
+    "toke_settings": "Events & meetups",
+    "somewhere_420": "Events & meetups",
+    "community_hub": "Events & meetups",
+    "movie_night": "Events & meetups",
+    "embed_studio": "Create messages",
+    "server_design": "Server appearance",
+    "card_assets": "Server appearance",
+    "status": "Check bot health",
+    "diagnostics": "Check bot health",
+    "logs_activity": "Server logs & counters",
+    "server_stats": "Server logs & counters",
+}
+
+
+def grouped_features(category: str) -> tuple[tuple[str, tuple[NavigationFeature, ...]], ...]:
+    groups: dict[str, list[NavigationFeature]] = {}
+    for feature in features_for_category(category):
+        name = FEATURE_GROUPS.get(feature.key, "Tools & settings")
+        groups.setdefault(name, []).append(feature)
+    return tuple((name, tuple(features)) for name, features in groups.items())
+
 
 def _normalized(value: str) -> str:
     text = str(value or "").lower().strip()
@@ -546,6 +621,12 @@ def validate_registry() -> list[str]:
     for key in RECENT_FEATURE_KEYS:
         if key not in set(feature_keys):
             errors.append(f"recent destination not registered: {key}")
+    for update in RECENT_UPDATES:
+        if not update.headline.strip() or not update.detail.strip() or not update.merged_date:
+            errors.append(f"recent update is incomplete: {update.key}")
+    for key in FEATURE_GROUPS:
+        if key not in set(feature_keys):
+            errors.append(f"feature group references missing destination: {key}")
     for feature in FEATURES:
         if feature.category not in known_categories:
             errors.append(f"{feature.key}: unknown category {feature.category}")
@@ -573,6 +654,10 @@ __all__ = [
     "NavigationFeature",
     "REGISTRY_ERRORS",
     "RECENT_FEATURE_KEYS",
+    "RECENT_UPDATES",
+    "FEATURE_GROUPS",
+    "RecentFeatureUpdate",
+    "grouped_features",
     "recent_features",
     "category_by_key",
     "feature_by_key",
