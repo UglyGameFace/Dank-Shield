@@ -324,7 +324,10 @@ def _is_video_provider_link(value: str) -> bool:
     if key == "vimeo":
         return bool(re.fullmatch(r"/[0-9]+(?:/.*)?", path))
     if key == "streamable":
-        return bool(re.fullmatch(r"/[a-z0-9]{4,20}/?", path))
+        slug = path.strip("/")
+        return slug not in {"login", "signup", "privacy", "about", "terms", "settings", "profile"} and bool(
+            re.fullmatch(r"[a-z0-9]{4,20}", slug)
+        )
     if key == "instagram":
         return any(path.startswith(prefix) for prefix in ("/reel/", "/reels/", "/tv/"))
     if key == "facebook":
