@@ -1,3 +1,11 @@
+## Current checkpoint: Larger Embed Studio Media Library + Smart Text PR (2026-10-24)
+
+- **Only active implementation task remains Embed Studio.** Owner merged #714 (verified main `2b04b598a70cf67984d1b52aec86680f30f9d873`; 9 applicable checks passed). #713 Bump Manager remains backlog; Share Router remains suspended.
+- **Single canonical editor:** Add a 12-link, named guild-local HTTPS Media Library in existing `embed_studio_v1` per-guild compare-and-swap storage. Can save, select for image/thumbnail/author/footer icons, and remove only after private confirmation. Never fetch/host files or alter published messages while editing.
+- **Smart Text:** Four allowlisted tokens for server name, selected channel, Discord-reported member count and UTC date. Resolve once at private preview, validate full expanded project against Discord limits, then send exactly the previewed snapshot after existing identity/authorization/destination/revision checks. No arbitrary expressions, role pings, new slash root, DM sender, API polling or live-update worker. Saved drafts retain original placeholders.
+- **Acceptance:** focused model/UI tests and full exact-head CI; check edit-post compatibility, legacy templates/themes/drafts/role buttons, storage outage/CAS conflict, URL limits, mobile component rows, and publish-time preview staleness. Merge/deployment and Android testing are not yet proven.
+- **Still unfinished within Embed Studio:** native durable image uploads, scheduled/campaign publishing, automatic live updates, advanced forms/actions and real-time multi-moderator collaboration. #713 must not start until this task DoD or exact FORCE SWITCH.
+
 ## Current checkpoint: Larger, coherent Brand Themes PR (2026-10-24)
 
 - **Active task remains Embed Studio.** Owner merged #712; confirmed main starts at fc590e232e084e89b084c850cdbe240b816e313d. No FORCE SWITCH. Backlogged #713 Bump Manager is untouched.
