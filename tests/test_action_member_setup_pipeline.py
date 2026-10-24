@@ -34,11 +34,14 @@ def _owners(monkeypatch, *, ids=(101, 102), cursor=None, revision=7, enabled=Tru
     async def published(guild_id, *, refresh):
         assert guild_id == 321 and refresh
         return {
-            "enabled": enabled,
-            "current_revision": revision,
-            "history": [{
-                "revision": revision, "published_at": "2026-10-22T11:00:00+00:00",
-            }] if revision > 0 else [],
+            "source": "supabase:guild_configs",
+            "member_setup_state": {
+                "enabled": enabled,
+                "current_revision": revision,
+                "history": [{
+                    "revision": revision, "published_at": "2026-10-22T11:00:00+00:00",
+                }] if revision > 0 else [],
+            },
         }
 
     async def page(guild_id, *, after_user_id, limit):
@@ -51,7 +54,7 @@ def _owners(monkeypatch, *, ids=(101, 102), cursor=None, revision=7, enabled=Tru
         entries = state.get("history", [])
         return entries[-1] if entries else None
 
-    monkeypatch.setattr(pipeline, "load_guild_setup_state", published)
+    monkeypatch.setattr(pipeline, "get_guild_config", published)
     monkeypatch.setattr(pipeline, "latest_revision", latest)
     monkeypatch.setattr(pipeline, "read_member_setup_opt_in_page", page)
 
@@ -135,8 +138,16 @@ def test_source_failure_timeout_and_cross_guild_input_fail_closed(monkeypatch):
     _owners(monkeypatch)
     async def fail(_gid, *, refresh):
         raise RuntimeError("postgres://private-password")
-    monkeypatch.setattr(pipeline, "load_guild_setup_state", fail)
+    monkeypatch.setattr(pipeline, "get_guild_config", fail)
     with pytest.raises(pipeline.CandidatePreviewUnavailable, match="Candidate source"):
+        asyncio.run(pipeline.preview_member_setup_opt_in_page(FakeGuild()))
+
+    async def unavailable(_gid, *, refresh):
+        return {"source": "unavailable:supabase_none",
+                "member_setup_state": {"enabled": False}}
+    monkeypatch.setattr(pipeline, "get_guild_config", unavailable)
+    # Storage outages must not masquerade as "no published revision".
+    with pytest.raises(pipeline.CandidatePreviewUnavailable):
         asyncio.run(pipeline.preview_member_setup_opt_in_page(FakeGuild()))
 
     guild = FakeGuild()
