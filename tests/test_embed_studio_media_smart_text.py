@@ -157,6 +157,11 @@ def test_expanded_capacity_still_enforces_a_bounded_shared_guild_library():
         project["embeds"][0]["footer"] = "F" * 1500
         project["embeds"][0]["image"] = "https://example.com/" + "a" * 1700
         project["embeds"][0]["thumbnail"] = "https://example.com/" + "b" * 1700
+        project["embeds"][0]["author_name"] = "Team"
+        project["embeds"][0]["author_icon"] = "https://example.com/" + "c" * 1900
+        project["embeds"][0]["author_url"] = "https://example.com/" + "d" * 1900
+        project["embeds"][0]["title_url"] = "https://example.com/" + "e" * 1900
+        project["embeds"][0]["footer_icon"] = "https://example.com/" + "f" * 1900
         lib["templates"][str(i)] = {"name": f"Template {i}", "project": project}
     # A limited shared library must fail with an explicit actionable error.
     # No template, draft or media record is silently truncated on writes.
