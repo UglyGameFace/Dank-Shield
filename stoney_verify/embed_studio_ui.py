@@ -10,14 +10,16 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Callable
 from datetime import datetime, timezone
+import asyncio
 import secrets
+import time
 
 import discord
 
 from .embed_studio_core import (
     STUDIO_KEY, MAX_EMBEDS, MAX_FIELDS, MAX_TEMPLATES,
     StudioValidationError, new_project, validate_project, render_embeds,
-    link_view, default_embed, parse_library, library_payload, https_url,
+    link_view, default_embed, parse_library, library_payload, https_url, draft_snapshot,
 )
 
 _MENTIONS = discord.AllowedMentions.none()
@@ -32,6 +34,9 @@ class StudioSession:
     active: int = 0
     post_key: str = ""
     history: list[dict[str, Any]] = field(default_factory=list)
+    saved_version: int = 0
+    dirty: bool = False
+    save_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def apply(self, mutation: Callable[[dict[str, Any]], None]) -> None:
         candidate = deepcopy(self.project)
@@ -40,12 +45,14 @@ class StudioSession:
         self.history.append(self.project)
         self.history = self.history[-10:]
         self.project = checked
+        self.dirty = True
         self.active = min(self.active, len(self.project["embeds"]) - 1)
 
     def undo(self) -> bool:
         if not self.history:
             return False
         self.project = self.history.pop()
+        self.dirty = True
         self.active = min(self.active, len(self.project["embeds"]) - 1)
         return True
 
@@ -138,8 +145,10 @@ def _preview_embed(session: StudioSession) -> discord.Embed:
 
 
 async def _home(interaction: discord.Interaction, session: StudioSession, *, notice: str = "") -> None:
+    autosave_warning = await _autosave(interaction, session)
     message = (
         ("✅ " + notice + "\n" if notice else "")
+        + ("⚠️ " + autosave_warning + "\n" if autosave_warning else "")
         + "Private editor • choose a section; Publish requires confirmation."
     )
     current = _preview_embed(session)
@@ -183,6 +192,7 @@ class DestinationSelect(discord.ui.ChannelSelect):
         if not isinstance(channel, discord.TextChannel) or channel.guild.id != self.session.guild_id:
             return await _say(interaction, "Choose a normal text channel in this server.")
         self.session.channel_id = int(channel.id)
+        self.session.dirty = True
         if self.session.post_key:
             self.session.post_key = ""  # Never edit a post after switching destination.
         await _home(interaction, self.session, notice="Destination selected.")
@@ -239,6 +249,10 @@ class StudioHomeView(_StudioView):
     async def starter_layouts(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _starters(interaction, self.session)
 
+    @discord.ui.button(label="Reload Saved", emoji="📂", style=discord.ButtonStyle.secondary, row=3)
+    async def reload_saved(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _reload_saved(interaction, self.session)
+
     @discord.ui.button(label="Preview & Publish", emoji="👁️", style=discord.ButtonStyle.success, row=3)
     async def preview(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _review(interaction, self.session)
@@ -260,6 +274,7 @@ class StarterSelect(discord.ui.Select):
         self.session.history.append(self.session.project)
         self.session.history = self.session.history[-10:]
         self.session.project = project_for_preset(self.values[0])
+        self.session.dirty = True
         self.session.active = 0
         self.session.post_key = ""
         await _home(interaction, self.session, notice="Starter layout loaded. Make it yours before publishing.")
@@ -366,6 +381,11 @@ class StudioImagesModal(_ProjectModal):
 
 
 async def _menu(interaction: discord.Interaction, *, heading: str, description: str, view: discord.ui.View) -> None:
+    session = getattr(view, "session", None)
+    if isinstance(session, StudioSession):
+        warning = await _autosave(interaction, session)
+        if warning:
+            description = "⚠️ " + warning + "\n\n" + description
     embed = discord.Embed(title=heading, description=description[:3900], color=discord.Color.blurple())
     kwargs = {"content": None, "embed": embed, "view": view, "allowed_mentions": _MENTIONS}
     if interaction.response.is_done():
@@ -839,6 +859,78 @@ async def _save_library(guild_id: int, source: Any, lib: dict[str, Any]) -> bool
     return bool(ok)
 
 
+
+async def _autosave(interaction: discord.Interaction, session: StudioSession) -> str:
+    """Persist validated per-staff drafts through the existing guild CAS."""
+    if not session.dirty:
+        return ""
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    async with session.save_lock:
+        if not session.dirty:
+            return ""
+        snapshot = deepcopy(session.project)
+        channel_id, active, post_key = session.channel_id, session.active, session.post_key
+        prior_version = session.saved_version
+        try:
+            # Retry only whole-library CAS conflicts caused by unrelated
+            # templates, post-history or other staff drafts. Never overwrite
+            # this editor owner's newer draft revision.
+            for _attempt in range(3):
+                source, lib = await _load_library(session.guild_id)
+                next_version = draft_snapshot(
+                    lib, owner_id=session.owner_id, expected_version=prior_version,
+                    project=snapshot, channel_id=channel_id, active=active,
+                    post_key=post_key, now=int(time.time()),
+                )
+                if await _save_library(session.guild_id, source, lib):
+                    session.saved_version = next_version
+                    if (session.project == snapshot and session.channel_id == channel_id
+                        and session.active == active and session.post_key == post_key):
+                        session.dirty = False
+                    return ""
+            return "Autosave collided with another server edit. Changes remain in this open editor."
+        except StudioValidationError as exc:
+            return str(exc)
+        except Exception:
+            return "Autosave unavailable. Changes remain only in this open editor."
+
+
+def _restore_snapshot(session: StudioSession, lib: dict[str, Any]) -> bool:
+    saved = lib.get("drafts", {}).get(str(session.owner_id))
+    if not isinstance(saved, dict):
+        return False
+    project = validate_project(saved.get("project") or {})
+    version = int(saved.get("version") or 0)
+    if version <= 0:
+        raise StudioValidationError("Saved draft revision is invalid.")
+    channel_id = max(0, int(saved.get("channel_id") or 0))
+    active = max(0, min(int(saved.get("active") or 0), len(project["embeds"]) - 1))
+    key = str(saved.get("post_key") or "")
+    session.project = project
+    session.saved_version = version
+    session.channel_id = channel_id
+    session.active = active
+    # A deleted or evicted published post must not become an edit target.
+    session.post_key = key if key in lib["published"] else ""
+    session.history.clear()
+    session.dirty = False
+    return True
+
+
+async def _reload_saved(interaction: discord.Interaction, session: StudioSession) -> None:
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    try:
+        _, lib = await _load_library(session.guild_id)
+        found = _restore_snapshot(session, lib)
+    except (StudioValidationError, ValueError, TypeError):
+        return await _say(interaction, "Saved draft could not be restored. Your current editor was not published.")
+    except Exception:
+        return await _say(interaction, "Saved draft storage is unavailable. No changes were published.")
+    await _home(interaction, session, notice="Saved draft restored." if found else "No saved draft found for your account.")
+
+
 class TemplateNameModal(discord.ui.Modal, title="Save Embed Template"):
     def __init__(self, session: StudioSession) -> None:
         super().__init__(timeout=900)
@@ -894,6 +986,7 @@ class TemplateSelect(discord.ui.Select):
         self.session.history.append(self.session.project)
         self.session.history = self.session.history[-10:]
         self.session.project = draft
+        self.session.dirty = True
         self.session.active = 0
         self.session.post_key = ""
         await _home(interaction, self.session, notice="Template loaded. Nothing posted.")
@@ -1151,6 +1244,7 @@ class StudioReviewView(_StudioView):
         except Exception as exc:
             return await _say(interaction, f"❌ Could not complete publish: {type(exc).__name__}. Verify the destination.")
         self.session.post_key = f"{channel.id}:{message.id}"
+        self.session.dirty = True
         tracked = False
         try:
             source, lib = await _load_library(self.session.guild_id)
@@ -1183,10 +1277,12 @@ class StudioReviewView(_StudioView):
                 await message.edit(view=link_view(draft), allowed_mentions=_MENTIONS)
             except (discord.Forbidden, discord.HTTPException):
                 pass  # Runtime still rejects all untracked or stale buttons.
+        autosave_warning = await _autosave(interaction, self.session)
         await _say(
             interaction,
             f"✅ {'Updated' if editing_existing else 'Published'}: {message.jump_url}"
-            + ("" if tracked else "\n⚠️ Message sent, but saved-post tracking is unavailable. Keep the message link."),
+            + ("" if tracked else "\n⚠️ Message sent, but saved-post tracking is unavailable. Keep the message link.")
+            + ("\n⚠️ " + autosave_warning if autosave_warning else ""),
         )
 
     @discord.ui.button(label="Back & Edit", emoji="✏️", style=discord.ButtonStyle.secondary, row=0)
@@ -1264,6 +1360,7 @@ class TrackedPostSelect(discord.ui.Select):
         except StudioValidationError:
             return await _say(interaction, "This tracked post has an unsupported role configuration. Ask staff to repair it.")
         self.session.project = draft
+        self.session.dirty = True
         self.session.channel_id = int(channel.id)
         self.session.post_key = key
         self.session.active = 0
@@ -1301,5 +1398,16 @@ async def open_embed_studio(interaction: discord.Interaction) -> None:
         # Calls from an already-acknowledged Feature Center create their own
         # private editor; they never alter the public panel.
         pass
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
     session = StudioSession(guild_id=int(interaction.guild.id), owner_id=int(interaction.user.id))
-    await _home(interaction, session)
+    notice = ""
+    try:
+        _, lib = await _load_library(session.guild_id)
+        if _restore_snapshot(session, lib):
+            notice = "Recovered your last autosaved draft. Nothing was published."
+    except (StudioValidationError, ValueError, TypeError):
+        notice = "Saved draft could not be read; starting a new local draft."
+    except Exception:
+        notice = "Storage unavailable; editing works, but autosave will need to recover."
+    await _home(interaction, session, notice=notice)

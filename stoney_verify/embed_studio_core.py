@@ -12,6 +12,8 @@ import discord
 
 STUDIO_KEY = "embed_studio_v1"
 MAX_TEMPLATES = 12
+MAX_DRAFTS = 8
+MAX_DRAFT_AGE_SECONDS = 30 * 86400
 MAX_EMBEDS = 10
 MAX_FIELDS = 25
 MAX_LINK_BUTTONS = 5
@@ -205,16 +207,68 @@ def parse_library(config: Mapping[str, Any] | None) -> dict[str, Any]:
         raw = {}
     templates = raw.get("templates")
     published = raw.get("published")
+    drafts = raw.get("drafts")
     if not isinstance(templates, dict):
         templates = {}
     if not isinstance(published, dict):
         published = {}
+    if not isinstance(drafts, dict):
+        drafts = {}
     return {
         "revision": int(raw.get("revision") or 0),
         "templates": deepcopy(dict(list(templates.items())[:MAX_TEMPLATES])),
         "published": deepcopy(dict(list(published.items())[-20:])),
+        "drafts": deepcopy(dict(list(drafts.items())[:MAX_DRAFTS])),
     }
 
+
+
+def draft_snapshot(
+    library: dict[str, Any], *, owner_id: int, expected_version: int,
+    project: Mapping[str, Any], channel_id: int = 0, active: int = 0,
+    post_key: str = "", now: int,
+) -> int:
+    """Stage one staff member's draft without overwriting another editor session.
+
+    The entire library is still saved through the existing guild-config CAS.
+    Caller retries that CAS only after a fresh read, never bypassing this
+    per-draft revision check.
+    """
+    owner = str(int(owner_id))
+    if int(owner_id) <= 0 or int(expected_version) < 0:
+        raise StudioValidationError("Invalid draft owner or revision.")
+    drafts = library.setdefault("drafts", {})
+    if not isinstance(drafts, dict):
+        raise StudioValidationError("Invalid saved drafts.")
+    stored = drafts.get(owner)
+    if stored is not None and not isinstance(stored, Mapping):
+        raise StudioValidationError("Saved draft needs repair.")
+    current_version = int(stored.get("version") or 0) if stored else 0
+    if current_version != expected_version:
+        raise StudioValidationError(
+            "Your draft changed in another Studio session. "
+            "Use Reload Saved to review that version; current unsaved edits remain here."
+        )
+    # Only expire abandoned *other* editor drafts, never an active owner's
+    # saved state. No background cleaner or concurrent cross-guild scans.
+    cutoff = int(now) - MAX_DRAFT_AGE_SECONDS
+    for key, row in list(drafts.items()):
+        if key != owner and isinstance(row, Mapping) and int(row.get("updated_at") or 0) < cutoff:
+            drafts.pop(key, None)
+    if stored is None and len(drafts) >= MAX_DRAFTS:
+        raise StudioValidationError("Eight editor drafts are saved in this server. Ask staff to clear an unused draft.")
+    cleaned = validate_project(project)
+    active_index = int(active)
+    if not 0 <= active_index < len(cleaned["embeds"]):
+        raise StudioValidationError("Invalid draft page.")
+    if int(channel_id) < 0:
+        raise StudioValidationError("Invalid saved destination.")
+    drafts[owner] = {
+        "version": current_version + 1, "project": cleaned,
+        "channel_id": str(int(channel_id)), "active": active_index,
+        "post_key": str(post_key)[:100], "updated_at": int(now),
+    }
+    return current_version + 1
 
 
 def trim_published_history(published: Mapping[str, Any], *, max_posts: int = 20) -> dict[str, Any]:
@@ -241,16 +295,24 @@ def trim_published_history(published: Mapping[str, Any], *, max_posts: int = 20)
 def library_payload(library: Mapping[str, Any]) -> dict[str, Any]:
     templates = library.get("templates") or {}
     published = library.get("published") or {}
-    if len(templates) > MAX_TEMPLATES or len(published) > 20:
+    drafts = library.get("drafts") or {}
+    if len(templates) > MAX_TEMPLATES or len(published) > 20 or len(drafts) > MAX_DRAFTS:
         raise StudioValidationError("Studio library is full.")
     for item in templates.values():
         if not isinstance(item, Mapping):
             raise StudioValidationError("Invalid saved template.")
         validate_project(item.get("project") or {})
+    for owner, item in drafts.items():
+        if not str(owner).isascii() or not str(owner).isdecimal() or not isinstance(item, Mapping):
+            raise StudioValidationError("Invalid saved draft owner.")
+        if int(item.get("version") or 0) < 1 or int(item.get("updated_at") or 0) < 0:
+            raise StudioValidationError("Invalid saved draft revision.")
+        validate_project(item.get("project") or {})
     result = {
         "revision": int(library.get("revision") or 0) + 1,
         "templates": deepcopy(templates),
         "published": deepcopy(published),
+        "drafts": deepcopy(drafts),
     }
     import json
     if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_TEMPLATES_BYTES:
