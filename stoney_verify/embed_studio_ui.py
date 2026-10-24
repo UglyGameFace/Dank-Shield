@@ -269,6 +269,9 @@ class StudioJsonUploadModal(discord.ui.Modal, title="Import Embed Studio JSON"):
     def __init__(self, session: StudioSession) -> None:
         super().__init__(timeout=300)
         self.session = session
+        self.opened_project = deepcopy(session.project)
+        self.opened_channel_id = session.channel_id
+        self.opened_post_key = session.post_key
         self.upload = discord.ui.FileUpload(min_values=1, max_values=1, required=True)
         self.add_item(discord.ui.Label(
             text="Select a Studio .json file",
@@ -295,9 +298,22 @@ class StudioJsonUploadModal(discord.ui.Modal, title="Import Embed Studio JSON"):
         try:
             data = await asyncio.wait_for(attachment.read(use_cached=True), timeout=10)
             model = import_portable_project(data, guild_id=self.session.guild_id)
-            # Import is only an editor mutation. No published edit target,
-            # channel selection, role grant or automatic posting is imported.
-            self.session.apply(lambda project: (project.clear(), project.update(model)))
+            # A second editor panel could have changed the in-memory draft
+            # while this modal was open or the file was downloading.
+            if (
+                self.session.project != self.opened_project
+                or self.session.channel_id != self.opened_channel_id
+                or self.session.post_key != self.opened_post_key
+            ):
+                return await _say(interaction, "The draft changed while this import was open. Reopen Import JSON; no changes made.")
+
+            # Import is only an editor mutation. The destination is retained,
+            # but an existing published-message edit target must be cleared.
+            def replace_draft(project: dict[str, Any]) -> None:
+                project.clear()
+                project.update(model)
+
+            self.session.apply(replace_draft)
         except StudioValidationError as exc:
             return await _say(interaction, f"Import rejected: {exc}")
         except (discord.HTTPException, asyncio.TimeoutError, OSError, ValueError):
