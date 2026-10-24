@@ -347,6 +347,47 @@ def _share_media_health_embed() -> discord.Embed:
     return embed
 
 
+_FACEBOOK_PROBE_REASONS = {
+    "provider_extractor_incompatible": (
+        "Facebook returned video metadata the current extractor cannot parse. "
+        "This is a known upstream Facebook Reel issue. The original public "
+        "link is preserved; updating yt-dlp alone may not resolve it."
+    ),
+    "provider_no_downloadable_formats": (
+        "No downloadable video stream was exposed. Facebook may require "
+        "a login or group membership, or its video format may have changed. "
+        "The original link is preserved."
+    ),
+    "provider_login_required": (
+        "Facebook requires login or authorization. Share Router does not "
+        "use personal Facebook sessions, private cookies, or bypass permissions."
+    ),
+    "provider_private_or_restricted": (
+        "Facebook marked this video private or restricted. "
+        "Share Router will keep the original link rather than bypass access."
+    ),
+    "provider_rate_limited": (
+        "Facebook rate-limited this request. Repeated retries can make "
+        "extraction less reliable; the original link is preserved."
+    ),
+    "provider_forbidden": (
+        "Facebook refused the metadata/media request. The source link remains "
+        "available rather than forcing an unsafe download."
+    ),
+    "provider_bot_verification": (
+        "Facebook requested a bot check or CAPTCHA. Share Router cannot "
+        "bypass the verification prompt; the source link is preserved."
+    ),
+}
+
+
+def _provider_probe_outcome(provider: str, reason: str) -> str:
+    """Explain fixed, privacy-safe statuses without disclosing signed URLs."""
+    if provider == "facebook":
+        return _FACEBOOK_PROBE_REASONS.get(reason, reason)
+    return reason
+
+
 class ShareRouterProviderProbeModal(discord.ui.Modal, title="Test Share Router Provider"):
     media_url = discord.ui.TextInput(
         label="Public video URL",
@@ -408,7 +449,7 @@ class ShareRouterProviderProbeModal(discord.ui.Modal, title="Test Share Router P
         embed.add_field(
             name="Outcome",
             value=(
-                result.reason
+                _provider_probe_outcome(result.provider, result.reason)
                 or (
                     "Direct URL classified only; availability and file format not yet checked."
                     if result.provider == "direct"
