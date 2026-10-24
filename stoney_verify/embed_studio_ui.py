@@ -1274,7 +1274,7 @@ class StudioReviewView(_StudioView):
             for item in role_items:
                 self.add_item(discord.ui.Button(label=item["label"], disabled=True, style=discord.ButtonStyle.secondary, row=1))
 
-    @discord.ui.button(label="Confirm Post / Save Edit", emoji="✅", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Publish / Save Edit", emoji="✅", style=discord.ButtonStyle.success, row=0)
     async def publish(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         if self.sent:
             return await _say(interaction, "This confirmation has already been used.")
