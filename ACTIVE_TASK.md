@@ -1,3 +1,24 @@
+# Active task: Complete Embed Studio (owner FORCE SWITCH, 2026-10-24)
+
+## Single Active Task Lock
+- **Active:** Finish Dank Shield's existing mobile Embed Studio without creating a second editor. Owner explicitly FORCE SWITCHED from Share Router on 2026-10-24. Only Embed Studio may be investigated, modified or validated until this task reaches its Definition of Done, or another exact FORCE SWITCH is supplied.
+- **Baseline:** `main` at `b1e657a0d335661972128ebb76b106f118884f65` after merged #710; work branch `feat/embed-studio-durable-draft-recovery-20261024`. User work on other branches and deployment are untouched.
+- **Verified current ownership:** `stoney_verify.embed_studio_ui.open_embed_studio` is canonical through Community Tools and Server Setup. `embed_studio_core` validates layouts/templates/posts; `embed_studio_roles` is the persisted role action owner; `guild_config` CAS persists per-guild `embed_studio_v1`. #580 and #581 provide rich editor and persistent self-role controls; do not duplicate them.
+- **Current sub-slice:** Restore edits safely after a Discord view timeout/restart. Add bounded, per-editor-owner draft persistence in the canonical library, automatic saving after validated mutations, optimistic revision conflict detection, fail-closed errors, and regression coverage. Avoid remote media fetches, unauthorized automatic posting or a parallel service.
+- **Validation requirement:** Focused tests, existing CI workflows, legacy library/template/role/edit compatibility, storage outage/concurrency/limits, and clean diff; production Android/Discloud acceptance is separate. Do not claim fully finished until all applicable evidence exists.
+- **Following Embed Studio work (same single task):** audit remaining approved gaps (scheduling/campaign publication, dynamic embeds, media management, themes, JSON import/export, forms/action safety and collaboration), implement carefully without a second runtime owner, then validate. Those are NOT silently claimed implemented by this draft-recovery slice.
+
+## Suspended previous task: Share Router
+- **Outcome so far:** PR #709 merged at `775bce69f41d99392fc24efd1651327f7a764c57`, adding existing text channels via Search-Safe, non-destructive Keep Original routing, per-route filters, Facebook mobile URL patterns/diagnostics and pinned yt-dlp. PR #710 merged to `main` at `b1e657a0d335661972128ebb76b106f118884f65`, introducing bounded alternate progressive formats and installed JS-runtime/EJS support.
+- **Execution path:** Existing on-message Share Router handler, guild-scoped route JSON, media resolver / yt-dlp and sending/fallback owner. No new worker, schema or root slash command from those PRs. Managed proxy deletion semantics remain separate from ordinary-channel preservation.
+- **Validation:** Both are merged in GitHub; deployed Discloud version, Android real routing, problematic Facebook examples, compression acceptance and full universal media provider matrix are not proven in this record. No deployment or live canary performed by this Embed Studio task.
+- **Cleanup/conflicts:** Maintain #390 as wider media-provider backlog. Compression/transcoding not implemented by #710; investigate CPU, size, visual-quality safeguards only after Embed Studio is complete. Do not reopen / touch Share Router code here. Verify exact actual branch/CI/deploy state when resuming.
+- **Resume next steps:** Check merged SHA/current Discloud version, targeted real URL failures and video-format fallback acceptance, then select one bounded remaining Share Router scope under a new authorized task.
+
+---
+
+## Archived prior checkpoint (preserved verbatim below)
+
 # Active task: Share Router existing-channel non-destructive forwarding (owner-requested switch, 2026-10-24)
 
 ## Current checkpoint: Use Existing Channel with Search-Safe selection
