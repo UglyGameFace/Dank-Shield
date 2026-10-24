@@ -674,7 +674,10 @@ def test_actual_existing_forwarding_keeps_original_even_on_duplicate_and_error(
     monkeypatch.setattr(router, "_route_rejection_log", rejection)
     monkeypatch.setattr(router, "_cleanup_delivered_proxy_post", cleanup)
     monkeypatch.setattr(router, "_RECENT_ROUTE_KEYS", {})
-    monkeypatch.setattr(router, "_route_torrent_media", relay)
+    async def no_torrent(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(router, "_route_torrent_media", no_torrent)
 
     def message(content="A gaming clip! https://example.com/video", message_id=121):
         async def delete(*_args, **_kwargs):
