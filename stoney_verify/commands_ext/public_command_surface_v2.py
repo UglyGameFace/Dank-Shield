@@ -189,6 +189,10 @@ _FEATURE_ROUTE_KEYS = frozenset(
         "verification",
         "verification_reminders",
         "action_reminder_center",
+        "action_notification_systems",
+        "action_builder",
+        "action_safety_schedule",
+        "action_my_preferences",
         "welcome",
         "member_setup_manager",
         "protection",
@@ -344,6 +348,22 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
     if key == "action_reminder_center":
         from .public_action_center import open_action_center
         return await open_action_center(interaction)
+
+    if key == "action_notification_systems":
+        from .public_action_notification_directory import open_notification_owner_directory
+        return await open_notification_owner_directory(interaction)
+
+    if key == "action_builder":
+        from .public_action_builder import open_action_builder
+        return await open_action_builder(interaction)
+
+    if key == "action_safety_schedule":
+        from .public_action_schedule import open_schedule_panel
+        return await open_schedule_panel(interaction)
+
+    if key == "action_my_preferences":
+        from .public_action_preferences import open_member_action_preferences
+        return await open_member_action_preferences(interaction)
 
     if key == "verification_reminders":
         from .public_verify_reminder_ui import open_reminder_settings
