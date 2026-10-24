@@ -211,6 +211,17 @@ class ScheduleView(_OwnedStaffView):
             view=SchedulePreviewView(self.user_id, self.guild_id),
         )
 
+    @discord.ui.button(label="Preview Opted-in Members", emoji="👥", style=discord.ButtonStyle.secondary)
+    async def opted_in_preview(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """Bounded five-profile dry run using existing action readiness checks."""
+        if (
+            interaction.guild_id != self.guild_id
+            or not scoped_interaction_is_staff(interaction)
+        ):
+            return await _msg(interaction, "Server staff required to review reminder candidates.")
+        from .public_action_member_setup_preview import open_member_setup_candidate_preview
+        await open_member_setup_candidate_preview(interaction)
+
     @discord.ui.button(label="Owner Canary Console", emoji="🔐", style=discord.ButtonStyle.secondary)
     async def canary_console(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         # Not normal staff/administrator authority: actual application owner

@@ -118,6 +118,39 @@ Automatic sending and the deferred single-member canary stay disabled.
 No new tables, migrations, scheduler, background task, slash command or
 production data mutation are part of this slice.
 
+## Slice 4J: integrated Member Setup reminder dry-run workflow
+
+In **/dank home → 📋 Actions & Notifications → Schedule & Readiness
+(Draft) → Preview Opted-in Members**, authorized staff can review a
+**private, read-only, paged** inspection of opted-in Member Setup reminder
+candidates.
+
+This is one connected workflow reusing the existing authorities:
+
+1. The existing profile store's server-filtered JSONB opt-in source returns
+   **up to five records per page**. It does not load all guild members.
+2. The existing Member Setup publisher is consulted for the current active
+   published revision; without that revision the report has nothing to check.
+3. For each opted-in ID, use **guild.get_member (local cache only)**. Unknown
+   cache state never triggers Discord REST fetch or becomes "departed".
+4. For known non-bot members, the existing Action Center readiness owner
+   rechecks per-guild consent, exemptions, canonical completion/revision,
+   quiet-hour timing, cooldown, daily caps and actual private PostgreSQL
+   claim history. No assumption that a failed ledger read means zero claims.
+   Maximum two concurrent expensive reads, per-read timeout 8 seconds.
+5. Staff see **counts only** for `preview_due`, waiting, quiet,
+   completed, exempt, stale, capped, missing cache or unavailable statuses.
+   No recipient identities, DMs, claims, guild-wide Discord member fetches,
+   new worker, or cross-server state. Next page / Restart re-evaluate
+   live authoritative state with server- and user-bound interactions.
+
+Even `preview_due` means **potentially eligible at inspection time only**;
+it does not authorize delivery. Existing single-member canary, its
+approval gates and production sender status are **unchanged, OFF and
+operator-deferred**. The next gated delivery milestone must include
+an explicit, reviewed production activation plan and an accepted live canary;
+this PR does not activate an automatic scheduler.
+
 ## Scope of this first slice
 
 Find it under **/dank home → Onboarding & Access → Action & Reminder Center**,
