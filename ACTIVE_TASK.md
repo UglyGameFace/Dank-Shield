@@ -1,5 +1,15 @@
 # Active task: Action & Reminder Center (FORCE SWITCH, 2026-10-22)
 
+## Current checkpoint: 4K automatic Member Setup reminders (v1 code-complete candidate, 2026-10-23)
+
+- Owner merged #707. Verified main `f60be754d57ba6ec330acec0406bad92b0ff814f`; no other open PRs. Single active task remains Action & Reminder Center. This is the requested larger, final major implementation PR (#708 expected).
+- **User requirement:** Unverified members are automatically included by the EXISTING Simple Verify reminder worker when the guild enables its verification policy; they never need personal reminder opt-in. DO NOT send separate verification reminders through Action Center or require opt-in for Unverified status.
+- **Separate Member Setup condition:** self-service private member opt-in still governs optional Member Setup DM reminders. Staff can enable/disable automatic Member Setup DMs from **/dank → Actions & Notifications → Schedule & Readiness**. Toggle is persisted in existing guild settings via CAS, defaults OFF, requires published owner setup revision, active builder condition and reachable private PostgreSQL ledger. No Discloud environment variables for normal guild use.
+- Reuse the existing profile-store opted-in-only JSONB feed (max 5/page), existing owner completion/exemption/consent preflight, quiet hours, scheduled delays, existing claim-first private PostgreSQL transaction and attempt/day budgets. Background worker starts after protected startup only, 120s quiet period, fixed scan/poll/claim caps and limited REST lookups of opted-in IDs only; no full guild member sweeps.
+- On each delivery, canonical readiness + policy is checked before atomic claim; fresh policy, current membership, consent, completion and quiet hours checked AGAIN after claim before sending one link-free DM. Uncertain claims or outages block sends. Claimed failures never retry immediately, protecting against duplicates after crashes/restarts.
+- Runtime monitoring reports guild-private aggregate counters in staff panel; persistent attempt/cooldown safety comes from existing private PG. No new schema/migration/new verification sender/new slash command. Automated Member Setup remains default OFF until each server owner explicitly enables it.
+- **Acceptance is code-complete:** exact-head CI, integration tests and security checks; no real member DM test required at this stage. Owner will test later and file bugs. Do not claim production-verified or close whole post-audit epic (#367).
+
 ## Current checkpoint: 4J integrated bounded Member Setup dry run (2026-10-23)
 
 - Owner confirms #706 merged. Verified main `d85a5449b0815864e4b5b25b43306309fd0c872b`; no other open PRs.
