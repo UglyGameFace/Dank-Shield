@@ -7,6 +7,9 @@ from datetime import datetime, timezone
 import discord
 
 from stoney_verify.action_builder_policy import load_action_builder, preview_rules
+from stoney_verify.action_member_setup_automation import (
+    activation_prerequisites, parse_automation, save_automation_enabled,
+)
 from stoney_verify.action_center_service import load_member_actions
 from stoney_verify.action_schedule_policy import (
     ActionSchedule, edit_schedule, load_schedule, preview_candidate, save_schedule,
@@ -15,13 +18,18 @@ from .public_action_builder import _OwnedStaffView, _defer, _msg, _replace
 from .public_staff_scope import scoped_interaction_is_staff
 
 
-def _embed(schedule: ActionSchedule) -> discord.Embed:
+def _embed(schedule: ActionSchedule, *, automation_enabled: bool = False) -> discord.Embed:
     e = discord.Embed(
         title="🕓 Action Reminder Safety Schedule",
         description=(
-            f"**Draft revision {schedule.revision}** · **🔒 Delivery disabled**\n"
-            "Plan quiet hours, retry spacing and attempt limits before delivery exists. "
-            "Nothing on this page sends reminders."
+            f"**Safety settings revision {schedule.revision}**\n"
+            + (
+                "✅ **Automatic Member Setup reminders ON** for opted-in members.\n"
+                if automation_enabled else
+                "🔕 **Automatic Member Setup reminders OFF** until enabled here.\n"
+            )
+            + "Configure quiet hours, retry spacing and limits. "
+            "Only canonical Member Setup status and individual DM consent authorize delivery."
         ),
         color=discord.Color.blurple(),
     )
@@ -35,7 +43,14 @@ def _embed(schedule: ActionSchedule) -> discord.Embed:
         inline=False,
     )
     e.add_field(name="Guild daily cap", value=str(schedule.max_guild_per_day))
-    e.set_footer(text="Draft only • No messages • Uses canonical completion truth")
+    e.add_field(
+        name="Verification reminders",
+        value="Unverified members are automatically eligible under the existing "
+              "server-managed Verification Reminders policy. No individual opt-in "
+              "or second verification sender is created here.",
+        inline=False,
+    )
+    e.set_footer(text="Guild-owned toggle • Member Setup consent separate • Durable PG claims")
     return e
 
 
@@ -97,9 +112,51 @@ class ScheduleModal(discord.ui.Modal, title="Draft Reminder Safety"):
 
 
 class ScheduleView(_OwnedStaffView):
-    def __init__(self, owner: int, guild_id: int, schedule: ActionSchedule) -> None:
+    def __init__(
+        self, owner: int, guild_id: int, schedule: ActionSchedule,
+        *, automation_enabled: bool = False,
+    ) -> None:
         super().__init__(owner, guild_id)
         self.schedule = schedule
+        self.automation_enabled = automation_enabled
+        self.automation_toggle.label = (
+            "Disable Automatic Setup DMs" if automation_enabled
+            else "Enable Automatic Setup DMs"
+        )
+        self.automation_toggle.style = (
+            discord.ButtonStyle.danger if automation_enabled
+            else discord.ButtonStyle.success
+        )
+
+    @discord.ui.button(label="Enable Automatic Setup DMs", emoji="🔔", style=discord.ButtonStyle.success)
+    async def automation_toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if (
+            interaction.guild_id != self.guild_id
+            or not scoped_interaction_is_staff(interaction)
+        ):
+            return await _msg(interaction, "Only authorized server staff can manage automatic reminders.")
+        await _defer(interaction)
+        try:
+            from stoney_verify.guild_config import get_guild_config
+            cfg = await get_guild_config(self.guild_id, refresh=True)
+            current = parse_automation(cfg)
+            if current.enabled != self.automation_enabled:
+                return await _msg(interaction, "Automation changed. Reopen the panel to avoid overwriting.")
+            enabled = not current.enabled
+            if enabled:
+                reason = activation_prerequisites(cfg)
+                if reason:
+                    return await _msg(interaction, reason)
+            saved = await save_automation_enabled(
+                self.guild_id, expected_config=cfg, enabled=enabled,
+            )
+            if not saved:
+                return await _msg(interaction, "Another manager changed this setting. Reopen and retry.")
+        except ValueError as exc:
+            return await _msg(interaction, str(exc)[:180])
+        except Exception:
+            return await _msg(interaction, "Could not confirm the automation setting. No change was assumed.")
+        await open_schedule_panel(interaction)
 
     @discord.ui.button(label="Edit Timing & Limits", emoji="⚙️", style=discord.ButtonStyle.primary)
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -246,10 +303,14 @@ async def open_schedule_panel(interaction: discord.Interaction) -> None:
         return await _msg(interaction, "Action Schedule is for authorized server staff.")
     await _defer(interaction)
     try:
-        _, schedule = await load_schedule(interaction.guild.id, refresh=True)
+        cfg, schedule = await load_schedule(interaction.guild.id, refresh=True)
+        automation = parse_automation(cfg)
     except Exception:
         return await _msg(interaction, "Schedule configuration unavailable. No changes were made.")
     await _replace(
-        interaction, embed=_embed(schedule),
-        view=ScheduleView(interaction.user.id, interaction.guild.id, schedule),
+        interaction, embed=_embed(schedule, automation_enabled=automation.enabled),
+        view=ScheduleView(
+            interaction.user.id, interaction.guild.id, schedule,
+            automation_enabled=automation.enabled,
+        ),
     )
