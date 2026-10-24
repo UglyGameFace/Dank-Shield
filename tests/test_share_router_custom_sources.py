@@ -295,7 +295,7 @@ def test_new_ui_pages_sources_and_routes_and_preserves_old_routing_behavior():
     assert ui.count("DankGuildResourceBrowserView(") >= 4
     assert "choices=choices[:25]" not in ui
     assert 'route = route_for_source(routes, int(message.channel.id))' in runtime
-    assert 'await save_managed_share_route(' in ui
+    assert 'save = save_managed_share_route if delete_source else save_existing_share_route' in ui
     assert tuple(DEFAULT_SHARE_CHANNELS) == (
         "share-gaming-news", "share-deals", "share-memes", "share-announcements",
     )
