@@ -18,7 +18,8 @@ from .public_action_builder import _OwnedStaffView, _defer, _msg, _replace
 from .public_staff_scope import scoped_interaction_is_staff
 
 
-def _embed(schedule: ActionSchedule, *, automation_enabled: bool = False) -> discord.Embed:
+def _embed(schedule: ActionSchedule, *, automation_enabled: bool = False,
+           guild_id: int = 0) -> discord.Embed:
     e = discord.Embed(
         title="🕓 Action Reminder Safety Schedule",
         description=(
@@ -50,6 +51,20 @@ def _embed(schedule: ActionSchedule, *, automation_enabled: bool = False) -> dis
               "or second verification sender is created here.",
         inline=False,
     )
+    if guild_id > 0:
+        from stoney_verify.action_member_setup_worker import get_member_setup_automation_runtime
+        observed = get_member_setup_automation_runtime(guild_id)
+        e.add_field(
+            name="📊 This server's delivery activity (since bot start)",
+            value=(
+                observed.summary() + (
+                    f"\nLast pass: {observed.last_pass_at}"
+                    if observed.last_pass_at else ""
+                ) if observed is not None else
+                "No runtime history recorded for this server yet."
+            ),
+            inline=False,
+        )
     e.set_footer(text="Guild-owned toggle • Member Setup consent separate • Durable PG claims")
     return e
 
@@ -308,7 +323,8 @@ async def open_schedule_panel(interaction: discord.Interaction) -> None:
     except Exception:
         return await _msg(interaction, "Schedule configuration unavailable. No changes were made.")
     await _replace(
-        interaction, embed=_embed(schedule, automation_enabled=automation.enabled),
+        interaction, embed=_embed(schedule, automation_enabled=automation.enabled,
+                                  guild_id=interaction.guild.id),
         view=ScheduleView(
             interaction.user.id, interaction.guild.id, schedule,
             automation_enabled=automation.enabled,
