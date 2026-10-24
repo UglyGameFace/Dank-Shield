@@ -7,6 +7,7 @@ the existing per-guild atomic config store.
 from __future__ import annotations
 
 from copy import deepcopy
+from io import BytesIO
 from dataclasses import dataclass, field
 from typing import Any, Callable
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ from .embed_studio_core import (
     STUDIO_KEY, MAX_EMBEDS, MAX_FIELDS, MAX_TEMPLATES,
     StudioValidationError, new_project, validate_project, render_embeds,
     link_view, default_embed, parse_library, library_payload, https_url, draft_snapshot,
+    MAX_PORTABLE_BYTES, export_portable_project, import_portable_project,
 )
 
 _MENTIONS = discord.AllowedMentions.none()
@@ -253,10 +255,96 @@ class StudioHomeView(_StudioView):
     async def reload_saved(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _reload_saved(interaction, self.session)
 
+    @discord.ui.button(label="JSON Files", emoji="📦", style=discord.ButtonStyle.secondary, row=3)
+    async def portable(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _portable_menu(interaction, self.session)
+
     @discord.ui.button(label="Preview & Publish", emoji="👁️", style=discord.ButtonStyle.success, row=3)
     async def preview(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _review(interaction, self.session)
 
+
+
+class StudioJsonUploadModal(discord.ui.Modal, title="Import Embed Studio JSON"):
+    def __init__(self, session: StudioSession) -> None:
+        super().__init__(timeout=300)
+        self.session = session
+        self.upload = discord.ui.FileUpload(min_values=1, max_values=1, required=True)
+        self.add_item(discord.ui.Label(
+            text="Select a Studio .json file",
+            description="Up to 64 KiB. Import changes your private draft only.",
+            component=self.upload,
+        ))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if (
+            interaction.guild is None or int(interaction.guild.id) != self.session.guild_id
+            or int(interaction.user.id) != self.session.owner_id
+            or not _staff(interaction)
+        ):
+            return await _say(interaction, "Import requires your own server's staff editor.")
+        if len(self.upload.values) != 1:
+            return await _say(interaction, "Choose exactly one JSON file.")
+        attachment = self.upload.values[0]
+        if (
+            not str(attachment.filename).lower().endswith(".json")
+            or not 0 < int(attachment.size) <= MAX_PORTABLE_BYTES
+        ):
+            return await _say(interaction, "Select a .json Studio export up to 64 KiB.")
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            data = await asyncio.wait_for(attachment.read(use_cached=True), timeout=10)
+            model = import_portable_project(data, guild_id=self.session.guild_id)
+            # Import is only an editor mutation. No published edit target,
+            # channel selection, role grant or automatic posting is imported.
+            self.session.apply(lambda project: (project.clear(), project.update(model)))
+        except StudioValidationError as exc:
+            return await _say(interaction, f"Import rejected: {exc}")
+        except (discord.HTTPException, asyncio.TimeoutError, OSError, ValueError):
+            return await _say(interaction, "Could not safely read that JSON file. Your draft was kept.")
+        except Exception:
+            return await _say(interaction, "Import failed. Your current draft remains unchanged.")
+        self.session.active = 0
+        self.session.post_key = ""
+        await _home(interaction, self.session, notice="JSON imported as a private draft. Review before publishing.")
+
+
+class StudioJsonMenu(_StudioView):
+    @discord.ui.button(label="Export JSON File", emoji="📤", style=discord.ButtonStyle.primary, row=0)
+    async def export(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        try:
+            data = export_portable_project(self.session.project, guild_id=self.session.guild_id)
+        except StudioValidationError as exc:
+            return await _say(interaction, str(exc))
+        # Separate ephemeral attachment: the editor and existing draft stay intact.
+        await _say(
+            interaction,
+            "Your portable Embed Studio JSON is ready. Import it later from JSON Files.",
+            file=discord.File(BytesIO(data), filename="dank-embed-studio.json"),
+        )
+
+    @discord.ui.button(label="Import JSON File", emoji="📥", style=discord.ButtonStyle.secondary, row=0)
+    async def import_file(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(StudioJsonUploadModal(self.session))
+
+    @discord.ui.button(label="Back to Studio", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _home(interaction, self.session)
+
+
+async def _portable_menu(interaction: discord.Interaction, session: StudioSession) -> None:
+    await _menu(
+        interaction,
+        heading="📦 Portable Embed Studio JSON",
+        description=(
+            "Export your full embed design to a private JSON attachment, or import a "
+            "Studio JSON file through Discord's upload dialog. Imports replace only "
+            "your current private draft, never a published post. Destination and "
+            "published-message edit targets are never copied. Self-role controls "
+            "can only move within their original server."
+        ),
+        view=StudioJsonMenu(session),
+    )
 
 
 class StarterSelect(discord.ui.Select):
