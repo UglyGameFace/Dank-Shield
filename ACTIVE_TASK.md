@@ -15,6 +15,14 @@
 - No live canary: owner explicitly deferred it. `DANK_ACTION_CENTER_CANARY_SEND` and recipient/source gates stay OFF. No scheduler activation, production data mutations, code unrelated to Action Center, new slash roots, or new system duplicate.
 - Acceptance: action-directory owner map/route parity, staff and privacy checks, action-focused + full CI, merge/deploy verification before feature use.
 
+## Slice 4G: own Actions & Notifications navigation category (2026-10-23)
+
+- Owner reported PR #703 merged. Verified final main `32135a4fd8ee628518577948ae04b1b614b4507e` and no open PRs before starting.
+- Only active task: move the existing Action & Reminder Center **from Onboarding & Access** into a first-class `📋 Actions & Notifications` category on `/dank home`. Expose five registered entrypoints that call existing owners: Action Inbox, Notification Systems, Action Builder Draft, Schedule/Readiness Draft and My Reminder Preferences.
+- Preserve Verification, Verification Reminders and Member Setup under the original Onboarding & Access category. Preserve existing system owners, their original feature routes, click-time staff authority and guild isolation. No duplicates of scheduler, policy, completion or delivery logic.
+- Absolutely no runtime background worker, Action Center canary activation, scheduled sending, new DB mutations or secret changes. Live one-member test remains deferred at owner's request.
+- Acceptance: focused registry/Action Center navigation tests, all exact-head CI, Android category visibility and click-time authority checks after safe merge/deployment.
+
 ## Current single-task lock
 The owner explicitly FORCE SWITCHED to **Issue #367, Action & Reminder Center**, after PR #691 merged. The previous 4:20 task and guarded branch-retirement task are now both paused. Do not mix further 4:20 work, branch cleanup, Cinema, or unrelated verification framework implementation into this slice.
 
