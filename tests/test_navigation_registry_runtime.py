@@ -430,8 +430,8 @@ def test_actions_and_notifications_is_a_distinct_mobile_category_with_live_owner
     assert {feature.key for feature in registry.features_for_category("actions")} == expected
     labels = _labels(surface.FeatureCategoryView(42, "actions"))
     assert {
-        "Action & Reminder Center", "Notification Systems", "Action Builder (Draft)",
-        "Schedule & Readiness (Draft)", "My Reminder Preferences",
+        "Action & Reminder Center", "Other Notification Settings", "Reminder Rules (Preview)",
+        "Reminder Times & Limits", "My Reminder Preferences",
         "Back", "Home", "Refresh", "Close",
     } <= labels
     assert "Action & Reminder Center" not in _labels(surface.FeatureCategoryView(42, "access"))
