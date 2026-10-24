@@ -23,6 +23,7 @@ from .embed_studio_core import (
     link_view, default_embed, parse_library, library_payload, https_url, draft_snapshot,
     MAX_PORTABLE_BYTES, export_portable_project, import_portable_project,
     MAX_THEMES, THEME_PRESETS, theme_name, theme_from_project, apply_theme,
+    MAX_MEDIA_ITEMS, SMART_TEXT_TOKENS, validate_media_item, apply_media_url, resolve_smart_text,
 )
 
 _MENTIONS = discord.AllowedMentions.none()
@@ -110,8 +111,8 @@ def _summary(session: StudioSession) -> discord.Embed:
             "and add images or extra sections.\n"
             "**2. Add buttons (optional):** Link to a website or let members "
             "choose safe, optional roles.\n"
-            "**3. Save or post:** Brand Themes, Templates and JSON Files save your design "
-            "for later. Choose a channel, preview, then confirm to post.\n\n"
+            "**3. Reuse and publish:** Save themes, media links, templates and JSON files. "
+            "Smart Text fills details into your preview. Choose a channel, then confirm to post.\n\n"
             "Nothing is posted just by editing or saving."
         ),
         color=discord.Color.blurple(),
@@ -268,6 +269,14 @@ class StudioHomeView(_StudioView):
     @discord.ui.button(label="JSON Files", emoji="📦", style=discord.ButtonStyle.secondary, row=2)
     async def portable(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _portable_menu(interaction, self.session)
+
+    @discord.ui.button(label="Media Library", emoji="🖼️", style=discord.ButtonStyle.secondary, row=3)
+    async def media_library(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _media_library(interaction, self.session)
+
+    @discord.ui.button(label="Smart Text", emoji="🔤", style=discord.ButtonStyle.secondary, row=3)
+    async def smart_text(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _smart_text_help(interaction, self.session)
 
     @discord.ui.button(label="Preview & Publish", emoji="👁️", style=discord.ButtonStyle.primary, row=3)
     async def preview(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -471,6 +480,192 @@ class StudioAppearanceModal(_ProjectModal):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         values = {key: str(item.value or "") for key, item in self.inputs.items()}
         await self.commit(interaction, lambda p: p["embeds"][self.session.active].update(values))
+
+
+class MediaSaveModal(discord.ui.Modal, title="Save Image or GIF Link"):
+    def __init__(self, session: StudioSession) -> None:
+        super().__init__(timeout=900)
+        self.session = session
+        embed = session.project["embeds"][session.active]
+        self.name_input = discord.ui.TextInput(
+            label="Name", required=True, max_length=60, placeholder="Server logo, event banner...",
+        )
+        self.url_input = discord.ui.TextInput(
+            label="Direct HTTPS image or GIF link", required=True, max_length=2048,
+            default=next((embed[key] for key in ("image", "thumbnail", "author_icon", "footer_icon")
+                          if embed[key]), ""),
+        )
+        self.add_item(self.name_input)
+        self.add_item(self.url_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if (not _staff(interaction) or interaction.guild is None
+                or int(interaction.guild.id) != self.session.guild_id
+                or int(interaction.user.id) != self.session.owner_id):
+            return await _say(interaction, "Open your own server's Studio to save media.")
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            item = validate_media_item({"name": str(self.name_input.value or ""),
+                                        "url": str(self.url_input.value or "")})
+            source, lib = await _load_library(self.session.guild_id)
+            if len(lib["media"]) >= MAX_MEDIA_ITEMS:
+                return await _say(interaction, "Twelve media links are saved. Remove one first.")
+            if any(str(row.get("name") or "").casefold() == item["name"].casefold()
+                   for row in lib["media"].values()):
+                return await _say(interaction, "That media name is already taken.")
+            lib["media"][secrets.token_hex(6)] = item
+            ok = await _save_library(self.session.guild_id, source, lib)
+        except Exception as exc:
+            return await _say(interaction, "Link not saved: " + _error(exc))
+        if not ok:
+            return await _say(interaction, "Another moderator updated the media library. Reopen it.")
+        await _say(interaction, "✅ Saved the reusable media link for this server. Nothing posted.")
+
+
+class MediaLinkSelect(discord.ui.Select):
+    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
+        self.session = session
+        choices = [discord.SelectOption(label=str(item["name"])[:100], value=key)
+                   for key, item in lib["media"].items()]
+        if not choices:
+            choices = [discord.SelectOption(label="No saved media yet", value="none")]
+        super().__init__(placeholder="Choose a saved image or GIF", options=choices, row=0)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        key = self.values[0]
+        if key == "none":
+            return await _say(interaction, "Save an image or GIF link first.")
+        await _menu(
+            interaction, heading="Place this media in your embed",
+            description="Choose a position below, or remove the saved link. Nothing posts automatically.",
+            view=MediaPlacementMenu(self.session, key),
+        )
+
+
+class MediaPlacementMenu(_StudioView):
+    def __init__(self, session: StudioSession, key: str) -> None:
+        super().__init__(session)
+        self.key = key
+
+    async def place(self, interaction: discord.Interaction, field: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            _source, lib = await _load_library(self.session.guild_id)
+            row = lib["media"].get(self.key)
+            if row is None:
+                return await _say(interaction, "That saved link was removed. Reopen the library.")
+            url = validate_media_item(row)["url"]
+            index = self.session.active
+            self.session.apply(lambda draft: draft.update(
+                apply_media_url(draft, embed_index=index, target=field, url=url)
+            ))
+        except Exception as exc:
+            return await _say(interaction, "Could not apply media: " + _error(exc))
+        await _home(interaction, self.session, notice="Image added to the current draft.")
+
+    @discord.ui.button(label="Large Image", emoji="🖼️", style=discord.ButtonStyle.primary, row=0)
+    async def large(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await self.place(interaction, "image")
+
+    @discord.ui.button(label="Thumbnail", emoji="🔍", style=discord.ButtonStyle.secondary, row=0)
+    async def small(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await self.place(interaction, "thumbnail")
+
+    @discord.ui.button(label="Author Icon", emoji="👤", style=discord.ButtonStyle.secondary, row=0)
+    async def author(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await self.place(interaction, "author_icon")
+
+    @discord.ui.button(label="Footer Icon", emoji="🧩", style=discord.ButtonStyle.secondary, row=0)
+    async def footer(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await self.place(interaction, "footer_icon")
+
+    @discord.ui.button(label="Remove Saved Link", emoji="🗑️", style=discord.ButtonStyle.danger, row=1)
+    async def delete(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _menu(interaction, heading="Delete this saved link?",
+                    description="Drafts and existing posts will not change. Confirm removal below.",
+                    view=ConfirmMediaRemoval(self.session, self.key))
+
+    @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _media_library(interaction, self.session)
+
+
+class MediaLibraryMenu(_StudioView):
+    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
+        super().__init__(session)
+        self.add_item(MediaLinkSelect(session, lib))
+
+    @discord.ui.button(label="Save Media Link", emoji="💾", style=discord.ButtonStyle.primary, row=1)
+    async def save(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(MediaSaveModal(self.session))
+
+    @discord.ui.button(label="Back to Studio", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _home(interaction, self.session)
+
+
+class ConfirmMediaRemoval(_StudioView):
+    def __init__(self, session: StudioSession, key: str) -> None:
+        super().__init__(session)
+        self.key = key
+        self.used = False
+
+    @discord.ui.button(label="Confirm Delete Link", emoji="🗑️", style=discord.ButtonStyle.danger)
+    async def delete(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if self.used:
+            return await _say(interaction, "This deletion has already been submitted.")
+        self.used = True
+        await interaction.response.defer(ephemeral=True)
+        try:
+            source, lib = await _load_library(self.session.guild_id)
+            if self.key not in lib["media"]:
+                return await _say(interaction, "That link is no longer in the library.")
+            lib["media"].pop(self.key)
+            ok = await _save_library(self.session.guild_id, source, lib)
+        except Exception as exc:
+            return await _say(interaction, _error(exc))
+        if not ok:
+            return await _say(interaction, "The saved media changed. Reopen the library.")
+        await _home(interaction, self.session, notice="Saved link removed. Existing messages remain.")
+
+    @discord.ui.button(label="Cancel", emoji="◀️", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _media_library(interaction, self.session)
+
+
+async def _media_library(interaction: discord.Interaction, session: StudioSession) -> None:
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    try:
+        _source, lib = await _load_library(session.guild_id)
+    except Exception as exc:
+        return await _say(interaction, _error(exc))
+    await _menu(
+        interaction, heading="🖼️ Reusable Media Library",
+        description=(
+            f"{len(lib['media'])}/{MAX_MEDIA_ITEMS} links. Save direct HTTPS image or GIF URLs "
+            "and reuse them for large images, thumbnails and icons. These are links, not file uploads."
+        ),
+        view=MediaLibraryMenu(session, lib),
+    )
+
+
+class SmartTextHelp(_StudioView):
+    @discord.ui.button(label="Back to Studio", emoji="◀️", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _home(interaction, self.session)
+
+
+async def _smart_text_help(interaction: discord.Interaction, session: StudioSession) -> None:
+    tokens = "\n".join(f"• `{token}`: {meaning}" for token, meaning in SMART_TEXT_TOKENS)
+    await _menu(
+        interaction, heading="🔤 Smart Text",
+        description=(
+            "Type these tokens in your text, headline, footer or fields. They are replaced "
+            "in Preview and frozen in the published post. They do not automatically refresh.\n\n" + tokens
+        ),
+        view=SmartTextHelp(session),
+    )
 
 
 class StudioImagesModal(_ProjectModal):
@@ -1423,7 +1618,11 @@ async def _review(interaction: discord.Interaction, session: StudioSession) -> N
     if blockers:
         return await _say(interaction, "Bot cannot publish in that channel: " + ", ".join(blockers))
     try:
-        embeds = render_embeds(session.project)
+        resolved = resolve_smart_text(
+            session.project, guild_name=str(channel.guild.name),
+            channel_name=str(channel.name), member_count=getattr(channel.guild, "member_count", None),
+        )
+        embeds = render_embeds(resolved)
     except StudioValidationError as exc:
         return await _say(interaction, str(exc))
     status = (
@@ -1431,9 +1630,9 @@ async def _review(interaction: discord.Interaction, session: StudioSession) -> N
         + ("Update the tracked message" if session.post_key else "Publish a NEW message")
         + " below. The real embeds are shown here. Nothing has been sent."
     )
-    if session.project["content"]:
-        status += "\nPlain message: " + session.project["content"][:1300]
-    kwargs = {"content": status[:1950], "embeds": embeds, "view": StudioReviewView(session), "allowed_mentions": _MENTIONS}
+    if resolved["content"]:
+        status += "\nPlain message: " + resolved["content"][:1300]
+    kwargs = {"content": status[:1950], "embeds": embeds, "view": StudioReviewView(session, resolved_project=resolved), "allowed_mentions": _MENTIONS}
     if interaction.response.is_done():
         await interaction.edit_original_response(**kwargs)
     elif interaction.message is not None:
@@ -1443,13 +1642,14 @@ async def _review(interaction: discord.Interaction, session: StudioSession) -> N
 
 
 class StudioReviewView(_StudioView):
-    def __init__(self, session: StudioSession) -> None:
+    def __init__(self, session: StudioSession, *, resolved_project: dict[str, Any] | None = None) -> None:
         super().__init__(session, timeout=300)
         self.sent = False
         # Bind confirmation to exactly what the staff member previewed.
         # Other open editor messages may still mutate the session while this
         # confirmation is visible; a stale preview must never be publishable.
         self.preview_project = deepcopy(session.project)
+        self.preview_resolved_project = validate_project(resolved_project if resolved_project is not None else session.project)
         self.preview_channel_id = session.channel_id
         self.preview_post_key = session.post_key
         # Link buttons really open their HTTPS target in preview. Role actions
@@ -1498,7 +1698,7 @@ class StudioReviewView(_StudioView):
                 or self.session.post_key != self.preview_post_key
             ):
                 return await _say(interaction, "This preview is stale. Reopen it; nothing was sent.")
-            draft = validate_project(self.preview_project)
+            draft = validate_project(self.preview_resolved_project)
             embeds = render_embeds(draft)
             # Role controls need durable server records. Storage is checked
             # BEFORE sending, and the published message is made inert if the
