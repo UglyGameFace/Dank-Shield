@@ -37,9 +37,16 @@ begin
         raise exception 'Invalid Studio schedule claim batch';
     end if;
     -- Never send stale advertisements/announcements hours after an outage.
-    update public.dank_embed_studio_scheduled_posts
+    with expired as (
+        select id from public.dank_embed_studio_scheduled_posts
+        where status='pending' and execute_at < now()-interval '10 minutes'
+        order by execute_at,id
+        for update skip locked
+        limit 64
+    )
+    update public.dank_embed_studio_scheduled_posts s
         set status='missed',result_code='too_late',updated_at=now()
-    where status='pending' and execute_at < now()-interval '10 minutes';
+    from expired where s.id=expired.id;
 
     return query
     with ready as (
