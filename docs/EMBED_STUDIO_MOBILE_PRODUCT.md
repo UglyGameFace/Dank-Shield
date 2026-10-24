@@ -67,15 +67,18 @@ registered, or synced. A staff member needs **Manage Server** or Administrator.
 
 ## What remains for the complete product
 
-This PR delivers the stable rich-composition and editorial foundation, not
-every promised advanced subsystem. Do **not** advertise the following as
-implemented yet: role assignment/action buttons, persistent interactive
-dropdowns, scheduled/campaign publishing, dynamic live variables and updates,
-upload-file asset management, shared theme packs, raw JSON import/export, or
-multi-admin draft collaboration. They need durable component routing,
-guild-scoped permissions, persistent jobs and independent abuse/scale tests.
-They should build on this exact Studio model rather than adding more
-one-off embed builders.
+The rich-composition and editorial foundation is implemented. PR #581
+subsequently added durable, permission-checked optional self-role buttons and
+dropdowns using the canonical role runtime; see
+`EMBED_STUDIO_PERSISTENT_ROLE_ACTIONS.md`.
+
+Still **not** implemented by the draft-recovery slice: scheduled/campaign
+publishing, dynamic/live variables and updates, upload-file asset management,
+shared theme packs, raw JSON import/export, advanced forms or action buttons,
+and multi-admin draft collaboration. Autosave preserves each *individual*
+staff draft; it is not real-time multi-user co-editing. These advanced features
+require independent permissions, persistence and abuse/scale tests, and must
+extend the same model rather than create another editor.
 
 ## Deployment and acceptance
 
