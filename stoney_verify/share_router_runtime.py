@@ -331,8 +331,14 @@ def _is_video_provider_link(value: str) -> bool:
     if key == "instagram":
         return any(path.startswith(prefix) for prefix in ("/reel/", "/reels/", "/tv/"))
     if key == "facebook":
+        # Facebook's mobile share-sheet produces /share/v/ and /share/r/
+        # URLs whose media nature is known before any redirect. The previous
+        # Videos Only matcher silently dropped those links before yt-dlp ran.
+        # /share/p/ is usually a photo/post and must not be assumed video.
+        if re.match(r"^/share/(?:v|r|video|reel)/[a-z0-9_-]+/?$", path):
+            return True
         return host == "fb.watch" or any(
-            part in path for part in ("/watch", "/videos/", "/reel/")
+            part in path for part in ("/watch", "/videos/", "/reel/", "/video.php")
         )
     if key == "twitch":
         return "clips.twitch.tv" in host or "/clip/" in path or "/videos/" in path
