@@ -1,5 +1,12 @@
 # Active task: Action & Reminder Center (FORCE SWITCH, 2026-10-22)
 
+## Current checkpoint: 4E member self-status (2026-10-23)
+
+- **Only active development task:** Action & Reminder Center, 4E member-facing read-only setup DM eligibility. Branch `feat/action-center-4e-member-status-20261023` starts from verified main `92dc95c062847ee9ab2c1cef926d24bf1df248ec`. No other epic work or branch cleanup.
+- The owner explicitly postponed live one-member testing. **Do not enable** `DANK_ACTION_CENTER_CANARY_SEND`, target-guild/member/revision, or approved-source env gates, reserve claims, dispatch DMs, or start any scheduler. Release SHA independent host attestation and candidate canary approval remain deferred.
+- Private production PostgreSQL backup/recovery test succeeded; the approved 4C + 4D.4 additive migrations completed with all three `ready` checks true, counts `(0,0,0,3)`. Discord Readiness Report corroborated both tables. This supersedes older "unapplied" sections below, which are historical.
+- Next safe slice: expose the canonical one-member read-only eligibility reason to the member from My Reminder Preferences, with timeout, per-member UI identity, no private error leaks and no new delivery path; focused regression and exact-head CI required.
+
 ## Current single-task lock
 The owner explicitly FORCE SWITCHED to **Issue #367, Action & Reminder Center**, after PR #691 merged. The previous 4:20 task and guarded branch-retirement task are now both paused. Do not mix further 4:20 work, branch cleanup, Cinema, or unrelated verification framework implementation into this slice.
 
