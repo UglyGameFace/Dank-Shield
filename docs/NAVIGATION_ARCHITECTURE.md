@@ -48,7 +48,7 @@ Expected Home composition:
 🛡️ DANK SHIELD
 CONTROL CENTER
 ━━━━━━━━━━━━━━━━━━━━
-🧭 12 sections  •  ✨ [count from current registry] destinations
+🧭 12 sections  •  ✨ 37 destinations
 
 [ 🧭 Choose a section… ▾ ]
   ⚙️ Setup & Server Settings
@@ -125,7 +125,7 @@ verify that the runtime actually uses the intended GitHub/Discloud revision.
 
 Navigation changes must keep:
 - identical key sets across `FEATURES` and `_FEATURE_ROUTE_KEYS`;
-- 11 stable Home sections (unless deliberately reviewed), no category with
+- 12 stable Home sections (unless deliberately reviewed), no category with
   zero destinations, unique keys/aliases and useful descriptions;
 - fewer than 25 total Discord components per view and component rows 0–4;
 - live dispatch to existing authorized feature owners, with no fake actions;
