@@ -1,7 +1,9 @@
 """Portable Embed Studio JSON, permission boundaries and Android modal UI."""
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
+from types import SimpleNamespace
 import json
 from pathlib import Path
 
@@ -130,3 +132,119 @@ def test_json_export_preserves_valid_role_dropdown_and_multiple_embeds():
     assert len(output["embeds"]) == 2
     assert output["role_mode"] == "dropdown"
     assert len(output["role_actions"]) == 1
+
+
+def test_valid_modal_attachment_import_replaces_draft_but_never_published_post(monkeypatch):
+    from stoney_verify import embed_studio_ui as ui
+
+    class Attachment:
+        filename = "designer.JSON"
+        def __init__(self, content):
+            self.content = content
+            self.size = len(content)
+        async def read(self, *, use_cached=False):
+            assert use_cached is True
+            return self.content
+
+    class Response:
+        deferred = False
+        async def defer(self, **kwargs):
+            assert kwargs == {"ephemeral": True, "thinking": True}
+            self.deferred = True
+        def is_done(self):
+            return self.deferred
+
+    imported = _studio_project()
+    imported["embeds"][0]["title"] = "Imported correctly"
+    session = StudioSession(guild_id=42, owner_id=55, channel_id=123, post_key="123:456")
+    modal = StudioJsonUploadModal(session)
+    attachment = Attachment(export_portable_project(imported, guild_id=42))
+    monkeypatch.setattr(discord.ui.FileUpload, "values", property(lambda _self: [attachment]))
+    monkeypatch.setattr(ui, "_staff", lambda _interaction: True)
+    observed = []
+    async def home(_interaction, state, *, notice=""):
+        observed.append((deepcopy(state.project), state.channel_id, state.post_key, notice))
+    monkeypatch.setattr(ui, "_home", home)
+    response = Response()
+    interaction = SimpleNamespace(
+        guild=SimpleNamespace(id=42), user=SimpleNamespace(id=55),
+        response=response,
+    )
+    asyncio.run(modal.on_submit(interaction))
+    assert response.deferred
+    assert session.project["embeds"][0]["title"] == "Imported correctly"
+    assert session.post_key == "" and session.channel_id == 123
+    assert session.active == 0 and session.dirty
+    assert observed and "private draft" in observed[0][3]
+
+
+def test_invalid_uploaded_file_leaves_editor_untouched(monkeypatch):
+    from stoney_verify import embed_studio_ui as ui
+
+    class Attachment:
+        filename = "invalid.json"
+        size = 9
+        async def read(self, **kwargs):
+            return b"not json!"
+
+    class Response:
+        deferred = False
+        async def defer(self, **kwargs):
+            self.deferred = True
+        def is_done(self):
+            return self.deferred
+
+    session = StudioSession(guild_id=42, owner_id=55, channel_id=123, post_key="123:456")
+    snapshot = deepcopy(session.project)
+    modal = StudioJsonUploadModal(session)
+    monkeypatch.setattr(discord.ui.FileUpload, "values", property(lambda _self: [Attachment()]))
+    monkeypatch.setattr(ui, "_staff", lambda _interaction: True)
+    results = []
+    async def say(_interaction, content, **kwargs):
+        results.append(content)
+    monkeypatch.setattr(ui, "_say", say)
+    interaction = SimpleNamespace(
+        guild=SimpleNamespace(id=42), user=SimpleNamespace(id=55),
+        response=Response(),
+    )
+    asyncio.run(modal.on_submit(interaction))
+    assert results and "Import rejected" in results[0]
+    assert session.project == snapshot
+    assert session.channel_id == 123 and session.post_key == "123:456"
+    assert not session.dirty
+
+
+def test_stale_file_upload_never_overwrites_newer_changes(monkeypatch):
+    from stoney_verify import embed_studio_ui as ui
+
+    class Attachment:
+        filename = "draft.json"
+        def __init__(self, data):
+            self.data = data
+            self.size = len(data)
+        async def read(self, **kwargs):
+            return self.data
+
+    class Response:
+        async def defer(self, **kwargs):
+            return None
+        def is_done(self):
+            return True
+
+    session = StudioSession(guild_id=42, owner_id=55)
+    modal = StudioJsonUploadModal(session)
+    session.apply(lambda project: project["embeds"][0].update(title="Newer edit"))
+    attachment = Attachment(export_portable_project(_studio_project(), guild_id=42))
+    monkeypatch.setattr(discord.ui.FileUpload, "values", property(lambda _self: [attachment]))
+    monkeypatch.setattr(ui, "_staff", lambda _interaction: True)
+    results = []
+    async def say(_interaction, content, **kwargs):
+        results.append(content)
+    monkeypatch.setattr(ui, "_say", say)
+    interaction = SimpleNamespace(
+        guild=SimpleNamespace(id=42), user=SimpleNamespace(id=55),
+        response=Response(),
+    )
+    asyncio.run(modal.on_submit(interaction))
+    assert results and "draft changed" in results[0].lower()
+    assert session.project["embeds"][0]["title"] == "Newer edit"
