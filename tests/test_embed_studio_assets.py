@@ -54,7 +54,7 @@ def test_image_not_stored_in_guild_json_and_server_path_is_private_to_writer(mon
             captured.append(kw)
             assert kw["path"].startswith("777/")
             assert kw["file_options"]["upsert"] == "false"
-            assert kw["file"].read().startswith(b"\\x89PNG") is False or True
+            assert kw["file"].read(8) == bytes([137, 80, 78, 71, 13, 10, 26, 10])
             return object()
         def get_public_url(self, path):
             return "https://viamriafkbqhquvrsnua.supabase.co/storage/v1/object/public/dank-studio-artwork/" + path
