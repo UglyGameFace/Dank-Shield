@@ -1,5 +1,13 @@
 # Active task: Action & Reminder Center (FORCE SWITCH, 2026-10-22)
 
+## Current checkpoint: 4I bounded Member Setup consent source (2026-10-23)
+
+- Owner merged PR #705, confirmed on main `c29964f4699be93c8eac44ca4f3764b3226fa135`; no other open PRs.
+- **Only active development task:** prepare real Member Setup reminder pipeline without another independent scheduler. The existing `dank_profile_guild_settings` table already stores per-member/per-guild opt-in, but legacy `list_profile_guild_settings` scans all profiles. Slice 4I adds a **bounded (1–10), server-filtered, JSONB `settings @>` opt-in cursor page**, retaining the existing profile storage adapter and its TEXT-snowflake index/order.
+- `read_member_setup_opt_in_page` reuses canonical `action_member_consent.parse_consent`; only explicitly opted-in, versioned records enter the private candidate feed. It is not a due queue or approval to send. Any malformed settings/backend outage fail closed.
+- **Not yet wired to any worker, scheduler, server delivery switches, Discord API sweeps or sending.** A subsequent slice can connect these bounded pages to the existing action readiness/canary/claim safety, but automatic delivery remains disabled. Owner deferred the live one-person canary.
+- No migration, schema/index additions, DSN changes, new slash commands, Discord REST bursts, background process, or changes to existing Verification, Ticket, Member Activity, Quiet Notice, 4:20, or /toke senders.
+
 ## Current checkpoint: 4H saved notification policy status (2026-10-23)
 
 - Owner reported PR #704 merged. Verified main is `67fd502e3471e9c5f6ea9eb6354d9ec01c7a08e1` and all eight exact-PR tests passed.
