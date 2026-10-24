@@ -631,9 +631,9 @@ def test_share_router_destination_selection_is_search_first_on_mobile() -> None:
     assert 'placeholder="Choose a destination channel…"' in target_region
     assert 'home_label="Destination options"' in target_region
 
-    assert "embed=_target_options_embed(source)" in target_region
+    assert "embed=_target_options_embed(source, delete_source=delete_source)" in target_region
     assert "view=ShareRouterTargetLandingView(" in target_region
-    assert "await _open_target_browser(back_interaction, source)" in target_region
+    assert "await _open_target_browser(back_interaction, source, delete_source=delete_source)" in target_region
 
     final_replace = target_region.rsplit("await _replace(", 1)[1]
     assert "view=browser" not in final_replace
@@ -842,8 +842,9 @@ def test_runtime_keeps_legacy_route_storage_and_sender_permission_boundary() -> 
     assert "author_perms = target.permissions_for(author)" in RUNTIME
     assert "author_perms.view_channel" in RUNTIME
     assert "author_perms.send_messages" in RUNTIME
-    assert "source_age_blocker(message.channel)" in RUNTIME
-    assert "source_privacy_blocker(message.channel)" in RUNTIME
+    assert "route_source_blockers(" in RUNTIME
+    assert "source_age_blocker(source), source_privacy_blocker(source)" in RUNTIME
+    assert "if source.is_nsfw() and not target.is_nsfw()" in RUNTIME
     assert "allowed_mentions=discord.AllowedMentions.none()" in RUNTIME
 
 
