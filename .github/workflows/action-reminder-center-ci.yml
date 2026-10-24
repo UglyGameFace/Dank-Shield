@@ -5,6 +5,11 @@ on:
     paths:
       - 'stoney_verify/action_notification_status.py'
       - 'tests/test_action_notification_status.py'
+      - 'stoney_verify/action_member_setup_automation.py'
+      - 'stoney_verify/action_member_setup_worker.py'
+      - 'tests/test_action_member_setup_automation.py'
+      - 'tests/test_action_member_setup_worker.py'
+      - 'stoney_verify/app.py'
       - 'stoney_verify/action_member_setup_pipeline.py'
       - 'stoney_verify/commands_ext/public_action_member_setup_preview.py'
       - 'tests/test_action_member_setup_pipeline.py'
@@ -46,6 +51,11 @@ on:
     paths:
       - 'stoney_verify/action_notification_status.py'
       - 'tests/test_action_notification_status.py'
+      - 'stoney_verify/action_member_setup_automation.py'
+      - 'stoney_verify/action_member_setup_worker.py'
+      - 'tests/test_action_member_setup_automation.py'
+      - 'tests/test_action_member_setup_worker.py'
+      - 'stoney_verify/app.py'
       - 'stoney_verify/action_member_setup_pipeline.py'
       - 'stoney_verify/commands_ext/public_action_member_setup_preview.py'
       - 'tests/test_action_member_setup_pipeline.py'
@@ -88,7 +98,7 @@ permissions:
 
 jobs:
   action-center:
-    name: Read-only action truth and mobile navigation
+    name: Automatic Member Setup delivery and mobile navigation
     runs-on: ubuntu-latest
     timeout-minutes: 9
     services:
@@ -119,9 +129,9 @@ jobs:
         run: python -m pip install -q -r requirements.txt pytest
       - name: Compile action service and UI
         run: |
-          python -m py_compile stoney_verify/action_member_setup_pipeline.py stoney_verify/commands_ext/public_action_member_setup_preview.py stoney_verify/profile_card_service.py stoney_verify/action_notification_status.py stoney_verify/action_notification_owners.py stoney_verify/commands_ext/public_action_notification_directory.py stoney_verify/action_canary_readiness_report.py stoney_verify/runtime_release.py stoney_verify/action_canary_audit.py stoney_verify/commands_ext/public_action_canary.py tools/migrate_action_canary_audit_postgres.py stoney_verify/action_canary_delivery.py stoney_verify/action_delivery_readiness.py stoney_verify/action_member_consent.py stoney_verify/action_delivery_preflight.py stoney_verify/commands_ext/public_action_preferences.py stoney_verify/action_center_service.py stoney_verify/action_builder_policy.py stoney_verify/action_schedule_policy.py stoney_verify/action_center_postgres.py stoney_verify/commands_ext/public_action_center.py stoney_verify/commands_ext/public_action_builder.py stoney_verify/commands_ext/public_action_schedule.py tools/migrate_action_center_postgres.py stoney_verify/navigation_registry.py stoney_verify/commands_ext/public_command_surface_v2.py
+          python -m py_compile stoney_verify/action_member_setup_automation.py stoney_verify/action_member_setup_worker.py stoney_verify/app.py stoney_verify/action_member_setup_pipeline.py stoney_verify/commands_ext/public_action_member_setup_preview.py stoney_verify/profile_card_service.py stoney_verify/action_notification_status.py stoney_verify/action_notification_owners.py stoney_verify/commands_ext/public_action_notification_directory.py stoney_verify/action_canary_readiness_report.py stoney_verify/runtime_release.py stoney_verify/action_canary_audit.py stoney_verify/commands_ext/public_action_canary.py tools/migrate_action_canary_audit_postgres.py stoney_verify/action_canary_delivery.py stoney_verify/action_delivery_readiness.py stoney_verify/action_member_consent.py stoney_verify/action_delivery_preflight.py stoney_verify/commands_ext/public_action_preferences.py stoney_verify/action_center_service.py stoney_verify/action_builder_policy.py stoney_verify/action_schedule_policy.py stoney_verify/action_center_postgres.py stoney_verify/commands_ext/public_action_center.py stoney_verify/commands_ext/public_action_builder.py stoney_verify/commands_ext/public_action_schedule.py tools/migrate_action_center_postgres.py stoney_verify/navigation_registry.py stoney_verify/commands_ext/public_command_surface_v2.py
       - name: Verify action status ownership, no pings, navigation
-        run: python -m pytest -q tests/test_action_canary_live_readiness.py tests/test_action_owner_canary_console.py tests/test_action_canary_delivery.py tests/test_action_delivery_readiness.py tests/test_action_member_consent.py tests/test_action_opt_in_candidates.py tests/test_action_member_setup_pipeline.py tests/test_action_schedule_safety.py tests/test_action_builder_policy.py tests/test_action_notification_status.py tests/test_action_reminder_center.py tests/test_navigation_registry_runtime.py tests/test_member_setup_revision_runtime.py tests/test_verification_reminders.py --tb=short --disable-warnings
+        run: python -m pytest -q tests/test_action_canary_live_readiness.py tests/test_action_owner_canary_console.py tests/test_action_canary_delivery.py tests/test_action_delivery_readiness.py tests/test_action_member_consent.py tests/test_action_opt_in_candidates.py tests/test_action_member_setup_pipeline.py tests/test_action_member_setup_automation.py tests/test_action_member_setup_worker.py tests/test_action_schedule_safety.py tests/test_action_builder_policy.py tests/test_action_notification_status.py tests/test_action_reminder_center.py tests/test_navigation_registry_runtime.py tests/test_member_setup_revision_runtime.py tests/test_verification_reminders.py --tb=short --disable-warnings
       - name: Emit source proof for comparing GitHub CI to deployed Discloud runtime
         run: |
           python - <<'PY'
