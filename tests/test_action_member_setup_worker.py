@@ -209,4 +209,4 @@ def test_do_not_create_verification_sender_or_duplicate_worker():
     assert "POLL_SECONDS = 180" in code
     assert "await asyncio.sleep(POLL_SECONDS)" in code
     assert "create_task(" in code
-    assert "self.guild_counters.get(guild_id)" in code
+    assert "_WORKER.guild_counters.get(guild_id)" in code
