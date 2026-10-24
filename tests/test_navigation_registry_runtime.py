@@ -299,13 +299,13 @@ def test_releases_show_real_merged_updates_and_exclude_unmerged_work() -> None:
     ]
     assert len(updates) == len(set(item.key for item in updates))
     assert all(registry.feature_by_key(item.key) for item in updates)
-    assert any("remember your work" in item.headline.lower() for item in updates)
+    assert any("portable json" in item.headline.lower() for item in updates)
     assert all(item.merged_date and item.detail for item in updates)
-    assert not any("json" in item.headline.lower() for item in updates)
+    assert any("JSON" in item.detail for item in updates)
 
     content = surface._recent_embed()
     joined = "\n".join(str(field.value) for field in content.fields)
-    assert "Drafts now remember your work" in joined
+    assert "Saved drafts and portable JSON files" in joined
     assert "Share videos from regular channels" in joined
     assert "Member Setup" in joined
     assert "Only merged updates" in str(content.footer.text)
