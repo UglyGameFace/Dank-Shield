@@ -282,7 +282,7 @@ def test_new_and_updated_shortcuts_route_to_live_owner_without_duplicate_logic()
     assert len(view.children) <= 25
     assert max(int(getattr(item, "row", 0) or 0) for item in view.children) <= 4
     embed = surface._recent_embed()
-    assert all(item.label in str(embed.fields[0].value) for item in recent)
+    assert all(item.label in "\n".join(str(field.value) for field in embed.fields) for item in recent)
 
     from pathlib import Path
     source = Path(surface.__file__).read_text(encoding="utf-8")
@@ -290,6 +290,86 @@ def test_new_and_updated_shortcuts_route_to_live_owner_without_duplicate_logic()
     assert 'from .public_share_router import open_share_router_download_settings' in source
     assert 'from stoney_verify.toke_live_ui import open_toke_settings' in source
     assert 'from .public_verify_reminder_ui import open_reminder_settings' in source
+
+
+def test_releases_show_real_merged_updates_and_exclude_unmerged_work() -> None:
+    updates = registry.RECENT_UPDATES
+    assert [item.key for item in updates][:4] == [
+        "embed_studio", "share_router", "share_downloads", "action_safety_schedule",
+    ]
+    assert len(updates) == len(set(item.key for item in updates))
+    assert all(registry.feature_by_key(item.key) for item in updates)
+    assert any("remember your work" in item.headline.lower() for item in updates)
+    assert all(item.merged_date and item.detail for item in updates)
+    assert not any("json" in item.headline.lower() for item in updates)
+
+    content = surface._recent_embed()
+    joined = "\n".join(str(field.value) for field in content.fields)
+    assert "Drafts now remember your work" in joined
+    assert "Share videos from regular channels" in joined
+    assert "Member Setup" in joined
+    assert "Only merged updates" in str(content.footer.text)
+    assert len(content.fields) <= 25
+    assert all(len(str(field.value)) <= 1024 for field in content.fields)
+
+
+def test_design_has_direct_embed_studio_without_second_editor() -> None:
+    design = registry.features_for_category("design")
+    assert "embed_studio" in {item.key for item in design}
+    assert "Embed Studio" in _labels(surface.FeatureCategoryView(100, "design"))
+    assert registry.search_features("embed builder")[0].key == "embed_studio"
+    assert registry.search_features("create announcement")[0].key == "embed_studio"
+    assert registry.search_features("json embed")[0].key == "embed_studio"
+    from pathlib import Path
+    source = Path(surface.__file__).read_text(encoding="utf-8")
+    assert 'if key == "embed_studio":' in source
+    assert "from ..embed_studio_ui import open_embed_studio" in source
+    assert "return await open_embed_studio(interaction)" in source
+    assert len(surface.FeatureCategoryView(100, "design").children) <= 25
+
+
+def test_category_groups_have_readable_tasks_and_fit_mobile() -> None:
+    action_groups = registry.grouped_features("actions")
+    assert [name for name, _ in action_groups] == [
+        "Your reminders", "For server moderators",
+    ]
+    community_groups = registry.grouped_features("community")
+    assert {name for name, _ in community_groups} >= {
+        "Share photos & videos", "Events & meetups", "Roles & notifications",
+    }
+    design_groups = registry.grouped_features("design")
+    assert [name for name, _ in design_groups] == [
+        "Create messages", "Server appearance",
+    ]
+    for category in registry.CATEGORIES:
+        keys = [f.key for _group, features in registry.grouped_features(category.key) for f in features]
+        assert sorted(keys) == sorted(f.key for f in registry.features_for_category(category.key))
+        embed = surface._category_embed(category)
+        assert all(len(str(field.value)) <= 1024 for field in embed.fields)
+        assert "manager-only" not in str(embed.description)
+        view = surface.FeatureCategoryView(100, category.key)
+        assert max(int(getattr(item, "row", 0) or 0) for item in view.children) <= 4
+
+
+def test_buttons_use_action_meaning_not_moderator_role_color() -> None:
+    blue = discord.ButtonStyle.primary
+    neutral = discord.ButtonStyle.secondary
+    design = surface.FeatureCategoryView(100, "design")
+    embed = next(item for item in design.children if getattr(item, "label", "") == "Embed Studio")
+    card = next(item for item in design.children if getattr(item, "label", "") == "Card Assets")
+    assert embed.style is blue
+    assert card.style is neutral
+    assert registry.feature_by_key("card_assets").manager_only
+    home = surface.CompactDankHomeView(100)
+    close = next(item for item in home.children if getattr(item, "label", "") == "Close")
+    find = next(item for item in home.children if getattr(item, "label", "") == "Find Feature")
+    assert close.style is neutral
+    assert find.style is blue
+    assert all(
+        item.style is not discord.ButtonStyle.danger
+        for item in surface.RecentFeaturesView(100).children
+        if getattr(item, "label", "") == "Close"
+    )
 
 
 def test_navigation_home_category_descriptions_represent_recent_features() -> None:
