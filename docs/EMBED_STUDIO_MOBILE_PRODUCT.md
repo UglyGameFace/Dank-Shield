@@ -7,10 +7,25 @@ the main editor, and remains isolated from saved Studio projects.
 
 ## Find the Studio on Android
 
-From `/dank home`, open **Community & Engagement → Community Tools →
-Embed Studio**. The old `/dank setup` Feature Centers → Embed Builder entry
-also opens this same editor. No new slash command needs to be remembered,
-registered, or synced. A staff member needs **Manage Server** or Administrator.
+From `/dank home`, open **Design & Branding → Embed Studio**. You can
+also use the existing **Community & Engagement → Community Tools → Embed
+Studio** shortcut, or the `/dank setup` Feature Centers → Embed Builder entry.
+All three open the **same** editor, without a new slash command or duplicated
+storage. Search for **embed builder**, **make an announcement**, or **embed
+studio**. A staff member needs **Manage Server** or Administrator.
+
+## Beginner-friendly screen layout
+
+- **Build your post:** Starter Layouts, Write, Appearance, Images, Fields.
+- **Add extras:** Embeds, Link Buttons, Role Controls, Undo.
+- **Keep your work:** Templates, Edit Posted, Reload Saved, JSON Files.
+- **Post safely:** Pick a channel, open **Preview & Publish** (blue), then
+  confirm the actual public send with **Publish / Save Edit** (green).
+- **Button colors:** Blue opens a main tool or preview; grey browses/back;
+  green confirms a public post; red is reserved for removing content.
+
+A moderator never has to know terms like database CAS, storage revision,
+backend worker, or API routing just to build a server announcement.
 
 ## First use: six simple steps
 
