@@ -197,3 +197,55 @@ def test_media_save_conflict_and_storage_outage_do_not_mutate_draft(monkeypatch)
     asyncio.run(modal.on_submit(interaction))
     assert "not saved" in notes[-1]
     assert not session.dirty
+
+
+def test_real_private_review_uses_resolved_exact_preview_and_frozen_project(monkeypatch):
+    from stoney_verify import embed_studio_ui as ui
+
+    session = StudioSession(guild_id=5, owner_id=10, channel_id=44)
+    session.project["content"] = "{server.member_count} community members"
+    session.project["embeds"][0]["description"] = "Welcome to {server.name}"
+    channel = SimpleNamespace(
+        mention="<#44>", guild=SimpleNamespace(name="The Community", member_count=900),
+        name="announcements",
+    )
+    output = {}
+
+    async def capture(**kwargs):
+        output.update(kwargs)
+
+    interaction = SimpleNamespace(
+        response=SimpleNamespace(is_done=lambda: True),
+        edit_original_response=capture,
+    )
+    monkeypatch.setattr(ui, "_target_channel", lambda *_: channel)
+    monkeypatch.setattr(ui, "_post_blockers", lambda *_: [])
+    asyncio.run(ui._review(interaction, session))
+    assert output["embeds"][0].description == "Welcome to The Community"
+    assert "900 community members" in output["content"]
+    assert output["allowed_mentions"] == discord.AllowedMentions.none()
+    confirmation = output["view"]
+    assert confirmation.preview_project["content"] == "{server.member_count} community members"
+    assert confirmation.preview_resolved_project["content"] == "900 community members"
+    assert session.project["content"] == "{server.member_count} community members"
+
+
+def test_preview_missing_member_count_never_displays_a_false_value(monkeypatch):
+    from stoney_verify import embed_studio_ui as ui
+
+    session = StudioSession(guild_id=5, owner_id=10, channel_id=44)
+    session.project["content"] = "{server.member_count}"
+    channel = SimpleNamespace(
+        mention="<#44>", guild=SimpleNamespace(name="Server", member_count=None), name="news",
+    )
+    errors = []
+
+    async def say(_interaction, note, **kwargs):
+        errors.append(note)
+
+    monkeypatch.setattr(ui, "_target_channel", lambda *_: channel)
+    monkeypatch.setattr(ui, "_post_blockers", lambda *_: [])
+    monkeypatch.setattr(ui, "_say", say)
+    asyncio.run(ui._review(SimpleNamespace(), session))
+    assert "unavailable" in errors[-1]
+    assert session.project["content"] == "{server.member_count}"
