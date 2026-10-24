@@ -1,0 +1,56 @@
+name: Embed Studio Focused Regression CI
+
+on:
+  pull_request:
+    paths:
+      - 'stoney_verify/embed_studio_*.py'
+      - 'stoney_verify/navigation_registry.py'
+      - 'tests/test_embed_studio_*.py'
+      - 'docs/EMBED_STUDIO_*.md'
+      - '.github/workflows/embed-studio-focused.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  embed-studio:
+    name: Embed Studio models, UI, storage and publishing
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt pytest
+
+      - name: Compile canonical Embed Studio
+        run: |
+          python -m py_compile \
+            stoney_verify/embed_studio_core.py \
+            stoney_verify/embed_studio_ui.py \
+            stoney_verify/embed_studio_roles.py
+
+      - name: Run focused regression tests
+        run: >-
+          python -m pytest -q --tb=short --disable-warnings
+          tests/test_embed_studio_core.py
+          tests/test_embed_studio_draft_recovery.py
+          tests/test_embed_studio_portable_json.py
+          tests/test_embed_studio_brand_themes.py
+          tests/test_embed_studio_role_actions.py
+          tests/test_embed_studio_media_smart_text.py
+        env:
+          DANK_STARTUP_LOG_STYLE: quiet
+          DANK_COMMAND_LOG_STYLE: quiet
+
+      - name: Validate navigation registry and release descriptions
+        run: python -m pytest -q tests/test_navigation_registry_runtime.py --tb=short --disable-warnings
