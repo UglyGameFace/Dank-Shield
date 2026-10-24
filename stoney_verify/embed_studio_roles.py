@@ -118,7 +118,16 @@ async def _role_click(interaction: discord.Interaction, token: str, item: str) -
             config = await asyncio.wait_for(get_guild_config(int(guild.id), refresh=True), timeout=12)
             if str(config.get("source") or "").startswith("unavailable:"):
                 return await _answer(interaction, "Embed role settings are unavailable. No role changed.")
-            library = config.get(STUDIO_KEY)
+            # Self-role clicks must consult the SAME authoritative storage as
+            # Studio publishing. After a v2 cutover the legacy guild blob is
+            # intentionally frozen, and reading it would reject live panels.
+            from .embed_studio_storage_v2 import storage_v2_enabled, read_library
+            if storage_v2_enabled():
+                _version, library = await asyncio.wait_for(
+                    read_library(int(guild.id), config), timeout=12
+                )
+            else:
+                library = config.get(STUDIO_KEY)
             if not isinstance(library, Mapping):
                 return await _answer(interaction, "This embed is no longer configured for role actions.")
             posted = library.get("published")
