@@ -311,14 +311,20 @@ def _is_video_provider_link(value: str) -> bool:
         return False
     if path.endswith(_VIDEO_LINK_EXTENSIONS):
         return True
-    if key in {"youtube", "tiktok", "vimeo", "streamable"}:
-        # A provider's homepage or text profile isn't a media post.
+    if key == "youtube":
         return bool(path.strip("/") or parsed.query) and (
-            key != "youtube" or host == "youtu.be"
-            or any(path.startswith(prefix) for prefix in (
-                "/watch", "/shorts/", "/live/", "/embed/", "/clip/",
-            ))
+            host == "youtu.be"
+            or path.startswith(("/watch", "/shorts/", "/live/", "/embed/", "/clip/"))
         )
+    if key == "tiktok":
+        return (
+            host in {"vm.tiktok.com", "vt.tiktok.com"}
+            or "/video/" in path or path.startswith("/t/")
+        )
+    if key == "vimeo":
+        return bool(re.fullmatch(r"/[0-9]+(?:/.*)?", path))
+    if key == "streamable":
+        return bool(re.fullmatch(r"/[a-z0-9]{4,20}/?", path))
     if key == "instagram":
         return any(path.startswith(prefix) for prefix in ("/reel/", "/reels/", "/tv/"))
     if key == "facebook":
@@ -1615,6 +1621,10 @@ def route_deletes_source(source: discord.TextChannel, route: Mapping[str, Any]) 
 def route_health(guild: discord.Guild, route: Mapping[str, Any]) -> RouteHealth:
     blockers: list[str] = []
     warnings: list[str] = []
+    try:
+        validate_route_content_filter(route.get("content_filter"))
+    except ValueError:
+        blockers.append("Invalid saved content filter. Reconfigure this route.")
     if not bool(route.get("enabled", True)):
         blockers.append("Route is disabled. Use Add / Change Route to enable it again.")
     source_id = _safe_int(route.get("source_channel_id"), 0)
