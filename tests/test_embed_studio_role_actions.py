@@ -122,6 +122,10 @@ def test_handler_is_message_and_guild_scoped_and_rechecks_safety():
     editor = (ROOT / "stoney_verify/embed_studio_ui.py").read_text()
     bootstrap = (ROOT / "stoney_verify/commands.py").read_text()
     assert "get_guild_config(int(guild.id), refresh=True)" in roles
+    # Role clicks must read the authoritative normalized Studio library after
+    # an opt-in v2 cutover, not a stale guild-config compatibility snapshot.
+    assert "storage_v2_enabled()" in roles
+    assert "read_library(int(guild.id), config)" in roles
     assert 'record.get("role_token") != token' in roles
     assert 'record.get("channel_id", 0)' in roles
     assert 'record.get("message_id", 0)' in roles
