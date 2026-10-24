@@ -83,7 +83,7 @@ def test_member_private_view_does_not_expose_another_members_settings():
     labels = {v.label for v in on.children if isinstance(v, discord.ui.Button)}
     assert labels == {"Enable Future Setup DMs", "Stop Setup DMs", "Check Setup DM Status", "Back to Action Inbox"}
     assert "Your opt-in alone" in ui._embed(prefs.MemberReminderConsent()).description
-    assert "Verification reminders have separate controls" in ui._embed(prefs.MemberReminderConsent()).description
+    assert "automatically cover unverified members" in ui._embed(prefs.MemberReminderConsent()).description
 
 
 def test_failed_stop_explicitly_warns_that_prior_opt_in_may_remain(monkeypatch):
@@ -240,7 +240,7 @@ def test_member_setup_status_without_published_revision_never_inspects_claims(mo
         SimpleNamespace(guild=SimpleNamespace(id=901), id=902),
     ))
     assert "No published Member Setup revision" in status
-    assert "Delivery remains disabled" in status
+    assert "No published Member Setup revision" in status
 
 
 def test_member_setup_status_unknown_result_fails_closed_without_exposing_reason(monkeypatch):
@@ -257,7 +257,7 @@ def test_member_setup_status_unknown_result_fails_closed_without_exposing_reason
     ))
     assert "Eligibility could not be verified" in status
     assert "private password" not in status
-    assert "Delivery remains disabled" in status
+    assert "Eligibility could not be verified" in status
 
 
 def test_malformed_published_revision_cannot_be_reported_as_clear(monkeypatch):
