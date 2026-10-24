@@ -627,14 +627,14 @@ async def _download_resolved_progressive(
     *,
     max_bytes: int,
 ) -> Optional[RoutedVideo]:
-    """Try one provider-declared Facebook alternate if the first CDN URL fails.
+    """Try one safe metadata-declared alternate if the first transfer fails.
 
-    Both candidates go through the same guarded bounded download. Do not add
-    more yt-dlp extraction, use arbitrary page links, or bypass size limits.
+    This works for all supported extractors. Both candidate URLs use the
+    existing byte cap, public-only DNS and bounded timeout. No new extraction,
+    arbitrary page scraping or unbounded transfer retries.
     """
     candidates = [(resolution.media_url, resolution.request_headers)]
-    if resolution.provider == "facebook":
-        candidates.extend(tuple(resolution.alternate_progressive)[:1])
+    candidates.extend(tuple(resolution.alternate_progressive)[:1])
     attempted: set[str] = set()
     for candidate, headers in candidates:
         if not candidate or candidate in attempted or not is_safe_media_download_url(candidate):
