@@ -98,7 +98,7 @@ entry can be pinned in the **New & Updated** Home shortcut using
 `RECENT_FEATURE_KEYS`; it is never an independent dispatcher.
 
 Current major destinations include (some were released before October 24):
-- **Embed Studio** → Design & Branding → the same editor opened from Community Tools and Setup. Draft autosave/recovery shipped in #711; portable JSON import/export is **not listed as merged** until its PR passes and merges. Search “embed builder” or “create announcement”.
+- **Embed Studio** → Design & Branding → the same editor opened from Community Tools and Setup. Draft autosave/recovery shipped in #711. PR #712 adds portable JSON files: the New & Updated note becomes valid when that PR merges and the bot is deployed, not when the PR is merely opened. Search “embed builder” or “create announcement”.
 - **Action & Reminder Center** → Actions & Notifications → code-complete optional Member Setup automation from #708. Disabled per guild until staff enables it; deployment and live delivery acceptance are separate.
 - **Share Router** → Community & Engagement → ordinary-channel preservation and per-route content filters from #709; video fallback improvements from #710.
 
