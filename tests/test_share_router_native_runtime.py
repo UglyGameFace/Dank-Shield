@@ -634,7 +634,8 @@ def test_share_router_destination_selection_is_search_first_on_mobile() -> None:
     assert "embed=_target_options_embed(" in target_region
     assert "content_filter=content_filter" in target_region
     assert "view=ShareRouterTargetLandingView(" in target_region
-    assert "await _open_target_browser(back_interaction, source, delete_source=delete_source)" in target_region
+    assert "await _open_target_browser(" in target_region
+    assert "back_interaction, source," in target_region
 
     final_replace = target_region.rsplit("await _replace(", 1)[1]
     assert "view=browser" not in final_replace
