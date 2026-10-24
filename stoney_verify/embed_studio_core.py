@@ -13,6 +13,7 @@ import discord
 
 STUDIO_KEY = "embed_studio_v1"
 MAX_TEMPLATES = 12
+MAX_THEMES = 8
 MAX_DRAFTS = 8
 MAX_DRAFT_AGE_SECONDS = 30 * 86400
 MAX_EMBEDS = 10
@@ -166,6 +167,54 @@ def validate_project(project: Mapping[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+# Reusable branding is a compact style override, not a second embed editor.
+# Built-in choices change color only; saved guild themes capture the whole style.
+THEME_FIELDS = ("color", "author_name", "author_url", "author_icon", "footer", "footer_icon")
+THEME_PRESETS: tuple[tuple[str, str, dict[str, str]], ...] = (
+    ("evergreen", "Evergreen", {"color": "1F8B4C"}),
+    ("midnight", "Midnight", {"color": "283246"}),
+    ("sunset", "Sunset", {"color": "E67E46"}),
+    ("royal", "Royal Blue", {"color": "5865F2"}),
+    ("amethyst", "Amethyst", {"color": "9B59B6"}),
+    ("warm", "Warm Gold", {"color": "D4A43A"}),
+)
+
+
+def validate_theme(style: Mapping[str, Any]) -> dict[str, str]:
+    """Validate a *partial* style using the same editor limits and URL rules."""
+    if not isinstance(style, Mapping) or not style or (set(style) - set(THEME_FIELDS)):
+        raise StudioValidationError("Invalid brand theme.")
+    sample = new_project()
+    sample["embeds"][0].update(style)
+    cleaned = validate_project(sample)["embeds"][0]
+    return {key: cleaned[key] for key in THEME_FIELDS if key in style}
+
+
+def theme_from_project(project: Mapping[str, Any], *, embed_index: int = 0) -> dict[str, str]:
+    cleaned = validate_project(project)
+    if not 0 <= embed_index < len(cleaned["embeds"]):
+        raise StudioValidationError("Choose an existing embed before saving its style.")
+    return validate_theme({key: cleaned["embeds"][embed_index][key] for key in THEME_FIELDS})
+
+
+def apply_theme(project: Mapping[str, Any], style: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a valid draft styled across *all* its embeds, without posting."""
+    changes = validate_theme(style)
+    draft = validate_project(project)
+    for embed in draft["embeds"]:
+        embed.update(changes)
+    return validate_project(draft)
+
+
+def theme_name(value: Any) -> str:
+    if not isinstance(value, str):
+        raise StudioValidationError("Theme name must be text.")
+    name = value.strip()
+    if not name or len(name) > 60 or not name.isprintable():
+        raise StudioValidationError("Theme name must be 1–60 visible characters.")
+    return name
+
+
 def export_portable_project(project: Mapping[str, Any], *, guild_id: int) -> bytes:
     """Export a strictly validated editor project, never a published post or config.
 
@@ -274,10 +323,13 @@ def parse_library(config: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raw = {}
     templates = raw.get("templates")
+    themes = raw.get("themes")
     published = raw.get("published")
     drafts = raw.get("drafts")
     if not isinstance(templates, dict):
         templates = {}
+    if not isinstance(themes, dict):
+        themes = {}
     if not isinstance(published, dict):
         published = {}
     if not isinstance(drafts, dict):
@@ -285,6 +337,7 @@ def parse_library(config: Mapping[str, Any] | None) -> dict[str, Any]:
     return {
         "revision": int(raw.get("revision") or 0),
         "templates": deepcopy(dict(list(templates.items())[:MAX_TEMPLATES])),
+        "themes": deepcopy(dict(list(themes.items())[:MAX_THEMES])),
         "published": deepcopy(dict(list(published.items())[-20:])),
         "drafts": deepcopy(dict(list(drafts.items())[:MAX_DRAFTS])),
     }
@@ -362,10 +415,16 @@ def trim_published_history(published: Mapping[str, Any], *, max_posts: int = 20)
 
 def library_payload(library: Mapping[str, Any]) -> dict[str, Any]:
     templates = library.get("templates") or {}
+    themes = library.get("themes") or {}
     published = library.get("published") or {}
     drafts = library.get("drafts") or {}
-    if len(templates) > MAX_TEMPLATES or len(published) > 20 or len(drafts) > MAX_DRAFTS:
+    if len(templates) > MAX_TEMPLATES or len(themes) > MAX_THEMES or len(published) > 20 or len(drafts) > MAX_DRAFTS:
         raise StudioValidationError("Studio library is full.")
+    for key, item in themes.items():
+        if not isinstance(key, str) or not key or len(key) > 40 or not isinstance(item, Mapping):
+            raise StudioValidationError("Invalid saved brand theme.")
+        theme_name(item.get("name"))
+        validate_theme(item.get("style"))
     for item in templates.values():
         if not isinstance(item, Mapping):
             raise StudioValidationError("Invalid saved template.")
@@ -379,6 +438,7 @@ def library_payload(library: Mapping[str, Any]) -> dict[str, Any]:
     result = {
         "revision": int(library.get("revision") or 0) + 1,
         "templates": deepcopy(templates),
+        "themes": deepcopy(themes),
         "published": deepcopy(published),
         "drafts": deepcopy(drafts),
     }

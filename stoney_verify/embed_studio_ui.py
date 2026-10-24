@@ -22,6 +22,7 @@ from .embed_studio_core import (
     StudioValidationError, new_project, validate_project, render_embeds,
     link_view, default_embed, parse_library, library_payload, https_url, draft_snapshot,
     MAX_PORTABLE_BYTES, export_portable_project, import_portable_project,
+    MAX_THEMES, THEME_PRESETS, theme_name, theme_from_project, apply_theme,
 )
 
 _MENTIONS = discord.AllowedMentions.none()
@@ -109,7 +110,7 @@ def _summary(session: StudioSession) -> discord.Embed:
             "and add images or extra sections.\n"
             "**2. Add buttons (optional):** Link to a website or let members "
             "choose safe, optional roles.\n"
-            "**3. Save or post:** Templates and JSON Files save your design "
+            "**3. Save or post:** Brand Themes, Templates and JSON Files save your design "
             "for later. Choose a channel, preview, then confirm to post.\n\n"
             "Nothing is posted just by editing or saving."
         ),
@@ -237,6 +238,10 @@ class StudioHomeView(_StudioView):
     @discord.ui.button(label="Role Controls", emoji="🎭", style=discord.ButtonStyle.secondary, row=1)
     async def role_controls(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _role_controls(interaction, self.session)
+
+    @discord.ui.button(label="Brand Themes", emoji="🎨", style=discord.ButtonStyle.secondary, row=1)
+    async def brand_themes(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _themes(interaction, self.session)
 
     @discord.ui.button(label="Undo", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
     async def undo(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -1038,6 +1043,194 @@ async def _reload_saved(interaction: discord.Interaction, session: StudioSession
     except Exception:
         return await _say(interaction, "Saved draft storage is unavailable. No changes were published.")
     await _home(interaction, session, notice="Saved draft restored." if found else "No saved draft found for your account.")
+
+
+class ThemeNameModal(discord.ui.Modal, title="Save Server Brand Theme"):
+    def __init__(self, session: StudioSession) -> None:
+        super().__init__(timeout=900)
+        self.session = session
+        # Snapshot what was on the screen when the modal opened.
+        self.style = theme_from_project(session.project, embed_index=session.active)
+        self.name_input = discord.ui.TextInput(
+            label="Theme name", placeholder="Example: Welcome and announcements",
+            required=True, max_length=60,
+        )
+        self.add_item(self.name_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if (
+            not _staff(interaction) or interaction.guild is None
+            or int(interaction.guild.id) != self.session.guild_id
+            or int(interaction.user.id) != self.session.owner_id
+        ):
+            return await _say(interaction, "Open your own server's Studio to save themes.")
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            name = theme_name(str(self.name_input.value or ""))
+            source, lib = await _load_library(self.session.guild_id)
+            if len(lib["themes"]) >= MAX_THEMES:
+                return await _say(interaction, "Eight server brand themes are saved. Remove an unused one first.")
+            if any(str(row.get("name") or "").casefold() == name.casefold() for row in lib["themes"].values()):
+                return await _say(interaction, "That theme name is already in use. Choose a different name.")
+            lib["themes"][secrets.token_hex(6)] = {"name": name, "style": self.style}
+            ok = await _save_library(self.session.guild_id, source, lib)
+        except Exception as exc:
+            return await _say(interaction, "Theme not saved: " + _error(exc))
+        if not ok:
+            return await _say(interaction, "Another moderator updated server themes. Open Brand Themes again.")
+        await _say(interaction, f"✅ Server theme **{discord.utils.escape_markdown(name)}** saved. No messages were posted.")
+
+
+class BrandThemeSelect(discord.ui.Select):
+    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
+        self.session = session
+        presets = [
+            discord.SelectOption(label=name, value="preset:" + key, description="Color preset")
+            for key, name, _style in THEME_PRESETS
+        ]
+        saved = [
+            discord.SelectOption(label=str(row["name"])[:100], value="saved:" + key,
+                                 description="Saved server brand style")
+            for key, row in lib["themes"].items()
+        ]
+        super().__init__(
+            placeholder="Apply a brand theme to all embeds…",
+            min_values=1, max_values=1, row=0, options=presets + saved,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        value = self.values[0]
+        await interaction.response.defer(ephemeral=True)
+        try:
+            if value.startswith("preset:"):
+                chosen = next(
+                    (style for key, _name, style in THEME_PRESETS if key == value[7:]),
+                    None,
+                )
+            elif value.startswith("saved:"):
+                _source, lib = await _load_library(self.session.guild_id)
+                record = lib["themes"].get(value[6:])
+                chosen = record.get("style") if isinstance(record, dict) else None
+            else:
+                chosen = None
+            if chosen is None:
+                return await _say(interaction, "That theme is no longer available. Refresh Brand Themes.")
+            self.session.apply(lambda project: project.update(apply_theme(project, chosen)))
+        except Exception as exc:
+            return await _say(interaction, "Theme not applied: " + _error(exc))
+        await _home(interaction, self.session, notice="Brand style applied to all embeds. Preview before posting.")
+
+
+class BrandThemeMenu(_StudioView):
+    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
+        super().__init__(session)
+        self.add_item(BrandThemeSelect(session, lib))
+
+    @discord.ui.button(label="Save Current Style", emoji="💾", style=discord.ButtonStyle.primary, row=1)
+    async def save(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(ThemeNameModal(self.session))
+
+    @discord.ui.button(label="Match All Embeds", emoji="🖌️", style=discord.ButtonStyle.secondary, row=1)
+    async def match(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        style = theme_from_project(self.session.project, embed_index=self.session.active)
+        self.session.apply(lambda project: project.update(apply_theme(project, style)))
+        await _home(interaction, self.session, notice="All embeds now match the current embed's style.")
+
+    @discord.ui.button(label="Remove Saved Theme", emoji="🗑️", style=discord.ButtonStyle.danger, row=1)
+    async def remove(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _remove_theme_menu(interaction, self.session)
+
+    @discord.ui.button(label="Back to Studio", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _home(interaction, self.session)
+
+
+async def _themes(interaction: discord.Interaction, session: StudioSession) -> None:
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    try:
+        _source, lib = await _load_library(session.guild_id)
+    except Exception as exc:
+        return await _say(interaction, _error(exc))
+    await _menu(
+        interaction, heading="🎨 Server Brand Themes",
+        description=(
+            f"{len(lib['themes'])}/{MAX_THEMES} shared themes. Choose a color preset or saved "
+            "style to update the current draft's embeds, or save this embed's color, "
+            "author and footer for moderators to reuse. Nothing posts automatically. "
+            "Undo is available in the editor."
+        ),
+        view=BrandThemeMenu(session, lib),
+    )
+
+
+class RemoveThemeSelect(discord.ui.Select):
+    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
+        self.session = session
+        options = [
+            discord.SelectOption(label=str(row["name"])[:100], value=key)
+            for key, row in lib["themes"].items()
+        ] or [discord.SelectOption(label="No saved themes", value="none")]
+        super().__init__(placeholder="Choose saved theme to remove", options=options, row=0)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        key = self.values[0]
+        if key == "none":
+            return await _say(interaction, "There are no saved themes.")
+        await _menu(interaction, heading="Remove shared theme?",
+                    description="Only the saved theme is removed; existing drafts and messages stay unchanged.",
+                    view=ConfirmThemeRemovalView(self.session, key))
+
+
+class RemoveThemeMenu(_StudioView):
+    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
+        super().__init__(session)
+        self.add_item(RemoveThemeSelect(session, lib))
+
+    @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _themes(interaction, self.session)
+
+
+class ConfirmThemeRemovalView(_StudioView):
+    def __init__(self, session: StudioSession, key: str) -> None:
+        super().__init__(session)
+        self.key = key
+        self.used = False
+
+    @discord.ui.button(label="Remove This Theme", emoji="🗑️", style=discord.ButtonStyle.danger)
+    async def remove(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if self.used:
+            return await _say(interaction, "This removal was already submitted.")
+        self.used = True
+        await interaction.response.defer(ephemeral=True)
+        try:
+            source, lib = await _load_library(self.session.guild_id)
+            if self.key not in lib["themes"]:
+                return await _say(interaction, "Theme no longer exists.")
+            lib["themes"].pop(self.key)
+            ok = await _save_library(self.session.guild_id, source, lib)
+        except Exception as exc:
+            return await _say(interaction, _error(exc))
+        if not ok:
+            return await _say(interaction, "Another moderator updated server themes. Refresh this screen.")
+        await _home(interaction, self.session, notice="Saved theme removed. Published posts unchanged.")
+
+    @discord.ui.button(label="Cancel", emoji="◀️", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _themes(interaction, self.session)
+
+
+async def _remove_theme_menu(interaction: discord.Interaction, session: StudioSession) -> None:
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    try:
+        _source, lib = await _load_library(session.guild_id)
+    except Exception as exc:
+        return await _say(interaction, _error(exc))
+    await _menu(interaction, heading="Remove a Saved Brand Theme",
+                description="Only saved styles are listed. Removal requires a second confirmation.",
+                view=RemoveThemeMenu(session, lib))
 
 
 class TemplateNameModal(discord.ui.Modal, title="Save Embed Template"):

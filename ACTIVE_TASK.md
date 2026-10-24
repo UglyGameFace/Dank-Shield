@@ -1,3 +1,10 @@
+## Current checkpoint: Larger, coherent Brand Themes PR (2026-10-24)
+
+- **Active task remains Embed Studio.** Owner merged #712; confirmed main starts at fc590e232e084e89b084c850cdbe240b816e313d. No FORCE SWITCH. Backlogged #713 Bump Manager is untouched.
+- **This PR:** Add the shared server Brand Themes collection to the same versioned `embed_studio_v1` CAS library, with 6 built-in color presets, 8 saved shared styles, all-embed apply, save current style, safe confirmed deletion, and existing editor autosave/Undo/Preview flow. No second editor, scheduler, public post, new slash root, or DB migration.
+- **Validation plan:** exact-head core/UI theme tests, legacy draft/template/post compatibility, design CI, failed storage and concurrency paths, navigation audit, and clean PR diff. Deployment and Android acceptance remain unverified before owner merge.
+- **Remaining inside Embed Studio:** richer media uploads/assets, scheduling/campaign publishing, truly live content, advanced forms/actions, and multi-moderator collaboration (shared themes in this PR are style reuse, not live co-editing).
+
 # Active task: Complete Embed Studio (owner FORCE SWITCH, 2026-10-24)
 
 ## Current checkpoint: Mobile navigation quality and release notes (2026-10-24)
