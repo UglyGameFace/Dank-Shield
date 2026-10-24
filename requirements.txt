@@ -17,7 +17,7 @@ justmytype-intl-africa==0.1.0
 justmytype-intl-cjk==0.1.0
 deckr-fonts==0.2.0
 
-yt-dlp==2026.10.21
+yt-dlp[default]==2026.10.21
 
 libtorrent==2.1.1
 
