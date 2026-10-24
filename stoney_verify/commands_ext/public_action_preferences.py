@@ -37,7 +37,6 @@ def _embed(consent: MemberReminderConsent, *, status: str | None = None) -> disc
     return e
 
 
-
 # Display only allowlisted interpretations from the canonical, read-only
 # readiness adapter. Never expose database exception text or another member's
 # state, and never confuse "due in preview" with permission to send.
@@ -69,19 +68,21 @@ async def _read_my_setup_dm_status(member: discord.Member) -> str:
     if not isinstance(state, Mapping):
         raise RuntimeError("Member Setup source unavailable")
     revision = state.get("current_revision")
-    if type(revision) is not int or revision <= 0:
-        return "No published Member Setup revision can be checked.\\n\\n🔒 Delivery remains disabled."
+    if type(revision) is not int or revision < 0:
+        raise RuntimeError("Invalid published Member Setup revision")
+    if revision == 0:
+        return "No published Member Setup revision can be checked.\n\n🔒 Delivery remains disabled."
     result = await asyncio.wait_for(
         inspect_member_setup_readiness(member, expected_revision=revision),
         timeout=20.0,
     )
     explanation = _STATUS_EXPLANATIONS.get(result.status)
     if explanation is None:
-        return "Eligibility could not be verified.\\n\\n🔒 Delivery remains disabled."
+        return "Eligibility could not be verified.\n\n🔒 Delivery remains disabled."
     message = f"**{result.status.replace('_', ' ').title()}** • {explanation}"
     if result.next_at is not None:
-        message += f"\\nNext policy check: <t:{int(result.next_at.timestamp())}:F>"
-    return message + "\\n\\n🔒 Preview only. No Action Center DM is scheduled or authorized."
+        message += f"\nNext policy check: <t:{int(result.next_at.timestamp())}:F>"
+    return message + "\n\n🔒 Preview only. No Action Center DM is scheduled or authorized."
 
 
 class MemberActionPreferencesView(discord.ui.View):
