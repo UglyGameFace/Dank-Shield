@@ -97,6 +97,9 @@ async def _eligible(guild_id: int, member: discord.Member, revision: int):
     schedule_cfg, schedule = await asyncio.wait_for(
         load_schedule(guild_id, refresh=True), READ_TIMEOUT_SECONDS,
     )
+    from .action_member_setup_automation import verified_config
+    if not verified_config(schedule_cfg):
+        return None
     if parse_action_builder(schedule_cfg).rule_for("member_setup_revision").included is not True:
         return None
     readiness = await asyncio.wait_for(
@@ -251,6 +254,7 @@ class MemberSetupReminderWorker:
             for uid in page.user_ids:
                 if claims >= budget:
                     break
+                previous_seen = last_seen
                 last_seen = uid
                 member = _cached_member(guild, uid)
                 fetched = False
@@ -259,7 +263,7 @@ class MemberSetupReminderWorker:
                     # never a guild-wide member list. Reserve 2 of the 8
                     # per-pass calls so a post-claim recheck is guaranteed.
                     if self.remaining_targeted_fetches < 2:
-                        last_seen = cursor if uid == page.user_ids[0] else last_seen
+                        last_seen = previous_seen  # Retry unprocessed ID next pass.
                         break
                     self.remaining_targeted_fetches -= 2
                     try:
@@ -288,6 +292,7 @@ class MemberSetupReminderWorker:
                 elif result.status == "unavailable":
                     self.counters.unavailable += 1
                     guild_stats.unavailable += 1
+                    last_seen = previous_seen  # Failed read is never a completed scan.
                     # Back-end uncertainty: abort pass rather than amplify load.
                     break
                 await asyncio.sleep(0)
