@@ -49,6 +49,9 @@ from stoney_verify.share_router_runtime import (
     route_health,
     route_permission_blockers,
     save_managed_share_route,
+    save_existing_share_route,
+    route_source_blockers,
+    validate_route_content_filter,
     _share_video_limit_bytes,
     source_age_blocker,
     source_privacy_blocker,
@@ -155,15 +158,17 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
     embed = discord.Embed(
         title="🔗 Share Router",
         description=(
-            "Use private, plain proxy channels as mobile share-sheet destinations, then let Dank Shield "
-            "forward the post into the real channel. This is useful when Discord does not list an "
-            "age-restricted destination in the phone share sheet."
+            "**Two forwarding modes:** Use Existing Channel to forward from an ordinary "
+            "channel **without deleting its posts**, or Create Proxy for a private "
+            "mobile share-sheet drop-off that cleans successful posts. Both use "
+            "Search-Safe destination selection."
+
         ),
         color=discord.Color.blurple(),
     )
 
     if category is None:
-        hub_status = "❌ Missing. Use Create / Repair Hub."
+        hub_status = "ℹ️ No proxy hub. Optional for Use Existing Channel; Create / Repair Hub enables private mobile drop-offs."
     elif str(category.name) != SHARE_ROUTER_CATEGORY_NAME:
         hub_status = f"⚠️ Found styled/legacy hub: {category.name}. Repair will restore the plain name."
     else:
@@ -227,7 +232,18 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
         icon = "✅" if health.ok else "⚠️"
         source_text = f"#{source.name}" if isinstance(source, discord.TextChannel) else f"source {source_id}"
         target_text = _target_label(target if isinstance(target, discord.TextChannel) else None)
-        line = f"{icon} {source_text} → {target_text}"
+        keep_original = (
+            isinstance(source, discord.TextChannel)
+            and not is_share_router_design_resource(source)
+            and route.get("delete_source") is False
+        )
+        mode = "🛡️ Keep Original" if keep_original else "🧹 Proxy cleanup"
+        raw_filter = route.get("content_filter", "everything")
+        display_filter = (
+            _FILTER_LABELS.get(raw_filter, "⚠️ Invalid filter")
+            if isinstance(raw_filter, str) else "⚠️ Invalid filter"
+        )
+        line = f"{icon} {source_text} → {target_text} • {mode} • {display_filter}"
         if health.blockers:
             line += f" • {health.blockers[0]}"
         elif health.warnings:
@@ -245,16 +261,17 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
     else:
         embed.add_field(
             name="Saved routes",
-            value="None yet. Create or repair the hub, then choose Add / Change Route.",
+            value="None yet. Use Existing Channel for a non-destructive route, or Create / Repair Hub for private share-sheet proxies.",
             inline=False,
         )
 
     embed.add_field(
         name="Safety boundary",
         value=(
-            "Proxy sources stay non-age-restricted and hidden from @everyone. Dank Shield also checks "
-            "that the sender has normal View Channel + Send Messages permission in the destination "
-            "before forwarding. Discord still controls who can view age-restricted destinations."
+            "Proxies stay hidden, non-age-restricted, and clean delivered source posts. "
+            "Existing channels keep original posts and can be public. An age-restricted "
+            "source never forwards to a non-age-restricted destination. All routes "
+            "require the sender to have normal destination View + Send permissions."
         )[:1024],
         inline=False,
     )
@@ -330,6 +347,47 @@ def _share_media_health_embed() -> discord.Embed:
     return embed
 
 
+_FACEBOOK_PROBE_REASONS = {
+    "provider_extractor_incompatible": (
+        "Facebook returned video metadata the current extractor cannot parse. "
+        "This is a known upstream Facebook Reel issue. The original public "
+        "link is preserved; updating yt-dlp alone may not resolve it."
+    ),
+    "provider_no_downloadable_formats": (
+        "No downloadable video stream was exposed. Facebook may require "
+        "a login or group membership, or its video format may have changed. "
+        "The original link is preserved."
+    ),
+    "provider_login_required": (
+        "Facebook requires login or authorization. Share Router does not "
+        "use personal Facebook sessions, private cookies, or bypass permissions."
+    ),
+    "provider_private_or_restricted": (
+        "Facebook marked this video private or restricted. "
+        "Share Router will keep the original link rather than bypass access."
+    ),
+    "provider_rate_limited": (
+        "Facebook rate-limited this request. Repeated retries can make "
+        "extraction less reliable; the original link is preserved."
+    ),
+    "provider_forbidden": (
+        "Facebook refused the metadata/media request. The source link remains "
+        "available rather than forcing an unsafe download."
+    ),
+    "provider_bot_verification": (
+        "Facebook requested a bot check or CAPTCHA. Share Router cannot "
+        "bypass the verification prompt; the source link is preserved."
+    ),
+}
+
+
+def _provider_probe_outcome(provider: str, reason: str) -> str:
+    """Explain fixed, privacy-safe statuses without disclosing signed URLs."""
+    if provider == "facebook":
+        return _FACEBOOK_PROBE_REASONS.get(reason, reason)
+    return reason
+
+
 class ShareRouterProviderProbeModal(discord.ui.Modal, title="Test Share Router Provider"):
     media_url = discord.ui.TextInput(
         label="Public video URL",
@@ -391,7 +449,7 @@ class ShareRouterProviderProbeModal(discord.ui.Modal, title="Test Share Router P
         embed.add_field(
             name="Outcome",
             value=(
-                result.reason
+                _provider_probe_outcome(result.provider, result.reason)
                 or (
                     "Direct URL classified only; availability and file format not yet checked."
                     if result.provider == "direct"
@@ -416,14 +474,42 @@ class _OwnedView(discord.ui.View):
         return False
 
 
-def _target_options_embed(source: discord.TextChannel) -> discord.Embed:
+_FILTER_LABELS = {
+    "everything": "Everything",
+    "videos": "Videos Only",
+    "images": "Images Only",
+    "links": "Links Only",
+}
+
+
+def _target_options_embed(
+    source: discord.TextChannel, *, delete_source: bool = True,
+    content_filter: str = "everything",
+) -> discord.Embed:
     embed = discord.Embed(
         title=f"🔗 Destination for #{source.name}",
         description=(
             "Search is the fastest way to find the real destination on mobile. "
-            "Dank Shield can match the current/styled name, a saved previous name, Discord ID, or mention."
+            "Dank Shield can match the current/styled name, a saved previous name, Discord ID, or mention.\n\n"
+            + (
+                "🧹 **Proxy mode:** original drop-off posts are cleaned up after delivery."
+                if delete_source else
+                "🛡️ **Keep Original mode:** posts stay in your existing channel. "
+                "Only members who can also post in the destination will be forwarded."
+            )
         ),
         color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Content to forward",
+        value=(
+            f"**{_FILTER_LABELS[content_filter]}**. Change the filter below, then "
+            "choose your destination. Videos Only includes video attachments, "
+            "playable embeds and recognized video links; Images Only includes "
+            "pictures/GIFs; Links Only includes messages with web links. "
+            "Other messages remain in the original source."
+        ),
+        inline=False,
     )
     embed.add_field(
         name="Recommended",
@@ -446,10 +532,47 @@ class ShareRouterTargetLandingView(_OwnedView):
         *,
         source: discord.TextChannel,
         browser: DankGuildResourceBrowserView,
+        delete_source: bool = True,
+        content_filter: str = "everything",
     ) -> None:
         super().__init__(owner_id)
         self.source = source
         self.browser = browser
+        self.delete_source = delete_source
+        self.content_filter = validate_route_content_filter(content_filter)
+        for option in self.content_choice.options:
+            option.default = option.value == self.content_filter
+        if not delete_source:
+            self.back.label = "Back to Existing Channels"
+
+    @discord.ui.select(
+        placeholder="Content filter • choose what gets forwarded",
+        row=2,
+        min_values=1,
+        max_values=1,
+        options=[
+            discord.SelectOption(label="Videos Only", value="videos", emoji="🎬",
+                                 description="Video uploads, video embeds & recognized video links"),
+            discord.SelectOption(label="Images Only", value="images", emoji="🖼️",
+                                 description="Image uploads, GIFs & direct image links"),
+            discord.SelectOption(label="Links Only", value="links", emoji="🔗",
+                                 description="Messages containing URLs (including video links)"),
+            discord.SelectOption(label="Everything", value="everything", emoji="📋",
+                                 description="All qualifying messages, including conversations"),
+        ],
+    )
+    async def content_choice(self, interaction: discord.Interaction, select: discord.ui.Select) -> None:
+        if not await _require_manage(interaction) or interaction.guild_id != self.source.guild.id:
+            return
+        try:
+            chosen = validate_route_content_filter(select.values[0])
+        except (IndexError, ValueError):
+            return await _private(interaction, "❌ Select one supported content filter.")
+        await _open_target_browser(
+            interaction, self.source,
+            delete_source=self.delete_source,
+            content_filter=chosen,
+        )
 
     @discord.ui.button(label="Search Destination", emoji="🔎", style=discord.ButtonStyle.primary, row=0)
     async def search_destination(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -464,7 +587,10 @@ class ShareRouterTargetLandingView(_OwnedView):
     @discord.ui.button(label="Back to Proxy Sources", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await _open_source_picker(interaction)
+        if self.delete_source:
+            await _open_source_picker(interaction)
+        else:
+            await _open_existing_source_picker(interaction)
 
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=1)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -531,7 +657,10 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
         current = await available_share_source_ids(guild)
         if not isinstance(resource, discord.TextChannel) or resource.id not in current:
             return await _private(pick_interaction, "❌ This proxy source is no longer configured.")
-        await _open_target_browser(pick_interaction, resource)
+        await _open_target_browser(
+            pick_interaction, resource,
+            delete_source=is_share_router_design_resource(resource),
+        )
 
     view = DankGuildResourceBrowserView(
         guild=guild,
@@ -548,16 +677,71 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
     await _replace(interaction, embed=view.embed(), view=view)
 
 
+async def _open_existing_source_picker(interaction: discord.Interaction) -> None:
+    """Search-Safe selection of an existing, ordinary source channel."""
+    guild = interaction.guild
+    if guild is None or not await _require_manage(interaction):
+        return
+    download_id = await guild_download_channel_id(int(guild.id))
+
+    def allowed_source(resource: Any) -> bool:
+        return (
+            isinstance(resource, discord.TextChannel)
+            and resource.guild.id == guild.id
+            and int(resource.id) != download_id
+            and not is_share_router_design_resource(resource)
+        )
+
+    async def back(pick_interaction: discord.Interaction) -> None:
+        await open_share_router(pick_interaction, replace_message=True)
+
+    async def picked(pick_interaction: discord.Interaction, resource: Any) -> None:
+        if (
+            not await _require_manage(pick_interaction)
+            or pick_interaction.guild_id != guild.id
+        ):
+            return
+        if (
+            not allowed_source(resource)
+            or not isinstance(guild.get_channel(resource.id), discord.TextChannel)
+        ):
+            return await _private(pick_interaction, "❌ That ordinary channel is no longer available.")
+        await _open_target_browser(pick_interaction, resource, delete_source=False)
+
+    browser = DankGuildResourceBrowserView(
+        guild=guild,
+        author_id=int(interaction.user.id),
+        resource_kinds=("text",),
+        on_pick=picked,
+        custom_id="dank:share_router:existing_source",
+        placeholder="Choose an existing channel…",
+        title="Keep Original • Existing Source Channel",
+        predicate=allowed_source,
+        on_home=back,
+        home_label="Share Router",
+    )
+    await _replace(interaction, embed=browser.embed(), view=browser)
+
+
 async def _open_target_browser(
     interaction: discord.Interaction,
     source: discord.TextChannel,
+    *, delete_source: bool = True, content_filter: str | None = None,
 ) -> None:
+    content_filter = validate_route_content_filter(
+        content_filter if content_filter is not None else (
+            "everything" if delete_source else "videos"
+        )
+    )
     guild = interaction.guild
     if guild is None:
         return await _private(interaction, "❌ Use Share Router inside a server.")
 
     async def back(back_interaction: discord.Interaction) -> None:
-        await _open_target_browser(back_interaction, source)
+        await _open_target_browser(
+            back_interaction, source,
+            delete_source=delete_source, content_filter=content_filter,
+        )
 
     async def picked_target(
         pick_interaction: discord.Interaction,
@@ -565,20 +749,27 @@ async def _open_target_browser(
     ) -> None:
         if not await _require_manage(pick_interaction):
             return
+        if pick_interaction.guild_id != guild.id:
+            return await _private(pick_interaction, "❌ Reopen Share Router in this server.")
+        if (
+            source.guild.id != guild.id
+            or not isinstance(guild.get_channel(source.id), discord.TextChannel)
+        ):
+            return await _private(pick_interaction, "❌ Source channel no longer exists.")
         source_ids = await available_share_source_ids(guild)
-        if int(source.id) not in source_ids:
+        if delete_source and int(source.id) not in source_ids:
             return await _private(pick_interaction, "❌ This proxy source is no longer configured.")
+        if delete_source != is_share_router_design_resource(source):
+            return await _private(pick_interaction, "❌ Channel mode changed. Start again.")
         if not isinstance(resource, discord.TextChannel):
             return await _private(pick_interaction, "❌ Pick a normal text channel.")
 
-        blockers: list[str] = []
-        age = source_age_blocker(source)
-        if age:
-            blockers.append(age)
-        privacy = source_privacy_blocker(source)
-        if privacy:
-            blockers.append(privacy)
-        blockers.extend(route_permission_blockers(source, resource, delete_source=True))
+        blockers = route_source_blockers(
+            source, resource, delete_source=delete_source,
+        )
+        blockers.extend(route_permission_blockers(
+            source, resource, delete_source=delete_source,
+        ))
 
         if blockers:
             embed = discord.Embed(
@@ -589,19 +780,27 @@ async def _open_target_browser(
             embed.add_field(
                 name="What to fix",
                 value=(
-                    "Keep the proxy source non-age-restricted, hide it from @everyone, and make sure "
-                    "Dank Shield can read/delete there and send in the destination."
+                    (
+                        "Keep the proxy non-age-restricted, private, and allow the bot to delete "
+                        "delivered posts in it. The destination must allow sending."
+                        if delete_source else
+                        "Keep the existing channel unchanged. Give Dank Shield View Channel "
+                        "and Read Message History in the source, plus Send Messages in the target. "
+                        "An age-restricted source can only forward to another age-restricted channel."
+                    )
                 ),
                 inline=False,
             )
             return await _private(pick_interaction, embed=embed)
 
         try:
-            await save_managed_share_route(
+            save = save_managed_share_route if delete_source else save_existing_share_route
+            await save(
                 guild,
                 source_channel_id=int(source.id),
                 target_channel_id=int(resource.id),
                 created_by_id=int(pick_interaction.user.id),
+                content_filter=content_filter,
             )
         except (OSError, ValueError) as exc:
             return await _private(pick_interaction, f"❌ Share route could not be saved: {exc}")
@@ -632,11 +831,16 @@ async def _open_target_browser(
     )
     await _replace(
         interaction,
-        embed=_target_options_embed(source),
+        embed=_target_options_embed(
+            source, delete_source=delete_source,
+            content_filter=content_filter,
+        ),
         view=ShareRouterTargetLandingView(
             int(interaction.user.id),
             source=source,
             browser=browser,
+            delete_source=delete_source,
+            content_filter=content_filter,
         ),
     )
 
@@ -968,6 +1172,12 @@ class ShareRouterDownloadSettingsView(_OwnedView):
         await open_share_router(interaction, replace_message=True)
 
 class ShareRouterView(_OwnedView):
+    @discord.ui.button(label="Use Existing Channel", emoji="📁", style=discord.ButtonStyle.primary, row=2)
+    async def use_existing_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not await _require_manage(interaction):
+            return
+        await _open_existing_source_picker(interaction)
+
     @discord.ui.button(label="Create Proxy", emoji="➕", style=discord.ButtonStyle.primary, row=2)
     async def create_proxy(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
