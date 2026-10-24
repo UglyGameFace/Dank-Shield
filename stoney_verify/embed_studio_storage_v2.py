@@ -16,6 +16,7 @@ from .embed_studio_core import STUDIO_KEY, StudioValidationError, library_payloa
 LIBRARY_TABLE = "dank_embed_studio_libraries"
 ITEM_TABLE = "dank_embed_studio_items"
 WRITE_RPC = "dank_embed_studio_write"
+MAX_STUDIO_V2_BYTES = 1024 * 1024  # Private normalized records; V1 remains 256 KiB
 SECTIONS = ("drafts", "templates", "themes", "media", "published")
 EXPECTED_SUPABASE_REF = "viamriafkbqhquvrsnua"
 FLAG = "DANK_EMBED_STUDIO_V2_ENABLED"
@@ -137,7 +138,7 @@ def _write_sync(source: StudioV2Source, lib: Mapping[str, Any]) -> bool:
         raise StudioV2Unavailable("Invalid Studio v2 server.")
     # Preserve exactly the canonical existing model validation, including
     # the published-role controls and a bounded overall serialized payload.
-    validated = library_payload(lib)
+    validated = library_payload(lib, max_bytes=MAX_STUDIO_V2_BYTES)
     parts = {section: validated[section] for section in SECTIONS}
     db = _client()
     response = db.rpc(WRITE_RPC, {
