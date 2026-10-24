@@ -13,6 +13,7 @@ existing Share Router runtime remains the single route/upload owner.
 import asyncio
 import os
 import re
+import shutil
 import time
 from dataclasses import dataclass, replace
 
@@ -113,9 +114,9 @@ class MediaResolution:
     request_headers: tuple[tuple[str, str], ...] = ()
     audio_request_headers: tuple[tuple[str, str], ...] = ()
     reason: str = ""
-    # Existing provider metadata may expose more than one progressive MP4 URL.
-    # Retain at most one separate safe alternative for a failed Facebook CDN
-    # transfer; this is not an additional extractor request or unbounded retry.
+    # Provider metadata can include one safer/lower-quality progressive option.
+    # Keep at most one same-container candidate if the first CDN transfer fails.
+    # This requires no second extractor request and is byte/time-capped.
     alternate_progressive: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
     title: str = ""
 
@@ -769,15 +770,14 @@ def select_media_resolution(
         progressive.sort(key=lambda item: item[0], reverse=True)
         _, url, protocol, ext, size, request_headers = progressive[0]
         alternatives: list[tuple[str, tuple[tuple[str, str], ...]]] = []
-        if provider == "facebook":
-            # A FB CDN HD URL may expire or be unavailable while its SD
-            # representation is valid. Reuse only a distinct progressive URL
-            # from the same extractor response; never invent an endpoint.
-            for candidate in progressive[1:]:
-                if candidate[3] != ext or candidate[1] == url:
-                    continue
-                alternatives.append((candidate[1], candidate[5]))
-                break
+        # An HD CDN may expire or be larger than its declared size; an SD or
+        # alternate format from the SAME metadata response can still work.
+        # No new extraction, arbitrary URL or unlimited fallback waterfall.
+        for candidate in progressive[1:]:
+            if candidate[3] != ext or candidate[1] == url:
+                continue
+            alternatives.append((candidate[1], candidate[5]))
+            break
         return MediaResolution(
             source_url=source_url,
             canonical_url=canonical,
@@ -855,6 +855,12 @@ def _extract_info_sync(canonical_url: str) -> Any:
     except Exception:
         return ExtractionFailure("extractor_unavailable")
 
+    # YouTube's JS challenges require yt-dlp-ejs plus a local runtime.
+    # Never fetch untrusted scripts at runtime or assume a JS binary exists
+    # on Discloud; if neither is installed the normal link fallback remains.
+    js_runtime = "deno" if shutil.which("deno") else (
+        "node" if shutil.which("node") else ""
+    )
     options = {
         "quiet": True,
         "no_warnings": True,
@@ -867,6 +873,8 @@ def _extract_info_sync(canonical_url: str) -> Any:
         "fragment_retries": 0,
         "playlistend": 1,
     }
+    if js_runtime:
+        options["js_runtimes"] = {js_runtime: {}}
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
             return ydl.extract_info(canonical_url, download=False)
