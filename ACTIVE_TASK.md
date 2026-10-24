@@ -1,4 +1,18 @@
-# Active task: Action & Reminder Center (FORCE SWITCH, 2026-10-22)
+# Active task: Share Router existing-channel non-destructive forwarding (owner-requested switch, 2026-10-24)
+
+## Current checkpoint: Use Existing Channel with Search-Safe selection
+
+- **Owner explicitly switched** from Action & Reminder Center, following merged #708. Verified main at start `4f7756a163d32780acd544991c9aebf5bcac5b5d` with no other open PRs. Action Center v1 is code-complete; leave its internals and all unrelated work unchanged.
+- Fix the cause of channels not appearing as Share Router sources: the original **Add / Change Route** source browser only displayed registered proxies/legacy routes. Add **Use Existing Channel** for ordinary guild text channels through the **existing shared Search-Safe picker** (styled names, aliases, Discord IDs, restricted channels as its existing resolver supports), without native Discord channel selectors.
+- **Non-destructive mode**: an existing channel stays visible and retained. Save `delete_source=False` and explicitly suppress cleanup at runtime including dedupe/error paths; no hidden private proxy requirements for ordinary public channels. Existing sources never require Manage Messages. The bot still needs source view/history + destination view/send. Check source and destination under the existing guild lock. Never forward from age-restricted source to non-age-restricted destination.
+- **Proxy mode unchanged**: managed hub sources must remain temporary, hidden, non-NSFW, and clean forwarded source posts. Preserve old routes, registration, downloads, direct memes, source/target privacy and sender permissions.
+- Reuse existing on-message gateway handler, route JSON storage, route health, and existing shared Search-Safe browser. No new worker, separate database, migration, branch proliferation, or slash root. Add regression coverage to Share Router Production Reconciliation CI.
+- Acceptance: exact PR head automated CI including Share Router routing safety, no original deletion, source permission checks, NSFW boundary, cross-guild isolation; provide user one mergeable PR. Do not claim deployed until after owner merges and Discloud runs it.
+
+---
+
+## Previous completed task: Action & Reminder Center v1
+
 
 ## Current checkpoint: 4K automatic Member Setup reminders (v1 code-complete candidate, 2026-10-23)
 
