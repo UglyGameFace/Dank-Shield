@@ -1751,12 +1751,14 @@ async def _review(interaction: discord.Interaction, session: StudioSession) -> N
 
 class StudioScheduleModal(discord.ui.Modal, title="Schedule an Announcement"):
     def __init__(self, session: StudioSession, *, preview: dict[str, Any],
-                 channel_id: int, post_key: str) -> None:
+                 channel_id: int, post_key: str, review: Any) -> None:
         super().__init__(timeout=300)
         self.session = session
         self.preview = deepcopy(preview)
         self.channel_id = channel_id
         self.post_key = post_key
+        self.review = review
+        self.used = False
         self.when_input = discord.ui.TextInput(
             label="Date, time and timezone offset",
             placeholder="2026-11-01T18:00-05:00",
@@ -1774,6 +1776,9 @@ class StudioScheduleModal(discord.ui.Modal, title="Schedule an Announcement"):
                 or int(interaction.guild.id) != self.session.guild_id
                 or int(interaction.user.id) != self.session.owner_id):
             return await _say(interaction, "Scheduled publishing is not enabled, or staff access changed.")
+        if self.used or self.review.sent:
+            return await _say(interaction, "This preview was already used. Open a fresh preview.")
+        self.used = True
         if (self.session.project != self.preview
                 or self.session.channel_id != self.channel_id
                 or self.session.post_key != self.post_key
@@ -1799,6 +1804,7 @@ class StudioScheduleModal(discord.ui.Modal, title="Schedule an Announcement"):
             return await _say(interaction, f"Could not schedule: {exc}")
         except Exception:
             return await _say(interaction, "Scheduling storage unavailable. No automatic post was queued.")
+        self.review.sent = True
         stamp = int(when.timestamp())
         await _say(interaction,
             f"✅ Announcement scheduled for <t:{stamp}:F> in <#{self.channel_id}>. "
@@ -1886,6 +1892,11 @@ class StudioReviewView(_StudioView):
         self.preview_resolved_project = validate_project(resolved_project if resolved_project is not None else session.project)
         self.preview_channel_id = session.channel_id
         self.preview_post_key = session.post_key
+        from .embed_studio_schedules import schedules_enabled
+        self.schedule_later.disabled = (
+            not schedules_enabled() or bool(session.post_key)
+            or bool(session.project.get("role_actions"))
+        )
         # Link buttons really open their HTTPS target in preview. Role actions
         # are disabled here: a private preview must never grant a public role.
         for link in session.project["links"]:
@@ -1900,6 +1911,26 @@ class StudioReviewView(_StudioView):
         else:
             for item in role_items:
                 self.add_item(discord.ui.Button(label=item["label"], disabled=True, style=discord.ButtonStyle.secondary, row=1))
+
+    @discord.ui.button(label="Schedule for Later", emoji="📅", style=discord.ButtonStyle.primary, row=0)
+    async def schedule_later(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        from .embed_studio_schedules import schedules_enabled
+        if not schedules_enabled():
+            return await _say(interaction, "The scheduled sender has not been enabled.")
+        if self.sent or self.session.project != self.preview_project or (
+            self.session.channel_id != self.preview_channel_id
+            or self.session.post_key != self.preview_post_key
+        ):
+            return await _say(interaction, "This preview changed or was already used. Reopen Preview.")
+        if self.session.post_key:
+            return await _say(interaction, "Scheduled edits of existing posts are not supported.")
+        if self.session.project.get("role_actions"):
+            return await _say(interaction, "Self-role panels require immediate moderator publishing.")
+        await interaction.response.send_modal(StudioScheduleModal(
+            self.session, preview=self.preview_project,
+            channel_id=self.preview_channel_id, post_key=self.preview_post_key,
+            review=self,
+        ))
 
     @discord.ui.button(label="Publish / Save Edit", emoji="✅", style=discord.ButtonStyle.success, row=0)
     async def publish(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
