@@ -16,7 +16,7 @@ import discord
 STUDIO_KEY = "embed_studio_v1"
 MAX_TEMPLATES = 12
 MAX_THEMES = 8
-MAX_MEDIA_ITEMS = 12
+MAX_MEDIA_ITEMS = 50
 MAX_DRAFTS = 8
 MAX_DRAFT_AGE_SECONDS = 30 * 86400
 MAX_EMBEDS = 10
@@ -25,7 +25,7 @@ MAX_LINK_BUTTONS = 5
 MAX_ROLE_ACTIONS = 10
 MAX_ROLE_BUTTONS = 5
 MAX_PROJECT_BYTES = 40000
-MAX_TEMPLATES_BYTES = 100000
+MAX_TEMPLATES_BYTES = 256 * 1024  # Entire guild Studio library, not per-template
 PORTABLE_FORMAT = "dank-shield-embed-studio"
 PORTABLE_VERSION = 1
 MAX_PORTABLE_BYTES = 65536
@@ -525,5 +525,5 @@ def library_payload(library: Mapping[str, Any]) -> dict[str, Any]:
     }
     import json
     if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_TEMPLATES_BYTES:
-        raise StudioValidationError("Saved studio library is at capacity. Delete unused templates.")
+        raise StudioValidationError("Studio storage is full (256 KiB shared by media, templates, themes, drafts and posts). Shorten or remove unused saved work.")
     return result
