@@ -68,6 +68,8 @@ async def _dispatch(bot: Any, job: Mapping[str, Any]) -> tuple[int, str]:
         return 0, "send_timeout_unconfirmed"
     except (TypeError, KeyError, ValueError, AttributeError):
         return 0, "invalid_schedule_data"
+    except Exception:
+        return 0, "unexpected_send_failure"
 
 
 async def _loop(bot: Any) -> None:
