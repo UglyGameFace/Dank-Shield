@@ -358,7 +358,8 @@ def test_actions_and_notifications_is_a_distinct_mobile_category_with_live_owner
     assert {"Verification", "Member Setup Manager", "Verification Reminders"} <= _labels(
         surface.FeatureCategoryView(42, "access")
     )
-    assert registry.search_features("actions and notifications")[0].category == "actions"
+    assert registry.search_features("actions and notifications")[0].key == "action_reminder_center"
+    assert registry.search_features("actions & notifications")[0].key == "action_reminder_center"
     assert registry.search_features("notification systems")[0].key == "action_notification_systems"
     assert registry.search_features("reminder center")[0].key == "action_reminder_center"
     assert registry.search_features("my reminder preferences")[0].key == "action_my_preferences"
