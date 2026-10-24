@@ -692,6 +692,7 @@ def test_actual_existing_forwarding_keeps_original_even_on_duplicate_and_error(
         await router.save_existing_share_route(
             guild, source_channel_id=source.id,
             target_channel_id=target.id, created_by_id=6,
+            content_filter="everything",  # Explicit legacy all-post behavior
         )
         await router.route_message(message())
         assert len(target.sent) == 1
@@ -796,3 +797,188 @@ def test_inflight_legacy_cleanup_honors_newly_saved_keep_original_mode(
         assert deleted == [source.id]
 
     asyncio.run(check())
+
+
+
+def test_content_filter_matcher_ignores_chat_and_classifies_media_without_network():
+    from types import SimpleNamespace as SN
+
+    def msg(content="", *, attachments=None, embeds=None):
+        return SN(content=content, attachments=attachments or [], embeds=embeds or [])
+
+    video = SN(filename="clip.MP4", content_type="video/mp4")
+    image = SN(filename="image.PNG", content_type="image/png")
+    gif = SN(filename="animated.gif", content_type="image/gif")
+    image_embed = SN(type="image", image=SN(url="https://img.example.net/a.jpg"), url="https://img.example.net/a.jpg", video=None)
+    preview_embed = SN(type="rich", image=SN(url="https://cdn.example.net/thumb.jpg"), video=None, url="https://news.example.net/story")
+    video_embed = SN(type="video", video=SN(url="https://cdn.example.net/clip.mp4"), image=None, url=None)
+    assert router.route_content_matches(msg("How was your night?"), "everything")
+    for mode in ("videos", "images", "links"):
+        assert not router.route_content_matches(msg("How was your night?"), mode)
+    assert router.route_content_matches(msg(attachments=[video]), "videos")
+    assert not router.route_content_matches(msg(attachments=[video]), "links")
+    assert router.route_content_matches(msg(embeds=[video_embed]), "videos")
+    assert router.route_content_matches(msg(attachments=[image]), "images")
+    assert router.route_content_matches(msg(attachments=[gif]), "images")
+    assert not router.route_content_matches(msg(attachments=[gif]), "videos")
+    assert router.route_content_matches(msg(embeds=[image_embed]), "images")
+    assert not router.route_content_matches(msg(embeds=[preview_embed]), "images")
+    assert router.route_content_matches(msg("https://youtube.com/shorts/abcDEF"), "videos")
+    assert router.route_content_matches(msg("https://youtu.be/xyz123"), "videos")
+    assert router.route_content_matches(msg("https://www.tiktok.com/@member/video/7654321"), "videos")
+    assert router.route_content_matches(msg("https://instagram.com/reel/abc123"), "videos")
+    assert router.route_content_matches(msg("https://facebook.com/watch?v=123"), "videos")
+    assert not router.route_content_matches(msg("https://instagram.com/p/photo123"), "videos")
+    assert not router.route_content_matches(msg("https://x.com/someone/status/123"), "videos")
+    assert not router.route_content_matches(msg("https://example.com/news"), "videos")
+    assert router.route_content_matches(msg("https://example.com/photo.webp"), "images")
+    assert router.route_content_matches(msg("https://example.com/clip.mp4"), "videos")
+    assert router.route_content_matches(msg("https://example.com/news"), "links")
+    assert router.route_content_matches(msg(embeds=[preview_embed]), "links")
+    assert not router.route_content_matches(msg("ordinary chat"), "links")
+    assert not router.route_content_matches(msg("https://example.com/news"), "images")
+    for bad in ("UNKNOWN", "all", "video", "", True, {"mode": "everything"}):
+        assert not router.route_content_matches(msg("Anything"), bad)
+        with pytest.raises(ValueError):
+            router.validate_route_content_filter(bad)
+    assert router.validate_route_content_filter(None) == "everything"
+
+
+def test_existing_route_defaults_to_video_only_but_saved_legacy_routes_stay_everything(
+    isolated_router, monkeypatch,
+):
+    guild, source, target, _member = _ordinary_route_fixture(monkeypatch, router, guild_id=1671)
+
+    async def check():
+        await router.save_existing_share_route(
+            guild, source_channel_id=source.id,
+            target_channel_id=target.id, created_by_id=44,
+        )
+        latest = (await router.guild_routes(guild.id))[0]
+        assert latest["content_filter"] == "videos"
+        assert latest["delete_source"] is False
+        await router.save_existing_share_route(
+            guild, source_channel_id=source.id,
+            target_channel_id=target.id, created_by_id=44,
+            content_filter="images",
+        )
+        saved = (await router.guild_routes(guild.id))[0]
+        assert saved["content_filter"] == "images"
+        await router.save_route(
+            guild.id, source_channel_id=source.id, target_channel_id=target.id,
+            delete_source=False, created_by_id=44,
+        )
+        legacy = (await router.guild_routes(guild.id))[0]
+        assert legacy["content_filter"] == "everything"
+        # A preexisting file with NO content_filter also remains Everything.
+        data = router._load_all_unlocked()
+        data[str(guild.id)]["routes"][0].pop("content_filter", None)
+        router._save_all_unlocked(data)
+        older = (await router.guild_routes(guild.id))[0]
+        assert "content_filter" not in older
+        assert router.route_content_matches(
+            type("Message", (), {"content": "hello", "attachments": [], "embeds": []})(),
+            older.get("content_filter"),
+        )
+        with pytest.raises(ValueError, match="Everything"):
+            await router.save_route(
+                guild.id, source_channel_id=source.id, target_channel_id=target.id,
+                content_filter="not_valid",
+            )
+        assert (await router.guild_routes(guild.id))[0].get("content_filter") is None
+
+    asyncio.run(check())
+
+
+def test_filtered_existing_route_skips_chat_while_forwarding_video_link_without_cleanup(
+    isolated_router, monkeypatch,
+):
+    from types import SimpleNamespace as SN
+    guild, source, target, member = _ordinary_route_fixture(monkeypatch, router, guild_id=1672)
+    calls = []
+    deleted = []
+
+    async def fake_relay(*args, **kwargs):
+        calls.append("media")
+        return False
+
+    async def bad_torrent(*_args, **_kwargs):
+        calls.append("torrent")
+        return None
+
+    async def silent_modlog(*_args, **_kwargs):
+        return None
+
+    async def reject(*_args, **_kwargs):
+        calls.append("rejected")
+
+    async def cleanup(_msg, *, enabled):
+        calls.append("cleanup")
+        assert enabled is False
+
+    monkeypatch.setattr(router, "_relay_native_video_upload", fake_relay)
+    monkeypatch.setattr(router, "_route_torrent_media", bad_torrent)
+    monkeypatch.setattr(router, "_send_modlog", silent_modlog)
+    monkeypatch.setattr(router, "_route_rejection_log", reject)
+    monkeypatch.setattr(router, "_cleanup_delivered_proxy_post", cleanup)
+    monkeypatch.setattr(router, "_RECENT_ROUTE_KEYS", {})
+
+    def message(content, i):
+        async def delete():
+            deleted.append(i)
+        return SN(
+            id=i, guild=guild, channel=source, author=member, content=content,
+            attachments=[], embeds=[], webhook_id=None, delete=delete,
+        )
+
+    async def check():
+        await router.save_existing_share_route(
+            guild, source_channel_id=source.id,
+            target_channel_id=target.id, created_by_id=44,
+        )
+        await router.route_message(message("Hey everyone, what are you playing?", 1))
+        await router.route_message(message("https://example.org/news", 2))
+        assert target.sent == [] and calls == []
+        await router.route_message(message("https://youtu.be/ABCD123456", 3))
+        assert len(target.sent) == 1
+        assert calls.count("media") == 1
+        assert calls.count("torrent") == 1
+        assert calls.count("cleanup") == 1
+        assert deleted == []
+
+    asyncio.run(check())
+
+
+def test_content_filter_ui_has_selectable_four_modes_and_preserves_proxy_defaults():
+    from stoney_verify.commands_ext import public_share_router as ui
+    import discord
+
+    class Source:
+        guild = type("Guild", (), {"id": 100})()
+        name = "gaming-clips"
+
+    class Browser:
+        pass
+
+    source = Source()
+    existing = ui.ShareRouterTargetLandingView(
+        42, source=source, browser=Browser(), delete_source=False,
+        content_filter="videos",
+    )
+    proxy = ui.ShareRouterTargetLandingView(
+        42, source=source, browser=Browser(), delete_source=True,
+        content_filter="everything",
+    )
+    for view, current in ((existing, "videos"), (proxy, "everything")):
+        selects = [part for part in view.children if isinstance(part, discord.ui.Select)]
+        assert len(selects) == 1
+        assert {opt.value for opt in selects[0].options} == {
+            "videos", "images", "links", "everything",
+        }
+        assert [opt.value for opt in selects[0].options if opt.default] == [current]
+    assert existing.back.label == "Back to Existing Channels"
+    embed = ui._target_options_embed(source, delete_source=False, content_filter="videos")
+    assert "Videos Only" in str(embed.to_dict())
+    saved_code = Path(ui.__file__).read_text()
+    assert "content_filter=content_filter" in saved_code
+    assert "save = save_managed_share_route if delete_source else save_existing_share_route" in saved_code
