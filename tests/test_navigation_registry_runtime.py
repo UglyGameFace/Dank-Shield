@@ -305,7 +305,7 @@ def test_releases_show_real_merged_updates_and_exclude_unmerged_work() -> None:
 
     content = surface._recent_embed()
     joined = "\n".join(str(field.value) for field in content.fields)
-    assert "Saved drafts and portable JSON files" in joined
+    assert "Media Library, Smart Text and portable JSON" in joined
     assert "Share videos from regular channels" in joined
     assert "Member Setup" in joined
     assert "Only merged updates" in str(content.footer.text)
