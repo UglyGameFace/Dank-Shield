@@ -20,14 +20,14 @@ def _embed(consent: MemberReminderConsent, *, status: str | None = None) -> disc
         title="🔔 My Action Reminder Preferences",
         description=(
             "**Your choices apply only to this server.**\n\n"
-            "**Future Member Setup DMs:** "
+            "**Automatic Member Setup DMs:** "
             + ("✅ You opted in" if enabled else "🔕 Off")
             + "\n\n"
-            "These would remind you to review a newly published Member Setup "
-            "revision that you still haven't completed.\n\n"
-            "**Important:** Automatic Action Center reminders are **not live**. "
-            "This preference does not activate a scheduler, change verification, "
-            "or send a message. Verification reminders have separate controls."
+            "If this server enables the automation, these DMs remind you about "
+            "published Member Setup changes you haven't completed.\n\n"
+            "**Important:** Your opt-in alone doesn't activate sending for the "
+            "server. Verification reminders are separate and automatically "
+            "cover unverified members when enabled by server staff."
         ),
         color=discord.Color.blurple() if enabled else discord.Color.light_grey(),
     )
@@ -46,7 +46,7 @@ _STATUS_EXPLANATIONS = {
     "excluded": "This server's Action Builder draft does not include Member Setup reminders.",
     "complete": "No incomplete published Member Setup requirement is currently recorded.",
     "stale": "The published Member Setup revision or safety settings changed. Check again later.",
-    "preview_due": "The current policy would consider this requirement due in a dry run only.",
+    "preview_due": "This requirement looks due in the latest safety preview; the server switch controls automatic delivery.",
     "waiting": "The initial wait or retry cooldown has not elapsed.",
     "quiet": "The server's configured quiet hours prevent delivery now.",
     "exhausted": "The per-revision reminder attempt limit has been reached.",
@@ -71,18 +71,18 @@ async def _read_my_setup_dm_status(member: discord.Member) -> str:
     if type(revision) is not int or revision < 0:
         raise RuntimeError("Invalid published Member Setup revision")
     if revision == 0:
-        return "No published Member Setup revision can be checked.\n\n🔒 Delivery remains disabled."
+        return "No published Member Setup revision can be checked."
     result = await asyncio.wait_for(
         inspect_member_setup_readiness(member, expected_revision=revision),
         timeout=20.0,
     )
     explanation = _STATUS_EXPLANATIONS.get(result.status)
     if explanation is None:
-        return "Eligibility could not be verified.\n\n🔒 Delivery remains disabled."
+        return "Eligibility could not be verified."
     message = f"**{result.status.replace('_', ' ').title()}** • {explanation}"
     if result.next_at is not None:
         message += f"\nNext policy check: <t:{int(result.next_at.timestamp())}:F>"
-    return message + "\n\n🔒 Preview only. No Action Center DM is scheduled or authorized."
+    return message + "\n\nEligibility is a preview, not a send authorization."
 
 
 class MemberActionPreferencesView(discord.ui.View):
