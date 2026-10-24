@@ -21,6 +21,8 @@ from ..navigation_registry import (
     category_by_key,
     feature_by_key,
     features_for_category,
+    grouped_features,
+    RECENT_UPDATES,
     recent_features,
     search_features,
 )
@@ -201,6 +203,7 @@ _FEATURE_ROUTE_KEYS = frozenset(
         "profile_builder",
         "community_pings_manager",
         "community_tools",
+        "embed_studio",
         "share_router",
         "share_downloads",
         "toke_settings",
@@ -411,6 +414,10 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
     if key == "community_tools":
         from .public_community_tools import open_community_tools
         return await open_community_tools(interaction, replace_message=True)
+
+    if key == "embed_studio":
+        from ..embed_studio_ui import open_embed_studio
+        return await open_embed_studio(interaction)
 
     if key == "share_router":
         from .public_share_router import open_share_router
@@ -627,12 +634,22 @@ class _HomeSectionSelect(discord.ui.Select):
         await _open_category(interaction, value)
 
 
+# Blue marks the main starting point, never a staff-access level.
+# Real authorization remains inside each existing feature owner.
+_MAIN_FEATURE_KEYS = frozenset({
+    "setup_center", "verification", "action_reminder_center", "protection",
+    "roles_profiles", "share_router", "tickets", "embed_studio",
+    "live_captions", "server_stats", "my_profile", "help",
+})
+
+
 class _FeatureButton(discord.ui.Button):
     def __init__(self, feature: NavigationFeature, *, row: int) -> None:
         super().__init__(
             label=feature.label,
             emoji=feature.emoji,
-            style=discord.ButtonStyle.primary if feature.manager_only else discord.ButtonStyle.secondary,
+            style=(discord.ButtonStyle.primary if feature.key in _MAIN_FEATURE_KEYS
+                   else discord.ButtonStyle.secondary),
             custom_id=f"dank:navigation:feature:{feature.key}:v1"[:100],
             row=row,
         )
@@ -647,7 +664,7 @@ class _FindFeatureButton(discord.ui.Button):
         super().__init__(
             label="Find Feature",
             emoji="🔎",
-            style=discord.ButtonStyle.success,
+            style=discord.ButtonStyle.primary,
             custom_id="dank:navigation:find:v1",
             row=row,
         )
@@ -717,7 +734,7 @@ class _CloseNavigationButton(discord.ui.Button):
         super().__init__(
             label="Close",
             emoji="✖️",
-            style=discord.ButtonStyle.danger,
+            style=discord.ButtonStyle.secondary,
             custom_id=f"dank:navigation:close:{row}:v1",
             row=row,
         )
@@ -766,7 +783,8 @@ class FeatureCategoryView(_OwnedView):
     def __init__(self, owner_id: int, category_key: str) -> None:
         super().__init__(owner_id)
         self.category_key = str(category_key)
-        features = features_for_category(self.category_key)
+        groups = grouped_features(self.category_key)
+        features = tuple(feature for _label, group in groups for feature in group)
         for index, feature in enumerate(features):
             self.add_item(_FeatureButton(feature, row=index // 5))
 
@@ -823,7 +841,7 @@ class CompactHelpView(_OwnedView):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="dank:help:close:v1")
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank:help:close:v1")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.edit_message(content="Help closed.", embed=None, view=None)
