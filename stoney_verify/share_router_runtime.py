@@ -79,7 +79,11 @@ _DISCORD_CATEGORY_CHANNEL_LIMIT = 50
 _RECENT_ROUTE_KEYS: dict[tuple[int, int, str], float] = {}
 URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
 _X_STATUS_PATH_RE = re.compile(r"^/([^/]+)/status/(\d+)(?:/.*)?$", re.IGNORECASE)
-_VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".gif")
+_VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".m4v", ".mkv", ".avi", ".gif")
+_CONTENT_FILTERS = frozenset({"everything", "videos", "images", "links"})
+_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".heic", ".bmp")
+_VIDEO_LINK_EXTENSIONS = (".mp4", ".webm", ".mov", ".m4v", ".mkv", ".gifv")
+
 _VIDEO_CONTENT_TYPES = {
     "video/mp4": ".mp4",
     "video/webm": ".webm",
@@ -266,6 +270,117 @@ def _trusted_video_url(value: str) -> bool:
         return True
     if host.endswith(".giphy.com"):
         return True
+    return False
+
+
+def validate_route_content_filter(value: Any) -> str:
+    """Stored routes default to Everything; explicit invalid input is rejected."""
+    if value is None:
+        return "everything"
+    if type(value) is not str or value not in _CONTENT_FILTERS:
+        raise ValueError("Choose Everything, Videos Only, Images Only, or Links Only.")
+    return value
+
+
+def _message_explicit_urls(message: discord.Message) -> list[str]:
+    """Use human-authored URLs and embed canonical links, not attachment URLs."""
+    values: list[str] = []
+    values.extend(URL_RE.findall(_safe_str(getattr(message, "content", ""))))
+    for embed in list(getattr(message, "embeds", []) or [])[:10]:
+        link = _safe_str(getattr(embed, "url", ""))
+        if link.startswith(("https://", "http://")):
+            values.append(link)
+    return values[:30]
+
+
+def _path_ext(value: str) -> str:
+    try:
+        return urlsplit(value).path.casefold()
+    except (ValueError, TypeError):
+        return ""
+
+
+def _is_video_provider_link(value: str) -> bool:
+    """No network/extraction. Avoid treating photo/status pages as videos."""
+    try:
+        key = provider_for_url(value)
+        parsed = urlsplit(value)
+        path = parsed.path.casefold()
+        host = (parsed.hostname or "").casefold()
+    except (TypeError, ValueError):
+        return False
+    if path.endswith(_VIDEO_LINK_EXTENSIONS):
+        return True
+    if key in {"youtube", "tiktok", "vimeo", "streamable"}:
+        # A provider's homepage or text profile isn't a media post.
+        return bool(path.strip("/") or parsed.query) and (
+            key != "youtube" or host == "youtu.be"
+            or any(path.startswith(prefix) for prefix in (
+                "/watch", "/shorts/", "/live/", "/embed/", "/clip/",
+            ))
+        )
+    if key == "instagram":
+        return any(path.startswith(prefix) for prefix in ("/reel/", "/reels/", "/tv/"))
+    if key == "facebook":
+        return host == "fb.watch" or any(
+            part in path for part in ("/watch", "/videos/", "/reel/")
+        )
+    if key == "twitch":
+        return "clips.twitch.tv" in host or "/clip/" in path or "/videos/" in path
+    if key == "reddit":
+        return host == "v.redd.it"
+    # x.com/tweet, Instagram /p, Pinterest, Reddit comments and Imgur albums
+    # can be still images or text. Only explicit playable embeds count below.
+    return False
+
+
+def route_content_matches(message: discord.Message, content_filter: Any) -> bool:
+    """Pure, cheap, fail-closed filtering before any relay/REST/media work.
+
+    This is a content-presence rule, not media inspection or expensive
+    provider detection. Attachments are authoritative. An unrelated link
+    with a thumbnail does not qualify as an image or video automatically.
+    """
+    try:
+        mode = validate_route_content_filter(content_filter)
+    except ValueError:
+        return False
+    if mode == "everything":
+        return True
+    attachments = list(getattr(message, "attachments", []) or [])[:30]
+    urls = _message_explicit_urls(message)
+    if mode == "links":
+        return bool(urls)
+    for attachment in attachments:
+        name = _safe_str(getattr(attachment, "filename", "")).casefold()
+        kind = _safe_str(getattr(attachment, "content_type", "")).casefold()
+        if mode == "images" and (
+            kind.startswith("image/") or name.endswith(_IMAGE_EXTENSIONS)
+        ):
+            return True
+        if mode == "videos" and (
+            kind.startswith("video/") or name.endswith(_VIDEO_LINK_EXTENSIONS)
+        ):
+            return True
+    embeds = list(getattr(message, "embeds", []) or [])[:10]
+    if mode == "videos":
+        for embed in embeds:
+            video = getattr(embed, "video", None)
+            if video is not None and (
+                _safe_str(getattr(video, "url", ""))
+                or _safe_str(getattr(video, "proxy_url", ""))
+            ):
+                return True
+        return any(_is_video_provider_link(url) for url in urls)
+    if mode == "images":
+        for embed in embeds:
+            # Only standalone image embeds. Link-preview thumbnails are not
+            # evidence the human actually posted an image.
+            if getattr(embed, "type", None) == "image":
+                image = getattr(embed, "image", None)
+                if image and _safe_str(getattr(image, "url", "")):
+                    return True
+        return any(_path_ext(url).endswith(_IMAGE_EXTENSIONS) for url in urls)
     return False
 
 
@@ -854,6 +969,7 @@ async def save_managed_share_route(
     source_channel_id: int,
     target_channel_id: int,
     created_by_id: int,
+    content_filter: str = "everything",
 ) -> None:
     """Revalidate selection under the same per-guild lock as proxy deletion."""
     async with _guild_source_lock(int(guild.id)):
@@ -864,6 +980,7 @@ async def save_managed_share_route(
             source_channel_id=int(source_channel_id),
             target_channel_id=int(target_channel_id),
             delete_source=True,
+            content_filter=content_filter,
             created_by_id=int(created_by_id),
         )
 
@@ -874,6 +991,7 @@ async def save_existing_share_route(
     source_channel_id: int,
     target_channel_id: int,
     created_by_id: int,
+    content_filter: str = "videos",
 ) -> None:
     """Save a non-destructive route from an existing ordinary text channel.
 
@@ -902,6 +1020,7 @@ async def save_existing_share_route(
             source_channel_id=int(source.id),
             target_channel_id=int(target.id),
             delete_source=False,
+            content_filter=content_filter,
             created_by_id=int(created_by_id),
         )
 
@@ -1137,6 +1256,7 @@ async def save_managed_share_route(
     source_channel_id: int,
     target_channel_id: int,
     created_by_id: int,
+    content_filter: str = "everything",
 ) -> None:
     """Revalidate selection under the same per-guild lock as proxy deletion."""
     async with _guild_source_lock(int(guild.id)):
@@ -1147,6 +1267,7 @@ async def save_managed_share_route(
             source_channel_id=int(source_channel_id),
             target_channel_id=int(target_channel_id),
             delete_source=True,
+            content_filter=content_filter,
             created_by_id=int(created_by_id),
         )
 
@@ -1347,7 +1468,9 @@ async def save_route(
     target_channel_id: int,
     delete_source: bool = True,
     created_by_id: int = 0,
+    content_filter: str = "everything",
 ) -> None:
+    content_filter = validate_route_content_filter(content_filter)
     async with _DATA_LOCK:
         data = _load_all_unlocked()
         key = str(int(guild_id))
@@ -1371,6 +1494,7 @@ async def save_route(
                 "target_channel_id": str(int(target_channel_id)),
                 "enabled": True,
                 "delete_source": bool(delete_source),
+                "content_filter": content_filter,
                 "created_by_id": str(int(created_by_id or 0)),
                 "created_at": now,
                 "updated_at": now,
@@ -2095,6 +2219,13 @@ async def route_message(message: discord.Message) -> None:
             await enqueue_download_request(message)
             return
         route = route_for_source(routes, int(message.channel.id))
+        # Filter out ordinary conversation before target permissions, media
+        # resolution, torrents, destination sending, or proxy cleanup.
+        # A miss leaves the original source message untouched.
+        if route is not None and not route_content_matches(
+            message, route.get("content_filter"),
+        ):
+            return
         # An ordinary existing channel may receive webhooks from other bots.
         # Do not relay those to a second channel, creating recursive copies.
         # Temporary proxy sources keep the original webhook share semantics.
@@ -2543,6 +2674,8 @@ __all__ = [
     "route_health",
     "route_message",
     "route_source_blockers",
+    "route_content_matches",
+    "validate_route_content_filter",
     "save_existing_share_route",
     "route_permission_blockers",
     "save_route",
