@@ -53,4 +53,4 @@ jobs:
           DANK_COMMAND_LOG_STYLE: quiet
 
       - name: Validate navigation registry and release descriptions
-        run: python -m pytest -q tests/test_navigation_registry_behavior.py --tb=short --disable-warnings
+        run: python -m pytest -q tests/test_navigation_registry_runtime.py --tb=short --disable-warnings
