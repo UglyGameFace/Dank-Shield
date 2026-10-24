@@ -93,6 +93,31 @@ health attestation, successful delivery, auditing, or a new unified
 scheduler. The production single-user Action Center DM canary is still
 deferred and disabled. No database migration or owner feature mutation.
 
+## Slice 4I: bounded opted-in Member Setup candidate source
+
+The next live-delivery prerequisite can reuse **the existing profile guild
+settings store**, instead of scanning every Discord member or constructing
+a separate reminder database. `profile_card_service` now offers a narrowly
+bounded, indexed-by-guild namespaced JSONB-flag read with a stable cursor.
+The Discord snowflake `user_id` field is **TEXT** in this existing table,
+so cursor comparisons honor the database's lexical order.
+
+`action_member_consent.read_member_setup_opt_in_page` reads at most ten
+records for one guild; it verifies each saved member's **versioned, timestamped
+opt-in**, returning only a private list of candidate IDs and optional
+next-page cursor. It **never scans every guild member**, assumes a cached
+Discord membership, or treats old member opt-ins as current permission.
+
+These candidate IDs are **NOT due reminders**. A future gated sender must
+still confirm live guild membership, staff exemption, published Member Setup
+revision, consent at send time, quiet hours, scheduled cooldown, private
+PostgreSQL ledger budget, durable claim-before-send, and consent/completion
+again immediately before delivery. **No worker consumes this feed yet.**
+Automatic sending and the deferred single-member canary stay disabled.
+
+No new tables, migrations, scheduler, background task, slash command or
+production data mutation are part of this slice.
+
 ## Scope of this first slice
 
 Find it under **/dank home → Onboarding & Access → Action & Reminder Center**,
