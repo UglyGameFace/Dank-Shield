@@ -8,6 +8,37 @@
 - **Owner deferred the live one-member DM canary until later.** All canary target/approved-source environment gates remain disabled, no Action Center claims or DMs have occurred, and the future automatic scheduler is not activated. Opt-in by itself does not bypass existing owner/Administrator exemption or authorize a DM.
 - Next reviewed 4E slice adds a **self-service read-only reminder eligibility explanation** to My Reminder Preferences, using the canonical source+ledger inspection. This is not canary approval, a new worker, or scheduler activation.
 
+## Slice 4F: existing notification owner directory (read-only integration)
+
+**Scope:** expose one staff-only "Notification Systems" destination in the
+existing Action & Reminder Center. It is a **directory into the existing
+canonical owners**, not a cross-feature sender, single database, or new
+activation switch. Per-guild staff checks are re-evaluated on each click;
+owner destinations independently enforce their own permissions. Ordinary
+members still see only their private actions and DM preference controls.
+
+The six pre-existing notification domains are:
+
+| System | Existing code owner | Navigation destination | State authority |
+| --- | --- | --- | --- |
+| Simple Verify reminders | `verification_reminders` | Verification Reminders | Verification role truth + private Discloud PG claim ledger |
+| Member activity notices | `commands_ext/public_members_group` | Members & Moderation, `/members notices` | Existing member notice records/worker |
+| Ticket SLA and inactivity | `workers/ticket_automation_worker` | Tickets | Ticket state and settings |
+| Quiet Server Notices | `community_tools_runtime` | Community Tools → Quiet Server Notice | Existing community quiet notice store |
+| It's 4:20 Somewhere | `somewhere_420_runtime` | It's 4:20 Somewhere | Indexed schedule owner and claim RPC |
+| /toke session reminder | `toke_sessions` | Toke Sesh Settings, live session | Existing opt-in session state |
+
+The Action Center **must not infer whether these systems are enabled**
+just from the directory, duplicate their completion truth, migrate their
+storage, or merge their schedulers. A future shared diagnostic layer must
+call each owner's read-only adapter with explicit unavailability; a future
+Member Setup sender must reuse the proven rate-budget/claim patterns while
+remaining separately approved and disabled by default.
+
+**Excluded:** live canary, new worker, DMs, PostgreSQL or Supabase writes,
+environment switches, migrations, automatic scheduling, branch cleanup and
+other epic features.
+
 ## Scope of this first slice
 
 Find it under **/dank home → Onboarding & Access → Action & Reminder Center**,

@@ -7,6 +7,14 @@
 - Private production PostgreSQL backup/recovery test succeeded; the approved 4C + 4D.4 additive migrations completed with all three `ready` checks true, counts `(0,0,0,3)`. Discord Readiness Report corroborated both tables. This supersedes older "unapplied" sections below, which are historical.
 - Next safe slice: expose the canonical one-member read-only eligibility reason to the member from My Reminder Preferences, with timeout, per-member UI identity, no private error leaks and no new delivery path; focused regression and exact-head CI required.
 
+## Slice 4F: inventory existing notification owners (2026-10-23)
+
+- PR #702 (4E) confirmed merged into main `f8214a17049d3ff1bcb934836f653cffb8959a54` with six successful PR checks.
+- The owner requested **reusing existing reminder systems instead of creating a seventh independent scheduling engine**. One active task: staff-only existing-system directory with canonical registry routes and explicit owner boundaries. Branch `feat/action-center-4f-notification-directory-20261023` starts from the exact merged main SHA above.
+- Verified distinct existing owners: Verification Reminders (private Discloud PG), Member Activity Notices (member notice records), Ticket Automation, Quiet Server Notices, It's 4:20 Somewhere scheduler, and /toke one-session opt-in reminders. Their independent processing and persistence remain unchanged.
+- No live canary: owner explicitly deferred it. `DANK_ACTION_CENTER_CANARY_SEND` and recipient/source gates stay OFF. No scheduler activation, production data mutations, code unrelated to Action Center, new slash roots, or new system duplicate.
+- Acceptance: action-directory owner map/route parity, staff and privacy checks, action-focused + full CI, merge/deploy verification before feature use.
+
 ## Current single-task lock
 The owner explicitly FORCE SWITCHED to **Issue #367, Action & Reminder Center**, after PR #691 merged. The previous 4:20 task and guarded branch-retirement task are now both paused. Do not mix further 4:20 work, branch cleanup, Cinema, or unrelated verification framework implementation into this slice.
 

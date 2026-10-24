@@ -84,6 +84,7 @@ class ActionCenterView(discord.ui.View):
             self.remove_item(self.staff_reminders)
             self.remove_item(self.staff_setup)
             self.remove_item(self.staff_builder)
+            self.remove_item(self.staff_notification_directory)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if (
@@ -143,6 +144,13 @@ class ActionCenterView(discord.ui.View):
             return await _feedback(interaction, "Server staff only.")
         from .public_action_builder import open_action_builder
         await open_action_builder(interaction)
+
+    @discord.ui.button(label="Notification Systems", emoji="🧭", style=discord.ButtonStyle.secondary, row=1)
+    async def staff_notification_directory(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if not scoped_interaction_is_staff(interaction):
+            return await _feedback(interaction, "Server staff only.")
+        from .public_action_notification_directory import open_notification_owner_directory
+        await open_notification_owner_directory(interaction)
 
     @discord.ui.button(label="My Reminder Preferences", emoji="🔔", style=discord.ButtonStyle.secondary, row=2)
     async def my_preferences(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
