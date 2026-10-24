@@ -1252,3 +1252,38 @@ def test_supported_short_share_redirect_uses_same_provider_and_preserves_origina
         "https://www.facebook.com/watch/?v=123456789"
     )
     assert response.released
+
+
+def test_facebook_failure_probe_gives_specific_actionable_privacy_safe_status():
+    from stoney_verify.commands_ext import public_share_router as ui
+
+    assert "current extractor cannot parse" in ui._provider_probe_outcome(
+        "facebook", "provider_extractor_incompatible",
+    )
+    assert "video stream" in ui._provider_probe_outcome(
+        "facebook", "provider_no_downloadable_formats",
+    )
+    assert "does not" in ui._provider_probe_outcome(
+        "facebook", "provider_login_required",
+    )
+    assert "CAPTCHA" in ui._provider_probe_outcome(
+        "facebook", "provider_bot_verification",
+    )
+    assert ui._provider_probe_outcome(
+        "youtube", "provider_login_required",
+    ) == "provider_login_required"
+    for result in (
+        ui._provider_probe_outcome("facebook", "provider_extractor_incompatible"),
+        ui._provider_probe_outcome("facebook", "provider_no_downloadable_formats"),
+    ):
+        assert "token=" not in result
+        assert "https://" not in result
+
+
+def test_yt_dlp_upgrade_uses_released_version_not_unpinned_nightly():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    pinned = (root / "requirements.txt").read_text(encoding="utf-8")
+    assert "yt-dlp==2026.10.21" in pinned
+    assert "yt-dlp>=" not in pinned
