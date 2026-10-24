@@ -967,6 +967,20 @@ def test_filtered_existing_route_skips_chat_while_forwarding_video_link_without_
         assert calls.count("cleanup") == 1
         assert deleted == []
 
+        # Facebook short-video share-sheet URLs must pass Videos Only before
+        # the existing extractor/fallback is invoked.
+        await router.route_message(message("https://www.facebook.com/share/v/Abc123/", 4))
+        assert len(target.sent) == 2
+        assert calls.count("media") == 2
+        assert calls.count("torrent") == 2
+        assert calls.count("cleanup") == 2
+        assert deleted == []
+
+        # Photo share links are not unconditionally treated as videos.
+        await router.route_message(message("https://facebook.com/share/p/Photo123/", 5))
+        assert len(target.sent) == 2
+        assert calls.count("media") == 2
+
     asyncio.run(check())
 
 
