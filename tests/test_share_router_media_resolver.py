@@ -123,12 +123,13 @@ def test_facebook_progressive_format_retains_only_one_safe_declared_alternate() 
     assert resolved.media_url.endswith("hd.mp4?token=short")
     assert len(resolved.alternate_progressive) == 1
     assert resolved.alternate_progressive[0][0].endswith("sd.mp4?token=short")
-    # Do not leak the fallback to other providers without explicit acceptance.
+    # Reuse only one same-container alternate for other providers too.
     vimeo = media.select_media_resolution(
         info, source_url="https://vimeo.com/10000001",
         provider="vimeo", max_bytes=10_000_000,
     )
-    assert vimeo.alternate_progressive == ()
+    assert len(vimeo.alternate_progressive) == 1
+    assert vimeo.alternate_progressive[0][0].endswith("sd.mp4?token=short")
 
 
 def test_live_extractor_adapter_returns_safe_failure_not_raw_error(monkeypatch) -> None:
@@ -1285,5 +1286,46 @@ def test_yt_dlp_upgrade_uses_released_version_not_unpinned_nightly():
 
     root = Path(__file__).resolve().parents[1]
     pinned = (root / "requirements.txt").read_text(encoding="utf-8")
-    assert "yt-dlp==2026.10.21" in pinned
+    assert "yt-dlp[default]==2026.10.21" in pinned
     assert "yt-dlp>=" not in pinned
+
+
+
+def test_yt_dlp_adapter_selects_existing_js_runtime_without_network(monkeypatch):
+    from types import SimpleNamespace
+    import sys
+
+    options_seen = []
+
+    class YoutubeDL:
+        def __init__(self, options):
+            options_seen.append(options)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def extract_info(self, url, *, download):
+            assert download is False
+            return {"id": "test", "formats": []}
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", SimpleNamespace(YoutubeDL=YoutubeDL))
+
+    monkeypatch.setattr(media.shutil, "which", lambda binary: {
+        "deno": "/usr/bin/deno", "node": "/usr/bin/node",
+    }.get(binary))
+    assert isinstance(media._extract_info_sync("https://youtu.be/Test"), dict)
+    assert options_seen[-1]["js_runtimes"] == {"deno": {}}
+
+    monkeypatch.setattr(media.shutil, "which", lambda binary: {
+        "node": "/usr/bin/node",
+    }.get(binary))
+    media._extract_info_sync("https://youtu.be/Test")
+    assert options_seen[-1]["js_runtimes"] == {"node": {}}
+
+    monkeypatch.setattr(media.shutil, "which", lambda _binary: None)
+    media._extract_info_sync("https://youtu.be/Test")
+    assert "js_runtimes" not in options_seen[-1]
+    assert "remote_components" not in options_seen[-1]
