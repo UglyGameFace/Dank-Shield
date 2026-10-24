@@ -527,8 +527,13 @@ def library_payload(library: Mapping[str, Any], *, max_bytes: int = MAX_TEMPLATE
     if not 1 <= int(max_bytes) <= 4 * 1024 * 1024:
         raise StudioValidationError("Invalid Studio payload budget.")
     if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > int(max_bytes):
+        if int(max_bytes) == MAX_TEMPLATES_BYTES:
+            raise StudioValidationError(
+                "Studio storage is full (256 KiB shared by media, templates, themes, "
+                "drafts and posts). Shorten or remove unused saved work."
+            )
         raise StudioValidationError(
-            "Studio library storage is full for this backend. "
-            "Shorten or remove unused media, drafts or templates."
+            "Studio v2 library storage is full. Shorten or remove unused media, "
+            "drafts or templates."
         )
     return result
