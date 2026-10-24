@@ -482,7 +482,7 @@ class RecentFeatureUpdate:
 
 RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     RecentFeatureUpdate(
-        "embed_studio", "Media Library, Smart Text and brand themes",
+        "embed_studio", "Media Library, Smart Text and portable JSON",
         "Reuse saved images across embeds, add safe server details, and keep your designs consistent.", "2026-10-24",
     ),
     RecentFeatureUpdate(
