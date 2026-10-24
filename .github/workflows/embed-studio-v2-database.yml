@@ -43,7 +43,21 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
       - name: Install migration twice, proving idempotent schema
         run: |
-          psql -v ON_ERROR_STOP=1 -c "do \$\$ begin if not exists(select 1 from pg_roles where rolname='service_role') then create role service_role; end if; end \$\$;"
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $roles$
+          begin
+              if not exists(select 1 from pg_roles where rolname='service_role') then
+                  create role service_role;
+              end if;
+              if not exists(select 1 from pg_roles where rolname='anon') then
+                  create role anon;
+              end if;
+              if not exists(select 1 from pg_roles where rolname='authenticated') then
+                  create role authenticated;
+              end if;
+          end;
+          $roles$;
+          SQL
           psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200028_dankshield_embed_studio_v2.sql
           psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200028_dankshield_embed_studio_v2.sql
       - name: Check atomic CAS and individual item durability
@@ -91,8 +105,8 @@ jobs:
               public_read boolean;
               public_execute boolean;
           begin
-              select has_table_privilege('public','public.dank_embed_studio_items','select') into public_read;
-              select has_function_privilege('public','public.dank_embed_studio_write(text,bigint,jsonb,jsonb)','execute') into public_execute;
+              select has_table_privilege('anon','public.dank_embed_studio_items','select') into public_read;
+              select has_function_privilege('anon','public.dank_embed_studio_write(text,bigint,jsonb,jsonb)','execute') into public_execute;
               if public_read or public_execute then
                   raise exception 'Studio storage is publicly accessible';
               end if;
