@@ -196,7 +196,7 @@ def _center_embed() -> discord.Embed:
         value="Weather, useful lookups, dice, coin flips, and community games.",
         inline=False,
     )
-    embed.set_footer(text="Blue: start a task • Grey: browse or go back • Red: remove only")
+    embed.set_footer(text="Community Tools • previews stay private until you publish or post a test • Blue: open a task • Grey: browse • Red: remove")
     return embed
 
 
