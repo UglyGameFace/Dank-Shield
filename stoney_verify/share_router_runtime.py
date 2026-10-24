@@ -1965,6 +1965,18 @@ async def _cleanup_delivered_proxy_post(message: discord.Message, *, enabled: bo
     """Never discard failed sends. Successful sends clean their source or queue retry."""
     if not enabled:
         return
+    if not is_share_router_design_resource(message.channel):
+        # An ordinary legacy source can be switched from destructive to Keep
+        # Original while the previous relay is still finishing. Re-check the
+        # CURRENT persisted route before any DELETE, never the stale event copy.
+        # Fail closed if route state is unavailable.
+        try:
+            current_routes = await guild_routes(int(message.guild.id))
+            active = route_for_source(current_routes, int(message.channel.id))
+            if active is None or not route_deletes_source(message.channel, active):
+                return
+        except Exception:
+            return
     try:
         await message.delete()
         return
