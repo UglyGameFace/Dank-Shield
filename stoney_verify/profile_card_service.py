@@ -627,14 +627,20 @@ async def list_profile_guild_settings_namespace_page(
     ))
     if len(rows) > limit:
         raise ProfileStorageUnavailable("Malformed opt-in page")
-    previous = after_user_id
+    # Existing schema stores Discord snowflakes as TEXT; cursor/order use the
+    # same lexical comparison as the database, not Python integer ordering.
+    previous = str(after_user_id) if after_user_id else ""
     result: list[dict[str, Any]] = []
     for row in rows:
         try:
-            gid, uid = int(row["guild_id"]), int(row["user_id"])
+            gid, uid = int(row["guild_id"]), str(row["user_id"])
         except (KeyError, TypeError, ValueError, OverflowError):
             raise ProfileStorageUnavailable("Malformed opt-in page") from None
-        if gid != guild_id or uid <= previous or not isinstance(row.get("settings"), Mapping):
+        if (
+            gid != guild_id or not uid.isascii() or not uid.isdecimal()
+            or int(uid) <= 0 or uid <= previous
+            or not isinstance(row.get("settings"), Mapping)
+        ):
             raise ProfileStorageUnavailable("Malformed opt-in page")
         setting = row["settings"].get(namespace)
         if not isinstance(setting, Mapping) or setting.get(enabled_key) is not True:
