@@ -5,6 +5,7 @@ Pure model operations: no DB writes, Discord messages, startup hooks or globals.
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 
@@ -21,6 +22,9 @@ MAX_ROLE_ACTIONS = 10
 MAX_ROLE_BUTTONS = 5
 MAX_PROJECT_BYTES = 40000
 MAX_TEMPLATES_BYTES = 100000
+PORTABLE_FORMAT = "dank-shield-embed-studio"
+PORTABLE_VERSION = 1
+MAX_PORTABLE_BYTES = 65536
 
 
 class StudioValidationError(ValueError):
@@ -160,6 +164,70 @@ def validate_project(project: Mapping[str, Any]) -> dict[str, Any]:
     if len(repr(cleaned).encode("utf-8")) > MAX_PROJECT_BYTES:
         raise StudioValidationError("Draft exceeds the storage limit. Reduce media links or text.")
     return cleaned
+
+
+def export_portable_project(project: Mapping[str, Any], *, guild_id: int) -> bytes:
+    """Export a strictly validated editor project, never a published post or config.
+
+    The envelope includes the server of origin only to prevent accidentally
+    reusing interactive self-role IDs in another server.
+    """
+    if int(guild_id) <= 0:
+        raise StudioValidationError("Open the Studio inside a server to export.")
+    envelope = {
+        "format": PORTABLE_FORMAT,
+        "format_version": PORTABLE_VERSION,
+        "origin_guild_id": str(guild_id),
+        "project": validate_project(project),
+    }
+    data = json.dumps(envelope, ensure_ascii=False, indent=2).encode("utf-8")
+    if len(data) > MAX_PORTABLE_BYTES:
+        raise StudioValidationError("This draft is too large for a portable JSON file.")
+    return data
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise StudioValidationError("JSON has a repeated field name.")
+        result[key] = value
+    return result
+
+
+def _nonfinite_json(_value: str) -> Any:
+    raise StudioValidationError("JSON cannot contain non-finite numbers.")
+
+
+def import_portable_project(data: bytes, *, guild_id: int) -> dict[str, Any]:
+    """Read a bounded Studio export without trusting its filename or media type."""
+    if not isinstance(data, bytes) or not 0 < len(data) <= MAX_PORTABLE_BYTES:
+        raise StudioValidationError("Studio JSON must be a nonempty file under 64 KiB.")
+    if int(guild_id) <= 0:
+        raise StudioValidationError("Open the Studio inside a server to import.")
+    try:
+        envelope = json.loads(
+            data.decode("utf-8"), object_pairs_hook=_unique_object,
+            parse_constant=_nonfinite_json,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise StudioValidationError("File must contain valid UTF-8 Studio JSON.") from exc
+    if not isinstance(envelope, dict) or set(envelope) != {
+        "format", "format_version", "origin_guild_id", "project",
+    }:
+        raise StudioValidationError("File is not a supported Embed Studio export.")
+    if envelope["format"] != PORTABLE_FORMAT or type(envelope["format_version"]) is not int or envelope["format_version"] != PORTABLE_VERSION:
+        raise StudioValidationError("This Embed Studio export format is not supported.")
+    origin = envelope["origin_guild_id"]
+    if not isinstance(origin, str) or not origin.isascii() or not origin.isdecimal() or int(origin) <= 0:
+        raise StudioValidationError("Export has an invalid server of origin.")
+    model = validate_project(envelope["project"])
+    if int(origin) != int(guild_id) and model["role_actions"]:
+        raise StudioValidationError(
+            "This file has self-role controls from a different server. "
+            "Remove those controls in the original server before exporting for another."
+        )
+    return model
 
 
 def render_embeds(project: Mapping[str, Any]) -> list[discord.Embed]:

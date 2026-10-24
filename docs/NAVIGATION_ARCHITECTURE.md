@@ -24,7 +24,7 @@ and business logic. Navigation must never become a second implementation of a fe
 4. A feature may have shortcuts from other places, but shortcuts call the same owner.
 5. Do not duplicate save logic, permission checks, role/channel mutation, or persistence
    inside the navigation layer.
-6. New public destinations must be added to the registry and the reachability tests.
+6. New public destinations must be added to the registry, plain-language groups, merged-change notes, and reachability tests.
 7. Home is category-first. Do not add another one-off feature button directly to Home.
 8. Find a Feature should receive useful aliases when normal users may search by a
    different name than the product label.
@@ -48,11 +48,12 @@ Expected Home composition:
 🛡️ DANK SHIELD
 CONTROL CENTER
 ━━━━━━━━━━━━━━━━━━━━
-🧭 11 sections  •  ✨ 30 destinations
+🧭 12 sections  •  ✨ 37 destinations
 
 [ 🧭 Choose a section… ▾ ]
   ⚙️ Setup & Server Settings
   🚪 Onboarding & Access
+  📋 Actions & Notifications
   🛡️ Safety & Moderation
   👥 Members, Roles & Profiles
   🌿 Community & Engagement
@@ -75,6 +76,7 @@ names.
 | --- | --- | --- |
 | `setup` | ⚙️ Setup & Server Settings | Initial setup, mappings, permissions, configuration |
 | `access` | 🚪 Onboarding & Access | Verification reminders, agreements, Member Setup, welcome |
+| `actions` | 📋 Actions & Notifications | Action Inbox, reminder timing, member choice and notification settings |
 | `safety` | 🛡️ Safety & Moderation | Protection, AI Voice Safety, moderation, spam/invite safety |
 | `people` | 👥 Members, Roles & Profiles | Server roles and staff profile configuration |
 | `community` | 🌿 Community & Engagement | Toke Settings, Share Router Downloads, roles, pings, Hub |
@@ -95,7 +97,11 @@ aliases. For recently shipped major workflows, the same canonical registry
 entry can be pinned in the **New & Updated** Home shortcut using
 `RECENT_FEATURE_KEYS`; it is never an independent dispatcher.
 
-Current major destinations include:
+Current major destinations include (some were released before October 24):
+- **Embed Studio** → Design & Branding → the same editor opened from Community Tools and Setup. Draft autosave/recovery shipped in #711. PR #712 adds portable JSON files: the New & Updated note becomes valid when that PR merges and the bot is deployed, not when the PR is merely opened. Search “embed builder” or “create announcement”.
+- **Action & Reminder Center** → Actions & Notifications → code-complete optional Member Setup automation from #708. Disabled per guild until staff enables it; deployment and live delivery acceptance are separate.
+- **Share Router** → Community & Engagement → ordinary-channel preservation and per-route content filters from #709; video fallback improvements from #710.
+
 - **AI Voice Safety** → Voice & Accessibility → existing
   `open_voice_safety_center` under Protection Center, with its real admin and
   host privacy/DAVE gates. Search “voice moderation”, “voice patrol”, or
@@ -119,13 +125,37 @@ verify that the runtime actually uses the intended GitHub/Discloud revision.
 
 Navigation changes must keep:
 - identical key sets across `FEATURES` and `_FEATURE_ROUTE_KEYS`;
-- 11 stable Home sections (unless deliberately reviewed), no category with
+- 12 stable Home sections (unless deliberately reviewed), no category with
   zero destinations, unique keys/aliases and useful descriptions;
 - fewer than 25 total Discord components per view and component rows 0–4;
 - live dispatch to existing authorized feature owners, with no fake actions;
 - searchable names for new features and their everyday aliases;
+- `RECENT_UPDATES` is a truth-checked list of merged features, with meaningful one-sentence descriptions; no open PR or unverified deployment must be described as live;
 - `RECENT_FEATURE_KEYS` references that all resolve and render;
+- category page headings group tools by what moderators want to do, not backend subsystems;
+- consistent colors: **blue** for opening primary tools, **grey** for browsing/back/close, **green** for final confirmation, **red** only for destructive action;
+- the PR-only `tools/test_recent_feature_nav_contract.py` audit must inspect public-menu changes and require a navigation metadata review;
 - mobile Home’s compact full-name selector and no repetitive full-directory embed.
+
+## Release-note and language rule
+
+Whenever a PR changes a public menu or ships a visible feature, update
+`stoney_verify/navigation_registry.py` **in that PR** with a clear, accurate
+`RECENT_UPDATES` entry or revision of an existing one, useful everyday search
+aliases, and a proper category/group. Treat this as part of the Definition of
+Done, not optional cleanup. The standalone CI audit checks that a feature-menu
+PR also reviews navigation metadata.
+
+Only merged changes belong in New & Updated. Never advertise a draft PR, a
+code-complete-but-off feature as already running, or live health without proof.
+The bot does not query GitHub at runtime. Each note must stay rooted in the
+canonical feature entry; no competing runtime page or sender is allowed.
+
+Use words a first-time moderator understands. Prefer *"remind unverified
+members"* to *"eligibility scheduling"*, and *"save a draft"* to *"persist a
+revision"*. Where a product must retain a technical feature name, explain
+it below in a normal sentence. The top-level UI must fit Android and Discord's
+component limits, especially the five rows per message.
 
 ## Category page contract
 

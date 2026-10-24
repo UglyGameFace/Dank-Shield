@@ -21,6 +21,8 @@ from ..navigation_registry import (
     category_by_key,
     feature_by_key,
     features_for_category,
+    grouped_features,
+    RECENT_UPDATES,
     recent_features,
     search_features,
 )
@@ -100,8 +102,9 @@ def _home_embed() -> discord.Embed:
             "**CONTROL CENTER**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             f"🧭 **{len(CATEGORIES)} sections**  •  ✨ **{len(FEATURES)} destinations**\n\n"
-            "Choose where you want to go. Can't remember where something lives? "
-            "Use **🔎 Find Feature**."
+            "Pick a topic below, then choose what you want to do. "
+            "Not sure where to start? Use **Find Feature** and type everyday words.\n"
+            "Tap **New & Updated** to see what changed recently."
         ),
         color=discord.Color.blurple(),
     )
@@ -112,16 +115,16 @@ def _home_embed() -> discord.Embed:
 def _help_embed() -> discord.Embed:
     embed = discord.Embed(
         title="❓ Dank Shield Help",
-        description="Use the category pages, **Find**, or the complete **Directory**. Feature owners still enforce their own permissions.",
+        description="Pick a section, search by what you need, or browse every tool. Each feature checks your server permissions before making changes.",
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="Normal entry",
+        name="Start here",
         value="`/dank home` — categorized control center\n**🔎 Find** — search by normal words and aliases\n**📚 Directory** — complete categorized feature list",
         inline=False,
     )
     embed.add_field(
-        name="Optional fast doorways",
+        name="Quick commands",
         value=(
             "`/captions` — ordinary server voice captions and personal consent\n"
             "`/cinema` — Dank Cinema session, queue, info, and vote shortcuts\n"
@@ -136,7 +139,7 @@ def _help_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
-        name="Direct /dank shortcuts",
+        name="Other shortcuts",
         value=(
             "`/dank protection` • `/dank voice-safety` • `/dank diagnostics` • "
             "`/dank stats` • `/dank status` • `/dank logs`\n"
@@ -201,6 +204,7 @@ _FEATURE_ROUTE_KEYS = frozenset(
         "profile_builder",
         "community_pings_manager",
         "community_tools",
+        "embed_studio",
         "share_router",
         "share_downloads",
         "toke_settings",
@@ -234,30 +238,28 @@ if _FEATURE_ROUTE_KEYS != _REGISTRY_ROUTE_KEYS:
 
 
 def _category_embed(category: NavigationCategory) -> discord.Embed:
-    features = features_for_category(category.key)
     embed = discord.Embed(
         title=f"{category.emoji} {category.label}",
-        description=f"**Home › {category.label}**\n{category.description}",
+        description=(
+            f"**Home › {category.label}**\n{category.description}\n\n"
+            "Choose a button below. 🔒 means server staff must open it."
+        ),
         color=discord.Color.blurple(),
     )
-    lines = []
-    for feature in features:
-        lock = "🔒 " if feature.manager_only else ""
-        lines.append(f"{feature.emoji} **{feature.label}** — {lock}{feature.description}")
-    embed.add_field(
-        name="Features",
-        value="\n".join(lines)[:1024] if lines else "No features are registered here yet.",
-        inline=False,
-    )
-    embed.add_field(
-        name="Permissions",
-        value=(
-            "Manager-only destinations stay visible so nothing becomes a hidden treasure hunt. "
-            "The feature itself checks your live Discord authority when you open it."
-        ),
-        inline=False,
-    )
-    embed.set_footer(text=f"Dank Shield • Home › {category.label}")
+    for group_name, features in grouped_features(category.key):
+        lines = []
+        for feature in features:
+            lock = " 🔒" if feature.manager_only else ""
+            lines.append(
+                f"{feature.emoji} **{feature.label}**{lock}\n"
+                f"  {feature.description}"
+            )
+        embed.add_field(
+            name=group_name,
+            value="\n\n".join(lines)[:1024],
+            inline=False,
+        )
+    embed.set_footer(text="Blue = main tool • Grey = browse • Green = confirm • Red = delete")
     return embed
 
 
@@ -265,8 +267,8 @@ def _directory_embed() -> discord.Embed:
     embed = discord.Embed(
         title="📚 All Dank Shield Features",
         description=(
-            "Complete registry of the current public UI. Choose a category below, "
-            "or use **🔎 Find** from Home when you know the name or purpose."
+            "Every available tool, grouped by what it helps you do. "
+            "Choose a section below or use **Find Feature** on Home."
         ),
         color=discord.Color.blurple(),
     )
@@ -305,30 +307,37 @@ def _search_embed(query: str, results: list[NavigationFeature]) -> discord.Embed
             category_name = category.label if category is not None else feature.category
             lines.append(f"{feature.emoji} **{feature.label}** — {category_name}")
         embed.add_field(name=f"Matches • {len(results)}", value="\n".join(lines)[:1024], inline=False)
-    embed.set_footer(text="Search opens the existing canonical feature owner; it does not duplicate feature logic.")
+    embed.set_footer(text="Select the tool you want. Each tool checks permissions before making changes.")
     return embed
 
 
 def _recent_embed() -> discord.Embed:
-    features = recent_features()
     embed = discord.Embed(
-        title="✨ New & Updated Dank Shield Features",
+        title="✨ What's New in Dank Shield",
         description=(
             "**Home › New & Updated**\n"
-            "These shortcuts reflect existing feature owners, not duplicate controls. "
-            "Select a destination to open the current setup or member flow."
+            "These improvements are merged into the bot's code. "
+            "They appear in your server after its bot deployment is updated. "
+            "Tap a button to open the feature."
         ),
         color=discord.Color.blurple(),
     )
-    embed.add_field(
-        name="Updated destinations",
-        value="\n".join(
-            f"{feature.emoji} **{feature.label}** — {feature.description}"
-            for feature in features
-        )[:1024],
-        inline=False,
-    )
-    embed.set_footer(text="Dank Shield • Feature availability depends on server configuration and permissions")
+    grouped: dict[str, list[str]] = {}
+    for update in RECENT_UPDATES:
+        feature = feature_by_key(update.key)
+        if feature is None:
+            continue
+        grouped.setdefault(update.merged_date, []).append(
+            f"{feature.emoji} **{feature.label}: {update.headline}**\n"
+            f"  {update.detail}"
+        )
+    for date, lines in grouped.items():
+        embed.add_field(
+            name=f"Updated {date}",
+            value="\n\n".join(lines)[:1024],
+            inline=False,
+        )
+    embed.set_footer(text="Only merged updates • Features not yet merged are not listed")
     return embed
 
 
@@ -411,6 +420,10 @@ async def _route_feature(interaction: discord.Interaction, feature_key: str) -> 
     if key == "community_tools":
         from .public_community_tools import open_community_tools
         return await open_community_tools(interaction, replace_message=True)
+
+    if key == "embed_studio":
+        from ..embed_studio_ui import open_embed_studio
+        return await open_embed_studio(interaction)
 
     if key == "share_router":
         from .public_share_router import open_share_router
@@ -627,12 +640,22 @@ class _HomeSectionSelect(discord.ui.Select):
         await _open_category(interaction, value)
 
 
+# Blue marks the main starting point, never a staff-access level.
+# Real authorization remains inside each existing feature owner.
+_MAIN_FEATURE_KEYS = frozenset({
+    "setup_center", "verification", "action_reminder_center", "protection",
+    "roles_profiles", "share_router", "tickets", "embed_studio",
+    "live_captions", "server_stats", "my_profile", "help",
+})
+
+
 class _FeatureButton(discord.ui.Button):
     def __init__(self, feature: NavigationFeature, *, row: int) -> None:
         super().__init__(
             label=feature.label,
             emoji=feature.emoji,
-            style=discord.ButtonStyle.primary if feature.manager_only else discord.ButtonStyle.secondary,
+            style=(discord.ButtonStyle.primary if feature.key in _MAIN_FEATURE_KEYS
+                   else discord.ButtonStyle.secondary),
             custom_id=f"dank:navigation:feature:{feature.key}:v1"[:100],
             row=row,
         )
@@ -647,7 +670,7 @@ class _FindFeatureButton(discord.ui.Button):
         super().__init__(
             label="Find Feature",
             emoji="🔎",
-            style=discord.ButtonStyle.success,
+            style=discord.ButtonStyle.primary,
             custom_id="dank:navigation:find:v1",
             row=row,
         )
@@ -717,7 +740,7 @@ class _CloseNavigationButton(discord.ui.Button):
         super().__init__(
             label="Close",
             emoji="✖️",
-            style=discord.ButtonStyle.danger,
+            style=discord.ButtonStyle.secondary,
             custom_id=f"dank:navigation:close:{row}:v1",
             row=row,
         )
@@ -766,7 +789,8 @@ class FeatureCategoryView(_OwnedView):
     def __init__(self, owner_id: int, category_key: str) -> None:
         super().__init__(owner_id)
         self.category_key = str(category_key)
-        features = features_for_category(self.category_key)
+        groups = grouped_features(self.category_key)
+        features = tuple(feature for _label, group in groups for feature in group)
         for index, feature in enumerate(features):
             self.add_item(_FeatureButton(feature, row=index // 5))
 
@@ -823,7 +847,7 @@ class CompactHelpView(_OwnedView):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.danger, custom_id="dank:help:close:v1")
+    @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, custom_id="dank:help:close:v1")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.edit_message(content="Help closed.", embed=None, view=None)
