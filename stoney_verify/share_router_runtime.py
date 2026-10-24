@@ -868,6 +868,44 @@ async def save_managed_share_route(
         )
 
 
+async def save_existing_share_route(
+    guild: discord.Guild,
+    *,
+    source_channel_id: int,
+    target_channel_id: int,
+    created_by_id: int,
+) -> None:
+    """Save a non-destructive route from an existing ordinary text channel.
+
+    Unlike proxy routes, never make an ordinary channel temporary. Recheck all
+    selection facts under the existing per-guild deletion/configuration lock.
+    """
+    async with _guild_source_lock(int(guild.id)):
+        source = guild.get_channel(int(source_channel_id))
+        target = guild.get_channel(int(target_channel_id))
+        if not isinstance(source, discord.TextChannel) or not isinstance(target, discord.TextChannel):
+            raise ValueError("Source or destination no longer exists in this server.")
+        if source.guild.id != guild.id or target.guild.id != guild.id:
+            raise ValueError("Channels must belong to this server.")
+        if is_share_router_design_resource(source):
+            raise ValueError("Use Add / Change Route for managed Share Router proxies.")
+        if is_share_router_design_resource(target):
+            raise ValueError("Share Router proxy hubs cannot be forwarding destinations.")
+        if int(source.id) == int(target.id):
+            raise ValueError("Source and destination must be different channels.")
+        blockers = route_source_blockers(source, target, delete_source=False)
+        blockers.extend(route_permission_blockers(source, target, delete_source=False))
+        if blockers:
+            raise ValueError(blockers[0])
+        await save_route(
+            int(guild.id),
+            source_channel_id=int(source.id),
+            target_channel_id=int(target.id),
+            delete_source=False,
+            created_by_id=int(created_by_id),
+        )
+
+
 async def prune_missing_custom_share_sources(guild: discord.Guild) -> int:
     """Admin-triggered cleanup, using Discord's live channel listing as authority."""
     async with _guild_source_lock(int(guild.id)):
@@ -1424,6 +1462,27 @@ def route_permission_blockers(
     return blockers
 
 
+def route_source_blockers(
+    source: discord.TextChannel,
+    target: discord.TextChannel,
+    *,
+    delete_source: bool,
+) -> list[str]:
+    """Proxy privacy rules or safe non-destructive ordinary-channel rules."""
+    if delete_source:
+        return [problem for problem in (
+            source_age_blocker(source), source_privacy_blocker(source),
+        ) if problem]
+    if is_share_router_design_resource(source):
+        return ["Share Router proxy channels must use temporary proxy forwarding."]
+    try:
+        if source.is_nsfw() and not target.is_nsfw():
+            return ["An age-restricted source cannot forward into a non-age-restricted destination."]
+    except Exception:
+        return ["Could not verify source and destination age restrictions."]
+    return []
+
+
 def route_deletes_source(source: discord.TextChannel, route: Mapping[str, Any]) -> bool:
     """Managed proxy hubs are always temporary; keep legacy external routes compatible."""
     return bool(route.get("delete_source", True)) or is_share_router_design_resource(source)
@@ -1446,17 +1505,11 @@ def route_health(guild: discord.Guild, route: Mapping[str, Any]) -> RouteHealth:
     if blockers:
         return RouteHealth(tuple(blockers), tuple(warnings))
 
-    age_blocker = source_age_blocker(source)
-    if age_blocker:
-        blockers.append(age_blocker)
-    privacy = source_privacy_blocker(source)
-    if privacy:
-        blockers.append(privacy)
+    delete_source = route_deletes_source(source, route)
+    blockers.extend(route_source_blockers(source, target, delete_source=delete_source))
     blockers.extend(
         route_permission_blockers(
-            source,
-            target,
-            delete_source=route_deletes_source(source, route),
+            source, target, delete_source=delete_source,
         )
     )
 
@@ -2046,15 +2099,6 @@ async def route_message(message: discord.Message) -> None:
             await _relay_direct_memes_video(message, routes)
             return
 
-        age_blocker = source_age_blocker(message.channel)
-        if age_blocker:
-            await _route_rejection_log(message, target=None, reason=age_blocker)
-            return
-        privacy_blocker = source_privacy_blocker(message.channel)
-        if privacy_blocker:
-            await _route_rejection_log(message, target=None, reason=privacy_blocker)
-            return
-
         target_id = _safe_int(route.get("target_channel_id"), 0)
         target = guild.get_channel(target_id)
         if not isinstance(target, discord.TextChannel):
@@ -2082,6 +2126,16 @@ async def route_message(message: discord.Message) -> None:
         if not isinstance(me, discord.Member):
             return
         cleanup_source = route_deletes_source(message.channel, route)
+        # Proxy-only age/privacy rules cannot be applied to normal channels.
+        # Never let an age-restricted existing source publish to a public one.
+        source_blockers = route_source_blockers(
+            message.channel, target, delete_source=cleanup_source,
+        )
+        if source_blockers:
+            await _route_rejection_log(message, target=target, reason=source_blockers[0])
+            return
+        # Existing-channel routes are non-destructive, including after relay
+        # failures and repeated-content deduplication.
         permission_blockers = route_permission_blockers(
             message.channel,
             target,
@@ -2467,6 +2521,8 @@ __all__ = [
     "route_for_source",
     "route_health",
     "route_message",
+    "route_source_blockers",
+    "save_existing_share_route",
     "route_permission_blockers",
     "save_route",
     "source_age_blocker",
