@@ -10,12 +10,14 @@ PostgreSQL claim HISTORY are freshly checked by action_delivery_readiness.
 
 import asyncio
 from dataclasses import dataclass
+from typing import Mapping
 
 import discord
 
 from .action_delivery_readiness import inspect_member_setup_readiness
 from .action_member_consent import read_member_setup_opt_in_page
-from .member_setup_service import latest_revision, load_guild_setup_state
+from .guild_config import get_guild_config
+from .member_setup_service import GUILD_SETUP_KEY, latest_revision, normalize_guild_setup_state
 
 PAGE_SIZE = 5
 SOURCE_TIMEOUT_SECONDS = 8.0
@@ -79,10 +81,18 @@ async def preview_member_setup_opt_in_page(
         raise ValueError("Guild cache lookup is required")
 
     try:
-        guild_state = await asyncio.wait_for(
-            load_guild_setup_state(guild_id, refresh=True),
+        cfg = await asyncio.wait_for(
+            get_guild_config(guild_id, refresh=True),
             timeout=SOURCE_TIMEOUT_SECONDS,
         )
+        # load_guild_setup_state() alone normalizes failed DB reads into an
+        # empty state; for the staff report we must distinguish an outage from
+        # a legitimately unconfigured server rather than claiming "no setup".
+        if not isinstance(cfg, Mapping) or str(cfg.get("source") or "").startswith(
+            ("unavailable:", "env_fallback")
+        ):
+            raise RuntimeError("Guild configuration source unavailable")
+        guild_state = normalize_guild_setup_state(cfg.get(GUILD_SETUP_KEY))
         revision = guild_state.get("current_revision")
         publication = latest_revision(guild_state)
         if (
