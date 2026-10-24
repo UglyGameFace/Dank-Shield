@@ -53,7 +53,7 @@ def _preview_embed(page: CandidatePreviewPage) -> discord.Embed:
             "capped": "📊 Guild daily cap",
             "exhausted": "🔒 Attempt limit",
             "blocked": "⛔ Blocked",
-            "ledger_unavailable": "⚠️ Claim history unavailable",
+            "ledger_unavailable": "⚠️ Ledger / claim history unavailable",
             "unavailable": "⚠️ Condition unavailable",
             "not_cached": "❔ Not in member cache",
             "bot": "🤖 Bot account",
