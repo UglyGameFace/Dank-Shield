@@ -161,12 +161,12 @@ def test_no_new_worker_ledger_or_root_slash_command() -> None:
 def test_registry_navigation_and_search_discover_action_center() -> None:
     feature = nav.feature_by_key("action_reminder_center")
     assert feature is not None
-    assert feature.category == "access"
+    assert feature.category == "actions"
     assert not feature.manager_only
     assert nav.search_features("reminder center")[0].key == "action_reminder_center"
     assert nav.search_features("my actions")[0].key == "action_reminder_center"
     assert "Action & Reminder Center" in {
-        c.label for c in surface.FeatureCategoryView(11, "access").children
+        c.label for c in surface.FeatureCategoryView(11, "actions").children
         if isinstance(c, discord.ui.Button)
     }
     assert nav.REGISTRY_ERRORS == ()
