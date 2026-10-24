@@ -105,8 +105,13 @@ def _summary(session: StudioSession) -> discord.Embed:
     embed = discord.Embed(
         title="🧱 Dank Shield Embed Studio",
         description=(
-            "Build your message with the buttons below. The next screen shows "
-            "only what you need. Nothing goes public until you review and publish."
+            "**1. Make it yours:** Choose a starter layout, write your text, "
+            "and add images or extra sections.\n"
+            "**2. Add buttons (optional):** Link to a website or let members "
+            "choose safe, optional roles.\n"
+            "**3. Save or post:** Templates and JSON Files save your design "
+            "for later. Choose a channel, preview, then confirm to post.\n\n"
+            "Nothing is posted just by editing or saving."
         ),
         color=discord.Color.blurple(),
     )
@@ -138,7 +143,7 @@ def _summary(session: StudioSession) -> discord.Embed:
         value="Edit a previously published message" if session.post_key else "New draft",
         inline=True,
     )
-    embed.set_footer(text="Text • Appearance • Media • Fields • Links • Roles • Layout • Save • Preview")
+    embed.set_footer(text="Top row: build • Second row: buttons • Third row: saved work • Preview before posting")
     return embed
 
 
@@ -181,7 +186,7 @@ def _error(exc: Exception) -> str:
 class DestinationSelect(discord.ui.ChannelSelect):
     def __init__(self, session: StudioSession) -> None:
         super().__init__(
-            placeholder="1. Choose where to publish…",
+            placeholder="Choose a channel before you post…",
             min_values=1, max_values=1, row=4,
             channel_types=[discord.ChannelType.text],
         )
@@ -247,19 +252,19 @@ class StudioHomeView(_StudioView):
     async def edit_posted(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _published(interaction, self.session)
 
-    @discord.ui.button(label="Starter Layouts", emoji="✨", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Starter Layouts", emoji="✨", style=discord.ButtonStyle.primary, row=0)
     async def starter_layouts(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _starters(interaction, self.session)
 
-    @discord.ui.button(label="Reload Saved", emoji="📂", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="Reload Saved", emoji="📂", style=discord.ButtonStyle.secondary, row=2)
     async def reload_saved(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _reload_saved(interaction, self.session)
 
-    @discord.ui.button(label="JSON Files", emoji="📦", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="JSON Files", emoji="📦", style=discord.ButtonStyle.secondary, row=2)
     async def portable(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _portable_menu(interaction, self.session)
 
-    @discord.ui.button(label="Preview & Publish", emoji="👁️", style=discord.ButtonStyle.success, row=3)
+    @discord.ui.button(label="Preview & Publish", emoji="👁️", style=discord.ButtonStyle.primary, row=3)
     async def preview(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _review(interaction, self.session)
 
@@ -1269,7 +1274,7 @@ class StudioReviewView(_StudioView):
             for item in role_items:
                 self.add_item(discord.ui.Button(label=item["label"], disabled=True, style=discord.ButtonStyle.secondary, row=1))
 
-    @discord.ui.button(label="Publish / Save Edit", emoji="✅", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Confirm Post / Save Edit", emoji="✅", style=discord.ButtonStyle.success, row=0)
     async def publish(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         if self.sent:
             return await _say(interaction, "This confirmation has already been used.")
