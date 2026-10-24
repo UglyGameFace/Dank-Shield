@@ -74,11 +74,39 @@ dropdowns using the canonical role runtime; see
 
 Still **not** implemented by the draft-recovery slice: scheduled/campaign
 publishing, dynamic/live variables and updates, upload-file asset management,
-shared theme packs, raw JSON import/export, advanced forms or action buttons,
+shared theme packs, advanced forms or action buttons,
 and multi-admin draft collaboration. Autosave preserves each *individual*
 staff draft; it is not real-time multi-user co-editing. These advanced features
 require independent permissions, persistence and abuse/scale tests, and must
 extend the same model rather than create another editor.
+
+## Portable JSON import/export (new)
+
+From the existing editor use **JSON Files → Export JSON File** to privately
+receive a versioned `dank-embed-studio.json` attachment. The export includes
+validated plain content, up to ten embeds, fields, HTTPS links, appearance,
+media URLs and optional self-role controls. It never includes saved templates,
+other staff drafts, destination channels, published message IDs or role tokens.
+
+Use **JSON Files → Import JSON File** to upload that JSON through Discord's
+native file-upload modal. Only one file with a `.json` filename, at most
+64 KiB, is read with a bounded timeout. Invalid UTF-8, corrupt/unsupported
+formats, duplicate keys, invalid Discord embed limits and oversized projects
+fail closed without changing the current draft. The import resets the
+published-message edit target and keeps the current destination, then
+returns to the private editor; an explicit Preview & Publish confirmation is
+still required. Changed/stale editor sessions cannot silently be replaced
+while the upload is processing. File contents are not logged.
+
+Embed layouts without role controls can be imported across servers. An export
+containing self-role buttons or dropdowns may be imported **only into the
+original guild**; publishing still rechecks current role safety/hierarchy.
+This avoids accidentally granting old role IDs in a different server.
+
+This feature uses `discord.py==2.7.1`'s built-in `discord.ui.FileUpload`
+modal support. Android and desktop support should be tested live after merge;
+no migration, background worker, new slash root or third-party file host
+is required. Imports are drafts only, not new messages.
 
 ## Deployment and acceptance
 
