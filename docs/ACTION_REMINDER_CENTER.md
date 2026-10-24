@@ -39,6 +39,31 @@ remaining separately approved and disabled by default.
 environment switches, migrations, automatic scheduling, branch cleanup and
 other epic features.
 
+## Slice 4G: first-class Actions & Notifications category
+
+The `/dank home` section picker now includes **📋 Actions & Notifications**
+as its own category. The existing Action & Reminder Center moves out of
+Onboarding & Access. All feature callbacks keep the exact canonical source
+owners; **this change is navigation only**.
+
+Five entrypoints are registered under this category:
+
+- **Action & Reminder Center:** the existing private Action Inbox.
+- **Notification Systems:** staff-only directory into the six existing
+  notification owner controls.
+- **Action Builder (Draft):** staff-only rule editing, no active delivery.
+- **Schedule & Readiness (Draft):** staff-only timing/limits, private
+  read-only readiness checks and the already locked app-owner canary console.
+- **My Reminder Preferences:** per-member, per-guild consent and read-only
+  reminder eligibility status.
+
+Verification, Member Setup and Verification Reminders remain in
+**🚪 Onboarding & Access**. The six existing notification features keep
+their original Home locations as well. This adds no second scheduler,
+per-guild database, live notification switch, new worker, delivery history
+dashboard or sending. Any missing future diagnostics must be honestly
+marked as not shipped until implemented.
+
 ## Scope of this first slice
 
 Find it under **/dank home → Onboarding & Access → Action & Reminder Center**,

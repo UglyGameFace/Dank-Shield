@@ -97,6 +97,7 @@ def test_registry_preserves_all_previous_home_destinations() -> None:
 def test_registry_promotes_previously_buried_member_and_manager_destinations() -> None:
     by_key = {item.key: item for item in registry.FEATURES}
 
+    assert by_key["action_reminder_center"].category == "actions"
     assert by_key["member_setup_manager"].category == "access"
     assert by_key["community_pings_manager"].category == "community"
     assert by_key["share_router"].category == "community"
@@ -301,6 +302,7 @@ def test_navigation_home_category_descriptions_represent_recent_features() -> No
     for key in ("share_downloads", "toke_settings"):
         assert registry.feature_by_key(key).category == "community"
     assert registry.feature_by_key("verification_reminders").category == "access"
+    assert registry.feature_by_key("action_reminder_center").category == "actions"
 
 
 def test_merged_voice_safety_navigation_contract_from_pr_522() -> None:
@@ -326,3 +328,62 @@ def test_merged_voice_safety_navigation_contract_from_pr_522() -> None:
     assert 'if key == "voice_safety":' in code
     assert "from .public_voice_safety import open_voice_safety_center" in code
     assert "return await open_voice_safety_center(interaction)" in code
+
+
+def test_actions_and_notifications_is_a_distinct_mobile_category_with_live_owner_shortcuts() -> None:
+    from stoney_verify.commands_ext import (
+        public_action_builder,
+        public_action_notification_directory,
+        public_action_preferences,
+        public_action_schedule,
+    )
+    category = registry.category_by_key("actions")
+    assert category is not None
+    assert category.label == "Actions & Notifications"
+    assert category.emoji == "📋"
+    assert len(registry.CATEGORIES) <= 25
+    assert len(category.description) <= 100
+    expected = {
+        "action_reminder_center", "action_notification_systems", "action_builder",
+        "action_safety_schedule", "action_my_preferences",
+    }
+    assert {feature.key for feature in registry.features_for_category("actions")} == expected
+    labels = _labels(surface.FeatureCategoryView(42, "actions"))
+    assert {
+        "Action & Reminder Center", "Notification Systems", "Action Builder (Draft)",
+        "Schedule & Readiness (Draft)", "My Reminder Preferences",
+        "Back", "Home", "Refresh", "Close",
+    } <= labels
+    assert "Action & Reminder Center" not in _labels(surface.FeatureCategoryView(42, "access"))
+    assert {"Verification", "Member Setup Manager", "Verification Reminders"} <= _labels(
+        surface.FeatureCategoryView(42, "access")
+    )
+    assert registry.search_features("actions and notifications")[0].key == "action_reminder_center"
+    assert registry.search_features("actions & notifications")[0].key == "action_reminder_center"
+    assert registry.search_features("notification systems")[0].key == "action_notification_systems"
+    assert registry.search_features("reminder center")[0].key == "action_reminder_center"
+    assert registry.search_features("my reminder preferences")[0].key == "action_my_preferences"
+    assert registry.search_features("delivery readiness")[0].key == "action_safety_schedule"
+    assert registry.feature_by_key("action_notification_systems").manager_only
+    assert registry.feature_by_key("action_builder").manager_only
+    assert registry.feature_by_key("action_safety_schedule").manager_only
+    assert not registry.feature_by_key("action_my_preferences").manager_only
+
+    source = __import__("inspect").getsource(surface._route_feature)
+    for feature_key, owner in (
+        ("action_notification_systems", "open_notification_owner_directory"),
+        ("action_builder", "open_action_builder"),
+        ("action_safety_schedule", "open_schedule_panel"),
+        ("action_my_preferences", "open_member_action_preferences"),
+    ):
+        assert f'if key == "{feature_key}":' in source
+        assert owner in source
+    for func in (
+        public_action_builder.open_action_builder,
+        public_action_notification_directory.open_notification_owner_directory,
+        public_action_schedule.open_schedule_panel,
+    ):
+        assert "scoped_interaction_is_staff" in __import__("inspect").getsource(func)
+    assert "read_member_consent" in __import__("inspect").getsource(
+        public_action_preferences.open_member_action_preferences
+    )
