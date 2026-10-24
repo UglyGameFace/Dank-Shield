@@ -81,7 +81,7 @@ def test_member_private_view_does_not_expose_another_members_settings():
     assert on.enable.disabled is True
     assert on.stop.disabled is False
     labels = {v.label for v in on.children if isinstance(v, discord.ui.Button)}
-    assert labels == {"Enable Future Setup DMs", "Stop Setup DMs", "Back to Action Inbox"}
+    assert labels == {"Enable Future Setup DMs", "Stop Setup DMs", "Check Setup DM Status", "Back to Action Inbox"}
     assert "not live" in ui._embed(prefs.MemberReminderConsent()).description
     assert "Verification reminders have separate controls" in ui._embed(prefs.MemberReminderConsent()).description
 
@@ -203,3 +203,58 @@ def test_preflight_unknown_publication_and_outage_fail_closed(monkeypatch):
     decision = asyncio.run(gate.inspect_member_setup_candidate(member, expected_revision=3))
     assert decision.status == "unavailable"
     assert not decision.delivery_authorized
+
+
+def test_member_setup_status_is_read_only_and_uses_authoritative_adapter(monkeypatch):
+    from stoney_verify import member_setup_service
+    from stoney_verify import action_delivery_readiness
+    member = SimpleNamespace(guild=SimpleNamespace(id=901), id=902)
+    seen = []
+    async def load(guild_id, *, refresh):
+        seen.append(("setup", guild_id, refresh))
+        return {"current_revision": 8}
+    async def inspect(target, *, expected_revision):
+        seen.append(("eligibility", target.id, expected_revision))
+        return SimpleNamespace(status="exempt", next_at=None)
+    monkeypatch.setattr(member_setup_service, "load_guild_setup_state", load)
+    monkeypatch.setattr(action_delivery_readiness, "inspect_member_setup_readiness", inspect)
+    status = asyncio.run(ui._read_my_setup_dm_status(member))
+    assert seen == [("setup", 901, True), ("eligibility", 902, 8)]
+    assert "owners" in status and "exempt" in status.lower()
+    assert "No Action Center DM is scheduled or authorized" in status
+    assert "🛡️ Current Member Setup DM status" in {
+        field.name for field in ui._embed(prefs.MemberReminderConsent(), status=status).fields
+    }
+
+
+def test_member_setup_status_without_published_revision_never_inspects_claims(monkeypatch):
+    from stoney_verify import member_setup_service
+    from stoney_verify import action_delivery_readiness
+    async def no_revision(guild_id, *, refresh):
+        return {"current_revision": 0}
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("No private DB or readiness call without a revision")
+    monkeypatch.setattr(member_setup_service, "load_guild_setup_state", no_revision)
+    monkeypatch.setattr(action_delivery_readiness, "inspect_member_setup_readiness", forbidden)
+    status = asyncio.run(ui._read_my_setup_dm_status(
+        SimpleNamespace(guild=SimpleNamespace(id=901), id=902),
+    ))
+    assert "No published Member Setup revision" in status
+    assert "Delivery remains disabled" in status
+
+
+def test_member_setup_status_unknown_result_fails_closed_without_exposing_reason(monkeypatch):
+    from stoney_verify import member_setup_service
+    from stoney_verify import action_delivery_readiness
+    async def load(guild_id, *, refresh):
+        return {"current_revision": 1}
+    async def inspect(member, *, expected_revision):
+        return SimpleNamespace(status="raw-db-error", reason="private password", next_at=None)
+    monkeypatch.setattr(member_setup_service, "load_guild_setup_state", load)
+    monkeypatch.setattr(action_delivery_readiness, "inspect_member_setup_readiness", inspect)
+    status = asyncio.run(ui._read_my_setup_dm_status(
+        SimpleNamespace(guild=SimpleNamespace(id=901), id=902),
+    ))
+    assert "Eligibility could not be verified" in status
+    assert "private password" not in status
+    assert "Delivery remains disabled" in status
