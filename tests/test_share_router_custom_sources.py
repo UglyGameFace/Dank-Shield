@@ -512,3 +512,231 @@ def test_repair_post_defer_render_failure_reports_explicit_error():
     assert "Hub repair ran, but Share Router could not display its status" in repair
     assert "share_router repair status failed" in repair
     assert "except discord.HTTPException:" in repair
+
+
+def _ordinary_route_fixture(monkeypatch, router_module, *, guild_id=1666):
+    """An ordinary public channel, not hidden Share Router infrastructure."""
+    import discord
+
+    guild = FakeGuild(guild_id)
+    ordinary = FakeCategory(55001, "Community", guild)
+    guild.categories.append(ordinary)
+    source = FakeTextChannel(guild, "gaming-clips", ordinary, 55101)
+    target = FakeTextChannel(guild, "games-and-media", ordinary, 55102)
+    for channel in (source, target):
+        ordinary.channels.append(channel)
+        guild.channels[channel.id] = channel
+        channel.nsfw = False
+        channel.mention = f"<#{channel.id}>"
+        channel.sent = []
+        channel.fail = False
+
+    class Member:
+        id = 4343
+        mention = "<@4343>"
+        bot = False
+        def __init__(self, guild):
+            self.guild = guild
+
+    member = Member(guild)
+    guild.me = member
+
+    def permissions(_channel, _actor):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            view_channel=True, read_message_history=True,
+            send_messages=True, manage_messages=False,
+            attach_files=True, embed_links=True,
+        )
+
+    async def send(self, content="", **_kwargs):
+        if self.fail:
+            raise RuntimeError("simulated target outage")
+        self.sent.append(content)
+        from types import SimpleNamespace
+        return SimpleNamespace(id=92929)
+
+    monkeypatch.setattr(router_module.discord, "Member", Member)
+    monkeypatch.setattr(FakeTextChannel, "permissions_for", permissions, raising=False)
+    monkeypatch.setattr(FakeTextChannel, "is_nsfw", lambda ch: ch.nsfw, raising=False)
+    monkeypatch.setattr(FakeTextChannel, "send", send, raising=False)
+    return guild, source, target, member
+
+
+def test_existing_channel_routes_are_non_destructive_and_guild_scoped(
+    isolated_router, monkeypatch,
+):
+    guild, source, target, _member = _ordinary_route_fixture(monkeypatch, router)
+
+    async def check():
+        await router.save_existing_share_route(
+            guild, source_channel_id=source.id,
+            target_channel_id=target.id, created_by_id=12345,
+        )
+        routes = await router.guild_routes(guild.id)
+        assert len(routes) == 1
+        assert routes[0]["source_channel_id"] == str(source.id)
+        assert routes[0]["target_channel_id"] == str(target.id)
+        assert routes[0]["delete_source"] is False
+        assert router.route_deletes_source(source, routes[0]) is False
+        assert router.route_health(guild, routes[0]).ok
+        assert guild.me and not source.deleted
+
+        # Reconfiguration never silently converts an ordinary source to a
+        # destructive proxy route. A second guild cannot use these channels.
+        with pytest.raises(ValueError, match="different channels"):
+            await router.save_existing_share_route(
+                guild, source_channel_id=source.id,
+                target_channel_id=source.id, created_by_id=12345,
+            )
+        other = FakeGuild(2666)
+        with pytest.raises(ValueError, match="no longer exists"):
+            await router.save_existing_share_route(
+                other, source_channel_id=source.id,
+                target_channel_id=target.id, created_by_id=12345,
+            )
+        assert len(await router.guild_routes(guild.id)) == 1
+        assert await router.guild_routes(other.id) == []
+
+    asyncio.run(check())
+
+
+def test_existing_channel_saves_reject_age_leak_managed_hubs_and_permission_gaps(
+    isolated_router, monkeypatch,
+):
+    guild, source, target, _member = _ordinary_route_fixture(monkeypatch, router, guild_id=1667)
+
+    async def check():
+        source.nsfw = True
+        with pytest.raises(ValueError, match="age-restricted"):
+            await router.save_existing_share_route(
+                guild, source_channel_id=source.id,
+                target_channel_id=target.id, created_by_id=5,
+            )
+        source.nsfw = False
+        original = FakeTextChannel.permissions_for
+        def source_blocked(ch, actor):
+            if ch is source:
+                from types import SimpleNamespace
+                return SimpleNamespace(
+                    view_channel=False, read_message_history=True,
+                    manage_messages=False, send_messages=True,
+                )
+            return original(ch, actor)
+        monkeypatch.setattr(FakeTextChannel, "permissions_for", source_blocked)
+        with pytest.raises(ValueError, match="cannot view source"):
+            await router.save_existing_share_route(
+                guild, source_channel_id=source.id,
+                target_channel_id=target.id, created_by_id=5,
+            )
+        monkeypatch.setattr(FakeTextChannel, "permissions_for", original)
+        # Managed proxy channels are exclusively controlled by the existing UI.
+        proxy = await router.create_custom_share_source(guild, None, "Extra Videos")
+        with pytest.raises(ValueError, match="managed Share Router proxies"):
+            await router.save_existing_share_route(
+                guild, source_channel_id=proxy.id,
+                target_channel_id=target.id, created_by_id=5,
+            )
+        with pytest.raises(ValueError, match="cannot be forwarding destinations"):
+            await router.save_existing_share_route(
+                guild, source_channel_id=source.id,
+                target_channel_id=proxy.id, created_by_id=5,
+            )
+        assert await router.guild_routes(guild.id) == []
+
+    asyncio.run(check())
+
+
+def test_actual_existing_forwarding_keeps_original_even_on_duplicate_and_error(
+    isolated_router, monkeypatch,
+):
+    from types import SimpleNamespace
+    guild, source, target, member = _ordinary_route_fixture(monkeypatch, router, guild_id=1668)
+    deleted = []
+    rejected = []
+    cleaned = []
+
+    async def relay(*_args, **_kwargs):
+        return False
+
+    async def modlog(*_args, **_kwargs):
+        return None
+
+    async def rejection(*_args, **kwargs):
+        rejected.append(kwargs.get("reason"))
+
+    async def cleanup(_msg, *, enabled):
+        cleaned.append(enabled)
+        assert enabled is False
+
+    monkeypatch.setattr(router, "_relay_native_video_upload", relay)
+    monkeypatch.setattr(router, "_send_modlog", modlog)
+    monkeypatch.setattr(router, "_route_rejection_log", rejection)
+    monkeypatch.setattr(router, "_cleanup_delivered_proxy_post", cleanup)
+    monkeypatch.setattr(router, "_RECENT_ROUTE_KEYS", {})
+    monkeypatch.setattr(router, "_route_torrent_media", relay)
+
+    def message(content="A gaming clip! https://example.com/video", message_id=121):
+        async def delete(*_args, **_kwargs):
+            deleted.append(message_id)
+        return SimpleNamespace(
+            id=message_id, guild=guild, channel=source, author=member,
+            content=content, attachments=[], embeds=[], webhook_id=None,
+            delete=delete,
+        )
+
+    async def check():
+        await router.save_existing_share_route(
+            guild, source_channel_id=source.id,
+            target_channel_id=target.id, created_by_id=6,
+        )
+        await router.route_message(message())
+        assert len(target.sent) == 1
+        assert "gaming clip" in target.sent[0].lower()
+        assert deleted == []
+        assert cleaned == [False]
+
+        # Existing Router dedupe never deletes either original.
+        await router.route_message(message(message_id=122))
+        assert len(target.sent) == 1
+        assert deleted == []
+        assert cleaned == [False, False]
+
+        target.fail = True
+        await router.route_message(message(content="Something else", message_id=123))
+        assert len(target.sent) == 1
+        assert deleted == []
+        assert cleaned == [False, False]
+        assert rejected and "Destination delivery failed" in rejected[-1]
+
+        # Age restrictions are rechecked during runtime, not only on save.
+        target.fail = False
+        source.nsfw = True
+        await router.route_message(message(content="Third clip", message_id=124))
+        assert len(target.sent) == 1
+        assert "age-restricted" in rejected[-1]
+        assert deleted == []
+
+    asyncio.run(check())
+
+
+def test_existing_source_uses_shared_search_safe_browser_and_real_ui_controls():
+    from stoney_verify.commands_ext import public_share_router as ui
+    from discord import ui as discord_ui
+
+    view = ui.ShareRouterView(42)
+    buttons = {part.label for part in view.children if isinstance(part, discord_ui.Button)}
+    assert "Use Existing Channel" in buttons
+    assert "Create Proxy" in buttons
+    assert "Add / Change Route" in buttons
+    assert len(view.children) <= 25
+    text = Path(ui.__file__).read_text(encoding="utf-8")
+    assert 'custom_id="dank:share_router:existing_source"' in text
+    assert 'resource_kinds=("text",)' in text
+    assert "DankGuildResourceBrowserView(" in text
+    assert "await _open_existing_source_picker(interaction)" in text
+    assert "delete_source=False" in text
+    assert "route_source_blockers(" in text
+    assert "route_permission_blockers(" in text
+    assert "save_existing_share_route" in text
+    assert "discord.ui.ChannelSelect" not in text
