@@ -23,7 +23,7 @@ from .embed_studio_core import (
     link_view, default_embed, parse_library, library_payload, https_url, draft_snapshot,
     MAX_PORTABLE_BYTES, export_portable_project, import_portable_project,
     MAX_THEMES, THEME_PRESETS, theme_name, theme_from_project, apply_theme,
-    MAX_MEDIA_ITEMS, SMART_TEXT_TOKENS, validate_media_item, apply_media_url, resolve_smart_text,
+    MAX_MEDIA_ITEMS, MAX_TEMPLATES_BYTES, SMART_TEXT_TOKENS, validate_media_item, apply_media_url, resolve_smart_text,
 )
 
 _MENTIONS = discord.AllowedMentions.none()
@@ -509,7 +509,7 @@ class MediaSaveModal(discord.ui.Modal, title="Save Image or GIF Link"):
                                         "url": str(self.url_input.value or "")})
             source, lib = await _load_library(self.session.guild_id)
             if len(lib["media"]) >= MAX_MEDIA_ITEMS:
-                return await _say(interaction, "Twelve media links are saved. Remove one first.")
+                return await _say(interaction, f"{MAX_MEDIA_ITEMS} media links are saved. Remove one first.")
             if any(str(row.get("name") or "").casefold() == item["name"].casefold()
                    for row in lib["media"].values()):
                 return await _say(interaction, "That media name is already taken.")
@@ -522,11 +522,18 @@ class MediaSaveModal(discord.ui.Modal, title="Save Image or GIF Link"):
         await _say(interaction, "✅ Saved the reusable media link for this server. Nothing posted.")
 
 
+MEDIA_PAGE_SIZE = 20
+
+
 class MediaLinkSelect(discord.ui.Select):
-    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
+    def __init__(self, session: StudioSession, lib: dict[str, Any], *, page: int = 0) -> None:
         self.session = session
-        choices = [discord.SelectOption(label=str(item["name"])[:100], value=key)
-                   for key, item in lib["media"].items()]
+        start = page * MEDIA_PAGE_SIZE
+        entries = list(lib["media"].items())[start:start + MEDIA_PAGE_SIZE]
+        choices = [
+            discord.SelectOption(label=str(item["name"])[:100], value=key)
+            for key, item in entries
+        ]
         if not choices:
             choices = [discord.SelectOption(label="No saved media yet", value="none")]
         super().__init__(placeholder="Choose a saved image or GIF", options=choices, row=0)
@@ -591,15 +598,28 @@ class MediaPlacementMenu(_StudioView):
 
 
 class MediaLibraryMenu(_StudioView):
-    def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
+    def __init__(self, session: StudioSession, lib: dict[str, Any], *, page: int = 0) -> None:
         super().__init__(session)
-        self.add_item(MediaLinkSelect(session, lib))
+        count = len(lib["media"])
+        self.pages = max(1, (count + MEDIA_PAGE_SIZE - 1) // MEDIA_PAGE_SIZE)
+        self.page = max(0, min(int(page), self.pages - 1))
+        self.add_item(MediaLinkSelect(session, lib, page=self.page))
+        self.previous.disabled = self.page == 0
+        self.next.disabled = self.page >= self.pages - 1
 
     @discord.ui.button(label="Save Media Link", emoji="💾", style=discord.ButtonStyle.primary, row=1)
     async def save(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await interaction.response.send_modal(MediaSaveModal(self.session))
 
-    @discord.ui.button(label="Back to Studio", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Previous", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def previous(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _media_library(interaction, self.session, page=self.page - 1)
+
+    @discord.ui.button(label="Next", emoji="▶️", style=discord.ButtonStyle.secondary, row=1)
+    async def next(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _media_library(interaction, self.session, page=self.page + 1)
+
+    @discord.ui.button(label="Back to Studio", emoji="🏠", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _home(interaction, self.session)
 
@@ -633,20 +653,23 @@ class ConfirmMediaRemoval(_StudioView):
         await _media_library(interaction, self.session)
 
 
-async def _media_library(interaction: discord.Interaction, session: StudioSession) -> None:
+async def _media_library(interaction: discord.Interaction, session: StudioSession, *, page: int = 0) -> None:
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True)
     try:
         _source, lib = await _load_library(session.guild_id)
     except Exception as exc:
         return await _say(interaction, _error(exc))
+    view = MediaLibraryMenu(session, lib, page=page)
     await _menu(
         interaction, heading="🖼️ Reusable Media Library",
         description=(
-            f"{len(lib['media'])}/{MAX_MEDIA_ITEMS} links. Save direct HTTPS image or GIF URLs "
-            "and reuse them for large images, thumbnails and icons. These are links, not file uploads."
+            f"{len(lib['media'])}/{MAX_MEDIA_ITEMS} saved links • Page {view.page + 1}/{view.pages}. "
+            "Use Previous/Next to browse. Save direct HTTPS image or GIF URLs and reuse "
+            "them for large images, thumbnails and icons. These are links, not file uploads. "
+            "Media, drafts and templates share a 256 KiB Studio storage budget."
         ),
-        view=MediaLibraryMenu(session, lib),
+        view=view,
     )
 
 
