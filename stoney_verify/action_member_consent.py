@@ -3,8 +3,8 @@ from __future__ import annotations
 """Private, per-member per-guild consent for FUTURE Member Setup reminder DMs.
 
 This namespace is independent of verification reminders, profile visibility and
-4:20 opt-outs. Default is OFF. No worker/sender can use these settings yet.
-Read failures must never become implicit consent.
+4:20 opt-outs. Default is OFF. Automatic Member Setup delivery can use the explicit opt-in after fresh owner
+checks and durable PostgreSQL reservation. Read failures never imply consent.
 """
 
 from dataclasses import dataclass
@@ -87,10 +87,10 @@ async def read_member_setup_opt_in_page(
 ) -> MemberSetupOptInPage:
     """Only valid explicitly opted-in profiles, using the existing JSONB store.
 
-    Returns a bounded source feed for a future scheduler. Absolutely no member
-    fetch, condition check, claim, Discord DM, worker or activation. A future
-    sender MUST freshly re-read consent and canonical member revision before
-    and after a durable PostgreSQL claim.
+    Returns a bounded source feed for the opt-in-only Member Setup worker.
+    This read does NOT fetch a member, inspect eligibility, claim or send.
+    The sender independently rechecks consent and owner revision before and
+    after durable PostgreSQL reservation.
     """
     from .profile_card_service import list_profile_guild_settings_namespace_page
 

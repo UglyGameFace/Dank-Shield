@@ -25,9 +25,9 @@ class NotificationOwner:
 NOTIFICATION_OWNERS: tuple[NotificationOwner, ...] = (
     NotificationOwner(
         "verification", "Verification Reminders", "📩",
-        "Opt-in Simple Verify nudges; role truth and delivery history remain with Verification.",
+        "Server-managed Simple Verify nudges automatically cover Unverified members; stops after verification.",
         "verification_reminders", "stoney_verify.verification_reminders",
-        "Existing scheduled worker; private PostgreSQL claims and bounded sends.",
+        "Existing server-enabled worker; all pending Unverified members are eligible without personal opt-in.",
     ),
     NotificationOwner(
         "activity", "Member Activity Notices", "👥",

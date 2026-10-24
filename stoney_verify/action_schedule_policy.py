@@ -2,8 +2,9 @@ from __future__ import annotations
 
 """Action Center 4C: conservative guild schedule policy and safe dry-run.
 
-No worker reads this policy to send messages; saved delivery is ALWAYS off.
-Completion truth and verification reminders remain owned by existing systems.
+The schedule object remains planning-only for backwards compatibility. A
+separate per-guild automation toggle gates Member Setup delivery. Completion
+truth and verification reminders remain owned by existing systems.
 """
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -59,7 +60,7 @@ class ActionSchedule:
             raise ValueError("Choose a supported schedule preset")
         zone_name(self.timezone)
         if self.enabled is not False:
-            raise ValueError("Schedule is planning-only; cannot activate delivery")
+            raise ValueError("Schedule object is settings-only; use guild automation toggle")
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -80,7 +81,7 @@ def parse_schedule(config: Mapping[str, Any]) -> ActionSchedule:
     if not isinstance(raw, Mapping) or type(raw.get("version")) is not int or raw["version"] != VERSION:
         raise ValueError("Unsupported schedule schema")
     if raw.get("enabled") is not False or raw.get("delivery") != "preview_only":
-        raise ValueError("Live scheduling is not enabled by 4C")
+        raise ValueError("The schedule contains an unexpected delivery switch")
     keys = ("revision", "first_delay_hours", "repeat_hours", "max_attempts",
             "quiet_start", "quiet_end", "max_guild_per_day")
     if any(type(raw.get(key)) is not int for key in keys):

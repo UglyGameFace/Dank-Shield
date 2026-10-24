@@ -1093,6 +1093,14 @@ async def _start_workers_once() -> None:
     except Exception as e:
         print("⚠️ 4:20 delivery worker failed:", type(e).__name__)
 
+    try:
+        from .action_member_setup_worker import start_member_setup_automatic_worker
+        task = start_member_setup_automatic_worker(bot)
+        if task is not None:
+            print("📋 Member Setup reminder worker started (guild switch default off)")
+    except Exception as e:
+        print("⚠️ Member Setup reminder worker failed:", type(e).__name__)
+
 
 async def _startup_background_runner() -> None:
     try:

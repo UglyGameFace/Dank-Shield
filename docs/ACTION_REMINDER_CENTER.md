@@ -151,6 +151,53 @@ operator-deferred**. The next gated delivery milestone must include
 an explicit, reviewed production activation plan and an accepted live canary;
 this PR does not activate an automatic scheduler.
 
+## Slice 4K: automatic reminders v1 (code-complete release)
+
+Dank Shield uses **two different existing notification owners**, intentionally:
+
+- **Unverified members:** no individual opt-in required. The preexisting
+  **Verification Reminders** worker automatically targets anyone still pending
+  Simple Verify when the guild owner enables its verification reminder policy.
+  Completion/role truth stops reminders. Its own verified-scope settings,
+  PostgreSQL ledger, rate limits and history are unchanged. Action Center
+  does **not** create another verification sender.
+- **Member Setup revisions:** optional per-member **My Reminder Preferences**
+  opt-in is separate. Guild staff control **Enable/Disable Automatic Setup DMs**
+  in **/dank → 📋 Actions & Notifications → Schedule & Readiness**. Each guild
+  defaults **OFF**, cannot enable without an active published Member Setup
+  revision, included Builder rule and working private PostgreSQL delivery
+  ledger. This toggle requires no Discloud environment variables.
+
+When guild staff enable Member Setup automatic reminders, the runtime worker:
+1. Starts once after guarded bot initialization plus 120-second quiet window.
+   One pass every 180 seconds, max 8 guilds/pass and 4 claims/pass;
+   max two claims per guild/pass.
+2. Reads up to 5 explicitly opted-in profiles from one guild at a time
+   through the **existing** profile-store JSONB namespace page. Uses a cursor,
+   never a full Discord guild member list. At most 8 targeted Discord member
+   REST gets per pass, strictly for opted-in IDs absent from the local cache
+   or confirming their continued membership post-claim.
+3. Rechecks the **canonical** Member Setup published revision/completion,
+   member consent, exemptions, quiet window, retry interval and private
+   PostgreSQL claim-history budget. No guessed statuses authorize sending.
+4. Atomically commits a per-member/per-revision attempt and per-guild/day
+   budget through the **already deployed private PostgreSQL schema** before
+   sending. On claim failure or uncertainty: no send.
+5. Rereads the server switch, schedule, owner completion, opt-out, revision
+   and membership after the claim. If any check fails, suppresses the DM
+   and keeps the claim consumed. Sends a single link-free, mention-free
+   private message only on fresh successful checks.
+6. Shows guild-private since-start attempt, sent, cancelled, failed and
+   unavailable totals to staff in Schedule & Readiness. Runtime counters
+   reset on restart; durable PostgreSQL claims and cooldowns do not.
+
+**Release contract:** code-complete after exact-head CI and mock integration
+tests pass, **not production-validated**. No live canary is forced on the
+owner; no server auto-enables on deploy. After merge/deployment, guild staff
+can opt in to automatic Member Setup delivery using the toggle. Owner will
+perform real-world testing later and file follow-up bugs as needed.
+No new migrations, tables, secrets, verification senders or root commands.
+
 ## Scope of this first slice
 
 Find it under **/dank home → Onboarding & Access → Action & Reminder Center**,

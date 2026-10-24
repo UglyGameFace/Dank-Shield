@@ -147,7 +147,7 @@ def test_per_guild_schedule_uses_atomic_cas(monkeypatch):
 def test_staff_buttons_and_no_scheduler_or_dm():
     v=ui.ScheduleView(42,123,policy.ActionSchedule())
     labels={child.label for child in v.children if isinstance(child,discord.ui.Button)}
-    assert labels=={"Edit Timing & Limits","Preview Timing","Check Delivery Readiness","Preview Opted-in Members","Owner Canary Console","Back to Action Builder"}
+    assert labels=={"Enable Automatic Setup DMs","Edit Timing & Limits","Preview Timing","Check Delivery Readiness","Preview Opted-in Members","Owner Canary Console","Back to Action Builder"}
     b=builder.ActionBuilderView(42,123,__import__("stoney_verify.action_builder_policy",fromlist=["ActionBuilderDraft"]).ActionBuilderDraft())
     assert "Safety Schedule (Draft)" in {x.label for x in b.children if isinstance(x,discord.ui.Button)}
     for path in (policy.__file__,ui.__file__):
