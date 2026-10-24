@@ -1,5 +1,14 @@
 # Active task: Action & Reminder Center (FORCE SWITCH, 2026-10-22)
 
+## Current checkpoint: 4J integrated bounded Member Setup dry run (2026-10-23)
+
+- Owner confirms #706 merged. Verified main `d85a5449b0815864e4b5b25b43306309fd0c872b`; no other open PRs.
+- **One larger connected Action Center slice:** staff-only **Schedule & Readiness → Preview Opted-in Members**; bounded 5-profile pages from existing profile-store JSONB opt-in feed. The service gets the current published Member Setup revision and checks cached members through the existing `inspect_member_setup_readiness` (fresh consent/completion + quiet-hours/delay/caps + actual private PostgreSQL history). No new eligibility owner, scheduler, claim or send loop.
+- At most 2 concurrent expensive per-member reads, each with an 8-second timeout; missing guild member cache is "not_cached" rather than guessed departed/eligible and **never triggers Discord REST fetch**. Staff private summary includes counts only, no individual user IDs. Failed source/ledger state never becomes due. Versioned per-guild opt-in is authoritative and rechecked by the existing readiness owner.
+- Paged Next / Restart / Back preserve server and invoking staff identity, with rechecked staff authority, fresh revision and per-click server isolation. A full page suggests more might exist but never means more are actually due.
+- **Absolutely no new automatic sender, scheduled job, reservation, PostgreSQL change, DMs or rollout switches.** User explicitly deferred live single-member canary. Keep all process-local canary gates off.
+- Acceptance: focused end-to-end fake owner + outage tests, exact head Action Center + full CI, live staff mobile preview after merger (no deliveries). Broader production activation is a separate **approval-gated** integration.
+
 ## Current checkpoint: 4I bounded Member Setup consent source (2026-10-23)
 
 - Owner merged PR #705, confirmed on main `c29964f4699be93c8eac44ca4f3764b3226fa135`; no other open PRs.
