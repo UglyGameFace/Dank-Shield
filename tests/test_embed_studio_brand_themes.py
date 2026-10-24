@@ -121,9 +121,14 @@ def test_mobile_controls_reuse_editor_and_stay_within_discord_limits():
     lib = _saved_lib()
     lib["themes"]["foo"] = {"name": "Stored", "style": {"color": "ABCDEF"}}
     view = BrandThemeMenu(session, lib)
-    assert isinstance(view.children[0], BrandThemeSelect)
-    assert any(o.label == "Stored" for o in view.children[0].options)
-    assert len(view.children[0].options) == len(THEME_PRESETS) + 1
+    # discord.py registers decorated buttons before dynamically added selects.
+    # Find the actual control instead of relying on children insertion order.
+    selectors = [item for item in view.children if isinstance(item, BrandThemeSelect)]
+    assert len(selectors) == 1
+    selector = selectors[0]
+    assert selector.row == 0
+    assert any(o.label == "Stored" for o in selector.options)
+    assert len(selector.options) == len(THEME_PRESETS) + 1
     assert len(ThemeNameModal(session).children) == 1
     assert any(isinstance(c, discord.ui.Button) and c.style == discord.ButtonStyle.danger
                for c in ConfirmThemeRemovalView(session, "foo").children)
