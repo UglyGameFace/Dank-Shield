@@ -1277,10 +1277,12 @@ class StudioReviewView(_StudioView):
                 await message.edit(view=link_view(draft), allowed_mentions=_MENTIONS)
             except (discord.Forbidden, discord.HTTPException):
                 pass  # Runtime still rejects all untracked or stale buttons.
+        autosave_warning = await _autosave(interaction, self.session)
         await _say(
             interaction,
             f"✅ {'Updated' if editing_existing else 'Published'}: {message.jump_url}"
-            + ("" if tracked else "\n⚠️ Message sent, but saved-post tracking is unavailable. Keep the message link."),
+            + ("" if tracked else "\n⚠️ Message sent, but saved-post tracking is unavailable. Keep the message link.")
+            + ("\n⚠️ " + autosave_warning if autosave_warning else ""),
         )
 
     @discord.ui.button(label="Back & Edit", emoji="✏️", style=discord.ButtonStyle.secondary, row=0)
