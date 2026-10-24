@@ -1,5 +1,13 @@
 # Action & Reminder Center (Issue #367, Slice 4A)
 
+## Operational checkpoint, 2026-10-23 (4D.5C) and deferred DM canary
+
+- Production private Discloud database `dankshield` was backed up to a private encrypted v2 Drive ZIP, successfully decrypted on Android and restored independently into an isolated Termux PostgreSQL instance before writes.
+- Owner separately approved both manual migrations; `202610230001` claim/budget and `202610230002` canary audit were applied and checked in the live database. Read-only verification: DB identity `('dankshield', 'dankshield')`; row counts `(delivery,budget,audit,verify)=(0,0,0,3)`; `ready_sync`, `ledger_ready_sync`, `audit_ready_sync` all True.
+- Application-owner Discord Readiness Report now confirms configured PostgreSQL, claim schema and audit schema. GitHub CI and live runtime source fingerprints match `549534fd81e572cf`. Declared deployment SHA is unavailable; the report deliberately cannot independently attest it.
+- **Owner deferred the live one-member DM canary until later.** All canary target/approved-source environment gates remain disabled, no Action Center claims or DMs have occurred, and the future automatic scheduler is not activated. Opt-in by itself does not bypass existing owner/Administrator exemption or authorize a DM.
+- Next reviewed 4E slice adds a **self-service read-only reminder eligibility explanation** to My Reminder Preferences, using the canonical source+ledger inspection. This is not canary approval, a new worker, or scheduler activation.
+
 ## Scope of this first slice
 
 Find it under **/dank home → Onboarding & Access → Action & Reminder Center**,
