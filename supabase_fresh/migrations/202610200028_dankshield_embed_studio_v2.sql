@@ -99,10 +99,10 @@ begin
                 where public.dank_embed_studio_items.payload is distinct from excluded.payload;
         end loop;
     end loop;
-    delete from public.dank_embed_studio_items item
-    where item.guild_id=p_guild_id and not exists (
-        select 1 from jsonb_each(p_sections->item.section) entry
-        where entry.key=item.item_id
+    delete from public.dank_embed_studio_items rec
+    where rec.guild_id=p_guild_id and not exists (
+        select 1 from jsonb_each(p_sections->rec.section) remaining
+        where remaining.key=rec.item_id
     );
     update public.dank_embed_studio_libraries set revision=current_rev+1,updated_at=now()
         where guild_id=p_guild_id;
