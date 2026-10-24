@@ -1,5 +1,14 @@
 # Active task: Complete Embed Studio (owner FORCE SWITCH, 2026-10-24)
 
+## Current checkpoint: Portable JSON import/export (2026-10-24)
+
+- **Still one active task:** Complete canonical Embed Studio. User merged PR #711; GitHub `main` merge `ac6034142db593ed588aface72ced5f6e5229d32`. Its five exact-head PR workflows (Dank Shield CI, Profile Runtime, Dank Design, Ticket Owner Emergency, Command Size) all passed. Real Discord/Discloud autosave acceptance remains unverified.
+- **Current feature branch:** `feat/embed-studio-json-portability-20261024` from the exact merge SHA, no unrelated branch switch. Baseline had zero open PRs.
+- **Requirement:** Mobile user must export a complete validated Studio project as a private JSON file, and import it using the existing `discord.py==2.7.1` native file-upload modal. No new slash root, external uploads, separate editor, public send, persistent table, or background job.
+- **Execution and authority:** Existing `StudioHomeView` staff+guild+author view guard routes to `StudioJsonMenu`; import modal rechecks guild/user/staff, bounds attachment size and read timeout, validates a versioned envelope via `embed_studio_core`, rejects foreign-guild self-role IDs, stale concurrent editor mutation, and unsupported projects, then applies the validated draft and clears any tracked-message edit target. Existing `StudioSession.apply` and `_autosave` retain canonical mutation/persistence ownership; only ordinary Preview & Publish sends.
+- **Tests/cleanup:** Dedicated `tests/test_embed_studio_portable_json.py` covers complete model roundtrip, role isolation, corrupt/oversized/duplicate/unsupported JSON, native UI component and safe draft mutation. Existing template, role and recovery tests must continue passing. Review exact-head compilation, full CI, final diff, Android file upload/export and declared running Discloud SHA before production-complete claims.
+- **Scope after this PR:** Schedule publishing and jobs, uploaded image asset management, shared themes, dynamic variables, advanced actions/forms, collaborative editing. Avoid treating each small merge as total Embed Studio completion. Retain the suspended Share Router checkpoint below unchanged.
+
 ## Single Active Task Lock
 - **Active:** Finish Dank Shield's existing mobile Embed Studio without creating a second editor. Owner explicitly FORCE SWITCHED from Share Router on 2026-10-24. Only Embed Studio may be investigated, modified or validated until this task reaches its Definition of Done, or another exact FORCE SWITCH is supplied.
 - **Baseline:** `main` at `b1e657a0d335661972128ebb76b106f118884f65` after merged #710; work branch `feat/embed-studio-durable-draft-recovery-20261024`. User work on other branches and deployment are untouched.
