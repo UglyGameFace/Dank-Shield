@@ -773,6 +773,35 @@ def test_facebook_failed_hd_tries_one_sd_before_link_fallback(monkeypatch) -> No
     assert attempts[1][2] == {"Referer": "https://www.facebook.com/"}
 
 
+def test_other_providers_retry_one_safe_lower_quality_candidate(monkeypatch) -> None:
+    from stoney_verify.share_router_media_resolver import MediaResolution
+
+    primary = "https://cdn.example.com/hd.mp4"
+    fallback = "https://cdn.example.com/sd.mp4"
+    resolution = MediaResolution(
+        source_url="https://www.youtube.com/watch?v=sample",
+        canonical_url="https://www.youtube.com/watch?v=sample",
+        identity="youtube:sample",
+        provider="youtube", delivery="progressive",
+        media_url=primary, ext="mp4",
+        alternate_progressive=((fallback, ()),),
+    )
+    calls = []
+
+    async def guarded_download(url, *, max_bytes, request_headers=None):
+        calls.append((url, max_bytes))
+        if url == fallback:
+            return SimpleNamespace(source_url=url, size_bytes=256, file="video")
+        return None
+
+    monkeypatch.setattr(share_runtime, "_download_trusted_video", guarded_download)
+    result = asyncio.run(
+        share_runtime._download_resolved_progressive(resolution, max_bytes=4 * 1024 * 1024)
+    )
+    assert result.source_url == fallback
+    assert calls == [(primary, 4 * 1024 * 1024), (fallback, 4 * 1024 * 1024)]
+
+
 def test_facebook_backup_never_bypasses_host_security(monkeypatch) -> None:
     from stoney_verify.share_router_media_resolver import MediaResolution
     alt = "http://127.0.0.1/private.mp4"
