@@ -166,3 +166,36 @@ def test_manual_seeding_requires_owner_confirmation_and_does_not_autorun():
     assert 'op.add_argument("--apply"' in source
     assert "SEED_{args.guild_id}" in source
     assert "legacy data" in source.lower()
+
+
+def test_normalized_v2_can_save_valid_library_above_old_config_blob_guard(monkeypatch):
+    from stoney_verify.embed_studio_core import library_payload, StudioValidationError
+    monkeypatch.setattr(v2, "verify_project", lambda: None)
+    lib = parse_library(None)
+    for i in range(12):
+        p = new_project()
+        e = p["embeds"][0]
+        e["description"] = "D" * 3400
+        e["footer"] = "F" * 1900
+        e["image"] = "https://cdn.example.com/" + ("a" * 1900)
+        e["thumbnail"] = "https://cdn.example.com/" + ("b" * 1900)
+        e["author_name"] = "Studio team"
+        e["author_url"] = "https://cdn.example.com/" + ("c" * 1900)
+        e["author_icon"] = "https://cdn.example.com/" + ("d" * 1900)
+        e["footer_icon"] = "https://cdn.example.com/" + ("e" * 1900)
+        e["title_url"] = "https://cdn.example.com/" + ("f" * 1900)
+        lib["templates"][str(i)] = {"name": f"Layout {i}", "project": p}
+    for i in range(50):
+        lib["media"][str(i)] = {"name": f"Artwork {i}",
+            "url": "https://cdn.example.com/" + ("g" * 1900)}
+    with pytest.raises(StudioValidationError, match="256 KiB"):
+        library_payload(lib)
+    calls = []
+    class DB:
+        def rpc(self, name, args):
+            calls.append(args)
+            return SimpleNamespace(execute=lambda:SimpleNamespace(data={"applied":True}))
+    monkeypatch.setattr(v2, "_client", lambda: DB())
+    assert v2._write_sync(v2.StudioV2Source(123,1,{}),lib)
+    assert v2.MAX_STUDIO_V2_BYTES == 1024*1024
+    assert len(calls)==1 and len(calls[0]["p_sections"]["templates"])==12

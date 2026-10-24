@@ -487,7 +487,7 @@ def trim_published_history(published: Mapping[str, Any], *, max_posts: int = 20)
     return rows
 
 
-def library_payload(library: Mapping[str, Any]) -> dict[str, Any]:
+def library_payload(library: Mapping[str, Any], *, max_bytes: int = MAX_TEMPLATES_BYTES) -> dict[str, Any]:
     templates = library.get("templates") or {}
     themes = library.get("themes") or {}
     media = library.get("media") or {}
@@ -524,6 +524,16 @@ def library_payload(library: Mapping[str, Any]) -> dict[str, Any]:
         "drafts": deepcopy(drafts),
     }
     import json
-    if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_TEMPLATES_BYTES:
-        raise StudioValidationError("Studio storage is full (256 KiB shared by media, templates, themes, drafts and posts). Shorten or remove unused saved work.")
+    if not 1 <= int(max_bytes) <= 4 * 1024 * 1024:
+        raise StudioValidationError("Invalid Studio payload budget.")
+    if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > int(max_bytes):
+        if int(max_bytes) == MAX_TEMPLATES_BYTES:
+            raise StudioValidationError(
+                "Studio storage is full (256 KiB shared by media, templates, themes, "
+                "drafts and posts). Shorten or remove unused saved work."
+            )
+        raise StudioValidationError(
+            "Studio v2 library storage is full. Shorten or remove unused media, "
+            "drafts or templates."
+        )
     return result
