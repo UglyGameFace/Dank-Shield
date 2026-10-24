@@ -88,6 +88,36 @@ mode. The existing Add / Change Route selector still operates on registered
 sources, and automatically selects non-destructive mode for historical
 ordinary sources outside the managed Share Router hub.
 
+## Facebook video grabber: known limits and fixes
+
+The bot uses the pinned stable `yt-dlp==2026.10.21` metadata extractor
+with pre-existing direct Discord/Facebook CDN fast paths, one guarded
+provider-declared alternate CDN for an unsuccessful Facebook transfer, and
+safe link fallback. This is an upgrade from the previous `2026.8.19`
+pin, **not** a claim that upstream Facebook Reel extraction is repaired.
+
+- Facebook mobile-share **`/share/v/`** and **`/share/r/`**, along with
+  `/share/video/`, `/share/reel/`, `fb.watch`, `watch/?v=`, and
+  `video.php?v=` now qualify for the **Videos Only** filter. Previously,
+  some would be dropped before the extractor could examine them.
+- `/share/p/` is an ordinary photo/post link and is *not* classified as
+  video without a playable video embed. Private group posts also cannot be
+  assumed public videos based on their URL alone.
+- Facebook can serve login-restricted, age-restricted, group-only or
+  changing video metadata. Even currently published yt-dlp versions
+  report "Cannot parse data" for some public Reels. We keep the link
+  rather than promise native media or use account cookies/CAPTCHA bypass.
+- Staff can test one problematic public link privately through
+  **Share Router → Media Health → Test Provider**. The Outcome field
+  distinguishes parser incompatibility, no downloadable format, bot check,
+  login restriction, rate limiting, and HTTP refusal. This metadata-only
+  probe does not upload content or display the URL/token to server members.
+- Inline transfer can also fail separately due to a too-large file, an
+  expired signed CDN URL, incompatible HLS/DASH formats, or missing Discord
+  Attach Files permissions. A metadata probe alone does not guarantee
+  playback. Diagnostic counters are limited to aggregate non-sensitive
+  statuses.
+
 ## Limitations and validation
 
 This option makes normal text-channel forwarding possible; it does not turn
