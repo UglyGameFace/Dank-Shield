@@ -64,6 +64,35 @@ per-guild database, live notification switch, new worker, delivery history
 dashboard or sending. Any missing future diagnostics must be honestly
 marked as not shipped until implemented.
 
+## Slice 4H: saved policy status from the existing notification owners
+
+From `/dank home → 📋 Actions & Notifications → Notification Systems`,
+authorized guild staff can choose **Check Saved Status**. This is an
+on-demand, private, read-only snapshot, not a monitoring worker.
+
+- Simple Verify reminders: the existing guild config + Verification Reminders
+  policy parser reports only whether the **saved setting** is on or off.
+  It does **not** claim that member verification is pending or PostgreSQL
+  delivery is healthy.
+- Quiet Server Notice: the existing per-guild quiet configuration reports
+  saved on/off or no configuration. No channel send or notice record mutation.
+- It's 4:20 Somewhere: the existing indexed **guild-wide** schedule reports
+  saved on/off or no guild schedule. **Personal subscriptions are not scanned
+  or reported.**
+- Member Activity Notices, Ticket Automation, and /toke session reminders:
+  the directory explicitly reports **owner-managed / not inspected**,
+  retaining the existing owner links. Ticket Automation's general settings
+  helper currently swallows storage failures into defaults, so treating its
+  returned `enabled=False` as confirmed disabled would be misleading.
+- All three checked sources are independently bounded to eight seconds,
+  isolate errors, and never display exception details. An unavailable
+  source is not silently interpreted as disabled or unconfigured.
+
+This slice intentionally provides **saved policy state**, not queue depth,
+health attestation, successful delivery, auditing, or a new unified
+scheduler. The production single-user Action Center DM canary is still
+deferred and disabled. No database migration or owner feature mutation.
+
 ## Scope of this first slice
 
 Find it under **/dank home → Onboarding & Access → Action & Reminder Center**,
