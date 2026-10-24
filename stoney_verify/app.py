@@ -1101,6 +1101,14 @@ async def _start_workers_once() -> None:
     except Exception as e:
         print("⚠️ Member Setup reminder worker failed:", type(e).__name__)
 
+    try:
+        from .embed_studio_schedule_runtime import start_embed_studio_schedule_worker
+        task = start_embed_studio_schedule_worker(bot)
+        if task is not None:
+            print("🗓️ Opt-in Embed Studio scheduled sender started (indexed due claims)")
+    except Exception as e:
+        print("⚠️ Embed Studio scheduled sender failed:", type(e).__name__)
+
 
 async def _startup_background_runner() -> None:
     try:
