@@ -60,7 +60,7 @@ class DraftActionRule:
         if self.severity not in LEVELS:
             raise ValueError("Invalid action severity")
         if self.audience != AUDIENCE or self.schedule != SCHEDULE or self.delivery != DELIVERY:
-            raise ValueError("Automated delivery and arbitrary audiences are unavailable in this slice")
+            raise ValueError("Only the separate guild Member Setup toggle can authorize automatic delivery")
         if _note(self.note) != self.note:
             raise ValueError("Action note must be normalized")
         if self.condition == "pending_verification" and self.severity != "required":
@@ -96,7 +96,7 @@ class ActionBuilderDraft:
         return {
             "version": ACTION_BUILDER_VERSION,
             "revision": int(self.revision),
-            "delivery_enabled": False,  # Important: draft is NEVER a scheduler switch.
+            "delivery_enabled": False,  # Canonical builder is NOT the automation activation switch.
             "rules": [r.to_payload() for r in self.rules],
         }
 
@@ -121,7 +121,7 @@ def parse_action_builder(raw_config: Mapping[str, Any]) -> ActionBuilderDraft:
     if not isinstance(raw_rules, list) or len(raw_rules) > MAX_RULES:
         raise ValueError("Unrecognized action-rule configuration; refusing to overwrite it")
     if blob.get("delivery_enabled") is not False:
-        raise ValueError("Unexpected live delivery flag: this is a draft-only rule format")
+        raise ValueError("Unexpected delivery flag: use the independent Member Setup automation toggle")
     for raw in raw_rules:
         if not isinstance(raw, Mapping):
             raise ValueError("Malformed action-rule definition")
