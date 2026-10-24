@@ -58,8 +58,8 @@ read-only; do not silently overwrite new revisions.
 
 ## Boundaries and future work
 The canonical editor keeps its existing UX, item-count limits and model
-validators for this foundation PR. V2 currently validates a 256 KiB combined
-operation and transmits a bounded logical snapshot but stores entries in
+validators for this foundation PR. V2 validates up to a 1 MiB combined
+operation (legacy V1 remains 256 KiB) and transmits a bounded logical snapshot but stores entries in
 individually versioned Postgres rows. A later audited change may increase
 per-section limits with server-side pagination and item-level RPCs, without
 another new persistence system. Persistent uploaded artwork belongs in
