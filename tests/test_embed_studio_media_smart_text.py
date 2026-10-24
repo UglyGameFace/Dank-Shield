@@ -138,7 +138,8 @@ def test_member_count_missing_is_a_real_preview_blocker_only_when_used():
 
 def test_expansion_is_revalidated_after_preview_substitution():
     original = new_project()
-    original["embeds"][0]["title"] = "{server.name}" * 25
+    # The raw tokenized title is valid (234 chars); the expanded one is not.
+    original["embeds"][0]["title"] = "{server.name}" * 18
     before = deepcopy(original)
     with pytest.raises(StudioValidationError, match="256"):
         resolve_smart_text(original, guild_name="Long Server Name", channel_name="news", member_count=1)
