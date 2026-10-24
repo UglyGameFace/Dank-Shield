@@ -282,6 +282,10 @@ class StudioHomeView(_StudioView):
     async def scheduled_posts(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _scheduled_posts(interaction, self.session)
 
+    @discord.ui.button(label="Team Review", emoji="👥", style=discord.ButtonStyle.secondary, row=3)
+    async def team_review(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _team_review_home(interaction, self.session)
+
     @discord.ui.button(label="Preview & Publish", emoji="👁️", style=discord.ButtonStyle.primary, row=3)
     async def preview(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _review(interaction, self.session)
@@ -1747,6 +1751,197 @@ async def _review(interaction: discord.Interaction, session: StudioSession) -> N
         await interaction.response.edit_message(**kwargs)
     else:
         await interaction.response.send_message(**kwargs, ephemeral=True)
+
+
+class StudioReviewSubmissionModal(discord.ui.Modal, title="Send Design for Staff Review"):
+    def __init__(self, session: StudioSession) -> None:
+        super().__init__(timeout=300)
+        self.session = session
+        self.snapshot = deepcopy(session.project)
+        self.channel_id = session.channel_id
+        self.post_key = session.post_key
+        self.name_input = discord.ui.TextInput(
+            label="Design name", required=True, max_length=80,
+            placeholder="Rules update, event announcement...",
+        )
+        self.add_item(self.name_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        from .embed_studio_reviews import submit_review, reviews_enabled
+        if (not reviews_enabled() or not _staff(interaction)
+                or interaction.guild is None
+                or int(interaction.guild.id) != self.session.guild_id
+                or int(interaction.user.id) != self.session.owner_id):
+            return await _say(interaction, "Team Review is not enabled or staff access changed.")
+        if (not self.channel_id or self.post_key
+                or self.session.project != self.snapshot
+                or self.session.channel_id != self.channel_id
+                or self.session.post_key != self.post_key):
+            return await _say(interaction, "Select a destination and reopen Team Review. This draft changed.")
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            channel = _target_channel(interaction, self.session)
+            if channel is None or _post_blockers(interaction, channel):
+                return await _say(interaction, "The selected posting channel is no longer usable.")
+            await submit_review(self.session.guild_id, self.session.owner_id,
+                                self.channel_id, str(self.name_input.value), self.snapshot)
+        except StudioValidationError as exc:
+            return await _say(interaction, "Could not submit design: " + str(exc))
+        except Exception:
+            return await _say(interaction, "Team Review storage unavailable. No request was sent.")
+        await _say(interaction, "✅ Design sent to the server's private staff review queue. "
+                   "It was not published and your draft remains unchanged.")
+
+
+class StudioReviewQueueSelect(discord.ui.Select):
+    def __init__(self, session: StudioSession, rows: list[dict[str, Any]],
+                 *, state: str) -> None:
+        self.session, self.state = session, state
+        options = [
+            discord.SelectOption(label=str(row["title"])[:100], value=str(row["id"]),
+                                 description=f"By {row['submitted_by']} • Channel {row['channel_id']}"[:100])
+            for row in rows
+        ] or [discord.SelectOption(label="No requests found", value="none")]
+        super().__init__(options=options, placeholder="Choose a staff design...", row=0)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if self.values[0] == "none":
+            return await _say(interaction, "No designs in this queue.")
+        if self.state == "pending":
+            await _menu(interaction, heading="Review this design",
+                        description=("Approving loads a private copy into your own editor. "
+                                     "It never publishes. You cannot approve your own submission."),
+                        view=StudioReviewDecisionView(self.session, self.values[0]))
+        else:
+            await _load_approved_review(interaction, self.session, self.values[0])
+
+
+class StudioReviewQueueView(_StudioView):
+    def __init__(self, session: StudioSession, rows: list[dict[str, Any]], *, state: str) -> None:
+        super().__init__(session)
+        self.add_item(StudioReviewQueueSelect(session, rows, state=state))
+
+    @discord.ui.button(label="Back to Team Review", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _team_review_home(interaction, self.session)
+
+
+class StudioReviewDecisionView(_StudioView):
+    def __init__(self, session: StudioSession, review_id: str) -> None:
+        super().__init__(session)
+        self.review_id = review_id
+        self.used = False
+
+    async def _decide(self, interaction: discord.Interaction, *, action: str) -> None:
+        from .embed_studio_reviews import decide_review, load_review_project
+        if self.used:
+            return await _say(interaction, "This decision was already submitted.")
+        self.used = True
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            result = await decide_review(self.session.guild_id, self.review_id,
+                                         self.session.owner_id, action)
+            if not result:
+                return await _say(interaction,
+                    "This request changed, or you submitted it yourself. Refresh the review queue.")
+            if action == "approved":
+                project = load_review_project(result, guild_id=self.session.guild_id)
+                # Private editor mutation retains Undo history. No public message
+                # changes or staff-to-staff draft overwrite.
+                self.session.apply(lambda draft: (draft.clear(), draft.update(project)))
+                self.session.channel_id = int(result["channel_id"])
+                self.session.post_key = ""
+        except StudioValidationError as exc:
+            return await _say(interaction, "Review was not loaded: " + str(exc))
+        except Exception:
+            return await _say(interaction, "Review service unavailable. Reopen Team Review before retrying.")
+        if action == "approved":
+            return await _home(interaction, self.session,
+                notice="Approved draft opened in your private editor. Review and preview before publishing.")
+        await _say(interaction, "Request rejected. No public messages or private drafts changed.")
+
+    @discord.ui.button(label="Approve & Edit Copy", emoji="✅", style=discord.ButtonStyle.success)
+    async def approve(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await self._decide(interaction, action="approved")
+
+    @discord.ui.button(label="Reject Request", emoji="🗑️", style=discord.ButtonStyle.danger)
+    async def reject(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await self._decide(interaction, action="rejected")
+
+    @discord.ui.button(label="Keep Pending", emoji="◀️", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _team_review_queue(interaction, self.session, state="pending")
+
+
+async def _load_approved_review(interaction: discord.Interaction, session: StudioSession,
+                                review_id: str) -> None:
+    from .embed_studio_reviews import get_review, load_review_project
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    try:
+        row = await get_review(session.guild_id, review_id)
+        if row is None:
+            return await _say(interaction, "That review no longer exists.")
+        project = load_review_project(row, guild_id=session.guild_id)
+        session.apply(lambda draft: (draft.clear(), draft.update(project)))
+        session.channel_id = int(row["channel_id"])
+        session.post_key = ""
+    except StudioValidationError as exc:
+        return await _say(interaction, "Cannot load approved design: " + str(exc))
+    except Exception:
+        return await _say(interaction, "Approved designs are unavailable. The existing draft was kept.")
+    await _home(interaction, session, notice="Approved design loaded as a private draft. Preview before publishing.")
+
+
+async def _team_review_queue(interaction: discord.Interaction, session: StudioSession,
+                             *, state: str) -> None:
+    from .embed_studio_reviews import list_reviews
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    try:
+        rows = await list_reviews(session.guild_id, state=state)
+    except StudioValidationError as exc:
+        return await _say(interaction, str(exc))
+    except Exception:
+        return await _say(interaction, "Review queue is unavailable. No changes made.")
+    await _menu(interaction,
+                heading="👥 Pending Team Reviews" if state == "pending" else "✅ Approved Designs",
+                description=(f"{len(rows)} recent server designs. "
+                             "Only staff may view them. Approved designs load privately; "
+                             "publishing always needs a separate preview."),
+                view=StudioReviewQueueView(session, rows, state=state))
+
+
+class StudioTeamReviewHomeView(_StudioView):
+    @discord.ui.button(label="Submit Current Draft", emoji="📤", style=discord.ButtonStyle.primary, row=0)
+    async def submit(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        from .embed_studio_reviews import reviews_enabled
+        if not reviews_enabled():
+            return await _say(interaction, "Team Review has not been enabled yet.")
+        await interaction.response.send_modal(StudioReviewSubmissionModal(self.session))
+
+    @discord.ui.button(label="Pending Reviews", emoji="📋", style=discord.ButtonStyle.secondary, row=0)
+    async def pending(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _team_review_queue(interaction, self.session, state="pending")
+
+    @discord.ui.button(label="Approved Designs", emoji="✅", style=discord.ButtonStyle.secondary, row=0)
+    async def approved(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _team_review_queue(interaction, self.session, state="approved")
+
+    @discord.ui.button(label="Back to Studio", emoji="🏠", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _home(interaction, self.session)
+
+
+async def _team_review_home(interaction: discord.Interaction, session: StudioSession) -> None:
+    from .embed_studio_reviews import reviews_enabled
+    if not reviews_enabled():
+        return await _say(interaction, "Team Review is off until the owner enables its storage.")
+    await _menu(interaction, heading="👥 Team Design Review",
+                description="Send a draft to your staff team without posting it. "
+                            "Another moderator can approve and edit a private copy, "
+                            "or reject it. No automatic publication.",
+                view=StudioTeamReviewHomeView(session))
 
 
 class StudioScheduleModal(discord.ui.Modal, title="Schedule an Announcement"):
