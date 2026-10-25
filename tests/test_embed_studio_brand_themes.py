@@ -113,7 +113,9 @@ def test_theme_cap_storage_validation_and_no_foreign_style_data():
 def test_mobile_controls_reuse_editor_and_stay_within_discord_limits():
     session = StudioSession(guild_id=5, owner_id=9)
     home = StudioHomeView(session)
-    assert "Brand Themes" in {getattr(item, "label", "") for item in home.children}
+    assert "Look & Images" in {getattr(item, "label", "") for item in home.children}
+    from stoney_verify.embed_studio_ui import StudioDesignTools
+    assert "Reuse Server Style" in {getattr(item, "label", "") for item in StudioDesignTools(session).children}
     counts = {}
     for item in home.children:
         counts[item.row] = counts.get(item.row, 0) + 1
