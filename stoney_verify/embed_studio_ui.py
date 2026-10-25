@@ -525,6 +525,69 @@ class MediaSaveModal(discord.ui.Modal, title="Save Image or GIF Link"):
 MEDIA_PAGE_SIZE = 20
 
 
+class StudioArtworkUploadModal(discord.ui.Modal, title="Upload Artwork"):
+    def __init__(self, session: StudioSession) -> None:
+        super().__init__(timeout=300)
+        self.session = session
+        self.file_upload = discord.ui.FileUpload(min_values=1, max_values=1, required=True)
+        self.add_item(discord.ui.Label(
+            text="Upload PNG, JPEG, WebP or GIF",
+            description="6 MiB maximum. Images in published posts are publicly viewable.",
+            component=self.file_upload,
+        ))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        from .embed_studio_assets import (
+            StudioAssetError, MAX_UPLOAD_BYTES, uploads_enabled,
+            upload_artwork, discard_failed_upload,
+        )
+        if (interaction.guild is None or int(interaction.guild.id) != self.session.guild_id
+                or int(interaction.user.id) != self.session.owner_id
+                or not _staff(interaction)):
+            return await _say(interaction, "Upload requires your own server's staff editor.")
+        if not uploads_enabled():
+            return await _say(interaction, "Managed uploads are not enabled on this deployment.")
+        if len(self.file_upload.values) != 1:
+            return await _say(interaction, "Choose exactly one image.")
+        attachment = self.file_upload.values[0]
+        if not 0 < int(getattr(attachment, "size", 0) or 0) <= MAX_UPLOAD_BYTES:
+            return await _say(interaction, "Choose an image or GIF up to 6 MiB.")
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        uploaded = None
+        saved = False
+        try:
+            data = await asyncio.wait_for(attachment.read(use_cached=True), timeout=15)
+            if len(data) > MAX_UPLOAD_BYTES:
+                raise StudioAssetError("File exceeded the upload limit.")
+            uploaded = await upload_artwork(self.session.guild_id, data, str(attachment.filename))
+            for _ in range(3):
+                source, lib = await _load_library(self.session.guild_id)
+                if len(lib["media"]) >= MAX_MEDIA_ITEMS:
+                    raise StudioAssetError("Media Library is full. Remove a saved link first.")
+                if any(str(row.get("name") or "").casefold() == uploaded.name.casefold()
+                       for row in lib["media"].values()):
+                    raise StudioAssetError("An image already has that name. Rename the file and retry.")
+                lib["media"][secrets.token_hex(6)] = {
+                    "name": uploaded.name, "url": uploaded.url,
+                }
+                if await _save_library(self.session.guild_id, source, lib):
+                    saved = True
+                    break
+            if not saved:
+                raise StudioAssetError("Another moderator updated saved media. Retry this upload.")
+        except StudioValidationError as exc:
+            await _say(interaction, f"Artwork not saved: {exc}")
+        except (discord.HTTPException, asyncio.TimeoutError, OSError):
+            await _say(interaction, "Could not safely upload that image. Existing designs were kept.")
+        except Exception:
+            await _say(interaction, "Upload storage is unavailable. Existing designs were kept.")
+        else:
+            await _say(interaction, "✅ Artwork saved to your reusable Media Library. Nothing was posted.")
+        finally:
+            if uploaded is not None and not saved:
+                await discard_failed_upload(uploaded)
+
+
 class MediaLinkSelect(discord.ui.Select):
     def __init__(self, session: StudioSession, lib: dict[str, Any], *, page: int = 0) -> None:
         self.session = session
@@ -618,6 +681,13 @@ class MediaLibraryMenu(_StudioView):
     @discord.ui.button(label="Next", emoji="▶️", style=discord.ButtonStyle.secondary, row=1)
     async def next(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _media_library(interaction, self.session, page=self.page + 1)
+
+    @discord.ui.button(label="Upload Image/GIF", emoji="📤", style=discord.ButtonStyle.primary, row=1)
+    async def upload_image(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        from .embed_studio_assets import uploads_enabled
+        if not uploads_enabled():
+            return await _say(interaction, "Managed artwork uploads are not enabled yet.")
+        await interaction.response.send_modal(StudioArtworkUploadModal(self.session))
 
     @discord.ui.button(label="Back to Studio", emoji="🏠", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
