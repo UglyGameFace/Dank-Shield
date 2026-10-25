@@ -851,6 +851,36 @@ class TicketNotificationRoleSelect(discord.ui.RoleSelect):
         await _replace(interaction, embed=await self.parent_view.embed(guild), view=self.parent_view)
 
 
+async def _save_ticket_staff_alert_channel(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+    parent: "TicketNotificationSettingsView",
+) -> None:
+    if not await _require_ticket_notification_manager(interaction):
+        return
+    guild = interaction.guild
+    if guild is None or not isinstance(guild.get_channel(int(channel.id)), discord.TextChannel):
+        return await _private(interaction, "❌ Choose a server text channel.")
+    from ..tickets_new.open_notifications import _private_for_staff
+    if not _private_for_staff(channel):
+        return await _private(
+            interaction,
+            "❌ Staff alert channels must hide View Channel from @everyone. "
+            "Open this manager in a private staff channel or choose another.",
+        )
+    me = guild.me
+    perms = channel.permissions_for(me) if me else None
+    if perms is None or not (perms.view_channel and perms.send_messages):
+        return await _private(interaction, "❌ Dank Shield needs View Channel and Send Messages there.")
+    await interaction.response.defer()
+    from ..workers.ticket_automation_worker import upsert_ticket_automation_settings
+    if not await upsert_ticket_automation_settings(
+        guild.id, {"staff_alert_channel_id": str(channel.id)},
+    ):
+        return await _private(interaction, "❌ Alert channel was not saved. Check database availability.")
+    await _replace(interaction, embed=await parent.embed(guild), view=parent)
+
+
 class TicketNotificationChannelSelect(discord.ui.ChannelSelect):
     def __init__(self, parent: "TicketNotificationSettingsView") -> None:
         self.parent_view = parent
@@ -862,25 +892,12 @@ class TicketNotificationChannelSelect(discord.ui.ChannelSelect):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not await _require_ticket_notification_manager(interaction):
-            return
         guild = interaction.guild
         channel = guild.get_channel(int(self.values[0].id)) if guild and self.values else None
         if not isinstance(channel, discord.TextChannel):
-            return await _private(interaction, "❌ Choose a text channel from this server.")
-        from ..tickets_new.open_notifications import _private_for_staff
-        if not _private_for_staff(channel):
-            return await _private(
-                interaction, "❌ The alert channel must deny @everyone View Channel. Keep staff ticket details private.",
-            )
-        perms = channel.permissions_for(guild.me) if guild.me else None
-        if perms is None or not (perms.view_channel and perms.send_messages):
-            return await _private(interaction, "❌ Dank Shield needs View Channel and Send Messages there.")
-        await interaction.response.defer()
-        from ..workers.ticket_automation_worker import upsert_ticket_automation_settings
-        if not await upsert_ticket_automation_settings(guild.id, {"staff_alert_channel_id": str(channel.id)}):
-            return await _private(interaction, "❌ Alert channel was not saved. Check database availability.")
-        await _replace(interaction, embed=await self.parent_view.embed(guild), view=self.parent_view)
+            return await _private(interaction, "❌ Choose a text channel in this server.")
+        await _save_ticket_staff_alert_channel(interaction, channel, self.parent_view)
+
 
 
 class TicketNotificationSettingsView(_OwnedView):
@@ -974,6 +991,14 @@ class TicketNotificationSettingsView(_OwnedView):
         except Exception as exc:
             return await _private(interaction, f"❌ Staff alert settings were not saved: {type(exc).__name__}.")
         await _replace(interaction, embed=await self.embed(interaction.guild), view=self)
+
+    @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.secondary, row=4)
+    async def use_this_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        channel = current_text_channel(interaction)
+        if channel is None:
+            return await _private(interaction, "❌ Open Staff Alerts inside a private staff text channel.")
+        await _save_ticket_staff_alert_channel(interaction, channel, self)
 
     @discord.ui.button(label="Enable", emoji="🔔", style=discord.ButtonStyle.success, row=3)
     async def enable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
