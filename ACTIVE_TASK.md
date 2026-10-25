@@ -1,3 +1,11 @@
+## Active Embed Studio checkpoint: guarded Storage v2 (2026-10-24)
+
+- Merged PR #715 is on `main` at `d8974edf89edf7d848d9b8a3e9c171882c7e7a62`. Only active implementation task is **Embed Studio**. Bump Manager #713 and Share Router stay deferred.
+- Verified new DankShield Supabase ref `viamriafkbqhquvrsnua`: database ~93 MB, 12 guild config rows, no current `embed_studio_v1` payload found in any of the four JSONB compatibility columns. The Discloud shared-storage free space is not measured.
+- This PR introduces additive private indexed Studio item storage (drafts/templates/themes/media/published), versioned per-guild CAS, manual per-guild migration with parity checks, project-pinned opt-in adapter, negative authorization tests, and real PostgreSQL smoke CI. The default runtime continues to use legacy storage and **no live schema/deploy switch is automatic**.
+- Finish SQL + Python exact-head CI and explicitly stage a test guild before enabling. Do not silently rewrite/clear original config or auto-fallback into legacy once v2 is enabled.
+- **Remaining active slices**: durable media upload/object-storage (with persistent URLs), safe scheduled campaigns and worker integration, server-side pagination/unbounded metadata library redesign, dynamic refresh with moderation review, configurable forms/actions and collaboration. Maintain single-task lock; owner asked to execute the entire sequence with larger cohesive PRs.
+
 ## Studio media capacity revision (2026-10-24)
 
 - Owner correctly challenged conservative 12-link/100-KB caps. Inspection confirms Supabase RPC mirrors config keys into four JSONB compatibility columns and Studio submits a full-library CAS blob on writes. Inactive PostgreSQL guild-config repo has a 2-MiB row guard and 32-KiB patch guard; it must be redesigned before ever routing large Studio writes there.
