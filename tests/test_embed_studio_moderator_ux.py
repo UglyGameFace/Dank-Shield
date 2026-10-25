@@ -80,7 +80,7 @@ def test_layout_confirmation_preserves_undo_and_discards_old_edit_target(monkeyp
     async def fake_home(*args,**kwargs):
         home.append(kwargs)
     monkeypatch.setattr(ui,"_home",fake_home)
-    asyncio.run(view.confirm(object(),None))
+    asyncio.run(view.confirm.callback(object()))
     assert len(home)==1
     assert session.post_key==""
     assert session.project!=original
@@ -98,7 +98,7 @@ def test_stale_layout_confirmation_cannot_destroy_newer_draft(monkeypatch):
     async def fake_say(*args,**kwargs):
         feedback.append(args[1])
     monkeypatch.setattr(ui,"_say",fake_say)
-    asyncio.run(view.confirm(object(),None))
+    asyncio.run(view.confirm.callback(object()))
     assert session.project==current
     assert len(feedback)==1 and "draft changed" in feedback[0].lower()
 
