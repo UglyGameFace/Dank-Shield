@@ -112,8 +112,8 @@ jobs:
       - name: Audit event boundary ownership
         run: python tools/audit_event_boundary.py
 
-  cinema-cache-regression:
-    name: Cinema torrent cache lifecycle
+  cinema-detachment-regression:
+    name: Cinema/Share Router separation regressions
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -125,10 +125,9 @@ jobs:
           python-version: '3.11'
           cache: pip
       - name: Install test dependencies
-        run: |
-          python -m pip install -q -r requirements.txt pytest
-      - name: Check Cinema torrent cache and session lease regressions
-        run: python -m pytest -q tests/test_torrent_streaming.py tests/test_cinema_rolling_gateway.py tests/test_cinema_mobile_progress_checkpoint.py --tb=short --disable-warnings
+        run: python -m pip install -q -r requirements.txt pytest
+      - name: Verify Cinema shutdown and Share Router independence
+        run: python -m pytest -q tests/test_cinema_shield_detachment.py tests/test_share_router_native_runtime.py tests/test_share_router_custom_sources.py --tb=short --disable-warnings
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
