@@ -108,7 +108,11 @@ def test_restore_only_own_record_and_tracked_edit_target():
 def test_mobile_editor_exposes_explicit_safe_reload():
     view = StudioHomeView(StudioSession(guild_id=5, owner_id=10))
     labels = {getattr(item, "label", "") for item in view.children}
-    assert {"Reload Saved", "Templates", "Preview & Publish"} <= labels
+    assert {"Saved Designs", "Preview & Post"} <= labels
+    from stoney_verify.embed_studio_ui import StudioSavedTools
+    assert {"Restore My Draft", "Saved Post Layouts"} <= {
+        item.label for item in StudioSavedTools(StudioSession(guild_id=5, owner_id=10)).children
+    }
 
 
 def test_autosave_uses_cas_and_conflicting_open_editors_fail_closed(monkeypatch):

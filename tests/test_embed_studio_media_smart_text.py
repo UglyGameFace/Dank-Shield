@@ -88,7 +88,10 @@ def test_media_mobile_control_rows_and_confirmation_are_safe():
     session = StudioSession(guild_id=5, owner_id=10)
     home = StudioHomeView(session)
     labels = {getattr(item, "label", "") for item in home.children}
-    assert {"Media Library", "Smart Text", "Preview & Publish"} <= labels
+    assert {"Look & Images", "More Tools", "Preview & Post"} <= labels
+    from stoney_verify.embed_studio_ui import StudioDesignTools, StudioAdvancedTools
+    assert "Saved Pictures" in {item.label for item in StudioDesignTools(session).children}
+    assert "Automatic Server Details" in {item.label for item in StudioAdvancedTools(session).children}
     assert max(sum(1 for item in home.children if item.row == row) for row in range(5)) <= 5
     lib = parse_library(None)
     lib["media"]["saved"] = {"name": "Banner", "url": "https://example.com/banner.png"}
