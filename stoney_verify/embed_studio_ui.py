@@ -2464,6 +2464,15 @@ class StudioReviewView(_StudioView):
                 "role_actions": draft["role_actions"],
                 "form": deepcopy(form), "form_token": form_token,
             }
+            # Store original Smart Text only for safe, normalized records.
+            # Enrollment happens separately after explicit moderator approval.
+            from .embed_studio_storage_v2 import storage_v2_enabled
+            from .embed_studio_live_text import live_project, StudioLiveError
+            if storage_v2_enabled():
+                try:
+                    lib["published"][self.session.post_key]["live_source"] = live_project(self.preview_project)
+                except StudioLiveError:
+                    pass
             from .embed_studio_core import trim_published_history
             try:
                 lib["published"] = trim_published_history(lib["published"], max_posts=20)
@@ -2558,6 +2567,12 @@ class TrackedPostSelect(discord.ui.Select):
             if message.author.id != interaction.client.user.id:
                 return await _say(interaction, "This is not a Dank Shield message.")
             draft = _from_message(message)
+            if isinstance(item.get("live_source"), dict):
+                from .embed_studio_live_text import live_project
+                try:
+                    draft = live_project(item["live_source"])
+                except StudioValidationError:
+                    pass
         except Exception as exc:
             return await _say(interaction, f"Could not load this message: {_error(exc)}")
         self.session.history.append(self.session.project)
@@ -2581,6 +2596,11 @@ class PublishedMenu(_StudioView):
     def __init__(self, session: StudioSession, lib: dict[str, Any]) -> None:
         super().__init__(session)
         self.add_item(TrackedPostSelect(session, lib))
+
+    @discord.ui.button(label="Live Text Updates", emoji="🔄", style=discord.ButtonStyle.secondary, row=1)
+    async def live_text(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        from .embed_studio_live_ui import open_live_text_menu
+        await open_live_text_menu(interaction, self.session)
 
     @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
