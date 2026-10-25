@@ -159,7 +159,9 @@ def test_manual_and_scheduled_ledgers_are_independent_and_restart_safe():
     assert ledger.manual_ready_sync()
     guild, user, other = _new_snowflake(), _new_snowflake(), _new_snowflake()
     joined = datetime.now(timezone.utc) - timedelta(minutes=5)
+    assert ledger.available_manual_member_ids_sync(guild, [(user, joined), (other, joined)]) == {user, other}
     assert ledger.reserve_manual_batch_sync(guild, [(user, joined), (other, joined)]) == (user, other)
+    assert ledger.available_manual_member_ids_sync(guild, [(user, joined), (other, joined)]) == set()
     # One minute cooldown is persisted by PostgreSQL, not the current worker.
     with pytest.raises(ledger.ManualClaimUnavailable, match="once per minute"):
         ledger.reserve_manual_batch_sync(guild, [(user, joined)])
@@ -188,7 +190,9 @@ def test_manual_and_scheduled_ledgers_are_independent_and_restart_safe():
                 "set last_claimed_at=now()-interval '13 hours' where guild_id=%s",
                 (str(guild),),
             )
+    assert ledger.available_manual_member_ids_sync(guild, [(user, joined)]) == {user}
     assert ledger.reserve_manual_batch_sync(guild, [(user, joined)]) == (user,)
+    assert ledger.available_manual_member_ids_sync(guild, [(user, joined)]) == set()
     with ledger._connect() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
