@@ -129,11 +129,22 @@ async def cancel(guild_id: int, job_id: str) -> bool:
     return await asyncio.wait_for(asyncio.to_thread(run), timeout=12)
 
 
-async def claim_due() -> list[dict[str, Any]]:
+async def claim_due(*, shard_count: int = 1, owned_shards: tuple[int, ...] = (0,)) -> list[dict[str, Any]]:
     if not schedules_enabled():
         return []
+    if (not isinstance(shard_count, int) or not 1 <= shard_count <= 4096
+            or not isinstance(owned_shards, tuple) or not owned_shards
+            or len(owned_shards) > shard_count
+            or any(type(shard) is not int or shard < 0 or shard >= shard_count
+                   for shard in owned_shards)
+            or len(set(owned_shards)) != len(owned_shards)):
+        raise StudioScheduleError("Cannot safely identify the process's Discord shard ownership.")
     def run():
-        return _rows(_client().rpc(CLAIM_RPC, {"p_limit": 8}).execute())
+        return _rows(_client().rpc(CLAIM_RPC, {
+            "p_limit": 8,
+            "p_shard_count": shard_count,
+            "p_owned_shards": list(owned_shards),
+        }).execute())
     return await asyncio.wait_for(asyncio.to_thread(run), timeout=12)
 
 
