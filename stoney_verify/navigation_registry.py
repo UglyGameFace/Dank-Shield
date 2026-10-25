@@ -348,7 +348,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "📣",
         "design",
         "Make a server announcement in four steps. Extra tools are tucked into simple menus.",
-        ("embed", "embed builder", "embed studio", "announcement builder", "create announcement", "message designer", "design a message", "embed editor", "custom embed", "json embed", "save embed", "brand themes", "server themes", "branding", "embed color palettes", "media library", "saved images", "smart text", "embed placeholders", "feedback form", "private response inbox", "create form", "questionnaire", "staff review", "private feedback forms", "team review", "scheduled posts", "live text", "hourly updates", "dynamic embeds", "auto refresh"),
+        ("embed", "embed builder", "embed studio", "announcement builder", "create announcement", "message designer", "design a message", "embed editor", "custom embed", "json embed", "save embed", "brand themes", "server themes", "branding", "embed color palettes", "media library", "saved images", "image storage", "upload limit", "artwork usage", "smart text", "embed placeholders", "feedback form", "private response inbox", "create form", "questionnaire", "staff review", "private feedback forms", "team review", "scheduled posts", "live text", "hourly updates", "dynamic embeds", "auto refresh"),
         True,
     ),
     NavigationFeature(
@@ -488,8 +488,8 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     ),
     RecentFeatureUpdate(
         "embed_studio", "Post Builder is easier for moderators",
-        "Make an announcement in 4 steps. More options are grouped; saved pictures, "
-        "designs, Smart Text and JSON files remain available.", "2026-10-24",
+        "Make an announcement in 4 steps with simple menus. Saved Pictures shows "
+        "image storage usage when uploads are enabled, and JSON backups stay available.", "2026-10-24",
     ),
     RecentFeatureUpdate(
         "share_router", "Share videos from regular channels",
