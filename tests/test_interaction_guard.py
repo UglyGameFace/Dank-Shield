@@ -263,10 +263,9 @@ def test_unowned_ephemeral_component_recovers_in_place_to_fresh_home(monkeypatch
     asyncio.run(run())
 
 
-def test_unowned_ephemeral_movie_component_recovers_immediately_to_dank_cinema(monkeypatch):
+def test_unowned_ephemeral_movie_component_retires_to_dank_home(monkeypatch):
     async def run() -> None:
-        from stoney_verify.commands_ext import public_movie_night
-        from stoney_verify.commands_ext.public_movie_night import MovieNightHubView
+        from stoney_verify.commands_ext.public_command_surface_v2 import CompactDankHomeView
 
         interaction = FakeInteraction(ephemeral=True)
         interaction.data["custom_id"] = "dank:movie:hub:refresh"
@@ -277,7 +276,6 @@ def test_unowned_ephemeral_movie_component_recovers_immediately_to_dank_cinema(m
             raise AssertionError("known stale Dank Cinema controls must recover without generic grace")
 
         monkeypatch.setattr(guard.asyncio, "sleep", unexpected_sleep)
-        monkeypatch.setattr(public_movie_night, "_room_for_interaction", lambda _interaction: None)
 
         recovered = await guard._recover_unowned_private_component(bot, interaction)
 
@@ -285,9 +283,9 @@ def test_unowned_ephemeral_movie_component_recovers_immediately_to_dank_cinema(m
         assert interaction.response.done is True
         assert len(interaction.response.edits) == 1
         payload = interaction.response.edits[0]
-        assert "Dank Cinema menu expired" in payload["content"]
+        assert "Dank Cinema is now separate" in payload["content"]
         assert "stale action was not executed" in payload["content"]
-        assert isinstance(payload["view"], MovieNightHubView)
+        assert isinstance(payload["view"], CompactDankHomeView)
         assert interaction.followup.sent == []
 
     asyncio.run(run())
@@ -295,8 +293,7 @@ def test_unowned_ephemeral_movie_component_recovers_immediately_to_dank_cinema(m
 
 def test_unowned_ephemeral_cinema_visual_component_recovers_immediately(monkeypatch):
     async def run() -> None:
-        from stoney_verify.commands_ext import public_movie_night
-        from stoney_verify.commands_ext.public_movie_night import MovieNightHubView
+        from stoney_verify.commands_ext.public_command_surface_v2 import CompactDankHomeView
 
         interaction = FakeInteraction(ephemeral=True)
         interaction.data["custom_id"] = "dank:cinema:catalog-visual:next"
@@ -307,7 +304,6 @@ def test_unowned_ephemeral_cinema_visual_component_recovers_immediately(monkeypa
             raise AssertionError("known stale Cinema visual controls must recover without generic grace")
 
         monkeypatch.setattr(guard.asyncio, "sleep", unexpected_sleep)
-        monkeypatch.setattr(public_movie_night, "_room_for_interaction", lambda _interaction: None)
 
         recovered = await guard._recover_unowned_private_component(bot, interaction)
 
@@ -315,16 +311,15 @@ def test_unowned_ephemeral_cinema_visual_component_recovers_immediately(monkeypa
         assert interaction.response.done is True
         assert len(interaction.response.edits) == 1
         payload = interaction.response.edits[0]
-        assert "Dank Cinema menu expired" in payload["content"]
-        assert isinstance(payload["view"], MovieNightHubView)
+        assert "Dank Cinema is now separate" in payload["content"]
+        assert isinstance(payload["view"], CompactDankHomeView)
 
     asyncio.run(run())
 
 
 def test_legacy_opaque_movie_component_uses_cinema_embed_for_recovery(monkeypatch):
     async def run() -> None:
-        from stoney_verify.commands_ext import public_movie_night
-        from stoney_verify.commands_ext.public_movie_night import MovieNightHubView
+        from stoney_verify.commands_ext.public_command_surface_v2 import CompactDankHomeView
 
         interaction = FakeInteraction(ephemeral=True)
         interaction.data["custom_id"] = "legacy-discord-generated-component-id"
@@ -341,14 +336,13 @@ def test_legacy_opaque_movie_component_uses_cinema_embed_for_recovery(monkeypatc
             raise AssertionError("legacy Dank Cinema surfaces must recover without generic grace")
 
         monkeypatch.setattr(guard.asyncio, "sleep", unexpected_sleep)
-        monkeypatch.setattr(public_movie_night, "_room_for_interaction", lambda _interaction: None)
 
         recovered = await guard._recover_unowned_private_component(bot, interaction)
 
         assert recovered is True
         payload = interaction.response.edits[0]
-        assert "refreshed Dank Cinema in place" in payload["content"]
-        assert isinstance(payload["view"], MovieNightHubView)
+        assert "This old Cinema menu has been retired" in payload["content"]
+        assert isinstance(payload["view"], CompactDankHomeView)
 
     asyncio.run(run())
 

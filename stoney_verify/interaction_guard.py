@@ -621,14 +621,17 @@ async def _recover_unowned_private_component(
                     ),
                 )
             elif is_private_movie_night:
-                from .commands_ext.public_movie_night import open_movie_night
+                # Historical Cinema panels may still exist in Discord messages.
+                # Retire them without importing or reactivating the old runtime.
+                from .commands_ext.public_command_surface_v2 import (
+                    replace_with_compact_dank_home,
+                )
 
-                await open_movie_night(
+                await replace_with_compact_dank_home(
                     interaction,
-                    replace_message=True,
-                    recovery_notice=(
-                        "♻️ That Dank Cinema menu expired or belonged to an older bot session. "
-                        "I refreshed Dank Cinema in place; the stale action was not executed."
+                    content=(
+                        "♻️ Dank Cinema is now separate from Dank Shield. "
+                        "This old Cinema menu has been retired; the stale action was not executed."
                     ),
                 )
             else:

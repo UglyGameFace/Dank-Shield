@@ -79,5 +79,6 @@ def test_cinema_is_not_shipped_in_discloud_package() -> None:
 
 
 def test_lifecycle_hooks_do_not_call_cinema() -> None:
+    assert "from .commands_ext.public_movie_night" not in source("stoney_verify/interaction_guard.py")
     assert "cinema_site" not in source("stoney_verify/events.py")
     assert "cinema_site" not in source("stoney_verify/commands_ext/public_onboarding.py")
