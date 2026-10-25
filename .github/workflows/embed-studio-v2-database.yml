@@ -8,6 +8,7 @@ on:
       - 'supabase_fresh/migrations/202610200030_dankshield_embed_studio_scheduling.sql'
       - 'supabase_fresh/migrations/202610200031_dankshield_embed_studio_reviews.sql'
       - 'supabase_fresh/migrations/202610200032_dankshield_embed_studio_forms.sql'
+      - 'supabase_fresh/migrations/202610200033_dankshield_embed_studio_live_text.sql'
       - 'stoney_verify/embed_studio_storage_v2.py'
       - 'tests/test_embed_studio_storage_v2.py'
       - '.github/workflows/embed-studio-v2-database.yml'
@@ -253,6 +254,44 @@ jobs:
               end if;
               if exists(select 1 from public.dank_embed_studio_form_responses) then
                   raise exception 'Deleted response remains';
+              end if;
+          end;
+          $tests$;
+          SQL
+
+      - name: Check live text RLS and owned-shard hourly claims
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200033_dankshield_embed_studio_live_text.sql
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200033_dankshield_embed_studio_live_text.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $tests$
+          declare
+              none_claimed integer;
+              one_claimed integer;
+              duplicate_claimed integer;
+          begin
+              insert into public.dank_embed_studio_live_posts (
+                  guild_id,channel_id,message_id,created_by,nonce,project,
+                  next_refresh_at
+              ) values (
+                  '123','234','345','456',repeat('a',32),'{}'::jsonb,
+                  now()-interval '1 minute'
+              );
+              select count(*) into none_claimed
+                from public.dank_embed_studio_claim_live(4,2,array[1]);
+              select count(*) into one_claimed
+                from public.dank_embed_studio_claim_live(4,2,array[0]);
+              select count(*) into duplicate_claimed
+                from public.dank_embed_studio_claim_live(4,2,array[0]);
+              if none_claimed <> 0 or one_claimed <> 1 or duplicate_claimed <> 0 then
+                  raise exception 'Shard-safe Studio Live Text claim failed';
+              end if;
+              if has_table_privilege('anon','public.dank_embed_studio_live_posts','select') then
+                  raise exception 'Studio live post metadata exposed to anon';
+              end if;
+              if not (select relrowsecurity from pg_class
+                       where oid='public.dank_embed_studio_live_posts'::regclass) then
+                  raise exception 'Live Text RLS not enabled';
               end if;
           end;
           $tests$;
