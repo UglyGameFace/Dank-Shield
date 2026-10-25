@@ -12,6 +12,8 @@ from typing import Any, Optional
 
 import discord
 
+from ..ui.current_channel import current_text_channel
+
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from discord import app_commands
 
@@ -380,6 +382,18 @@ class TicketActionCenterView(_OwnedView):
             interaction,
             embed=_operations_embed(),
             view=TicketOperationsView(self.owner_id),
+        )
+
+    @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.secondary, row=3)
+    async def use_this_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        channel = current_text_channel(interaction, require_bot_send=False)
+        if channel is None:
+            return await _private(interaction, "❌ Open Ticket Center inside the target ticket text channel.")
+        self.channel_id = channel.id
+        await interaction.response.edit_message(
+            embed=_ticket_center_embed(channel), view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3)
@@ -1082,6 +1096,18 @@ class TicketPanelToolsView(_OwnedView):
             color=discord.Color.blurple(),
         )
 
+    @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.secondary, row=1)
+    async def use_this_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_staff(interaction):
+            return
+        channel = current_text_channel(interaction, require_bot_embed=True)
+        if channel is None:
+            return await _private(interaction, "❌ Open Public Ticket Panel in a text channel "
+                                  "where Dank Shield can post embeds, or use the picker.")
+        self.channel_id = channel.id
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
     @discord.ui.button(label="Post / Update Panel", emoji="🎫", style=discord.ButtonStyle.primary, row=1)
     async def post(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -1249,6 +1275,18 @@ class TicketIntakePostActionsView(_OwnedView):
             description="Choose the active ticket channel that should receive the persistent staff actions panel.",
             color=discord.Color.blurple(),
         )
+
+    @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.secondary, row=1)
+    async def use_this_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_staff(interaction):
+            return
+        channel = current_text_channel(interaction, require_bot_embed=True)
+        if channel is None:
+            return await _private(interaction, "❌ Open this menu in the active ticket text channel "
+                                  "or use the picker for another ticket.")
+        from .public_ticket_intake_group import intake_post_actions
+        await _invoke(intake_post_actions, interaction, channel=channel)
 
     @discord.ui.button(label="Back", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
