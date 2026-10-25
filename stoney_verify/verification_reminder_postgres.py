@@ -326,3 +326,47 @@ def delete_manual_departed_sync(
                 (guild_id, user_id, joined_at, cutoff),
             )
             return cursor.fetchone() is not None
+
+
+def apply_manual_schema_sync() -> bool:
+    """Explicit operator-only schema application. Never invoked by bot startup."""
+    from pathlib import Path
+
+    sql_path = (
+        Path(__file__).resolve().parents[1]
+        / "postgres/migrations/202610250001_verify_manual_reminders.sql"
+    )
+    try:
+        statement = sql_path.read_text(encoding="utf-8")
+        with _connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(statement)
+        return manual_ready_sync()
+    except Exception:
+        return False
+
+
+def _operator_cli() -> int:
+    """Installed with the bot even though top-level tools/ is excluded by Discloud."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Private verification reminder PostgreSQL maintenance; default is read-only."
+    )
+    parser.add_argument(
+        "--apply-manual", action="store_true",
+        help="Explicitly apply the additive manual reminder tables after backup",
+    )
+    args = parser.parse_args()
+    if not args.apply_manual:
+        print("No database changes requested. Pass --apply-manual only after an approved backup.")
+        return 0
+    if not apply_manual_schema_sync():
+        print("Manual schema verification failed; automatic reminders remain independent.")
+        return 1
+    print("Manual reminder tables installed and verified on the configured private database.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_operator_cli())
