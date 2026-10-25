@@ -17,6 +17,8 @@ from ..verification_reminders import (
     reminder_text,
     verification_channel,
     delivery_channel,
+    ManualReminderUnavailable,
+    send_due_now_in_designated_channel,
 )
 from .public_verify_command_center import _OwnedView, _private, _replace, _require_staff
 from ..ui.current_channel import current_text_channel
@@ -65,7 +67,8 @@ def _embed(guild: discord.Guild, cfg: Mapping[str, Any], policy: ReminderPolicy)
         description=(
             "Uses Dank Shield's **existing Simple Verify status and role mapping**, not a separate member list. "
             "This server controls its own settings. Members who verify stop qualifying automatically. "
-            "Enabling does not send instantly; reminders begin after the configured delay."
+            "Normal reminders follow the saved schedule. Staff can also tap **Send Due Now** "
+            "to check eligible members immediately without skipping any timing limits."
         ),
         color=discord.Color.blurple(),
     )
@@ -98,8 +101,8 @@ def _embed(guild: discord.Guild, cfg: Mapping[str, Any], policy: ReminderPolicy)
     if blocker:
         embed.add_field(name="Setup required", value=blocker, inline=False)
     embed.set_footer(
-        text="Use This Channel sends reminders here; Choose Other Channel opens Search. "
-             "No messages are sent immediately."
+        text="Use This Channel SAVES the destination (no instant post). "
+             "Send Due Now checks the saved channel, cooldowns and verified status."
     )
     return embed
 
@@ -219,6 +222,72 @@ async def _choose_reminder_channel(interaction: discord.Interaction, owner_id: i
     await _replace(interaction, embed=browser.embed(), view=browser)
 
 
+class ConfirmDueReminderView(_OwnedView):
+    """Explicit staff confirmation before trying the saved due-only workflow."""
+
+    def __init__(self, owner_id: int, guild_id: int, channel_id: int) -> None:
+        super().__init__(owner_id)
+        self.guild_id = int(guild_id)
+        self.channel_id = int(channel_id)
+        self.used = False
+
+    @discord.ui.button(
+        label="Confirm Send Due Now", emoji="📣",
+        style=discord.ButtonStyle.success, row=0,
+    )
+    async def confirm_due(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        if (interaction.guild is None
+                or int(interaction.guild.id) != self.guild_id
+                or not await _require_staff(interaction)):
+            return
+        if self.used:
+            return await _private(
+                interaction, "This check was already requested. Use Refresh before sending again."
+            )
+        self.used = True
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            claimed = await send_due_now_in_designated_channel(
+                interaction.client, interaction.guild, channel_id=self.channel_id,
+            )
+        except ManualReminderUnavailable as exc:
+            return await _private(interaction, f"❌ No reminders sent: {exc}")
+        except Exception as exc:
+            print(f"⚠️ verify manual due trigger unavailable kind={type(exc).__name__}")
+            return await _private(
+                interaction, "❌ Couldn't safely check the due reminders. "
+                             "No additional retry was started; automatic delivery stays active."
+            )
+        if claimed == 0:
+            return await _private(
+                interaction,
+                f"✅ Checked the next page of unverified members for <#{self.channel_id}>. "
+                "No due reminder attempts were claimed on that page. "
+                "This does not bypass the first delay, repeat interval or maximum per join."
+            )
+        await _private(
+            interaction,
+            f"✅ Requested {claimed} due reminder attempt(s) in <#{self.channel_id}>. "
+            "Only still-unverified members who met the saved schedule qualified. "
+            "Each attempt is counted even if Discord could not deliver its message. "
+            "Automatic checks will continue normally."
+        )
+
+    @discord.ui.button(
+        label="Cancel", emoji="◀️", style=discord.ButtonStyle.secondary, row=0,
+    )
+    async def cancel_due(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        self.used = True
+        await _private(interaction, "Cancelled. No manual reminder check was started.")
+
+
 class ReminderSettingsView(_OwnedView):
     def __init__(self, owner_id: int, policy: ReminderPolicy) -> None:
         super().__init__(owner_id)
@@ -297,6 +366,46 @@ class ReminderSettingsView(_OwnedView):
         if await _save(interaction, cfg, replace(policy, delivery="dm")):
             fresh, current = await _load(interaction.guild)
             await _replace(interaction, embed=_embed(interaction.guild, fresh, current), view=ReminderSettingsView(self.owner_id, current))
+
+    @discord.ui.button(
+        label="Send Due Now", emoji="📣",
+        style=discord.ButtonStyle.primary, row=2,
+    )
+    async def send_due(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if interaction.guild is None or not await _require_staff(interaction):
+            return
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        cfg, policy = await _load(interaction.guild)
+        if not policy.enabled:
+            return await _private(interaction, "❌ Enable reminders before sending due notifications.")
+        if policy.delivery != "channel":
+            return await _private(
+                interaction, "❌ Choose channel delivery and save the designated "
+                             "reminder channel first. This button never sends DMs."
+            )
+        channel = delivery_channel(interaction.guild, policy)
+        if channel is None:
+            return await _private(interaction, "❌ Choose a valid designated reminder channel first.")
+        if _can_enable(interaction.guild, cfg):
+            return await _private(
+                interaction, "❌ Reminder setup is incomplete: " + _can_enable(interaction.guild, cfg)
+            )
+        await _private(
+            interaction,
+            f"**Send due reminders now to {channel.mention}?**\n\n"
+            f"• First reminder only after **{policy.delay_hours} hours** in the server.\n"
+            f"• Repeat no sooner than **{policy.repeat_hours} hours**.\n"
+            f"• Up to **{policy.max_reminders}** attempts per member per join.\n"
+            "• Only members still awaiting verification and able to see both channels.\n"
+            "• At most **3 attempts** per tap, from one page of up to 100 members.\n\n"
+            "This uses the normal database duplicate protection and existing worker. "
+            "**It doesn't restart anyone's schedule or send reminders early.**",
+            view=ConfirmDueReminderView(
+                self.owner_id, interaction.guild.id, channel.id,
+            ),
+        )
 
     @discord.ui.button(label="Check Database", emoji="🩺", style=discord.ButtonStyle.secondary, row=3)
     async def check_database(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
