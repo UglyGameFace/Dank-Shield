@@ -58,9 +58,9 @@ class FakeResponse:
     def is_done(self):
         return self.done
 
-    async def send_message(self, text, **kwargs):
+    async def send_message(self, text="", **kwargs):
         self.done = True
-        self.sent.append(str(text))
+        self.sent.append(str(kwargs.get("content", text)))
 
     async def defer(self, **kwargs):
         self.done = True
@@ -122,7 +122,7 @@ def test_search_safe_browser_has_current_channel_button_and_same_owner_callback(
                           response=FakeResponse())
     asyncio.run(browser.pick_current_channel(wrong))
     assert actions==[999]
-    assert "another" in wrong.response.sent[0].lower()
+    assert "own channel picker" in wrong.response.sent[0].lower()
 
 
 def test_browser_uses_feature_predicate_and_does_not_grant_roles(monkeypatch):
@@ -148,12 +148,14 @@ def test_browser_uses_feature_predicate_and_does_not_grant_roles(monkeypatch):
 def test_reminders_choose_invoking_channel_and_delivery_atomically(monkeypatch):
     guild,ch,interaction=setup(monkeypatch)
     saves=[]
+    state={"policy":ReminderPolicy(delivery="dm")}
     async def staff(_):return True
     async def load(_guild):
         assert interaction.response.deferred
-        return {},ReminderPolicy(delivery="dm")
+        return {},state["policy"]
     async def save(_interaction,_old,updated):
         saves.append(updated)
+        state["policy"]=updated
         return True
     async def replace(_interaction,**kwargs):
         saves.append(kwargs["view"].policy)
