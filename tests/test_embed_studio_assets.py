@@ -10,6 +10,7 @@ from PIL import Image
 import pytest
 
 from stoney_verify import embed_studio_assets as assets
+from stoney_verify import embed_studio_artwork_budget as budget
 from stoney_verify.embed_studio_ui import MediaLibraryMenu, StudioArtworkUploadModal, StudioSession
 from stoney_verify.embed_studio_core import parse_library
 
@@ -48,6 +49,7 @@ def test_malicious_or_invalid_upload_is_rejected(bad):
 def test_image_not_stored_in_guild_json_and_server_path_is_private_to_writer(monkeypatch):
     monkeypatch.setattr(assets, "uploads_enabled", lambda: True)
     monkeypatch.setattr(assets, "verify_project", lambda: None)
+    monkeypatch.setattr(budget, "get_budget", lambda: budget.ArtworkBudget(64*budget.MIB, 512*budget.MIB))
     captured = []
     class Storage:
         def upload(self, **kw):
@@ -66,23 +68,31 @@ def test_image_not_stored_in_guild_json_and_server_path_is_private_to_writer(mon
             return self
         def execute(self):
             return SimpleNamespace(data=[{}])
-    db = SimpleNamespace(
-        storage=SimpleNamespace(from_=lambda bucket: Storage()),
-        table=lambda name: Table(),
-    )
+    class DB:
+        storage = SimpleNamespace(from_=lambda bucket: Storage())
+        def rpc(self, name, params):
+            captured.append({"rpc": name, "params": params})
+            return SimpleNamespace(execute=lambda: SimpleNamespace(data={
+                "reserved": True, "finalized": True,
+            }))
+    db = DB()
     monkeypatch.setattr(assets, "_client", lambda: db)
     uploaded = assets._upload_sync(777, _image_bytes(), "Lounge Logo.png")
     assert uploaded.url.startswith("https://")
     assert uploaded.object_path.startswith("777/")
     assert uploaded.content_type == "image/png"
     assert uploaded.image_sha256 and len(uploaded.image_sha256) == 64
-    assert captured[1]["metadata"]["guild_id"] == "777"
-    assert captured[1]["metadata"]["object_path"] == uploaded.object_path
+    assert captured[0]["rpc"] == budget.RESERVE_RPC
+    assert captured[0]["params"]["p_global_budget"] == 512*budget.MIB
+    assert captured[-1]["rpc"] == budget.FINALIZE_RPC
+    assert captured[-1]["params"]["p_guild_id"] == "777"
+    assert captured[-1]["params"]["p_path"] == uploaded.object_path
 
 
 def test_upload_failure_does_not_keep_new_asset(monkeypatch):
     monkeypatch.setattr(assets, "uploads_enabled", lambda: True)
     monkeypatch.setattr(assets, "verify_project", lambda: None)
+    monkeypatch.setattr(budget, "get_budget", lambda: budget.ArtworkBudget(64*budget.MIB, 512*budget.MIB))
     removed = []
     class Storage:
         def upload(self, **kw):
@@ -91,13 +101,16 @@ def test_upload_failure_does_not_keep_new_asset(monkeypatch):
             return "https://example.com/" + path
         def remove(self, paths):
             removed.extend(paths)
-    class BrokenTable:
-        def insert(self, data): return self
-        def execute(self): raise RuntimeError("db down")
-    monkeypatch.setattr(assets, "_client", lambda: SimpleNamespace(
-        storage=SimpleNamespace(from_=lambda *_: Storage()),
-        table=lambda *_: BrokenTable(),
-    ))
+            return []
+    class DB:
+        storage=SimpleNamespace(from_=lambda *_: Storage())
+        def rpc(self, name, params):
+            if name == budget.FINALIZE_RPC:
+                raise RuntimeError("metadata offline")
+            return SimpleNamespace(execute=lambda:SimpleNamespace(data={
+                "reserved":True, "finalized":True,
+            } if name == budget.RESERVE_RPC else True))
+    monkeypatch.setattr(assets, "_client", lambda: DB())
     with pytest.raises(RuntimeError):
         assets._upload_sync(777, _image_bytes(), "image.png")
     assert len(removed) == 1 and removed[0].startswith("777/")

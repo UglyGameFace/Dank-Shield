@@ -4,8 +4,17 @@
 - The canonical Search-Safe `DankGuildResourceBrowserView` automatically gets a Use This Channel button on text-capable pickers; it reuses the existing `on_pick` callback, eligibility predicate and guild/owner checks, never auto-posts.
 - Standalone native channel menus adopt `ui.current_channel.current_text_channel` and their original feature save/permissions paths, beginning with Verification Reminders, Post Builder, 4:20 announcements, Welcome/Join/Exit Cards, Live Profile Signature channels, Ticket Center/Panel/Staff Alerts/Intake and cleanup target selectors.
 - **User-visible behavior:** button selects the exact invoking guild text channel; no Discord dropdown selection required. Feature-specific checks still apply, including private ticket alerts and destructive-cleanup confirmation. Multi-channel profile configuration adds current without deleting previously saved channels.
-- **Remaining audit**: each existing native selector not yet covered must be migrated explicitly, with regression evidence, before describing this as complete across all feature screens. Preserve Embed Studio #722 without merging unrelated work.
+- **Remaining audit**: each existing native selector not yet covered must be migrated explicitly, with regression evidence, before describing this as complete across all feature screens. Embed Studio #722 already merged separately; preserve its artwork capacity protections.
 - Previous active Embed Studio work is **paused** here. Bump Manager #713 and Share Router remain backlog. Do not do multiple active coding tasks.
+
+
+## ACTIVE: Embed Studio managed artwork capacity (2026-10-24)
+
+- **Only active task: Embed Studio**. PRs #716, #717, #718, #719, #720 and #721 confirmed merged into main. Code is not the same as feature activation: private Supabase migrations, object-storage bucket, flags, backups, shard canary and Android tests remain deployment gates.
+- Current slice is atomic, owner-configurable artwork budgets and read-only orphan **candidate** auditing, not arbitrary restrictions on the separate Postgres database. Adds guild/global budget environment validation, service-role-only reservation/finalize/release/usage SQL, safe upload integration, optional Media Library capacity readout, audit CLI, focused tests and ephemeral PG17 contracts.
+- Uncertain upload failures keep quota reserved until humans confirm the new object was removed. Published artwork is never automatically deleted to save space. No free-tier quota, billing tier or Discloud capacity is presumed.
+- **Remaining within Embed Studio after this slice:** true high-volume per-record paginated media/template catalogs, recurring announcement campaigns, deeper collaborative editing, comprehensive retention/observability and production deployment canary. Do not prematurely update New/Updated with features that are not enabled.
+- Bump Manager #713 and the suspended Share Router are still out of scope. Respect single-active-task lock.
 
 ## Embed Studio implementation sequence (2026-10-24)
 
