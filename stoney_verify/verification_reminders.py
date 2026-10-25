@@ -342,13 +342,15 @@ class ReminderWorker:
                 if notice_channel is not None and not notice_channel.permissions_for(current).view_channel:
                     continue
                 try:
-                    body = reminder_text(guild, channel, cfg, policy)
                     if notice_channel is not None:
                         await send_channel_reminder_message(
                             guild, channel, notice_channel, current, cfg, policy,
                         )
                     else:
-                        await current.send(body, allowed_mentions=discord.AllowedMentions.none())
+                        await current.send(
+                            reminder_text(guild, channel, cfg, policy),
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
                 except (discord.Forbidden, discord.HTTPException) as exc:
                     print(f"ℹ️ verify reminder delivery unavailable guild={guild.id} kind={type(exc).__name__}")
                 await asyncio.sleep(0.5)
