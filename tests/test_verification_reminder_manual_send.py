@@ -79,6 +79,10 @@ def setup(monkeypatch, *, count=4, initial_age_minutes=5):
     monkeypatch.setattr(manual, "clear_role_truth_cache", lambda *_: None)
     monkeypatch.setattr(manual, "ledger_ready", ready)
     monkeypatch.setattr(manual, "manual_ready_sync", lambda: True)
+    monkeypatch.setattr(
+        manual, "available_manual_member_ids_sync",
+        lambda gid, batch: {uid for uid, _ in batch},
+    )
 
     async def no_sleep(*_):
         return None
@@ -169,7 +173,8 @@ def test_manual_discord_ui_has_separate_actions_with_valid_rows():
     assert len(view.children) <= 25
     preview = manual.ManualPreview(
         after=0, next_after=100, scanned=100, pending=4, without_access=0,
-        before_automatic_delay=4, potential=4, candidates=(100, 101, 102),
+        before_automatic_delay=4, manual_limited=0, potential=4,
+        candidates=(100, 101, 102),
         guild_id=1234, channel_id=44, policy_proof="ok", message="Please verify",
     )
     modal = ui.ManualPreviewView(7, preview)
@@ -233,3 +238,16 @@ def test_manual_confirm_counts_failed_discord_send_without_retry(monkeypatch):
     result = run(manual.send_previewed_manual_reminders(bot, guild, preview))
     assert result.reserved == 3 and result.failed == 3 and result.delivered == 0
     assert len(calls) == 3  # one attempt per claimed recipient; never auto retry
+
+
+def test_preview_skips_previous_manual_recipients_without_skipping_member_page(monkeypatch):
+    cfg, guild, bot, worker, members, sent = setup(monkeypatch, count=7)
+    monkeypatch.setattr(
+        manual, "available_manual_member_ids_sync",
+        lambda gid, batch: {uid for uid, _ in batch if uid not in (100, 101, 102)},
+    )
+    preview = run(manual.preview_manual_reminders(bot, guild, channel_id=44))
+    assert preview.scanned == 7 and preview.pending == 7
+    assert preview.manual_limited == 3
+    assert preview.potential == 4
+    assert preview.candidates == (103, 104, 105)
