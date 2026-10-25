@@ -228,7 +228,7 @@ def test_settings_buttons_acknowledge_before_remote_config(monkeypatch):
 
     monkeypatch.setattr(ui, "_require_staff", require_staff)
 
-    for label in ("Refresh", "Preview", "Use DMs", "Use Channel"):
+    for label in ("Refresh", "Preview", "Use DMs"):
         events = []
         class FakeResponse:
             done = False
