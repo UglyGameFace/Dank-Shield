@@ -14,9 +14,7 @@ this contract before global sync.
 PUBLIC_GLOBAL_COMMAND_NAMES: tuple[str, ...] = (
     "dank",
     "captions",
-    "cinema",
     "mod",
-    "movie",
     "role",
     "ticket",
     "tickets",

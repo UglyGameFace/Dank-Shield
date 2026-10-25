@@ -62,4 +62,4 @@ def test_final_surface_reasserts_after_additive_registrar_drift() -> None:
     assert "ticket-panel" not in _root_names()
     assert {
         name for name in _root_names() if name != "View Dank Profile"
-    } == {"captions", "cinema", "dank", "mod", "movie", "role", "ticket", "tickets", "toke", "verify"}
+    } == {"captions", "dank", "mod", "role", "ticket", "tickets", "toke", "verify"}

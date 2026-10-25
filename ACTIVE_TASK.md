@@ -1,3 +1,23 @@
+## FORCE SWITCH active task: extract Dank Cinema from Dank Shield (2026-10-25)
+
+- **Outcome:** Preserve Cinema source in `UglyGameFace/Dank-Cinema`; make the Discloud Dank Shield deployment start only non-Cinema services and continue ordinary Share Router.
+- **Reason:** Discloud copyright notice of possible movie torrents; separate runtime services, not VPN-based masking or enforcement evasion.
+- **Source main at switch:** `930f1796c3c1dd5d81d505f9ee4b4946de0952e7`. Branch `extract/disable-cinema-in-shield-20261025`.
+- **Destination:** `UglyGameFace/Dank-Cinema`, draft PR #2, historical Cinema source/assets/migrations/docs/tests copied with source hash parity; two source files blocked during copy and documented. **Standalone Cinema runtime is NOT operational or deployable**; Shield shared dependencies, auth, and DB still need extraction.
+- **Root cause:** `command_runtime.setup_hook` and `app.on_ready` both started `torrent_media_server`; that registered Cinema website, torrent endpoints, and feed worker. Share Router independently called torrent manager on message intake and shared the media server listener. `api_new/server` also registered torrent admin routes. Guild/member lifecycle and command navigation referenced Cinema.
+- **Changes in this branch:** Create Share Router-only HTTP listener on existing port with only `/health` and `/share-video` routes; retarget pre-gateway and ready lifecycle, remove Share Router torrent processing and admin routes, retire `/cinema` and `/movie`, remove Cinema join/leave integration and navigation, exclude Cinema source from Discloud package, remove libtorrent dependency. Retain ordinary video sharing, all other Discord controls and saved data. No live DB wipe.
+- **Validation required:** Full exact-head CI including command-tree sync and Share Router regression tests; deployed Discloud SHA, clean startup, route responses (Cinema/torrent endpoints should not exist), no libtorrent process/download/seeding, no dormant Cinema worker, share-video successful, configuration/secret cleanup and release rollback. **No live Discloud configuration/process was changed by GitHub edits.**
+- **Known blockers:** Complete standalone port not yet runnable, two archived files missing, no access to live Discloud console here, git source cleanup/physical deletion still pending correctness review.
+- **Current next step:** Finish regression/contract tests, draft PR, inspect CI and fix only extraction-related regressions, then guarded deploy and runtime verification.
+
+## Suspended task checkpoint: manual verification reminders (2026-10-25)
+
+- **Branch:** `fix/verification-manual-guild-role-audience-20261025`. Do not modify, merge, or deploy until resumed.
+- **Requirement:** Full guild authoritative scan using saved custom Unverified role, channel or DM delivery without lifetime two-per-join restrictions, grouped up-to-25 selections, durable 6h cooldown, 1-minute/4-hour guild pacing, rechecks and reporting.
+- **Evidence/root cause:** Prior preview used `fetch_members(limit=100)` mixed guild page and selected only 3; manual DMs prohibited and old PG claims had lifetime attempt cap.
+- **Validation missing:** Exact-head CI incl PG16 concurrency/PG17 contracts; review, guarded Discloud deploy, live preview of 24 custom-role unverified members, channel/DM send and verification-transition acceptance.
+- **Backlog:** LFG #638, remaining channel picker audit, Share Router unrelated enhancements and other features. Do not lose source branches or rewrite current user work.
+
 ## Active task: custom-role, full-guild manual verification reminders (2026-10-25)
 
 - **Outcome:** Server owners can reach all eligible people with *their own saved* Unverified role, by channel or DMs, without lifetime two-per-join manual restrictions.

@@ -11,7 +11,7 @@ import discord
 import pytest
 
 import stoney_verify.command_runtime as command_runtime
-from stoney_verify import torrent_media_server
+from stoney_verify import share_router_public_server
 from stoney_verify.startup_guards import process_health
 from stoney_verify.command_runtime import (
     DankAutoShardedBot,
@@ -139,7 +139,7 @@ def test_native_bot_constructor_owns_tree_and_shard_choice(monkeypatch: pytest.M
 
 
 
-def test_setup_hook_binds_cinema_site_before_discord_command_cleanup(
+def test_setup_hook_binds_share_router_listener_before_discord_command_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
@@ -154,8 +154,8 @@ def test_setup_hook_binds_cinema_site_before_discord_command_cleanup(
         return {"status": "ok", "cleared": [], "failed": []}
 
     monkeypatch.setattr(
-        torrent_media_server,
-        "start_torrent_media_server",
+        share_router_public_server,
+        "start_share_router_public_server",
         fake_start_media_server,
     )
     monkeypatch.setattr(

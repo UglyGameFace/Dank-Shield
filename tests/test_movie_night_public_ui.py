@@ -52,14 +52,12 @@ def test_cinema_home_open_site_button_is_signed_to_guild_and_user(monkeypatch) -
     assert params["sig"][0]
 
 
-def test_movie_is_one_compact_public_doorway() -> None:
-    assert PUBLIC_GLOBAL_COMMAND_COUNT == 11
+def test_archived_movie_ui_is_not_part_of_shield_command_surface() -> None:
+    assert PUBLIC_GLOBAL_COMMAND_COUNT == 9
     assert PUBLIC_GLOBAL_COMMAND_NAMES == (
         "dank",
         "captions",
-        "cinema",
         "mod",
-        "movie",
         "role",
         "ticket",
         "tickets",
@@ -1532,18 +1530,10 @@ def test_catalog_filter_reports_when_provider_results_do_not_match() -> None:
     assert "none matched the selected catalog title" in filtered.errors[-1]
 
 
-def test_movie_night_is_reachable_from_home_registry_and_normal_search_words() -> None:
-    feature = feature_by_key("movie_night")
-    assert feature is not None
-    assert feature.category == "community"
-    assert feature.label == "Dank Cinema & Movie Night"
-    assert search_features("dank cinema")[0].key == "movie_night"
-    assert search_features("subtitles")[0].key == "movie_night"
-
-    for query in ("movie night", "watch party", "group streaming", "torrent streaming"):
-        matches = search_features(query)
-        assert matches
-        assert matches[0].key == "movie_night"
+def test_movie_night_is_no_longer_in_shield_home_or_search() -> None:
+    assert feature_by_key("movie_night") is None
+    for query in ("dank cinema", "subtitles", "movie night", "watch party", "group streaming", "torrent streaming"):
+        assert all(item.key != "movie_night" for item in search_features(query))
 
 
 def test_setup_readiness_blocks_public_url_bound_only_to_loopback(monkeypatch) -> None:

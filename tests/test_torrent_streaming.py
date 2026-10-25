@@ -1249,45 +1249,23 @@ def test_partial_stream_response_never_advertises_unbuffered_tail() -> None:
 
 
 def test_torrent_runtime_static_contract_keeps_public_stream_isolated() -> None:
+    """Cinema's archived code must not remain wired into Dank Shield execution."""
     root = Path(__file__).resolve().parents[1]
-    server = (root / "stoney_verify/api_new/server.py").read_text(encoding="utf-8")
-    routes = (root / "stoney_verify/api_new/torrent_stream_routes.py").read_text(encoding="utf-8")
-    media_server = (root / "stoney_verify/torrent_media_server.py").read_text(encoding="utf-8")
+    api = (root / "stoney_verify/api_new/server.py").read_text(encoding="utf-8")
     app = (root / "stoney_verify/app.py").read_text(encoding="utf-8")
-    router = (root / "stoney_verify/share_router_runtime.py").read_text(encoding="utf-8")
-
-    assert "register_torrent_admin_routes(app" in server
-    assert "/media/torrent/stream/" not in server
-    assert "register_torrent_public_routes(app)" in media_server
-    assert 'DANK_MEDIA_BIND_HOST' in media_server
-    assert 'DANK_MEDIA_PORT' in media_server
-    assert "start_torrent_media_server" in app
-    assert "parse_http_range(" in routes
-    assert '"Accept-Ranges": "bytes"' in routes
-    assert "await manager.wait_range(" in routes
-    assert "except (ConnectionError, asyncio.CancelledError):" in routes
-    assert "client_disconnected = True" in routes
-    assert "consumer_key = str(request.query.get(\"cid\", \"\")" in routes
-    assert "consumer_key=consumer_key" in routes
-    assert "plan.target_bytes" in routes
-    assert "_bounded_partial_response_end(" in routes
-    assert "requested_end" in routes
-    assert "startup_wait_end" in routes
-    assert "initial_wait_end = first_end if partial else startup_wait_end" in routes
-    assert "manager.contiguous_available_end(" in routes
-    assert "get_torrent_manager().ensure_cleanup_task()" not in routes
-    torrent_runtime = (root / "stoney_verify/torrent_streaming.py").read_text(encoding="utf-8")
-    assert "_MANAGER.ensure_cleanup_task()" in torrent_runtime
-    assert "find_magnet(" in router
-    assert "is_torrent_filename(" in router
-    assert "manager.start_magnet(" in router
-    assert "manager.start_torrent_bytes(" in router
-    assert "manager.stream_url(session)" in router
-    assert "DANK_MEDIA_PUBLIC_BASE_URL is required" in router
-    assert "DANK_TORRENT_STREAM_SECRET is required" in router
-    assert "media_server_ready()" in router
-    assert "lease_key=lease_key" in router
-    assert "await manager.release_lease(" in router
+    runtime = (root / "stoney_verify/command_runtime.py").read_text(encoding="utf-8")
+    share = (root / "stoney_verify/share_router_runtime.py").read_text(encoding="utf-8")
+    public = (root / "stoney_verify/share_router_public_server.py").read_text(encoding="utf-8")
+    assert "register_torrent_admin_routes" not in api
+    assert "torrent_stream_routes" not in api
+    assert "start_torrent_media_server" not in app
+    assert "start_torrent_media_server" not in runtime
+    assert "_route_torrent_media" not in share
+    assert "get_torrent_manager" not in share
+    assert "torrent_streaming" not in share
+    assert "register_share_video_routes(app)" in public
+    assert "register_torrent_public_routes" not in public
+    assert "register_cinema_site_routes" not in public
 
 
 def test_public_route_registration_does_not_construct_torrent_manager(monkeypatch) -> None:

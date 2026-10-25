@@ -13,28 +13,18 @@ def test_discloud_profile_is_site_capable_and_uses_current_ram_allocation() -> N
     assert "RAM=1495" in config
 
 
-def test_env_example_has_movie_night_dynamic_capacity_contract() -> None:
+def test_env_example_has_share_router_capacity_without_cinema() -> None:
     env = (ROOT / ".env.example").read_text(encoding="utf-8")
-
-    required = (
-        "DANK_MEDIA_SERVER_ENABLED=true",
-        "DANK_MEDIA_BIND_HOST=0.0.0.0",
-        "DANK_MEDIA_PORT=8080",
+    for required in (
+        "DANK_SHARE_VIDEO_PUBLIC_BASE_URL=",
+        "DANK_SHARE_VIDEO_SERVER_ENABLED=true",
+        "DANK_SHARE_VIDEO_BIND_HOST=0.0.0.0",
+        "DANK_SHARE_VIDEO_PORT=8080",
         "DANK_PROCESS_MEMORY_LIMIT_MB=1495",
-        "DANK_MOVIE_NIGHT_EMPTY_ROOM_TTL_SECONDS=1800",
-        "DANK_MOVIE_NIGHT_MEMORY_RESERVE_MB=350",
-        "DANK_TORRENT_ESTIMATED_SESSION_MB=96",
-        "DANK_TORRENT_SOFT_SESSION_LIMIT=2",
-        "DANK_TORRENT_MAX_SESSIONS=4",
-        "DANK_TORRENT_MAX_UNIQUE_PER_GUILD=1",
-        "DANK_TORRENT_ALLOW_BURST=false",
-        "DANK_TORRENT_MAX_FILE_BYTES=26843545600",
-        "DANK_TORRENT_MAX_TOTAL_BYTES=53687091200",
-        "DANK_TORRENT_DISK_RESERVE_BYTES=68719476736",
-    )
-    for line in required:
-        assert line in env
-
+    ):
+        assert required in env
+    assert "DANK_TORRENT_" not in env
+    assert "DANK_CINEMA_" not in env
 
 def test_setup_surface_exposes_capacity_and_shared_session_telemetry() -> None:
     source = (
