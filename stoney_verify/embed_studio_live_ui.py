@@ -83,14 +83,30 @@ class LiveTextChoice(_StudioView):
                 if not old_nonce:
                     return await _say(interaction,"Live Text is already disabled.")
                 row["live_nonce"]=""
-            if not await _save_library(self.session.guild_id,source,lib):
-                return await _say(interaction,"Another moderator changed the post. Reopen Live Text.")
+            # Enroll BEFORE publishing the authorization nonce. If the DB
+            # operation fails, don't leave a bogus "enabled" label in Studio.
+            # If a competing moderator invalidates the CAS, disable the newly
+            # created row and never alter their saved configuration.
             if enable:
-                if not await enroll(self.session.guild_id,channel_id,message_id,
-                                    self.session.owner_id,nonce,project):
+                enrolled = await enroll(self.session.guild_id,channel_id,message_id,
+                                        self.session.owner_id,nonce,project)
+                if not enrolled:
                     return await _say(interaction,
-                        "Live Text enrollment was not confirmed. No automatic edits will happen.")
+                        "Live Text enrollment was not confirmed. Nothing was enabled.")
+                try:
+                    saved = await _save_library(self.session.guild_id,source,lib)
+                except Exception:
+                    await disable(self.session.guild_id,channel_id,message_id,nonce)
+                    raise
+                if not saved:
+                    await disable(self.session.guild_id,channel_id,message_id,nonce)
+                    return await _say(interaction,
+                        "Another moderator changed this post. Nothing was enabled.")
             else:
+                if not await _save_library(self.session.guild_id,source,lib):
+                    return await _say(interaction,"Another moderator changed the post. Reopen Live Text.")
+                # The saved nonce has already been revoked, so the worker
+                # fails closed even if this final database update times out.
                 await disable(self.session.guild_id,channel_id,message_id,old_nonce)
         except StudioValidationError as exc:
             return await _say(interaction,str(exc))
