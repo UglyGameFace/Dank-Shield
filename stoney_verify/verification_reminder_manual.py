@@ -32,6 +32,7 @@ from .verification_reminders import (
 from .verification_reminder_postgres import (
     ManualClaimUnavailable,
     manual_ready_sync,
+    available_manual_member_ids_sync,
     reserve_manual_batch_sync,
 )
 
@@ -46,6 +47,7 @@ class ManualPreview:
     pending: int
     without_access: int
     before_automatic_delay: int
+    manual_limited: int
     potential: int
     candidates: tuple[int, ...]
     guild_id: int
@@ -161,8 +163,8 @@ async def preview_manual_reminders(
         raise ManualReminderUnavailable(
             "Could not read this page of guild members. Check Server Members Intent and bot access."
         ) from exc
-    pending = invisible = early = potential = 0
-    candidates: list[int] = []
+    pending = invisible = early = 0
+    pool: list[tuple[int, datetime]] = []
     now = datetime.now(timezone.utc)
     for member in members:
         if not pending_for_reminder(member, cfg):
@@ -175,9 +177,14 @@ async def preview_manual_reminders(
             continue
         if now < member.joined_at + timedelta(hours=policy.delay_hours):
             early += 1
-        potential += 1
-        if len(candidates) < MAX_MANUAL_RECIPIENTS:
-            candidates.append(int(member.id))
+        pool.append((int(member.id), member.joined_at))
+    try:
+        available_ids = await asyncio.to_thread(
+            available_manual_member_ids_sync, int(guild.id), pool,
+        )
+    except ManualClaimUnavailable as exc:
+        raise ManualReminderUnavailable(str(exc)) from exc
+    candidates = [uid for uid, _ in pool if uid in available_ids][:MAX_MANUAL_RECIPIENTS]
     return ManualPreview(
         after=after,
         next_after=int(members[-1].id) if len(members) == SCAN_SIZE else 0,
@@ -185,7 +192,8 @@ async def preview_manual_reminders(
         pending=pending,
         without_access=invisible,
         before_automatic_delay=early,
-        potential=potential,
+        manual_limited=len(pool) - len(available_ids),
+        potential=len(available_ids),
         candidates=tuple(candidates),
         guild_id=int(guild.id),
         channel_id=notice.id,
