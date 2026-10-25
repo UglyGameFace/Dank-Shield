@@ -11,6 +11,7 @@ from stoney_verify.somewhere_420_schedules import (
     Somewhere420StorageUnavailable, get_schedule, next_daily_fire, save_schedule, valid_timezone,
 )
 from stoney_verify.ui.resource_browser import DankGuildResourceBrowserView
+from stoney_verify.ui.current_channel import current_text_channel
 from stoney_verify.somewhere_420_role_headsup import (
     configure_role_heads_up, get_role_optout, set_role_optout,
 )
@@ -280,6 +281,32 @@ class ServerSettingsModal(discord.ui.Modal, title="Daily Server 4:20 Settings"):
         await _panel(interaction, _settings_embed("guild", data), Staff420View(self.owner_id, data))
 
 
+async def _save_staff_420_channel(
+    interaction: discord.Interaction, owner_id: int, channel: discord.TextChannel,
+) -> None:
+    guild = interaction.guild
+    if guild is None or not interaction_has_manage_guild_authority(interaction):
+        return await _reply(interaction, "You need server management permission.")
+    live = guild.get_channel(int(channel.id))
+    if not isinstance(live, discord.TextChannel) or not _can_post(guild, live):
+        return await _reply(interaction, "Dank Shield lacks the required channel permissions.")
+    if not interaction.response.is_done():
+        await interaction.response.defer()
+    try:
+        old = await get_schedule("guild", guild.id) or {}
+        saved = await save_schedule(
+            "guild", guild.id,
+            zone_name=str(old.get("timezone") or "UTC"),
+            enabled=bool(old.get("enabled")),
+            channel_id=live.id, notify_role=bool(old.get("notify_role")),
+            quiet_start=int(old.get("quiet_start", 22)),
+            quiet_end=int(old.get("quiet_end", 8)),
+        )
+    except (Somewhere420StorageUnavailable, ValueError):
+        return await _reply(interaction, "Couldn't save the channel. No changes to scheduled delivery.")
+    await _panel(interaction, _settings_embed("guild", saved), Staff420View(owner_id, saved))
+
+
 class Staff420View(_OwnedView):
     def __init__(self, owner_id: int, saved: dict | None):
         super().__init__(owner_id)
@@ -291,24 +318,7 @@ class Staff420View(_OwnedView):
             return await _reply(interaction, "You need server management permission.")
         guild, owner = interaction.guild, self.owner_id
         async def chosen(pick: discord.Interaction, channel: discord.TextChannel) -> None:
-            if not interaction_has_manage_guild_authority(pick) or not _can_post(guild, channel):
-                return await _reply(pick, "Dank Shield lacks the required channel permissions.")
-            if not pick.response.is_done():
-                await pick.response.defer()
-            try:
-                old = await get_schedule("guild", guild.id) or {}
-                saved = await save_schedule(
-                    "guild", guild.id,
-                    zone_name=str(old.get("timezone") or "UTC"),
-                    enabled=bool(old.get("enabled")),
-                    channel_id=channel.id,
-                    notify_role=bool(old.get("notify_role")),
-                    quiet_start=int(old.get("quiet_start", 22)),
-                    quiet_end=int(old.get("quiet_end", 8)),
-                )
-            except (Somewhere420StorageUnavailable, ValueError):
-                return await _reply(pick, "Couldn't save the channel. No changes to scheduled delivery.")
-            await _panel(pick, _settings_embed("guild", saved), Staff420View(owner, saved))
+            await _save_staff_420_channel(pick, owner, channel)
         browser = DankGuildResourceBrowserView(
             guild=guild, author_id=owner, resource_kinds=("text",),
             on_pick=chosen, custom_id="dank:420:channel",
@@ -317,6 +327,17 @@ class Staff420View(_OwnedView):
             on_home=open_staff_420,
         )
         await _panel(interaction, browser.embed(), browser)
+
+    @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.success, row=0)
+    async def use_this_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not interaction_has_manage_guild_authority(interaction):
+            return await _reply(interaction, "You need Manage Server permission.")
+        channel = current_text_channel(interaction)
+        if channel is None:
+            return await _reply(interaction, "Open this menu in the text channel you want, "
+                                "or use Choose Announcement Channel to search.")
+        await _save_staff_420_channel(interaction, self.owner_id, channel)
 
     @discord.ui.button(label="Edit Timezone / Quiet Hours / Role", emoji="⚙️", style=discord.ButtonStyle.secondary, row=0)
     async def settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
