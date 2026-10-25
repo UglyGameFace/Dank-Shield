@@ -97,7 +97,10 @@ def _embed(guild: discord.Guild, cfg: Mapping[str, Any], policy: ReminderPolicy)
     )
     if blocker:
         embed.add_field(name="Setup required", value=blocker, inline=False)
-    embed.set_footer(text="Opt-in per server • Use Check Database for live PostgreSQL status")
+    embed.set_footer(
+        text="Use This Channel sends reminders here; Choose Other Channel opens Search. "
+             "No messages are sent immediately."
+    )
     return embed
 
 
@@ -264,23 +267,24 @@ class ReminderSettingsView(_OwnedView):
             return await _private(interaction, "❌ Configure the verification channel before previewing.")
         await _private(interaction, reminder_text(interaction.guild, channel, cfg, policy))
 
-    @discord.ui.button(label="Use Channel", emoji="📣", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.success, row=1)
     async def use_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_staff(interaction):
             return
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-        cfg, policy = await _load(interaction.guild)
-        selected_channel = delivery_channel(interaction.guild, replace(policy, delivery="channel"))
-        if selected_channel is None:
-            return await _private(interaction, "❌ Select a reminder text channel using the picker below first.")
-        me = interaction.guild.me
-        if me is None or not selected_channel.permissions_for(me).view_channel or not selected_channel.permissions_for(me).send_messages:
-            return await _private(interaction, "❌ Dank Shield needs View Channel and Send Messages in the selected reminder channel.")
-        if await _save(interaction, cfg, replace(policy, delivery="channel")):
-            fresh, current = await _load(interaction.guild)
-            await _replace(interaction, embed=_embed(interaction.guild, fresh, current), view=ReminderSettingsView(self.owner_id, current))
+        channel = current_text_channel(interaction)
+        if channel is None:
+            return await _private(
+                interaction,
+                "❌ Open this menu in the text channel you want to use, "
+                "then tap Use This Channel. Or choose another channel with Search."
+            )
+        await _save_delivery_channel(interaction, self.owner_id, channel)
+
+    @discord.ui.button(label="Choose Other Channel", emoji="🔎", style=discord.ButtonStyle.secondary, row=1)
+    async def choose_other_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _choose_reminder_channel(interaction, self.owner_id)
 
     @discord.ui.button(label="Use DMs", emoji="✉️", style=discord.ButtonStyle.secondary, row=1)
     async def use_dms(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
