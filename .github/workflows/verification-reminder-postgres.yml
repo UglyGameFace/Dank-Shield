@@ -61,5 +61,9 @@ jobs:
           psql -v ON_ERROR_STOP=1 -f postgres/migrations/202610250001_verify_manual_reminders.sql
       - name: Install isolated PostgreSQL test dependencies
         run: python -m pip install -q pytest "psycopg[binary]>=3.2.0,<4.0.0"
+      - name: Verify installed-app additive operator migration is idempotent
+        run: |
+          python -m stoney_verify.verification_reminder_postgres --apply-manual
+          python -m stoney_verify.verification_reminder_postgres --apply-manual
       - name: Verify atomic claims and replay safety on PostgreSQL 16
         run: python -m pytest tests/test_verification_reminder_postgres.py -q --tb=short
