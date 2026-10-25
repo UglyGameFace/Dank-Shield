@@ -316,7 +316,8 @@ def test_releases_show_real_merged_updates_and_exclude_unmerged_work() -> None:
 def test_design_has_direct_embed_studio_without_second_editor() -> None:
     design = registry.features_for_category("design")
     assert "embed_studio" in {item.key for item in design}
-    assert "Embed Studio" in _labels(surface.FeatureCategoryView(100, "design"))
+    assert "Post Builder" in _labels(surface.FeatureCategoryView(100, "design"))
+    assert registry.search_features("embed studio")[0].key == "embed_studio"
     assert registry.search_features("embed builder")[0].key == "embed_studio"
     assert registry.search_features("create announcement")[0].key == "embed_studio"
     assert registry.search_features("json embed")[0].key == "embed_studio"
@@ -355,7 +356,7 @@ def test_buttons_use_action_meaning_not_moderator_role_color() -> None:
     blue = discord.ButtonStyle.primary
     neutral = discord.ButtonStyle.secondary
     design = surface.FeatureCategoryView(100, "design")
-    embed = next(item for item in design.children if getattr(item, "label", "") == "Embed Studio")
+    embed = next(item for item in design.children if getattr(item, "label", "") == "Post Builder")
     card = next(item for item in design.children if getattr(item, "label", "") == "Card Assets")
     assert embed.style is blue
     assert card.style is neutral
