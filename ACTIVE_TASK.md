@@ -1,3 +1,15 @@
+## Active task: custom-role, full-guild manual verification reminders (2026-10-25)
+
+- **Outcome:** Server owners can reach all eligible people with *their own saved* Unverified role, by channel or DMs, without lifetime two-per-join manual restrictions.
+- **Root cause:** PR #727 preview called `fetch_members(limit=100)`, counted that mixed guild-member page as a recipient page and only selected 3; manual delivery disallowed DMs. A separate uncached role truth lookup could disagree with just-fetched saved settings. PG claims permanently stopped after 2 attempts per join.
+- **Authoritative execution:** `/dank` Verification Center -> canonical `public_verify_reminder_ui` -> `verification_reminder_manual` -> existing shared `collect_membership_snapshot` (fully fetched + Discord recovery pacing) -> `pending_for_reminder` -> `role_truth.member_is_pending_verification(config=fresh_guild_config)` -> independent PG manual claims -> existing worker per-guild lock -> DM sender or canonical grouped mention sender. Automatic worker remains separate and unchanged in pacing.
+- **Scope:** Whole-guild authoritative scan, saved role mappings including custom names/emojis and verified/staff conflict diagnostics; up to 25 selected per group, one channel post or individually paced DMs, no lifetime cap, durable 6h member cooldown, existing 1min/4hr guild batch pacing, rechecks, reports, regression tests, documentation.
+- **Branch:** `fix/verification-manual-guild-role-audience-20261025` on latest main, not deployed.
+- **Validation:** Pending exact-head CI (full pytest, PG16 manual concurrency, PG17 contracts, Discord menu, role truth). No live Discloud pings made.
+- **Cleanup/conflicts:** Preserve PR #727 migration tables and claims, no new ledger; no second full-enumeration authority, reuse existing membership service.
+- **Release gate:** Review diff, clean CI, merge, guarded Discloud deploy, live 24-member custom-role preview, targeted manual send and DM tests. Full scan must fail closed on incomplete REST source.
+- **Backlog:** LFG #638 after this task's actual Definition of Done; separate unrelated channel-picker redesign remains backlogged.
+
 ## Current active task: manual verification reminders (2026-10-25)
 
 - User validated deployment of PR #726 on main: Send Due Now works but only scans 100 mixed guild members, honors 24h first delay and confusingly reports zero without explaining how many are actually pending.
