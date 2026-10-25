@@ -133,7 +133,7 @@ def test_find_feature_understands_common_names_and_aliases() -> None:
     assert registry.search_features("facebook download")[0].key == "share_downloads"
     assert registry.search_features("sesh")[0].key == "toke_settings"
     assert registry.search_features("unverified reminders")[0].key == "verification_reminders"
-    assert registry.search_features("subtitles") == []
+    assert all(item.key != "movie_night" for item in registry.search_features("subtitles"))
     assert registry.feature_by_key("movie_night") is None
 
 

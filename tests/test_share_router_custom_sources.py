@@ -438,8 +438,8 @@ def test_source_cleanup_only_enqueues_successful_route_acks():
     assert "source.get_partial_message(message_id).delete()" in runtime
     assert "message.delete(reason=" not in runtime
     assert "get_partial_message(message_id).delete(reason=" not in runtime
-    assert source.count("await _cleanup_delivered_proxy_post(message, enabled=cleanup_source)") == 2
-    assert source.index("await _cleanup_delivered_proxy_post") > source.index("torrent_duplicate is not None")
+    assert source.count("await _cleanup_delivered_proxy_post(message, enabled=cleanup_source)") == 1
+    assert source.index("await _cleanup_delivered_proxy_post") > source.index("native_sent = await _relay_native_video_upload(")
     assert source.index("native_sent = await _relay_native_video_upload(") < source.rindex(
         "await _cleanup_delivered_proxy_post"
     )
@@ -674,10 +674,6 @@ def test_actual_existing_forwarding_keeps_original_even_on_duplicate_and_error(
     monkeypatch.setattr(router, "_route_rejection_log", rejection)
     monkeypatch.setattr(router, "_cleanup_delivered_proxy_post", cleanup)
     monkeypatch.setattr(router, "_RECENT_ROUTE_KEYS", {})
-    async def no_torrent(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(router, "_route_torrent_media", no_torrent)
 
     def message(content="A gaming clip! https://example.com/video", message_id=121):
         async def delete(*_args, **_kwargs):
@@ -923,10 +919,6 @@ def test_filtered_existing_route_skips_chat_while_forwarding_video_link_without_
         calls.append("media")
         return False
 
-    async def bad_torrent(*_args, **_kwargs):
-        calls.append("torrent")
-        return None
-
     async def silent_modlog(*_args, **_kwargs):
         return None
 
@@ -938,7 +930,6 @@ def test_filtered_existing_route_skips_chat_while_forwarding_video_link_without_
         assert enabled is False
 
     monkeypatch.setattr(router, "_relay_native_video_upload", fake_relay)
-    monkeypatch.setattr(router, "_route_torrent_media", bad_torrent)
     monkeypatch.setattr(router, "_send_modlog", silent_modlog)
     monkeypatch.setattr(router, "_route_rejection_log", reject)
     monkeypatch.setattr(router, "_cleanup_delivered_proxy_post", cleanup)
@@ -963,7 +954,6 @@ def test_filtered_existing_route_skips_chat_while_forwarding_video_link_without_
         await router.route_message(message("https://youtu.be/ABCD123456", 3))
         assert len(target.sent) == 1
         assert calls.count("media") == 1
-        assert calls.count("torrent") == 1
         assert calls.count("cleanup") == 1
         assert deleted == []
 
@@ -972,7 +962,6 @@ def test_filtered_existing_route_skips_chat_while_forwarding_video_link_without_
         await router.route_message(message("https://www.facebook.com/share/v/Abc123/", 4))
         assert len(target.sent) == 2
         assert calls.count("media") == 2
-        assert calls.count("torrent") == 2
         assert calls.count("cleanup") == 2
         assert deleted == []
 
@@ -1031,15 +1020,10 @@ def test_filtered_proxy_mismatch_does_not_delete_source_or_attempt_delivery(
     async def delete():
         deleted.append(True)
 
-    async def fail_torrent(*_args, **_kwargs):
-        calls.append("torrent")
-        raise AssertionError("Ignored messages cannot reach the torrent engine")
-
     async def fail_relay(*_args, **_kwargs):
         calls.append("relay")
         raise AssertionError("Ignored messages cannot reach the video engine")
 
-    monkeypatch.setattr(router, "_route_torrent_media", fail_torrent)
     monkeypatch.setattr(router, "_relay_native_video_upload", fail_relay)
 
     async def check():

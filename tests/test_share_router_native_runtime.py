@@ -957,9 +957,6 @@ def test_proxy_send_failure_preserves_source_and_allows_retry(monkeypatch) -> No
     async def no_modlog(*_args, **_kwargs):
         return None
 
-    def unavailable_manager():
-        raise AssertionError("ordinary shares must not construct libtorrent")
-
     monkeypatch.setattr(share_runtime.discord, "TextChannel", FakeTextChannel)
     monkeypatch.setattr(share_runtime.discord, "Member", FakeMember)
     async def configured_state(guild_id):
@@ -971,7 +968,6 @@ def test_proxy_send_failure_preserves_source_and_allows_retry(monkeypatch) -> No
     monkeypatch.setattr(share_runtime, "route_permission_blockers", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(share_runtime, "_relay_native_video_upload", link_only)
     monkeypatch.setattr(share_runtime, "_send_modlog", no_modlog)
-    monkeypatch.setattr(share_runtime, "get_torrent_manager", unavailable_manager)
     monkeypatch.setattr(share_runtime, "_RECENT_ROUTE_KEYS", {})
 
     target.fail_send = True
