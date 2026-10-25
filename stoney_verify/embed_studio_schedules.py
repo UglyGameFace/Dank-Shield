@@ -52,7 +52,7 @@ def safe_scheduled_project(project: Mapping[str, Any]) -> dict[str, Any]:
     result = validate_project(project)
     if result["role_actions"] or result.get("form"):
         raise StudioScheduleError(
-            "Interactive role and form controls cannot be scheduled unattended. "
+            "Role controls and forms cannot be scheduled unattended. "
             "Publish these with a moderator."
         )
     return result
