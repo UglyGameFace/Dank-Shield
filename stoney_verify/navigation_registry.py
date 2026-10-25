@@ -65,7 +65,7 @@ CATEGORIES: tuple[NavigationCategory, ...] = (
         "community",
         "Community & Engagement",
         "🌿",
-        "Share Router, /toke sessions, event pings, and games.",
+        "Share Router downloads, /toke sessions, event pings, and games.",
     ),
     NavigationCategory(
         "tickets",

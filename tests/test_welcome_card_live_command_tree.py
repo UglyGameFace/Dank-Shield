@@ -18,7 +18,7 @@ from stoney_verify.commands_ext.public_setup_group import dank_group
 
 
 EXPECTED_DANK_CHILDREN = PUBLIC_DANK_CHILDREN
-EXPECTED_GLOBAL_ROOTS = {"captions", "cinema", "dank", "mod", "movie", "role", "ticket", "tickets", "toke", "verify"}
+EXPECTED_GLOBAL_ROOTS = {"captions", "dank", "mod", "role", "ticket", "tickets", "toke", "verify"}
 
 
 def _child_names(group: Any) -> set[str]:
@@ -60,23 +60,13 @@ def test_final_compacted_tree_is_small_and_idempotent() -> None:
 
 def test_final_fast_doorways_are_commands_not_subcommand_groups() -> None:
     _final_imported_tree()
-    for name in ("captions", "mod", "movie", "role", "ticket", "tickets", "toke", "verify"):
+    for name in ("captions", "mod", "role", "ticket", "tickets", "toke", "verify"):
         command = commands_module.bot.tree.get_command(name, guild=None)
         assert isinstance(command, app_commands.Command)
         assert not isinstance(command, app_commands.Group)
 
-    cinema = commands_module.bot.tree.get_command("cinema", guild=None)
-    assert isinstance(cinema, app_commands.Group)
-    assert {str(command.name) for command in cinema.commands} == {
-        "home",
-        "start",
-        "private",
-        "join",
-        "leave",
-        "queue",
-        "info",
-        "vote",
-    }
+    assert commands_module.bot.tree.get_command("cinema", guild=None) is None
+    assert commands_module.bot.tree.get_command("movie", guild=None) is None
 
     assert commands_module.bot.tree.get_command("ticket-intake", guild=None) is None
     assert commands_module.bot.tree.get_command("ticket-category", guild=None) is None
@@ -127,19 +117,8 @@ def test_attachment_doorways_are_limited_to_card_upload_and_toke_media() -> None
     for root in commands_module.bot.tree.get_commands(guild=None):
         collect(root)
 
-    movie = commands_module.bot.tree.get_command("movie", guild=None)
-    assert isinstance(movie, app_commands.Command)
-    assert getattr(movie.callback, "__module__", "") == (
-        "stoney_verify.commands_ext.public_movie_night"
-    )
-    movie_params = getattr(movie, "_params", {})
-    assert set(movie_params) == {"magnet", "torrent"}
-    assert movie_params["torrent"].type is discord.AppCommandOptionType.attachment
-    assert not bool(getattr(movie_params["torrent"], "required", True))
-
     assert attachment_paths == {
         "dank upload:file",
-        "movie:torrent",
         "toke:upload",
     }
 

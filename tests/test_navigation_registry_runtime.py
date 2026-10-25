@@ -133,7 +133,8 @@ def test_find_feature_understands_common_names_and_aliases() -> None:
     assert registry.search_features("facebook download")[0].key == "share_downloads"
     assert registry.search_features("sesh")[0].key == "toke_settings"
     assert registry.search_features("unverified reminders")[0].key == "verification_reminders"
-    assert registry.search_features("subtitles")[0].key == "movie_night"
+    assert registry.search_features("subtitles") == []
+    assert registry.feature_by_key("movie_night") is None
 
 
 def test_manager_features_are_visible_instead_of_permission_hidden() -> None:
@@ -397,7 +398,7 @@ def test_merged_voice_safety_navigation_contract_from_pr_522() -> None:
     assert "AI Voice Safety" in cats["voice"].description
     assert "AI Voice Safety" in cats["safety"].description
     assert "Share Router" in cats["community"].description
-    assert "Movie Night" in cats["community"].description
+    assert "Movie Night" not in cats["community"].description
     assert len(registry.CATEGORIES) <= 25
     assert all(len(c.description) <= 100 for c in registry.CATEGORIES)
     assert {f.key for f in registry.features_for_category("voice")} == {"live_captions", "voice_safety"}
