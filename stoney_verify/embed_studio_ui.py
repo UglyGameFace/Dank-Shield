@@ -2059,8 +2059,9 @@ async def _review(interaction: discord.Interaction, session: StudioSession) -> N
         return await _say(interaction, str(exc))
     status = (
         f"👁️ PRIVATE PREVIEW for {channel.mention}. "
-        + ("Update the tracked message" if session.post_key else "Publish a NEW message")
-        + " below. The real embeds are shown here. Nothing has been sent."
+        + ("Review the changes to your existing post." if session.post_key
+           else "Check how your new post will look.")
+        + " Nothing has changed publicly yet. Choose the green button only when ready."
     )
     if resolved["content"]:
         status += "\nPlain message: " + resolved["content"][:1300]
@@ -2411,7 +2412,9 @@ class StudioReviewView(_StudioView):
         self.schedule_later.disabled = (
             not schedules_enabled() or bool(session.post_key)
             or bool(session.project.get("role_actions"))
+            or bool(session.project.get("form"))
         )
+        self.publish.label = "Save Changes" if session.post_key else "Post Now"
         # Link buttons really open their HTTPS target in preview. Role actions
         # are disabled here: a private preview must never grant a public role.
         for link in session.project["links"]:
@@ -2453,7 +2456,7 @@ class StudioReviewView(_StudioView):
             review=self,
         ))
 
-    @discord.ui.button(label="Publish / Save Edit", emoji="✅", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Post Now", emoji="✅", style=discord.ButtonStyle.success, row=0)
     async def publish(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         if self.sent:
             return await _say(interaction, "This confirmation has already been used.")
