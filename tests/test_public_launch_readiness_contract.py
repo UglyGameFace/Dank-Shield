@@ -52,7 +52,11 @@ def test_readiness_audit_passes_present_contract_and_docs(capsys) -> None:
 def test_stale_or_missing_slash_root_is_rejected() -> None:
     audit = _audit()
     checklist = CHECKLIST.read_text(encoding="utf-8")
-    bad = checklist.replace("\n/cinema\n", "\n/ticket-panel\n", 1)
+    # Always corrupt a command from the *current* canonical surface.
+    # /cinema and /movie were removed when Cinema became independent.
+    current_root = audit["REQUIRED_COMMANDS"][0]
+    assert current_root == "/dank"
+    bad = checklist.replace(f"\n{current_root}\n", "\n/ticket-panel\n", 1)
     assert bad != checklist
     failures: list[str] = []
     audit["verify_documented_command_surface"](bad, failures)
