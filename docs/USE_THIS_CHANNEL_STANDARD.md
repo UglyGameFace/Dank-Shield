@@ -55,12 +55,18 @@ depend on a ChannelSelect value or ask the user to copy channel IDs.
    resource-browser integrations inherit this automatically.
 
 ## Known remaining surfaces to migrate in later verified batches
-Unmigrated native selectors in the full Setup wizard, live captions,
-legacy role-center, welcome recommendation, design/renaming tools and
-ticket category-specific selectors still need their own equivalent
-button or migration to the canonical browser. Do not assert complete
-coverage of *every* historical selector until the explicit file-level
-audit is finished and test coverage proves the remaining list empty.
+The follow-up batch also covers legacy Setup wizard text slots,
+Guided Setup text requirements, Live Captions text output and Roles Center
+pronoun/identity panels. The wizard's four different log destinations
+first ask which target the moderator intends to update; none is silently
+overwritten. Staged wizard channel selections still require the ordinary
+Save action and its existing validation.
+
+Remaining native selectors for multi-kind design/renaming targets, certain
+ticket category-specific actions and archived setup screens need a
+separate eligibility audit. Category, voice, role and forum selectors do
+not accept a text-only **Use This Channel** shortcut. Do not assert full
+coverage until every channel-selector workflow is audited.
 
 ## Canary on Discord Android
 - Open the settings in the desired channel; tap **Use This Channel**.
