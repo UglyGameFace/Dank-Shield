@@ -919,6 +919,15 @@ class MediaLibraryMenu(_StudioView):
         from .embed_studio_assets import uploads_enabled
         if not uploads_enabled():
             return await _say(interaction, "Managed artwork uploads are not enabled yet.")
+        from .embed_studio_artwork_budget import get_budget, ArtworkBudgetError
+        try:
+            get_budget()
+        except ArtworkBudgetError:
+            return await _say(
+                interaction,
+                "Artwork upload capacity has not been configured by the server operator. "
+                "You can still save and reuse direct HTTPS image links."
+            )
         await interaction.response.send_modal(StudioArtworkUploadModal(self.session))
 
     @discord.ui.button(label="Back to Studio", emoji="🏠", style=discord.ButtonStyle.secondary, row=2)
