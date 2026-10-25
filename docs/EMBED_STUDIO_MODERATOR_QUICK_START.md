@@ -47,8 +47,7 @@ No permissions, data storage, migrations, bot workers or Discord slash
 commands change. Existing templates, uploads, self-role panels, forms,
 schedules, staff reviews, JSON support and Live Text remain reachable.
 The 6000-character, component-row, role safety and preview-before-publish
-guards are retained. The **New/Updated** area should only advertise this
-simpler workflow after CI passes and the PR is actually merged/deployed.
+guards are retained. The **New/Updated** menu metadata changes in this same PR; it must only be visible to moderators after this PR is merged and deployed.
 
 Recommended canary: give a younger moderator who has not used Studio before
 one task ("make an announcement about a movie night"), and observe whether
