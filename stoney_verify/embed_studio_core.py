@@ -517,7 +517,7 @@ def trim_published_history(published: Mapping[str, Any], *, max_posts: int = 20)
         )
         if removable is None:
             raise StudioValidationError(
-                "All saved post slots contain active role or form panels. Edit or remove an older panel first."
+                "All saved post slots contain active role panels or forms. Edit an older panel to remove its controls first."
             )
         rows.pop(removable, None)
     return rows
