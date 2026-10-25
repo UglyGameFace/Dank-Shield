@@ -97,8 +97,17 @@ def _upload_sync(guild_id: int, data: bytes, filename: str) -> UploadedArtwork:
     # Always use a fresh unpredictable object path. A failed CAS can undo its
     # own new upload without deleting another moderator's shared content.
     object_path = f"{int(guild_id)}/{secrets.token_hex(16)}.{ext}"
+    from .embed_studio_artwork_budget import (
+        get_budget, reserve_artwork, finalize_artwork, release_artwork,
+    )
+    budget = get_budget()  # missing explicit allocation means uploads fail closed
     db = _client()
     bucket = db.storage.from_(BUCKET)
+    # Reserve before contacting Storage so simultaneous uploads cannot exceed
+    # the same remaining allowance. A timed-out upload is treated as uncertain.
+    reserve_artwork(db, guild_id=int(guild_id), object_path=object_path,
+                    size_bytes=len(data), budget=budget)
+    digest = sha256(data).hexdigest()
     try:
         result = bucket.upload(
             path=object_path, file=BytesIO(data),
@@ -109,20 +118,22 @@ def _upload_sync(guild_id: int, data: bytes, filename: str) -> UploadedArtwork:
         url = https_url(bucket.get_public_url(object_path), "Public artwork URL")
         if not url:
             raise StudioAssetError("Storage did not provide a permanent artwork URL.")
-        db.table(ASSET_TABLE).insert({
-            "guild_id": str(int(guild_id)),
-            "object_path": object_path,
-            "image_sha256": sha256(data).hexdigest(),
-            "name": name, "content_type": mime, "size_bytes": len(data),
-        }).execute()
+        finalize_artwork(
+            db, guild_id=int(guild_id), object_path=object_path, size_bytes=len(data),
+            name=name, content_type=mime, digest=digest,
+        )
         return UploadedArtwork(int(guild_id), name, url, object_path,
-                               sha256(data).hexdigest(), mime, len(data))
+                               digest, mime, len(data))
     except Exception:
-        # Only this freshly generated path can be removed, never a shared asset.
+        # Only release the reservation after a *confirmed* removal of this
+        # newly generated path. A failed or ambiguous Storage call keeps the
+        # quota occupied until staff review; never silently overbook bytes.
         try:
-            bucket.remove([object_path])
+            removed = bucket.remove([object_path])
+            if removed is not None:
+                release_artwork(db, int(guild_id), object_path)
         except Exception:
-            pass  # The private orphan audit must reconcile this unusual failure.
+            pass
         raise
 
 
@@ -141,7 +152,11 @@ async def upload_artwork(guild_id: int, data: bytes, filename: str) -> UploadedA
 
 def _discard_sync(art: UploadedArtwork) -> None:
     db = _client()
-    db.storage.from_(BUCKET).remove([art.object_path])
+    removed = db.storage.from_(BUCKET).remove([art.object_path])
+    if removed is None:
+        raise StudioAssetError(
+            "Artwork removal not confirmed; keep its metadata and quota allocated."
+        )
     db.table(ASSET_TABLE).delete().eq("guild_id", str(art.guild_id)).eq(
         "object_path", art.object_path
     ).execute()
