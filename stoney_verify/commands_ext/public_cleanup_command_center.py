@@ -11,6 +11,8 @@ from typing import Any, Optional
 
 import discord
 
+from ..ui.current_channel import current_text_channel
+
 from ..panel_lifecycle import PRIVATE_MENU_TTL_SECONDS
 from discord import app_commands
 
@@ -238,6 +240,22 @@ class CleanupChannelSelect(discord.ui.ChannelSelect):
 class _ChannelStateView(_OwnedView):
     channel_id: int = 0
 
+    @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.secondary, row=2)
+    async def use_this_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_staff(interaction):
+            return
+        channel = current_text_channel(interaction, require_bot_send=False)
+        if channel is None:
+            return await _private(interaction, "❌ Open Cleanup in the channel you want to review, "
+                                  "or use the channel picker for a different channel.")
+        self.channel_id = channel.id
+        # Selection ONLY: the original preview/confirm guards still own deletes.
+        await interaction.response.edit_message(
+            embed=self.embed(interaction), view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
     def channel(self, interaction: discord.Interaction) -> Optional[discord.TextChannel]:
         if interaction.guild and self.channel_id:
             channel = interaction.guild.get_channel(self.channel_id)
@@ -375,6 +393,21 @@ class UserPurgeView(_OwnedView):
         super().__init__(owner_id)
         self.add_item(CleanupUserSelect(self))
         self.add_item(UserPurgeChannelSelect(self))
+
+    @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.secondary, row=2)
+    async def use_this_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_staff(interaction):
+            return
+        channel = current_text_channel(interaction, require_bot_send=False)
+        if channel is None:
+            return await _private(interaction, "❌ Open Cleanup in the target channel "
+                                  "or use the picker for another.")
+        self.channel_id = channel.id
+        await interaction.response.edit_message(
+            embed=self.embed(interaction), view=self,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     def embed(self, interaction: discord.Interaction) -> discord.Embed:
         user_text = f"<@{self.user_id}> (`{self.user_id}`)" if self.user_id else "Not selected — raw ID can be entered in options"
