@@ -102,52 +102,53 @@ class _StudioView(discord.ui.View):
 
 
 def _summary(session: StudioSession) -> discord.Embed:
+    """A short, actionable checklist rather than a map of developer features."""
     project = session.project
     current = project["embeds"][session.active]
+    has_text = bool(
+        project["content"].strip()
+        or any(
+            (entry.get("title") or "").strip()
+            or (entry.get("description") or "").strip()
+            for entry in project["embeds"]
+        )
+    )
+    is_edit = bool(session.post_key)
+    destination = f"<#{session.channel_id}>" if session.channel_id else "Not selected yet"
     embed = discord.Embed(
-        title="🧱 Dank Shield Embed Studio",
+        title="📣 Edit a Server Post" if is_edit else "📣 Create a Server Post",
         description=(
-            "**1. Make it yours:** Choose a starter layout, write your text, "
-            "and add images or extra sections.\n"
-            "**2. Add buttons (optional):** Link to a website or let members "
-            "choose safe, optional roles.\n"
-            "**3. Reuse and publish:** Save themes, media links, templates and JSON files. "
-            "Smart Text fills details into your preview. Choose a channel, then confirm to post.\n\n"
-            "Nothing is posted just by editing or saving."
+            "**Make a post in four easy steps**\n"
+            "**1. Pick a Layout** (optional) or write your own.\n"
+            "**2. Write Message** and add pictures or colors if you like.\n"
+            "**3. Choose a Channel** with the picker below.\n"
+            "**4. Preview & Post** when you're happy with it.\n\n"
+            "Saved designs, buttons, forms, and staff tools are in their own menus. "
+            "**Nothing goes public until you confirm.**"
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="Current draft",
+        name="Message",
         value=(
-            f"Embed **{session.active + 1}/{len(project['embeds'])}**"
-            f" • {len(current['fields'])}/25 fields"
-            f" • {len(project['links'])}/5 link buttons"
-            f" • {len(session.history)} undo steps"
+            ("✅ Text added" if has_text else "◻️ Add your message")
+            + (f" • {len(project['embeds'])} card(s)" if len(project["embeds"]) > 1 else "")
+            + (f" • {len(current['fields'])} extra section(s)" if current["fields"] else "")
+        ),
+        inline=True,
+    )
+    embed.add_field(name="Where to post", value=destination, inline=True)
+    embed.add_field(
+        name="What happens next",
+        value=(
+            "Review changes to your existing post."
+            if is_edit else
+            ("Ready to preview." if session.channel_id else "Choose a channel first.")
         ),
         inline=False,
     )
-    embed.add_field(
-        name="Role controls",
-        value=(
-            f"{len(project['role_actions'])} optional role(s)"
-            + (f" • {project['role_mode']}" if project["role_actions"] else " • none")
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="Destination",
-        value=f"<#{session.channel_id}>" if session.channel_id else "Choose a channel below",
-        inline=True,
-    )
-    embed.add_field(
-        name="Mode",
-        value="Edit a previously published message" if session.post_key else "New draft",
-        inline=True,
-    )
-    embed.set_footer(text="Top row: build • Second row: buttons • Third row: saved work • Preview before posting")
+    embed.set_footer(text="Need more options? Open the grouped menus. Changes stay private until confirmed.")
     return embed
-
 
 def _preview_embed(session: StudioSession) -> discord.Embed:
     return render_embeds(session.project)[session.active]
@@ -208,93 +209,188 @@ class DestinationSelect(discord.ui.ChannelSelect):
 
 
 class StudioHomeView(_StudioView):
+    """Keep the common posting path visible; group everything else by purpose."""
+
     def __init__(self, session: StudioSession) -> None:
         super().__init__(session)
         self.add_item(DestinationSelect(session))
 
-    @discord.ui.button(label="Write", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Pick a Layout", emoji="✨", style=discord.ButtonStyle.primary, row=0)
+    async def starter_layouts(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _starters(interaction, self.session)
+
+    @discord.ui.button(label="Write Message", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
     async def write(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await interaction.response.send_modal(StudioTextModal(self.session))
 
-    @discord.ui.button(label="Appearance", emoji="🎨", style=discord.ButtonStyle.secondary, row=0)
-    async def appearance(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await interaction.response.send_modal(StudioAppearanceModal(self.session))
+    @discord.ui.button(label="Look & Images", emoji="🎨", style=discord.ButtonStyle.secondary, row=0)
+    async def design(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _design_tools(interaction, self.session)
 
-    @discord.ui.button(label="Images", emoji="🖼️", style=discord.ButtonStyle.secondary, row=0)
-    async def images(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await interaction.response.send_modal(StudioImagesModal(self.session))
+    @discord.ui.button(label="Add Buttons", emoji="🔗", style=discord.ButtonStyle.secondary, row=1)
+    async def actions(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _button_tools(interaction, self.session)
 
-    @discord.ui.button(label="Fields", emoji="📋", style=discord.ButtonStyle.secondary, row=0)
-    async def fields(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _fields(interaction, self.session)
+    @discord.ui.button(label="Saved Designs", emoji="💾", style=discord.ButtonStyle.secondary, row=1)
+    async def saved_designs(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _saved_tools(interaction, self.session)
 
-    @discord.ui.button(label="Link Buttons", emoji="🔗", style=discord.ButtonStyle.secondary, row=1)
-    async def links(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _links(interaction, self.session)
+    @discord.ui.button(label="More Tools", emoji="🧰", style=discord.ButtonStyle.secondary, row=1)
+    async def advanced(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _advanced_tools(interaction, self.session)
 
-    @discord.ui.button(label="Embeds", emoji="🧩", style=discord.ButtonStyle.secondary, row=1)
-    async def embeds(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _embeds(interaction, self.session)
+    @discord.ui.button(label="Edit Existing Post", emoji="🛠️", style=discord.ButtonStyle.secondary, row=2)
+    async def edit_posted(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _published(interaction, self.session)
 
-    @discord.ui.button(label="Role Controls", emoji="🎭", style=discord.ButtonStyle.secondary, row=1)
-    async def role_controls(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _role_controls(interaction, self.session)
-
-    @discord.ui.button(label="Brand Themes", emoji="🎨", style=discord.ButtonStyle.secondary, row=1)
-    async def brand_themes(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _themes(interaction, self.session)
-
-    @discord.ui.button(label="Undo", emoji="↩️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Undo", emoji="↩️", style=discord.ButtonStyle.secondary, row=2)
     async def undo(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         if not self.session.undo():
             return await _say(interaction, "No changes to undo.")
         await _home(interaction, self.session, notice="Last edit undone.")
 
-    @discord.ui.button(label="Templates", emoji="💾", style=discord.ButtonStyle.secondary, row=2)
-    async def templates(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _templates(interaction, self.session)
-
-    @discord.ui.button(label="Edit Posted", emoji="🛠️", style=discord.ButtonStyle.secondary, row=2)
-    async def edit_posted(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _published(interaction, self.session)
-
-    @discord.ui.button(label="Starter Layouts", emoji="✨", style=discord.ButtonStyle.primary, row=0)
-    async def starter_layouts(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _starters(interaction, self.session)
-
-    @discord.ui.button(label="Reload Saved", emoji="📂", style=discord.ButtonStyle.secondary, row=2)
-    async def reload_saved(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _reload_saved(interaction, self.session)
-
-    @discord.ui.button(label="JSON Files", emoji="📦", style=discord.ButtonStyle.secondary, row=2)
-    async def portable(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _portable_menu(interaction, self.session)
-
-    @discord.ui.button(label="Form Builder", emoji="📝", style=discord.ButtonStyle.secondary, row=2)
-    async def form_builder(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _form_builder(interaction, self.session)
-
-    @discord.ui.button(label="Media Library", emoji="🖼️", style=discord.ButtonStyle.secondary, row=3)
-    async def media_library(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _media_library(interaction, self.session)
-
-    @discord.ui.button(label="Smart Text", emoji="🔤", style=discord.ButtonStyle.secondary, row=3)
-    async def smart_text(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _smart_text_help(interaction, self.session)
-
-    @discord.ui.button(label="Scheduled Posts", emoji="📅", style=discord.ButtonStyle.secondary, row=3)
-    async def scheduled_posts(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _scheduled_posts(interaction, self.session)
-
-    @discord.ui.button(label="Team Review", emoji="👥", style=discord.ButtonStyle.secondary, row=3)
-    async def team_review(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        await _team_review_home(interaction, self.session)
-
-    @discord.ui.button(label="Preview & Publish", emoji="👁️", style=discord.ButtonStyle.primary, row=3)
+    @discord.ui.button(label="Preview & Post", emoji="👁️", style=discord.ButtonStyle.success, row=2)
     async def preview(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _review(interaction, self.session)
 
 
+class StudioDesignTools(_StudioView):
+    @discord.ui.button(label="Colors & Style", emoji="🎨", style=discord.ButtonStyle.primary, row=0)
+    async def appearance(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(StudioAppearanceModal(self.session))
+
+    @discord.ui.button(label="Add Pictures", emoji="🖼️", style=discord.ButtonStyle.secondary, row=0)
+    async def images(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(StudioImagesModal(self.session))
+
+    @discord.ui.button(label="Saved Pictures", emoji="📷", style=discord.ButtonStyle.secondary, row=0)
+    async def media(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _media_library(interaction, self.session)
+
+    @discord.ui.button(label="Reuse Server Style", emoji="✨", style=discord.ButtonStyle.secondary, row=1)
+    async def theme(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _themes(interaction, self.session)
+
+    @discord.ui.button(label="Back to My Post", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _home(interaction, self.session)
+
+
+async def _design_tools(interaction: discord.Interaction, session: StudioSession) -> None:
+    await _menu(
+        interaction, heading="🎨 Make Your Post Look Good",
+        description=(
+            "Choose **Colors & Style** to change how the post looks. "
+            "**Add Pictures** for new image links, **Saved Pictures** to reuse images, "
+            "or **Reuse Server Style** for a look your staff already saved. "
+            "None of these options posts anything."
+        ),
+        view=StudioDesignTools(session),
+    )
+
+
+class StudioButtonTools(_StudioView):
+    @discord.ui.button(label="Website Buttons", emoji="🔗", style=discord.ButtonStyle.primary, row=0)
+    async def links(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _links(interaction, self.session)
+
+    @discord.ui.button(label="Let Members Pick Roles", emoji="🎭", style=discord.ButtonStyle.secondary, row=0)
+    async def roles(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _role_controls(interaction, self.session)
+
+    @discord.ui.button(label="Collect Answers", emoji="📝", style=discord.ButtonStyle.secondary, row=1)
+    async def forms(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _form_builder(interaction, self.session)
+
+    @discord.ui.button(label="Back to My Post", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _home(interaction, self.session)
+
+
+async def _button_tools(interaction: discord.Interaction, session: StudioSession) -> None:
+    await _menu(
+        interaction, heading="🔗 What Should Members Be Able to Do?",
+        description=(
+            "**Website Buttons:** Open a safe web link.\n"
+            "**Let Members Pick Roles:** Add opt-in roles, like game or notification roles.\n"
+            "**Collect Answers:** Ask questions and receive private staff responses.\n\n"
+            "These are optional. A simple announcement doesn't need any buttons."
+        ),
+        view=StudioButtonTools(session),
+    )
+
+
+class StudioSavedTools(_StudioView):
+    @discord.ui.button(label="Saved Post Layouts", emoji="💾", style=discord.ButtonStyle.primary, row=0)
+    async def templates(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _templates(interaction, self.session)
+
+    @discord.ui.button(label="Restore My Draft", emoji="📂", style=discord.ButtonStyle.secondary, row=0)
+    async def reload(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _reload_saved(interaction, self.session)
+
+    @discord.ui.button(label="Share With Staff", emoji="👥", style=discord.ButtonStyle.secondary, row=1)
+    async def team_review(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _team_review_home(interaction, self.session)
+
+    @discord.ui.button(label="Import / Export", emoji="📦", style=discord.ButtonStyle.secondary, row=1)
+    async def json(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _portable_menu(interaction, self.session)
+
+    @discord.ui.button(label="Back to My Post", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _home(interaction, self.session)
+
+
+async def _saved_tools(interaction: discord.Interaction, session: StudioSession) -> None:
+    await _menu(
+        interaction, heading="💾 Saved Designs & Staff Sharing",
+        description=(
+            "**Saved Post Layouts** are designs your team can reuse. "
+            "**Restore My Draft** reloads your last saved edit. "
+            "**Share With Staff** sends a design for another moderator to review. "
+            "**Import / Export** is for moving a design file between servers or backups. "
+            "Nothing is published from this menu."
+        ),
+        view=StudioSavedTools(session),
+    )
+
+
+class StudioAdvancedTools(_StudioView):
+    @discord.ui.button(label="Extra Text Sections", emoji="📋", style=discord.ButtonStyle.secondary, row=0)
+    async def fields(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _fields(interaction, self.session)
+
+    @discord.ui.button(label="Multiple Post Cards", emoji="🧩", style=discord.ButtonStyle.secondary, row=0)
+    async def embeds(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _embeds(interaction, self.session)
+
+    @discord.ui.button(label="Automatic Server Details", emoji="🔤", style=discord.ButtonStyle.secondary, row=1)
+    async def smart_text(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _smart_text_help(interaction, self.session)
+
+    @discord.ui.button(label="Upcoming Scheduled Posts", emoji="📅", style=discord.ButtonStyle.secondary, row=1)
+    async def schedules(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _scheduled_posts(interaction, self.session)
+
+    @discord.ui.button(label="Back to My Post", emoji="◀️", style=discord.ButtonStyle.secondary, row=2)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _home(interaction, self.session)
+
+
+async def _advanced_tools(interaction: discord.Interaction, session: StudioSession) -> None:
+    await _menu(
+        interaction, heading="🧰 More Options",
+        description=(
+            "**Extra Text Sections:** Add labeled information inside your post. "
+            "**Multiple Post Cards:** Put several designs into one Discord message. "
+            "**Automatic Server Details:** Insert the server name, channel name, "
+            "member count, or date. "
+            "**Upcoming Scheduled Posts:** Review or cancel posts you've scheduled.\n\n"
+            "You can ignore all of this when making a normal announcement."
+        ),
+        view=StudioAdvancedTools(session),
+    )
 
 class StudioJsonUploadModal(discord.ui.Modal, title="Import Embed Studio JSON"):
     def __init__(self, session: StudioSession) -> None:
