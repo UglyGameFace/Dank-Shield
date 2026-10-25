@@ -514,11 +514,6 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
         "Open your to-dos, message preferences, and reminder settings in one area.", "2026-10-23",
     ),
     RecentFeatureUpdate(
-        "verification_reminders", "Send due reminders in your chosen channel",
-        "Staff can run a safe check now without skipping the first delay, repeat interval, "
-        "or per-member maximum.", "2026-10-25",
-    ),
-    RecentFeatureUpdate(
         "somewhere_420", "See where it's 4:20",
         "Browse the world clock and jump into a sesh with the existing /toke flow.", "2026-10-22",
     ),
