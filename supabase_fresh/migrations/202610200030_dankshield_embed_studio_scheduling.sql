@@ -28,13 +28,24 @@ alter table public.dank_embed_studio_scheduled_posts enable row level security;
 revoke all on table public.dank_embed_studio_scheduled_posts from public,anon,authenticated;
 grant select,insert,update on public.dank_embed_studio_scheduled_posts to service_role;
 
-create or replace function public.dank_embed_studio_claim_due(p_limit integer default 8)
+create or replace function public.dank_embed_studio_claim_due(
+    p_limit integer default 8,
+    p_shard_count integer default 1,
+    p_owned_shards integer[] default array[0]
+)
 returns setof public.dank_embed_studio_scheduled_posts
 language plpgsql security invoker set search_path=public,pg_temp
 as $$
 begin
     if p_limit < 1 or p_limit > 8 then
         raise exception 'Invalid Studio schedule claim batch';
+    end if;
+    if p_shard_count < 1 or p_shard_count > 4096
+        or p_owned_shards is null or cardinality(p_owned_shards) < 1
+        or cardinality(p_owned_shards) > p_shard_count
+        or exists(select 1 from unnest(p_owned_shards) shard
+                  where shard is null or shard < 0 or shard >= p_shard_count) then
+        raise exception 'Invalid Discord shard ownership';
     end if;
     -- Never send stale advertisements/announcements hours after an outage.
     with expired as (
@@ -53,6 +64,8 @@ begin
         select p.id from public.dank_embed_studio_scheduled_posts p
         where p.status='pending' and p.execute_at <= now()
           and p.execute_at >= now()-interval '10 minutes'
+          and (floor(p.guild_id::numeric / 4194304)::bigint % p_shard_count)
+              = any(p_owned_shards)
         order by p.execute_at,p.id
         for update skip locked
         limit p_limit
@@ -63,8 +76,12 @@ begin
     returning s.*;
 end;
 $$;
-revoke all on function public.dank_embed_studio_claim_due(integer)
+revoke all on function public.dank_embed_studio_claim_due(integer,integer,integer[])
     from public,anon,authenticated;
-grant execute on function public.dank_embed_studio_claim_due(integer) to service_role;
+grant execute on function public.dank_embed_studio_claim_due(integer,integer,integer[])
+    to service_role;
 comment on table public.dank_embed_studio_scheduled_posts is
     'Private one-shot Studio jobs with at-most-once claims; claimed events are never auto-replayed.';
+
+comment on function public.dank_embed_studio_claim_due(integer,integer,integer[]) is
+    'Shard-owned atomic due claim. Discord routing uses (guild snowflake >> 22) mod shard count.';
