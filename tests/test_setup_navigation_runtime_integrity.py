@@ -108,6 +108,13 @@ def test_ticket_choice_manager_keeps_home_and_close_without_duplicate_ids() -> N
 def test_welcome_profile_and_history_keep_setup_navigation() -> None:
     welcome = welcome_setup_ui.WelcomeSetupView(owner_id=7, config={})
     profile = profile_card_setup_ui.ProfileCardSetupView(owner_id=7, config={})
+    # Current-channel shortcut belongs beside the enable toggle (row 1),
+    # not the full row of profile configuration/navigation actions.
+    use_here = next(item for item in profile.children
+                    if getattr(item, "label", "") == "Use This Channel")
+    assert use_here.row == 1
+    assert sum(1 for item in profile.children if item.row == 1) <= 5
+    assert sum(1 for item in profile.children if item.row == 3) <= 5
     history = config_history_ui.ConfigHistoryView([])
 
     for view in (welcome, profile, history):
