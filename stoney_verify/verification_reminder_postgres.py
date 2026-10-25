@@ -8,7 +8,7 @@ Schema creation is an explicit deployment/migration step, not a bot startup job.
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 DATABASE_URL_ENV = "DANK_VERIFY_REMINDER_DATABASE_URL"
 TABLE = "public.dank_verify_reminder_delivery"
@@ -286,6 +286,52 @@ def reserve_manual_batch_sync(
         # psycopg errors can embed connection details: never reveal them.
         raise ManualClaimUnavailable(
             "The private manual reminder database is unavailable; no new sends were authorized."
+        ) from None
+
+
+
+
+def available_manual_member_ids_sync(
+    guild_id: int, members: list[tuple[int, datetime]],
+) -> set[int]:
+    """Read-only batch eligibility for one preview page, never an authorization.
+
+    Actual send still requires the same transactionally atomic claim, since
+    another shard or moderator may win between preview and confirmation.
+    """
+    if not members:
+        return set()
+    if guild_id <= 0 or len(members) > 100:
+        raise ValueError("Invalid manual preview batch")
+    seen: set[int] = set()
+    for uid, joined in members:
+        if (uid <= 0 or uid in seen or not isinstance(joined, datetime)
+                or joined.tzinfo is None):
+            raise ValueError("Invalid manual preview member")
+        seen.add(uid)
+    try:
+        with _connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "select user_id, joined_at, last_claimed_at, attempts "
+                    "from public.dank_verify_manual_member_delivery "
+                    "where guild_id = %s and user_id = any(%s)",
+                    (str(guild_id), [str(uid) for uid in seen]),
+                )
+                rows = cursor.fetchall()
+        claimed = {int(uid): (joined, last, attempts) for uid, joined, last, attempts in rows}
+        now = datetime.now(timezone.utc)
+        allowed: set[int] = set()
+        for uid, joined in members:
+            previous = claimed.get(uid)
+            if previous is None or previous[0] != joined.astimezone(timezone.utc):
+                allowed.add(uid)
+            elif previous[2] < 2 and previous[1] <= now - timedelta(hours=12):
+                allowed.add(uid)
+        return allowed
+    except Exception:
+        raise ManualClaimUnavailable(
+            "Manual reminder history is unavailable. No recipients were selected."
         ) from None
 
 
