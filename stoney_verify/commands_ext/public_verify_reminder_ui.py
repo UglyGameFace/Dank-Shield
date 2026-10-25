@@ -24,6 +24,7 @@ from ..verification_reminder_manual import (
     ManualPreview,
     preview_manual_reminders,
     send_previewed_manual_reminders,
+    select_manual_group,
 )
 from .public_verify_command_center import _OwnedView, _private, _replace, _require_staff
 from ..ui.current_channel import current_text_channel
@@ -74,8 +75,9 @@ def _embed(guild: discord.Guild, cfg: Mapping[str, Any], policy: ReminderPolicy)
             "This server controls its own settings. Members who verify stop qualifying automatically. "
             "**Automatic reminders** follow the saved hours and repeat limits. "
             "**Check Scheduled Due** checks that schedule now. "
-            "**Send Reminder Now** previews a small group of still-unverified members "
-            "and can send early, using a separate manual cooldown."
+            "**Send Reminder Now** scans members against your server's saved Unverified role, "
+            "previews eligible people, and can remind them before the automatic delay "
+            "by channel or DM. No permanent manual reminder attempt limit."
         ),
         color=discord.Color.blurple(),
     )
@@ -302,45 +304,83 @@ class ConfirmDueReminderView(_OwnedView):
 
 def _manual_preview_embed(guild: discord.Guild, preview: ManualPreview) -> discord.Embed:
     names = ", ".join(f"<@{member_id}>" for member_id in preview.candidates)
+    destination = (
+        f"<#{preview.channel_id}> (one grouped announcement)"
+        if preview.delivery == "channel"
+        else "Private DM to each selected member"
+    )
+    start = preview.after + 1 if preview.candidates else 0
+    end = preview.after + len(preview.candidates)
     card = discord.Embed(
-        title="📣 Manual reminder preview",
+        title="📣 Review unverified reminders",
         description=(
-            f"Destination: <#{preview.channel_id}>\n"
-            f"Members inspected on **this page**: **{preview.scanned}**\n"
-            f"Still unverified on this page: **{preview.pending}**\n"
-            f"Can't see both required channels: **{preview.without_access}**\n"
-            f"Would be too early for the automatic schedule: **{preview.before_automatic_delay}**\n"
-            f"Already manually reminded or cooling down: **{preview.manual_limited}**\n"
-            f"Potential manual recipients on this page: **{preview.potential}**\n\n"
-            f"**Selected for this send (up to 3):** {names or 'None on this page'}\n\n"
-            "These are candidates, not guaranteed deliveries. Manual cooldowns, "
-            "reverification, access changes and PostgreSQL claims are checked again "
-            "on confirmation. More unverified people may exist on later pages."
+            f"**Your server's Unverified role:** <@&{preview.role_id}>\\n"
+            f"**Send via:** {destination}\\n"
+            f"**Server members checked:** **{preview.scanned}** (complete live scan)\\n"
+            f"**Members with that role:** **{preview.mapped_pending}**\\n"
+            f"**Still needing verification:** **{preview.pending}**\\n"
+            f"**Also marked verified/staff:** **{preview.already_verified_or_staff}**\\n"
+            f"**Cannot access verification:** **{preview.without_access}**\\n"
+            f"**Already reminded / cooling down:** **{preview.manual_limited}**\\n"
+            f"**Ready for a manual reminder:** **{preview.potential}**\\n\\n"
+            f"**Group {start}–{end} of {preview.potential}:** {names or 'No eligible members'}\\n\\n"
+            "Everyone in this group is selected by default. You can choose fewer "
+            "from the menu before confirming. Additional eligible people can be "
+            "reviewed with Next Group. Membership, roles, access and manual cooldown "
+            "are checked again before delivery."
         ),
         color=discord.Color.blurple(),
     )
     card.add_field(
-        name="Message to send",
-        value=preview.message[:1000],
-        inline=False,
+        name="Message to send", value=preview.message[:1000], inline=False,
     )
     card.set_footer(
-        text="Manual: max 2 per member per join, 12h between attempts; "
-             "one batch/minute, four batches/hour per server. "
-             "No automatic reminder attempts are consumed."
+        text="Manual reminders: no per-join limit • at least 6 hours between "
+             "manual attempts to the same member • up to 25 per confirmed group. "
+             "Automatic reminder history is unchanged."
     )
     return card
 
-
 class ManualPreviewView(_OwnedView):
-    """Private confirmation, with an explicit next-page scan if needed."""
+    """Owner-only snapshot group: optional recipient selection and safe confirmation."""
 
     def __init__(self, owner_id: int, preview: ManualPreview) -> None:
         super().__init__(owner_id, timeout=180)
         self.preview = preview
         self.used = False
+        self.selected_ids = tuple(preview.candidates)
         self.confirm_manual.disabled = not bool(preview.candidates)
         self.next_page.disabled = not bool(preview.next_after)
+        if preview.candidates:
+            name_by_id = dict(zip(preview.eligible_ids, preview.eligible_names))
+            self.recipient_selector = discord.ui.Select(
+                placeholder="Recipients: all selected (or choose fewer)",
+                min_values=1,
+                max_values=len(preview.candidates),
+                options=[
+                    discord.SelectOption(
+                        label=name_by_id.get(uid, str(uid))[:90],
+                        value=str(uid), description=f"Member ID: {uid}"[:100],
+                        default=True,
+                    )
+                    for uid in preview.candidates
+                ],
+                row=1,
+            )
+            self.recipient_selector.callback = self.choose_recipients
+            self.add_item(self.recipient_selector)
+
+    async def choose_recipients(self, interaction: discord.Interaction) -> None:
+        if not await _require_staff(interaction):
+            return
+        if self.used:
+            return await _private(interaction, "This preview was already used.")
+        self.selected_ids = tuple(int(value) for value in self.recipient_selector.values)
+        await _private(
+            interaction,
+            f"✅ **{len(self.selected_ids)}** selected. "
+            "Press Confirm Manual Send to send, or Cancel.",
+        )
 
     @discord.ui.button(
         label="Confirm Manual Send", emoji="📣",
@@ -355,37 +395,39 @@ class ManualPreviewView(_OwnedView):
             return
         if self.used:
             return await _private(interaction, "This preview has already been used. Reopen Send Reminder Now.")
+        if not self.selected_ids:
+            return await _private(interaction, "Choose at least one member first.")
         self.used = True
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             report = await send_previewed_manual_reminders(
-                interaction.client, interaction.guild, self.preview,
+                interaction.client, interaction.guild,
+                replace(self.preview, candidates=self.selected_ids),
             )
         except ManualReminderUnavailable as exc:
             return await _private(interaction, f"❌ No manual messages authorized: {exc}")
         except Exception as exc:
             print(f"⚠️ verify manual send unavailable kind={type(exc).__name__}")
             return await _private(
-                interaction, "❌ Could not confirm manual reminders. "
-                "Do not retry until checking the database and channel; uncertain "
-                "attempts may have used their safety budget."
+                interaction, "❌ Couldn't confirm manual reminders. "
+                "Check the database and channel before retrying; uncertain "
+                "attempts may already have consumed their safety cooldown."
             )
         await _private(
             interaction,
-            f"**Manual reminder result for <#{self.preview.channel_id}>**\n"
-            f"Preview selected: **{report.selected}** • "
-            f"Reserved attempts: **{report.reserved}** • "
-            f"Delivered: **{report.delivered}**\n"
-            f"Discord send failures: **{report.failed}** • "
+            f"**Manual reminder result ({self.preview.delivery.upper()})**\\n"
+            f"Selected: **{report.selected}** • Reserved: **{report.reserved}** • "
+            f"Successfully sent: **{report.delivered}**\\n"
+            f"Failed sends: **{report.failed}** • "
             f"No longer eligible: **{report.skipped}** • "
-            f"Manual limits: **{report.blocked_by_manual_limits}**.\n"
-            "Reserved attempts count even when Discord rejects the message. "
-            "Your scheduled reminders and their existing intervals are unchanged."
+            f"On cooldown: **{report.blocked_by_manual_limits}**.\\n"
+            "Manual attempts use their own six-hour per-member cooldown; "
+            "scheduled reminders and their configuration are unchanged."
         )
 
     @discord.ui.button(
-        label="Next 100 Members", emoji="➡️",
+        label="Next Eligible Group", emoji="➡️",
         style=discord.ButtonStyle.secondary, row=0,
     )
     async def next_page(
@@ -396,17 +438,14 @@ class ManualPreviewView(_OwnedView):
                 or not await _require_staff(interaction)):
             return
         if self.used or not self.preview.next_after:
-            return await _private(interaction, "This preview has expired. Open a new manual preview.")
+            return await _private(interaction, "No more groups in this preview.")
         self.used = True
         if not interaction.response.is_done():
             await interaction.response.defer()
         try:
-            next_preview = await preview_manual_reminders(
-                interaction.client, interaction.guild,
-                channel_id=self.preview.channel_id, after=self.preview.next_after,
-            )
+            next_preview = select_manual_group(self.preview)
         except ManualReminderUnavailable as exc:
-            return await _private(interaction, f"❌ Cannot scan next page: {exc}")
+            return await _private(interaction, f"❌ Cannot open next group: {exc}")
         await _replace(
             interaction, embed=_manual_preview_embed(interaction.guild, next_preview),
             view=ManualPreviewView(self.owner_id, next_preview),
@@ -423,7 +462,6 @@ class ManualPreviewView(_OwnedView):
             return
         self.used = True
         await _private(interaction, "Cancelled. No manual reminders were authorized.")
-
 
 class ReminderSettingsView(_OwnedView):
     def __init__(self, owner_id: int, policy: ReminderPolicy) -> None:
@@ -559,13 +597,14 @@ class ReminderSettingsView(_OwnedView):
             cfg, policy = await _load(interaction.guild)
         except Exception:
             return await _private(interaction, "❌ Could not read saved reminder settings.")
-        if policy.delivery != "channel" or not policy.reminder_channel_id:
+        if policy.delivery == "channel" and not policy.reminder_channel_id:
             return await _private(
-                interaction, "❌ Save a reminder text channel first. Manual sending never uses DMs."
+                interaction, "❌ Save a reminder channel first, or select Use DMs."
             )
+        destination_id = policy.reminder_channel_id if policy.delivery == "channel" else 0
         try:
             preview = await preview_manual_reminders(
-                interaction.client, interaction.guild, channel_id=policy.reminder_channel_id,
+                interaction.client, interaction.guild, channel_id=destination_id,
             )
         except ManualReminderUnavailable as exc:
             return await _private(interaction, f"❌ Manual preview unavailable: {exc}")
