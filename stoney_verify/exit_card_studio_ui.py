@@ -6,6 +6,8 @@ from typing import Any, Awaitable, Callable, Mapping, Optional
 
 import discord
 
+from .ui.current_channel import current_text_channel
+
 from .commands_ext.public_setup_group import _require_setup_permission, _upsert_config
 from .exit_card_runtime import build_exit_card_embed, resolve_exit_card_channel
 from .exit_card_service import (
@@ -290,6 +292,47 @@ class _ChoiceView(_OwnedView):
         )
 
 
+async def _save_exit_card_channel(
+    interaction: discord.Interaction, channel: discord.TextChannel,
+) -> None:
+    guild = interaction.guild
+    if guild is None or not isinstance(guild.get_channel(int(channel.id)), discord.TextChannel):
+        return await _private(interaction, content="❌ Open the editor in a server text channel.")
+    me = guild.me
+    if me is None:
+        return await _private(interaction, content="❌ Dank Shield cannot confirm its channel permissions.")
+    perms = channel.permissions_for(me)
+    missing = [
+        name
+        for name, allowed in {
+            "View Channel": perms.view_channel,
+            "Send Messages": perms.send_messages,
+            "Embed Links": perms.embed_links,
+            "Read Message History": perms.read_message_history,
+        }.items()
+        if not allowed
+    ]
+    if missing:
+        return await _private(
+            interaction,
+            content=f"❌ I cannot use {channel.mention}. Missing: {', '.join(missing)}.",
+        )
+    await _defer(interaction)
+    await _save(
+        interaction,
+        {
+            "exit_card_channel_id": str(channel.id),
+            "exit_card_enabled": True,
+            "goodbye_channel_id": str(channel.id),
+            "leave_channel_id": str(channel.id),
+            "welcome_leave_enabled": True,
+            "goodbye_enabled": True,
+            "leave_message_enabled": True,
+        },
+    )
+    await _refresh(interaction, notice=f"✅ Exit cards are ON in {channel.mention}.")
+
+
 class ExitCardChannelSelect(discord.ui.ChannelSelect):
     def __init__(self) -> None:
         super().__init__(
@@ -310,38 +353,7 @@ class ExitCardChannelSelect(discord.ui.ChannelSelect):
         channel = guild.get_channel(int(selected.id)) if guild is not None and selected is not None else None
         if not isinstance(channel, discord.TextChannel):
             return await _private(interaction, content="❌ Choose a text channel from this server.")
-        me = guild.me
-        if isinstance(me, discord.Member):
-            perms = channel.permissions_for(me)
-            missing = [
-                name
-                for name, allowed in {
-                    "View Channel": perms.view_channel,
-                    "Send Messages": perms.send_messages,
-                    "Embed Links": perms.embed_links,
-                    "Read Message History": perms.read_message_history,
-                }.items()
-                if not allowed
-            ]
-            if missing:
-                return await _private(
-                    interaction,
-                    content=f"❌ I cannot use {channel.mention}. Missing: {', '.join(missing)}.",
-                )
-        await _defer(interaction)
-        await _save(
-            interaction,
-            {
-                "exit_card_channel_id": str(channel.id),
-                "exit_card_enabled": True,
-                "goodbye_channel_id": str(channel.id),
-                "leave_channel_id": str(channel.id),
-                "welcome_leave_enabled": True,
-                "goodbye_enabled": True,
-                "leave_message_enabled": True,
-            },
-        )
-        await _refresh(interaction, notice=f"✅ Exit cards are ON in {channel.mention}.")
+        await _save_exit_card_channel(interaction, channel)
 
 
 class ExitTextModal(discord.ui.Modal):
@@ -432,6 +444,17 @@ class ExitCardStudioView(_OwnedView):
         super().__init__(owner_id=owner_id, timeout=900)
         self.cfg = cfg
         self.add_item(ExitCardChannelSelect())
+
+    @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.success, row=0)
+    async def use_this_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        channel = current_text_channel(interaction, require_bot_embed=True)
+        if channel is None:
+            return await _private(interaction, content=(
+                "❌ Open Exit Card Studio in the text channel you want, "
+                "or use the picker for another channel."
+            ))
+        await _save_exit_card_channel(interaction, channel)
 
     @discord.ui.button(label="Enable / Disable", emoji="🔌", style=discord.ButtonStyle.success, row=1)
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
