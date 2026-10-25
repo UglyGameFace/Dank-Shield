@@ -99,7 +99,10 @@ def _policy_proof(
 
 
 async def _context(guild: discord.Guild, channel_id: int):
-    cfg = await get_guild_config(guild.id, refresh=True)
+    try:
+        cfg = await get_guild_config(guild.id, refresh=True)
+    except Exception as exc:
+        raise ManualReminderUnavailable("Could not read this server's verification settings.") from exc
     if str(cfg.get("source") or "").startswith(("unavailable:", "unconfigured:")):
         raise ManualReminderUnavailable("Saved server settings are unavailable.")
     if not basic_verify_allowed_for_guild(guild, cfg):
@@ -227,6 +230,27 @@ async def send_previewed_manual_reminders(
         except ManualClaimUnavailable as exc:
             raise ManualReminderUnavailable(str(exc)) from exc
         reserved_set = set(reserved)
+        # A staff member may reconfigure the guild while PostgreSQL is claiming.
+        # Fail closed even after a committed reservation, without retry/refund.
+        try:
+            fresh_cfg, fresh_policy, fresh_verify, fresh_notice = await _context(
+                guild, preview.channel_id,
+            )
+        except ManualReminderUnavailable:
+            return ManualDelivery(
+                len(preview.candidates), len(reserved), 0, 0,
+                len(preview.candidates) - len(eligible) + len(reserved),
+                len(eligible) - len(reserved),
+            )
+        if _policy_proof(
+            guild, fresh_cfg, fresh_policy, fresh_verify, fresh_notice,
+        ) != preview.policy_proof:
+            return ManualDelivery(
+                len(preview.candidates), len(reserved), 0, 0,
+                len(preview.candidates) - len(eligible) + len(reserved),
+                len(eligible) - len(reserved),
+            )
+        cfg, policy, verify, notice = fresh_cfg, fresh_policy, fresh_verify, fresh_notice
         delivered = failed = skipped_after_claim = 0
         original_join = {m.id: m.joined_at for m in eligible}
         for member in eligible:
@@ -251,7 +275,10 @@ async def send_previewed_manual_reminders(
                     ),
                 )
                 delivered += 1
-            except (discord.Forbidden, discord.HTTPException):
+            except Exception as exc:
+                # The reservation is already durable; even unexpected Discord
+                # send errors cannot authorize a retry of this manual attempt.
+                print(f"ℹ️ verify manual delivery unavailable guild={guild.id} kind={type(exc).__name__}")
                 failed += 1
             await asyncio.sleep(0.5)
         return ManualDelivery(
