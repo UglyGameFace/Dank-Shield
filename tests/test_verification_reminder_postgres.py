@@ -187,7 +187,7 @@ def test_manual_and_scheduled_ledgers_are_independent_and_restart_safe():
             )
             cursor.execute(
                 "update public.dank_verify_manual_member_delivery "
-                "set last_claimed_at=now()-interval '13 hours' where guild_id=%s",
+                "set last_claimed_at=now()-interval '7 hours' where guild_id=%s",
                 (str(guild),),
             )
     assert ledger.available_manual_member_ids_sync(guild, [(user, joined)]) == {user}
@@ -202,11 +202,12 @@ def test_manual_and_scheduled_ledgers_are_independent_and_restart_safe():
             )
             cursor.execute(
                 "update public.dank_verify_manual_member_delivery "
-                "set last_claimed_at=now()-interval '13 hours' where guild_id=%s",
+                "set last_claimed_at=now()-interval '7 hours' where guild_id=%s",
                 (str(guild),),
             )
-    # Two manual attempts per join. Later claims do not consume schedule slots.
-    assert ledger.reserve_manual_batch_sync(guild, [(user, joined)]) == ()
+    # Third attempt in the same join is authorized after another cooldown,
+    # without consuming the independent scheduled reminder history.
+    assert ledger.reserve_manual_batch_sync(guild, [(user, joined)]) == (user,)
     with ledger._connect() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -224,6 +225,30 @@ def test_manual_and_scheduled_ledgers_are_independent_and_restart_safe():
         ledger.reserve_manual_batch_sync(guild, [(user, joined + timedelta(days=1))])
     # Independent guild with the same member remains available.
     assert ledger.reserve_manual_batch_sync(_new_snowflake(), [(user, joined)]) == (user,)
+
+
+@requires_postgres
+def test_manual_channel_or_dm_batch_can_claim_24_members_without_lifetime_limit():
+    guild = _new_snowflake()
+    joined = datetime.now(timezone.utc) - timedelta(hours=1)
+    batch = [(_new_snowflake(), joined) for _ in range(24)]
+    claimed = ledger.reserve_manual_batch_sync(guild, batch)
+    assert claimed == tuple(uid for uid, _ in batch)
+    assert ledger.available_manual_member_ids_sync(guild, batch) == set()
+    with ledger._connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "update public.dank_verify_manual_guild_budget "
+                "set last_claimed_at=now()-interval '61 seconds' where guild_id=%s",
+                (str(guild),),
+            )
+            cursor.execute(
+                "update public.dank_verify_manual_member_delivery "
+                "set last_claimed_at=now()-interval '7 hours' where guild_id=%s",
+                (str(guild),),
+            )
+    assert ledger.available_manual_member_ids_sync(guild, batch) == {uid for uid, _ in batch}
+    assert ledger.reserve_manual_batch_sync(guild, batch) == claimed
 
 
 @requires_postgres
