@@ -10,6 +10,8 @@ from typing import Any
 
 import discord
 
+from .ui.current_channel import current_text_channel
+
 
 async def _send_ephemeral(interaction: discord.Interaction, content: str = "", **kwargs: Any) -> None:
     try:
@@ -102,6 +104,30 @@ class RolesCenterView(discord.ui.View):
         self.add_item(RolePanelChannelSelect(kind="pronouns"))
         self.add_item(RolePanelChannelSelect(kind="identity"))
 
+    @discord.ui.button(
+        label="Use This Channel: Pronouns", emoji="📍",
+        style=discord.ButtonStyle.secondary, row=2,
+    )
+    async def current_pronouns(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        channel = current_text_channel(interaction, require_bot_embed=True)
+        if channel is None:
+            return await _send_ephemeral(interaction, "❌ Open Roles Center in the text channel "
+                                         "where you want the Pronoun panel, or use the picker.")
+        await _post_default_panel(interaction, channel, kind="pronouns")
+
+    @discord.ui.button(
+        label="Use This Channel: Identity", emoji="📍",
+        style=discord.ButtonStyle.secondary, row=2,
+    )
+    async def current_identity(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        channel = current_text_channel(interaction, require_bot_embed=True)
+        if channel is None:
+            return await _send_ephemeral(interaction, "❌ Open Roles Center in the text channel "
+                                         "where you want the Identity panel, or use the picker.")
+        await _post_default_panel(interaction, channel, kind="identity")
+
 
 async def open_roles_center(interaction: discord.Interaction) -> None:
     from stoney_verify.commands_ext.public_setup_group import _require_setup_permission
@@ -127,7 +153,13 @@ async def open_roles_center(interaction: discord.Interaction) -> None:
         ),
         inline=False,
     )
-    embed.add_field(name="Actions", value="Use the selectors below to post a Pronoun panel or Optional Identity panel.", inline=False)
+    embed.add_field(
+        name="Actions",
+        value="Choose a destination from a picker, or tap **Use This Channel** "
+              "for Pronouns or Identity to create that panel right here. "
+              "Either choice posts a public role panel after staff checks.",
+        inline=False,
+    )
     embed.set_footer(text="/dank setup • Feature Centers • Roles Center")
     await _send_ephemeral(interaction, embed=embed, view=RolesCenterView(), allowed_mentions=discord.AllowedMentions.none())
 

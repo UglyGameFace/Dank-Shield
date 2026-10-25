@@ -1,3 +1,10 @@
+## Legacy channel pickers follow-up (2026-10-25)
+
+- Continued **same active task** in a second coherent PR after shared channel fallback: Guided Setup single text slot, legacy Setup Wizard (verify/transcripts/VC queue and precise log target choice), Live Captions text output and Roles Center pronoun/identity publishing.
+- Reuse one `current_text_channel` resolver and existing callbacks. Role/category/voice pickers remain type-specific, and role-panel selection still runs original role-creation permissions.
+- No extra slash commands, Postgres migrations, premium services, auto-purges or unrelated feature changes.
+- Next native audit remains design formatting/multi-kind selectors, old ticket category targeting and any uncovered legacy channel-based menus. Do not claim 100% until code and canary validate every owner-facing screen.
+
 # FORCE SWITCH: Fix all channel pickers (2026-10-25)
 
 - **Active task**: One shared, moderator-friendly **Use This Channel** path for channel-based configuration. Owner explicitly prioritized this after repeated failures to select text channels on Discord Android.
