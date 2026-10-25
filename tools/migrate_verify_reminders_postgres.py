@@ -9,17 +9,11 @@ command after setting DANK_VERIFY_REMINDER_DATABASE_URL in the bot environment.
 import argparse
 from pathlib import Path
 
-from stoney_verify.verification_reminder_postgres import _connect
+from stoney_verify.verification_reminder_postgres import _connect, apply_manual_schema_sync
 
 MIGRATION = (
     Path(__file__).resolve().parents[1]
     / "postgres/migrations/202610110001_verify_unverified_reminders.sql"
-)
-
-
-MANUAL_MIGRATION = (
-    Path(__file__).resolve().parents[1]
-    / "postgres/migrations/202610250001_verify_manual_reminders.sql"
 )
 
 
@@ -34,35 +28,29 @@ def main() -> int:
         print("No changes made. Pass --apply or --apply-manual after explicit operator approval.")
         return 0
 
-    sql = (MANUAL_MIGRATION if args.apply_manual else MIGRATION).read_text(encoding="utf-8")
+    if args.apply_manual:
+        if apply_manual_schema_sync():
+            print("Manual reminder ledger applied and verified.")
+            return 0
+        print("Manual reminder ledger migration failed; scheduled rows were untouched.")
+        return 1
+
+    sql = MIGRATION.read_text(encoding="utf-8")
     try:
         with _connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(sql)
-                if args.apply_manual:
-                    cursor.execute(
-                        "select guild_id, last_claimed_at, window_started_at, window_claims "
-                        "from public.dank_verify_manual_guild_budget limit 0"
-                    )
-                    cursor.execute(
-                        "select guild_id, user_id, joined_at, last_claimed_at, attempts "
-                        "from public.dank_verify_manual_member_delivery limit 0"
-                    )
-                else:
-                    cursor.execute(
-                        "select guild_id, user_id, joined_at, last_claimed_at, attempts "
-                        "from public.dank_verify_reminder_delivery limit 0"
-                    )
+                cursor.execute(
+                    "select guild_id, user_id, joined_at, last_claimed_at, attempts "
+                    "from public.dank_verify_reminder_delivery limit 0"
+                )
     except Exception as exc:
         # Keep credentials and DSN out of logs even when psycopg includes them
         # in its exception details.
         print(f"Reminder database initialization failed ({type(exc).__name__}).")
         return 1
 
-    print(
-        ("Manual" if args.apply_manual else "Scheduled")
-        + " reminder schema exists and is readable on the configured private PostgreSQL connection."
-    )
+    print("Scheduled reminder schema exists and is readable on the private PostgreSQL connection.")
     return 0
 
 
