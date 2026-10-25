@@ -29,8 +29,7 @@ def test_home_is_a_9_action_guided_post_instead_of_20_technical_buttons():
     guide=ui._summary(session)
     assert "four easy steps" in guide.description.lower()
     assert "Nothing goes public until you confirm" in guide.description
-    assert "Choose a channel first." in "
-".join(str(field.value) for field in guide.fields)
+    assert "Choose a channel first." in " ".join(str(field.value) for field in guide.fields)
 
 
 def test_all_existing_features_remain_accessible_through_task_groups():
