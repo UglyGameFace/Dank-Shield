@@ -72,6 +72,13 @@ def test_cinema_is_not_shipped_in_discloud_package() -> None:
         "stoney_verify/assets/cinema_site.js",
         "stoney_verify/assets/cinema_site.css",
     }.issubset(ignored)
+    # Discloud's exact-name matching has varied by client; check basenames too.
+    for required_name in (
+        "torrent_streaming.py", "torrent_media_server.py", "cinema_site.py",
+        "movie_night_web.py", "public_movie_night.py",
+        "torrent_stream_routes.py", "cinema_site.js", "cinema_site.css",
+    ):
+        assert required_name in ignored
     assert "libtorrent==" not in source("requirements.txt")
     example = source(".env.example")
     assert "DANK_TORRENT_" not in example
