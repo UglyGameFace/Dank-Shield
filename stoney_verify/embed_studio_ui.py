@@ -278,6 +278,10 @@ class StudioHomeView(_StudioView):
     async def smart_text(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _smart_text_help(interaction, self.session)
 
+    @discord.ui.button(label="Scheduled Posts", emoji="📅", style=discord.ButtonStyle.secondary, row=3)
+    async def scheduled_posts(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _scheduled_posts(interaction, self.session)
+
     @discord.ui.button(label="Preview & Publish", emoji="👁️", style=discord.ButtonStyle.primary, row=3)
     async def preview(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _review(interaction, self.session)
@@ -1745,6 +1749,138 @@ async def _review(interaction: discord.Interaction, session: StudioSession) -> N
         await interaction.response.send_message(**kwargs, ephemeral=True)
 
 
+class StudioScheduleModal(discord.ui.Modal, title="Schedule an Announcement"):
+    def __init__(self, session: StudioSession, *, preview: dict[str, Any],
+                 channel_id: int, post_key: str, review: Any) -> None:
+        super().__init__(timeout=300)
+        self.session = session
+        self.preview = deepcopy(preview)
+        self.channel_id = channel_id
+        self.post_key = post_key
+        self.review = review
+        self.used = False
+        self.when_input = discord.ui.TextInput(
+            label="Date, time and timezone offset",
+            placeholder="2026-11-01T18:00-05:00",
+            required=True, max_length=35,
+        )
+        self.add_item(self.when_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        from .embed_studio_schedules import (
+            StudioScheduleError, parse_schedule_time, safe_scheduled_project,
+            schedules_enabled, enqueue,
+        )
+        if (not schedules_enabled() or not _staff(interaction)
+                or interaction.guild is None
+                or int(interaction.guild.id) != self.session.guild_id
+                or int(interaction.user.id) != self.session.owner_id):
+            return await _say(interaction, "Scheduled publishing is not enabled, or staff access changed.")
+        if self.used or self.review.sent:
+            return await _say(interaction, "This preview was already used. Open a fresh preview.")
+        self.used = True
+        if (self.session.project != self.preview
+                or self.session.channel_id != self.channel_id
+                or self.session.post_key != self.post_key
+                or self.post_key):
+            return await _say(interaction, "This preview changed or edits an existing post. Reopen Preview.")
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            channel = _target_channel(interaction, self.session)
+            if channel is None or _post_blockers(interaction, channel):
+                return await _say(interaction, "Destination or publishing permissions changed.")
+            when = parse_schedule_time(str(self.when_input.value or ""))
+            project = safe_scheduled_project(self.preview)
+            from .commands_ext.public_embed_group import _require_safe_embed_action
+            if not await _require_safe_embed_action(interaction, action="send public embed"):
+                return
+            if (self.session.project != self.preview
+                    or self.session.channel_id != self.channel_id
+                    or self.session.post_key != self.post_key):
+                return await _say(interaction, "Preview changed while scheduling; nothing was queued.")
+            job = await enqueue(self.session.guild_id, self.channel_id,
+                                self.session.owner_id, project, when)
+        except StudioValidationError as exc:
+            return await _say(interaction, f"Could not schedule: {exc}")
+        except Exception:
+            return await _say(interaction, "Scheduling storage unavailable. No automatic post was queued.")
+        self.review.sent = True
+        stamp = int(when.timestamp())
+        await _say(interaction,
+            f"✅ Announcement scheduled for <t:{stamp}:F> in <#{self.channel_id}>. "
+            "You can cancel it under Scheduled Posts. No message was posted yet.")
+
+
+class StudioScheduleSelect(discord.ui.Select):
+    def __init__(self, session: StudioSession, rows: list[dict[str, Any]]) -> None:
+        self.session = session
+        options = [
+            discord.SelectOption(
+                label=f"Channel {str(row['channel_id'])[:18]} • {str(row['execute_at'])[:22]}",
+                value=str(row["id"]),
+            ) for row in rows
+        ] or [discord.SelectOption(label="No upcoming announcements", value="none")]
+        super().__init__(placeholder="Choose a scheduled announcement",options=options,row=0)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if self.values[0] == "none":
+            return await _say(interaction, "There are no upcoming announcements.")
+        await _menu(interaction, heading="Cancel this scheduled announcement?",
+                    description="Cancellation affects only a pending job. It never deletes past posts.",
+                    view=CancelScheduleView(self.session, self.values[0]))
+
+
+class StudioSchedulesMenu(_StudioView):
+    def __init__(self, session: StudioSession, rows: list[dict[str, Any]]) -> None:
+        super().__init__(session)
+        self.add_item(StudioScheduleSelect(session, rows))
+
+    @discord.ui.button(label="Back to Studio", emoji="🏠", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _home(interaction, self.session)
+
+
+class CancelScheduleView(_StudioView):
+    def __init__(self, session: StudioSession, job_id: str) -> None:
+        super().__init__(session)
+        self.job_id = job_id
+        self.used = False
+
+    @discord.ui.button(label="Cancel Pending Post", emoji="🗑️", style=discord.ButtonStyle.danger)
+    async def cancel_post(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if self.used:
+            return await _say(interaction, "This action has already been submitted.")
+        self.used = True
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        from .embed_studio_schedules import cancel
+        try:
+            stopped = await cancel(self.session.guild_id, self.job_id)
+        except Exception:
+            return await _say(interaction, "Could not cancel. Check Scheduled Posts before assuming it was stopped.")
+        await _say(interaction, "✅ Scheduled post cancelled." if stopped
+                   else "Post is no longer pending. It may have started or been cancelled already.")
+
+    @discord.ui.button(label="Keep Post", emoji="◀️", style=discord.ButtonStyle.secondary)
+    async def keep(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _scheduled_posts(interaction, self.session)
+
+
+async def _scheduled_posts(interaction: discord.Interaction, session: StudioSession) -> None:
+    from .embed_studio_schedules import list_pending
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    try:
+        rows = await list_pending(session.guild_id)
+    except StudioValidationError as exc:
+        return await _say(interaction, str(exc))
+    except Exception:
+        return await _say(interaction, "Upcoming posts are unavailable. No changes were made.")
+    await _menu(interaction, heading="📅 Scheduled Announcements",
+                description="Upcoming one-time posts. Open Preview to schedule another. "
+                            "A missed or failed message is never sent twice automatically.",
+                view=StudioSchedulesMenu(session, rows))
+
+
 class StudioReviewView(_StudioView):
     def __init__(self, session: StudioSession, *, resolved_project: dict[str, Any] | None = None) -> None:
         super().__init__(session, timeout=300)
@@ -1756,6 +1892,11 @@ class StudioReviewView(_StudioView):
         self.preview_resolved_project = validate_project(resolved_project if resolved_project is not None else session.project)
         self.preview_channel_id = session.channel_id
         self.preview_post_key = session.post_key
+        from .embed_studio_schedules import schedules_enabled
+        self.schedule_later.disabled = (
+            not schedules_enabled() or bool(session.post_key)
+            or bool(session.project.get("role_actions"))
+        )
         # Link buttons really open their HTTPS target in preview. Role actions
         # are disabled here: a private preview must never grant a public role.
         for link in session.project["links"]:
@@ -1770,6 +1911,26 @@ class StudioReviewView(_StudioView):
         else:
             for item in role_items:
                 self.add_item(discord.ui.Button(label=item["label"], disabled=True, style=discord.ButtonStyle.secondary, row=1))
+
+    @discord.ui.button(label="Schedule for Later", emoji="📅", style=discord.ButtonStyle.primary, row=0)
+    async def schedule_later(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        from .embed_studio_schedules import schedules_enabled
+        if not schedules_enabled():
+            return await _say(interaction, "The scheduled sender has not been enabled.")
+        if self.sent or self.session.project != self.preview_project or (
+            self.session.channel_id != self.preview_channel_id
+            or self.session.post_key != self.preview_post_key
+        ):
+            return await _say(interaction, "This preview changed or was already used. Reopen Preview.")
+        if self.session.post_key:
+            return await _say(interaction, "Scheduled edits of existing posts are not supported.")
+        if self.session.project.get("role_actions"):
+            return await _say(interaction, "Self-role panels require immediate moderator publishing.")
+        await interaction.response.send_modal(StudioScheduleModal(
+            self.session, preview=self.preview_project,
+            channel_id=self.preview_channel_id, post_key=self.preview_post_key,
+            review=self,
+        ))
 
     @discord.ui.button(label="Publish / Save Edit", emoji="✅", style=discord.ButtonStyle.success, row=0)
     async def publish(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
