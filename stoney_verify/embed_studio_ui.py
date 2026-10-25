@@ -963,13 +963,34 @@ async def _media_library(interaction: discord.Interaction, session: StudioSessio
     except Exception as exc:
         return await _say(interaction, _error(exc))
     view = MediaLibraryMenu(session, lib, page=page)
+    from .embed_studio_assets import uploads_enabled
+    usage_note = ""
+    if uploads_enabled():
+        from .embed_studio_artwork_budget import (
+            ArtworkBudgetError, get_budget, read_artwork_usage, MIB,
+        )
+        try:
+            budget = get_budget()
+            usage = await read_artwork_usage(session.guild_id)
+            usage_note = (
+                f"\nArtwork storage: {usage['guild_used'] / MIB:.1f}/"
+                f"{budget.guild_bytes / MIB:.0f} MiB for this server; "
+                f"{usage['global_used'] / MIB:.1f}/{budget.global_bytes / MIB:.0f} MiB total."
+            )
+            if usage["stale_reservations"]:
+                usage_note += (
+                    f" {usage['stale_reservations']} uncertain uploads need a staff audit."
+                )
+        except (ArtworkBudgetError, asyncio.TimeoutError):
+            usage_note = "\nArtwork capacity unavailable. Managed uploads remain guarded."
     await _menu(
         interaction, heading="🖼️ Reusable Media Library",
         description=(
             f"{len(lib['media'])}/{MAX_MEDIA_ITEMS} saved links • Page {view.page + 1}/{view.pages}. "
-            "Use Previous/Next to browse. Save direct HTTPS image or GIF URLs and reuse "
-            "them for large images, thumbnails and icons. These are links, not file uploads. "
-            "Media, drafts and templates share a 256 KiB Studio storage budget."
+            "Use Previous/Next to browse. Reuse saved HTTPS image/GIF links in "
+            "images, thumbnails and icons across channels. Removing a saved "
+            "link never deletes artwork from existing published posts."
+            + usage_note
         ),
         view=view,
     )
