@@ -2,46 +2,25 @@
 
 ## What owners see
 
-Go to `/dank home → Verification Center → Unverified Reminders`.
+Open `/dank home → Verification Center → Unverified Reminders`.
 
-- **Configure**: sets the existing automatic first delay (1–720 hours), repeat
-  interval (12–720 hours), and maximum attempts (1–5 per join).
-- **Check Scheduled Due**: immediately runs one bounded pass of the **automatic**
-  rules. It never skips first delay or repeat limits, and its zero count is NOT a
-  full-guild verification audit.
-- **Send Reminder Now**: opens a **private page preview**. It counts the 100
-  Discord members inspected, how many remain unverified on that page, access
-  blockers, and how many would still be too early for automatic reminders.
-  It displays up to three selected people and the exact message. **Next 100
-  Members** looks farther into the server if no desired candidates appear.
-  **Confirm Manual Send** then performs fresh permission/role/member checks and
-  independently reserves the manual attempt before sending.
-- Manual reminders can reach still-unverified members who joined minutes ago.
-  They do not affect the automatic 24h/48h timing or consume the automatic
-  reminder ledger. Manual sends work with automatic scheduling disabled when
-  the saved delivery mode is Channel and Simple Verify remains active.
+- **Configure**: sets the *automatic* first delay (1–720 hours), repeat (12–720 hours), and its own per-join maximum.
+- **Check Scheduled Due**: scans one bounded page against the **automatic** schedule; it never sends early.
+- **Send Reminder Now**: fetches the full live guild membership with the existing shared, rate-budgeted membership enumerator. The current server's saved **Unverified role ID**, not the role's name, is the starting point. The canonical role-truth owner excludes bots and members who already have the server's mapped access or staff roles.
+- Preview reports the total scanned, those with the mapped Unverified role, those still pending under server settings, access blockers, and manual cooldown exclusions. It never claims that an incomplete cache is complete. If an authoritative full scan fails, sending is blocked instead of reporting zero.
+- Each group includes up to **25 eligible recipients**, all selected initially. Staff can optionally select fewer from the names menu. **Next Eligible Group** browses additional eligible users without fetching the whole guild again.
+- **Channel** sends *one* message mentioning the selected members in the saved reminder channel. **Use DMs** makes the same manual preview send private messages to each selected member instead; it does not silently send to the public chat.
+- New members can be reminded before automatic delay. Manual and automatic attempts have independent PostgreSQL claim histories and never reset one another.
 
-## Safety / clear outcomes
+## Safety and large guilds
 
-Requires the server's saved Simple Verify mode, both mapped roles, verification
-channel, and a saved reminder **text channel** where the bot can post. Never
-silently sends DMs or uses the channel where staff clicked the menu.
+- Per-guild configuration controls the pending/verified/staff/access roles, verification channel, delivery preference and message. No server name or role text is hardcoded. Role-mapping conflicts are counted for staff instead of being pinged as unverified.
+- **No lifetime per-join cap on manual sends**. A durable 6-hour *per-member* manual cooldown prevents repeated pings. A server may start one manual batch per minute and up to four per hour, max 25 selected people per confirmation. These are independently enforced for channel and DM sends across bot restarts and shards.
+- Staff receive a private delivery report, including successfully delivered, Discord failures and members who no longer qualify. DM permission failures are counted, not retried blindly.
+- Recipient verification status, membership, join generation and channel visibility are rechecked immediately before and after durable claims. A setting change invalidates an old preview.
+- Member privacy: only staff see previews; direct messages are sent only when the server owner has chosen DM delivery.
+- The automatic reminder ledger and worker remain authoritative for scheduled reminders.
 
-Only members currently pending per canonical role truth, able to see both
-channels and still present in the guild may receive a manual reminder. Bot and
-staff are excluded by existing role truth. Preview is advisory: live changes
-can reduce the final number of recipients.
-
-Manual budget: **up to three recipients per confirmation**, maximum one batch
-per server per 60 seconds and four batches per hour; **at most two manual
-attempts per member per join** with a 12-hour per-member cooldown. PostgreSQL
-claims are durable across shards and restarts. Discord failures count as
-attempts so retries cannot accidentally spam members.
-
-The final private result distinguishes selected, reserved, successfully
-delivered, Discord failures, people who ceased qualifying, and manual limits.
-No result claims to represent every unverified member in a server unless every
-page was actually scanned.
 
 ## Database release gate
 
