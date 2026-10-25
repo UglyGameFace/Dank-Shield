@@ -887,19 +887,12 @@ def test_legacy_startup_guard_is_side_effect_free_compatibility_only() -> None:
     assert "\ninstall()\n" not in LEGACY
 
 
-def test_plain_proxy_message_never_initializes_cinema_torrent_manager(monkeypatch) -> None:
-    def unavailable_manager():
-        raise AssertionError("ordinary shares must not construct libtorrent")
-
-    monkeypatch.setattr(share_runtime, "get_torrent_manager", unavailable_manager)
-
-    for content, attachments in (
-        ("A plain text share", []),
-        ("https://www.facebook.com/watch/?v=123", []),
-        ("A video uploaded from Android", [SimpleNamespace(filename="clip.mp4")]),
-    ):
-        message = SimpleNamespace(content=content, attachments=attachments)
-        assert asyncio.run(share_runtime._route_torrent_media(message, SimpleNamespace(id=22))) is None
+def test_plain_proxy_message_has_no_torrent_engine_or_route() -> None:
+    # Share Router must not be able to construct Cinema sessions through
+    # hidden compatibility imports, even if users submit magnet text.
+    assert not hasattr(share_runtime, "get_torrent_manager")
+    assert not hasattr(share_runtime, "_route_torrent_media")
+    assert not hasattr(share_runtime, "_torrent_attachment_bytes")
 
 
 def test_proxy_send_failure_preserves_source_and_allows_retry(monkeypatch) -> None:
