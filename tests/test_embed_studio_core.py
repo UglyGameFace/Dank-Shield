@@ -167,7 +167,9 @@ def test_mobile_studio_has_clear_separate_sections_and_one_confirmation() -> Non
     }
     assert any(isinstance(item, discord.ui.ChannelSelect) for item in view.children)
     review = StudioReviewView(session)
-    assert "Publish / Save Edit" in {getattr(item, "label", "") for item in review.children}
+    assert "Post Now" in {getattr(item, "label", "") for item in review.children}
+    session.post_key = "111:222"
+    assert "Save Changes" in {getattr(item, "label", "") for item in StudioReviewView(session).children}
     assert "Back & Edit" in {getattr(item, "label", "") for item in review.children}
     assert len(StudioTextModal(session).children) == 3
     assert len(StudioAppearanceModal(session).children) == 5
