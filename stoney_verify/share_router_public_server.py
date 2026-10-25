@@ -16,7 +16,9 @@ _PUBLIC_SITE: Optional[web.TCPSite] = None
 
 def _config(primary: str, old: str, default: str) -> str:
     value = os.getenv(primary)
-    if value is None:
+    # Empty new settings should not suppress a working existing Site URL.
+    # An explicit off switch ("false") still takes precedence.
+    if value is None or not str(value).strip():
         value = os.getenv(old, default)
     return str(value or default).strip()
 

@@ -89,3 +89,22 @@ def test_lifecycle_hooks_do_not_call_cinema() -> None:
     assert "from .commands_ext.public_movie_night" not in source("stoney_verify/interaction_guard.py")
     assert "cinema_site" not in source("stoney_verify/events.py")
     assert "cinema_site" not in source("stoney_verify/commands_ext/public_onboarding.py")
+
+
+def test_share_video_listener_uses_new_or_legacy_configuration_without_cinema(monkeypatch) -> None:
+    from stoney_verify import share_router_public_server as site
+
+    monkeypatch.setenv("DANK_MEDIA_PUBLIC_BASE_URL", "https://stoneyverify.discloud.dev/")
+    monkeypatch.setenv("DANK_SHARE_VIDEO_PUBLIC_BASE_URL", "")
+    assert site.media_public_base_url() == "https://stoneyverify.discloud.dev"
+    monkeypatch.setenv("DANK_SHARE_VIDEO_PUBLIC_BASE_URL", "https://video.example.net/")
+    assert site.media_public_base_url() == "https://video.example.net"
+    monkeypatch.setenv("DANK_SHARE_VIDEO_SERVER_ENABLED", "false")
+    assert not site.media_server_enabled()
+    monkeypatch.setenv("DANK_SHARE_VIDEO_SERVER_ENABLED", "true")
+    assert site.media_server_enabled()
+    monkeypatch.setenv("DANK_SHARE_VIDEO_PUBLIC_BASE_URL", "http://public.example.net")
+    import pytest
+    with pytest.raises(RuntimeError, match="HTTPS"):
+        site._validate_public_base_url()
+
