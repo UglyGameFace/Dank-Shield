@@ -1,3 +1,12 @@
+# FORCE SWITCH: Fix all channel pickers (2026-10-25)
+
+- **Active task**: One shared, moderator-friendly **Use This Channel** path for channel-based configuration. Owner explicitly prioritized this after repeated failures to select text channels on Discord Android.
+- The canonical Search-Safe `DankGuildResourceBrowserView` automatically gets a Use This Channel button on text-capable pickers; it reuses the existing `on_pick` callback, eligibility predicate and guild/owner checks, never auto-posts.
+- Standalone native channel menus adopt `ui.current_channel.current_text_channel` and their original feature save/permissions paths, beginning with Verification Reminders, Post Builder, 4:20 announcements, Welcome/Join/Exit Cards, Live Profile Signature channels, Ticket Center/Panel/Staff Alerts/Intake and cleanup target selectors.
+- **User-visible behavior:** button selects the exact invoking guild text channel; no Discord dropdown selection required. Feature-specific checks still apply, including private ticket alerts and destructive-cleanup confirmation. Multi-channel profile configuration adds current without deleting previously saved channels.
+- **Remaining audit**: each existing native selector not yet covered must be migrated explicitly, with regression evidence, before describing this as complete across all feature screens. Preserve Embed Studio #722 without merging unrelated work.
+- Previous active Embed Studio work is **paused** here. Bump Manager #713 and Share Router remain backlog. Do not do multiple active coding tasks.
+
 ## Embed Studio implementation sequence (2026-10-24)
 
 - **Single active task: Embed Studio.** Three cohesive dependency-ordered PRs exist: #716 normalized private Storage v2 with per-guild CAS and manual legacy parity, #717 native mobile image/GIF uploads with separate Supabase object bucket, #718 indexed at-most-once one-shot scheduled announcements with owner-only cancellation and due-time staff/permissions rechecks. Merge in order **716 → 717 → 718**.
