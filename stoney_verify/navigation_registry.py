@@ -348,7 +348,7 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "🧱",
         "design",
         "Build announcements with brand themes, team reviews, private forms and optional Live Text updates.",
-        ("embed", "embed builder", "embed studio", "announcement builder", "create announcement", "message designer", "design a message", "embed editor", "custom embed", "json embed", "save embed", "brand themes", "server themes", "branding", "embed color palettes", "media library", "saved images", "smart text", "embed placeholders", "private feedback forms", "team review", "scheduled posts", "live text", "hourly updates", "dynamic embeds", "auto refresh"),
+        ("embed", "embed builder", "embed studio", "announcement builder", "create announcement", "message designer", "design a message", "embed editor", "custom embed", "json embed", "save embed", "brand themes", "server themes", "branding", "embed color palettes", "media library", "saved images", "smart text", "embed placeholders", "feedback form", "private response inbox", "create form", "questionnaire", "staff review", "private feedback forms", "team review", "scheduled posts", "live text", "hourly updates", "dynamic embeds", "auto refresh"),
         True,
     ),
     NavigationFeature(
