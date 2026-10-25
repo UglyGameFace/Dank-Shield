@@ -483,8 +483,8 @@ class RecentFeatureUpdate:
 RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     RecentFeatureUpdate(
         "embed_studio", "Post Builder is easier for moderators",
-        "Make an announcement in 4 steps with simple menus. Saved Pictures also shows "
-        "image storage usage when managed uploads are enabled.", "2026-10-24",
+        "Make an announcement in 4 steps with simple menus. Saved Pictures shows "
+        "image storage usage when uploads are enabled, and JSON backups stay available.", "2026-10-24",
     ),
     RecentFeatureUpdate(
         "share_router", "Share videos from regular channels",
