@@ -137,7 +137,7 @@ except Exception:
 # API SERVERS
 # ============================================================
 from .api_new.server import start_api
-from .torrent_media_server import media_server_ready, start_torrent_media_server
+from .share_router_public_server import media_server_ready, start_share_router_public_server
 
 try:
     from .bot_actions_api import start_bot_actions_server
@@ -158,7 +158,7 @@ _NATIVE_PUBLIC_STARTUP_SCOPE = True
 
 _STARTED_LEGACY_ACTIONS_API = False
 _STARTED_NEW_ACTIONS_API = False
-_STARTED_TORRENT_MEDIA_SERVER = False
+_STARTED_SHARE_PUBLIC_SERVER = False
 _STARTED_WORKERS = False
 _DID_SLASH_MAINTENANCE = False
 _DID_GLOBAL_COMMAND_CLEANUP = False
@@ -1006,36 +1006,36 @@ async def _start_private_voice_bridge_once() -> None:
         print(f"⚠️ Voice companion private bridge unavailable: {type(exc).__name__}")
 
 
-async def _start_torrent_media_server_once() -> None:
-    global _STARTED_TORRENT_MEDIA_SERVER
+async def _start_share_public_server_once() -> None:
+    global _STARTED_SHARE_PUBLIC_SERVER
 
-    if _STARTED_TORRENT_MEDIA_SERVER:
+    if _STARTED_SHARE_PUBLIC_SERVER:
         return
 
     # setup_hook starts the public listener before Discord gateway readiness so
     # Discloud's TYPE=site proxy always has an origin. Keep this on_ready path as
     # an idempotent fallback if the early attempt failed.
     if media_server_ready():
-        _STARTED_TORRENT_MEDIA_SERVER = True
-        claim_startup_flag("torrent_media_server")
-        print("🎞️ Torrent media server already ready from pre-gateway setup")
+        _STARTED_SHARE_PUBLIC_SERVER = True
+        claim_startup_flag("share_router_public_server")
+        print("🔗 Share Router public server already ready from pre-gateway setup")
         return
 
-    if not claim_startup_flag("torrent_media_server"):
-        _STARTED_TORRENT_MEDIA_SERVER = True
-        print("ℹ️ Torrent media server startup already claimed elsewhere; skipping here.")
+    if not claim_startup_flag("share_router_public_server"):
+        _STARTED_SHARE_PUBLIC_SERVER = True
+        print("ℹ️ Share Router public server startup already claimed elsewhere; skipping here.")
         return
 
-    _STARTED_TORRENT_MEDIA_SERVER = True
+    _STARTED_SHARE_PUBLIC_SERVER = True
 
     try:
-        started = await start_torrent_media_server()
+        started = await start_share_router_public_server()
         if started:
-            print("🎞️ Torrent media server started")
+            print("🔗 Share Router public server started")
         else:
-            print("ℹ️ Torrent media server is not configured for public playback")
+            print("ℹ️ Share Router public server is not configured for public playback")
     except Exception as e:
-        print("❌ Torrent media server failed:", repr(e))
+        print("❌ Share Router public server failed:", repr(e))
 
 
 async def _start_workers_once() -> None:
@@ -1212,7 +1212,7 @@ async def on_ready() -> None:
         await _start_legacy_actions_api_once()
         await _start_new_api_once()
         await _start_private_voice_bridge_once()
-        await _start_torrent_media_server_once()
+        await _start_share_public_server_once()
         await _start_workers_once()
         await _run_permission_self_check_once()
 

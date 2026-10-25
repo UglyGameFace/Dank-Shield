@@ -470,20 +470,20 @@ class _DankCommandOwnerMixin:
             )
 
         # Discloud TYPE=site health depends on the public listener binding promptly.
-        # Start Cinema on the client's live event loop before gateway readiness so
+        # Start Share Router's public listener on the live event loop before gateway readiness so
         # a slow/blocked Discord ready lifecycle cannot leave port 8080 unbound.
         # The on_ready owner remains as an idempotent fallback for reconnects.
         try:
-            from .torrent_media_server import start_torrent_media_server
+            from .share_router_public_server import start_share_router_public_server
 
-            media_started = await start_torrent_media_server()
+            media_started = await start_share_router_public_server()
             if media_started:
-                print("🎞️ Torrent media server ready before Discord gateway readiness")
+                print("🔗 Share Router public server ready before Discord gateway readiness")
             else:
-                print("ℹ️ Torrent media server disabled during pre-gateway setup")
+                print("ℹ️ Share Router public server disabled during pre-gateway setup")
         except Exception as exc:
             print(
-                "❌ Torrent media server pre-gateway startup failed; "
+                "❌ Share Router public server pre-gateway startup failed; "
                 f"on_ready will retry: {type(exc).__name__}: {exc}"
             )
 

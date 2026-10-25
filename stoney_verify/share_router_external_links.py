@@ -73,7 +73,7 @@ def _storage_dir() -> Path:
 
 
 def _public_base() -> str:
-    from .torrent_media_server import media_public_base_url, media_server_enabled, media_server_ready
+    from .share_router_public_server import media_public_base_url, media_server_enabled, media_server_ready
     if not media_server_enabled() or not media_server_ready():
         return ""
     value = media_public_base_url()
