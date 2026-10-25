@@ -46,7 +46,7 @@ def default_embed() -> dict[str, Any]:
 
 
 def new_project() -> dict[str, Any]:
-    return {"version": 1, "content": "", "embeds": [default_embed()], "links": [], "role_mode": "buttons", "role_actions": []}
+    return {"version": 1, "content": "", "embeds": [default_embed()], "links": [], "role_mode": "buttons", "role_actions": [], "form": None}
 
 
 def _text(value: Any, limit: int, label: str) -> str:
@@ -78,6 +78,36 @@ def color_hex(value: Any) -> str:
     if len(color) != 6 or any(c not in "0123456789ABCDEF" for c in color):
         raise StudioValidationError("Color must be six hex digits, like #5865F2.")
     return color
+
+
+def validate_studio_form(raw: Any) -> dict[str, Any] | None:
+    if raw is None or raw == {}:
+        return None
+    if not isinstance(raw, Mapping):
+        raise StudioValidationError("Form settings must be a valid object.")
+    title = _text(raw.get("title"), 45, "Form title")
+    button = _text(raw.get("button_label"), 80, "Form button label")
+    if not title or not button:
+        raise StudioValidationError("Form title and button label are required.")
+    questions = raw.get("questions") or []
+    if not isinstance(questions, list) or len(questions) > 5:
+        raise StudioValidationError("Forms support up to five text questions.")
+    fields = []
+    used = set()
+    for question in questions:
+        if not isinstance(question, Mapping):
+            raise StudioValidationError("Invalid form question.")
+        label = _text(question.get("label"), 45, "Question")
+        hint = _text(question.get("placeholder"), 100, "Question example")
+        if not label or label.casefold() in used:
+            raise StudioValidationError("Form questions must be named and unique.")
+        used.add(label.casefold())
+        kind = str(question.get("style") or "short").strip().lower()
+        if kind not in ("short","paragraph"):
+            raise StudioValidationError("Question style must be short or paragraph.")
+        fields.append({"label": label, "placeholder": hint, "style": kind,
+                       "required": bool(question.get("required", True))})
+    return {"title": title, "button_label": button, "questions": fields}
 
 
 def validate_project(project: Mapping[str, Any]) -> dict[str, Any]:
@@ -163,8 +193,14 @@ def validate_project(project: Mapping[str, Any]) -> dict[str, Any]:
         raise StudioValidationError("Use the dropdown layout for more than five role controls.")
     if mode == "buttons" and len(roles) + len(buttons) > 5:
         raise StudioValidationError("Buttons layout supports at most five total link and role buttons. Switch roles to dropdown.")
+    form = validate_studio_form(project.get("form"))
+    if form is not None:
+        if roles:
+            raise StudioValidationError("Forms and self-role controls cannot share one message.")
+        if len(buttons) > 4:
+            raise StudioValidationError("Forms leave room for up to four URL buttons.")
     cleaned = {"version": 1, "content": content, "embeds": result, "links": buttons,
-               "role_mode": mode, "role_actions": roles}
+               "role_mode": mode, "role_actions": roles, "form": form}
     if len(repr(cleaned).encode("utf-8")) > MAX_PROJECT_BYTES:
         raise StudioValidationError("Draft exceeds the storage limit. Reduce media links or text.")
     return cleaned
@@ -467,7 +503,7 @@ def draft_snapshot(
 
 
 def trim_published_history(published: Mapping[str, Any], *, max_posts: int = 20) -> dict[str, Any]:
-    """Never evict live self-role controls just to fit an edit-history entry.
+    """Never evict live self-role or form controls just to fit edit history.
 
     Ordinary posts lose Studio edit-history visibility oldest-first when full;
     role posts require an explicit staff edit that removes their actions.
@@ -476,12 +512,12 @@ def trim_published_history(published: Mapping[str, Any], *, max_posts: int = 20)
     while len(rows) > max_posts:
         removable = next(
             (key for key, value in rows.items()
-             if not isinstance(value, Mapping) or not value.get("role_actions")),
+             if not isinstance(value, Mapping) or not (value.get("role_actions") or value.get("form"))),
             None,
         )
         if removable is None:
             raise StudioValidationError(
-                "All saved post slots contain active role panels. Edit an older panel to remove its roles first."
+                "All saved post slots contain active role panels or forms. Edit an older panel to remove its controls first."
             )
         rows.pop(removable, None)
     return rows

@@ -214,6 +214,16 @@ except Exception as e:
     raise
 
 
+# Persistent Studio form buttons are checked against authoritative, bot-owned
+# published message records on every use. Default-off feature, no startup scans.
+try:
+    from .embed_studio_forms import install_embed_studio_form_runtime as _install_embed_studio_form_runtime
+    _install_embed_studio_form_runtime(bot)
+except Exception as e:
+    print(f"❌ commands.py Embed Studio form runtime failed closed: {type(e).__name__}")
+    raise
+
+
 # Versioned Member Setup owns join/update access reconciliation separately from
 # slash-command registration. Install it strictly so an active gate can never be
 # left without its recovery/grant runtime after a partial command-module failure.

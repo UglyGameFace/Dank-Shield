@@ -7,6 +7,7 @@ on:
       - 'supabase_fresh/migrations/202610200029_dankshield_embed_studio_assets.sql'
       - 'supabase_fresh/migrations/202610200030_dankshield_embed_studio_scheduling.sql'
       - 'supabase_fresh/migrations/202610200031_dankshield_embed_studio_reviews.sql'
+      - 'supabase_fresh/migrations/202610200032_dankshield_embed_studio_forms.sql'
       - 'stoney_verify/embed_studio_storage_v2.py'
       - 'tests/test_embed_studio_storage_v2.py'
       - '.github/workflows/embed-studio-v2-database.yml'
@@ -224,4 +225,35 @@ jobs:
               end if;
           end;
           $checks$;
+          SQL
+
+      - name: Validate private form-response schema and idempotent retention
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200032_dankshield_embed_studio_forms.sql
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200032_dankshield_embed_studio_forms.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $tests$
+          declare
+              purged integer;
+          begin
+              insert into public.dank_embed_studio_form_responses
+                  (guild_id,channel_id,message_id,user_id,window_slot,answers,created_at)
+                  values('12','34','56','78',1,'[{"question":"Q","answer":"A"}]'::jsonb,
+                         now()-interval '31 days');
+              if has_table_privilege('anon','public.dank_embed_studio_form_responses','select') then
+                  raise exception 'Form responses readable by anonymous clients';
+              end if;
+              if not (select relrowsecurity from pg_class
+                       where oid='public.dank_embed_studio_form_responses'::regclass) then
+                  raise exception 'RLS missing from private responses';
+              end if;
+              purged := public.dank_embed_studio_purge_form_responses(50);
+              if purged <> 1 then
+                  raise exception 'Stale form response retention did not work';
+              end if;
+              if exists(select 1 from public.dank_embed_studio_form_responses) then
+                  raise exception 'Deleted response remains';
+              end if;
+          end;
+          $tests$;
           SQL

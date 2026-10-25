@@ -50,9 +50,10 @@ def parse_schedule_time(value: str, *, now: datetime | None = None) -> datetime:
 
 def safe_scheduled_project(project: Mapping[str, Any]) -> dict[str, Any]:
     result = validate_project(project)
-    if result["role_actions"]:
+    if result["role_actions"] or result.get("form"):
         raise StudioScheduleError(
-            "Role controls cannot be scheduled unattended. Publish those with a moderator."
+            "Role controls and forms cannot be scheduled unattended. "
+            "Publish these with a moderator."
         )
     return result
 
