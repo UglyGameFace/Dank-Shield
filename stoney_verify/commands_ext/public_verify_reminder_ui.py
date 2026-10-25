@@ -314,16 +314,16 @@ def _manual_preview_embed(guild: discord.Guild, preview: ManualPreview) -> disco
     card = discord.Embed(
         title="📣 Review unverified reminders",
         description=(
-            f"**Your server's Unverified role:** <@&{preview.role_id}>\\n"
-            f"**Send via:** {destination}\\n"
-            f"**Server members checked:** **{preview.scanned}** (complete live scan)\\n"
-            f"**Members with that role:** **{preview.mapped_pending}**\\n"
-            f"**Still needing verification:** **{preview.pending}**\\n"
-            f"**Also marked verified/staff:** **{preview.already_verified_or_staff}**\\n"
-            f"**Cannot access verification:** **{preview.without_access}**\\n"
-            f"**Already reminded / cooling down:** **{preview.manual_limited}**\\n"
-            f"**Ready for a manual reminder:** **{preview.potential}**\\n\\n"
-            f"**Group {start}–{end} of {preview.potential}:** {names or 'No eligible members'}\\n\\n"
+            f"**Your server's Unverified role:** <@&{preview.role_id}>\n"
+            f"**Send via:** {destination}\n"
+            f"**Server members checked:** **{preview.scanned}** (complete live scan)\n"
+            f"**Members with that role:** **{preview.mapped_pending}**\n"
+            f"**Still needing verification:** **{preview.pending}**\n"
+            f"**Also marked verified/staff:** **{preview.already_verified_or_staff}**\n"
+            f"**Cannot access verification:** **{preview.without_access}**\n"
+            f"**Already reminded / cooling down:** **{preview.manual_limited}**\n"
+            f"**Ready for a manual reminder:** **{preview.potential}**\n\n"
+            f"**Group {start}–{end} of {preview.potential}:** {names or 'No eligible members'}\n\n"
             "Everyone in this group is selected by default. You can choose fewer "
             "from the menu before confirming. Additional eligible people can be "
             "reviewed with Next Group. Membership, roles, access and manual cooldown "
@@ -416,12 +416,12 @@ class ManualPreviewView(_OwnedView):
             )
         await _private(
             interaction,
-            f"**Manual reminder result ({self.preview.delivery.upper()})**\\n"
+            f"**Manual reminder result ({self.preview.delivery.upper()})**\n"
             f"Selected: **{report.selected}** • Reserved: **{report.reserved}** • "
-            f"Successfully sent: **{report.delivered}**\\n"
+            f"Successfully sent: **{report.delivered}**\n"
             f"Failed sends: **{report.failed}** • "
             f"No longer eligible: **{report.skipped}** • "
-            f"On cooldown: **{report.blocked_by_manual_limits}**.\\n"
+            f"On cooldown: **{report.blocked_by_manual_limits}**.\n"
             "Manual attempts use their own six-hour per-member cooldown; "
             "scheduled reminders and their configuration are unchanged."
         )
