@@ -347,8 +347,8 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Embed Studio",
         "🧱",
         "design",
-        "Create styled announcements with media links, smart text, brand themes, templates and saved drafts.",
-        ("embed", "embed builder", "embed studio", "announcement builder", "create announcement", "message designer", "design a message", "embed editor", "custom embed", "json embed", "save embed", "brand themes", "server themes", "branding", "embed color palettes", "media library", "saved images", "smart text", "embed placeholders"),
+        "Design announcements, reusable branding, private feedback forms and saved drafts in one editor.",
+        ("embed", "embed builder", "embed studio", "announcement builder", "create announcement", "message designer", "design a message", "embed editor", "custom embed", "json embed", "save embed", "brand themes", "server themes", "branding", "embed color palettes", "media library", "saved images", "smart text", "embed placeholders", "feedback form", "private response inbox", "create form", "questionnaire", "staff review", "scheduled posts"),
         True,
     ),
     NavigationFeature(
