@@ -508,8 +508,8 @@ class StarterSelect(discord.ui.Select):
                 heading="Replace Your Current Draft?",
                 description=(
                     "Picking a different layout starts a new draft. Your current work "
-                    "will be kept for **Undo**, but the new layout replaces what "
-                    "you're editing. Nothing will be posted."
+                    "can be restored with **Undo**, but the new layout replaces what "
+                    "you're editing. Existing posted messages stay unchanged."
                 ),
                 view=ConfirmStarterLayout(self.session, selected),
             )
@@ -536,12 +536,18 @@ class ConfirmStarterLayout(_StudioView):
         super().__init__(session)
         self.key = key
         self.used = False
+        self.snapshot = deepcopy(session.project)
+        self.post_key = session.post_key
 
     @discord.ui.button(label="Use New Layout", emoji="✅", style=discord.ButtonStyle.primary)
     async def confirm(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         if self.used:
             return await _say(interaction, "This layout choice was already used.")
         self.used = True
+        if self.session.project != self.snapshot or self.session.post_key != self.post_key:
+            return await _say(
+                interaction, "Your draft changed since this confirmation. Reopen Pick a Layout."
+            )
         await _use_starter_layout(interaction, self.session, self.key)
 
     @discord.ui.button(label="Keep My Draft", emoji="◀️", style=discord.ButtonStyle.secondary)
