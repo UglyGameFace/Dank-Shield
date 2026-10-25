@@ -270,6 +270,10 @@ class StudioHomeView(_StudioView):
     async def portable(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _portable_menu(interaction, self.session)
 
+    @discord.ui.button(label="Form Builder", emoji="📝", style=discord.ButtonStyle.secondary, row=2)
+    async def form_builder(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _form_builder(interaction, self.session)
+
     @discord.ui.button(label="Media Library", emoji="🖼️", style=discord.ButtonStyle.secondary, row=3)
     async def media_library(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await _media_library(interaction, self.session)
@@ -531,6 +535,226 @@ class MediaSaveModal(discord.ui.Modal, title="Save Image or GIF Link"):
 
 
 MEDIA_PAGE_SIZE = 20
+
+
+class StudioFormBasicsModal(discord.ui.Modal, title="Set Up Feedback Form"):
+    def __init__(self, session: StudioSession) -> None:
+        super().__init__(timeout=600)
+        self.session = session
+        form = session.project.get("form") or {}
+        self.title_input = discord.ui.TextInput(
+            label="Form title",required=True,max_length=45,default=form.get("title",""),
+        )
+        self.button_input = discord.ui.TextInput(
+            label="Button label",required=True,max_length=80,default=form.get("button_label","Send Feedback"),
+        )
+        self.add_item(self.title_input)
+        self.add_item(self.button_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        from .embed_studio_forms import forms_enabled
+        if not forms_enabled():
+            return await _say(interaction,"Private forms have not been enabled yet.")
+        try:
+            def mutate(project):
+                existing = project.get("form") or {}
+                project["form"] = {
+                    "title": str(self.title_input.value or ""),
+                    "button_label": str(self.button_input.value or ""),
+                    "questions": deepcopy(existing.get("questions") or []),
+                }
+            self.session.apply(mutate)
+        except StudioValidationError as exc:
+            return await _say(interaction,"Could not save form: "+str(exc))
+        await _form_builder(interaction,self.session)
+
+
+class StudioFormQuestionModal(discord.ui.Modal, title="Add Form Question"):
+    def __init__(self,session: StudioSession) -> None:
+        super().__init__(timeout=600)
+        self.session=session
+        self.label_input=discord.ui.TextInput(
+            label="Question",required=True,max_length=45,placeholder="What would you like to tell us?",
+        )
+        self.placeholder_input=discord.ui.TextInput(
+            label="Example or hint (optional)",required=False,max_length=100,
+        )
+        self.kind_input=discord.ui.TextInput(
+            label="Answer length: short or paragraph",
+            default="paragraph",required=True,max_length=9,
+        )
+        self.required_input=discord.ui.TextInput(
+            label="Is an answer required? yes/no",default="yes",required=True,max_length=3,
+        )
+        for item in (self.label_input,self.placeholder_input,self.kind_input,self.required_input):
+            self.add_item(item)
+
+    async def on_submit(self,interaction: discord.Interaction) -> None:
+        required=str(self.required_input.value or "").strip().lower()
+        if required not in ("yes","no"):
+            return await _say(interaction,"Choose yes or no for required.")
+        def change(project):
+            form=project.get("form")
+            if not form:
+                raise StudioValidationError("Set up the form title first.")
+            form["questions"].append({
+                "label":str(self.label_input.value or ""),
+                "placeholder":str(self.placeholder_input.value or ""),
+                "style":str(self.kind_input.value or "").strip().lower(),
+                "required":required=="yes",
+            })
+        try:
+            self.session.apply(change)
+        except StudioValidationError as exc:
+            return await _say(interaction,"Question was not added: "+str(exc))
+        await _form_builder(interaction,self.session)
+
+
+class StudioFormQuestionSelect(discord.ui.Select):
+    def __init__(self,session: StudioSession) -> None:
+        self.session=session
+        form=session.project.get("form") or {}
+        options=[
+            discord.SelectOption(label=row["label"][:100],value=str(i))
+            for i,row in enumerate(form.get("questions") or [])
+        ] or [discord.SelectOption(label="No questions yet",value="none")]
+        super().__init__(placeholder="Choose a question to remove",options=options,row=0)
+
+    async def callback(self,interaction: discord.Interaction) -> None:
+        index=self.values[0]
+        if index=="none":
+            return await _say(interaction,"Add a question first.")
+        def change(project):
+            project["form"]["questions"].pop(int(index))
+        try:
+            self.session.apply(change)
+        except (StudioValidationError,IndexError,TypeError):
+            return await _say(interaction,"Question changed. Reopen Form Builder.")
+        await _form_builder(interaction,self.session)
+
+
+class StudioFormQuestionMenu(_StudioView):
+    def __init__(self,session: StudioSession) -> None:
+        super().__init__(session)
+        self.add_item(StudioFormQuestionSelect(session))
+
+    @discord.ui.button(label="Back",emoji="◀️",style=discord.ButtonStyle.secondary,row=1)
+    async def back(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:
+        await _form_builder(interaction,self.session)
+
+
+class StudioFormDeleteConfirm(_StudioView):
+    @discord.ui.button(label="Remove Form From Draft",emoji="🗑️",style=discord.ButtonStyle.danger)
+    async def delete(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:
+        self.session.apply(lambda project: project.update(form=None))
+        await _home(interaction,self.session,notice="Form removed from this draft. Published posts stay unchanged.")
+
+    @discord.ui.button(label="Keep Form",emoji="◀️",style=discord.ButtonStyle.secondary)
+    async def keep(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:
+        await _form_builder(interaction,self.session)
+
+
+class StudioFormInboxSelect(discord.ui.Select):
+    def __init__(self,session: StudioSession,rows: list[dict[str,Any]]) -> None:
+        self.session,self.rows=session,rows
+        options=[
+            discord.SelectOption(
+                label=f"Member {str(row['user_id'])[:18]} • {str(row['created_at'])[:20]}",
+                value=str(i),
+            ) for i,row in enumerate(rows)
+        ] or [discord.SelectOption(label="No responses yet",value="none")]
+        super().__init__(placeholder="Read a private response",options=options,row=0)
+
+    async def callback(self,interaction: discord.Interaction) -> None:
+        if self.values[0]=="none":
+            return await _say(interaction,"No form responses yet.")
+        try:
+            row=self.rows[int(self.values[0])]
+            parts=[
+                f"**{discord.utils.escape_markdown(str(item.get('question') or '')[:50])}**\n"
+                + discord.utils.escape_mentions(str(item.get("answer") or "")[:900])
+                for item in row.get("answers",[])[:5] if isinstance(item,dict)
+            ]
+            note=(f"Private response from member {str(row['user_id'])[:20]}\n"
+                  + "\n\n".join(parts))
+        except (ValueError,KeyError,IndexError,TypeError):
+            return await _say(interaction,"That response is unavailable.")
+        await _say(interaction,note[:1900])
+
+
+class StudioFormInboxView(_StudioView):
+    def __init__(self,session: StudioSession,rows: list[dict[str,Any]]) -> None:
+        super().__init__(session)
+        self.add_item(StudioFormInboxSelect(session,rows))
+
+    @discord.ui.button(label="Back to Forms",emoji="◀️",style=discord.ButtonStyle.secondary,row=1)
+    async def back(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:
+        await _form_builder(interaction,self.session)
+
+
+async def _form_inbox(interaction: discord.Interaction,session: StudioSession) -> None:
+    from .embed_studio_forms import recent_responses
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
+    try:
+        rows=await recent_responses(session.guild_id)
+    except StudioValidationError as exc:
+        return await _say(interaction,str(exc))
+    except Exception:
+        return await _say(interaction,"Private form submissions are unavailable right now.")
+    await _menu(interaction,heading="🔒 Private Form Responses",
+                description="Recent answers are visible only to authorized moderators. "
+                            "Never share sensitive responses publicly.",
+                view=StudioFormInboxView(session,rows))
+
+
+class StudioFormBuilderMenu(_StudioView):
+    @discord.ui.button(label="Set Up Form",emoji="📝",style=discord.ButtonStyle.primary,row=0)
+    async def basics(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(StudioFormBasicsModal(self.session))
+
+    @discord.ui.button(label="Add Question",emoji="➕",style=discord.ButtonStyle.secondary,row=0)
+    async def question(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:
+        if not self.session.project.get("form"):
+            return await _say(interaction,"Set up the form title first.")
+        if len(self.session.project["form"]["questions"])>=5:
+            return await _say(interaction,"Five questions is the maximum.")
+        await interaction.response.send_modal(StudioFormQuestionModal(self.session))
+
+    @discord.ui.button(label="Remove Question",emoji="➖",style=discord.ButtonStyle.secondary,row=0)
+    async def remove_question(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:
+        await _menu(interaction,heading="Remove a Question",
+                    description="Choose a question to remove from this draft.",
+                    view=StudioFormQuestionMenu(self.session))
+
+    @discord.ui.button(label="Response Inbox",emoji="📥",style=discord.ButtonStyle.secondary,row=1)
+    async def responses(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:
+        await _form_inbox(interaction,self.session)
+
+    @discord.ui.button(label="Remove Form",emoji="🗑️",style=discord.ButtonStyle.danger,row=1)
+    async def remove(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:
+        await _menu(interaction,heading="Remove this form?",
+                    description="Only your current draft changes; existing posts keep their forms.",
+                    view=StudioFormDeleteConfirm(self.session))
+
+    @discord.ui.button(label="Back to Studio",emoji="🏠",style=discord.ButtonStyle.secondary,row=2)
+    async def back(self,interaction: discord.Interaction,_button: discord.ui.Button) -> None:
+        await _home(interaction,self.session)
+
+
+async def _form_builder(interaction: discord.Interaction,session: StudioSession) -> None:
+    from .embed_studio_forms import forms_enabled
+    if not forms_enabled():
+        return await _say(interaction,"Forms are not enabled on this deployment yet.")
+    form=session.project.get("form")
+    description=("Set up the title, then add up to five questions. Each response "
+                 "goes privately to the moderator inbox, not into a public channel. "
+                 "Forms require a separate explicit publish confirmation.\n\n"
+                 + (f"**{discord.utils.escape_markdown(form['title'])}** "
+                    f"({len(form['questions'])}/5 questions)"
+                    if form else "No form configured for this draft."))
+    await _menu(interaction,heading="📝 Studio Form Builder",
+                description=description,view=StudioFormBuilderMenu(session))
 
 
 class StudioArtworkUploadModal(discord.ui.Modal, title="Upload Artwork"):
