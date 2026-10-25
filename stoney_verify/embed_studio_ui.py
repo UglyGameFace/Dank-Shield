@@ -1059,6 +1059,14 @@ class MediaLibraryMenu(_StudioView):
         from .embed_studio_assets import uploads_enabled
         if not uploads_enabled():
             return await _say(interaction, "Managed artwork uploads are not enabled yet.")
+        from .embed_studio_artwork_budget import get_budget, ArtworkBudgetError
+        try:
+            get_budget()
+        except ArtworkBudgetError:
+            return await _say(
+                interaction,
+                "Image uploads are not set up yet. You can still save and reuse image links."
+            )
         await interaction.response.send_modal(StudioArtworkUploadModal(self.session))
 
     @discord.ui.button(label="Back to Studio", emoji="🏠", style=discord.ButtonStyle.secondary, row=2)
@@ -1103,17 +1111,37 @@ async def _media_library(interaction: discord.Interaction, session: StudioSessio
     except Exception as exc:
         return await _say(interaction, _error(exc))
     view = MediaLibraryMenu(session, lib, page=page)
+    from .embed_studio_assets import uploads_enabled
+    usage_note = ""
+    if uploads_enabled():
+        from .embed_studio_artwork_budget import (
+            ArtworkBudgetError, get_budget, read_artwork_usage, MIB,
+        )
+        try:
+            budget = get_budget()
+            usage = await read_artwork_usage(session.guild_id)
+            usage_note = (
+                f"\nImage storage: {usage['guild_used'] / MIB:.1f} of "
+                f"{budget.guild_bytes / MIB:.0f} MB for this server. "
+                f"Shared space: {usage['global_used'] / MIB:.1f} of "
+                f"{budget.global_bytes / MIB:.0f} MB."
+            )
+            if usage["stale_reservations"]:
+                usage_note += (
+                    f" {usage['stale_reservations']} unfinished upload(s) need an owner check."
+                )
+        except (ArtworkBudgetError, asyncio.TimeoutError):
+            usage_note = "\nStorage usage is temporarily unavailable. Saved links still work."
     await _menu(
-        interaction, heading="🖼️ Reusable Media Library",
+        interaction, heading="🖼️ Saved Pictures",
         description=(
             f"{len(lib['media'])}/{MAX_MEDIA_ITEMS} saved links • Page {view.page + 1}/{view.pages}. "
-            "Use Previous/Next to browse. Save direct HTTPS image or GIF URLs and reuse "
-            "them for large images, thumbnails and icons. These are links, not file uploads. "
-            "Media, drafts and templates share a 256 KiB Studio storage budget."
+            "Browse your saved image and GIF links, or add an image to reuse in a post. "
+            "Removing a saved link won't delete pictures from posts already published."
+            + usage_note
         ),
         view=view,
     )
-
 
 class SmartTextHelp(_StudioView):
     @discord.ui.button(label="Back to Studio", emoji="◀️", style=discord.ButtonStyle.secondary)

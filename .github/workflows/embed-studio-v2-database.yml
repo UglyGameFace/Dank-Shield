@@ -9,6 +9,7 @@ on:
       - 'supabase_fresh/migrations/202610200031_dankshield_embed_studio_reviews.sql'
       - 'supabase_fresh/migrations/202610200032_dankshield_embed_studio_forms.sql'
       - 'supabase_fresh/migrations/202610200033_dankshield_embed_studio_live_text.sql'
+      - 'supabase_fresh/migrations/202610200034_dankshield_embed_studio_asset_budgets.sql'
       - 'stoney_verify/embed_studio_storage_v2.py'
       - 'tests/test_embed_studio_storage_v2.py'
       - '.github/workflows/embed-studio-v2-database.yml'
@@ -292,6 +293,72 @@ jobs:
               if not (select relrowsecurity from pg_class
                        where oid='public.dank_embed_studio_live_posts'::regclass) then
                   raise exception 'Live Text RLS not enabled';
+              end if;
+          end;
+          $tests$;
+          SQL
+
+      - name: Validate per-server and global artwork quota reservations
+        run: |
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200034_dankshield_embed_studio_asset_budgets.sql
+          psql -v ON_ERROR_STOP=1 -f supabase_fresh/migrations/202610200034_dankshield_embed_studio_asset_budgets.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $tests$
+          declare
+              path1 text := '123/'||repeat('a',32)||'.png';
+              path2 text := '123/'||repeat('b',32)||'.png';
+              path3 text := '456/'||repeat('c',32)||'.png';
+              attempt jsonb;
+              report jsonb;
+              finalized jsonb;
+          begin
+              if not (select relrowsecurity from pg_class
+                      where oid='public.dank_embed_studio_asset_holds'::regclass) then
+                  raise exception 'Artwork hold RLS is missing';
+              end if;
+              if has_table_privilege('anon','public.dank_embed_studio_asset_holds','select')
+                 or has_function_privilege('anon','public.dank_embed_studio_asset_reserve(text,text,bigint,bigint,bigint)','execute') then
+                  raise exception 'Public may read or reserve artwork quota';
+              end if;
+              attempt:=public.dank_embed_studio_asset_reserve('123',path1,4194304,6291456,8388608);
+              if attempt->>'reserved' <> 'true' then
+                  raise exception 'Valid first artwork reservation was refused';
+              end if;
+              attempt:=public.dank_embed_studio_asset_reserve('123',path2,4194304,6291456,8388608);
+              if attempt->>'reserved' <> 'false' then
+                  raise exception 'Per-guild storage limit was bypassed';
+              end if;
+              attempt:=public.dank_embed_studio_asset_reserve('456',path3,4194304,6291456,8388608);
+              if attempt->>'reserved' <> 'true' then
+                  raise exception 'Valid second guild reservation was refused';
+              end if;
+              report:=public.dank_embed_studio_asset_usage('123');
+              if (report->>'global_used')::bigint <> 8388608
+                 or (report->>'guild_used')::bigint <> 4194304
+                 or (report->>'reservation_count')::integer <> 2 then
+                  raise exception 'Allocated storage usage is not exact';
+              end if;
+              finalized:=public.dank_embed_studio_asset_finalize(
+                  '123',path1,repeat('a',64),'Brand art','image/png',4194304
+              );
+              if finalized->>'finalized' <> 'true' then
+                  raise exception 'Artwork metadata did not finalize';
+              end if;
+              if (select count(*) from public.dank_embed_studio_assets
+                  where object_path=path1) <> 1 then
+                  raise exception 'Finalized artwork metadata is missing';
+              end if;
+              if not public.dank_embed_studio_asset_release('456',path3) then
+                  raise exception 'Confirmed rollback could not release quota';
+              end if;
+              report:=public.dank_embed_studio_asset_usage('123');
+              if (report->>'global_used')::bigint <> 4194304
+                 or (report->>'reservation_count')::integer <> 0
+                 or (report->>'asset_count')::integer <> 1 then
+                  raise exception 'Released capacity was counted incorrectly';
+              end if;
+              if exists(select 1 from public.dank_embed_studio_asset_holds where object_path=path1) then
+                  raise exception 'Finalized art still consumes a hold';
               end if;
           end;
           $tests$;

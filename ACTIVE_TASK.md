@@ -1,3 +1,11 @@
+## ACTIVE: Embed Studio managed artwork capacity (2026-10-24)
+
+- **Only active task: Embed Studio**. PRs #716, #717, #718, #719, #720 and #721 confirmed merged into main. Code is not the same as feature activation: private Supabase migrations, object-storage bucket, flags, backups, shard canary and Android tests remain deployment gates.
+- Current slice is atomic, owner-configurable artwork budgets and read-only orphan **candidate** auditing, not arbitrary restrictions on the separate Postgres database. Adds guild/global budget environment validation, service-role-only reservation/finalize/release/usage SQL, safe upload integration, optional Media Library capacity readout, audit CLI, focused tests and ephemeral PG17 contracts.
+- Uncertain upload failures keep quota reserved until humans confirm the new object was removed. Published artwork is never automatically deleted to save space. No free-tier quota, billing tier or Discloud capacity is presumed.
+- **Remaining within Embed Studio after this slice:** true high-volume per-record paginated media/template catalogs, recurring announcement campaigns, deeper collaborative editing, comprehensive retention/observability and production deployment canary. Do not prematurely update New/Updated with features that are not enabled.
+- Bump Manager #713 and the suspended Share Router are still out of scope. Respect single-active-task lock.
+
 ## Embed Studio implementation sequence (2026-10-24)
 
 - **Single active task: Embed Studio.** Three cohesive dependency-ordered PRs exist: #716 normalized private Storage v2 with per-guild CAS and manual legacy parity, #717 native mobile image/GIF uploads with separate Supabase object bucket, #718 indexed at-most-once one-shot scheduled announcements with owner-only cancellation and due-time staff/permissions rechecks. Merge in order **716 → 717 → 718**.
