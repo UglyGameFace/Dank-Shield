@@ -18,6 +18,7 @@ import discord
 from stoney_verify.services import naming_identity
 
 from .picker import DankChoice, DankPickerView
+from .current_channel import eligible_browser_current_channel
 
 ResourcePickAction = Callable[[discord.Interaction, Any], Awaitable[None]]
 ResourcePredicate = Callable[[Any], bool]
@@ -348,6 +349,20 @@ class _ClearSearchButton(discord.ui.Button):
         await self.owner_view.show(interaction, query="", page=0)
 
 
+class _UseThisChannelButton(discord.ui.Button):
+    """One shared shortcut for every text-capable Search-Safe resource browser."""
+
+    def __init__(self, owner: "DankGuildResourceBrowserView") -> None:
+        super().__init__(
+            label="Use This Channel", emoji="📍",
+            style=discord.ButtonStyle.success, row=3,
+        )
+        self.owner_view = owner
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.owner_view.pick_current_channel(interaction)
+
+
 class DankResourceSearchModal(discord.ui.Modal, title="Search Server Items"):
     query = discord.ui.TextInput(
         label="Name, previous name, ID, or mention",
@@ -461,6 +476,10 @@ class DankGuildResourceBrowserView(DankPickerView):
         self.add_item(_SearchButton(self))
         if self.query:
             self.add_item(_ClearSearchButton(self))
+        # All text-channel browsers inherit the same owner-locked shortcut.
+        # The feature's on_pick must still recheck permissions and persist.
+        if "text" in self.resource_kinds or "channel" in self.resource_kinds:
+            self.add_item(_UseThisChannelButton(self))
 
     def clone(
         self,
@@ -528,8 +547,10 @@ class DankGuildResourceBrowserView(DankPickerView):
             description=(
                 intro
                 + paging_help
-                + "\n\nUse **🔎 Search** below for a current/styled name, saved previous name, Discord ID, or mention. "
+                + "\n\nUse **🔎 Search** for a current/styled name, saved previous name, Discord ID, or mention. "
                 "Dank Shield searches its own server cache instead of relying on Discord's generic entity picker."
+                + ("\n\nAlready in the channel you want? Tap **📍 Use This Channel**."
+                   if "text" in self.resource_kinds or "channel" in self.resource_kinds else "")
             ),
             color=discord.Color.blurple(),
         )
@@ -565,6 +586,25 @@ class DankGuildResourceBrowserView(DankPickerView):
             except Exception:
                 return None
         return resource
+
+    async def pick_current_channel(self, interaction: discord.Interaction) -> None:
+        if int(getattr(interaction.user, "id", 0) or 0) != self.author_id:
+            return await _safe_ephemeral(
+                interaction, "❌ Open your own channel picker to use this button."
+            )
+        channel = eligible_browser_current_channel(
+            interaction, guild=self.guild, kinds=self.resource_kinds,
+            predicate=self.predicate,
+        )
+        if channel is None:
+            return await _safe_ephemeral(
+                interaction,
+                "❌ This channel cannot be used here. Open the picker in a server text channel "
+                "that meets this feature's access requirements, or use Search to select another."
+            )
+        # Reuse the exact same resolver and callback as an ordinary picked ID.
+        # No bypass of the per-feature permission checks or CAS persistence.
+        await self.pick_resource(interaction, f"text:{int(channel.id)}")
 
     async def pick_resource(self, interaction: discord.Interaction, value: str) -> None:
         if int(getattr(interaction.user, "id", 0) or 0) != self.author_id:
