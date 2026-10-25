@@ -214,8 +214,7 @@ set joined_at = excluded.joined_at,
       when public.dank_verify_manual_member_delivery.joined_at is distinct from excluded.joined_at
       then 1 else public.dank_verify_manual_member_delivery.attempts + 1 end
 where public.dank_verify_manual_member_delivery.joined_at is distinct from excluded.joined_at
-   or (public.dank_verify_manual_member_delivery.attempts < 2
-       and public.dank_verify_manual_member_delivery.last_claimed_at <= now() - interval '12 hours')
+   or public.dank_verify_manual_member_delivery.last_claimed_at <= now() - interval '12 hours'
 returning user_id
 """
 
@@ -249,12 +248,12 @@ def manual_ready_sync() -> bool:
 def reserve_manual_batch_sync(
     guild_id: int, members: list[tuple[int, datetime]],
 ) -> tuple[int, ...]:
-    """Atomically reserve one guild send window and up to 3 member attempts.
+    """Atomically reserve one guild send window and up to 25 member attempts.
 
     Separate durable records preserve scheduled cooldowns/attempt budgets.
     No retry on uncertain DB commit, and no partial committed reservations.
     """
-    if not isinstance(guild_id, int) or guild_id <= 0 or not 1 <= len(members) <= 3:
+    if not isinstance(guild_id, int) or guild_id <= 0 or not 1 <= len(members) <= 25:
         raise ValueError("Invalid manual reminder batch")
     seen = set()
     for member_id, joined in members:
@@ -326,7 +325,7 @@ def available_manual_member_ids_sync(
             previous = claimed.get(uid)
             if previous is None or previous[0] != joined.astimezone(timezone.utc):
                 allowed.add(uid)
-            elif previous[2] < 2 and previous[1] <= now - timedelta(hours=12):
+            elif previous[1] <= now - timedelta(hours=12):
                 allowed.add(uid)
         return allowed
     except Exception:
