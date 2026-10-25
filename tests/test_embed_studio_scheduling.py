@@ -107,7 +107,9 @@ def test_due_claim_writes_no_discord_message_and_returns_backend_rows(monkeypatc
             return SimpleNamespace(execute=lambda:SimpleNamespace(data=[{"id":"one","status":"claimed"}]))
     monkeypatch.setattr(schedules,"_client",lambda:DB())
     rows=asyncio.run(schedules.claim_due())
-    assert captured == [(schedules.CLAIM_RPC,{"p_limit":8})]
+    assert captured == [(schedules.CLAIM_RPC,{
+        "p_limit":8,"p_shard_count":1,"p_owned_shards":[0],
+    })]
     assert rows[0]["status"]=="claimed"
 
 
@@ -134,3 +136,31 @@ def test_sql_claim_is_indexed_and_at_most_once():
         assert clause in sql
     assert "security definer" not in sql
     assert "drop table" not in sql
+
+
+def test_owned_shard_routing_never_claims_foreign_process_jobs(monkeypatch):
+    from stoney_verify.embed_studio_schedule_runtime import _owned_shards
+    assert _owned_shards(SimpleNamespace(shard_count=None,shard_ids=None)) == (1,(0,))
+    assert _owned_shards(SimpleNamespace(shard_count=4,shard_ids=[1,3])) == (4,(1,3))
+    assert _owned_shards(SimpleNamespace(shard_count=4,shard_ids=[])) is None
+    assert _owned_shards(SimpleNamespace(shard_count=4,shard_ids=[4])) is None
+    assert _owned_shards(SimpleNamespace(shard_count=4,shard_ids=None,shards={})) is None
+    assert _owned_shards(SimpleNamespace(shard_count=4,shard_ids=None,shards={0:object()})) == (4,(0,))
+    monkeypatch.setattr(schedules,"schedules_enabled",lambda:True)
+    monkeypatch.setattr(schedules,"_client",lambda:SimpleNamespace(
+        rpc=lambda *_a,**_kw: (_ for _ in ()).throw(AssertionError("must not query SQL"))
+    ))
+    with pytest.raises(schedules.StudioScheduleError,match="shard"):
+        asyncio.run(schedules.claim_due(shard_count=3,owned_shards=(4,)))
+
+
+def test_shard_claim_parameters_sent_to_database(monkeypatch):
+    monkeypatch.setattr(schedules,"schedules_enabled",lambda:True)
+    requests=[]
+    class DB:
+        def rpc(self,name,args):
+            requests.append((name,args))
+            return SimpleNamespace(execute=lambda:SimpleNamespace(data=[]))
+    monkeypatch.setattr(schedules,"_client",lambda:DB())
+    assert asyncio.run(schedules.claim_due(shard_count=4,owned_shards=(1,3))) == []
+    assert requests[0][1] == {"p_limit":8,"p_shard_count":4,"p_owned_shards":[1,3]}

@@ -72,12 +72,38 @@ async def _dispatch(bot: Any, job: Mapping[str, Any]) -> tuple[int, str]:
         return 0, "unexpected_send_failure"
 
 
+def _owned_shards(bot: Any) -> tuple[int, tuple[int, ...]] | None:
+    """Derive shard ownership from discord.py, never from guessed guild IDs."""
+    count = getattr(bot, "shard_count", None)
+    if count is None:
+        # Unsharded clients own the only route.
+        return (1, (0,)) if not getattr(bot, "shard_ids", None) else None
+    if type(count) is not int or not 1 <= count <= 4096:
+        return None
+    raw_ids = getattr(bot, "shard_ids", None)
+    if raw_ids is None:
+        active = getattr(bot, "shards", None)
+        raw_ids = tuple(active.keys()) if isinstance(active, dict) else None
+    if raw_ids is None or not isinstance(raw_ids, (tuple, list)):
+        return None
+    shards = tuple(raw_ids)
+    if (not shards or len(shards) != len(set(shards))
+            or any(type(shard) is not int or not 0 <= shard < count for shard in shards)):
+        return None
+    return count, shards
+
+
 async def _loop(bot: Any) -> None:
     await asyncio.sleep(STARTUP_DELAY_SECONDS)
     semaphore = asyncio.Semaphore(PARALLEL)
     while schedules_enabled():
         try:
-            due = await claim_due()
+            ownership = _owned_shards(bot)
+            if ownership is None:
+                # Never claim jobs unless this process can prove its shard routes.
+                await asyncio.sleep(POLL_SECONDS)
+                continue
+            due = await claim_due(shard_count=ownership[0], owned_shards=ownership[1])
             async def one(job: dict[str, Any]) -> None:
                 async with semaphore:
                     # Job ID is server-owned, no member or message content in logs.

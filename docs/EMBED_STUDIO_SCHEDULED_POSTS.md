@@ -21,7 +21,10 @@ This adds **one-shot scheduled posts** to the canonical Discord editor.
 - Scheduler rechecks creator's Manage Server/Administrator permissions, bot
   membership, channel existence and send/embed permissions at delivery.
 - Uses a **due-row database index**, 8 claims per poll, and 2 concurrent sends,
-  with a 125-second post-startup quiet window. No full member/server scans.
+  with a 125-second post-startup quiet window. In sharded deployments, a
+  process only claims rows routing to its owned Discord shard IDs, so one
+  process never consumes another process's scheduled posts. If shard ownership
+  is unknown the scheduler does not claim anything. No full server scans.
 - The database marks each claimed job *before* a Discord HTTP request.
   Crashes and ambiguous send timeouts are **never automatically replayed**,
   avoiding duplicates. Unsent jobs more than 10 minutes late become

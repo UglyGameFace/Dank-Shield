@@ -163,8 +163,11 @@ jobs:
               insert into public.dank_embed_studio_scheduled_posts
                   (guild_id,channel_id,scheduled_by,project,execute_at)
                   values('123','456','789','{}',now()-interval '1 minute');
-              select count(*) into first_claim from public.dank_embed_studio_claim_due(8);
-              select count(*) into second_claim from public.dank_embed_studio_claim_due(8);
+              -- Guild 123 belongs to shard 0 of two.
+              select count(*) into second_claim from public.dank_embed_studio_claim_due(8,2,array[1]);
+              if second_claim <> 0 then raise exception 'Foreign shard claimed Studio job'; end if;
+              select count(*) into first_claim from public.dank_embed_studio_claim_due(8,2,array[0]);
+              select count(*) into second_claim from public.dank_embed_studio_claim_due(8,2,array[0]);
               if first_claim <> 1 or second_claim <> 0 then
                   raise exception 'Studio scheduled job was not claimed exactly once';
               end if;
