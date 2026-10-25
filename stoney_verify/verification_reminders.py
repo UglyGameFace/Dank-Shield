@@ -16,7 +16,7 @@ import discord
 
 from .guild_config import get_guild_config
 from .role_truth import clear_cache as clear_role_truth_cache
-from .role_truth import member_is_pending_verification
+from .role_truth import member_is_pending_for_config
 from .setup_engine.verification_modes import basic_verify_allowed_for_guild
 from .verification_reminder_postgres import (
     claim_sync as _pg_claim_sync,
@@ -94,7 +94,7 @@ def pending_for_reminder(member: discord.Member, cfg: Mapping[str, Any]) -> bool
         return False
     if _as_int(cfg.get("verified_role_id"), 0) <= 0:
         return False
-    return member_is_pending_verification(member)
+    return member_is_pending_for_config(member, cfg)
 
 
 def verification_channel(guild: discord.Guild, cfg: Mapping[str, Any]) -> discord.TextChannel | None:
