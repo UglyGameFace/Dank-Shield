@@ -188,7 +188,8 @@ def test_one_canonical_editor_replaces_parallel_community_and_setup_modals() -> 
     assert "class EmbedDraftView" not in community
     assert "class EmbedDraftModal" not in setup
     assert "class EmbedBuilderCenterView" not in setup
-    assert 'label="Publish / Save Edit"' in studio
+    assert 'label="Post Now"' in studio
+    assert 'self.publish.label = "Save Changes" if session.post_key else "Post Now"' in studio
     assert "compare_and_swap_guild_config_key(" in studio
     assert "get_guild_config(guild_id, refresh=True)" in studio
     assert "message.author.id != interaction.client.user.id" in studio
