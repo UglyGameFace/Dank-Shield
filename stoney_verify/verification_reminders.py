@@ -130,6 +130,20 @@ def reminder_text(
     return f"**{guild.name}** verification reminder\n\n{greeting}\n\n✅ Verify here: {destination}\n\nIf you've already verified, you can ignore this message."
 
 
+async def send_channel_reminder_message(
+    guild: discord.Guild, verify: discord.TextChannel,
+    notice: discord.TextChannel, member: discord.Member,
+    cfg: Mapping[str, Any], policy: ReminderPolicy,
+) -> None:
+    """Single authoritative Discord channel-post shape for scheduled and manual checks."""
+    await notice.send(
+        f"{member.mention} {reminder_text(guild, verify, cfg, policy)}",
+        allowed_mentions=discord.AllowedMentions(
+            users=[member], roles=False, everyone=False,
+        ),
+    )
+
+
 async def ledger_ready() -> bool:
     """Check the Discloud PostgreSQL ledger; fail closed if not provisioned."""
     return await asyncio.to_thread(_pg_ready_sync)
@@ -330,9 +344,8 @@ class ReminderWorker:
                 try:
                     body = reminder_text(guild, channel, cfg, policy)
                     if notice_channel is not None:
-                        await notice_channel.send(
-                            f"{current.mention} {body}",
-                            allowed_mentions=discord.AllowedMentions(users=[current], roles=False, everyone=False),
+                        await send_channel_reminder_message(
+                            guild, channel, notice_channel, current, cfg, policy,
                         )
                     else:
                         await current.send(body, allowed_mentions=discord.AllowedMentions.none())
