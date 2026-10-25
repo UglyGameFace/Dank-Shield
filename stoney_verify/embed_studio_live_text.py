@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
+import re
 from hashlib import sha256
 import json
 import os
@@ -76,16 +78,14 @@ async def enroll(guild_id:int,channel_id:int,message_id:int,staff_id:int,
     if not live_enabled():
         raise StudioLiveError("Live Text is not enabled on this deployment.")
     model=live_project(project)
-    if min(guild_id,channel_id,message_id,staff_id)<=0 or len(nonce)!=32:
+    if min(guild_id,channel_id,message_id,staff_id)<=0 or not re.fullmatch(r'[0-9a-f]{32}',nonce):
         raise StudioLiveError("Invalid Live Text target.")
     def write():
         row={
             "guild_id":str(guild_id),"channel_id":str(channel_id),
             "message_id":str(message_id),"created_by":str(staff_id),
             "nonce":nonce,"project":model,"enabled":True,
-            "next_refresh_at":( __import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            )+__import__("datetime").timedelta(hours=1)).isoformat(),
+            "next_refresh_at":(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat(),
             "last_hash":None,"last_status":None,
         }
         return _rows(_client().table(TABLE).upsert(
