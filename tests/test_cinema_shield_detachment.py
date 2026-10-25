@@ -107,4 +107,3 @@ def test_share_video_listener_uses_new_or_legacy_configuration_without_cinema(mo
     import pytest
     with pytest.raises(RuntimeError, match="HTTPS"):
         site._validate_public_base_url()
-
