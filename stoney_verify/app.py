@@ -1109,6 +1109,14 @@ async def _start_workers_once() -> None:
     except Exception as e:
         print("⚠️ Embed Studio scheduled sender failed:", type(e).__name__)
 
+    try:
+        from .embed_studio_live_runtime import start_embed_studio_live_worker
+        task = start_embed_studio_live_worker(bot)
+        if task is not None:
+            print("🔄 Opt-in Studio hourly Live Text worker started (shard-owned)")
+    except Exception as e:
+        print("⚠️ Studio Live Text worker failed:", type(e).__name__)
+
 
 async def _startup_background_runner() -> None:
     try:
