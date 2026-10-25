@@ -90,7 +90,10 @@ def test_poll_and_embed_posting_use_preview_publish_and_real_permissions() -> No
     core = (ROOT / "stoney_verify/embed_studio_core.py").read_text(encoding="utf-8")
     assert "from ..embed_studio_ui import open_embed_studio" in UI
     assert "class StudioReviewView" in studio
-    assert 'label="Publish / Save Edit"' in studio
+    # The private preview now uses an explicit action for each workflow:
+    # creating a post vs safely saving an edit to an existing bot-owned post.
+    assert 'label="Post Now"' in studio
+    assert 'self.publish.label = "Save Changes" if session.post_key else "Post Now"' in studio
     assert "await channel.send(" in studio
     assert "await message.edit(" in studio
     assert "channel.permissions_for(bot)" in studio

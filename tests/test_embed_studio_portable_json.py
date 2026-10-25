@@ -98,7 +98,11 @@ def test_mobile_home_json_menu_and_native_file_upload_component():
     home = StudioHomeView(session)
     menu = StudioJsonMenu(session)
     modal = StudioJsonUploadModal(session)
-    assert "JSON Files" in {getattr(item, "label", "") for item in home.children}
+    assert "Saved Designs" in {getattr(item, "label", "") for item in home.children}
+    from stoney_verify.embed_studio_ui import StudioSavedTools
+    assert "Import / Export" in {
+        getattr(item, "label", "") for item in StudioSavedTools(session).children
+    }
     assert {"Import JSON File", "Export JSON File", "Back to Studio"} <= {
         getattr(item, "label", "") for item in menu.children
     }

@@ -107,7 +107,9 @@ def test_role_controls_can_coexist_with_url_buttons():
 def test_editor_displays_role_picker_and_disables_preview_role_actions():
     session = StudioSession(guild_id=123, owner_id=456, project=validate_project(_model(2)))
     home = StudioHomeView(session)
-    assert "Role Controls" in {str(getattr(item, "label", "")) for item in home.children}
+    assert "Add Buttons" in {str(getattr(item, "label", "")) for item in home.children}
+    from stoney_verify.embed_studio_ui import StudioButtonTools
+    assert "Let Members Pick Roles" in {item.label for item in StudioButtonTools(session).children}
     menu = StudioRolesMenu(session)
     assert any(isinstance(item, discord.ui.RoleSelect) for item in menu.children)
     preview = StudioReviewView(session)

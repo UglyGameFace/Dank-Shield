@@ -74,7 +74,11 @@ def test_private_editor_buttons_only_allow_schedule_on_new_roleless_preview(monk
     monkeypatch.setattr(schedules,"schedules_enabled",lambda:True)
     session=StudioSession(guild_id=1,owner_id=2)
     home=StudioHomeView(session)
-    assert "Scheduled Posts" in {getattr(i,"label","") for i in home.children}
+    assert "More Tools" in {getattr(i,"label","") for i in home.children}
+    from stoney_verify.embed_studio_ui import StudioAdvancedTools
+    assert "Upcoming Scheduled Posts" in {
+        getattr(i, "label", "") for i in StudioAdvancedTools(session).children
+    }
     preview=StudioReviewView(session)
     assert not preview.schedule_later.disabled
     session.post_key="7:8"

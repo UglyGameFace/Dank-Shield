@@ -78,7 +78,11 @@ def test_loading_only_approved_same_guild():
 def test_discord_mobile_controls_private_and_bounded():
     session=StudioSession(guild_id=100,owner_id=200)
     home=StudioHomeView(session)
-    assert "Team Review" in {getattr(x,"label","") for x in home.children}
+    assert "Saved Designs" in {getattr(x,"label","") for x in home.children}
+    from stoney_verify.embed_studio_ui import StudioSavedTools
+    assert "Share With Staff" in {
+        getattr(x, "label", "") for x in StudioSavedTools(session).children
+    }
     assert max(sum(1 for item in home.children if item.row==row) for row in range(5))<=5
     team=StudioTeamReviewHomeView(session)
     assert {"Submit Current Draft","Pending Reviews","Approved Designs"} <= {
