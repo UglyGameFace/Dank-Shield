@@ -294,8 +294,9 @@ def test_new_and_updated_shortcuts_route_to_live_owner_without_duplicate_logic()
 
 def test_releases_show_real_merged_updates_and_exclude_unmerged_work() -> None:
     updates = registry.RECENT_UPDATES
-    assert [item.key for item in updates][:4] == [
-        "embed_studio", "share_router", "share_downloads", "action_safety_schedule",
+    assert [item.key for item in updates][:5] == [
+        "verification", "embed_studio", "share_router",
+        "share_downloads", "action_safety_schedule",
     ]
     assert len(updates) == len(set(item.key for item in updates))
     assert all(registry.feature_by_key(item.key) for item in updates)

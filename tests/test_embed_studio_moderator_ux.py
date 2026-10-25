@@ -19,12 +19,12 @@ def test_home_is_a_9_action_guided_post_instead_of_20_technical_buttons():
     session=ui.StudioSession(guild_id=111,owner_id=222)
     home=ui.StudioHomeView(session)
     buttons=[item for item in home.children if isinstance(item,discord.ui.Button)]
-    assert len(buttons)==9
+    assert len(buttons)==10
     assert len([item for item in home.children if isinstance(item,discord.ui.ChannelSelect)])==1
     assert max(sum(1 for item in home.children if item.row==row) for row in range(5))<=5
     assert {"Pick a Layout","Write Message","Look & Images","Add Buttons",
             "Saved Designs","More Tools","Edit Existing Post","Undo",
-            "Preview & Post"} == {item.label for item in buttons}
+            "Preview & Post", "Use This Channel"} == {item.label for item in buttons}
     assert "JSON Files" not in _labels(home)
     guide=ui._summary(session)
     assert "four easy steps" in guide.description.lower()

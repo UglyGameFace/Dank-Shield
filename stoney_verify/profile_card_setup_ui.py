@@ -11,6 +11,7 @@ import discord
 
 from . import profile_card_setup_ui_core as _core
 from .commands_ext.public_setup_group import _require_setup_permission
+from .ui.current_channel import current_text_channel
 from .guild_config import get_guild_config, upsert_guild_config
 from .profile_card_runtime import (
     LIVE_ALLOWED_FIELDS_KEY,
@@ -129,6 +130,37 @@ class LiveProfileChannelSelect(discord.ui.ChannelSelect):
             if isinstance(channel, discord.TextChannel):
                 selected.add(int(channel.id))
         await _save_selected_channels(interaction, view, selected)
+
+
+class _UseThisProfileChannelButton(discord.ui.Button):
+    def __init__(self) -> None:
+        super().__init__(
+            label="Use This Channel", emoji="📍", style=discord.ButtonStyle.success,
+            custom_id="dank_setup_profile_cards:use_current:v1", row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if not isinstance(view, ProfileCardSetupView):
+            return
+        if not await view.interaction_check(interaction):
+            return
+        if not await _require_setup_permission(interaction):
+            return
+        channel = current_text_channel(interaction)
+        if channel is None:
+            return await _private_message(
+                interaction,
+                "Open Live Profile Setup in a text channel where Dank Shield can post, "
+                "or choose channels with the picker.",
+                ok=False,
+            )
+        # This feature supports multiple configured channels. Do not silently
+        # remove earlier channels when adding the current one.
+        live = parse_live_card_config(await get_guild_config(interaction.guild.id, refresh=True))
+        await _save_selected_channels(
+            interaction, view, set(live.channel_ids) | {int(channel.id)}
+        )
 
 
 class _ServerLiveToggleButton(discord.ui.Button):
@@ -359,6 +391,7 @@ class ProfileCardSetupView(_core.ProfileCardSetupView):
             else _clean_channel_ids(pending_channel_ids)
         )
         self.add_item(LiveProfileChannelSelect())
+        self.add_item(_UseThisProfileChannelButton())
         self.add_item(_ServerLiveToggleButton(enabled=live.enabled, has_channels=bool(live.channel_ids)))
         for field_key in ("server_roles", "profile_tags", "account_dates", "platforms"):
             self.add_item(_core._FieldToggleButton(field_key, allowed=field_key in live.allowed_fields))

@@ -17,6 +17,8 @@ import time
 
 import discord
 
+from .ui.current_channel import current_text_channel
+
 from .embed_studio_core import (
     STUDIO_KEY, MAX_EMBEDS, MAX_FIELDS, MAX_TEMPLATES,
     StudioValidationError, new_project, validate_project, render_embeds,
@@ -186,6 +188,19 @@ def _error(exc: Exception) -> str:
     return "The draft could not be updated. Nothing was published."
 
 
+async def _select_studio_destination(
+    interaction: discord.Interaction, session: StudioSession,
+    channel: discord.TextChannel,
+) -> None:
+    if interaction.guild is None or channel.guild.id != session.guild_id:
+        return await _say(interaction, "Choose a text channel in this server.")
+    session.channel_id = int(channel.id)
+    session.dirty = True
+    if session.post_key:
+        session.post_key = ""  # Changing destination must never edit the old post.
+    await _home(interaction, session, notice=f"Channel set to {channel.mention}. No post was sent.")
+
+
 class DestinationSelect(discord.ui.ChannelSelect):
     def __init__(self, session: StudioSession) -> None:
         super().__init__(
@@ -201,11 +216,7 @@ class DestinationSelect(discord.ui.ChannelSelect):
         channel = guild.get_channel(int(getattr(chosen, "id", 0) or 0)) if guild else None
         if not isinstance(channel, discord.TextChannel) or channel.guild.id != self.session.guild_id:
             return await _say(interaction, "Choose a normal text channel in this server.")
-        self.session.channel_id = int(channel.id)
-        self.session.dirty = True
-        if self.session.post_key:
-            self.session.post_key = ""  # Never edit a post after switching destination.
-        await _home(interaction, self.session, notice="Destination selected.")
+        await _select_studio_destination(interaction, self.session, channel)
 
 
 class StudioHomeView(_StudioView):
@@ -248,6 +259,18 @@ class StudioHomeView(_StudioView):
         if not self.session.undo():
             return await _say(interaction, "No changes to undo.")
         await _home(interaction, self.session, notice="Last edit undone.")
+
+    @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.primary, row=3)
+    async def use_this_channel(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        channel = current_text_channel(interaction, require_bot_embed=True)
+        if channel is None:
+            return await _say(
+                interaction,
+                "Open Post Builder in the server text channel you want to use, "
+                "or choose another with the channel picker below. "
+                "Dank Shield needs View Channel, Send Messages and Embed Links."
+            )
+        await _select_studio_destination(interaction, self.session, channel)
 
     @discord.ui.button(label="Preview & Post", emoji="👁️", style=discord.ButtonStyle.success, row=2)
     async def preview(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:

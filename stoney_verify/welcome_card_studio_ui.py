@@ -10,6 +10,8 @@ from typing import Any, Mapping, Optional
 
 import discord
 
+from .ui.current_channel import current_text_channel
+
 from .commands_ext.public_setup_group import _require_setup_permission, _upsert_config
 from .guild_config import get_guild_config, invalidate_guild_config
 from .ui.picker import DankPickerView, make_choice
@@ -204,6 +206,40 @@ def _studio_embed(
     return embed
 
 
+async def _save_live_welcome_card_channel(
+    interaction: discord.Interaction, owner_id: int, channel: discord.TextChannel,
+) -> None:
+    guild = interaction.guild
+    if guild is None or guild.get_channel(int(channel.id)) is not channel:
+        return await _private(interaction, content="❌ Choose a text channel in this server.")
+    bot = guild.me
+    if bot is None:
+        return await _private(interaction, content="❌ Dank Shield cannot confirm channel permissions.")
+    perms = channel.permissions_for(bot)
+    if not (perms.view_channel and perms.send_messages and perms.attach_files):
+        return await _private(interaction, content=(
+            "❌ Dank Shield needs View Channel, Send Messages and Attach Files here."
+        ))
+    await _defer(interaction)
+    try:
+        cfg = await _save(
+            interaction, {
+                "join_welcome_channel_id": str(channel.id),
+                "welcome_card_enabled": True,
+            },
+        )
+    except Exception as exc:
+        return await _private(
+            interaction, content=f"❌ Could not save the join-card channel ({type(exc).__name__}).",
+        )
+    await _private(
+        interaction,
+        content=f"✅ Live join-card channel saved as {channel.mention} and cards enabled.",
+        embed=_studio_embed(guild, cfg),
+        view=WelcomeCardStudioView(owner_id=owner_id),
+    )
+
+
 class WelcomeCardChannelSelect(discord.ui.ChannelSelect):
     def __init__(self) -> None:
         super().__init__(
@@ -229,26 +265,7 @@ class WelcomeCardChannelSelect(discord.ui.ChannelSelect):
                 interaction,
                 content="❌ Choose a text channel from this server.",
             )
-        await _defer(interaction)
-        try:
-            cfg = await _save(
-                interaction,
-                {
-                    "join_welcome_channel_id": str(channel.id),
-                    "welcome_card_enabled": True,
-                },
-            )
-        except Exception as exc:
-            return await _private(
-                interaction,
-                content=f"❌ Could not save the join-card channel: `{type(exc).__name__}: {exc}`",
-            )
-        await _private(
-            interaction,
-            content=f"✅ Live join-card channel saved as {channel.mention} and cards enabled.",
-            embed=_studio_embed(guild, cfg),
-            view=WelcomeCardStudioView(owner_id=view.owner_id),
-        )
+        await _save_live_welcome_card_channel(interaction, view.owner_id, channel)
 
 
 class WelcomeCardStudioView(discord.ui.View):
@@ -265,6 +282,22 @@ class WelcomeCardStudioView(discord.ui.View):
             content="❌ Open your own Welcome Card Studio to use these controls.",
         )
         return False
+
+    @discord.ui.button(
+        label="Use This Channel", emoji="📍", style=discord.ButtonStyle.success, row=0,
+    )
+    async def use_this_channel(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        channel = current_text_channel(interaction)
+        if channel is None:
+            return await _private(
+                interaction,
+                content="❌ Open Join Card Studio in the text channel you want, "
+                        "or use the channel picker for another.",
+            )
+        await _save_live_welcome_card_channel(interaction, self.owner_id, channel)
 
     @discord.ui.button(
         label="Enable / Disable",

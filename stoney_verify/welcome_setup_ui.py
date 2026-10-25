@@ -7,6 +7,7 @@ from typing import Any, Mapping, Optional
 import discord
 
 from .commands_ext.public_setup_group import _require_setup_permission
+from .ui.current_channel import current_text_channel
 from .commands_ext.public_welcome_group import (
     _cfg_bool,
     _cfg_int,
@@ -262,6 +263,27 @@ class WelcomeSetupView(discord.ui.View):
             )
             return False
         return True
+
+    @discord.ui.button(
+        label="Use This Channel", emoji="📍",
+        style=discord.ButtonStyle.success, row=3,
+    )
+    async def use_this_channel(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        if not await self.interaction_check(interaction):
+            return
+        if not await _require_setup_permission(interaction):
+            return
+        channel = current_text_channel(interaction)
+        if channel is None:
+            return await _send_private(
+                interaction,
+                content="❌ Open Welcome Setup in the text channel you want "
+                        "or use the channel picker to choose another.",
+            )
+        await save_welcome_channel(interaction, channel)
 
     @discord.ui.button(
         label="Edit Welcome Text",
