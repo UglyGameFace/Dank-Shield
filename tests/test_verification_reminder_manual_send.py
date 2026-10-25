@@ -177,3 +177,59 @@ def test_manual_discord_ui_has_separate_actions_with_valid_rows():
         "Confirm Manual Send", "Next 100 Members", "Cancel",
     }
     assert not modal.confirm_manual.disabled and not modal.next_page.disabled
+
+
+def test_manual_rechecks_config_after_atomic_claim_and_does_not_send(monkeypatch):
+    cfg, guild, bot, worker, members, sent = setup(monkeypatch)
+    preview = run(manual.preview_manual_reminders(bot, guild, channel_id=44))
+    reservations = []
+
+    def reserve(gid, batch):
+        reservations.append(batch)
+        cfg["unverified_reminders_v1"]["message"] = "Settings changed during claim"
+        return tuple(uid for uid, _ in batch)
+
+    monkeypatch.setattr(manual, "reserve_manual_batch_sync", reserve)
+    result = run(manual.send_previewed_manual_reminders(bot, guild, preview))
+    assert len(reservations) == 1
+    assert result.reserved == 3
+    assert result.delivered == 0
+    assert result.skipped == 3
+    assert sent == []
+
+
+def test_manual_configuration_failure_prevents_preview_and_claim(monkeypatch):
+    cfg, guild, bot, worker, members, sent = setup(monkeypatch)
+    async def bad_config(*args, **kwargs):
+        raise OSError("internal database details not for Discord")
+    monkeypatch.setattr(manual, "get_guild_config", bad_config)
+    with pytest.raises(reminders.ManualReminderUnavailable, match="Could not read"):
+        run(manual.preview_manual_reminders(bot, guild, channel_id=44))
+    assert sent == []
+
+
+def test_manual_confirm_counts_failed_discord_send_without_retry(monkeypatch):
+    cfg, guild, bot, worker, members, sent = setup(monkeypatch)
+    preview = run(manual.preview_manual_reminders(bot, guild, channel_id=44))
+    calls = []
+
+    async def failed_send(*args, **kwargs):
+        calls.append(args)
+        raise RuntimeError("Simulated Discord outbound failure")
+
+    # Previews reference the canonical channel; only the sender is mocked.
+    class FailedChannel:
+        id = 44
+        def permissions_for(self, user):
+            return SimpleNamespace(view_channel=True, send_messages=True)
+        send = failed_send
+
+    bad_channel = FailedChannel()
+    monkeypatch.setattr(manual, "delivery_channel", lambda *a: bad_channel)
+    monkeypatch.setattr(
+        manual, "reserve_manual_batch_sync",
+        lambda gid, batch: tuple(uid for uid, _ in batch),
+    )
+    result = run(manual.send_previewed_manual_reminders(bot, guild, preview))
+    assert result.reserved == 3 and result.failed == 3 and result.delivered == 0
+    assert len(calls) == 3  # one attempt per claimed recipient; never auto retry
