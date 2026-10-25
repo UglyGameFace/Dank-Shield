@@ -81,7 +81,8 @@ def _embed(guild: discord.Guild, cfg: Mapping[str, Any], policy: ReminderPolicy)
     )
     embed.add_field(
         name="Status",
-        value="Enabled (delivery requires a healthy database)" if policy.enabled else "Disabled (no messages are sent)",
+        value="Automatic reminders: enabled (requires healthy database)" if policy.enabled
+        else "Automatic reminders: disabled (staff manual send is separate)",
         inline=True,
     )
     embed.add_field(
@@ -273,9 +274,10 @@ class ConfirmDueReminderView(_OwnedView):
         if claimed == 0:
             return await _private(
                 interaction,
-                f"✅ Checked the next page of unverified members for <#{self.channel_id}>. "
-                "No due reminder attempts were claimed on that page. "
-                "This does not bypass the first delay, repeat interval or maximum per join."
+                f"✅ Checked the next page of up to 100 guild members for <#{self.channel_id}>. "
+                "No scheduled reminder attempts were claimed on that page. "
+                "This is not a count of all unverified members in the server; "
+                "the first delay, repeat interval and maximum per join still apply."
             )
         await _private(
             interaction,
@@ -528,7 +530,7 @@ class ReminderSettingsView(_OwnedView):
             )
         await _private(
             interaction,
-            f"**Send due reminders now to {channel.mention}?**\n\n"
+            f"**Check scheduled reminders now in {channel.mention}?**\n\n"
             f"• First reminder only after **{policy.delay_hours} hours** in the server.\n"
             f"• Repeat no sooner than **{policy.repeat_hours} hours**.\n"
             f"• Up to **{policy.max_reminders}** attempts per member per join.\n"
@@ -552,7 +554,10 @@ class ReminderSettingsView(_OwnedView):
             return
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True, thinking=True)
-        cfg, policy = await _load(interaction.guild)
+        try:
+            cfg, policy = await _load(interaction.guild)
+        except Exception:
+            return await _private(interaction, "❌ Could not read saved reminder settings.")
         if policy.delivery != "channel" or not policy.reminder_channel_id:
             return await _private(
                 interaction, "❌ Save a reminder text channel first. Manual sending never uses DMs."
