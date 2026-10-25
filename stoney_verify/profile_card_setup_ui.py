@@ -136,7 +136,7 @@ class _UseThisProfileChannelButton(discord.ui.Button):
     def __init__(self) -> None:
         super().__init__(
             label="Use This Channel", emoji="📍", style=discord.ButtonStyle.success,
-            custom_id="dank_setup_profile_cards:use_current:v1", row=3,
+            custom_id="dank_setup_profile_cards:use_current:v1", row=1,
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
