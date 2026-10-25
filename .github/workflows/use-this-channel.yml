@@ -1,0 +1,60 @@
+name: Shared Use This Channel Regression
+
+on:
+  pull_request:
+    paths:
+      - 'stoney_verify/ui/current_channel.py'
+      - 'stoney_verify/ui/resource_browser.py'
+      - 'stoney_verify/commands_ext/public_verify_reminder_ui.py'
+      - 'stoney_verify/commands_ext/public_somewhere_420_settings.py'
+      - 'stoney_verify/commands_ext/public_ticket_command_center.py'
+      - 'stoney_verify/commands_ext/public_cleanup_command_center.py'
+      - 'stoney_verify/welcome_setup_ui.py'
+      - 'stoney_verify/welcome_card_studio_ui.py'
+      - 'stoney_verify/exit_card_studio_ui.py'
+      - 'stoney_verify/profile_card_setup_ui.py'
+      - 'stoney_verify/embed_studio_ui.py'
+      - 'tests/test_use_this_channel_shared.py'
+      - '.github/workflows/use-this-channel.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  current-channel:
+    name: Cross-feature channel picker fallback
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip -q
+          pip install -q -r requirements.txt pytest
+      - name: Compile channel setup screens
+        run: |
+          python -m py_compile \
+            stoney_verify/ui/current_channel.py \
+            stoney_verify/ui/resource_browser.py \
+            stoney_verify/commands_ext/public_verify_reminder_ui.py \
+            stoney_verify/commands_ext/public_somewhere_420_settings.py \
+            stoney_verify/commands_ext/public_ticket_command_center.py \
+            stoney_verify/commands_ext/public_cleanup_command_center.py \
+            stoney_verify/welcome_setup_ui.py \
+            stoney_verify/welcome_card_studio_ui.py \
+            stoney_verify/exit_card_studio_ui.py \
+            stoney_verify/profile_card_setup_ui.py \
+            stoney_verify/embed_studio_ui.py
+      - name: Shared picker and existing feature regressions
+        run: |
+          python -m pytest -q --tb=short --disable-warnings \
+            tests/test_use_this_channel_shared.py \
+            tests/test_verification_reminders.py \
+            tests/test_setup_resource_browser_binding.py \
+            tests/test_setup_resource_browser_owner_lock.py \
+            tests/test_profile_card_setup_picker_ux.py \
+            tests/test_embed_studio_core.py
