@@ -94,7 +94,7 @@ def pending_for_reminder(member: discord.Member, cfg: Mapping[str, Any]) -> bool
         return False
     if _as_int(cfg.get("verified_role_id"), 0) <= 0:
         return False
-    return member_is_pending_verification(member)
+    return member_is_pending_verification(member, config=cfg)
 
 
 def verification_channel(guild: discord.Guild, cfg: Mapping[str, Any]) -> discord.TextChannel | None:
