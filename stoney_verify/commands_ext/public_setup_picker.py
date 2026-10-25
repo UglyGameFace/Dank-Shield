@@ -5,6 +5,7 @@ from typing import Any, Optional
 import discord
 from discord import app_commands
 
+from ..ui.current_channel import current_text_channel
 from .common import safe_defer
 from .public_setup_config_writer import apply_public_setup_writer_patch, upsert_guild_config
 from .public_setup_group import (
@@ -231,6 +232,57 @@ class SetupPickerHome(OwnerOnlyView):
         await _edit_or_send(interaction, embed=_home_embed(guild, cfg), view=self)
 
 
+async def _stage_current_setup_channel(
+    interaction: discord.Interaction,
+    picker: OwnerOnlyView,
+    field_key: str,
+) -> None:
+    """Stage only one named channel slot. Save still uses existing setup validation."""
+    if not await picker.interaction_check(interaction):
+        return
+    channel = current_text_channel(interaction, require_bot_send=False)
+    if channel is None:
+        return await interaction.response.send_message(
+            "❌ Open this wizard in the server text channel you want, "
+            "or use the normal channel picker for another.",
+            ephemeral=True,
+        )
+    picker.state[field_key] = str(channel.id)
+    await _edit_or_send(
+        interaction, embed=picker.embed(interaction.guild), view=picker,
+    )
+
+
+class _UseCurrentChannelForLogButton(discord.ui.Button):
+    def __init__(self, parent: "LogPicker", key: str, label: str, row: int) -> None:
+        super().__init__(
+            label=label, emoji="📍", style=discord.ButtonStyle.secondary, row=row,
+        )
+        self.parent = parent
+        self.key = key
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _stage_current_setup_channel(interaction, self.parent, self.key)
+
+
+class _CurrentLogTargetMenu(OwnerOnlyView):
+    def __init__(self, picker: "LogPicker") -> None:
+        super().__init__(owner_id=picker.owner_id)
+        self.picker = picker
+        for key,label,row in (
+            ("modlog_channel_id", "Mod Logs Here",0),
+            ("raidlog_channel_id", "Security Logs Here",0),
+            ("join_log_channel_id", "Join & Leave Logs Here",1),
+            ("force_verify_log_channel_id", "Verification Logs Here",1),
+        ):
+            self.add_item(_UseCurrentChannelForLogButton(picker,key,label,row))
+
+    @discord.ui.button(label="Back",emoji="◀️",style=discord.ButtonStyle.secondary,row=2)
+    async def back(self,interaction: discord.Interaction,button:discord.ui.Button) -> None:
+        _=button
+        await _edit_or_send(interaction,embed=self.picker.embed(interaction.guild),view=self.picker)
+
+
 class TicketPicker(OwnerOnlyView):
     def __init__(self, *, owner_id: int, cfg: Any) -> None:
         super().__init__(owner_id=owner_id)
@@ -254,6 +306,12 @@ class TicketPicker(OwnerOnlyView):
             _line(guild, "Transcripts", self.state.get("transcripts_channel_id")),
         ]), inline=False)
         return embed
+
+    @discord.ui.button(
+        label="Use This Channel",emoji="📍",style=discord.ButtonStyle.secondary,row=4,
+    )
+    async def use_this_channel(self,interaction:discord.Interaction,_button:discord.ui.Button)->None:
+        await _stage_current_setup_channel(interaction,self,"transcripts_channel_id")
 
     @discord.ui.button(label="Save Tickets", style=discord.ButtonStyle.success, emoji="💾", row=4)
     async def save(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -326,6 +384,12 @@ class VerifyPicker(OwnerOnlyView):
         ]), inline=False)
         return embed
 
+    @discord.ui.button(
+        label="Use This Channel",emoji="📍",style=discord.ButtonStyle.secondary,row=4,
+    )
+    async def use_this_channel(self,interaction:discord.Interaction,_button:discord.ui.Button)->None:
+        await _stage_current_setup_channel(interaction,self,"verify_channel_id")
+
     @discord.ui.button(label="Save Verification", style=discord.ButtonStyle.success, emoji="💾", row=4)
     async def save(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         guild = interaction.guild
@@ -395,6 +459,12 @@ class VCPicker(OwnerOnlyView):
         ]), inline=False)
         return embed
 
+    @discord.ui.button(
+        label="Use This Channel",emoji="📍",style=discord.ButtonStyle.secondary,row=4,
+    )
+    async def use_this_channel(self,interaction:discord.Interaction,_button:discord.ui.Button)->None:
+        await _stage_current_setup_channel(interaction,self,"vc_verify_queue_channel_id")
+
     @discord.ui.button(label="Save VC Verify", style=discord.ButtonStyle.success, emoji="💾", row=4)
     async def save(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         guild = interaction.guild
@@ -463,6 +533,22 @@ class LogPicker(OwnerOnlyView):
             _line(guild, "Forced verification", self.state.get("force_verify_log_channel_id")),
         ]), inline=False)
         return embed
+
+    @discord.ui.button(
+        label="Use This Channel",emoji="📍",style=discord.ButtonStyle.secondary,row=4,
+    )
+    async def use_this_channel(self,interaction:discord.Interaction,_button:discord.ui.Button)->None:
+        if not await self.interaction_check(interaction):
+            return
+        await _edit_or_send(
+            interaction,
+            embed=discord.Embed(
+                title="📍 Use This Channel For…",
+                description="Choose which log destination should use this text channel. "
+                            "You can repeat this for other log types. Nothing is saved until Save Logs.",
+            ),
+            view=_CurrentLogTargetMenu(self),
+        )
 
     @discord.ui.button(label="Save Logs", style=discord.ButtonStyle.success, emoji="💾", row=4)
     async def save(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
