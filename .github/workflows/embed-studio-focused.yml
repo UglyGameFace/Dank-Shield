@@ -44,6 +44,9 @@ jobs:
             stoney_verify/embed_studio_schedule_runtime.py \
             stoney_verify/embed_studio_reviews.py \
             stoney_verify/embed_studio_forms.py \
+            stoney_verify/embed_studio_live_text.py \
+            stoney_verify/embed_studio_live_runtime.py \
+            stoney_verify/embed_studio_live_ui.py \
             tools/stage_embed_studio_v2.py
 
       - name: Run focused regression tests
@@ -60,6 +63,7 @@ jobs:
           tests/test_embed_studio_scheduling.py
           tests/test_embed_studio_reviews.py
           tests/test_embed_studio_forms.py
+          tests/test_embed_studio_live_text.py
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
