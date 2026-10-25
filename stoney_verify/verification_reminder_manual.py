@@ -60,6 +60,7 @@ class ManualPreview:
     eligible_ids: tuple[int, ...] = ()
     eligible_names: tuple[str, ...] = ()
     role_id: int = 0
+    missing_join_time: int = 0
 
 
 @dataclass(frozen=True)
@@ -193,7 +194,7 @@ async def preview_manual_reminders(
             "Could not finish the live server-member scan. No reminders authorized. "
             "Check Server Members Intent and Discord connectivity."
         )
-    pending = mapped = conflicts = invisible = early = 0
+    pending = mapped = conflicts = invisible = early = missing_join = 0
     pool: list[tuple[int, datetime]] = []
     names: dict[int, str] = {}
     now = datetime.now(timezone.utc)
@@ -213,6 +214,7 @@ async def preview_manual_reminders(
             invisible += 1
             continue
         if member.joined_at is None or member.joined_at.tzinfo is None:
+            missing_join += 1
             continue
         if now < member.joined_at + timedelta(hours=policy.delay_hours):
             early += 1
@@ -250,6 +252,7 @@ async def preview_manual_reminders(
         eligible_ids=eligible_ids,
         eligible_names=tuple(names[uid] for uid in eligible_ids),
         role_id=unverified_role_id,
+        missing_join_time=missing_join,
     )
 
 async def send_previewed_manual_reminders(
