@@ -173,8 +173,8 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Verification Reminders",
         "📩",
         "access",
-        "Set automatic reminders or preview and manually remind unverified members before the saved wait time.",
-        ("verify reminders", "unverified reminders", "verification notices", "verification database", "pending members", "check scheduled due", "send due now", "send reminder now"),
+        "Remind members using this server's mapped Unverified role. Preview the entire eligible audience, choose members, and send early by channel or DM.",
+        ("verify reminders", "unverified reminders", "verification notices", "verification database", "pending members", "check scheduled due", "send due now", "send reminder now", "unverified role", "remind all unverified", "verification dm reminders", "custom verification roles"),
         True,
     ),
     NavigationFeature(
@@ -482,9 +482,10 @@ class RecentFeatureUpdate:
 
 RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     RecentFeatureUpdate(
-        "verification_reminders", "Manual reminders with preview",
-        "Check exactly who is still unverified on each member page, then confirm "
-        "an early manual reminder without changing automatic reminder intervals.",
+        "verification_reminders", "Full-server verification reminders by channel or DM",
+        "Check members against each server's saved Unverified and access roles, "
+        "select up to 25 per group, and send early by channel or DM. "
+        "Six-hour manual cooldown; automatic schedules remain separate.",
         "2026-10-25",
     ),
     RecentFeatureUpdate(
