@@ -46,7 +46,7 @@ def test_multi_channel_wizard_asks_which_log_field(monkeypatch):
 
 def test_wizard_stages_only_chosen_field_no_implicit_save(monkeypatch):
     picker=setup.VerifyPicker(owner_id=7,cfg=SimpleNamespace())
-    channel=SimpleNamespace(id=121)
+    channel=SimpleNamespace(id=121,mention="<#121>")
     calls=[]
     async def owner(_interaction):return True
     async def edit(_interaction,**payload):
