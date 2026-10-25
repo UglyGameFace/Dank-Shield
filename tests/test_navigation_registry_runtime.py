@@ -298,8 +298,9 @@ def test_releases_show_real_merged_updates_and_exclude_unmerged_work() -> None:
         "verification_reminders", "verification", "embed_studio",
         "share_router", "share_downloads", "action_safety_schedule",
     ]
-    assert updates[0].headline == "Manual reminders with preview"
-    assert "automatic reminder intervals" in updates[0].detail
+    assert updates[0].headline == "Full-server verification reminders by channel or DM"
+    assert "automatic schedules remain separate" in updates[0].detail
+    assert registry.search_features("verification dm reminders")[0].key == "verification_reminders"
     assert len(updates) == len(set(item.key for item in updates))
     assert all(registry.feature_by_key(item.key) for item in updates)
     assert any("post builder" in item.headline.lower() for item in updates)
