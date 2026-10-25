@@ -64,6 +64,7 @@ jobs:
           tests/test_embed_studio_reviews.py
           tests/test_embed_studio_forms.py
           tests/test_embed_studio_live_text.py
+          tests/test_embed_studio_moderator_ux.py
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
