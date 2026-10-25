@@ -55,7 +55,11 @@ def test_wizard_stages_only_chosen_field_no_implicit_save(monkeypatch):
     monkeypatch.setattr(setup,"current_text_channel",lambda _interaction,**kwargs:channel)
     monkeypatch.setattr(setup,"_edit_or_send",edit)
     asyncio.run(setup._stage_current_setup_channel(
-        SimpleNamespace(guild=SimpleNamespace(id=1)),
+        SimpleNamespace(guild=SimpleNamespace(
+            id=1,
+            get_channel=lambda cid:channel if cid==channel.id else None,
+            get_role=lambda rid:None,
+        )),
         picker,"verify_channel_id"
     ))
     assert picker.state["verify_channel_id"]=="121"
