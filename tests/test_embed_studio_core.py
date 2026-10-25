@@ -147,7 +147,8 @@ def test_mobile_studio_has_clear_separate_sections_and_one_confirmation() -> Non
         "Add Buttons", "Saved Designs", "More Tools",
         "Edit Existing Post", "Undo", "Preview & Post",
     } <= labels
-    assert len([item for item in view.children if isinstance(item, discord.ui.Button)]) == 9
+    assert len([item for item in view.children if isinstance(item, discord.ui.Button)]) == 10
+    assert "Use This Channel" in labels
     assert not {"JSON Files", "Smart Text", "Role Controls", "Form Builder"} & labels
     from stoney_verify.embed_studio_ui import (
         StudioDesignTools, StudioButtonTools, StudioSavedTools, StudioAdvancedTools,
