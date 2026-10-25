@@ -239,5 +239,6 @@ def test_feed_auto_refresh_worker_is_bounded_and_started_with_media_server() -> 
     assert "list_due_private_source_targets" in service
     assert "refresh_private_source(" in service
     assert "start_cinema_feed_refresh_worker()" in server
-    assert "DANK_CINEMA_FEED_REFRESH_SECONDS=900" in env
-    assert "DANK_CINEMA_FEED_REFRESH_BATCH=24" in env
+    # Historical Cinema service tests remain, but its settings must no longer ship in Shield.
+    assert "DANK_CINEMA_FEED_REFRESH_SECONDS=" not in env
+    assert "DANK_CINEMA_FEED_REFRESH_BATCH=" not in env
