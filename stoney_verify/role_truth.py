@@ -212,6 +212,25 @@ def base_member_role_snapshot(member: discord.Member) -> dict[str, Any]:
     }
 
 
+
+def member_is_pending_for_config(member: discord.Member, cfg: Mapping[str, Any]) -> bool:
+    """Canonical verification-role truth using the *loaded guild's* settings.
+
+    This avoids looking up an older cached guild config while the reminder
+    worker already has authoritative refreshed settings. Role names are never
+    interpreted or hardcoded: the owner's saved role IDs decide.
+    """
+    if getattr(member, "bot", False):
+        return False
+    pending = {cfg_id(cfg, key) for key in PENDING_ROLE_KEYS} - {0}
+    verified = {cfg_id(cfg, key) for key in SAFE_ROLE_KEYS} - {0}
+    if not pending or not {cfg_id(cfg, k) for k in PRIMARY_SAFE_ROLE_KEYS} - {0}:
+        return False
+    roles = member_role_ids(member)
+    return bool(roles & pending and not roles & verified)
+
+
+
 def member_role_truth(member: discord.Member) -> dict[str, Any]:
     guild_id = safe_int(getattr(getattr(member, "guild", None), "id", 0), 0)
     roles = member_role_ids(member)
