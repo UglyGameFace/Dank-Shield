@@ -102,13 +102,13 @@ def _upload_sync(guild_id: int, data: bytes, filename: str) -> UploadedArtwork:
     )
     budget = get_budget()  # missing explicit allocation means uploads fail closed
     db = _client()
-    bucket = db.storage.from_(BUCKET)
     # Reserve before contacting Storage so simultaneous uploads cannot exceed
     # the same remaining allowance. A timed-out upload is treated as uncertain.
     reserve_artwork(db, guild_id=int(guild_id), object_path=object_path,
                     size_bytes=len(data), budget=budget)
     digest = sha256(data).hexdigest()
     try:
+        bucket = db.storage.from_(BUCKET)
         result = bucket.upload(
             path=object_path, file=BytesIO(data),
             file_options={"content-type": mime, "cache-control": "86400", "upsert": "false"},
