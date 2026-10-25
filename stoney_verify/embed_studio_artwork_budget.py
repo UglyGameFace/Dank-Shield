@@ -101,29 +101,21 @@ def release_artwork(db: Any, guild_id: int, object_path: str) -> None:
         raise ArtworkBudgetError("Artwork reservation release was not confirmed.")
 
 
+USAGE_RPC = "dank_embed_studio_asset_usage"
+
+
 def _read_usage_sync(guild_id: int) -> dict[str, int]:
     if int(guild_id) <= 0:
         raise ArtworkBudgetError("Artwork usage requires a real Discord server.")
-    db = _client()
-    committed = db.table(ASSET_TABLE).select("guild_id,size_bytes").limit(10001).execute()
-    held = db.table(HOLD_TABLE).select("guild_id,size_bytes").limit(10001).execute()
-    rows_a, rows_h = getattr(committed, "data", None), getattr(held, "data", None)
-    if (not isinstance(rows_a, list) or not isinstance(rows_h, list)
-            or len(rows_a) > 10000 or len(rows_h) > 10000):
-        raise ArtworkBudgetError("Artwork inventory is too large for this canary report.")
-    all_rows = [*rows_a, *rows_h]
-    if any(not isinstance(row, Mapping) for row in all_rows):
-        raise ArtworkBudgetError("Invalid artwork inventory from database.")
-    try:
-        global_used = sum(int(row["size_bytes"]) for row in all_rows)
-        guild_used = sum(int(row["size_bytes"]) for row in all_rows
-                         if row["guild_id"] == str(guild_id))
-    except (ValueError, KeyError, TypeError) as exc:
-        raise ArtworkBudgetError("Malformed artwork inventory.") from exc
-    return {
-        "guild_used": guild_used, "global_used": global_used,
-        "asset_count": len(rows_a), "reservation_count": len(rows_h),
-    }
+    result = _client().rpc(USAGE_RPC, {"p_guild_id": str(guild_id)}).execute()
+    data = getattr(result, "data", None)
+    expected = ("guild_used", "global_used", "asset_count",
+                "reservation_count", "stale_reservations")
+    if not isinstance(data, Mapping):
+        raise ArtworkBudgetError("Artwork usage was not confirmed by the database.")
+    if any(type(data.get(k)) is not int or data[k] < 0 for k in expected):
+        raise ArtworkBudgetError("Artwork usage returned malformed values.")
+    return {key: data[key] for key in expected}
 
 
 async def read_artwork_usage(guild_id: int) -> dict[str, int]:
