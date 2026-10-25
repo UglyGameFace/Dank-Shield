@@ -310,6 +310,7 @@ def _manual_preview_embed(guild: discord.Guild, preview: ManualPreview) -> disco
             f"Still unverified on this page: **{preview.pending}**\n"
             f"Can't see both required channels: **{preview.without_access}**\n"
             f"Would be too early for the automatic schedule: **{preview.before_automatic_delay}**\n"
+            f"Already manually reminded or cooling down: **{preview.manual_limited}**\n"
             f"Potential manual recipients on this page: **{preview.potential}**\n\n"
             f"**Selected for this send (up to 3):** {names or 'None on this page'}\n\n"
             "These are candidates, not guaranteed deliveries. Manual cooldowns, "
