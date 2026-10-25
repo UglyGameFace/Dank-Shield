@@ -482,6 +482,11 @@ class RecentFeatureUpdate:
 
 RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     RecentFeatureUpdate(
+        "verification", "Use This Channel in channel setup",
+        "Choose the current channel with one tap in Reminders and other setup menus, "
+        "or search for another channel. Existing permission checks still apply.", "2026-10-25",
+    ),
+    RecentFeatureUpdate(
         "embed_studio", "Post Builder is easier for moderators",
         "Make an announcement in 4 steps. More options are grouped; saved pictures, "
         "designs, Smart Text and JSON files remain available.", "2026-10-24",
