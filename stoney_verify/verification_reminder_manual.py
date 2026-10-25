@@ -18,7 +18,6 @@ from .guild_config import get_guild_config
 from .role_truth import clear_cache as clear_role_truth_cache
 from .setup_engine.verification_modes import basic_verify_allowed_for_guild
 from .verification_reminders import (
-    REMINDER_CONFIG_KEY,
     SCAN_SIZE,
     ManualReminderUnavailable,
     ReminderPolicy,
@@ -27,6 +26,7 @@ from .verification_reminders import (
     parse_policy,
     pending_for_reminder,
     reminder_text,
+    send_channel_reminder_message,
     verification_channel,
 )
 from .verification_reminder_postgres import (
@@ -276,11 +276,8 @@ async def send_previewed_manual_reminders(
                 continue
             try:
                 # Count only successful Discord sends as delivered.
-                await notice.send(
-                    f"{current.mention} {reminder_text(guild, verify, cfg, policy)}",
-                    allowed_mentions=discord.AllowedMentions(
-                        users=[current], roles=False, everyone=False,
-                    ),
+                await send_channel_reminder_message(
+                    guild, verify, notice, current, cfg, policy,
                 )
                 delivered += 1
             except Exception as exc:
