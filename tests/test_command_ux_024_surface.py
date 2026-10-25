@@ -125,7 +125,8 @@ def test_ticket_staff_alerts_fit_mobile_discord_component_rows() -> None:
     assert alerts_button.row == 3
 
     settings = TicketNotificationSettingsView(1, [("support", "Support")])
-    assert len(settings.children) == 8
+    assert len(settings.children) == 9
+    assert "Use This Channel" in _labels(settings)
     for item in settings.children:
         if isinstance(item, (discord.ui.Select, discord.ui.RoleSelect, discord.ui.ChannelSelect)):
             assert item.row in (0, 1, 2)
