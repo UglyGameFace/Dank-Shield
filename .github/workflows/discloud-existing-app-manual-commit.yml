@@ -192,8 +192,9 @@ jobs:
           # by a GitHub check. Always require separately restored backups.
           test -s discloud.config
           test -s stoney_verify/app.py
-          test -s stoney_verify/torrent_streaming.py
+          test -s stoney_verify/share_router_public_server.py
           test -s stoney_verify/members_new/activity_tracker.py
+          python tools/audit_cinema_discloud_package.py
           echo "Preflight only: NOT a Discloud backup or data-retention guarantee."
 
   deploy:
