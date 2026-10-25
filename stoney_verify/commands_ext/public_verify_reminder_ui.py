@@ -19,6 +19,8 @@ from ..verification_reminders import (
     delivery_channel,
 )
 from .public_verify_command_center import _OwnedView, _private, _replace, _require_staff
+from ..ui.current_channel import current_text_channel
+from ..ui.resource_browser import DankGuildResourceBrowserView
 
 
 async def _load(guild: discord.Guild) -> tuple[Mapping[str, Any], ReminderPolicy]:
@@ -162,35 +164,56 @@ class SettingsModal(discord.ui.Modal, title="Verification Reminder Settings"):
             await _private(interaction, embed=_embed(interaction.guild, fresh, current), view=ReminderSettingsView(self.owner_id, current))
 
 
-class ReminderChannelPicker(discord.ui.ChannelSelect):
-    def __init__(self, parent: "ReminderSettingsView") -> None:
-        self.parent_view = parent
-        super().__init__(
-            placeholder="Select reminder channel (channel mode)",
-            channel_types=[discord.ChannelType.text],
-            min_values=1,
-            max_values=1,
-            row=2,
+async def _save_delivery_channel(
+    interaction: discord.Interaction, owner_id: int, channel: discord.TextChannel,
+) -> None:
+    """Identical save path for the current-channel shortcut and Search-Safe."""
+    if interaction.guild is None or not await _require_staff(interaction):
+        return
+    guild = interaction.guild
+    actual = guild.get_channel(int(channel.id))
+    if not isinstance(actual, discord.TextChannel) or actual.guild.id != guild.id:
+        return await _private(interaction, "❌ Choose a text channel in this server.")
+    bot_member = guild.me
+    if bot_member is None:
+        return await _private(interaction, "❌ Dank Shield cannot verify its channel access.")
+    perms = actual.permissions_for(bot_member)
+    if not (perms.view_channel and perms.send_messages):
+        return await _private(interaction, "❌ Dank Shield needs View Channel and Send Messages there.")
+    if not interaction.response.is_done():
+        await interaction.response.defer()
+    cfg, policy = await _load(guild)
+    updated = replace(policy, reminder_channel_id=int(actual.id), delivery="channel")
+    if await _save(interaction, cfg, updated):
+        fresh, current = await _load(guild)
+        await _replace(
+            interaction,
+            embed=_embed(guild, fresh, current),
+            view=ReminderSettingsView(owner_id, current),
         )
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if int(interaction.user.id) != self.parent_view.owner_id or not await _require_staff(interaction):
-            return
-        picked = self.values[0] if self.values else None
-        guild = interaction.guild
-        channel = guild.get_channel(int(getattr(picked, "id", 0) or 0)) if guild else None
-        if not isinstance(channel, discord.TextChannel):
-            return await _private(interaction, "❌ Select an existing text channel.")
-        bot_member = guild.me
-        if bot_member is None or not channel.permissions_for(bot_member).view_channel or not channel.permissions_for(bot_member).send_messages:
-            return await _private(interaction, "❌ Dank Shield needs View Channel and Send Messages there.")
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-        cfg, policy = await _load(guild)
-        updated = replace(policy, reminder_channel_id=int(channel.id))
-        if await _save(interaction, cfg, updated):
-            fresh, current = await _load(guild)
-            await _replace(interaction, embed=_embed(guild, fresh, current), view=ReminderSettingsView(self.parent_view.owner_id, current))
+
+async def _choose_reminder_channel(interaction: discord.Interaction, owner_id: int) -> None:
+    if interaction.guild is None or not await _require_staff(interaction):
+        return
+    guild = interaction.guild
+
+    async def picked(pick: discord.Interaction, channel: discord.TextChannel) -> None:
+        await _save_delivery_channel(pick, owner_id, channel)
+
+    browser = DankGuildResourceBrowserView(
+        guild=guild, author_id=owner_id, resource_kinds=("text",),
+        on_pick=picked, custom_id="dank:verify:reminders:text:search_safe",
+        title="Choose Reminder Channel",
+        predicate=lambda channel: (
+            isinstance(channel, discord.TextChannel)
+            and guild.me is not None
+            and channel.permissions_for(guild.me).view_channel
+            and channel.permissions_for(guild.me).send_messages
+        ),
+        on_home=lambda pick: open_reminder_settings(pick, owner_id),
+    )
+    await _replace(interaction, embed=browser.embed(), view=browser)
 
 
 class ReminderSettingsView(_OwnedView):
@@ -199,7 +222,6 @@ class ReminderSettingsView(_OwnedView):
         self.policy = policy
         self.toggle.label = "Disable" if policy.enabled else "Enable"
         self.toggle.style = discord.ButtonStyle.danger if policy.enabled else discord.ButtonStyle.success
-        self.add_item(ReminderChannelPicker(self))
 
     @discord.ui.button(label="Enable", emoji="🔔", style=discord.ButtonStyle.success, row=0)
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
