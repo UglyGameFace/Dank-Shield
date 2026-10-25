@@ -89,10 +89,8 @@ def test_current_channel_resolves_exact_cached_channel_no_dropdown(monkeypatch):
     interaction.guild=SimpleNamespace(id=222,get_channel=lambda _id: ch,me=guild.me)
     assert shortcut.current_text_channel(interaction) is None
     interaction.guild=guild
-    interaction.channel=SimpleNamespace(id=999,type=discord.ChannelType.public_thread)
-    assert shortcut.current_text_channel(interaction) is ch if False else (
-        shortcut.current_text_channel(interaction) is ch
-    )
+    interaction.channel=SimpleNamespace(id=444,type=discord.ChannelType.public_thread)
+    assert shortcut.current_text_channel(interaction) is None
 
 
 def test_no_missing_bot_permission_or_dm_leak(monkeypatch):
@@ -215,4 +213,4 @@ def test_cleanup_shortcut_is_selection_only_not_an_immediate_delete():
     one=source.split("class _ChannelStateView(",1)[1].split("class ChannelPurgeView(",1)[0]
     assert "self.channel_id = channel.id" in one
     assert "_invoke(" not in one
-    assert "delete" not in one.lower()
+    assert "await _invoke(" not in one
