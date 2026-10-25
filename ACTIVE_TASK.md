@@ -1,3 +1,12 @@
+## Current active task: manual verification reminders (2026-10-25)
+
+- User validated deployment of PR #726 on main: Send Due Now works but only scans 100 mixed guild members, honors 24h first delay and confusingly reports zero without explaining how many are actually pending.
+- Active task: separate, genuine staff-confirmed **Send Reminder Now** with mobile preview and next-100 pagination; independent manual PostgreSQL claim/budgets, 2 sends per join/12h cooldown, 1 batch/min and 4 batches/hour, max 3 selected per confirmation, guild/role/visibility/policy rechecks. The existing automatic scheduler, delay and attempt ledger remain unchanged.
+- Implementation branch `feat/verify-manual-reminder-preview-20261025`. New manual migration is explicit, never run on bot startup; production manual sends fail closed until migration and credentials validated. No auto mass ping or DMs.
+- Definition of Done: CI including live ephemeral PostgreSQL concurrency tests, UI regression (Android row/component count), compare deployed code after guarded main update, live Discloud DB migration and Android delivery with real pending test member, check member cooldown/verified transition and preserve existing DB.
+- Pending release gates: exact-head full CI, reviewed diff and current production backup. No live schema changes or deployed code in this branch.
+- Next major feature **LFG #638** remains backlog until manual reminders are validated. Remaining all-channel selector audit separately backlogged.
+
 ## Current channel-picker task: due verification reminders (2026-10-25)
 
 - Single active task remains **channel-based feature setup**. After the shared Use This Channel fix, the user explicitly requested a manual **Send Due Now** action targeted to the **saved designated reminder channel**, not the chat where staff clicked.

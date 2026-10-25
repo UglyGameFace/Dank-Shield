@@ -23,6 +23,8 @@ from .verification_reminder_postgres import (
     ready_sync as _pg_ready_sync,
     stale_candidates_sync as _pg_stale_candidates_sync,
     delete_departed_sync as _pg_delete_departed_sync,
+    manual_stale_candidates_sync as _pg_manual_stale_candidates_sync,
+    delete_manual_departed_sync as _pg_delete_manual_departed_sync,
 )
 
 REMINDER_CONFIG_KEY = "unverified_reminders_v1"
@@ -128,6 +130,20 @@ def reminder_text(
     return f"**{guild.name}** verification reminder\n\n{greeting}\n\n✅ Verify here: {destination}\n\nIf you've already verified, you can ignore this message."
 
 
+async def send_channel_reminder_message(
+    guild: discord.Guild, verify: discord.TextChannel,
+    notice: discord.TextChannel, member: discord.Member,
+    cfg: Mapping[str, Any], policy: ReminderPolicy,
+) -> None:
+    """Single authoritative Discord channel-post shape for scheduled and manual checks."""
+    await notice.send(
+        f"{member.mention} {reminder_text(guild, verify, cfg, policy)}",
+        allowed_mentions=discord.AllowedMentions(
+            users=[member], roles=False, everyone=False,
+        ),
+    )
+
+
 async def ledger_ready() -> bool:
     """Check the Discloud PostgreSQL ledger; fail closed if not provisioned."""
     return await asyncio.to_thread(_pg_ready_sync)
@@ -159,6 +175,7 @@ class ReminderWorker:
         # In-memory keyset cursor only controls scan progress. Actual reminder
         # budgets are durable in PostgreSQL and never reset by cleanup.
         self.cleanup_cursor: tuple[datetime, str, str] | None = None
+        self.manual_cleanup_cursor: tuple[datetime, str, str] | None = None
         # Do not add cleanup traffic to Discord's busy startup window.
         self.cleanup_due = time.monotonic() + CLEANUP_INTERVAL_SECONDS
 
@@ -325,14 +342,15 @@ class ReminderWorker:
                 if notice_channel is not None and not notice_channel.permissions_for(current).view_channel:
                     continue
                 try:
-                    body = reminder_text(guild, channel, cfg, policy)
                     if notice_channel is not None:
-                        await notice_channel.send(
-                            f"{current.mention} {body}",
-                            allowed_mentions=discord.AllowedMentions(users=[current], roles=False, everyone=False),
+                        await send_channel_reminder_message(
+                            guild, channel, notice_channel, current, cfg, policy,
                         )
                     else:
-                        await current.send(body, allowed_mentions=discord.AllowedMentions.none())
+                        await current.send(
+                            reminder_text(guild, channel, cfg, policy),
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
                 except (discord.Forbidden, discord.HTTPException) as exc:
                     print(f"ℹ️ verify reminder delivery unavailable guild={guild.id} kind={type(exc).__name__}")
                 await asyncio.sleep(0.5)
@@ -425,6 +443,52 @@ class ReminderWorker:
             self.cleanup_cursor = None
         return deleted
 
+
+    async def cleanup_stale_manual_history(self) -> int:
+        """Same verified-departure requirement as scheduled attempt retention."""
+        cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
+        try:
+            rows = await asyncio.to_thread(
+                _pg_manual_stale_candidates_sync,
+                cutoff, after=self.manual_cleanup_cursor, limit=CLEANUP_BATCH_SIZE,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Expected before the separate manual schema is enabled. No deletion
+            # and no auto-migration when this table does not exist.
+            return 0
+        deleted = 0
+        for guild_id, user_id, joined_at, last_claimed_at in rows:
+            guild = self.bot.get_guild(int(guild_id))
+            if guild is None:
+                continue
+            try:
+                await guild.fetch_member(int(user_id))
+            except discord.NotFound as exc:
+                if getattr(exc, "code", None) != 10007:
+                    continue
+                try:
+                    removed = await asyncio.to_thread(
+                        _pg_delete_manual_departed_sync,
+                        guild_id, user_id, joined_at, cutoff,
+                    )
+                    if removed:
+                        deleted += 1
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    continue
+            except (discord.Forbidden, discord.HTTPException):
+                continue
+            await asyncio.sleep(0)
+        if rows and len(rows) == CLEANUP_BATCH_SIZE:
+            guild_id, user_id, _, last_claimed_at = rows[-1]
+            self.manual_cleanup_cursor = (last_claimed_at, guild_id, user_id)
+        else:
+            self.manual_cleanup_cursor = None
+        return deleted
+
     async def run(self) -> None:
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
@@ -433,6 +497,7 @@ class ReminderWorker:
                 if time.monotonic() >= self.cleanup_due:
                     self.cleanup_due = time.monotonic() + CLEANUP_INTERVAL_SECONDS
                     await self.cleanup_stale_history()
+                    await self.cleanup_stale_manual_history()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

@@ -139,3 +139,134 @@ def test_retention_never_deletes_fresh_claim_even_if_old_scan_had_selected_it():
                for row in ledger.stale_candidates_sync(cutoff, limit=50))
     assert ledger.claim_sync(guild, user, joined, repeat_hours=48, max_reminders=3)
     assert not ledger.delete_departed_sync(str(guild), str(user), joined, cutoff)
+
+
+def test_manual_claim_invalid_input_does_not_touch_database(monkeypatch):
+    monkeypatch.setattr(ledger, "_connect", lambda: pytest.fail("must not access database"))
+    now = datetime.now(timezone.utc)
+    with pytest.raises(ValueError):
+        ledger.reserve_manual_batch_sync(0, [(5, now)])
+    with pytest.raises(ValueError):
+        ledger.reserve_manual_batch_sync(1, [])
+    with pytest.raises(ValueError):
+        ledger.reserve_manual_batch_sync(1, [(5, now)] * 2)
+    with pytest.raises(ValueError):
+        ledger.reserve_manual_batch_sync(1, [(5, now.replace(tzinfo=None))])
+
+
+@requires_postgres
+def test_manual_and_scheduled_ledgers_are_independent_and_restart_safe():
+    assert ledger.manual_ready_sync()
+    guild, user, other = _new_snowflake(), _new_snowflake(), _new_snowflake()
+    joined = datetime.now(timezone.utc) - timedelta(minutes=5)
+    assert ledger.available_manual_member_ids_sync(guild, [(user, joined), (other, joined)]) == {user, other}
+    assert ledger.reserve_manual_batch_sync(guild, [(user, joined), (other, joined)]) == (user, other)
+    assert ledger.available_manual_member_ids_sync(guild, [(user, joined), (other, joined)]) == set()
+    # One minute cooldown is persisted by PostgreSQL, not the current worker.
+    with pytest.raises(ledger.ManualClaimUnavailable, match="once per minute"):
+        ledger.reserve_manual_batch_sync(guild, [(user, joined)])
+    with ledger._connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "select count(*) from public.dank_verify_reminder_delivery where guild_id=%s",
+                (str(guild),),
+            )
+            assert cursor.fetchone()[0] == 0
+            cursor.execute(
+                "update public.dank_verify_manual_guild_budget "
+                "set last_claimed_at=now()-interval '61 seconds' where guild_id=%s",
+                (str(guild),),
+            )
+    assert ledger.reserve_manual_batch_sync(guild, [(user, joined)]) == ()
+    with ledger._connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "update public.dank_verify_manual_guild_budget "
+                "set last_claimed_at=now()-interval '61 seconds' where guild_id=%s",
+                (str(guild),),
+            )
+            cursor.execute(
+                "update public.dank_verify_manual_member_delivery "
+                "set last_claimed_at=now()-interval '13 hours' where guild_id=%s",
+                (str(guild),),
+            )
+    assert ledger.available_manual_member_ids_sync(guild, [(user, joined)]) == {user}
+    assert ledger.reserve_manual_batch_sync(guild, [(user, joined)]) == (user,)
+    assert ledger.available_manual_member_ids_sync(guild, [(user, joined)]) == set()
+    with ledger._connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "update public.dank_verify_manual_guild_budget "
+                "set last_claimed_at=now()-interval '61 seconds' where guild_id=%s",
+                (str(guild),),
+            )
+            cursor.execute(
+                "update public.dank_verify_manual_member_delivery "
+                "set last_claimed_at=now()-interval '13 hours' where guild_id=%s",
+                (str(guild),),
+            )
+    # Two manual attempts per join. Later claims do not consume schedule slots.
+    assert ledger.reserve_manual_batch_sync(guild, [(user, joined)]) == ()
+    with ledger._connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "select attempts from public.dank_verify_manual_member_delivery "
+                "where guild_id=%s and user_id=%s",
+                (str(guild), str(user)),
+            )
+            assert cursor.fetchone()[0] == 2
+            cursor.execute(
+                "update public.dank_verify_manual_guild_budget "
+                "set last_claimed_at=now()-interval '61 seconds' where guild_id=%s",
+                (str(guild),),
+            )
+    with pytest.raises(ledger.ManualClaimUnavailable, match="four batches"):
+        ledger.reserve_manual_batch_sync(guild, [(user, joined + timedelta(days=1))])
+    # Independent guild with the same member remains available.
+    assert ledger.reserve_manual_batch_sync(_new_snowflake(), [(user, joined)]) == (user,)
+
+
+@requires_postgres
+def test_manual_claim_parallel_shards_only_one_wins():
+    guild, user = _new_snowflake(), _new_snowflake()
+    joined = datetime.now(timezone.utc)
+
+    def claim(_):
+        try:
+            return ledger.reserve_manual_batch_sync(guild, [(user, joined)])
+        except ledger.ManualClaimUnavailable:
+            return ()
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(claim, range(12)))
+    assert sum(bool(x) for x in results) == 1
+    with ledger._connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "select attempts from public.dank_verify_manual_member_delivery "
+                "where guild_id=%s and user_id=%s",
+                (str(guild), str(user)),
+            )
+            assert cursor.fetchone()[0] == 1
+
+
+@requires_postgres
+def test_manual_retention_only_verified_departed_generation():
+    guild, user = _new_snowflake(), _new_snowflake()
+    joined = datetime.now(timezone.utc) - timedelta(days=150)
+    assert ledger.reserve_manual_batch_sync(guild, [(user, joined)]) == (user,)
+    with ledger._connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "update public.dank_verify_manual_member_delivery "
+                "set last_claimed_at=now()-interval '100 days' "
+                "where guild_id=%s and user_id=%s",
+                (str(guild), str(user)),
+            )
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+    rows = ledger.manual_stale_candidates_sync(cutoff, limit=50)
+    assert any(row[:2] == (str(guild), str(user)) for row in rows)
+    assert not ledger.delete_manual_departed_sync(
+        str(guild), str(user), joined + timedelta(seconds=1), cutoff
+    )
+    assert ledger.delete_manual_departed_sync(str(guild), str(user), joined, cutoff)

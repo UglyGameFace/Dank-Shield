@@ -7,6 +7,9 @@ on:
       - 'stoney_verify/ui/resource_browser.py'
       - 'stoney_verify/commands_ext/public_verify_reminder_ui.py'
       - 'stoney_verify/verification_reminders.py'
+      - 'stoney_verify/verification_reminder_manual.py'
+      - 'stoney_verify/verification_reminder_postgres.py'
+      - 'tests/test_verification_reminder_manual_send.py'
       - 'tests/test_verification_reminder_manual_due.py'
       - 'stoney_verify/commands_ext/public_somewhere_420_settings.py'
       - 'stoney_verify/commands_ext/public_ticket_command_center.py'
@@ -44,6 +47,8 @@ jobs:
             stoney_verify/ui/resource_browser.py \
             stoney_verify/commands_ext/public_verify_reminder_ui.py \
             stoney_verify/verification_reminders.py \
+            stoney_verify/verification_reminder_manual.py \
+            stoney_verify/verification_reminder_postgres.py \
             stoney_verify/commands_ext/public_somewhere_420_settings.py \
             stoney_verify/commands_ext/public_ticket_command_center.py \
             stoney_verify/commands_ext/public_cleanup_command_center.py \
@@ -58,6 +63,7 @@ jobs:
             tests/test_use_this_channel_shared.py \
             tests/test_verification_reminders.py \
             tests/test_verification_reminder_manual_due.py \
+            tests/test_verification_reminder_manual_send.py \
             tests/test_setup_resource_browser_binding.py \
             tests/test_setup_resource_browser_owner_lock.py \
             tests/test_profile_card_setup_picker_ux.py \

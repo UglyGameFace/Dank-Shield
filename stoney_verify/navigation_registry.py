@@ -173,8 +173,8 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Verification Reminders",
         "📩",
         "access",
-        "Automatically remind unverified members, or send only currently due reminders to your saved channel.",
-        ("verify reminders", "unverified reminders", "verification notices", "verification database", "pending members", "send due now", "send reminder now"),
+        "Set automatic reminders or preview and manually remind unverified members before the saved wait time.",
+        ("verify reminders", "unverified reminders", "verification notices", "verification database", "pending members", "check scheduled due", "send due now", "send reminder now"),
         True,
     ),
     NavigationFeature(
@@ -482,6 +482,12 @@ class RecentFeatureUpdate:
 
 RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     RecentFeatureUpdate(
+        "verification_reminders", "Manual reminders with preview",
+        "Check exactly who is still unverified on each member page, then confirm "
+        "an early manual reminder without changing automatic reminder intervals.",
+        "2026-10-25",
+    ),
+    RecentFeatureUpdate(
         "verification", "Use This Channel in channel setup",
         "Choose the current channel with one tap in Reminders and other setup menus, "
         "or search for another channel. Existing permission checks still apply.", "2026-10-25",
@@ -506,11 +512,6 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     RecentFeatureUpdate(
         "action_reminder_center", "Reminders have their own home",
         "Open your to-dos, message preferences, and reminder settings in one area.", "2026-10-23",
-    ),
-    RecentFeatureUpdate(
-        "verification_reminders", "Send due reminders in your chosen channel",
-        "Staff can run a safe check now without skipping the first delay, repeat interval, "
-        "or per-member maximum.", "2026-10-25",
     ),
     RecentFeatureUpdate(
         "somewhere_420", "See where it's 4:20",
