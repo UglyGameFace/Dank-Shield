@@ -72,7 +72,7 @@ REQUIRED_CHECKLIST_MARKERS = [
     "DANK_FORCE_COMMAND_SYNC_ON_BOOT=false",
     "public_startup_guard blockers=0 warnings=0",
     "commands_ext registration complete",
-    "public command contract: 10 slash roots + View Dank Profile user context menu",
+    "public command contract: 8 slash roots + View Dank Profile user context menu",
 ]
 
 

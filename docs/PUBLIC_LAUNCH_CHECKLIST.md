@@ -1,6 +1,6 @@
 # Dank Shield Public Launch Checklist
 
-_Command-surface contract refreshed: 2026-10-16_
+_Command-surface contract refreshed: 2026-10-25_
 
 This checklist is the public-release gate for the Dank Shield bot runtime and the Vercel dashboard handoff. Do not invite the bot broadly until every blocker section passes in a fresh server.
 
@@ -21,14 +21,12 @@ python tools/audit_public_launch_readiness.py
 
 ## Required public command surface
 
-The final public Discord command tree is defined by `stoney_verify/command_surface_contract.py`. These are the ten global **slash command roots**, in canonical order:
+The final public Discord command tree is defined by `stoney_verify/command_surface_contract.py`. These are the eight global **slash command roots**, in canonical order:
 
 ```text
 /dank
 /captions
-/cinema
 /mod
-/movie
 /role
 /ticket
 /tickets
@@ -36,7 +34,7 @@ The final public Discord command tree is defined by `stoney_verify/command_surfa
 /verify
 ```
 
-The eleventh global application command is the user context menu **View Dank Profile**, not a slash command.
+The ninth global application command is the user context menu **View Dank Profile**, not a slash command.
 
 The public `/dank` group exposes these direct shortcuts only; deeper actions live in their feature managers:
 
@@ -171,7 +169,7 @@ Pass condition:
 ```text
 public_startup_guard blockers=0 warnings=0
 commands_ext registration complete
-public command contract: 10 slash roots + View Dank Profile user context menu
+public command contract: 8 slash roots + View Dank Profile user context menu
 /dank only exposes the canonical direct shortcuts shown above; no old aliases
 ```
 
