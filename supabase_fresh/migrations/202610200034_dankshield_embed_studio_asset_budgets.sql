@@ -128,3 +128,43 @@ grant execute on function public.dank_embed_studio_asset_release(text,text)
 
 comment on table public.dank_embed_studio_asset_holds is
     'Conservative allocation holds; old uncertain reservations require human audit before release.';
+
+-- One bounded-size JSON result, rather than transferring every object row
+-- to the bot. Usage includes reservations, even when a process died mid-upload.
+create or replace function public.dank_embed_studio_asset_usage(p_guild_id text)
+returns jsonb
+language plpgsql security invoker set search_path=public,pg_temp
+as $$
+declare
+    total_files bigint;
+    total_holds bigint;
+    guild_files bigint;
+    guild_holds bigint;
+    files_count bigint;
+    holds_count bigint;
+    stale_count bigint;
+begin
+    if p_guild_id is null or p_guild_id !~ '^[0-9]{1,20}$' then
+        raise exception 'Invalid Studio artwork usage guild';
+    end if;
+    select coalesce(sum(size_bytes),0),count(*) into total_files,files_count
+        from public.dank_embed_studio_assets;
+    select coalesce(sum(size_bytes),0),count(*) into total_holds,holds_count
+        from public.dank_embed_studio_asset_holds;
+    select coalesce(sum(size_bytes),0) into guild_files
+        from public.dank_embed_studio_assets where guild_id=p_guild_id;
+    select coalesce(sum(size_bytes),0) into guild_holds
+        from public.dank_embed_studio_asset_holds where guild_id=p_guild_id;
+    select count(*) into stale_count from public.dank_embed_studio_asset_holds
+        where created_at < now()-interval '30 minutes';
+    return jsonb_build_object(
+        'guild_used',guild_files+guild_holds,
+        'global_used',total_files+total_holds,
+        'asset_count',files_count,'reservation_count',holds_count,
+        'stale_reservations',stale_count
+    );
+end;
+$$;
+revoke all on function public.dank_embed_studio_asset_usage(text)
+    from public,anon,authenticated;
+grant execute on function public.dank_embed_studio_asset_usage(text) to service_role;
