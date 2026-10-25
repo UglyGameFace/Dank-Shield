@@ -150,7 +150,7 @@ def test_manual_ui_shows_exact_saved_destination_and_requires_confirm(monkeypatc
         response=SimpleNamespace(is_done=lambda:False,defer=defer),
     )
     view=ui.ReminderSettingsView(7,policy)
-    action=next(item for item in view.children if item.label=="Send Due Now")
+    action=next(item for item in view.children if item.label=="Check Scheduled Due")
     run(action.callback(interaction))
     assert events[0][0]=="defer"
     assert "<#44>" in events[-1][0]
@@ -158,7 +158,7 @@ def test_manual_ui_shows_exact_saved_destination_and_requires_confirm(monkeypatc
     assert "48 hours" in events[-1][0]
     confirm=events[-1][1]["view"]
     assert isinstance(confirm,ui.ConfirmDueReminderView)
-    assert {"Confirm Send Due Now","Cancel"}=={x.label for x in confirm.children}
+    assert {"Confirm Scheduled Check","Cancel"}=={x.label for x in confirm.children}
 
 
 def test_confirmation_is_one_shot_and_never_uses_invoking_channel(monkeypatch):
@@ -178,7 +178,7 @@ def test_confirmation_is_one_shot_and_never_uses_invoking_channel(monkeypatch):
         response=SimpleNamespace(is_done=lambda:False,defer=defer),
     )
     view=ui.ConfirmDueReminderView(7,1234,44)
-    button=next(x for x in view.children if x.label=="Confirm Send Due Now")
+    button=next(x for x in view.children if x.label=="Confirm Scheduled Check")
     run(button.callback(interaction))
     run(button.callback(interaction))
     assert calls==[(1234,44)]
