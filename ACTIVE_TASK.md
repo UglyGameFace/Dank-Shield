@@ -1,3 +1,11 @@
+## Current channel-picker task: due verification reminders (2026-10-25)
+
+- Single active task remains **channel-based feature setup**. After the shared Use This Channel fix, the user explicitly requested a manual **Send Due Now** action targeted to the **saved designated reminder channel**, not the chat where staff clicked.
+- The new staff-only, two-step action uses the existing singleton Verification Reminder Worker and Discloud Postgres atomic attempts; it does not bypass the first-delay, repeat, max-per-join, Simple Verify role truth, permissions, visibility or verification rechecks.
+- One manual press scans at most a normal 100-member page and consumes up to 3 guarded attempt slots; 60-second per-guild button throttle, shared scan lock/cursor with automatic background worker and no DM fallback.
+- The button is an eligibility check, not a bypass to ping everyone. Attempts include Discord send failures and are described accurately. The automatic schedule continues normally.
+- Preserve remaining channel-picker audit and defer unrelated Embed Studio/Bump Manager/Share Router work.
+
 # FORCE SWITCH: Fix all channel pickers (2026-10-25)
 
 - **Active task**: One shared, moderator-friendly **Use This Channel** path for channel-based configuration. Owner explicitly prioritized this after repeated failures to select text channels on Discord Android.

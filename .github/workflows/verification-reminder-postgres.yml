@@ -10,6 +10,8 @@ on:
       - "stoney_verify/verification_reminders.py"
       - "tests/test_verification_reminder_postgres.py"
       - "tests/test_verification_reminders.py"
+      - "tests/test_verification_reminder_manual_due.py"
+      - "stoney_verify/commands_ext/public_verify_reminder_ui.py"
       - "requirements.txt"
   workflow_dispatch:
 

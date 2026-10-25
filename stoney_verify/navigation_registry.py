@@ -173,8 +173,8 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Verification Reminders",
         "📩",
         "access",
-        "Remind members who have not verified yet. They do not need to opt in individually.",
-        ("verify reminders", "unverified reminders", "verification notices", "verification database", "pending members"),
+        "Automatically remind unverified members, or send only currently due reminders to your saved channel.",
+        ("verify reminders", "unverified reminders", "verification notices", "verification database", "pending members", "send due now", "send reminder now"),
         True,
     ),
     NavigationFeature(
@@ -508,8 +508,9 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
         "Open your to-dos, message preferences, and reminder settings in one area.", "2026-10-23",
     ),
     RecentFeatureUpdate(
-        "verification_reminders", "Reminders for unverified members",
-        "Server owners can send verification reminders without member opt-in.", "2026-10-23",
+        "verification_reminders", "Send due reminders in your chosen channel",
+        "Staff can run a safe check now without skipping the first delay, repeat interval, "
+        "or per-member maximum.", "2026-10-25",
     ),
     RecentFeatureUpdate(
         "somewhere_420", "See where it's 4:20",
