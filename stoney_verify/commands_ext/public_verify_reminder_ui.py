@@ -303,13 +303,13 @@ def _manual_preview_embed(guild: discord.Guild, preview: ManualPreview) -> disco
     card = discord.Embed(
         title="📣 Manual reminder preview",
         description=(
-            f"Destination: <#{preview.channel_id}>\\n"
-            f"Members inspected on **this page**: **{preview.scanned}**\\n"
-            f"Still unverified on this page: **{preview.pending}**\\n"
-            f"Can't see both required channels: **{preview.without_access}**\\n"
-            f"Would be too early for the automatic schedule: **{preview.before_automatic_delay}**\\n"
-            f"Potential manual recipients on this page: **{preview.potential}**\\n\\n"
-            f"**Selected for this send (up to 3):** {names or 'None on this page'}\\n\\n"
+            f"Destination: <#{preview.channel_id}>\n"
+            f"Members inspected on **this page**: **{preview.scanned}**\n"
+            f"Still unverified on this page: **{preview.pending}**\n"
+            f"Can't see both required channels: **{preview.without_access}**\n"
+            f"Would be too early for the automatic schedule: **{preview.before_automatic_delay}**\n"
+            f"Potential manual recipients on this page: **{preview.potential}**\n\n"
+            f"**Selected for this send (up to 3):** {names or 'None on this page'}\n\n"
             "These are candidates, not guaranteed deliveries. Manual cooldowns, "
             "reverification, access changes and PostgreSQL claims are checked again "
             "on confirmation. More unverified people may exist on later pages."
@@ -370,13 +370,13 @@ class ManualPreviewView(_OwnedView):
             )
         await _private(
             interaction,
-            f"**Manual reminder result for <#{self.preview.channel_id}>**\\n"
+            f"**Manual reminder result for <#{self.preview.channel_id}>**\n"
             f"Preview selected: **{report.selected}** • "
             f"Reserved attempts: **{report.reserved}** • "
-            f"Delivered: **{report.delivered}**\\n"
+            f"Delivered: **{report.delivered}**\n"
             f"Discord send failures: **{report.failed}** • "
             f"No longer eligible: **{report.skipped}** • "
-            f"Manual limits: **{report.blocked_by_manual_limits}**.\\n"
+            f"Manual limits: **{report.blocked_by_manual_limits}**.\n"
             "Reserved attempts count even when Discord rejects the message. "
             "Your scheduled reminders and their existing intervals are unchanged."
         )
