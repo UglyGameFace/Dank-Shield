@@ -2320,6 +2320,12 @@ class StudioReviewView(_StudioView):
         # are disabled here: a private preview must never grant a public role.
         for link in session.project["links"]:
             self.add_item(discord.ui.Button(label=link["label"], url=link["url"], style=discord.ButtonStyle.link, row=1))
+        form = session.project.get("form")
+        if form:
+            self.add_item(discord.ui.Button(
+                label=form["button_label"],disabled=True,
+                style=discord.ButtonStyle.primary,row=1,
+            ))
         role_items = session.project.get("role_actions") or []
         if role_items and session.project.get("role_mode") == "dropdown":
             self.add_item(discord.ui.Select(
@@ -2391,6 +2397,22 @@ class StudioReviewView(_StudioView):
             import secrets
             role_items = draft.get("role_actions") or []
             role_token = secrets.token_hex(16) if role_items else ""
+            form = draft.get("form")
+            from .embed_studio_forms import forms_enabled,form_view,StudioFormError
+            if form and not forms_enabled():
+                return await _say(interaction, "Forms are not enabled for publishing on this deployment.")
+            if form and not form.get("questions"):
+                return await _say(interaction, "Add at least one question before publishing.")
+            form_token = secrets.token_hex(16) if form else ""
+            if role_items or form:
+                _source,current_library=await _load_library(self.session.guild_id)
+                if not self.session.post_key and len(current_library["published"]) >= 20 and all(
+                    isinstance(item,dict) and (item.get("role_actions") or item.get("form"))
+                    for item in current_library["published"].values()
+                ):
+                    return await _say(interaction,
+                        "This server already has 20 active role or form posts. "
+                        "Edit an older panel to remove its controls first.")
             if role_items:
                 _source, current_library = await _load_library(self.session.guild_id)
                 if not self.session.post_key and len(current_library["published"]) >= 20 and all(
@@ -2412,7 +2434,7 @@ class StudioReviewView(_StudioView):
                     reason = _profile_cosmetic_role_blocker(channel.guild, role, guild_cfg)
                     if reason:
                         return await _say(interaction, f"An offered role is no longer safe: {reason}")
-            action_view = member_role_view(draft, role_token) if role_items else link_view(draft)
+            action_view = member_role_view(draft, role_token) if role_items else form_view(draft, form_token)
             message: discord.Message
             if self.session.post_key:
                 source, lib = await _load_library(self.session.guild_id)
@@ -2440,6 +2462,7 @@ class StudioReviewView(_StudioView):
                 "by": str(interaction.user.id),
                 "role_token": role_token, "role_mode": draft["role_mode"],
                 "role_actions": draft["role_actions"],
+                "form": deepcopy(form), "form_token": form_token,
             }
             from .embed_studio_core import trim_published_history
             try:
@@ -2456,7 +2479,7 @@ class StudioReviewView(_StudioView):
                 )
         except Exception:
             pass
-        if role_items and not tracked:
+        if (role_items or form) and not tracked:
             # Missing registry means live controls cannot be authorized. Avoid
             # showing unusable buttons, and do not pretend they are persistent.
             try:
@@ -2541,6 +2564,7 @@ class TrackedPostSelect(discord.ui.Select):
         self.session.history = self.session.history[-10:]
         draft["role_mode"] = str(item.get("role_mode") or "buttons")
         draft["role_actions"] = deepcopy(item.get("role_actions") or [])
+        draft["form"] = deepcopy(item.get("form"))
         try:
             draft = validate_project(draft)
         except StudioValidationError:
