@@ -15,6 +15,11 @@ on:
       - 'stoney_verify/profile_card_setup_ui.py'
       - 'stoney_verify/embed_studio_ui.py'
       - 'tests/test_use_this_channel_shared.py'
+      - 'tests/test_use_this_channel_legacy.py'
+      - 'stoney_verify/roles_center_services.py'
+      - 'stoney_verify/commands_ext/public_setup_picker.py'
+      - 'stoney_verify/commands_ext/public_setup_recommend.py'
+      - 'stoney_verify/commands_ext/public_live_captions.py'
       - '.github/workflows/use-this-channel.yml'
 
 permissions:
@@ -48,11 +53,16 @@ jobs:
             stoney_verify/welcome_card_studio_ui.py \
             stoney_verify/exit_card_studio_ui.py \
             stoney_verify/profile_card_setup_ui.py \
-            stoney_verify/embed_studio_ui.py
+            stoney_verify/embed_studio_ui.py \
+            stoney_verify/roles_center_services.py \
+            stoney_verify/commands_ext/public_setup_picker.py \
+            stoney_verify/commands_ext/public_setup_recommend.py \
+            stoney_verify/commands_ext/public_live_captions.py
       - name: Shared picker and existing feature regressions
         run: |
           python -m pytest -q --tb=short --disable-warnings \
             tests/test_use_this_channel_shared.py \
+            tests/test_use_this_channel_legacy.py \
             tests/test_verification_reminders.py \
             tests/test_setup_resource_browser_binding.py \
             tests/test_setup_resource_browser_owner_lock.py \
