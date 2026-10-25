@@ -40,6 +40,7 @@ jobs:
             stoney_verify/embed_studio_roles.py \
             stoney_verify/embed_studio_storage_v2.py \
             stoney_verify/embed_studio_assets.py \
+            stoney_verify/embed_studio_artwork_budget.py \
             stoney_verify/embed_studio_schedules.py \
             stoney_verify/embed_studio_schedule_runtime.py \
             stoney_verify/embed_studio_reviews.py \
@@ -47,7 +48,8 @@ jobs:
             stoney_verify/embed_studio_live_text.py \
             stoney_verify/embed_studio_live_runtime.py \
             stoney_verify/embed_studio_live_ui.py \
-            tools/stage_embed_studio_v2.py
+            tools/stage_embed_studio_v2.py \
+            tools/audit_embed_studio_artwork.py
 
       - name: Run focused regression tests
         run: >-
@@ -60,6 +62,7 @@ jobs:
           tests/test_embed_studio_media_smart_text.py
           tests/test_embed_studio_storage_v2.py
           tests/test_embed_studio_assets.py
+          tests/test_embed_studio_artwork_budgets.py
           tests/test_embed_studio_scheduling.py
           tests/test_embed_studio_reviews.py
           tests/test_embed_studio_forms.py
