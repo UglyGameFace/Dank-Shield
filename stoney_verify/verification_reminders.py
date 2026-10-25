@@ -30,6 +30,7 @@ SCAN_SIZE = 100
 GUILDS_PER_PASS = 25
 MAX_DELIVERIES_PER_PASS = 10
 MAX_PER_GUILD_PER_PASS = 3
+MANUAL_COOLDOWN_SECONDS = 60
 POLL_SECONDS = 180
 RETENTION_DAYS = 90
 CLEANUP_BATCH_SIZE = 12
@@ -143,12 +144,18 @@ async def _claim_delivery(guild_id: int, member: discord.Member, policy: Reminde
     )
 
 
+class ManualReminderUnavailable(RuntimeError):
+    """Explicit reason no manual due scan was allowed; never fallback to DMs."""
+
+
 class ReminderWorker:
     def __init__(self, bot: Any) -> None:
         self.bot = bot
         self.task: asyncio.Task[None] | None = None
         self.guild_cursor = 0
         self.member_cursors: dict[int, int] = {}
+        self.guild_scan_locks: dict[int, asyncio.Lock] = {}
+        self.manual_trigger_at: dict[int, float] = {}
         # In-memory keyset cursor only controls scan progress. Actual reminder
         # budgets are durable in PostgreSQL and never reset by cleanup.
         self.cleanup_cursor: tuple[datetime, str, str] | None = None
@@ -160,11 +167,91 @@ class ReminderWorker:
             self.task = asyncio.create_task(self.run(), name="verify-unverified-reminders")
         return self.task
 
+    def _scan_lock(self, guild_id: int) -> asyncio.Lock:
+        return self.guild_scan_locks.setdefault(int(guild_id), asyncio.Lock())
+
     async def scan_guild(self, guild: discord.Guild, *, remaining: int) -> int:
+        # Automatic passes and manual "Send Due Now" share the same cursor.
+        # Serialize them within a guild to avoid concurrent cursor races.
+        async with self._scan_lock(guild.id):
+            return await self._scan_guild_unlocked(guild, remaining=remaining)
+
+    async def scan_due_now_in_channel(
+        self, guild: discord.Guild, *, channel_id: int,
+    ) -> int:
+        """Run ONE bounded scheduled-equivalent pass in the saved channel.
+
+        Does not override the first delay, repeat cooldown, maximum attempts,
+        authoritative verification truth or the atomic PostgreSQL claim.
+        """
+        if int(guild.id) <= 0 or int(channel_id) <= 0:
+            raise ManualReminderUnavailable("Choose a saved reminder text channel first.")
+        if getattr(self.bot, "get_guild", None) is None or self.bot.get_guild(guild.id) is not guild:
+            raise ManualReminderUnavailable("This bot process cannot verify that it owns this server.")
+        async with self._scan_lock(guild.id):
+            now = time.monotonic()
+            previous = self.manual_trigger_at.get(guild.id)
+            if previous is not None and now - previous < MANUAL_COOLDOWN_SECONDS:
+                raise ManualReminderUnavailable(
+                    "A due-reminder check was already requested recently. "
+                    "Try again after a minute; normal automatic delivery continues."
+                )
+            try:
+                cfg = await get_guild_config(guild.id, refresh=True)
+            except Exception as exc:
+                raise ManualReminderUnavailable("Cannot load saved verification settings.") from exc
+            policy = parse_policy(cfg)
+            if (not policy.enabled
+                    or str(cfg.get("source") or "").startswith(("unavailable:", "unconfigured:"))):
+                raise ManualReminderUnavailable("Enable reminders and restore healthy guild settings first.")
+            if policy.delivery != "channel" or policy.reminder_channel_id != int(channel_id):
+                raise ManualReminderUnavailable(
+                    "Select the designated reminder channel with Use This Channel or Choose Other Channel first."
+                )
+            if not basic_verify_allowed_for_guild(guild, cfg):
+                raise ManualReminderUnavailable("Simple Verify is not configured for this server.")
+            verify = verification_channel(guild, cfg)
+            notice = delivery_channel(guild, policy)
+            if verify is None or notice is None or int(notice.id) != int(channel_id):
+                raise ManualReminderUnavailable("The saved verification or reminder channel no longer exists.")
+            if (guild.get_role(_as_int(cfg.get("unverified_role_id"), 0)) is None
+                    or guild.get_role(_as_int(cfg.get("verified_role_id"), 0)) is None):
+                raise ManualReminderUnavailable("Map both verification roles before sending reminders.")
+            sender = guild.me
+            if sender is None:
+                raise ManualReminderUnavailable("Cannot verify Dank Shield's channel permissions.")
+            permissions = notice.permissions_for(sender)
+            if not (permissions.view_channel and permissions.send_messages):
+                raise ManualReminderUnavailable(
+                    "Dank Shield needs View Channel and Send Messages in the designated channel."
+                )
+            if not await ledger_ready():
+                raise ManualReminderUnavailable(
+                    "The private PostgreSQL reminder ledger is unavailable. Nothing was sent."
+                )
+            self.manual_trigger_at[guild.id] = now
+            # At most 3 attempt claims, at most 100 fetched members.
+            # The cursor is retained so later checks can continue fairly.
+            return await self._scan_guild_unlocked(
+                guild, remaining=MAX_PER_GUILD_PER_PASS,
+                required_channel_id=int(channel_id),
+            )
+
+    async def _scan_guild_unlocked(
+        self, guild: discord.Guild, *, remaining: int,
+        required_channel_id: int = 0,
+    ) -> int:
         try:
             cfg = await get_guild_config(guild.id, refresh=True)
             policy = parse_policy(cfg)
             if not policy.enabled or str(cfg.get("source") or "").startswith(("unavailable:", "unconfigured:")):
+                return 0
+            # A manual request must never switch into DM mode just because
+            # another moderator changed the policy while the button ran.
+            if required_channel_id and (
+                policy.delivery != "channel"
+                or policy.reminder_channel_id != required_channel_id
+            ):
                 return 0
             if not basic_verify_allowed_for_guild(guild, cfg):
                 return 0
@@ -361,3 +448,15 @@ def start_unverified_reminder_worker(bot: Any) -> asyncio.Task[None]:
     if _WORKER is None or _WORKER.bot is not bot:
         _WORKER = ReminderWorker(bot)
     return _WORKER.start()
+
+
+async def send_due_now_in_designated_channel(
+    bot: Any, guild: discord.Guild, *, channel_id: int,
+) -> int:
+    """Use the already-running reminder worker, not a parallel sender."""
+    worker = _WORKER
+    if worker is None or worker.bot is not bot or worker.task is None or worker.task.done():
+        raise ManualReminderUnavailable(
+            "The reminder worker is not running. Check bot readiness before trying again."
+        )
+    return await worker.scan_due_now_in_channel(guild, channel_id=channel_id)
