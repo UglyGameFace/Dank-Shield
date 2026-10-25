@@ -143,10 +143,28 @@ def test_mobile_studio_has_clear_separate_sections_and_one_confirmation() -> Non
     view = StudioHomeView(session)
     labels = {str(getattr(item, "label", "") or "") for item in view.children}
     assert {
-        "Write", "Appearance", "Images", "Fields", "Link Buttons",
-        "Embeds", "Undo", "Templates", "Edit Posted",
-        "Starter Layouts", "Preview & Publish",
+        "Pick a Layout", "Write Message", "Look & Images",
+        "Add Buttons", "Saved Designs", "More Tools",
+        "Edit Existing Post", "Undo", "Preview & Post",
     } <= labels
+    assert len([item for item in view.children if isinstance(item, discord.ui.Button)]) == 9
+    assert not {"JSON Files", "Smart Text", "Role Controls", "Form Builder"} & labels
+    from stoney_verify.embed_studio_ui import (
+        StudioDesignTools, StudioButtonTools, StudioSavedTools, StudioAdvancedTools,
+    )
+    assert {"Colors & Style", "Add Pictures", "Saved Pictures", "Reuse Server Style"} <= {
+        item.label for item in StudioDesignTools(session).children
+    }
+    assert {"Website Buttons", "Let Members Pick Roles", "Collect Answers"} <= {
+        item.label for item in StudioButtonTools(session).children
+    }
+    assert {"Saved Post Layouts", "Restore My Draft", "Share With Staff", "Import / Export"} <= {
+        item.label for item in StudioSavedTools(session).children
+    }
+    assert {"Extra Text Sections", "Multiple Post Cards", "Automatic Server Details",
+            "Upcoming Scheduled Posts"} <= {
+        item.label for item in StudioAdvancedTools(session).children
+    }
     assert any(isinstance(item, discord.ui.ChannelSelect) for item in view.children)
     review = StudioReviewView(session)
     assert "Publish / Save Edit" in {getattr(item, "label", "") for item in review.children}
