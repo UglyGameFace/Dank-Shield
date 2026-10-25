@@ -94,7 +94,7 @@ def pending_for_reminder(member: discord.Member, cfg: Mapping[str, Any]) -> bool
         return False
     if _as_int(cfg.get("verified_role_id"), 0) <= 0:
         return False
-    return member_is_pending_verification(member)
+    return member_is_pending_verification(member, config=cfg)
 
 
 def verification_channel(guild: discord.Guild, cfg: Mapping[str, Any]) -> discord.TextChannel | None:
@@ -132,14 +132,18 @@ def reminder_text(
 
 async def send_channel_reminder_message(
     guild: discord.Guild, verify: discord.TextChannel,
-    notice: discord.TextChannel, member: discord.Member,
+    notice: discord.TextChannel, member: discord.Member | list[discord.Member],
     cfg: Mapping[str, Any], policy: ReminderPolicy,
 ) -> None:
-    """Single authoritative Discord channel-post shape for scheduled and manual checks."""
+    """One canonical sender for individual scheduled or grouped manual mentions."""
+    members = member if isinstance(member, list) else [member]
+    if not 1 <= len(members) <= 25:
+        raise ValueError("Invalid channel reminder audience")
     await notice.send(
-        f"{member.mention} {reminder_text(guild, verify, cfg, policy)}",
+        f"{' '.join(m.mention for m in members)} "
+        f"{reminder_text(guild, verify, cfg, policy)}",
         allowed_mentions=discord.AllowedMentions(
-            users=[member], roles=False, everyone=False,
+            users=members, roles=False, everyone=False,
         ),
     )
 

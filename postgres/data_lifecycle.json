@@ -45,7 +45,7 @@
     "public.dank_verify_manual_member_delivery": {
       "feature": "Staff-confirmed manual Simple Verify reminders",
       "owner": "stoney_verify.verification_reminders.ReminderWorker.cleanup_stale_manual_history",
-      "purpose": "Independent two-per-join manual attempts and 12-hour member cooldown",
+      "purpose": "Independent durable six-hour manual member cooldown for server-selected channel or DM batches, with legacy capped attempt counter",
       "stored_fields": ["guild_id", "user_id", "joined_at", "last_claimed_at", "attempts"],
       "contains_message_content": false,
       "retention_rule": "Retain while Discord membership remains; only delete after 90 days idle AND REST-confirmed Unknown Member (10007), matching join generation",

@@ -40,12 +40,46 @@ def test_member_due_requires_a_known_old_join():
 
 
 def test_pending_uses_existing_role_truth_not_role_names(monkeypatch):
-    monkeypatch.setattr(reminders, "member_is_pending_verification", lambda member: member.pending)
+    monkeypatch.setattr(reminders, "member_is_pending_verification", lambda member, *, config=None: member.pending)
     cfg = {"unverified_role_id": "10", "verified_role_id": "11"}
     assert reminders.pending_for_reminder(SimpleNamespace(bot=False, pending=True), cfg)
     assert not reminders.pending_for_reminder(SimpleNamespace(bot=False, pending=False), cfg)
     assert not reminders.pending_for_reminder(SimpleNamespace(bot=True, pending=True), cfg)
     assert not reminders.pending_for_reminder(SimpleNamespace(bot=False, pending=True), {"unverified_role_id": "10"})
+
+
+def test_server_owner_custom_role_mapping_overrides_cached_other_guild_truth(monkeypatch):
+    from stoney_verify import role_truth
+
+    guild = SimpleNamespace(id=1234)
+    role = lambda uid, title: SimpleNamespace(
+        id=uid, name=title, is_default=lambda: False,
+    )
+    pending = SimpleNamespace(
+        guild=guild, id=55, bot=False,
+        roles=[role(777, "🪐 Arrival Bay")],
+    )
+    cfg = {
+        "unverified_role_id": "777",
+        "verified_role_id": "888",
+        "resident_role_id": "999",
+        "staff_role_id": "444",
+    }
+    monkeypatch.setattr(
+        role_truth, "get_guild_role_config",
+        lambda guild_id: {"unverified_role_id": "1", "verified_role_id": "2"},
+    )
+    assert reminders.pending_for_reminder(pending, cfg)
+    pending.roles.append(role(888, "🎮 Already Access Granted"))
+    assert not reminders.pending_for_reminder(pending, cfg)
+    pending.roles = [role(777, "🪐 Arrival Bay"), role(444, "Server Mod")]
+    assert not reminders.pending_for_reminder(pending, cfg)
+    pending.roles = [role(777, "🪐 Arrival Bay"), role(999, "Resident")]
+    assert not reminders.pending_for_reminder(pending, cfg)
+    pending.roles = [role(777, "🪐 Arrival Bay")]
+    assert not reminders.pending_for_reminder(
+        pending, {**cfg, "unverified_role_id": "123"},
+    )
 
 
 def test_text_links_to_saved_panel_and_does_not_ping():
