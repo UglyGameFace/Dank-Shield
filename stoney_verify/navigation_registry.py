@@ -482,8 +482,9 @@ class RecentFeatureUpdate:
 
 RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     RecentFeatureUpdate(
-        "embed_studio", "Media Library, Smart Text and portable JSON",
-        "Reuse media links and brand themes, add Smart Text, and export/import portable JSON drafts.", "2026-10-24",
+        "embed_studio", "Post Builder is easier for moderators",
+        "Make an announcement in 4 steps. More options are grouped; saved pictures, "
+        "designs, Smart Text and JSON files remain available.", "2026-10-24",
     ),
     RecentFeatureUpdate(
         "share_router", "Share videos from regular channels",
