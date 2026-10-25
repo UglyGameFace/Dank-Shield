@@ -258,11 +258,11 @@ class _UseCurrentChannelForLogButton(discord.ui.Button):
         super().__init__(
             label=label, emoji="📍", style=discord.ButtonStyle.secondary, row=row,
         )
-        self.parent = parent
+        self.target_picker = parent
         self.key = key
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await _stage_current_setup_channel(interaction, self.parent, self.key)
+        await _stage_current_setup_channel(interaction, self.target_picker, self.key)
 
 
 class _CurrentLogTargetMenu(OwnerOnlyView):
