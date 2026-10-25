@@ -212,13 +212,24 @@ def base_member_role_snapshot(member: discord.Member) -> dict[str, Any]:
     }
 
 
-def member_role_truth(member: discord.Member) -> dict[str, Any]:
+def member_role_truth(
+    member: discord.Member, *, config: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     guild_id = safe_int(getattr(getattr(member, "guild", None), "id", 0), 0)
     roles = member_role_ids(member)
-    pending = configured_role_ids(guild_id, PENDING_ROLE_KEYS) if guild_id else set()
-    safe = configured_role_ids(guild_id, SAFE_ROLE_KEYS) if guild_id else set()
-    staff = configured_role_ids(guild_id, STAFF_ROLE_KEYS) if guild_id else set()
-    secondary = configured_role_ids(guild_id, SECONDARY_SAFE_ROLE_KEYS) if guild_id else set()
+    # When a caller already fetched the current guild's authoritative saved
+    # settings, use THAT exact snapshot. No stale role cache or name guessing.
+    # Default callers retain the canonical per-guild lookup unchanged.
+    if config is not None:
+        pending = {cfg_id(config, k) for k in PENDING_ROLE_KEYS} - {0}
+        safe = {cfg_id(config, k) for k in SAFE_ROLE_KEYS} - {0}
+        staff = {cfg_id(config, k) for k in STAFF_ROLE_KEYS} - {0}
+        secondary = {cfg_id(config, k) for k in SECONDARY_SAFE_ROLE_KEYS} - {0}
+    else:
+        pending = configured_role_ids(guild_id, PENDING_ROLE_KEYS) if guild_id else set()
+        safe = configured_role_ids(guild_id, SAFE_ROLE_KEYS) if guild_id else set()
+        staff = configured_role_ids(guild_id, STAFF_ROLE_KEYS) if guild_id else set()
+        secondary = configured_role_ids(guild_id, SECONDARY_SAFE_ROLE_KEYS) if guild_id else set()
     verified_safe = safe - staff
 
     has_unverified = bool(roles & pending)
@@ -282,8 +293,10 @@ def member_has_any_safe_access_role(member: discord.Member, *, include_unverifie
     return bool(roles & safe)
 
 
-def member_is_pending_verification(member: discord.Member) -> bool:
-    truth = member_role_truth(member)
+def member_is_pending_verification(
+    member: discord.Member, *, config: Mapping[str, Any] | None = None,
+) -> bool:
+    truth = member_role_truth(member, config=config)
     if not truth.get("configured"):
         return False
     return bool(truth.get("is_pending_verification"))
