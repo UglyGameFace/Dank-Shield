@@ -109,7 +109,9 @@ def test_modal_questions_are_bounded_and_clean_answers():
 def test_studio_ui_forms_are_in_private_editor_and_preview_disabled():
     session=StudioSession(guild_id=1,owner_id=2)
     menu=StudioHomeView(session)
-    assert "Form Builder" in {getattr(x,"label","") for x in menu.children}
+    assert "Add Buttons" in {getattr(x,"label","") for x in menu.children}
+    from stoney_verify.embed_studio_ui import StudioButtonTools
+    assert "Collect Answers" in {getattr(x,"label","") for x in StudioButtonTools(session).children}
     assert max(sum(1 for x in menu.children if x.row==row) for row in range(5))<=5
     session.project=validate_project(_project())
     assert len(StudioFormBasicsModal(session).children)==2
