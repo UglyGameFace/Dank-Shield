@@ -501,14 +501,52 @@ class StarterSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        from .embed_studio_presets import project_for_preset
-        self.session.history.append(self.session.project)
-        self.session.history = self.session.history[-10:]
-        self.session.project = project_for_preset(self.values[0])
-        self.session.dirty = True
-        self.session.active = 0
-        self.session.post_key = ""
-        await _home(interaction, self.session, notice="Starter layout loaded. Make it yours before publishing.")
+        selected = self.values[0]
+        if (self.session.project != new_project() or self.session.post_key):
+            return await _menu(
+                interaction,
+                heading="Replace Your Current Draft?",
+                description=(
+                    "Picking a different layout starts a new draft. Your current work "
+                    "will be kept for **Undo**, but the new layout replaces what "
+                    "you're editing. Nothing will be posted."
+                ),
+                view=ConfirmStarterLayout(self.session, selected),
+            )
+        await _use_starter_layout(interaction, self.session, selected)
+
+
+async def _use_starter_layout(
+    interaction: discord.Interaction, session: StudioSession, key: str,
+) -> None:
+    from .embed_studio_presets import project_for_preset
+    # New layouts never inherit an old published-post edit target.
+    chosen = project_for_preset(key)
+    session.history.append(deepcopy(session.project))
+    session.history = session.history[-10:]
+    session.project = chosen
+    session.dirty = True
+    session.active = 0
+    session.post_key = ""
+    await _home(interaction, session, notice="Layout ready. Edit the words and choose where to post.")
+
+
+class ConfirmStarterLayout(_StudioView):
+    def __init__(self, session: StudioSession, key: str) -> None:
+        super().__init__(session)
+        self.key = key
+        self.used = False
+
+    @discord.ui.button(label="Use New Layout", emoji="✅", style=discord.ButtonStyle.primary)
+    async def confirm(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if self.used:
+            return await _say(interaction, "This layout choice was already used.")
+        self.used = True
+        await _use_starter_layout(interaction, self.session, self.key)
+
+    @discord.ui.button(label="Keep My Draft", emoji="◀️", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await _home(interaction, self.session, notice="Your current draft was kept.")
 
 
 class StarterMenu(_StudioView):
