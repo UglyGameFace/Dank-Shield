@@ -13,6 +13,7 @@ import discord
 
 from ..guild_config import get_guild_config, invalidate_guild_config, upsert_guild_config
 from ..ui.picker import DankChannelSelect
+from ..ui.current_channel import current_text_channel
 from ..community_voice_caption_runtime import (
     ensure_community_voice_caption_manager,
     live_captions_enabled,
@@ -1553,6 +1554,7 @@ class CaptionOutputPickerView(_OwnedView):
             )
             await _followup(interaction, f"✅ Live Captions output set to {channel.mention}.")
 
+        self._save_output_channel = _picked
         self.add_item(
             DankChannelSelect(
                 author_id=owner_id,
@@ -1562,6 +1564,23 @@ class CaptionOutputPickerView(_OwnedView):
                 row=0,
             )
         )
+
+    @discord.ui.button(
+        label="Use This Channel", emoji="📍", style=discord.ButtonStyle.success, row=1,
+    )
+    async def use_this_channel(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        _ = button
+        channel = current_text_channel(interaction)
+        if channel is None:
+            return await _followup(
+                interaction,
+                "❌ Open captions setup in a text channel where Dank Shield can send, "
+                "or choose another with the picker."
+            )
+        # Same callback and staff/permission/persistence checks as the native selector.
+        await self._save_output_channel(interaction, channel)
 
 
 class CaptionVoiceRulePickerView(_OwnedView):
