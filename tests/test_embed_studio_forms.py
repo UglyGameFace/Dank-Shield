@@ -125,7 +125,7 @@ def test_studio_ui_forms_are_in_private_editor_and_preview_disabled():
 
 def test_form_actions_are_protected_against_eviction():
     records={str(i):{"form":_project()["form"]} for i in range(21)}
-    with pytest.raises(StudioValidationError,match="role or form"):
+    with pytest.raises(StudioValidationError,match="role panels or forms"):
         trim_published_history(records,max_posts=20)
     records["20"]={"form":None}
     result=trim_published_history(records,max_posts=20)
