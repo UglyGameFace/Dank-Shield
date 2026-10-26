@@ -49,8 +49,12 @@ def _safe_details_url(value: Any) -> str:
         parts = urlsplit(value)
     except ValueError:
         return SITE
+    try:
+        allowed_port = parts.port in (None, 443)
+    except ValueError:
+        return SITE
     if (parts.scheme != "https" or parts.hostname not in _ALLOWED_SOURCE_HOSTS
-            or parts.username or parts.password or parts.port not in (None, 443)
+            or parts.username or parts.password or not allowed_port
             or parts.fragment or "\\" in value):
         return SITE
     return value
@@ -65,6 +69,14 @@ def normalize_atlas_posts(payload: Any, *, limit: int = _MAX_RESULTS) -> list[di
             (payload[key] for key in ("posts", "data", "results", "items")
              if isinstance(payload.get(key), list)), None,
         )
+        # Tolerate a documented-style top-level data wrapper if its inner
+        # payload is a list collection; unknown objects still fail closed.
+        nested = payload.get("data")
+        if rows is None and isinstance(nested, dict):
+            rows = next(
+                (nested[k] for k in ("posts", "items", "results")
+                 if isinstance(nested.get(k), list)), None,
+            )
     else:
         rows = None
     if rows is None:
