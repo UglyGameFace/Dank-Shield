@@ -2921,7 +2921,7 @@ class SessionControlView(_OwnedView):
             return await _followup(
                 interaction,
                 "✅ Group shared on the public gaming board. Share this public discovery link with gamers outside the server: "
-                + url + "/lfg",
+                + url,
             )
         return await _followup(
             interaction,
@@ -4288,8 +4288,8 @@ def verified_public_lfg_invite(value: Any) -> str:
 
 
 def community_public_lfg_url() -> str:
-    from ..community_public_lfg import public_lfg_base_url
-    return public_lfg_base_url()
+    from ..community_public_lfg import public_lfg_page_url
+    return public_lfg_page_url()
 
 
 def _public_recruiting_embed(settings: dict[str, Any]) -> discord.Embed:
@@ -4308,7 +4308,7 @@ def _public_recruiting_embed(settings: dict[str, Any]) -> discord.Embed:
     )
     embed.add_field(name="Recruitment", value="Enabled" if enabled else "Off", inline=True)
     embed.add_field(name="Server invite", value=invite or "Not configured", inline=False)
-    embed.add_field(name="Public board", value=(url + "/lfg") if url else "Public HTTPS Site URL not configured", inline=False)
+    embed.add_field(name="Public board", value=(url) if url else "Public HTTPS Site URL not configured", inline=False)
     embed.add_field(
         name="Important",
         value="Outside users join your **server**, then must meet your verification/age rules before joining a session. Publishing does not message strangers or auto-advertise elsewhere.",
