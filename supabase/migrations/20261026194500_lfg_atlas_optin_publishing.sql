@@ -8,6 +8,7 @@ create table if not exists public.dank_community_atlas_publications (
   title text not null,
   region text not null,
   contact text not null,
+  adult_only boolean not null default false,
   expires_at timestamptz not null,
   state text not null default 'queued'
     check (state in ('queued','publishing','posted','removing','removed','unknown','failed')),
@@ -35,7 +36,8 @@ grant select, insert, update on public.dank_community_atlas_publications to serv
 
 create or replace function public.dank_queue_atlas_publication(
   p_session uuid, p_guild_id text, p_actor_id text,
-  p_region text, p_hours integer default 2
+  p_region text, p_hours integer default 2,
+  p_adult boolean default false
 )
 returns setof public.dank_community_atlas_publications
 language plpgsql security definer set search_path=''
@@ -58,7 +60,7 @@ begin
 
   return query
   insert into public.dank_community_atlas_publications as prior (
-    session_id, guild_id, actor_id, game, title, region, contact, expires_at
+    session_id, guild_id, actor_id, game, title, region, contact, adult_only, expires_at
   )
   select s.id, s.guild_id, p_actor_id,
     left(s.game_name, 80),
@@ -66,6 +68,7 @@ begin
       pg_catalog.regexp_replace(s.game_name, '[^a-zA-Z0-9 .+_-]', '', 'g'), 80),
     p_region,
     h.public_lfg_invite_url,
+    coalesce(p_adult,false),
     least(
       now() + p_hours * interval '1 hour',
       s.created_at + h.max_session_lifetime_seconds * interval '1 second'
@@ -89,7 +92,7 @@ begin
   on conflict (session_id) do update
     set guild_id=excluded.guild_id, actor_id=excluded.actor_id,
         game=excluded.game, title=excluded.title, region=excluded.region,
-        contact=excluded.contact, expires_at=excluded.expires_at,
+        contact=excluded.contact, adult_only=excluded.adult_only, expires_at=excluded.expires_at,
         state='queued', remote_id=null, remote_url=null, edit_token=null,
         lease_until=null, delete_attempts=0, revoke_requested=false, last_error=null,
         claim_version=prior.claim_version+1,
@@ -140,9 +143,9 @@ as $$
   from due where p.session_id=due.session_id
   returning p.*;
 $$;
-revoke all on function public.dank_queue_atlas_publication(uuid,text,text,text,integer)
+revoke all on function public.dank_queue_atlas_publication(uuid,text,text,text,integer,boolean)
   from public, anon, authenticated;
-grant execute on function public.dank_queue_atlas_publication(uuid,text,text,text,integer)
+grant execute on function public.dank_queue_atlas_publication(uuid,text,text,text,integer,boolean)
   to service_role;
 revoke all on function public.dank_claim_atlas_publications(integer)
   from public, anon, authenticated;
