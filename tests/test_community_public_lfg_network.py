@@ -13,11 +13,11 @@ from stoney_verify.commands_ext import public_community_hub as ui
 
 
 def _row(name="Minecraft", link="https://discord.gg/the420lobby"):
-    return {"game_name": name, "capacity": 6, "invite_url": link}
+    return {"game_name": name, "capacity": 6, "invite_url": link, "community_name": "The 420 Lobby"}
 
 
 def test_network_surface_is_mobile_friendly_and_not_a_native_join():
-    groups = [{"game": "Minecraft", "capacity": 6, "join_url": "https://discord.gg/the420lobby"}]
+    groups = [{"game": "Minecraft", "community": "The 420 Lobby", "capacity": 6, "join_url": "https://discord.gg/the420lobby"}]
     view = ui.PublicNetworkView(123, groups, game_query="mc")
     menu = next(x for x in view.children if isinstance(x, discord.ui.Select))
     assert len(menu.options) == 1
@@ -48,7 +48,7 @@ def test_public_network_source_reads_only_consent_projection(monkeypatch):
 
 
 def test_public_network_denies_stale_or_revoked_invite(monkeypatch):
-    groups = [{"game": "Minecraft", "capacity": 6, "join_url": "https://discord.gg/the420lobby"}]
+    groups = [{"game": "Minecraft", "community": "The 420 Lobby", "capacity": 6, "join_url": "https://discord.gg/the420lobby"}]
     menu = ui.PublicNetworkSelect(123, groups, "mc")
     menu._values = ["0"]
     monkeypatch.setattr(ui, "_defer_update", AsyncMock())
@@ -73,7 +73,7 @@ def test_invalid_destination_fails_closed(monkeypatch):
 
 
 def test_group_selector_has_finite_options():
-    rows = [{"game": f"Game {i}", "capacity": 4, "join_url": "https://discord.gg/validcode"} for i in range(100)]
+    rows = [{"game": f"Game {i}", "community": f"Community {i}", "capacity": 4, "join_url": "https://discord.gg/validcode"} for i in range(100)]
     menu = ui.PublicNetworkSelect(123, rows, "")
     assert len(menu.options) == 25
     assert len(menu.custom_id) <= 100
