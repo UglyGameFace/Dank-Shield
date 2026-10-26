@@ -51,6 +51,7 @@ def test_cinema_modules_cannot_be_reintroduced_by_nested_or_dynamic_imports() ->
         "bot.load_extension('stoney_verify.commands_ext.public_movie_night')",
         "__import__('stoney_verify.movie_night')",
         "import movie_catalog",
+        "from stoney_verify import media_metadata",
     )
     for snippet in forbidden:
         with pytest.raises(AssertionError, match="retired Cinema"):
