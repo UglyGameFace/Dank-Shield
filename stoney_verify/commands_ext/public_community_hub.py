@@ -1484,6 +1484,12 @@ class CommunityHubView(_OwnedView):
             view=LiveCaptionsHomeView(self.owner_id),
         )
 
+    @discord.ui.button(label="Public Gaming Network", emoji="🧭", style=discord.ButtonStyle.primary, custom_id="dank:hub:publicnetwork:v1", row=3)
+    async def public_network(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_public_lfg_network(interaction, self.owner_id)
+
     @discord.ui.button(label="External Groups", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:v1", row=2)
     async def external_groups(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -4111,6 +4117,171 @@ class CategoryPickerView(_OwnedView):
         await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings))
 
 
+class PublicNetworkSearchModal(discord.ui.Modal, title="Search Public Gaming Network"):
+    game = discord.ui.TextInput(
+        label="Game to search (clear for all)",
+        placeholder="Minecraft, Destiny 2, GTA V",
+        required=False,
+        max_length=60,
+    )
+
+    def __init__(self, owner_id: int, *, current_game: str = "") -> None:
+        super().__init__()
+        self.owner_id = int(owner_id)
+        self.game.default = str(current_game or "")[:60] or None
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await _private(interaction, "Open your own Community Hub panel.")
+        await _defer_ephemeral(interaction)
+        await _open_public_lfg_network(
+            interaction, self.owner_id,
+            game_query=_safe_str(self.game.value)[:60],
+        )
+
+
+def _public_network_embed(
+    groups: list[dict[str, Any]], *, game_query: str = "",
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="🧭 Public Gaming Network",
+        description=(
+            "Browse gaming groups that have **both server approval and host opt-in**. "
+            "These groups may be in other Discord servers. "
+            "Opening a server invite does not automatically join the group, "
+            "and its normal age, verification, and safety rules still apply."
+        ),
+        color=discord.Color.blurple(),
+    )
+    if game_query:
+        embed.add_field(name="Game search", value=discord.utils.escape_markdown(game_query)[:60], inline=False)
+    if not groups:
+        embed.add_field(name="No groups found", value="No approved public groups match right now. Try another game.", inline=False)
+    for row in groups[:8]:
+        embed.add_field(
+            name=_safe_str(row["game"], "Game")[:100],
+            value=f"Up to {row['capacity']} players • Open the selector below for the verified server invite.",
+            inline=False,
+        )
+    if len(groups) > 8:
+        embed.set_footer(text=f"{len(groups)} public groups in the current live snapshot. Use the selector for all.")
+    return embed
+
+
+class PublicNetworkSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, groups: list[dict[str, Any]], game_query: str) -> None:
+        self.owner_id = int(owner_id)
+        self.groups = list(groups[:25])
+        self.game_query = game_query
+        options = [
+            discord.SelectOption(
+                label=str(row["game"])[:100],
+                description=f"Up to {row['capacity']} players • opens server invite",
+                value=str(i),
+                emoji="🎮",
+            )
+            for i, row in enumerate(self.groups)
+        ]
+        super().__init__(
+            placeholder="Choose an outside gaming group",
+            custom_id="dank:hub:publicnetwork:select:v1", row=0,
+            min_values=1, max_values=1,
+            options=options or [discord.SelectOption(label="No public groups right now", value="none")],
+            disabled=not bool(options),
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        choice = self.values[0]
+        if choice == "none":
+            return
+        await _defer_update(interaction)
+        # A dropdown snapshot alone is not authority: re-read live publication,
+        # then require the exact listed invite/game still present.
+        fresh = await hub.list_public_lfg_directory(limit=100)
+        from ..community_public_lfg import sanitize_directory
+        approved = sanitize_directory(fresh, game=self.game_query)
+        try:
+            row = self.groups[int(choice)]
+        except (ValueError, IndexError):
+            return await _followup(interaction, "This listing changed; refresh the directory.")
+        if row not in approved:
+            return await _followup(interaction, "This group was unpublished or expired. Refresh the directory.")
+        embed = discord.Embed(
+            title=f"🎮 {row['game'][:80]}",
+            description=(
+                "This gaming group was deliberately advertised outside its server. "
+                "Join its Discord first, then follow that server's verification and group-joining steps."
+            ),
+            color=discord.Color.blurple(),
+        )
+        await _edit_private_original(
+            interaction, content=None, embed=embed,
+            view=PublicNetworkDetailView(self.owner_id, row, game_query=self.game_query),
+        )
+
+
+class PublicNetworkDetailView(_OwnedView):
+    def __init__(self, owner_id: int, row: dict[str, Any], *, game_query: str = "") -> None:
+        super().__init__(owner_id)
+        self.game_query = game_query
+        self.add_item(discord.ui.Button(
+            label="Join Discord Community", style=discord.ButtonStyle.link,
+            url=row["join_url"], emoji="🌍", row=0,
+        ))
+
+    @discord.ui.button(label="Back to Public Groups", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:publicnetwork:detailback:v1", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_public_lfg_network(interaction, self.owner_id, game_query=self.game_query)
+
+
+class PublicNetworkView(_OwnedView):
+    def __init__(self, owner_id: int, groups: list[dict[str, Any]], *, game_query: str = "") -> None:
+        super().__init__(owner_id)
+        self.game_query = game_query
+        self.add_item(PublicNetworkSelect(owner_id, groups, game_query))
+
+    @discord.ui.button(label="Search Game", emoji="🔎", style=discord.ButtonStyle.primary, custom_id="dank:hub:publicnetwork:search:v1", row=1)
+    async def search(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.send_modal(PublicNetworkSearchModal(self.owner_id, current_game=self.game_query))
+
+    @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank:hub:publicnetwork:refresh:v1", row=1)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_public_lfg_network(interaction, self.owner_id, game_query=self.game_query)
+
+    @discord.ui.button(label="Community Hub", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:publicnetwork:back:v1", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.edit_message(
+            embed=_hub_embed(), view=CommunityHubView(self.owner_id),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+async def _open_public_lfg_network(
+    interaction: discord.Interaction, owner_id: int, *, game_query: str = "",
+) -> None:
+    from ..community_public_lfg import sanitize_directory
+    try:
+        fresh = await hub.list_public_lfg_directory(limit=100)
+        groups = sanitize_directory(fresh, game=game_query)
+    except hub.CommunityHubError:
+        return await _edit_private_original(
+            interaction, content="Public Gaming Network is unavailable or not migrated yet.",
+            embed=None, view=CommunityHubView(owner_id),
+        )
+    groups = groups[:25]
+    await _edit_private_original(
+        interaction, content=None,
+        embed=_public_network_embed(groups, game_query=game_query),
+        view=PublicNetworkView(owner_id, groups, game_query=game_query),
+    )
+
+
 def verified_public_lfg_invite(value: Any) -> str:
     from ..community_public_lfg import verified_invite_url
     return verified_invite_url(value)
@@ -4169,7 +4340,7 @@ class PublicRecruitingInviteModal(discord.ui.Modal, title="Publish Gaming Recrui
             return await _followup(interaction, "Use a valid HTTPS Discord server invite, not a channel or website link.")
         try:
             live_invite = await interaction.client.fetch_invite(url)
-        except (discord.HTTPException, discord.InvalidArgument, ValueError):
+        except (discord.HTTPException, ValueError):
             return await _followup(interaction, "Discord could not verify this invitation. Nothing was published.")
         destination = getattr(live_invite, "guild", None)
         if not destination or int(destination.id) != int(interaction.guild_id or 0):
