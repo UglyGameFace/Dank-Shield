@@ -58,6 +58,32 @@ def _embed(guild: discord.Guild, channel_id: int, rules: list[dict[str, Any]]) -
         ), color=discord.Color.blurple(),
     )
     embed.add_field(name="Selected ad channel", value=mention, inline=False)
+    if isinstance(channel, discord.TextChannel):
+        me = getattr(guild, "me", None)
+        if me is not None:
+            perms = channel.permissions_for(me)
+            needed = [
+                label for flag, label in (
+                    ("view_channel", "View Channel"),
+                    ("read_message_history", "Read Message History"),
+                    ("manage_messages", "Manage Messages"),
+                )
+                if not getattr(perms, flag, False)
+            ]
+            embed.add_field(
+                name="Cleanup permissions",
+                value=("✅ Ready" if not needed else "⚠️ Missing: " + ", ".join(needed)),
+                inline=False,
+            )
+        default_role = getattr(guild, "default_role", None)
+        if default_role is not None:
+            public_view = bool(getattr(channel.permissions_for(default_role), "view_channel", False))
+            embed.add_field(
+                name="OneBump visibility",
+                value=("✅ Members can view the advertising channel." if public_view
+                       else "⚠️ The default server role cannot view this channel. OneBump fair-play rules require visible adverts."),
+                inline=False,
+            )
     lines = []
     for rule in rules[:10]:
         lines.append(
