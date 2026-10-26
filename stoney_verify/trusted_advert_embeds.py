@@ -67,7 +67,9 @@ async def suppress_one(message: Any, config: Any, *, automatic: bool = True) -> 
         return False
     if not _channel_permissions(message):
         return False
-    if automatic and not await _take_auto_slot():
+    # Staff-triggered recent suppression shares this global write budget with
+    # automated suppression, so several guilds cannot accidentally burst REST.
+    if not await _take_auto_slot():
         return False
     try:
         # Discord allows MANAGE_MESSAGES to change SUPPRESS_EMBEDS on another
