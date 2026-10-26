@@ -1095,6 +1095,14 @@ async def _start_workers_once() -> None:
         print("⚠️ Trusted embed bulk worker failed:", type(e).__name__)
 
     try:
+        from .community_lfg_public_panel import start_public_board_worker
+        task = start_public_board_worker(bot)
+        if task is not None:
+            print("🎮 Persistent public LFG panel worker started")
+    except Exception as exc:
+        print("⚠️ Public LFG panel worker unavailable:", type(exc).__name__)
+
+    try:
         from .community_lfg_atlas_publisher import start_atlas_publisher
         task = start_atlas_publisher(bot)
         if task is not None:

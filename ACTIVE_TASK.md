@@ -1,3 +1,10 @@
+## ACTIVE FORCE SWITCH: Persistent public Community Hub LFG board (2026-10-26)
+
+- **Single active task:** User returned from OneBump after PRs #740 and #741 merged and requested a permanently visible, interactive public LFG panel for all members. Implement in one large PR on `feat/community-lfg-persistent-public-panel-20261026`. Keep OneBump, Cinema, other projects paused.
+- **Scope:** One staff-selected channel, one durable panel per guild; Use This Channel and Search-Safe channel picker; persistent shared buttons with private per-member Find, Create, My Groups, Outside Players, Public Network and Refresh; public-only sanitized session summaries, near-live bounded update with startup recovery, optional staff disable/move, no duplicate reposts, no blanket Discord member scraping.
+- **Production blocker discovered:** Connected DankShield Supabase has sessions table but does **not** have PR #736 `public_lfg_opt_in` / directory RPC, or PR #741 `dank_community_atlas_publications`. This panel PR adds no SQL migration. Do NOT claim outside recruitment or external publishing live until authorized migrations and matching Discloud deploy.
+- **Release:** Dedicated focused and full CI, mobile nonstaff canary, move/remove/restart test, Discord REST pacing; no production deployment changes from PR alone. Historical notes below are not active.
+
 ## ACTIVE FORCE SWITCH: LFG outside advertising (October 26, 2026)
 
 - **Active:** User explicitly switched from OneBump to LFG after PR #740 was merged. One task only: host-authorized promotion of public Community Hub sessions to LFG Atlas. Branch `feat/lfg-atlas-consent-publishing-20261026`. Preserve OneBump and other projects for later.

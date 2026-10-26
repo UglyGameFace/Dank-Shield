@@ -939,6 +939,14 @@ async def record_event(
         await _db_call(_write)
     except CommunityHubError:
         return
+    # Cross-feature public board refresh is event-driven when a local session
+    # changes. The bounded periodic sweep also covers remote process updates.
+    if _safe_str(event_type).startswith(("session.", "member.", "match.")):
+        try:
+            from .community_lfg_public_panel import mark_dirty
+            mark_dirty(gid)
+        except Exception:
+            pass
 
 
 def _hour_bucket(moment: datetime | None = None) -> str:
