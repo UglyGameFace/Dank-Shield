@@ -3174,7 +3174,7 @@ class ExternalAtlasPublishModal(discord.ui.Modal, title="Advertise This Gaming G
             interaction,
             "✅ External gaming advertisement **queued**, not yet published. "
             "Your guild's staff-approved invite, game and region will be public on Atlas Gaming "
-            "when the provider confirms it. No member IDs or session notes are shared. "
+            "when the provider confirms it. No member IDs or session notes are shared. " +
             ("Audience: 18+ only. " if adult_only else "Audience: general gaming. ") +
             "Use **External Ad Status** to check confirmation and **Remove External Ad** to revoke.",
         )
