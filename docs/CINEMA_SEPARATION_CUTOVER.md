@@ -20,6 +20,11 @@
 - Confirm the new `share_router_public_server.py` is the only Site listener started by both `command_runtime.setup_hook` and `app.on_ready`. Both must be idempotent.
 - Verify `api_new/server`, `share_router_runtime`, public command registration, and lifecycle hooks import none of the archived Cinema/torrent modules.
 - Verify `requirements.txt` no longer installs `libtorrent` and that `.discloudignore` excludes every legacy Cinema filename (bare name as well as historical relative path).
+- Cinema [PR #11](https://github.com/UglyGameFace/Dank-Cinema/pull/11) also
+  preserved the final unreferenced `media_metadata.py` parser and its tests,
+  with matching original Git blob SHA and a passing independent CI run.
+  The Shield source/test copies have now been retired; shared Share Router
+  media code is intentionally untouched.
 - Archive PRs #2–#4 are merged in the independent Cinema repository;
   the two formerly missing non-runtime files were subsequently preserved.
   Historic Shield SQL migration history remains deliberately in place, because
