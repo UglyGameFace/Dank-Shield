@@ -31,7 +31,8 @@ _ALLOWED_SOURCE_HOSTS = frozenset({
     "lfgatlas.pages.dev",
     "lfgatlas-bot.jonsimm36.workers.dev",
 })
-_TYPE_FILTERS = frozenset({"", "lfg", "lfm", "server", "clan", "squad"})
+ATLAS_TYPE_VALUES = ("lfg", "lfm", "server", "clan", "squad")
+_TYPE_FILTERS = frozenset(("", *ATLAS_TYPE_VALUES))
 _GAME_FILTER_RE = re.compile(r"[a-zA-Z0-9 +._'-]{0,55}\Z")
 _REGION_FILTER_RE = re.compile(r"[a-zA-Z0-9 +_-]{0,40}\Z")
 
