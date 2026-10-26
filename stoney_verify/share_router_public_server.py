@@ -82,6 +82,9 @@ async def start_share_router_public_server() -> bool:
     app.router.add_get("/", _root)
     app.router.add_get("/health", _health)
     register_share_video_routes(app)
+    # Dedicated, read-only LFG pages; no Cinema/media functionality is restored.
+    from stoney_verify.community_public_lfg import register_public_lfg_routes
+    register_public_lfg_routes(app)
 
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
