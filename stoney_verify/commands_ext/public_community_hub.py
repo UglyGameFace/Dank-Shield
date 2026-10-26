@@ -4306,6 +4306,15 @@ class GameRoleRemoveModal(discord.ui.Modal, title="Remove Game Role Mapping"):
 
 
 class StaffDashboardView(_OwnedView):
+    @discord.ui.button(label="Public LFG Panel", emoji="🎮", style=discord.ButtonStyle.primary, custom_id="dank:hub:staff:publicpanel:v1", row=2)
+    async def public_panel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _staff_authorized(interaction):
+            return await _private(interaction, "Only Manage Server staff can post the public LFG panel.")
+        await _defer_update(interaction)
+        from .community_lfg_public_panel_ui import show_public_panel_setup
+        await show_public_panel_setup(interaction, self.owner_id)
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if not await super().interaction_check(interaction):
             return False
