@@ -1087,6 +1087,14 @@ async def _start_workers_once() -> None:
         print("⚠️ Trusted advert worker failed:", type(e).__name__)
 
     try:
+        from .trusted_advert_bulk import start_bulk_worker
+        task = start_bulk_worker(bot)
+        if task is not None:
+            print("🫥 Opt-in trusted embed bulk worker started")
+    except Exception as e:
+        print("⚠️ Trusted embed bulk worker failed:", type(e).__name__)
+
+    try:
         from .verification_reminders import start_unverified_reminder_worker
 
         start_unverified_reminder_worker(bot)
