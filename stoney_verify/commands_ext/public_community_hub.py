@@ -4151,6 +4151,7 @@ class PublicNetworkSearchModal(discord.ui.Modal, title="Search Public Gaming Net
 
 def _public_network_embed(
     groups: list[dict[str, Any]], *, game_query: str = "",
+    page: int = 0, has_next: bool = False,
 ) -> discord.Embed:
     embed = discord.Embed(
         title="🧭 Public Gaming Network",
@@ -4172,16 +4173,17 @@ def _public_network_embed(
             value=f"Hosted by {discord.utils.escape_markdown(row['community'])[:60]} • Up to {row['capacity']} players. Choose below for the invite.",
             inline=False,
         )
-    if len(groups) > 8:
-        embed.set_footer(text=f"{len(groups)} public groups in the current live snapshot. Use the selector for all.")
+    if page or has_next or len(groups) > 8:
+        embed.set_footer(text=f"Page {page + 1} • {len(groups)} choices • browse more with the page controls.")
     return embed
 
 
 class PublicNetworkSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, groups: list[dict[str, Any]], game_query: str) -> None:
+    def __init__(self, owner_id: int, groups: list[dict[str, Any]], game_query: str, *, page: int = 0) -> None:
         self.owner_id = int(owner_id)
         self.groups = list(groups[:25])
         self.game_query = game_query
+        self.page = max(0, int(page))
         options = [
             discord.SelectOption(
                 label=str(row["game"])[:100],
@@ -4229,14 +4231,15 @@ class PublicNetworkSelect(discord.ui.Select):
         )
         await _edit_private_original(
             interaction, content=None, embed=embed,
-            view=PublicNetworkDetailView(self.owner_id, row, game_query=self.game_query),
+            view=PublicNetworkDetailView(self.owner_id, row, game_query=self.game_query, page=self.page),
         )
 
 
 class PublicNetworkDetailView(_OwnedView):
-    def __init__(self, owner_id: int, row: dict[str, Any], *, game_query: str = "") -> None:
+    def __init__(self, owner_id: int, row: dict[str, Any], *, game_query: str = "", page: int = 0) -> None:
         super().__init__(owner_id)
         self.game_query = game_query
+        self.page = page
         self.add_item(discord.ui.Button(
             label="Join Discord Community", style=discord.ButtonStyle.link,
             url=row["join_url"], emoji="🌍", row=0,
@@ -4246,14 +4249,21 @@ class PublicNetworkDetailView(_OwnedView):
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        await _open_public_lfg_network(interaction, self.owner_id, game_query=self.game_query)
+        await _open_public_lfg_network(interaction, self.owner_id, game_query=self.game_query, page=self.page)
 
 
 class PublicNetworkView(_OwnedView):
-    def __init__(self, owner_id: int, groups: list[dict[str, Any]], *, game_query: str = "") -> None:
+    def __init__(self, owner_id: int, groups: list[dict[str, Any]], *, game_query: str = "", page: int = 0, has_next: bool = False) -> None:
         super().__init__(owner_id)
         self.game_query = game_query
-        self.add_item(PublicNetworkSelect(owner_id, groups, game_query))
+        self.page = max(0, min(int(page), 1))
+        self.has_next = bool(has_next)
+        self.add_item(PublicNetworkSelect(owner_id, groups, game_query, page=self.page))
+        for child in self.children:
+            if getattr(child, "custom_id", None) == "dank:hub:publicnetwork:prev:v1":
+                child.disabled = self.page == 0
+            if getattr(child, "custom_id", None) == "dank:hub:publicnetwork:next:v1":
+                child.disabled = not self.has_next
 
     @discord.ui.button(label="Search Game", emoji="🔎", style=discord.ButtonStyle.primary, custom_id="dank:hub:publicnetwork:search:v1", row=1)
     async def search(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -4266,6 +4276,20 @@ class PublicNetworkView(_OwnedView):
         await _defer_update(interaction)
         await _open_public_lfg_network(interaction, self.owner_id, game_query=self.game_query)
 
+    @discord.ui.button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:publicnetwork:prev:v1", row=2)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_public_lfg_network(interaction, self.owner_id, game_query=self.game_query, page=max(0, self.page - 1))
+
+    @discord.ui.button(label="More Groups", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:publicnetwork:next:v1", row=2)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not self.has_next:
+            return await _private(interaction, "No more public groups are available.")
+        await _defer_update(interaction)
+        await _open_public_lfg_network(interaction, self.owner_id, game_query=self.game_query, page=self.page + 1)
+
     @discord.ui.button(label="Community Hub", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:publicnetwork:back:v1", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -4276,7 +4300,7 @@ class PublicNetworkView(_OwnedView):
 
 
 async def _open_public_lfg_network(
-    interaction: discord.Interaction, owner_id: int, *, game_query: str = "",
+    interaction: discord.Interaction, owner_id: int, *, game_query: str = "", page: int = 0,
 ) -> None:
     from ..community_public_lfg import sanitize_directory
     try:
@@ -4287,11 +4311,23 @@ async def _open_public_lfg_network(
             interaction, content="Public Gaming Network is unavailable or not migrated yet.",
             embed=None, view=CommunityHubView(owner_id),
         )
-    groups = groups[:25]
+    # Discord select menus allow at most 25 options. Keep the source bounded,
+    # but make all 40 approved public groups reachable on Android and desktop.
+    page = max(0, min(int(page), 1))
+    start = page * 20
+    if page and start >= len(groups):
+        page, start = 0, 0
+    visible = groups[start:start + 20]
+    has_next = len(groups) > start + 20
     await _edit_private_original(
         interaction, content=None,
-        embed=_public_network_embed(groups, game_query=game_query),
-        view=PublicNetworkView(owner_id, groups, game_query=game_query),
+        embed=_public_network_embed(
+            visible, game_query=game_query, page=page, has_next=has_next,
+        ),
+        view=PublicNetworkView(
+            owner_id, visible, game_query=game_query,
+            page=page, has_next=has_next,
+        ),
     )
 
 
