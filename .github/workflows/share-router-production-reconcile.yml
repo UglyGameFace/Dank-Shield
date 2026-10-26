@@ -9,7 +9,7 @@ on:
       - "stoney_verify/share_router_media_resolver.py"
       - "stoney_verify/share_router_download_queue.py"
       - "stoney_verify/share_router_external_links.py"
-      - "stoney_verify/torrent_media_server.py"
+      - "stoney_verify/share_router_public_server.py"
       - "stoney_verify/share_router_resources.py"
       - "stoney_verify/commands_ext/public_share_router.py"
       - "tests/test_share_router_custom_sources.py"
