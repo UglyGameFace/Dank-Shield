@@ -2412,7 +2412,7 @@ class AtlasTypeSelect(discord.ui.Select):
         self.group_type = group_type
         options = [
             ("Any group", "all"),
-            ("Looking for a group", "lfg"),
+            ("Looking for a group", atlas.ATLAS_TYPE_VALUES[0]),
             ("Recruiting teammates", "lfm"),
             ("Gaming server", "server"),
             ("Clan", "clan"),
