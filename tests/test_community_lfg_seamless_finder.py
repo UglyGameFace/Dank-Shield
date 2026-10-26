@@ -174,3 +174,18 @@ def test_existing_detail_navigation_can_return_to_unified(monkeypatch):
     reopen.assert_awaited_once_with(
         interaction, 99, game="Minecraft", region="NA",
     )
+
+
+def test_public_result_labels_cannot_ping_or_format_as_role_mentions():
+    embed = ui._unified_discovery_embed(
+        [dict(_atlas()[0], title="@everyone **click**")],
+        [{"game": "@here Minecraft", "community": "@everyone Gaming",
+          "capacity": 6, "join_url": "https://discord.gg/goodcode"}],
+        [{"game_name": "@everyone Secret-looking Title", "host_id": "PRIVATE-HOST"}],
+    )
+    content = repr(embed.to_dict())
+    assert "@everyone" not in content
+    assert "@here" not in content
+    assert "＠everyone" in content
+    assert "＠here" in content
+    assert "PRIVATE-HOST" not in content
