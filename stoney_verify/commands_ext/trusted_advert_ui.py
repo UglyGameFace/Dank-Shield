@@ -273,6 +273,29 @@ class TrustedAdsView(discord.ui.View):
         _ = button
         await show_trusted_ads(interaction, self.owner_id, channel_id=self.channel_id)
 
+    @discord.ui.button(label="Cleanup Status", emoji="📋", style=discord.ButtonStyle.secondary, row=2)
+    async def cleanup_status(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not isinstance(self.guild.get_channel(self.channel_id), discord.TextChannel):
+            return await _notice(interaction, "Choose an approved channel to check its cleanup.")
+        await interaction.response.defer(ephemeral=True)
+        from ..trusted_advert_cleanup import recent_cleanup_status
+        try:
+            result = await recent_cleanup_status(self.guild.id, self.channel_id)
+        except Exception as exc:
+            return await _notice(interaction, "Cleanup history unavailable. "
+                                 "Make sure the private retention migration is installed.")
+        counts = result["counts"]
+        await _notice(
+            interaction,
+            f"🧹 **Recent advert cleanup in <#{self.channel_id}>**\n"
+            f"Tracked (latest 50): {result['total_shown']}\n"
+            f"Scheduled: {counts['pending']} • Processing: {counts['claimed']}\n"
+            f"Deleted/already gone: {counts['done']} • Cancelled: {counts['cancelled']} • Failed: {counts['failed']}\n"
+            f"Next scheduled deadline: {result['next_due']}\n"
+            "Only approved bot adverts are eligible, and every delete is rechecked.",
+        )
+
     @discord.ui.button(label="Back to Invite Shield", emoji="↩️", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
