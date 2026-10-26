@@ -1,3 +1,11 @@
+## ACTIVE FORCE SWITCH: Community Hub Find Players / LFG #638 (2026-10-26)
+
+- **Single active development task:** Resume the existing Community Hub **Find Players**, **Start Gaming Session**, and **Quick Match** system. Do not create a second bot, session store, or native channel/role picker. User explicitly resumed this after merged activity restart PR #734.
+- **Current slice:** PR #735 adds mobile paging of 100 recent authorized local or opted-in HubLink partner sessions in the existing Find Players filter selector, 25 selectable groups at a time. Re-query current source on paging and keep current click-time permission safeguards.
+- **Release gates:** Exact-head Community Hub tests, full CI, command-size checks, merge to main and independently verified Discloud rollout/Discord mobile canary. No live deployment, new SQL, external API writes, or auto role pings in this PR.
+- **Next LFG work after this slice:** Verify native/local/partner browse UX end to end, then plan structured platform/region fields and further provider integrations only against supported authoritative data and approved APIs. Preserve game-specific role ping consent and /toke isolation.
+- **Suspended:** Cinema standalone runtime and Discloud host-state verification, manual verification reminders, picker audit, other bot work. Historical statuses below are checkpoints only, not concurrent active tasks.
+
 ## Cinema source archive physically retired from Shield (2026-10-25)
 
 - **Source:** 29 Cinema runtime/assets, 34 Cinema-only tests, seven archived Cinema docs and two diagnostics removed from Shield working tree. These 72 files were all present in `UglyGameFace/Dank-Cinema/main` prior to deletion; production modules and docs matched exact Git blob SHAs. Four Shield tests had intentionally changed retirement contracts; Cinema retains their original test implementations.
