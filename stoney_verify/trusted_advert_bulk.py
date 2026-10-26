@@ -233,7 +233,9 @@ async def process_bulk_claim(bot: Any, row: dict[str, Any]) -> str:
                 if not await _take_auto_slot():
                     out_of_tokens = True
                     break
-                ok = await suppress_one(message, cfg, slot_reserved=True)
+                ok = await suppress_one(
+                    message, cfg, automatic=not manual_only, slot_reserved=True,
+                )
                 if not ok:
                     await _checkpoint(
                         row, cursor=cursor, scanned=scanned,
