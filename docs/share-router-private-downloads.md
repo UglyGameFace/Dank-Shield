@@ -49,18 +49,28 @@ It is not a general-purpose unlimited downloading or public file host.
 
 ## Expiring private HTTPS links: implementation and easy setup
 
-The public download endpoint reuses **the existing media site** from
-`stoney_verify/torrent_media_server.py`, no new ports, bot API route or
-extra database. It never provides direct public directory listings.
+The public video delivery endpoint is now owned by the independent Shield
+Share Router listener in `stoney_verify/share_router_public_server.py`.
+Its `/share-video/...` handlers live in `share_router_external_links.py`.
+**Neither file imports Dank Cinema, a torrent client, or a media-seeding
+worker.** The HTTPS site uses the existing Site port, without a second web
+listener or another database. It never provides public directory listings.
 
 1. Make sure the existing Discloud **TYPE=site** media app is publicly
    reachable over HTTPS. In the application's Discloud environment, reuse the
-   existing `DANK_MEDIA_PUBLIC_BASE_URL=https://YOUR-SITE.discloud.app`
-   if already configured for Cinema. Do not use the database private VLAN host.
-   That environment variable is required once **only if** missing, because
+   Share Router-specific
+   `DANK_SHARE_VIDEO_PUBLIC_BASE_URL=https://YOUR-SITE.discloud.app`.
+   The historical `DANK_MEDIA_PUBLIC_BASE_URL` remains a transitional fallback
+   only until the live Shield cutover is verified; it does **not** restart Cinema.
+   Do not use the database private VLAN host. A public URL must be configured
+   because
    guessing the public site address or accepting an untrusted request Host
    would create unsafe signed links.
-2. Restart the running bot/site after an environment change.
+2. After the guarded Shield deployment, restart the running bot/site if an
+   environment value changes. Confirm `/health` responds with
+   `service: "dank_share_router_public"` and both old `/cinema` and
+   `/media/torrent/stream/not-a-token` return 404. Do not restart the old
+   Cinema-enabled ZIP.
 3. In Discord, open `/dank home` → Share Router → **Create Download Channel**.
    The feature is per guild; existing Share Router proxy routing is untouched.
 4. Press **Download Settings**, choose **1 hour**, **24 hours**, **7 days**
