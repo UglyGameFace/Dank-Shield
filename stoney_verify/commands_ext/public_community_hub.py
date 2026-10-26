@@ -2362,6 +2362,14 @@ class UnifiedGameSearchModal(discord.ui.Modal, title="Find a Gaming Group"):
         )
 
 
+def _discovery_safe_label(value: Any, limit: int = 65) -> str:
+    text = " ".join(
+        "".join(ch if ch.isprintable() else " " for ch in str(value or ""))
+        .replace("@", "＠").split()
+    )[:max(1, min(int(limit), 90))]
+    return discord.utils.escape_markdown(text)
+
+
 def _unified_discovery_embed(
     atlas_rows: list[dict[str, Any]], network_rows: list[dict[str, Any]],
     local_rows: list[dict[str, Any]], *, game: str = "", region: str = "",
@@ -2387,9 +2395,9 @@ def _unified_discovery_embed(
     if atlas_rows:
         displayed = []
         for row in atlas_rows[:5]:
-            title = discord.utils.escape_markdown(str(row.get("title") or "Group"))[:65]
-            game_name = discord.utils.escape_markdown(str(row.get("game") or "Game"))[:40]
-            place = discord.utils.escape_markdown(str(row.get("region") or ""))[:30]
+            title = _discovery_safe_label(row.get("title") or "Group", 65)
+            game_name = _discovery_safe_label(row.get("game") or "Game", 40)
+            place = _discovery_safe_label(row.get("region") or "", 30)
             url = atlas._safe_details_url(row.get("url"))
             # The Atlas adapter returns only trusted provider-origin URLs.
             displayed.append(
@@ -2409,8 +2417,8 @@ def _unified_discovery_embed(
     if network_rows:
         displayed = []
         for row in network_rows[:5]:
-            community = discord.utils.escape_markdown(str(row["community"]))[:48]
-            game_name = discord.utils.escape_markdown(str(row["game"]))[:50]
+            community = _discovery_safe_label(row["community"], 48)
+            game_name = _discovery_safe_label(row["game"], 50)
             displayed.append(f"• **{community}** • {game_name} • up to {row['capacity']} players")
         embed.add_field(
             name="🧭 Public Gaming Network • approved Discord communities",
@@ -2429,7 +2437,7 @@ def _unified_discovery_embed(
 
     if local_rows:
         displayed = [
-            f"• {discord.utils.escape_markdown(str(row.get('game_name') or 'Game'))[:65]}"
+            f"• {_discovery_safe_label(row.get('game_name') or 'Game', 65)}"
             for row in local_rows[:3]
         ]
         text = "\n".join(displayed) + "\nUse **This Server** to join."
