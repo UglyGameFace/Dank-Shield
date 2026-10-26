@@ -2903,13 +2903,22 @@ class SessionControlView(_OwnedView):
                 )
             if session.get("privacy") != "public" or session.get("state") not in {"open", "forming", "ready", "active"}:
                 return await _followup(interaction, "Only an active, publicly joinable gaming group can be shared.")
-        try:
-            updated = await hub.set_session_public_lfg(
+        async def _factory() -> Any:
+            return await hub.set_session_public_lfg(
                 self.session_id, guild_id, enabled=not current,
                 expected_version=_safe_int(session.get("version"), 0),
             )
+        try:
+            state, updated = await _run_session_mutation(
+                interaction, session_id=self.session_id,
+                action="public_recruitment", factory=_factory,
+            )
         except hub.CommunityHubError as exc:
             return await _followup(interaction, f"❌ {_error_text(exc)}")
+        if not await _operation_feedback(interaction, state):
+            return
+        if not isinstance(updated, dict):
+            return await _followup(interaction, "Recruitment state was not confirmed. Refresh and check again.")
         await _edit_private_original(
             interaction, content=None,
             embed=build_session_embed(updated, members), view=self,
@@ -4197,7 +4206,10 @@ class PublicNetworkSelect(discord.ui.Select):
         await _defer_update(interaction)
         # A dropdown snapshot alone is not authority: re-read live publication,
         # then require the exact listed invite/game still present.
-        fresh = await hub.list_public_lfg_directory(limit=100)
+        try:
+            fresh = await hub.list_public_lfg_directory(limit=100)
+        except hub.CommunityHubError:
+            return await _followup(interaction, "The public directory is unavailable right now. No invitation was opened.")
         from ..community_public_lfg import sanitize_directory
         approved = sanitize_directory(fresh, game=self.game_query)
         try:
