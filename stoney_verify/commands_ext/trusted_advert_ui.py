@@ -306,11 +306,14 @@ class TrustedPreviewModal(discord.ui.Modal, title="Collapse Trusted Ad Previews"
 
 
 class TrustedAdsView(discord.ui.View):
-    def __init__(self, owner_id: int, guild: discord.Guild, channel_id: int):
+    def __init__(self, owner_id: int, guild: discord.Guild, channel_id: int,
+                 *, rules: list[dict[str, Any]] | None = None):
         super().__init__(timeout=900)
         self.owner_id = owner_id
         self.guild = guild
         self.channel_id = channel_id
+        # For rendering only; the modal rechecks fresh authoritative config.
+        self.rule_options = list(rules or [])
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if _staff(interaction, self.owner_id):
@@ -379,11 +382,7 @@ class TrustedAdsView(discord.ui.View):
         _ = button
         if not isinstance(self.guild.get_channel(self.channel_id), discord.TextChannel):
             return await _notice(interaction, "Choose the advertising channel first.")
-        try:
-            rules = await load_rules(self.guild.id)
-        except RuntimeError:
-            return await _notice(interaction, "Trusted bot settings are unavailable.")
-        selected = [x for x in rules if x["channel_id"] == self.channel_id]
+        selected = [x for x in self.rule_options if x["channel_id"] == self.channel_id]
         if not selected:
             return await _notice(interaction, "Approve a real advertising bot in this channel first.")
         modal = TrustedPreviewModal(
@@ -497,7 +496,7 @@ async def show_trusted_ads(interaction: discord.Interaction, owner_id: int, *, c
         rules = await load_rules(guild.id, refresh=True)
     except RuntimeError:
         return await _notice(interaction, "Guild settings unavailable. Cannot safely configure trusted bots.")
-    view = TrustedAdsView(owner_id, guild, channel_id)
+    view = TrustedAdsView(owner_id, guild, channel_id, rules=rules)
     embed = _embed(guild, channel_id, rules)
     if interaction.response.is_done():
         await interaction.edit_original_response(embed=embed, view=view, content=None)
