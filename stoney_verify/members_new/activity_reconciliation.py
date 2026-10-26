@@ -68,21 +68,52 @@ def reconcile_start_delay_seconds() -> int:
     )
 
 
-def reconcile_timeout_seconds() -> int:
-    return _env_int(
+def reconcile_timeout_seconds(guild: discord.Guild | None = None) -> int:
+    """Allow big guilds time to use the *same* process-wide REST budget.
+
+    The Discord history lane is serialized across guilds and every request
+    remains paced. A fixed 180-second timeout made a safe 100+ channel scan
+    fail simply because it had to wait for that pacing. This changes the
+    deadline, never the request rate or the proof requirements.
+    """
+    base = _env_int(
         "DANK_ACTIVITY_RECONCILE_TIMEOUT_SECONDS",
         180,
         minimum=30,
-        maximum=600,
+        maximum=1200,
     )
+    if guild is None:
+        return base
+
+    channels = list(getattr(guild, "channels", []) or [])
+    active_threads = list(getattr(guild, "threads", []) or [])
+    messageable_count = sum(
+        1 for channel in channels
+        if callable(getattr(channel, "history", None))
+    ) + len(active_threads)
+    thread_parents = sum(
+        isinstance(channel, (discord.TextChannel, discord.ForumChannel))
+        for channel in channels
+    )
+    # History consumes a weighted REST reservation for *each* channel.
+    # Every thread parent may also require archived public/private scans.
+    # Unknown archived threads remain covered by the upper deadline.
+    estimated = (
+        base
+        + 4 * max(0, messageable_count - 50)
+        + 2 * thread_parents
+    )
+    return min(1200, estimated)
 
 
 def _max_reconcile_channels() -> int:
+    # A guild with >100 channels/threads is valid. Keep a bounded overflow
+    # guard, but don't discard otherwise provable continuity at 101.
     return _env_int(
         "DANK_ACTIVITY_RECONCILE_MAX_CHANNELS",
-        100,
+        500,
         minimum=10,
-        maximum=250,
+        maximum=2000,
     )
 
 

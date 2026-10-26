@@ -36,14 +36,15 @@ def test_on_ready_schedules_but_never_awaits_reconciliation():
 def test_reconciliation_runs_in_bounded_background_task():
     assert "async def _run_scheduled_guild_tracking(" in TRACKER
     assert "asyncio.wait_for(" in TRACKER
-    assert "reconcile_timeout_seconds()" in TRACKER
+    assert "timeout_seconds = reconcile_timeout_seconds(guild)" in TRACKER
+    assert "timeout=timeout_seconds" in TRACKER
     assert "_STARTUP_RECONCILE_LOCK" in TRACKER
     assert "_STARTUP_TASKS" in TRACKER
 
 
 def test_activity_recovery_starts_after_discloud_initial_rest_window():
     start = RECONCILE.index("def reconcile_start_delay_seconds()")
-    end = RECONCILE.index("def reconcile_timeout_seconds()", start)
+    end = RECONCILE.index("def reconcile_timeout_seconds(", start)
     block = RECONCILE[start:end]
 
     assert '"DANK_ACTIVITY_RECONCILE_START_DELAY_SECONDS"' in block
