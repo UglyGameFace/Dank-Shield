@@ -295,12 +295,19 @@ def test_new_and_updated_shortcuts_route_to_live_owner_without_duplicate_logic()
 
 def test_releases_show_real_merged_updates_and_exclude_unmerged_work() -> None:
     updates = registry.RECENT_UPDATES
-    assert [item.key for item in updates][:6] == [
-        "verification_reminders", "verification", "embed_studio",
-        "share_router", "share_downloads", "action_safety_schedule",
+    # New & Updated starts with the already-merged public recruitment release,
+    # followed by prior verified releases. New unmerged provider work must not
+    # appear in the published release feed until its own PR is merged.
+    assert [item.key for item in updates][:7] == [
+        "community_hub", "verification_reminders", "verification",
+        "embed_studio", "share_router", "share_downloads",
+        "action_safety_schedule",
     ]
-    assert updates[0].headline == "Full-server verification reminders by channel or DM"
-    assert "automatic schedules remain separate" in updates[0].detail
+    assert updates[0].headline == "Find Players can recruit beyond your Discord server"
+    assert "opted-in servers" in updates[0].detail
+    assert updates[0].merged_date == "2026-10-26"
+    assert updates[1].headline == "Full-server verification reminders by channel or DM"
+    assert "automatic schedules remain separate" in updates[1].detail
     assert registry.search_features("verification dm reminders")[0].key == "verification_reminders"
     assert len(updates) == len(set(item.key for item in updates))
     assert all(registry.feature_by_key(item.key) for item in updates)
@@ -310,6 +317,7 @@ def test_releases_show_real_merged_updates_and_exclude_unmerged_work() -> None:
 
     content = surface._recent_embed()
     joined = "\n".join(str(field.value) for field in content.fields)
+    assert "Find Players can recruit beyond your Discord server" in joined
     assert "Post Builder is easier for moderators" in joined
     assert "Share videos from regular channels" in joined
     assert "Member Setup" in joined
