@@ -101,7 +101,7 @@ def invite_shield_embed(
             "**Turn Shield On / Off** preserves the original Invite Blocker toggle without leaving you trapped in this editor.\n"
             "**Watch Every Bot** protects bot invite posts server-wide.\n"
             "**Choose Watched Channel** uses Dank Shield's searchable server browser.\n"
-            "**Clean Existing Invites** scans up to 1,000 recent messages in one chosen channel through the central invite policy before deleting anything.\\n"
+            "**Clean Existing Invites** scans up to 1,000 recent messages in one chosen channel through the central invite policy before deleting anything.\n"
             "**Trusted Advertising Bots** lets OneBump or other approved bots post in a single designated channel, without letting members bypass Invite Shield. Optional 24-hour-plus cleanup requires confirmation."
         ),
         inline=False,
