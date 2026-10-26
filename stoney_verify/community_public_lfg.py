@@ -20,7 +20,7 @@ from aiohttp import web
 from stoney_verify.community_lfg_discovery import game_search_key
 
 _DISCORD_INVITE = re.compile(
-    r"https://(?:discord[.]gg/|discord[.]com/invite/)[A-Za-z0-9-]{2,64}\\Z"
+    r"https://(?:discord[.]gg/|discord[.]com/invite/)[A-Za-z0-9-]{2,64}\Z"
 )
 _ONE_MINUTE = 60.0
 _per_ip: dict[str, deque[float]] = {}
@@ -54,6 +54,8 @@ def public_lfg_base_url() -> str:
 def _rate_allowed(remote: str, *, now: float) -> bool:
     # Use peer address, not a caller-supplied X-Forwarded-For header.
     key = str(remote or "unknown")[:100]
+    if key not in _per_ip and len(_per_ip) >= 1024:
+        return False
     for queue in (_global_calls, _per_ip.setdefault(key, deque())):
         while queue and queue[0] <= now - _ONE_MINUTE:
             queue.popleft()
@@ -78,7 +80,7 @@ def sanitize_directory(rows: list[dict[str, Any]], *, game: str = "") -> list[di
         invite = verified_invite_url(row.get("invite_url"))
         name = str(row.get("game_name") or "").strip()
         # Filter original structured name only, not participant notes.
-        name = " ".join(ch for ch in name if ch.isprintable()).strip()[:80]
+        name = " ".join("".join(ch for ch in name if ch.isprintable()).split())[:80]
         if not invite or not name:
             continue
         if search and search not in game_search_key(name):
