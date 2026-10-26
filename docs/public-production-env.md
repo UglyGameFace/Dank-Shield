@@ -105,9 +105,9 @@ sending. Never interpret missing history as permission to send a fresh ping.
 
 ## Optional Community Hub external gaming sessions (The100.io)
 
-The100.io supports read-only upcoming gaming session discovery with a personal
-supporter API token. This integration does not post or join games on anyone's
-behalf; the provider separately approves Discord bot write operations.
+**The100.io personal API tokens are supporter-only as of October 26, 2026.** Its official API docs say developers building community tools can request complimentary lifetime supporter status from @muhuhuhaha or @fearbroner in the The100.io Discord server, **subject to their approval; do not assume it is free or automatically granted**. This provider is optional: **Public Recruiting and the public gaming directory require no The100.io token, no The100.io supporter plan, and no The100.io approval.**
+
+When separately authorized, The100.io supports read-only upcoming gaming session discovery. This integration does not post or join games on anyone's behalf; the provider additionally approves Discord bot write operations.
 
 - Apply `supabase/migrations/20261018010000_community_hub_external_the100.sql`
   through the existing schema pipeline **before** attempting to enable it.
