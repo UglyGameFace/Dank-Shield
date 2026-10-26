@@ -84,9 +84,11 @@ def sanitize_directory(rows: list[dict[str, Any]], *, game: str = "") -> list[di
             continue
         invite = verified_invite_url(row.get("invite_url"))
         name = str(row.get("game_name") or "").strip()
+        community = str(row.get("community_name") or "").strip()
         # Filter original structured name only, not participant notes.
         name = " ".join("".join(ch for ch in name if ch.isprintable()).split())[:80]
-        if not invite or not name:
+        community = " ".join("".join(ch if ch.isprintable() else " " for ch in community).replace("@", "＠").split())[:60]
+        if not invite or not name or len(community) < 2:
             continue
         if search and search not in game_search_key(name):
             continue
@@ -98,6 +100,7 @@ def sanitize_directory(rows: list[dict[str, Any]], *, game: str = "") -> list[di
             continue
         safe.append({
             "game": name,
+            "community": community,
             "capacity": capacity,
             "join_url": invite,
         })
@@ -110,6 +113,7 @@ def _page(entries: list[dict[str, Any]], game: str) -> str:
     search = escape(game[:60], quote=True)
     cards = "".join(
         '<article class="card"><h2>' + escape(row["game"]) + '</h2>'
+        + '<p>Hosted by ' + escape(row["community"]) + '</p>'
         + '<p>Public gaming group · Up to ' + str(row["capacity"]) + ' players</p>'
         + '<a rel="nofollow noopener noreferrer" href="'
         + escape(row["join_url"], quote=True) + '">Join the Discord community</a></article>'
