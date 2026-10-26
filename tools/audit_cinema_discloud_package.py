@@ -50,7 +50,7 @@ def _retired_module(module: str) -> bool:
     parts = str(module or "").strip(".").split(".")
     return any(
         part in RETIRED_MODULE_ROOTS
-        or part.startswith(("cinema_", "torrent_"))
+        or part.startswith(("cinema_", "torrent_", "movie_night_"))
         or part == "movie_night"
         for part in parts
     )
