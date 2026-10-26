@@ -196,13 +196,13 @@ jobs:
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/20261026083000_community_hub_public_lfg_recruitment.sql
           done
           psql -v ON_ERROR_STOP=1 <<'SQL'
-          do $
+          do $$
           begin
             if exists (select 1 from public.community_hub_public_lfg_directory(20)) then
               raise exception 'new public recruitment schema unexpectedly exposes rows';
             end if;
           end;
-          $;
+          $$;
           SQL
 
       - name: Verify security and lifecycle invariants
