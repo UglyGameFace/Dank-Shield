@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LEGACY = (
     "stoney_verify/cinema_site.py",
     "stoney_verify/movie_night_web.py",
+    "stoney_verify/media_metadata.py",
     "stoney_verify/torrent_media_server.py",
     "stoney_verify/torrent_streaming.py",
     "stoney_verify/commands_ext/public_movie_night.py",
@@ -36,7 +37,7 @@ FORBIDDEN_PREFIXES = (
 RETIRED_MODULE_ROOTS = frozenset((
     "cinema_site", "cinema_catalog", "cinema_storage", "cinema_playback_service",
     "cinema_feed_service", "cinema_feed_personalization", "cinema_discovery_service",
-    "movie_night", "movie_catalog", "media_source_registry", "media_source_resolver",
+    "movie_night", "movie_catalog", "media_metadata", "media_source_registry", "media_source_resolver",
     "torrent_media_server", "torrent_streaming", "torrent_stream_routes",
     "public_movie_night",
 ))
