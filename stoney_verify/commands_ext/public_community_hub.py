@@ -579,14 +579,15 @@ def _hub_embed() -> discord.Embed:
     embed = discord.Embed(
         title="🎮 Community Hub",
         description=(
-            "Find people to play with, start a gaming session, join community events, "
-            "and manage your own game notifications. No mystery acronyms required."
+            "Find outside gaming groups and real Discord communities **right from Find Players**, "
+            "plus groups hosted here. Start a session, join events or set game notifications."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(
         name="Find Players",
-        value="Browse active groups in this server and, when staff enables it, approved partner servers.",
+        value="One search shows free outside gaming groups, opt-in Public Gaming Network servers "
+              "and groups hosted here. Outside discovery works without a paid token.",
         inline=False,
     )
     embed.add_field(
@@ -1487,17 +1488,17 @@ class CommunityHubView(_OwnedView):
             view=LiveCaptionsHomeView(self.owner_id),
         )
 
-    @discord.ui.button(label="Public Gaming Network", emoji="🧭", style=discord.ButtonStyle.primary, custom_id="dank:hub:publicnetwork:v1", row=3)
+    @discord.ui.button(label="Browse Public Servers", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank:hub:publicnetwork:v1", row=3)
     async def public_network(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
         await _open_public_lfg_network(interaction, self.owner_id)
 
-    @discord.ui.button(label="External Groups", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:v1", row=2)
+    @discord.ui.button(label="More Gaming Sources", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:v1", row=2)
     async def external_groups(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        await _open_unified_player_discovery(interaction, self.owner_id)
+        await _open_outside_players_home(interaction, self.owner_id)
 
     @discord.ui.button(label="Staff Dashboard", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:staff:v1", row=2)
     async def staff(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
