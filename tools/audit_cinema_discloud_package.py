@@ -45,12 +45,14 @@ RETIRED_MODULE_ROOTS = frozenset((
 def _retired_module(module: str) -> bool:
     if any(module.startswith(prefix) for prefix in FORBIDDEN_PREFIXES):
         return True
-    # Match exact local module stems and their submodules. A community option
-    # called movie_night_role_id must NOT be confused with a Python import.
-    stem = str(module or "").split(".")[-1]
-    return (
-        stem in RETIRED_MODULE_ROOTS
-        or stem.startswith(("cinema_", "torrent_", "movie_night"))
+    # Match module path components, not arbitrary imported attribute names.
+    # Shared movie_night_role_id and CAP_MOVIE_NIGHT_NOTIFY remain valid.
+    parts = str(module or "").strip(".").split(".")
+    return any(
+        part in RETIRED_MODULE_ROOTS
+        or part.startswith(("cinema_", "torrent_"))
+        or part == "movie_night"
+        for part in parts
     )
 
 
@@ -64,12 +66,17 @@ def assert_no_retired_imports(source: str, *, path: str = "<source>") -> None:
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             names = [module]
-            # from stoney_verify import cinema_site / from . import cinema_site
-            # and from stoney_verify.commands_ext import public_movie_night.
-            names.extend(
-                f"{module}.{item.name}" if module else item.name
-                for item in node.names
-            )
+            # Alias names may be submodules only when imported directly from
+            # a package. A service attribute named movie_night_role_id is not
+            # a module and must remain importable.
+            if module in {
+                "", "stoney_verify", "stoney_verify.commands_ext",
+                "stoney_verify.api_new", "commands_ext", "api_new",
+            }:
+                names.extend(
+                    f"{module}.{item.name}" if module else item.name
+                    for item in node.names
+                )
         elif isinstance(node, ast.Call):
             func = node.func
             call_name = (
