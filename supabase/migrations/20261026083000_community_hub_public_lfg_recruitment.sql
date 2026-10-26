@@ -4,6 +4,9 @@ alter table public.dank_community_hub_settings
   add column if not exists public_lfg_enabled boolean not null default false;
 alter table public.dank_community_hub_settings
   add column if not exists public_lfg_invite_url text;
+-- Staff selects an explicitly public, human-readable host community label.
+alter table public.dank_community_hub_settings
+  add column if not exists public_lfg_display_name text;
 alter table public.dank_community_sessions
   add column if not exists public_lfg_opt_in boolean not null default false;
 
@@ -23,6 +26,7 @@ returns table (
   game_name text,
   capacity integer,
   invite_url text,
+  community_name text,
   activity_at timestamptz
 )
 language sql
@@ -30,11 +34,14 @@ stable
 security invoker
 set search_path = ''
 as $$
-  select left(s.game_name, 80), s.capacity, h.public_lfg_invite_url, s.last_activity_at
+  select left(s.game_name, 80), s.capacity, h.public_lfg_invite_url,
+    left(h.public_lfg_display_name, 60), s.last_activity_at
   from public.dank_community_sessions s
   join public.dank_community_hub_settings h on h.guild_id = s.guild_id
   where h.enabled is true and h.maintenance_mode is false
     and h.public_lfg_enabled is true
+    and h.public_lfg_display_name is not null
+    and length(btrim(h.public_lfg_display_name)) between 2 and 60
     and h.public_lfg_invite_url is not null
     and h.public_lfg_invite_url ~ '^https://(discord[.]gg/|discord[.]com/invite/)[A-Za-z0-9-]{2,64}$'
     and s.public_lfg_opt_in is true
