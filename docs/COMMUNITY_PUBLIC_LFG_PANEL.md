@@ -16,11 +16,11 @@ This is **not** a fake always-online claim or a raw Discord presence tracker. Th
 
 ## Buttons members see
 
-- **Find Players:** Opens a **private** live local-group browser with existing paging, filters and real join controls.
+- **Find Players:** Opens a **private, combined discovery screen by default**, immediately showing live public Atlas gaming posts from outside servers, approved Public Gaming Network host/server listings, and public groups hosted here. One game search filters all three sources; optional region filtering is applied only to external posts. Local sessions retain their own authoritative join controls.
 - **Create Group:** Opens the existing Start Gaming Session form; all current per-server creation permissions and limits apply.
 - **My Groups:** Opens a member's private current group list.
-- **Outside Players:** Opens the already integrated Atlas Gaming and Minecraft player discovery navigator.
-- **Public Network:** Opens the existing opt-in cross-server public directory, when the required public recruitment migration is installed.
+- **More Outside Groups:** Shortcut to the longer Atlas Gaming discovery view. The main Find Players button already includes outside groups, so members don't need this extra step.
+- **Public Servers:** Shortcut to the full approved cross-server directory. The main combined Find Players screen already includes matching approved server names and a dropdown whose choice rechecks publication before showing the invite.
 - **Refresh:** Refreshes the same shared panel in place, with a 30-second per-guild spam guard. No public channel response or new message.
 
 All public-board buttons avoid adding new slash commands. No custom voice/presence capture or unsolicited recruitment DMs.
@@ -35,13 +35,13 @@ All public-board buttons avoid adding new slash commands. No custom voice/presen
 
 ## Database deployment dependency (verified October 26, 2026)
 
-The connected DankShield Supabase database has `dank_community_sessions`, but does **not** yet have the `public_lfg_opt_in` column, the `community_hub_public_lfg_directory` function, or the `dank_community_atlas_publications` table. These belong to already merged PRs #736 and #741. **Do not pretend outside publishing works until migrations are installed in the correct active database and the Discloud runtime is on the matching main commit.**
+A fresh read-only check of the connected DankShield Supabase project on October 26 confirms `dank_community_sessions` is present, but the `public_lfg_opt_in` column, `community_hub_public_lfg_directory` function and `dank_community_atlas_publications` table are **still missing**. These belong to already merged PRs #736 and #741. **Do not pretend outside publishing works until migrations are installed in the correct active database and the Discloud runtime is on the matching main commit.**
 
-This public-panel PR adds **no new SQL schema**. Panel pointer configuration uses existing guild-config persistence, so it can be merged independently. Public Network and external advertising still depend on the earlier migrations.
+The new unified finder also adds **no new SQL schema**. It displays live Atlas posts and local groups independently of a missing Public Network function. Public Network and owned external advertising still depend on the earlier, already merged migrations; their absence is clearly marked on the combined screen rather than incorrectly announcing that no players exist.
 
 ## Canary
 
-1. Install one panel in a public channel and verify a **different nonstaff member** can click Find Players and Create Group without changing anyone else's public message.
+1. Install one panel in a public channel and verify a **different nonstaff member** can click Find Players and immediately see **outside gaming groups** alongside approved Public Network/local groups without changing anyone else's public message. Even with zero locally hosted sessions, the outside source must remain visible.
 2. Create, join, pause, lock, and end a session; ensure only eligible public groups appear after refresh, never private notes/host data.
 3. Try from Discord Android, then restart the bot on Discloud; all six panel buttons still respond.
 4. Move the panel using Search-Safe picker; old post is inactive, no duplicate live panel, and staff Remove Panel disables it.
