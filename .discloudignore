@@ -40,6 +40,7 @@ stoney_verify/cinema_storage.py
 stoney_verify/cinema_subtitle_providers.py
 stoney_verify/cinema_subtitle_router.py
 stoney_verify/cinema_subtitles.py
+stoney_verify/media_metadata.py
 stoney_verify/media_source_registry.py
 stoney_verify/media_source_resolver.py
 stoney_verify/movie_catalog.py
@@ -70,6 +71,7 @@ cinema_subtitle_providers.py
 cinema_subtitle_router.py
 cinema_subtitles.py
 dank_cinema_brand_500.webp.b64
+media_metadata.py
 media_source_registry.py
 media_source_resolver.py
 movie_catalog.py
