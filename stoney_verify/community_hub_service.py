@@ -297,6 +297,8 @@ _ALLOWED_SETTINGS = frozenset(
         "presence_analytics_enabled",
         "partner_discovery_enabled",
         "external_the100_enabled",
+        "public_lfg_enabled",
+        "public_lfg_invite_url",
         "detailed_retention_days",
         "aggregate_retention_days",
     }
@@ -2265,6 +2267,65 @@ def summarize_member_counts(members: Iterable[dict[str, Any]]) -> dict[str, int]
     return counts
 
 
+
+async def list_public_lfg_directory(*, limit: int = 40) -> list[dict[str, Any]]:
+    """Get only the explicitly public projection from the existing session DB."""
+    safe_limit = max(1, min(100, _safe_int(limit, 40)))
+
+    def _read() -> list[dict[str, Any]]:
+        sb = _require_supabase()
+        return _rows(
+            sb.rpc(
+                "community_hub_public_lfg_directory",
+                {"p_limit": safe_limit},
+            ).execute()
+        )
+
+    return await _db_call(_read)
+
+
+async def set_session_public_lfg(
+    session_id: str,
+    guild_id: int | str,
+    *,
+    enabled: bool,
+    expected_version: int,
+) -> dict[str, Any]:
+    """Optimistic, guild-scoped opt-in; the Discord controller checks authority.
+
+    Disabling does not require the session to remain public, so a host can
+    always revoke outward publication even after locking their group.
+    """
+    sid = _uuid_text(session_id)
+    gid = _safe_str(guild_id)
+    version = max(1, _safe_int(expected_version, 0))
+
+    def _write() -> dict[str, Any] | None:
+        sb = _require_supabase()
+        query = (
+            sb.table("dank_community_sessions")
+            .update({
+                "public_lfg_opt_in": bool(enabled),
+                "version": version + 1,
+                "updated_at": utc_now_iso(),
+            })
+            .eq("id", sid)
+            .eq("guild_id", gid)
+            .eq("version", version)
+        )
+        if enabled:
+            query = query.eq("privacy", "public").in_(
+                "state", ["open", "forming", "ready", "active"],
+            )
+        return _one(query.execute())
+
+    row = await _db_call(_write)
+    if not row:
+        raise CommunityHubError(
+            "The session changed or is no longer public. Refresh and try again."
+        )
+    return row
+
 __all__ = [
     "ACTIVE_SESSION_STATES",
     "JOINABLE_SESSION_STATES",
@@ -2338,6 +2399,8 @@ __all__ = [
     "update_partner_link",
     "list_partner_links",
     "list_partner_discovery_sessions",
+    "list_public_lfg_directory",
+    "set_session_public_lfg",
     "prune_session_personal_data",
     "delete_expired_detailed_events",
     "summarize_member_counts",
