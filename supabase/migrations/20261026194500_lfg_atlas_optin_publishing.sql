@@ -17,6 +17,7 @@ create table if not exists public.dank_community_atlas_publications (
   lease_until timestamptz,
   claim_version integer not null default 0,
   delete_attempts integer not null default 0,
+  revoke_requested boolean not null default false,
   last_error text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -90,7 +91,7 @@ begin
         game=excluded.game, title=excluded.title, region=excluded.region,
         contact=excluded.contact, expires_at=excluded.expires_at,
         state='queued', remote_id=null, remote_url=null, edit_token=null,
-        lease_until=null, delete_attempts=0, last_error=null,
+        lease_until=null, delete_attempts=0, revoke_requested=false, last_error=null,
         claim_version=prior.claim_version+1,
         updated_at=now()
     where prior.state in ('removed','failed') and prior.edit_token is null
@@ -113,7 +114,7 @@ as $$
       or (
         p.state in ('posted','removing')
         and p.edit_token is not null
-        and (p.state='removing' or p.expires_at <= now()
+        and (p.state='removing' or p.revoke_requested is true or p.expires_at <= now()
           or s.id is null or s.public_lfg_opt_in is distinct from true
           or s.privacy is distinct from 'public'
           or s.state not in ('open','forming','ready','active')
@@ -127,7 +128,7 @@ as $$
       )
     )
       and (p.lease_until is null or p.lease_until <= now())
-      and p.delete_attempts < 8
+      and (p.state='queued' or p.delete_attempts < 8)
     order by p.updated_at, p.session_id
     limit least(4,greatest(1,coalesce(p_limit,2)))
     for update of p skip locked
