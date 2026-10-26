@@ -25,6 +25,7 @@ SERVER = (ROOT / "stoney_verify/share_router_public_server.py").read_text(encodi
 def _row(*, game="Minecraft", invite="https://discord.gg/the420lobby", **other):
     return {
         "game_name": game, "capacity": 6, "invite_url": invite,
+        "community_name": "The 420 Lobby",
         "host_id": "123", "guild_id": "456", "notes": "private notes",
         "session_id": "opaque-uuid", "panel_channel_id": "999",
         **other,
@@ -34,13 +35,14 @@ def _row(*, game="Minecraft", invite="https://discord.gg/the420lobby", **other):
 def test_only_whitelisted_fields_are_published():
     rows = public.sanitize_directory([_row()])
     assert rows == [{
-        "game": "Minecraft", "capacity": 6,
+        "game": "Minecraft", "community": "The 420 Lobby", "capacity": 6,
         "join_url": "https://discord.gg/the420lobby",
     }]
     page = public._page(rows, "")
     for forbidden in ("private notes", "opaque-uuid", "999", "host_id", "guild_id"):
         assert forbidden not in page
     assert "Minecraft" in page
+    assert "Hosted by The 420 Lobby" in page
     assert "https://discord.gg/the420lobby" in page
 
 
@@ -125,6 +127,7 @@ def test_opt_in_and_guild_gate_default_off_and_no_member_data_exposed():
     assert "from public, anon, authenticated" in MIGRATION
     assert "grant execute on function public.community_hub_public_lfg_directory" in MIGRATION
     assert "to service_role" in MIGRATION
+    assert "public_lfg_display_name" in MIGRATION
     assert "host_id" not in MIGRATION
     assert "panel_message_id" not in MIGRATION
 
@@ -139,4 +142,4 @@ def test_discord_controls_require_staff_and_host_consent():
     assert 'mine or {}).get("role")' in UI
     assert 'hub.set_session_public_lfg(' in UI
     assert '"public_lfg_enabled": False' in UI
-    assert '"public_lfg_invite_url": url, "public_lfg_enabled": True' in UI
+    assert '"public_lfg_invite_url": url, "public_lfg_display_name": name, "public_lfg_enabled": True' in UI
