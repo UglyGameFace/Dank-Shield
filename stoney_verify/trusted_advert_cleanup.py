@@ -222,3 +222,22 @@ def start_trusted_advert_worker(bot: Any) -> asyncio.Task | None:
     if _TASK is None or _TASK.done():
         _TASK = asyncio.create_task(_worker(bot), name="trusted_advert_expiry")
     return _TASK
+
+
+async def recent_cleanup_status(guild_id: int, channel_id: int) -> dict[str, Any]:
+    """Staff-only UI calls this on demand; never exposes raw advert content."""
+    gid, cid = str(int(guild_id)), str(int(channel_id))
+    def read() -> list[dict[str, Any]]:
+        rows = (
+            _db().table(TABLE)
+            .select("state,delete_after,last_error,bot_id")
+            .eq("guild_id", gid).eq("channel_id", cid)
+            .order("delete_after", desc=True).limit(50).execute().data
+        )
+        return [dict(row) for row in (rows or []) if isinstance(row, dict)]
+    rows = await _db_run(read)
+    counts = {state: sum(row.get("state") == state for row in rows)
+              for state in ("pending", "claimed", "done", "cancelled", "failed")}
+    return {"total_shown": len(rows), "counts": counts,
+            "next_due": min((str(row.get("delete_after")) for row in rows
+                             if row.get("state") == "pending" and row.get("delete_after")), default="None")}
