@@ -101,7 +101,8 @@ def invite_shield_embed(
             "**Turn Shield On / Off** preserves the original Invite Blocker toggle without leaving you trapped in this editor.\n"
             "**Watch Every Bot** protects bot invite posts server-wide.\n"
             "**Choose Watched Channel** uses Dank Shield's searchable server browser.\n"
-            "**Clean Existing Invites** scans up to 1,000 recent messages in one chosen channel through the central invite policy before deleting anything."
+            "**Clean Existing Invites** scans up to 1,000 recent messages in one chosen channel through the central invite policy before deleting anything.\\n"
+            "**Trusted Advertising Bots** lets OneBump or other approved bots post in a single designated channel, without letting members bypass Invite Shield. Optional 24-hour-plus cleanup requires confirmation."
         ),
         inline=False,
     )
@@ -410,6 +411,18 @@ class InviteShieldView(discord.ui.View):
                 origin_channel_id=self.origin_channel_id,
                 scope=fresh,
             )
+        )
+
+    @discord.ui.button(label="Trusted Advertising Bots", emoji="🤝", style=discord.ButtonStyle.primary, row=3)
+    async def trusted_advertising_bots(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        center = _center()
+        if not await center._require_setup_permission(interaction):
+            return
+        from .trusted_advert_ui import show_trusted_ads
+        await show_trusted_ads(
+            interaction, self.author_id,
+            channel_id=_channel_id(interaction) or self.origin_channel_id,
         )
 
     @discord.ui.button(label="Clean Existing Invites", emoji="🧹", style=discord.ButtonStyle.secondary, row=3)
