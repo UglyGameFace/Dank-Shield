@@ -8,6 +8,7 @@ Uncertain POST outcomes fail closed and are never blindly retried.
 """
 
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -20,6 +21,22 @@ from .community_lfg_atlas_publishing import (
 
 _TASK: asyncio.Task | None = None
 POLL_SECONDS = 60
+_POST_SPACING_SECONDS = 16
+_POST_LOCK = asyncio.Lock()
+_last_post_at = 0.0
+
+
+async def _post_with_pacing(row: dict[str, Any]) -> tuple[str, str, str]:
+    """Only one provider POST per 16s per bot process, under Atlas's per-contact rule."""
+    global _last_post_at
+    async with _POST_LOCK:
+        remaining = _POST_SPACING_SECONDS - (time.monotonic() - _last_post_at)
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+        # Reserve before outbound call. If it times out, don't immediately
+        # fire another remote create from a different queued session.
+        _last_post_at = time.monotonic()
+        return await send_post(row)
 
 
 def _now() -> str:
@@ -119,7 +136,7 @@ async def _send_claim(row: dict[str, Any]) -> str:
         })
         return "revoked-before-publish"
     try:
-        rid, url, token = await send_post(row)
+        rid, url, token = await _post_with_pacing(row)
     except AtlasPublishError as exc:
         # Provider validation errors are definite, but if it returned 2xx
         # without a manageable receipt the outcome is UNKNOWN. Never repost.
