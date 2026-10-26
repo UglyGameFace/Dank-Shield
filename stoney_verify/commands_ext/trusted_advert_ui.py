@@ -221,6 +221,23 @@ class ConfirmAdvertCleanupModal(discord.ui.Modal, title="Optional Advertisement 
 
 
 
+def _bulk_status_message(job: dict[str, Any]) -> str:
+    state = str(job.get("status", "unknown"))
+    scanned = int(job.get("scanned") or 0)
+    changed = int(job.get("collapsed") or 0)
+    skipped = int(job.get("skipped") or 0)
+    error = str(job.get("last_error") or "").strip()
+    return (
+        f"🫥 **Bulk Collapse: {state.upper()}**\\n"
+        f"Messages checked: {scanned:,}\\n"
+        f"Previews collapsed: {changed:,}\\n"
+        f"Already hidden/not approved: {skipped:,}\\n"
+        + (f"Last issue: {error[:100]}\\n" if error else "")
+        + "Processing is paced, not a single mass edit. "
+          "Cancel Bulk stops the remaining scan; the original messages are never deleted."
+    )
+
+
 class TrustedPreviewModal(discord.ui.Modal, title="Collapse Trusted Ad Previews"):
     bot_id = discord.ui.TextInput(
         label="Approved bot User ID",
@@ -228,7 +245,7 @@ class TrustedPreviewModal(discord.ui.Modal, title="Collapse Trusted Ad Previews"
         min_length=15, max_length=25,
     )
     action = discord.ui.TextInput(
-        label="ON+RECENT, ON, OFF or RECENT",
+        label="ON+RECENT / ON / OFF / RECENT / STATUS / CANCEL",
         placeholder="ON+RECENT",
         default="ON+RECENT",
         max_length=10,
@@ -250,8 +267,8 @@ class TrustedPreviewModal(discord.ui.Modal, title="Collapse Trusted Ad Previews"
         if not _staff(interaction, self.owner_id):
             return await _notice(interaction, "Manage Server permission required.")
         action = str(self.action.value or "").strip().upper()
-        if action not in {"ON+RECENT", "ON", "OFF", "RECENT"}:
-            return await _notice(interaction, "Choose ON+RECENT, ON, OFF or RECENT.")
+        if action not in {"ON+RECENT", "ON", "OFF", "RECENT", "STATUS", "CANCEL"}:
+            return await _notice(interaction, "Choose ON+RECENT, ON, OFF, RECENT, STATUS or CANCEL.")
         if str(self.consent.value or "").strip().upper() != "HIDE":
             return await _notice(interaction, "No change. Type HIDE to confirm.")
         match = re.fullmatch(r"(?:<@!?)?([0-9]{15,20})>?", str(self.bot_id.value or "").strip())
@@ -271,7 +288,28 @@ class TrustedPreviewModal(discord.ui.Modal, title="Collapse Trusted Ad Previews"
         if old is None:
             return await _notice(interaction, "Approve this exact bot in this channel first. No changes made.")
 
-        if action != "RECENT":
+        from ..trusted_advert_bulk import (
+            start_bulk_collapse, get_bulk_status, cancel_bulk_collapse,
+        )
+        if action == "STATUS":
+            try:
+                job = await get_bulk_status(guild.id, self.channel_id, bot_id)
+            except Exception:
+                return await _notice(interaction, "Bulk status unavailable. Check the database migration.")
+            if not job:
+                return await _notice(interaction, "No bulk collapse has been requested for this bot and channel.")
+            return await _notice(interaction, _bulk_status_message(job))
+        if action == "CANCEL":
+            try:
+                cancelled = await cancel_bulk_collapse(guild.id, self.channel_id, bot_id)
+            except Exception:
+                return await _notice(interaction, "Could not cancel in the database; check the bulk worker status.")
+            return await _notice(interaction,
+                "✅ Bulk collapse cancelled. New auto-collapse stays as configured. "
+                "An edit already in flight may finish."
+                if cancelled else "No running bulk collapse found.")
+
+        if action not in {"RECENT"}:
             try:
                 await save_rule(
                     guild.id, bot_id=bot_id, channel_id=self.channel_id,
@@ -283,26 +321,48 @@ class TrustedPreviewModal(discord.ui.Modal, title="Collapse Trusted Ad Previews"
                 return await _notice(interaction, f"No changes saved: {str(exc)[:240]}")
 
         if action == "OFF":
+            try:
+                await cancel_bulk_collapse(guild.id, self.channel_id, bot_id)
+                extra = " Any in-progress bulk run was cancelled."
+            except Exception:
+                extra = " Check Bulk Progress separately if a bulk run was active."
             return await _notice(
                 interaction,
-                "✅ Future adverts will display normally. Existing suppressed previews "
-                "are unchanged. Your bot trust and scheduled cleanup settings were preserved.",
+                "✅ Future adverts will display normally. Existing hidden previews "
+                "stay hidden. Trust and 24-hour cleanup are preserved." + extra,
             )
-        message = "✅ Automatic preview collapse enabled for this exact bot/channel pair." if action != "RECENT" else "✅ Checking recent previews."
         if action in {"RECENT", "ON+RECENT"}:
-            from ..trusted_advert_embeds import collapse_recent_trusted_adverts
             try:
-                counts = await collapse_recent_trusted_adverts(guild, channel, bot_id)
-            except (PermissionError, ValueError) as exc:
-                return await _notice(interaction, message + " Recent posts were not changed: " + str(exc)[:190])
-            except (discord.Forbidden, discord.HTTPException) as exc:
-                return await _notice(interaction, message + " Discord denied the recent-history operation.")
-            message += (
-                f" Checked {counts['scanned']} recent messages and collapsed "
-                f"{counts['collapsed']} approved previews (maximum 3 per request)."
+                await start_bulk_collapse(
+                    guild, channel, bot_id=bot_id,
+                    requested_by=int(interaction.user.id),
+                    manual_only=action == "RECENT",
+                )
+            except (RuntimeError, PermissionError, ValueError) as exc:
+                return await _notice(
+                    interaction,
+                    "Your automatic setting was saved where applicable. "
+                    "Bulk scanning did not start: " + str(exc)[:240],
+                )
+            except Exception:
+                return await _notice(
+                    interaction,
+                    "Automatic setting saved where applicable, but the bulk queue could not start. "
+                    "Apply the trusted-advert bulk migration and retry.",
+                )
+            return await _notice(
+                interaction,
+                "✅ **Smart Bulk Collapse queued.** Dank Shield will scan older approved "
+                "adverts in small, rate-limited batches and save progress through restarts. "
+                "Use **Bulk Progress** to see counts, or **Cancel Bulk** to stop. "
+                "New adverts continue collapsing automatically when ON. "
+                "No posts are deleted; their large previews may disappear.",
             )
-        message += " The original OneBump posts remain; large previews and Join cards may be hidden."
-        await _notice(interaction, message)
+        await _notice(interaction,
+            "✅ New approved adverts will collapse automatically. Existing embeds "
+            "are unchanged until you choose ON+RECENT or RECENT. "
+            "Trust and scheduled 24-hour deletion settings are preserved."
+        )
 
 
 class TrustedAdsView(discord.ui.View):
@@ -400,6 +460,40 @@ class TrustedAdsView(discord.ui.View):
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await show_trusted_ads(interaction, self.owner_id, channel_id=self.channel_id)
+
+    @discord.ui.button(label="Bulk Progress", emoji="📊", style=discord.ButtonStyle.secondary, row=3)
+    async def bulk_progress(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        selected = [x for x in self.rule_options if x["channel_id"] == self.channel_id]
+        if len(selected) != 1:
+            return await _notice(interaction,
+                "Choose Collapse Previews → STATUS and enter the exact approved bot ID.")
+        await interaction.response.defer(ephemeral=True)
+        from ..trusted_advert_bulk import get_bulk_status
+        try:
+            job = await get_bulk_status(self.guild.id, self.channel_id, selected[0]["bot_id"])
+        except Exception:
+            return await _notice(interaction,
+                "Bulk status is unavailable. Check that the new migration is installed.")
+        await _notice(interaction,
+            _bulk_status_message(job) if job else "No bulk scan requested for this bot yet.")
+
+    @discord.ui.button(label="Cancel Bulk", emoji="⏹️", style=discord.ButtonStyle.danger, row=3)
+    async def cancel_bulk(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        selected = [x for x in self.rule_options if x["channel_id"] == self.channel_id]
+        if len(selected) != 1:
+            return await _notice(interaction,
+                "Choose Collapse Previews → CANCEL and enter the exact approved bot ID.")
+        await interaction.response.defer(ephemeral=True)
+        from ..trusted_advert_bulk import cancel_bulk_collapse
+        try:
+            ok = await cancel_bulk_collapse(self.guild.id, self.channel_id, selected[0]["bot_id"])
+        except Exception:
+            return await _notice(interaction, "Could not cancel the bulk job; check its status.")
+        await _notice(interaction,
+            "✅ Bulk scanning cancelled. Future automatic collapse stays enabled."
+            if ok else "No running bulk scan was found.")
 
     @discord.ui.button(label="Cleanup Status", emoji="📋", style=discord.ButtonStyle.secondary, row=2)
     async def cleanup_status(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
