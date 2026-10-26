@@ -2,7 +2,7 @@
 
 - **One active task:** Large LFG provider upgrade following merged PR #736. New branch `feat/lfg-free-outside-player-discovery-20261026`. Keep other Dank Shield and Cinema work paused.
 - **Verified integration:** MinecraftLFG published public, keyless, read-only player-profile API; strict schema, bounded cache/request pacing, never contact/DM, never claim users are live online. User can browse editions in Discord Android. Live endpoint accessibility remains unconfirmed until deployment canary.
-- **Additional free discovery:** Verified manual public Reddit gaming communities with safe fixed links, not unauthorized Reddit API harvesting. The100.io remains optional token-gated; LFG Atlas API unverified, NOT to be represented as active integration.
+- **Additional free discovery:** LFG Atlas documented public gaming posts for 28+ games, plus manual public Reddit gaming communities with safe fixed links, not unauthorized Reddit API harvesting. The100.io remains optional token-gated; LFG Atlas published keyless multi-game read-only API now integrated, but live host reachability/response shape still require production canary.
 - **Acceptance gates:** Dedicated provider and UI tests, Community Hub CI, full Dank Shield CI, command limits, security and Cinema separation; owner merge, guarded Discloud deploy, Android/user-facing canary. No Supabase data/migrations or new Discord commands.
 - **Owner preference:** Big cohesive PRs only, no piecemeal adjacent sub-feature PRs. The objective is actually finding outside players and growing the server, while distinguishing player profiles from approved outbound recruiting.
 
