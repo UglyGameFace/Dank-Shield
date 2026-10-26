@@ -120,7 +120,7 @@ async def _work(f: Any) -> Any:
 
 async def enqueue_host_publication(
     session_id: str, guild_id: int, actor_id: int, *,
-    region: str, hours: int,
+    region: str, hours: int, adult_only: bool = False,
 ) -> dict[str, Any]:
     if not _REGION_RE.fullmatch(region.strip()) or hours not in (1, 2, 4, 12, 24):
         raise AtlasPublishError("Use a normal region (2–40 characters) and 1, 2, 4, 12 or 24 hours.")
@@ -132,6 +132,7 @@ async def enqueue_host_publication(
             "p_actor_id": str(actor_id),
             "p_region": region.strip(),
             "p_hours": hours,
+            "p_adult": bool(adult_only),
         }).execute()
         return [dict(x) for x in (result.data or [])]
 
@@ -218,6 +219,7 @@ async def send_post(row: dict[str, Any]) -> tuple[str, str, str]:
     payload = {
         "consent": True, "source": "dankshield", "game": slug,
         "type": "lfm", "title": str(row["title"])[:80],
+        "adult": row.get("adult_only") is True,
         "region": str(row["region"])[:40], "contact": row["contact"],
         "hours": min(24, max(1, int((expiry-datetime.now(timezone.utc)).total_seconds()/3600)+1)),
     }
