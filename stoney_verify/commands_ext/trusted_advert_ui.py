@@ -245,8 +245,8 @@ class TrustedPreviewModal(discord.ui.Modal, title="Collapse Trusted Ad Previews"
         min_length=15, max_length=25,
     )
     action = discord.ui.TextInput(
-        label="ON+RECENT / ON / OFF / RECENT / STATUS / CANCEL",
-        placeholder="ON+RECENT",
+        label="Mode: ON+RECENT, ON, OFF, RECENT, STATUS",
+        placeholder="Use CANCEL to stop a running scan",
         default="ON+RECENT",
         max_length=10,
     )
