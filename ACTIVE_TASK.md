@@ -1,3 +1,10 @@
+## ACTIVE FORCE SWITCH: Seamless outside-first Find Players (2026-10-26)
+
+- **Single active task:** After merged persistent LFG panel PR #742, owner showed Discord screenshots proving main **Find Players** leads to only empty local sessions while Outside Players and Public Network are buried. Change BOTH Community Hub and its persistent panel so Find Players immediately fetches real external Atlas groups, host-approved cross-guild Public Gaming Network, and local sessions in a combined private finder; no hidden intermediate menu.
+- **Code:** Query each source independently and concurrently; game search across all three and optional external region filter. Always show partial authorized results when one source fails, without claiming no gaming groups globally just because local guild has none. Present Atlas provider links, public network exact approved invite selection with click-time fresh recheck, and local session join in their distinct owner-controlled flows. Keep legacy source-specific browses as optional details; avoid invented native joins for external users.
+- **Verified live blocker:** Connected Dank Shield Supabase project still lacks `public_lfg_opt_in`, `community_hub_public_lfg_directory`, and `dank_community_atlas_publications`. This PR cannot make outside public network appear without applying previously merged #736/#741 migrations to the actual production database and validating Discloud access. No unsafe direct production writes or schema migration in this UI PR.
+- **Release:** One large PR, dedicated Community Hub tests and cross-feature CI; guarded migration plan separately, Android canary and correct release feed. OneBump and all unrelated tasks paused.
+
 ## ACTIVE FORCE SWITCH: Persistent public Community Hub LFG board (2026-10-26)
 
 - **Single active task:** User returned from OneBump after PRs #740 and #741 merged and requested a permanently visible, interactive public LFG panel for all members. Implement in one large PR on `feat/community-lfg-persistent-public-panel-20261026`. Keep OneBump, Cinema, other projects paused.

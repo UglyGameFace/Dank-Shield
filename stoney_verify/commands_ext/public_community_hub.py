@@ -8,6 +8,7 @@ All slow mutations acknowledge Discord first, re-authorize on the server side,
 and run through the existing bot-wide operation queue.
 """
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional
@@ -578,14 +579,15 @@ def _hub_embed() -> discord.Embed:
     embed = discord.Embed(
         title="🎮 Community Hub",
         description=(
-            "Find people to play with, start a gaming session, join community events, "
-            "and manage your own game notifications. No mystery acronyms required."
+            "Find outside gaming groups and real Discord communities **right from Find Players**, "
+            "plus groups hosted here. Start a session, join events or set game notifications."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(
         name="Find Players",
-        value="Browse active groups in this server and, when staff enables it, approved partner servers.",
+        value="One search shows free outside gaming groups, opt-in Public Gaming Network servers "
+              "and groups hosted here. Outside discovery works without a paid token.",
         inline=False,
     )
     embed.add_field(
@@ -1348,7 +1350,7 @@ class CommunityHubView(_OwnedView):
     async def find_players(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        await _open_find_players_source(interaction, self.owner_id, partner=False)
+        await _open_unified_player_discovery(interaction, self.owner_id)
 
     @discord.ui.button(label="Start Gaming Session", emoji="➕", style=discord.ButtonStyle.success, custom_id="dank:hub:start:v1", row=0)
     async def start_session(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1486,13 +1488,13 @@ class CommunityHubView(_OwnedView):
             view=LiveCaptionsHomeView(self.owner_id),
         )
 
-    @discord.ui.button(label="Public Gaming Network", emoji="🧭", style=discord.ButtonStyle.primary, custom_id="dank:hub:publicnetwork:v1", row=3)
+    @discord.ui.button(label="Browse Public Servers", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank:hub:publicnetwork:v1", row=3)
     async def public_network(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
         await _open_public_lfg_network(interaction, self.owner_id)
 
-    @discord.ui.button(label="External Groups", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:v1", row=2)
+    @discord.ui.button(label="More Gaming Sources", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:external:v1", row=2)
     async def external_groups(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
@@ -2081,11 +2083,11 @@ class FindPlayersView(_OwnedView):
         await _defer_update(interaction)
         await _open_find_players_source(interaction, self.owner_id, partner=self.partner)
 
-    @discord.ui.button(label="External Groups", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:external:v1", row=3)
+    @discord.ui.button(label="All Gaming Groups", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:external:v1", row=3)
     async def external_groups(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        await _open_outside_players_home(interaction, self.owner_id)
+        await _open_unified_player_discovery(interaction, self.owner_id, game=self.game_query[:55])
 
     @discord.ui.button(label="Community Hub", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:back:v1", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2330,6 +2332,238 @@ async def _open_outside_players_home(interaction: discord.Interaction, owner_id:
     await _edit_private_original(
         interaction, content=None, embed=_outside_players_embed(),
         view=OutsidePlayersView(owner_id),
+    )
+
+
+class UnifiedGameSearchModal(discord.ui.Modal, title="Find a Gaming Group"):
+    game = discord.ui.TextInput(
+        label="Which game? (blank = all games)", required=False, max_length=55,
+        placeholder="Minecraft, Fortnite, Valorant...",
+    )
+    region = discord.ui.TextInput(
+        label="Region for outside groups (optional)", required=False,
+        max_length=40, placeholder="NA, US East, EU...",
+    )
+
+    def __init__(self, owner_id: int, *, game: str = "", region: str = "") -> None:
+        super().__init__()
+        self.owner_id = int(owner_id)
+        self.game.default = game[:55] or None
+        self.region.default = region[:40] or None
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await _private(interaction, "Open your own Find Players menu.")
+        await _defer_ephemeral(interaction)
+        await _open_unified_player_discovery(
+            interaction, self.owner_id,
+            game=str(self.game.value or "").strip(),
+            region=str(self.region.value or "").strip(),
+        )
+
+
+def _discovery_safe_label(value: Any, limit: int = 65) -> str:
+    text = " ".join(
+        "".join(ch if ch.isprintable() else " " for ch in str(value or ""))
+        .replace("@", "＠").split()
+    )[:max(1, min(int(limit), 90))]
+    return discord.utils.escape_markdown(text)
+
+
+def _unified_discovery_embed(
+    atlas_rows: list[dict[str, Any]], network_rows: list[dict[str, Any]],
+    local_rows: list[dict[str, Any]], *, game: str = "", region: str = "",
+    atlas_notice: str = "", network_notice: str = "", local_notice: str = "",
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="🎮 Find Players & Gaming Servers",
+        description=(
+            "**Results from outside gaming communities appear here first.** "
+            "You can also discover approved Discord servers from the Public Gaming Network "
+            "and join active groups in this server. Search once; no hidden outside-player menu. "
+            "External availability and age/verification requirements must be checked with the host."
+        ),
+        color=discord.Color.blurple(),
+    )
+    filters = " • ".join(filter(None, (
+        "Game: " + discord.utils.escape_markdown(game)[:55] if game else "",
+        "Outside region: " + discord.utils.escape_markdown(region)[:40] if region else "",
+    )))
+    if filters:
+        embed.add_field(name="Your search", value=filters, inline=False)
+
+    if atlas_rows:
+        displayed = []
+        for row in atlas_rows[:5]:
+            title = _discovery_safe_label(row.get("title") or "Group", 65)
+            game_name = _discovery_safe_label(row.get("game") or "Game", 40)
+            place = _discovery_safe_label(row.get("region") or "", 30)
+            url = atlas._safe_details_url(row.get("url"))
+            # The Atlas adapter returns only trusted provider-origin URLs.
+            displayed.append(
+                f"• **{game_name}**: {title}"
+                + (f" • {place}" if place else "")
+                + f" • [View group]({url})"
+            )
+        embed.add_field(name="🌍 Outside gaming groups", value="\n".join(displayed)[:1024], inline=False)
+    else:
+        embed.add_field(
+            name="🌍 Outside gaming groups",
+            value=(atlas_notice[:450] if atlas_notice else
+                   "No outside posts match right now. Search another game or browse more sources."),
+            inline=False,
+        )
+
+    if network_rows:
+        displayed = []
+        for row in network_rows[:5]:
+            community = _discovery_safe_label(row["community"], 48)
+            game_name = _discovery_safe_label(row["game"], 50)
+            displayed.append(f"• **{community}** • {game_name} • up to {row['capacity']} players")
+        embed.add_field(
+            name="🧭 Public Gaming Network • approved Discord communities",
+            value="\n".join(displayed)[:1024] +
+                  "\n**Choose a server below to view its current approved invitation.**",
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="🧭 Public Gaming Network",
+            value=network_notice[:450] if network_notice else
+                  "No participating Discord servers have advertised a matching group yet. "
+                  "Outside groups can still be found above.",
+            inline=False,
+        )
+
+    if local_rows:
+        displayed = [
+            f"• {_discovery_safe_label(row.get('game_name') or 'Game', 65)}"
+            for row in local_rows[:3]
+        ]
+        text = "\n".join(displayed) + "\nUse **This Server** to join."
+    else:
+        text = (local_notice[:300] if local_notice else
+                "No matching sessions hosted here right now. Outside search still works.")
+    embed.add_field(name="🏠 Groups in this server", value=text[:1024], inline=False)
+    embed.set_footer(text="External listings are independent • Public Network is staff/host opt-in • No automatic joins")
+    return embed
+
+
+class UnifiedPlayerDiscoveryView(_OwnedView):
+    def __init__(
+        self, owner_id: int, network_rows: list[dict[str, Any]],
+        *, game: str = "", region: str = "",
+    ) -> None:
+        super().__init__(owner_id)
+        self.game = game[:55]
+        self.region = region[:40]
+        # Reuse the existing click-time server/host consent validation.
+        self.add_item(PublicNetworkSelect(
+            owner_id, network_rows[:20], self.game, page=0,
+            return_to_unified=True, region=self.region,
+        ))
+
+    @discord.ui.button(label="Search Any Game", emoji="🔎", style=discord.ButtonStyle.primary, custom_id="dank:hub:unified:search:v1", row=1)
+    async def search(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.send_modal(
+            UnifiedGameSearchModal(self.owner_id, game=self.game, region=self.region)
+        )
+
+    @discord.ui.button(label="More Outside Groups", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:unified:outside:v1", row=1)
+    async def outside(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_atlas_groups(
+            interaction, self.owner_id, game=self.game, region=self.region,
+        )
+
+    @discord.ui.button(label="Public Network", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank:hub:unified:network:v1", row=1)
+    async def network(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_public_lfg_network(interaction, self.owner_id, game_query=self.game)
+
+    @discord.ui.button(label="This Server", emoji="🏠", style=discord.ButtonStyle.secondary, custom_id="dank:hub:unified:local:v1", row=2)
+    async def local(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_find_players_source(interaction, self.owner_id, partner=False, game_query=self.game)
+
+    @discord.ui.button(label="Minecraft Players", emoji="⛏️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:unified:minecraft:v1", row=2)
+    async def minecraft(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_minecraft_players(interaction, self.owner_id)
+
+    @discord.ui.button(label="More Sources", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank:hub:unified:sources:v1", row=2)
+    async def sources(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_outside_players_home(interaction, self.owner_id)
+
+    @discord.ui.button(label="Refresh Results", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="dank:hub:unified:refresh:v1", row=3)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_unified_player_discovery(interaction, self.owner_id, game=self.game, region=self.region)
+
+    @discord.ui.button(label="Community Hub", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:unified:home:v1", row=3)
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _edit_private_original(
+            interaction, content=None, embed=_hub_embed(), view=CommunityHubView(self.owner_id),
+        )
+
+
+async def _open_unified_player_discovery(
+    interaction: discord.Interaction, owner_id: int, *,
+    game: str = "", region: str = "",
+) -> None:
+    """Query each authorized source independently, with partial results on outage."""
+    gid = int(interaction.guild_id or 0)
+    if gid <= 0:
+        return await _edit_private_original(
+            interaction, content="Find Players works inside a Discord server.",
+            embed=None, view=CommunityHubView(owner_id),
+        )
+    game, region = str(game or "").strip()[:55], str(region or "").strip()[:40]
+    from ..community_public_lfg import sanitize_directory
+
+    results = await asyncio.gather(
+        atlas.list_atlas_posts(game=game, region=region, limit=25),
+        hub.list_public_lfg_directory(limit=100),
+        hub.list_active_sessions(gid, limit=30),
+        return_exceptions=True,
+    )
+    atlas_rows: list[dict[str, Any]] = []
+    network_rows: list[dict[str, Any]] = []
+    local_rows: list[dict[str, Any]] = []
+    notices = ["", "", ""]
+    for index, result in enumerate(results):
+        if isinstance(result, Exception):
+            if index == 0:
+                notices[index] = "Outside group listings are temporarily unavailable. Try More Sources."
+            elif index == 1:
+                notices[index] = "Cross-server listings aren't set up on this bot yet. Outside groups still work."
+            else:
+                notices[index] = "Local group listings are temporarily unavailable."
+            continue
+        if index == 0:
+            atlas_rows = result if isinstance(result, list) else []
+        elif index == 1:
+            network_rows = sanitize_directory(result, game=game)[:40]
+        else:
+            local_rows = filter_discovery_games(result, game, limit=10)
+
+    embed = _unified_discovery_embed(
+        atlas_rows, network_rows, local_rows, game=game, region=region,
+        atlas_notice=notices[0], network_notice=notices[1], local_notice=notices[2],
+    )
+    await _edit_private_original(
+        interaction, content=None, embed=embed,
+        view=UnifiedPlayerDiscoveryView(owner_id, network_rows, game=game, region=region),
     )
 
 
@@ -4770,8 +5004,11 @@ def _public_network_embed(
 
 
 class PublicNetworkSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, groups: list[dict[str, Any]], game_query: str, *, page: int = 0) -> None:
+    def __init__(self, owner_id: int, groups: list[dict[str, Any]], game_query: str, *,
+                 page: int = 0, return_to_unified: bool = False, region: str = "") -> None:
         self.owner_id = int(owner_id)
+        self.return_to_unified = bool(return_to_unified)
+        self.region = str(region or "")[:40]
         self.groups = list(groups[:25])
         self.game_query = game_query
         self.page = max(0, int(page))
@@ -4822,13 +5059,20 @@ class PublicNetworkSelect(discord.ui.Select):
         )
         await _edit_private_original(
             interaction, content=None, embed=embed,
-            view=PublicNetworkDetailView(self.owner_id, row, game_query=self.game_query, page=self.page),
+            view=PublicNetworkDetailView(
+                self.owner_id, row, game_query=self.game_query, page=self.page,
+                return_to_unified=self.return_to_unified, region=self.region,
+            ),
         )
 
 
 class PublicNetworkDetailView(_OwnedView):
-    def __init__(self, owner_id: int, row: dict[str, Any], *, game_query: str = "", page: int = 0) -> None:
+    def __init__(self, owner_id: int, row: dict[str, Any], *,
+                 game_query: str = "", page: int = 0, return_to_unified: bool = False,
+                 region: str = "") -> None:
         super().__init__(owner_id)
+        self.return_to_unified = bool(return_to_unified)
+        self.region = str(region or "")[:40]
         self.game_query = game_query
         self.page = page
         self.add_item(discord.ui.Button(
@@ -4840,7 +5084,14 @@ class PublicNetworkDetailView(_OwnedView):
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        await _open_public_lfg_network(interaction, self.owner_id, game_query=self.game_query, page=self.page)
+        if self.return_to_unified:
+            await _open_unified_player_discovery(
+                interaction, self.owner_id, game=self.game_query, region=self.region,
+            )
+        else:
+            await _open_public_lfg_network(
+                interaction, self.owner_id, game_query=self.game_query, page=self.page,
+            )
 
 
 class PublicNetworkView(_OwnedView):
@@ -4898,9 +5149,10 @@ async def _open_public_lfg_network(
         fresh = await hub.list_public_lfg_directory(limit=100)
         groups = sanitize_directory(fresh, game=game_query)
     except hub.CommunityHubError:
-        return await _edit_private_original(
-            interaction, content="Public Gaming Network is unavailable or not migrated yet.",
-            embed=None, view=CommunityHubView(owner_id),
+        # Cross-server opt-in storage is optional and might not be deployed.
+        # Never dead-end a member who wants to find a group right now.
+        return await _open_unified_player_discovery(
+            interaction, owner_id, game=game_query,
         )
     # Discord select menus allow at most 25 options. Keep the source bounded,
     # but make all 40 approved public groups reachable on Android and desktop.

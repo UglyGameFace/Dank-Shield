@@ -469,8 +469,8 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     RecentFeatureUpdate(
         "community_hub", "Find Players can recruit beyond your Discord server",
         "Host-approved public group listings for opted-in servers, free multi-game "
-        "discovery, and host-consented external Atlas advertisements with removal. "
-        "Hosts can stop sharing anytime.",
+        "discovery, host-consented Atlas ads and a persistent public LFG panel. "
+        "Private group details remain private; hosts can stop sharing anytime.",
         "2026-10-26",
     ),
     RecentFeatureUpdate(

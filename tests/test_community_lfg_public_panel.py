@@ -104,7 +104,8 @@ def test_board_only_shows_public_fresh_joinable_groups():
 
 def test_public_panel_exposes_no_personal_presence_or_unsaved_post_links():
     embed = panel.board_embed("Gaming", [], {"enabled": True})
-    assert "No public groups yet" in repr(embed.to_dict())
+    assert "No sessions hosted here yet" in repr(embed.to_dict())
+    assert "outside gaming groups" in repr(embed.to_dict()).lower()
     outage = panel.board_embed("Gaming", [_session()], {}, unavailable=True)
     assert "Temporarily unavailable" in repr(outage.to_dict())
     assert "Minecraft" not in repr(outage.to_dict())
@@ -233,3 +234,14 @@ def test_worker_wired_in_existing_startup_with_event_driven_invalidations():
     assert "mark_dirty(gid)" in service
     assert "bot.add_view(PublicLFGBoardView())" in Path(panel.__file__).read_text()
     assert "MAX_GUILDS_PER_TICK = 4" in Path(panel.__file__).read_text()
+
+
+def test_public_find_button_routes_directly_to_unified_outside_first(monkeypatch):
+    view = panel.PublicLFGBoardView()
+    monkeypatch.setattr(ui, "_open_unified_player_discovery", AsyncMock())
+    response = SimpleNamespace(defer=AsyncMock())
+    interaction = SimpleNamespace(response=response, user=SimpleNamespace(id=77))
+    button = next(x for x in view.children if x.custom_id == "dank:lfg:board:find:v1")
+    asyncio.run(button.callback(interaction))
+    ui._open_unified_player_discovery.assert_awaited_once_with(interaction, 77)
+    response.defer.assert_awaited_once_with(thinking=True, ephemeral=True)
