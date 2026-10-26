@@ -1346,22 +1346,7 @@ class CommunityHubView(_OwnedView):
     async def find_players(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        try:
-            sessions = await hub.list_active_sessions(int(interaction.guild_id or 0), limit=25)
-            availability = await hub.availability_summary(int(interaction.guild_id or 0), limit=1000)
-        except hub.CommunityHubError as exc:
-            return await _edit_private_original(
-                interaction,
-                content=f"❌ {_error_text(exc)}",
-                embed=None,
-                view=CommunityHubView(self.owner_id),
-            )
-        await _edit_private_original(
-            interaction,
-            content=None,
-            embed=_find_players_embed(sessions, partner=False, availability_summary=availability),
-            view=FindPlayersView(self.owner_id, sessions, partner=False, availability_summary=availability),
-        )
+        await _open_find_players_source(interaction, self.owner_id, partner=False)
 
     @discord.ui.button(label="Start Gaming Session", emoji="➕", style=discord.ButtonStyle.success, custom_id="dank:hub:start:v1", row=0)
     async def start_session(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1467,20 +1452,7 @@ class CommunityHubView(_OwnedView):
     async def partners(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        try:
-            sessions = await hub.list_partner_discovery_sessions(int(interaction.guild_id or 0), limit=25)
-            activity = await ensure_community_hub_runtime(interaction.client).partner_activity_snapshots(
-                int(interaction.guild_id or 0),
-                limit=10,
-            )
-        except hub.CommunityHubError as exc:
-            return await _edit_private_original(interaction, content=f"❌ {_error_text(exc)}", embed=None, view=CommunityHubView(self.owner_id))
-        await _edit_private_original(
-            interaction,
-            content=None,
-            embed=_find_players_embed(sessions, partner=True, partner_activity=activity),
-            view=FindPlayersView(self.owner_id, sessions, partner=True),
-        )
+        await _open_find_players_source(interaction, self.owner_id, partner=True)
 
     @discord.ui.button(label="Live Captions", emoji="📝", style=discord.ButtonStyle.secondary, custom_id="dank:hub:captions:v1", row=1)
     async def live_captions(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1590,6 +1562,8 @@ def _find_players_embed(
     game_query: str = "",
     play_style: str = "",
     mic_preference: str = "",
+    page: int = 0,
+    has_next: bool = False,
 ) -> discord.Embed:
     title = "🌐 Find Players Across Partner Servers" if partner else "🔎 Find Players"
     description = (
@@ -1612,6 +1586,11 @@ def _find_players_embed(
         if mic_preference:
             preferences.append(f"Mic: {mic_preference.replace('_', ' ').title()}")
         description += "\n🎚️ " + " • ".join(preferences) + " (exact session preferences)"
+    if page or has_next:
+        description += (
+            f"\n📄 Page {page + 1} of recent matching groups. "
+            "Use the Filters menu to browse more."
+        )
     description += "\n\nSources: local sessions, consented HubLink partners, or read-only The100.io listings."
     embed = discord.Embed(title=title, description=description, color=discord.Color.blurple())
     if partner and partner_activity:
@@ -1906,12 +1885,15 @@ class SessionPreferenceSelect(discord.ui.Select):
     def __init__(
         self, owner_id: int, *, partner: bool, game_query: str = "",
         play_style: str = "", mic_preference: str = "",
+        page: int = 0, has_next: bool = False,
     ) -> None:
         self.owner_id = int(owner_id)
         self.partner = bool(partner)
         self.game_query = str(game_query or "")[:80]
         self.play_style = play_style
         self.mic_preference = mic_preference
+        self.page = max(0, min(int(page), 3))
+        self.has_next = bool(has_next)
         items = [
             ("Reset session preferences", "clear", "🧹"),
             ("Any play style", "style:off", "🎮"),
@@ -1925,6 +1907,10 @@ class SessionPreferenceSelect(discord.ui.Select):
             ("Mic required", "mic:required", "🎙️"),
             ("No microphone", "mic:no_mic", "🔇"),
         ]
+        if self.page > 0:
+            items.insert(0, ("Previous groups", "page:prev", "⬅️"))
+        if self.has_next:
+            items.insert(0, ("More groups", "page:next", "➡️"))
         options = [
             discord.SelectOption(label=label, value=value, emoji=emoji)
             for label, value, emoji in items
@@ -1936,7 +1922,7 @@ class SessionPreferenceSelect(discord.ui.Select):
             ))) or "All styles and mic policies"
         )
         super().__init__(
-            placeholder=f"🎚️ {description}"[:150],
+            placeholder=f"🎚️ Filters / Page {self.page + 1} • {description}"[:150],
             options=options, min_values=1, max_values=1,
             custom_id="dank:hub:find:preferences:v1",
             row=4,
@@ -1946,6 +1932,17 @@ class SessionPreferenceSelect(discord.ui.Select):
         choice = self.values[0]
         style = self.play_style
         mic = self.mic_preference
+        if choice in {"page:prev", "page:next"}:
+            if choice == "page:prev" and self.page == 0:
+                return await _private(interaction, "Already at the first page.")
+            if choice == "page:next" and not self.has_next:
+                return await _private(interaction, "No more recent groups found.")
+            await _defer_update(interaction)
+            return await _open_find_players_source(
+                interaction, self.owner_id, partner=self.partner,
+                game_query=self.game_query, play_style=style, mic_preference=mic,
+                page=self.page + (1 if choice == "page:next" else -1),
+            )
         if choice == "clear":
             style, mic = "", ""
         elif choice.startswith("style:"):
@@ -1975,6 +1972,8 @@ class FindPlayersView(_OwnedView):
         game_query: str = "",
         play_style: str = "",
         mic_preference: str = "",
+        page: int = 0,
+        has_next: bool = False,
     ) -> None:
         super().__init__(owner_id)
         self.sessions = list(sessions)
@@ -1982,6 +1981,8 @@ class FindPlayersView(_OwnedView):
         self.game_query = str(game_query or "")[:80]
         self.play_style = play_style
         self.mic_preference = mic_preference
+        self.page = max(0, min(int(page), 3))
+        self.has_next = bool(has_next)
         self.availability_summary = dict(availability_summary or {})
         self.selected_game = _safe_str(selected_game)
         self.add_item(SessionSelect(owner_id, sessions, partner=partner))
@@ -1991,6 +1992,7 @@ class FindPlayersView(_OwnedView):
         self.add_item(SessionPreferenceSelect(
             owner_id, partner=self.partner, game_query=self.game_query,
             play_style=self.play_style, mic_preference=self.mic_preference,
+            page=self.page, has_next=self.has_next,
         ))
         if not self.partner:
             self.add_item(
@@ -2095,6 +2097,7 @@ async def _open_find_players_source(
     game_query: str = "",
     play_style: str = "",
     mic_preference: str = "",
+    page: int = 0,
 ) -> None:
     """Refresh only the selected authorized source; never merge private guild data."""
     guild_id = int(interaction.guild_id or 0)
@@ -2118,21 +2121,40 @@ async def _open_find_players_source(
             interaction, content=f"❌ {_error_text(exc)}",
             embed=None, view=CommunityHubView(owner_id),
         )
+    # Scan only the latest 100 already-authorized records. Paging is a
+    # presentation limit, never a new cross-guild discovery permission.
+    page = max(0, min(int(page), 3))
     filtered = filter_discovery_games(
         sessions, game_query, limit=25,
         play_style=play_style, mic_preference=mic_preference,
+        offset=page * 25,
     )
+    if page and not filtered:
+        # A session may expire or be revoked between clicks; never strand the
+        # member on an empty stale page when newer results are available.
+        page = 0
+        filtered = filter_discovery_games(
+            sessions, game_query, limit=25,
+            play_style=play_style, mic_preference=mic_preference,
+        )
+    has_next = bool(filter_discovery_games(
+        sessions, game_query, limit=1,
+        play_style=play_style, mic_preference=mic_preference,
+        offset=(page + 1) * 25,
+    ))
     await _edit_private_original(
         interaction, content=None,
         embed=_find_players_embed(
             filtered, partner=partner, partner_activity=activity,
             availability_summary=availability, game_query=game_query,
             play_style=play_style, mic_preference=mic_preference,
+            page=page, has_next=has_next,
         ),
         view=FindPlayersView(
             owner_id, filtered, partner=partner,
             availability_summary=availability, game_query=game_query,
             play_style=play_style, mic_preference=mic_preference,
+            page=page, has_next=has_next,
         ),
     )
 
