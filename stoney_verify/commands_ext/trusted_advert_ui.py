@@ -141,6 +141,20 @@ class ApproveAdvertBotModal(discord.ui.Modal, title="Approve an Advertising Bot"
         member = await _resolve_bot(guild, self.bot_id.value)
         if member is None:
             return await _notice(interaction, "Bot not verified in this server. Copy its Discord User ID; names aren't sufficient.")
+        # Refuse misleading setup if an older broad channel exemption would
+        # also let *ordinary members* post invitations here.
+        from ..invite_policy_engine import load_invite_policy
+        from ..invite_scope_settings import parse_ids
+        _cfg, settings = await load_invite_policy(guild, refresh=True)
+        allowed = settings.get("allowed_invite_channel_ids", settings.get("invite_allowed_channel_ids", []))
+        if str(channel.id) in parse_ids(allowed):
+            return await _notice(
+                interaction,
+                "⚠️ This channel is already on Invite Shield's allowed-channel list, "
+                "which lets ordinary members post invites here. Remove that broad "
+                "channel exemption under Spam Guard / Invite Allow Lists first. "
+                "Nothing was changed.",
+            )
         try:
             rules = await save_rule(guild.id, bot_id=member.id, channel_id=channel.id)
         except (RuntimeError, ValueError) as exc:
