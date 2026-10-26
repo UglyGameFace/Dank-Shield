@@ -16,6 +16,7 @@ import discord
 
 from .. import community_hub_service as hub
 from .. import community_external_lfg as external
+from .. import community_free_lfg as free_lfg
 from .. import community_hub_game_role_pings as game_pings
 from ..guild_config import get_guild_config
 from ..community_lfg_discovery import filter_discovery_games
@@ -1494,7 +1495,7 @@ class CommunityHubView(_OwnedView):
     async def external_groups(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        await _open_external_sessions(interaction, self.owner_id)
+        await _open_outside_players_home(interaction, self.owner_id)
 
     @discord.ui.button(label="Staff Dashboard", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:staff:v1", row=2)
     async def staff(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2083,7 +2084,7 @@ class FindPlayersView(_OwnedView):
     async def external_groups(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        await _open_external_sessions(interaction, self.owner_id, game_query=self.game_query)
+        await _open_outside_players_home(interaction, self.owner_id)
 
     @discord.ui.button(label="Community Hub", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:back:v1", row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -2251,6 +2252,229 @@ def _external_groups_embed(
         )
     embed.set_footer(text=f"External provider • page {page + 1}/{(len(sessions) + 4) // 5} • check live availability on The100.io")
     return embed
+
+
+
+def _outside_players_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="🌍 Find Players Outside Your Server",
+        description=(
+            "Use real, independently published gaming directories. "
+            "Minecraft LFG has public player profiles (not an automatic invite or live Discord session). "
+            "You can also browse outside communities manually. "
+            "The100.io is optional and requires an authorized supporter/developer token. "
+            "**Nobody is contacted automatically.**"
+        ), color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="⛏️ Minecraft Players • Free",
+        value="Search the public Minecraft LFG player pool by edition. No API key.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🧭 More Free Communities",
+        value="Browse public, independently moderated gaming communities in your browser. "
+              "Read their rules before sharing invitations.",
+        inline=False,
+    )
+    embed.add_field(
+        name="📣 Bring Players to Your Server",
+        value="For your own public groups use Community Hub → Public Gaming Network / Public Recruiting. "
+              "These are separate from third-party player profiles.",
+        inline=False,
+    )
+    return embed
+
+
+class OutsidePlayersView(_OwnedView):
+    @discord.ui.button(label="Minecraft Players", emoji="⛏️", style=discord.ButtonStyle.primary, custom_id="dank:hub:outside:minecraft:v1", row=0)
+    async def minecraft(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_minecraft_players(interaction, self.owner_id)
+
+    @discord.ui.button(label="More Free Communities", emoji="🧭", style=discord.ButtonStyle.secondary, custom_id="dank:hub:outside:communities:v1", row=0)
+    async def communities(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_outside_communities(interaction, self.owner_id)
+
+    @discord.ui.button(label="The100.io (Optional)", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:outside:the100:v1", row=1)
+    async def the100(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_external_sessions(interaction, self.owner_id)
+
+    @discord.ui.button(label="Community Hub", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:outside:back:v1", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.edit_message(
+            embed=_hub_embed(), view=CommunityHubView(self.owner_id),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+async def _open_outside_players_home(interaction: discord.Interaction, owner_id: int) -> None:
+    await _edit_private_original(
+        interaction, content=None, embed=_outside_players_embed(),
+        view=OutsidePlayersView(owner_id),
+    )
+
+
+class MinecraftEditionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, edition: str) -> None:
+        self.owner_id = int(owner_id)
+        choices = [
+            ("All editions", "", "🎮"),
+            ("Java", "JAVA", "💻"),
+            ("Bedrock", "BEDROCK", "📱"),
+            ("Cross-play", "CROSSPLAY", "🔀"),
+        ]
+        super().__init__(
+            placeholder="Minecraft edition: " + (edition or "All"),
+            options=[
+                discord.SelectOption(label=label, value=value or "ALL", emoji=emoji, default=edition == value)
+                for label, value, emoji in choices
+            ],
+            min_values=1, max_values=1,
+            row=0, custom_id="dank:hub:outside:minecraft:edition:v1",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _defer_update(interaction)
+        selected = self.values[0]
+        await _open_minecraft_players(
+            interaction, self.owner_id, edition="" if selected == "ALL" else selected,
+        )
+
+
+def _minecraft_players_embed(
+    rows: list[dict[str, Any]], *, page: int, edition: str, notice: str = "",
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="⛏️ Minecraft LFG • Outside Players",
+        description=(
+            "Public, opted-in Minecraft player profiles from an independent website. "
+            "These profiles **are not confirmed online now**, do not represent open Discord sessions, "
+            "and are not members of your server. Open Minecraft LFG to contact people under its rules."
+        ),
+        color=discord.Color.blurple(),
+    )
+    if notice:
+        embed.add_field(name="Provider status", value=notice[:400], inline=False)
+    for row in rows[:20]:
+        name = discord.utils.escape_markdown(str(row["name"]))[:70]
+        edition_label = str(row["edition"])
+        modes = ", ".join(discord.utils.escape_markdown(v) for v in row.get("modes", [])[:3])
+        headline = discord.utils.escape_markdown(str(row.get("headline", "")))[:120]
+        details = " • ".join(filter(None, [edition_label, modes, headline]))
+        embed.add_field(
+            name=f"🎮 {name}"[:95], value=details[:240] or "Public Minecraft profile",
+            inline=False,
+        )
+    if not rows and not notice:
+        embed.add_field(
+            name="No matching profiles", value="No public profiles in this provider page. Try another edition.",
+            inline=False,
+        )
+    embed.set_footer(
+        text=f"Provider page {page} • {edition or 'All editions'} • cached read-only profiles"
+    )
+    return embed
+
+
+class MinecraftPlayersView(_OwnedView):
+    def __init__(
+        self, owner_id: int, *, page: int = 1, pages: int = 1, edition: str = "",
+    ) -> None:
+        super().__init__(owner_id)
+        self.page = max(1, min(int(page), 5))
+        self.pages = max(1, min(int(pages), 5))
+        self.edition = edition
+        self.add_item(MinecraftEditionSelect(owner_id, edition))
+        self.previous.disabled = self.page <= 1
+        self.next_page.disabled = self.page >= self.pages
+        self.add_item(discord.ui.Button(
+            label="Open Minecraft LFG", emoji="🌐", style=discord.ButtonStyle.link,
+            url=free_lfg.MINECRAFT_SITE_URL, row=2,
+        ))
+
+    @discord.ui.button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:outside:minecraft:prev:v1", row=1)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_minecraft_players(
+            interaction, self.owner_id, page=max(1, self.page - 1), edition=self.edition,
+        )
+
+    @discord.ui.button(label="More Players", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:outside:minecraft:next:v1", row=1)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_minecraft_players(
+            interaction, self.owner_id, page=min(self.pages, self.page + 1), edition=self.edition,
+        )
+
+    @discord.ui.button(label="Outside Sources", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:outside:minecraft:back:v1", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_outside_players_home(interaction, self.owner_id)
+
+
+async def _open_minecraft_players(
+    interaction: discord.Interaction, owner_id: int, *,
+    page: int = 1, edition: str = "",
+) -> None:
+    rows: list[dict[str, Any]] = []
+    pages, notice = 1, ""
+    try:
+        settings = await hub.get_settings(int(interaction.guild_id or 0))
+        if not bool(settings.get("enabled", True)) or bool(settings.get("maintenance_mode")):
+            notice = "Community Hub is unavailable on this server."
+        else:
+            rows, pages = await free_lfg.list_minecraft_players(page=page, edition=edition)
+    except (hub.CommunityHubError, external.ExternalDiscoveryError) as exc:
+        notice = str(exc)[:400]
+    await _edit_private_original(
+        interaction, content=None,
+        embed=_minecraft_players_embed(rows, page=page, edition=edition, notice=notice),
+        view=MinecraftPlayersView(owner_id, page=page, pages=pages, edition=edition),
+    )
+
+
+class OutsideCommunitiesView(_OwnedView):
+    def __init__(self, owner_id: int) -> None:
+        super().__init__(owner_id)
+        for idx, item in enumerate(free_lfg.provider_navigation()):
+            self.add_item(discord.ui.Button(
+                label=item["label"], style=discord.ButtonStyle.link,
+                url=item["url"], row=idx // 5,
+            ))
+
+    @discord.ui.button(label="Outside Sources", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:outside:links:back:v1", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_outside_players_home(interaction, self.owner_id)
+
+
+async def _open_outside_communities(interaction: discord.Interaction, owner_id: int) -> None:
+    embed = discord.Embed(
+        title="🧭 Free Gaming Communities",
+        description=(
+            "Visit independently moderated gaming communities in your browser. "
+            "Links are **manual destinations**, not API-fed live sessions. "
+            "Check each community's posting, age and invite policies; "
+            "Dank Shield never scrapes posts or sends messages for you."
+        ), color=discord.Color.blurple(),
+    )
+    for item in free_lfg.provider_navigation():
+        embed.add_field(name=item["label"], value=item["game"] + " • Open with a button below", inline=False)
+    await _edit_private_original(
+        interaction, content=None, embed=embed,
+        view=OutsideCommunitiesView(owner_id),
+    )
 
 
 class ExternalGroupsView(_OwnedView):
