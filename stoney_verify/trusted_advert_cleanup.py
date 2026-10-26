@@ -241,3 +241,24 @@ async def recent_cleanup_status(guild_id: int, channel_id: int) -> dict[str, Any
     return {"total_shown": len(rows), "counts": counts,
             "next_due": min((str(row.get("delete_after")) for row in rows
                              if row.get("state") == "pending" and row.get("delete_after")), default="None")}
+
+
+async def cancel_scheduled_for_pair(guild_id: int, channel_id: int, bot_id: int) -> None:
+    """Best-effort immediate ledger cancellation following a verified config revoke.
+
+    Existing row status is not revived if the pair is approved again later.
+    """
+    def cancel() -> None:
+        (
+            _db().table(TABLE).update({
+                "state": "cancelled", "claimed_until": None,
+                "last_error": "staff_revoked_or_paused",
+                "updated_at": _iso(datetime.now(timezone.utc)),
+            })
+            .eq("guild_id", str(int(guild_id)))
+            .eq("channel_id", str(int(channel_id)))
+            .eq("bot_id", str(int(bot_id)))
+            .in_("state", ["pending", "claimed"])
+            .execute()
+        )
+    await _db_run(cancel)
