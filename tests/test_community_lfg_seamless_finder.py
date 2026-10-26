@@ -170,7 +170,7 @@ def test_existing_detail_navigation_can_return_to_unified(monkeypatch):
     monkeypatch.setattr(ui, "_defer_update", defer)
     monkeypatch.setattr(ui, "_open_unified_player_discovery", reopen)
     interaction = SimpleNamespace()
-    asyncio.run(detail.back(interaction, back))
+    asyncio.run(back.callback(interaction))
     reopen.assert_awaited_once_with(
         interaction, 99, game="Minecraft", region="NA",
     )
