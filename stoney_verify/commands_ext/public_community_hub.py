@@ -17,6 +17,7 @@ import discord
 from .. import community_hub_service as hub
 from .. import community_external_lfg as external
 from .. import community_free_lfg as free_lfg
+from .. import community_lfg_atlas as atlas
 from .. import community_hub_game_role_pings as game_pings
 from ..guild_config import get_guild_config
 from ..community_lfg_discovery import filter_discovery_games
@@ -2267,6 +2268,11 @@ def _outside_players_embed() -> discord.Embed:
         ), color=discord.Color.blurple(),
     )
     embed.add_field(
+        name="🎯 Live Multi-Game Groups • Free",
+        value="LFG Atlas public posts for 28+ games; filter game, region, group type and ready-now status. No API key.",
+        inline=False,
+    )
+    embed.add_field(
         name="⛏️ Minecraft Players • Free",
         value="Search public Minecraft player profiles by edition. No API key.",
         inline=False,
@@ -2287,6 +2293,12 @@ def _outside_players_embed() -> discord.Embed:
 
 
 class OutsidePlayersView(_OwnedView):
+    @discord.ui.button(label="Live Gaming Groups", emoji="🎯", style=discord.ButtonStyle.primary, custom_id="dank:hub:outside:atlas:v1", row=0)
+    async def live_groups(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_atlas_groups(interaction, self.owner_id)
+
     @discord.ui.button(label="Minecraft Players", emoji="⛏️", style=discord.ButtonStyle.primary, custom_id="dank:hub:outside:minecraft:v1", row=0)
     async def minecraft(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -2318,6 +2330,157 @@ async def _open_outside_players_home(interaction: discord.Interaction, owner_id:
     await _edit_private_original(
         interaction, content=None, embed=_outside_players_embed(),
         view=OutsidePlayersView(owner_id),
+    )
+
+
+class AtlasSearchModal(discord.ui.Modal, title="Search Outside Gaming Groups"):
+    game = discord.ui.TextInput(
+        label="Game (leave blank for all)",
+        placeholder="Minecraft, Valorant, Destiny 2", required=False, max_length=55,
+    )
+    region = discord.ui.TextInput(
+        label="Region (leave blank for all)",
+        placeholder="NA, EU, US East", required=False, max_length=40,
+    )
+
+    def __init__(self, owner_id: int, *, game: str = "", region: str = "", ready: bool = False) -> None:
+        super().__init__()
+        self.owner_id = int(owner_id)
+        self.ready = bool(ready)
+        self.game.default = game[:55] or None
+        self.region.default = region[:40] or None
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await _private(interaction, "Open your own Community Hub panel.")
+        await _defer_ephemeral(interaction)
+        await _open_atlas_groups(
+            interaction, self.owner_id, game=str(self.game.value or "").strip(),
+            region=str(self.region.value or "").strip(), ready=self.ready,
+        )
+
+
+def _atlas_groups_embed(
+    rows: list[dict[str, Any]], *, page: int, game: str, region: str,
+    ready: bool, notice: str = "",
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="🎯 Live Gaming Groups • LFG Atlas",
+        description=(
+            "Free, public, independently hosted looking-for-group posts across 28+ games. "
+            "LFG Atlas hosts the real listings; availability and age requirements must be checked there. "
+            "This bot never contacts or auto-enrolls players."
+        ), color=discord.Color.blurple(),
+    )
+    filters = " • ".join(filter(None, (
+        f"Game: {discord.utils.escape_markdown(game)}" if game else "",
+        f"Region: {discord.utils.escape_markdown(region)}" if region else "",
+        "Ready now" if ready else "",
+    )))
+    if filters:
+        embed.add_field(name="Filters", value=filters[:500], inline=False)
+    if notice:
+        embed.add_field(name="Provider status", value=notice[:400], inline=False)
+    if not rows and not notice:
+        embed.add_field(name="No matching groups", value="Try clearing filters or another game.", inline=False)
+    for row in rows[page * 5:page * 5 + 5]:
+        title = discord.utils.escape_markdown(row["title"])[:80]
+        game_name = discord.utils.escape_markdown(row["game"])[:60]
+        details = " • ".join(filter(None, (
+            row.get("type", ""), discord.utils.escape_markdown(row.get("region", ""))[:40],
+            discord.utils.escape_markdown(row.get("mode", ""))[:40],
+            "Ready now" if row.get("ready_now") else "",
+        )))
+        # Only allowitelisted provider-origin links, never external contact URLs.
+        view_label = "View on LFG Atlas" if row["url"] != atlas.SITE else "Browse LFG Atlas"
+        embed.add_field(
+            name=f"🎮 {game_name}"[:95],
+            value=f"**{title}**\n{details[:180]}\n[{view_label}]({row['url']})",
+            inline=False,
+        )
+    embed.set_footer(text=f"Page {page + 1} of {max(1, (len(rows) + 4) // 5)} • latest provider posts")
+    return embed
+
+
+class AtlasGroupsView(_OwnedView):
+    def __init__(self, owner_id: int, rows: list[dict[str, Any]], *, page: int = 0,
+                 game: str = "", region: str = "", ready: bool = False) -> None:
+        super().__init__(owner_id)
+        self.game = game[:55]
+        self.region = region[:40]
+        self.ready = bool(ready)
+        self.page = max(0, min(int(page), max(0, (len(rows) - 1) // 5)))
+        self.pages = max(1, (len(rows) + 4) // 5)
+        self.previous.disabled = self.page == 0
+        self.next_page.disabled = self.page + 1 >= self.pages
+        self.toggle_ready.label = "Show All" if self.ready else "Ready Now"
+        self.add_item(discord.ui.Button(
+            label="Browse LFG Atlas", emoji="🌐",
+            style=discord.ButtonStyle.link, url=atlas.SITE, row=2,
+        ))
+
+    @discord.ui.button(label="Search Game / Region", emoji="🔎", style=discord.ButtonStyle.primary, custom_id="dank:hub:atlas:search:v1", row=0)
+    async def search(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.send_modal(
+            AtlasSearchModal(self.owner_id, game=self.game, region=self.region, ready=self.ready)
+        )
+
+    @discord.ui.button(label="Ready Now", emoji="⚡", style=discord.ButtonStyle.secondary, custom_id="dank:hub:atlas:ready:v1", row=0)
+    async def toggle_ready(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_atlas_groups(
+            interaction, self.owner_id, game=self.game, region=self.region,
+            ready=not self.ready,
+        )
+
+    @discord.ui.button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:atlas:prev:v1", row=1)
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_atlas_groups(
+            interaction, self.owner_id, game=self.game, region=self.region,
+            ready=self.ready, page=max(0, self.page - 1),
+        )
+
+    @discord.ui.button(label="More Groups", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:atlas:next:v1", row=1)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_atlas_groups(
+            interaction, self.owner_id, game=self.game, region=self.region,
+            ready=self.ready, page=self.page + 1,
+        )
+
+    @discord.ui.button(label="Outside Sources", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:atlas:back:v1", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        await _open_outside_players_home(interaction, self.owner_id)
+
+
+async def _open_atlas_groups(
+    interaction: discord.Interaction, owner_id: int, *,
+    game: str = "", region: str = "", ready: bool = False, page: int = 0,
+) -> None:
+    rows: list[dict[str, Any]] = []
+    notice = ""
+    try:
+        settings = await hub.get_settings(int(interaction.guild_id or 0))
+        if not bool(settings.get("enabled", True)) or bool(settings.get("maintenance_mode")):
+            notice = "Community Hub is unavailable on this server."
+        else:
+            rows = await atlas.list_atlas_posts(game=game, region=region, ready_now=ready)
+    except (hub.CommunityHubError, external.ExternalDiscoveryError) as exc:
+        notice = str(exc)[:400]
+    page = max(0, min(int(page), max(0, (len(rows) - 1) // 5)))
+    await _edit_private_original(
+        interaction, content=None,
+        embed=_atlas_groups_embed(
+            rows, page=page, game=game, region=region, ready=ready, notice=notice,
+        ),
+        view=AtlasGroupsView(owner_id, rows, page=page, game=game, region=region, ready=ready),
     )
 
 
