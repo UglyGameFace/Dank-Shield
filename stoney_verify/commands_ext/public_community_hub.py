@@ -2449,7 +2449,10 @@ class UnifiedPlayerDiscoveryView(_OwnedView):
         self.game = game[:55]
         self.region = region[:40]
         # Reuse the existing click-time server/host consent validation.
-        self.add_item(PublicNetworkSelect(owner_id, network_rows[:20], self.game, page=0))
+        self.add_item(PublicNetworkSelect(
+            owner_id, network_rows[:20], self.game, page=0,
+            return_to_unified=True, region=self.region,
+        ))
 
     @discord.ui.button(label="Search Any Game", emoji="🔎", style=discord.ButtonStyle.primary, custom_id="dank:hub:unified:search:v1", row=1)
     async def search(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -4992,8 +4995,11 @@ def _public_network_embed(
 
 
 class PublicNetworkSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, groups: list[dict[str, Any]], game_query: str, *, page: int = 0) -> None:
+    def __init__(self, owner_id: int, groups: list[dict[str, Any]], game_query: str, *,
+                 page: int = 0, return_to_unified: bool = False, region: str = "") -> None:
         self.owner_id = int(owner_id)
+        self.return_to_unified = bool(return_to_unified)
+        self.region = str(region or "")[:40]
         self.groups = list(groups[:25])
         self.game_query = game_query
         self.page = max(0, int(page))
@@ -5044,13 +5050,20 @@ class PublicNetworkSelect(discord.ui.Select):
         )
         await _edit_private_original(
             interaction, content=None, embed=embed,
-            view=PublicNetworkDetailView(self.owner_id, row, game_query=self.game_query, page=self.page),
+            view=PublicNetworkDetailView(
+                self.owner_id, row, game_query=self.game_query, page=self.page,
+                return_to_unified=self.return_to_unified, region=self.region,
+            ),
         )
 
 
 class PublicNetworkDetailView(_OwnedView):
-    def __init__(self, owner_id: int, row: dict[str, Any], *, game_query: str = "", page: int = 0) -> None:
+    def __init__(self, owner_id: int, row: dict[str, Any], *,
+                 game_query: str = "", page: int = 0, return_to_unified: bool = False,
+                 region: str = "") -> None:
         super().__init__(owner_id)
+        self.return_to_unified = bool(return_to_unified)
+        self.region = str(region or "")[:40]
         self.game_query = game_query
         self.page = page
         self.add_item(discord.ui.Button(
@@ -5062,7 +5075,14 @@ class PublicNetworkDetailView(_OwnedView):
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
-        await _open_public_lfg_network(interaction, self.owner_id, game_query=self.game_query, page=self.page)
+        if self.return_to_unified:
+            await _open_unified_player_discovery(
+                interaction, self.owner_id, game=self.game_query, region=self.region,
+            )
+        else:
+            await _open_public_lfg_network(
+                interaction, self.owner_id, game_query=self.game_query, page=self.page,
+            )
 
 
 class PublicNetworkView(_OwnedView):
@@ -5120,9 +5140,10 @@ async def _open_public_lfg_network(
         fresh = await hub.list_public_lfg_directory(limit=100)
         groups = sanitize_directory(fresh, game=game_query)
     except hub.CommunityHubError:
-        return await _edit_private_original(
-            interaction, content="Public Gaming Network is unavailable or not migrated yet.",
-            embed=None, view=CommunityHubView(owner_id),
+        # Cross-server opt-in storage is optional and might not be deployed.
+        # Never dead-end a member who wants to find a group right now.
+        return await _open_unified_player_discovery(
+            interaction, owner_id, game=game_query,
         )
     # Discord select menus allow at most 25 options. Keep the source bounded,
     # but make all 40 approved public groups reachable on Android and desktop.
