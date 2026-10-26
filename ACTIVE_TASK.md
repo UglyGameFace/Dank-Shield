@@ -1,3 +1,10 @@
+## ACTIVE: Community Hub outside recruitment and cross-server public LFG (2026-10-26)
+
+- **Owner goal:** Let people outside a guild find explicitly advertised gaming groups and follow the host guild's verified invitation, so Community Hub contributes to real community growth. Not just local filtering; no speculative discovery of arbitrary Discord users.
+- **Single active scope:** Large PR on `feat/community-lfg-public-recruitment-20261026`, building on merged #735. Public read-only LFG board on the existing Share Router Site listener and in-Discord cross-guild network, approved per-guild invite, separate host opt-in per session, revocation, guarded SQL and regression coverage. Existing Community Hub remains the sole session owner. No alternative LFG bot, site database, scraper, pings or Cinema.
+- **Release gates:** No public consent defaults on. New additive Supabase migration required separately before runtime use. Exact-head focused Community Hub Python/PG16 CI, complete Shield CI, command sizes, diff/security review, guarded Discloud deploy, logged-out web/Android/Discord canary and verified invitation/revocation. Public page alone does not create organic traffic.
+- **Paused:** Manual verification reminders, Watch Yo Mouf, Cinema standalone, other owner projects. Historical entries below are context, not active concurrent tasks.
+
 ## ACTIVE FORCE SWITCH: Community Hub Find Players / LFG #638 (2026-10-26)
 
 - **Single active development task:** Resume the existing Community Hub **Find Players**, **Start Gaming Session**, and **Quick Match** system. Do not create a second bot, session store, or native channel/role picker. User explicitly resumed this after merged activity restart PR #734.
