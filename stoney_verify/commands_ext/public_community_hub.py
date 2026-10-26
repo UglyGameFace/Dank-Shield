@@ -3108,6 +3108,84 @@ class RoleTargetView(_OwnedView):
         await _edit_private_original(interaction, content=None, embed=build_session_embed(session, members), view=SessionControlView(self.owner_id, session_id=self.session_id))
 
 
+class ExternalAtlasPublishModal(discord.ui.Modal, title="Advertise This Gaming Group"):
+    region = discord.ui.TextInput(
+        label="Where are you playing?",
+        placeholder="NA, US East, EU West...",
+        min_length=2, max_length=40,
+    )
+    hours = discord.ui.TextInput(
+        label="Advert lifetime (1, 2, 4, 12, or 24 hours)",
+        placeholder="2", default="2",
+        min_length=1, max_length=2,
+    )
+    confirm = discord.ui.TextInput(
+        label="Type POST to share your server invite",
+        placeholder="POST", min_length=4, max_length=4,
+    )
+
+    def __init__(self, session_id: str, guild_id: int, owner_id: int):
+        super().__init__()
+        self.session_id = session_id
+        self.guild_id = guild_id
+        self.owner_id = owner_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await _defer_ephemeral(interaction)
+        if (interaction.guild is None
+                or int(interaction.guild.id) != self.guild_id
+                or int(interaction.user.id) != self.owner_id
+                or bool(getattr(interaction.user, "bot", False))):
+            return await _followup(interaction, "Only the host or co-host who opened this form can publish.")
+        if str(self.confirm.value or "").strip().upper() != "POST":
+            return await _followup(interaction, "No advertisement was queued. Type POST to confirm.")
+        try:
+            duration = int(str(self.hours.value or "").strip())
+        except ValueError:
+            return await _followup(interaction, "Choose 1, 2, 4, 12 or 24 hours.")
+        from ..community_lfg_atlas_publishing import (
+            enqueue_host_publication, AtlasPublishError, atlas_game_slug,
+        )
+        try:
+            session = await hub.get_session(self.session_id, guild_id=self.guild_id)
+            if not atlas_game_slug(session.get("game_name")):
+                return await _followup(
+                    interaction, "This game's title isn't on the external directory's supported list yet. "
+                    "Your public Community Hub board remains available.",
+                )
+            result = await enqueue_host_publication(
+                self.session_id, self.guild_id, self.owner_id,
+                region=str(self.region.value or "").strip(), hours=duration,
+            )
+        except (AtlasPublishError, hub.CommunityHubError) as exc:
+            return await _followup(interaction, f"❌ {str(exc)[:420]}")
+        return await _followup(
+            interaction,
+            "✅ External gaming advertisement **queued**, not yet published. "
+            "Your guild's staff-approved invite, game and region will be public on Atlas Gaming "
+            "when the provider confirms it. No member IDs or session notes are shared. "
+            "Use **External Ad Status** to check confirmation and **Remove External Ad** to revoke.",
+        )
+
+
+async def _require_atlas_host(
+    interaction: discord.Interaction, session_id: str, *, allow_staff: bool = False,
+) -> bool:
+    if interaction.guild is None or bool(getattr(interaction.user, "bot", False)):
+        return False
+    try:
+        members = await hub.list_session_members(session_id)
+    except hub.CommunityHubError:
+        return False
+    if any(
+        str(r.get("user_id")) == str(interaction.user.id)
+        and r.get("role") in {"host", "cohost"} and not r.get("left_at")
+        for r in members
+    ):
+        return True
+    return allow_staff and _staff_authorized(interaction)
+
+
 class SessionControlView(_OwnedView):
     def __init__(self, owner_id: int, *, session_id: str) -> None:
         super().__init__(owner_id)
@@ -3368,6 +3446,66 @@ class SessionControlView(_OwnedView):
             interaction,
             "✅ Group marked for public recruiting. Staff still need to configure a public HTTPS Site URL before you can share the board.",
         )
+
+    @discord.ui.button(label="Advertise Externally", emoji="📢", style=discord.ButtonStyle.primary, custom_id="dank:hub:manage:atlas:publish:v1", row=3)
+    async def atlas_publish(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        # Do not call any external API from this click. Only show the
+        # consent form. The SQL queue independently verifies membership.
+        await interaction.response.send_modal(
+            ExternalAtlasPublishModal(
+                self.session_id, int(interaction.guild_id or 0),
+                int(interaction.user.id),
+            )
+        )
+
+    @discord.ui.button(label="Remove External Ad", emoji="🛑", style=discord.ButtonStyle.secondary, custom_id="dank:hub:manage:atlas:remove:v1", row=3)
+    async def atlas_remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        if not await _require_atlas_host(interaction, self.session_id, allow_staff=True):
+            return await _followup(interaction, "Only the host, co-host or authorized staff can remove an external ad.")
+        from ..community_lfg_atlas_publishing import request_removal, AtlasPublishError
+        try:
+            requested = await request_removal(self.session_id, int(interaction.guild_id or 0))
+        except AtlasPublishError as exc:
+            return await _followup(interaction, f"❌ {str(exc)[:300]}")
+        await _followup(
+            interaction,
+            "✅ External removal requested. The cleanup worker will withdraw the ad "
+            "using its private deletion token, or prevent an unsent ad from publishing. "
+            "Use **External Ad Status** to verify the result."
+            if requested else "No active external advertisement found to remove.",
+        )
+
+    @discord.ui.button(label="External Ad Status", emoji="📊", style=discord.ButtonStyle.secondary, custom_id="dank:hub:manage:atlas:status:v1", row=3)
+    async def atlas_status(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        if not await _require_atlas_host(interaction, self.session_id, allow_staff=True):
+            return await _followup(interaction, "Only the host, co-host or authorized staff can inspect this ad.")
+        from ..community_lfg_atlas_publishing import get_publication_status, AtlasPublishError
+        try:
+            status = await get_publication_status(self.session_id, int(interaction.guild_id or 0))
+        except AtlasPublishError as exc:
+            return await _followup(interaction, f"❌ {str(exc)[:250]}")
+        if not status:
+            return await _followup(interaction, "No outside advertising request exists for this group.")
+        state = status["state"].replace("_", " ").title()
+        url = status.get("url")
+        note = status.get("last_error", "")
+        summary = (
+            f"🌍 **External Ad: {state}**\\n"
+            f"Region: {status['region']}\\n"
+            f"Expires: {status['expires_at']}\\n"
+            + (f"Public listing: {url}\\n" if url else "")
+            + ("Removal requested.\\n" if status.get("revoke_requested") else "")
+            + (f"Provider note: {note[:150]}\\n" if note else "")
+        )
+        if status["state"] == "unknown":
+            summary += ("The provider's publish result was uncertain. Dank Shield will **not repost "
+                        "automatically** because it could create an unmanaged duplicate.")
+        await _followup(interaction, summary[:1850])
 
     @discord.ui.button(label="Back to Group", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:manage:back:v1", row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
