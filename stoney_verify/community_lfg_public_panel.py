@@ -103,8 +103,10 @@ def board_embed(
         title="🎮 " + title + " • Live Looking for Group",
         color=discord.Color.blurple(),
         description=(
-            "Find teammates, start a group, or explore gaming communities outside this server. "
-            "**This public board stays here.** Buttons open your own private menus."
+            "Find teammates and gaming servers **beyond this Discord**, alongside groups hosted here. "
+            "**Find Players** opens a private combined search with outside groups, "
+            "approved Public Gaming Network communities and this server. "
+            "This public panel stays in the channel."
         ),
     )
     if unavailable or not settings.get("enabled", True) or settings.get("maintenance_mode"):
@@ -131,8 +133,9 @@ def board_embed(
         )
     if not public:
         embed.add_field(
-            name="🟢 No public groups yet",
-            value="Be the first to start a gaming group. The board updates as eligible groups appear.",
+            name="🏠 No sessions hosted here yet",
+            value="Tap **Find Players** to browse outside gaming groups and approved public servers now, "
+                  "or start a group here. This section only tracks groups hosted in this server.",
             inline=False,
         )
     elif len(public) > MAX_DISPLAY:
@@ -141,7 +144,7 @@ def board_embed(
             value=f"{len(public)-MAX_DISPLAY} more open groups. Use **Find Players** for the full list.",
             inline=False,
         )
-    embed.set_footer(text="Dank Shield Community Hub • automatically refreshed • public groups only")
+    embed.set_footer(text="Outside-first Find Players • local groups refresh automatically • private browsing")
     return embed
 
 
@@ -345,9 +348,9 @@ class PublicLFGBoardView(discord.ui.View):
                        custom_id="dank:lfg:board:find:v1", row=0)
     async def find(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        from .commands_ext.public_community_hub import _open_find_players_source
+        from .commands_ext.public_community_hub import _open_unified_player_discovery
         await interaction.response.defer(thinking=True, ephemeral=True)
-        await _open_find_players_source(interaction, int(interaction.user.id), partner=False)
+        await _open_unified_player_discovery(interaction, int(interaction.user.id))
 
     @discord.ui.button(label="Create Group", emoji="➕", style=discord.ButtonStyle.success,
                        custom_id="dank:lfg:board:create:v1", row=0)
@@ -376,15 +379,15 @@ class PublicLFGBoardView(discord.ui.View):
             await _edit_private_original(interaction,
                 content=_error_text(exc), view=CommunityHubView(owner))
 
-    @discord.ui.button(label="Outside Players", emoji="🌍", style=discord.ButtonStyle.secondary,
+    @discord.ui.button(label="More Outside Groups", emoji="🌍", style=discord.ButtonStyle.secondary,
                        custom_id="dank:lfg:board:outside:v1", row=1)
     async def outside(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        from .commands_ext.public_community_hub import _open_outside_players_home
+        from .commands_ext.public_community_hub import _open_atlas_groups
         await interaction.response.defer(thinking=True, ephemeral=True)
-        await _open_outside_players_home(interaction, int(interaction.user.id))
+        await _open_atlas_groups(interaction, int(interaction.user.id))
 
-    @discord.ui.button(label="Public Network", emoji="🧭", style=discord.ButtonStyle.secondary,
+    @discord.ui.button(label="Public Servers", emoji="🧭", style=discord.ButtonStyle.secondary,
                        custom_id="dank:lfg:board:network:v1", row=1)
     async def network(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
