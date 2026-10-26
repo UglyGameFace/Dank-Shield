@@ -46,6 +46,13 @@ async def track_advert(message: Any) -> bool:
     gid = int(getattr(guild, "id", 0) or 0)
     if gid <= 0:
         return False
+    # Hot path: almost every Discord message is human. Do not perform a
+    # config/DB lookup unless this is a bot-authored advert candidate.
+    author = getattr(message, "author", None)
+    if (not bool(getattr(author, "bot", False))
+            or getattr(message, "webhook_id", None)
+            or not is_advert_like(message)):
+        return False
     # Configuration is re-read from the existing cached policy owner.
     try:
         from .invite_policy_engine import load_invite_policy
