@@ -32,8 +32,8 @@ FORBIDDEN_PREFIXES = (
     "stoney_verify.commands_ext.public_movie_night",
     "stoney_verify.api_new.torrent_stream_routes",
 )
-# These roots were Cinema-only. Shared media metadata and Share Router
-# HTTP/video code must stay available; likewise Community & Pings settings.
+# These roots were Cinema-only, including the now-archived media_metadata.
+# Shared Share Router HTTP/video code and Community & Pings stay available.
 RETIRED_MODULE_ROOTS = frozenset((
     "cinema_site", "cinema_catalog", "cinema_storage", "cinema_playback_service",
     "cinema_feed_service", "cinema_feed_personalization", "cinema_discovery_service",

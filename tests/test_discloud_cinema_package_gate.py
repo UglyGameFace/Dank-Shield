@@ -52,16 +52,16 @@ def test_cinema_modules_cannot_be_reintroduced_by_nested_or_dynamic_imports() ->
         "__import__('stoney_verify.movie_night')",
         "import movie_catalog",
         "from stoney_verify import media_metadata",
+        "from .media_metadata import parse_release_name",
     )
     for snippet in forbidden:
         with pytest.raises(AssertionError, match="retired Cinema"):
             auditor.assert_no_retired_imports(snippet, path="test-injection.py")
 
 
-def test_shared_media_and_community_notification_imports_are_not_blocked() -> None:
+def test_share_router_and_community_notification_imports_are_not_blocked() -> None:
     auditor = _retirement_auditor()
     safe = (
-        "from .media_metadata import parse_release_name",
         "from stoney_verify.community_pings_service import CAP_MOVIE_NIGHT_NOTIFY",
         "from stoney_verify.share_router_public_server import media_public_base_url",
         "from .share_router_external_links import register_share_video_routes",
