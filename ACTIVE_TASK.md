@@ -1,3 +1,10 @@
+## ACTIVE: Smart Bulk Collapse for trusted OneBump adverts (2026-10-26)
+
+- **Single active task:** Owner confirmed new approved adverts auto-collapse already works and requests uncapped-by-three Smart Bulk Collapse for existing posts, with progress, cancel, paced processing and restart recovery. Work in `feat/trusted-advert-smart-bulk-collapse-20261026` on merged PR #739; do not reimplement approved bot/channel setup.
+- **Architecture:** New private SQL collapse-jobs ledger and atomic claim/lease functions, bounded 25-message scan/6-edit chunks, shared 12/min Discord REST limiter, saved cursor and counts, 20-second worker poll, revocation checks and cancel on staff request. No user/contact scraping, deletes, automatic OneBump bumping, or change to existing 24-hour advert retention worker.
+- **UI:** Existing Collapse Previews modal ON+RECENT/RECENT now queues the background scan, Progress and Cancel controls show actual status; ON continues live suppression, OFF stops new suppression and cancels running bulk. Staff must explicitly request bulk hiding and understand OneBump fair-play risk.
+- **Release:** Focused Python/PG16 migration/atomic-claim tests + full CI, protected DB migration, guarded Discloud main deployment and Discord Android canary. Nothing live before these. Paused LFG and unrelated bot work.
+
 ## ACTIVE: Trusted advertising embed collapse (2026-10-26)
 
 - **Single active task:** PR #738 was merged into main. Owner now explicitly requests Discord embed collapse for its already-approved OneBump channel. Branch `feat/trusted-advert-embed-collapse-20261026`. Do not reopen LFG, Cinema, or duplicate OneBump setup.

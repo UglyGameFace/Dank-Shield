@@ -61,7 +61,8 @@ async def _take_auto_slot() -> bool:
         return True
 
 
-async def suppress_one(message: Any, config: Any, *, automatic: bool = True) -> bool:
+async def suppress_one(message: Any, config: Any, *, automatic: bool = True,
+                       slot_reserved: bool = False) -> bool:
     """Never suppress a message not authorized by its exact sender+channel."""
     if not needs_collapse(message, config, require_opt_in=automatic):
         return False
@@ -69,7 +70,7 @@ async def suppress_one(message: Any, config: Any, *, automatic: bool = True) -> 
         return False
     # Staff-triggered recent suppression shares this global write budget with
     # automated suppression, so several guilds cannot accidentally burst REST.
-    if not await _take_auto_slot():
+    if not slot_reserved and not await _take_auto_slot():
         return False
     try:
         # Discord allows MANAGE_MESSAGES to change SUPPRESS_EMBEDS on another
