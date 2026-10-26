@@ -74,6 +74,9 @@ def _safe_public_url(raw: Any) -> str:
             return ""
     except ValueError:
         return ""
+    if (parts.query or not re.fullmatch(r"/[a-zA-Z0-9/_-]{1,300}", parts.path)
+            or any(ch in url for ch in ("@", "(", ")", "`", "\n", "\r"))):
+        return ""
     return url
 
 
