@@ -77,3 +77,45 @@ def test_group_selector_has_finite_options():
     menu = ui.PublicNetworkSelect(123, rows, "")
     assert len(menu.options) == 25
     assert len(menu.custom_id) <= 100
+
+
+def test_public_network_paging_reaches_all_approved_groups(monkeypatch):
+    items = [_row(name=f"Game {i}", link="https://discord.gg/validcode") for i in range(35)]
+    fetch = AsyncMock(return_value=items)
+    edited = AsyncMock()
+    monkeypatch.setattr(ui.hub, "list_public_lfg_directory", fetch)
+    monkeypatch.setattr(ui, "_edit_private_original", edited)
+    asyncio.run(ui._open_public_lfg_network(SimpleNamespace(), 123, page=1))
+    view = edited.await_args.kwargs["view"]
+    select = next(x for x in view.children if isinstance(x, discord.ui.Select))
+    assert view.page == 1 and not view.has_next
+    assert len(select.options) == 15
+    assert select.options[0].label == "Game 20"
+    assert any(
+        getattr(x, "custom_id", "") == "dank:hub:publicnetwork:prev:v1" and not x.disabled
+        for x in view.children
+    )
+    assert any(
+        getattr(x, "custom_id", "") == "dank:hub:publicnetwork:next:v1" and x.disabled
+        for x in view.children
+    )
+
+
+def test_public_network_stale_page_resets_to_first(monkeypatch):
+    fetch = AsyncMock(return_value=[_row(name="Minecraft")])
+    edited = AsyncMock()
+    monkeypatch.setattr(ui.hub, "list_public_lfg_directory", fetch)
+    monkeypatch.setattr(ui, "_edit_private_original", edited)
+    asyncio.run(ui._open_public_lfg_network(SimpleNamespace(), 123, page=1))
+    view = edited.await_args.kwargs["view"]
+    assert view.page == 0 and not view.has_next
+
+
+def test_staff_name_is_declassified_not_member_data():
+    groups = [{
+        "game": "Minecraft", "community": "The 420 Lobby",
+        "capacity": 6, "join_url": "https://discord.gg/the420lobby",
+    }]
+    embed = ui._public_network_embed(groups)
+    assert "The 420 Lobby" in embed.fields[0].value
+    assert "PRIVATE-HOST-ID" not in embed.description
