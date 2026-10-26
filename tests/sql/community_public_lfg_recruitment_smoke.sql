@@ -3,10 +3,10 @@ begin;
 
 insert into public.dank_community_hub_settings (
   guild_id, enabled, maintenance_mode, public_lfg_enabled,
-  public_lfg_invite_url, idle_timeout_seconds, max_session_lifetime_seconds
+  public_lfg_invite_url, public_lfg_display_name, idle_timeout_seconds, max_session_lifetime_seconds
 ) values (
   'public-demo', true, false, false,
-  'https://discord.gg/validinvite', 1800, 43200
+  'https://discord.gg/validinvite', 'The 420 Lobby', 1800, 43200
 );
 
 insert into public.dank_community_sessions (
@@ -35,6 +35,7 @@ begin
   if item.game_name <> 'Minecraft'
     or item.capacity <> 6
     or item.invite_url <> 'https://discord.gg/validinvite'
+    or item.community_name <> 'The 420 Lobby'
   then
     raise exception 'approved public recruitment omitted or mutated row';
   end if;
@@ -43,6 +44,19 @@ begin
   end if;
 end;
 $$;
+
+-- Even an enabled guild must explicitly provide a publishable identity.
+update public.dank_community_hub_settings set public_lfg_display_name = null
+  where guild_id = 'public-demo';
+do $
+begin
+  if exists (select 1 from public.community_hub_public_lfg_directory(100)) then
+    raise exception 'missing public community label leaked recruitment';
+  end if;
+end;
+$;
+update public.dank_community_hub_settings set public_lfg_display_name = 'The 420 Lobby'
+  where guild_id = 'public-demo';
 
 update public.dank_community_sessions set privacy='locked'
   where guild_id = 'public-demo';
