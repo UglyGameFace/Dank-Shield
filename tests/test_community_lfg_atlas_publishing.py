@@ -120,7 +120,7 @@ def test_post_payload_is_readonly_projection_not_session_notes(monkeypatch):
 
 def test_only_explicit_host_job_can_be_sent_and_receipt_saved(monkeypatch):
     monkeypatch.setattr(worker, "_still_authorized", AsyncMock(return_value=True))
-    monkeypatch.setattr(worker, "send_post", AsyncMock(return_value=(
+    monkeypatch.setattr(worker, "_post_with_pacing", AsyncMock(return_value=(
         "remote-123", "https://lfgatlas.pages.dev/p/remote-123", "PRIVATE-REVOKE-TOKEN",
     )))
     change = AsyncMock(return_value=True)
@@ -135,7 +135,7 @@ def test_invalid_or_revoked_host_never_calls_remote_post(monkeypatch):
     monkeypatch.setattr(worker, "_still_authorized", AsyncMock(return_value=False))
     send = AsyncMock()
     change = AsyncMock(return_value=True)
-    monkeypatch.setattr(worker, "send_post", send)
+    monkeypatch.setattr(worker, "_post_with_pacing", send)
     monkeypatch.setattr(worker, "_update_claim", change)
     assert asyncio.run(worker.process_claim(_row())) == "revoked-before-publish"
     send.assert_not_awaited()
@@ -144,7 +144,7 @@ def test_invalid_or_revoked_host_never_calls_remote_post(monkeypatch):
 
 def test_network_timeout_does_not_repost_uncertain_write(monkeypatch):
     monkeypatch.setattr(worker, "_still_authorized", AsyncMock(return_value=True))
-    monkeypatch.setattr(worker, "send_post", AsyncMock(side_effect=asyncio.TimeoutError()))
+    monkeypatch.setattr(worker, "_post_with_pacing", AsyncMock(side_effect=asyncio.TimeoutError()))
     change = AsyncMock(return_value=True)
     monkeypatch.setattr(worker, "_update_claim", change)
     assert asyncio.run(worker.process_claim(_row())) == "unknown"
@@ -165,7 +165,7 @@ def test_removal_purges_secret_only_after_provider_confirmation(monkeypatch):
 
 def test_failure_to_store_remote_token_attempts_compensating_delete(monkeypatch):
     monkeypatch.setattr(worker, "_still_authorized", AsyncMock(return_value=True))
-    monkeypatch.setattr(worker, "send_post", AsyncMock(return_value=(
+    monkeypatch.setattr(worker, "_post_with_pacing", AsyncMock(return_value=(
         "remote-123", "https://lfgatlas.pages.dev/p/remote-123", "PRIVATE-EDIT-TOKEN",
     )))
     monkeypatch.setattr(worker, "_update_claim", AsyncMock(return_value=False))
