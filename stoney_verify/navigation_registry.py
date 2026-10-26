@@ -462,7 +462,8 @@ RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     RecentFeatureUpdate(
         "protection", "Trusted advertising bots work with Invite Shield",
         "Approve a real bot and its advertising channel without letting ordinary "
-        "members bypass invite protection. Optional old-ad cleanup is staff controlled.",
+        "members bypass invite protection. Staff can also collapse approved ad previews "
+        "while keeping the original posts and retention settings.",
         "2026-10-26",
     ),
     RecentFeatureUpdate(
