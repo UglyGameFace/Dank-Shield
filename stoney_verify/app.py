@@ -1095,6 +1095,14 @@ async def _start_workers_once() -> None:
         print("⚠️ Trusted embed bulk worker failed:", type(e).__name__)
 
     try:
+        from .community_lfg_atlas_publisher import start_atlas_publisher
+        task = start_atlas_publisher(bot)
+        if task is not None:
+            print("🌍 Host-consent LFG Atlas posting/removal worker started")
+    except Exception as exc:
+        print("⚠️ Atlas posting worker unavailable:", type(exc).__name__)
+
+    try:
         from .verification_reminders import start_unverified_reminder_worker
 
         start_unverified_reminder_worker(bot)
