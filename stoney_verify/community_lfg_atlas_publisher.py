@@ -86,6 +86,7 @@ async def _still_authorized(row: dict[str, Any]) -> bool:
             or not settings.get("enabled", True)
             or settings.get("maintenance_mode")
             or not settings.get("public_lfg_enabled")
+            or not str(settings.get("public_lfg_display_name") or "").strip()
             or settings.get("public_lfg_invite_url") != row.get("contact")):
         return False
     if not any(
