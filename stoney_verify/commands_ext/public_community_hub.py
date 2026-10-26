@@ -2082,7 +2082,7 @@ class FindPlayersView(_OwnedView):
         await _defer_update(interaction)
         await _open_find_players_source(interaction, self.owner_id, partner=self.partner)
 
-    @discord.ui.button(label="External Groups", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:external:v1", row=3)
+    @discord.ui.button(label="All Gaming Groups", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:find:external:v1", row=3)
     async def external_groups(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await _defer_update(interaction)
