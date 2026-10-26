@@ -52,6 +52,7 @@ def clean_rules(config: Mapping[str, Any] | Any) -> list[dict[str, Any]]:
             "channel_id": channel_id,
             "cleanup_enabled": item.get("cleanup_enabled") is True,
             "retention_hours": retention,
+            "suppress_embeds": item.get("suppress_embeds") is True,
         })
     return out
 
@@ -125,7 +126,8 @@ async def load_rules(guild_id: int, *, refresh: bool = False) -> list[dict[str, 
 
 async def save_rule(guild_id: int, *, bot_id: int, channel_id: int,
                     cleanup_enabled: bool = False, retention_hours: int = 24,
-                    remove: bool = False) -> list[dict[str, Any]]:
+                    remove: bool = False,
+                    suppress_embeds: bool | None = None) -> list[dict[str, Any]]:
     from .guild_config import get_guild_config, compare_and_swap_guild_config_key
     from .invite_policy_engine import invalidate_invite_policy
     gid, bot, chan = _id(guild_id), _id(bot_id), _id(channel_id)
@@ -139,6 +141,7 @@ async def save_rule(guild_id: int, *, bot_id: int, channel_id: int,
             raise RuntimeError("Guild settings unavailable. Nothing was saved.")
         current_raw = cfg.get(CONFIG_KEY)
         current = clean_rules(cfg)
+        old = next((v for v in current if (v["bot_id"], v["channel_id"]) == (bot, chan)), None)
         new = [dict(v) for v in current if (v["bot_id"], v["channel_id"]) != (bot, chan)]
         if not remove:
             if len(new) >= MAX_RULES:
@@ -147,6 +150,8 @@ async def save_rule(guild_id: int, *, bot_id: int, channel_id: int,
                 "bot_id": bot, "channel_id": chan,
                 "cleanup_enabled": bool(cleanup_enabled),
                 "retention_hours": retention_hours,
+                "suppress_embeds": (old or {}).get("suppress_embeds", False)
+                    if suppress_embeds is None else bool(suppress_embeds),
             })
         ok, _ = await compare_and_swap_guild_config_key(
             gid, CONFIG_KEY,

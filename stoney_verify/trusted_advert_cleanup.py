@@ -217,7 +217,20 @@ def start_trusted_advert_worker(bot: Any) -> asyncio.Task | None:
         async def on_message(message: discord.Message) -> None:
             if getattr(message, "guild", None) is not None:
                 await track_advert(message)
+                # Suppression is separate from cleanup; it can be enabled
+                # when 24-hour deletion is disabled and never changes it.
+                from .trusted_advert_embeds import suppress_new_trusted_advert
+                await suppress_new_trusted_advert(message)
+
+        async def on_message_edit(before: discord.Message, after: discord.Message) -> None:
+            # Link previews may arrive after the initial message event.
+            # This is cache-based only: no global fetch or history scanning.
+            if getattr(after, "guild", None) is not None:
+                from .trusted_advert_embeds import suppress_new_trusted_advert
+                await suppress_new_trusted_advert(after)
+
         bot.add_listener(on_message, "on_message")
+        bot.add_listener(on_message_edit, "on_message_edit")
         setattr(bot, marker, True)
     if _TASK is None or _TASK.done():
         _TASK = asyncio.create_task(_worker(bot), name="trusted_advert_expiry")

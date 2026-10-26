@@ -88,11 +88,23 @@ def _embed(guild: discord.Guild, channel_id: int, rules: list[dict[str, Any]]) -
     for rule in rules[:10]:
         lines.append(
             f"Bot `{rule['bot_id']}` • <#{rule['channel_id']}> • "
+            + ("Previews hidden • " if rule.get("suppress_embeds") else "Previews visible • ")
             + (f"Cleanup after {rule['retention_hours']}h + 10m" if rule["cleanup_enabled"] else "No automatic deletion")
         )
     embed.add_field(
         name=f"Approved bot/channel pairs ({len(rules)}/10)",
         value="\n".join(lines)[:1024] or "No trusted advertising bots configured.",
+        inline=False,
+    )
+    embed.add_field(
+        name="Collapse ad previews (optional)",
+        value=(
+            "Hide the rich embed card of an approved advertising bot in the selected channel. "
+            "The original post stays; **its large preview and Join card may disappear**. "
+            "This is NOT selective text blur, and OneBump may consider a collapsed advert "
+            "less visible under its fair-play policy. Default: OFF. "
+            "Other bots, members and channels are unchanged."
+        ),
         inline=False,
     )
     embed.add_field(
@@ -208,12 +220,100 @@ class ConfirmAdvertCleanupModal(discord.ui.Modal, title="Optional Advertisement 
                       "OneBump may penalize automated deletion; consider leaving cleanup off.")
 
 
+
+class TrustedPreviewModal(discord.ui.Modal, title="Collapse Trusted Ad Previews"):
+    bot_id = discord.ui.TextInput(
+        label="Approved bot User ID",
+        placeholder="Exact ID of the bot already approved here",
+        min_length=15, max_length=25,
+    )
+    action = discord.ui.TextInput(
+        label="ON+RECENT, ON, OFF or RECENT",
+        placeholder="ON+RECENT",
+        default="ON+RECENT",
+        max_length=10,
+    )
+    consent = discord.ui.TextInput(
+        label="Type HIDE to confirm preview changes",
+        placeholder="HIDE",
+        min_length=4, max_length=4,
+    )
+
+    def __init__(self, owner_id: int, *, channel_id: int, bot_id: int = 0) -> None:
+        super().__init__()
+        self.owner_id = int(owner_id)
+        self.channel_id = int(channel_id)
+        if bot_id > 0:
+            self.bot_id.default = str(bot_id)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not _staff(interaction, self.owner_id):
+            return await _notice(interaction, "Manage Server permission required.")
+        action = str(self.action.value or "").strip().upper()
+        if action not in {"ON+RECENT", "ON", "OFF", "RECENT"}:
+            return await _notice(interaction, "Choose ON+RECENT, ON, OFF or RECENT.")
+        if str(self.consent.value or "").strip().upper() != "HIDE":
+            return await _notice(interaction, "No change. Type HIDE to confirm.")
+        match = re.fullmatch(r"(?:<@!?)?([0-9]{15,20})>?", str(self.bot_id.value or "").strip())
+        if match is None:
+            return await _notice(interaction, "Paste the exact approved bot User ID.")
+        bot_id = int(match.group(1))
+        guild = interaction.guild
+        channel = guild.get_channel(self.channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return await _notice(interaction, "Choose a real server text channel first.")
+        await interaction.response.defer(ephemeral=True)
+        try:
+            rules = await load_rules(guild.id, refresh=True)
+        except RuntimeError:
+            return await _notice(interaction, "Could not load current trusted bots; nothing changed.")
+        old = next((x for x in rules if x["channel_id"] == self.channel_id and x["bot_id"] == bot_id), None)
+        if old is None:
+            return await _notice(interaction, "Approve this exact bot in this channel first. No changes made.")
+
+        if action != "RECENT":
+            try:
+                await save_rule(
+                    guild.id, bot_id=bot_id, channel_id=self.channel_id,
+                    cleanup_enabled=old["cleanup_enabled"],
+                    retention_hours=old["retention_hours"],
+                    suppress_embeds=action != "OFF",
+                )
+            except (RuntimeError, ValueError) as exc:
+                return await _notice(interaction, f"No changes saved: {str(exc)[:240]}")
+
+        if action == "OFF":
+            return await _notice(
+                interaction,
+                "✅ Future adverts will display normally. Existing suppressed previews "
+                "are unchanged. Your bot trust and scheduled cleanup settings were preserved.",
+            )
+        message = "✅ Automatic preview collapse enabled for this exact bot/channel pair." if action != "RECENT" else "✅ Checking recent previews."
+        if action in {"RECENT", "ON+RECENT"}:
+            from ..trusted_advert_embeds import collapse_recent_trusted_adverts
+            try:
+                counts = await collapse_recent_trusted_adverts(guild, channel, bot_id)
+            except (PermissionError, ValueError) as exc:
+                return await _notice(interaction, message + " Recent posts were not changed: " + str(exc)[:190])
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                return await _notice(interaction, message + " Discord denied the recent-history operation.")
+            message += (
+                f" Checked {counts['scanned']} recent messages and collapsed "
+                f"{counts['collapsed']} approved previews (maximum 3 per request)."
+            )
+        message += " The original OneBump posts remain; large previews and Join cards may be hidden."
+        await _notice(interaction, message)
+
+
 class TrustedAdsView(discord.ui.View):
-    def __init__(self, owner_id: int, guild: discord.Guild, channel_id: int):
+    def __init__(self, owner_id: int, guild: discord.Guild, channel_id: int,
+                 *, rules: list[dict[str, Any]] | None = None):
         super().__init__(timeout=900)
         self.owner_id = owner_id
         self.guild = guild
         self.channel_id = channel_id
+        # For rendering only; the modal rechecks fresh authoritative config.
+        self.rule_options = list(rules or [])
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if _staff(interaction, self.owner_id):
@@ -276,6 +376,20 @@ class TrustedAdsView(discord.ui.View):
     async def cleanup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await interaction.response.send_modal(ConfirmAdvertCleanupModal(self.owner_id, channel_id=self.channel_id))
+
+    @discord.ui.button(label="Collapse Previews", emoji="🫥", style=discord.ButtonStyle.secondary, row=1)
+    async def collapse_previews(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not isinstance(self.guild.get_channel(self.channel_id), discord.TextChannel):
+            return await _notice(interaction, "Choose the advertising channel first.")
+        selected = [x for x in self.rule_options if x["channel_id"] == self.channel_id]
+        if not selected:
+            return await _notice(interaction, "Approve a real advertising bot in this channel first.")
+        modal = TrustedPreviewModal(
+            self.owner_id, channel_id=self.channel_id,
+            bot_id=selected[0]["bot_id"] if len(selected) == 1 else 0,
+        )
+        await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Manage / Remove", emoji="🗑️", style=discord.ButtonStyle.secondary, row=1)
     async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -382,7 +496,7 @@ async def show_trusted_ads(interaction: discord.Interaction, owner_id: int, *, c
         rules = await load_rules(guild.id, refresh=True)
     except RuntimeError:
         return await _notice(interaction, "Guild settings unavailable. Cannot safely configure trusted bots.")
-    view = TrustedAdsView(owner_id, guild, channel_id)
+    view = TrustedAdsView(owner_id, guild, channel_id, rules=rules)
     embed = _embed(guild, channel_id, rules)
     if interaction.response.is_done():
         await interaction.edit_original_response(embed=embed, view=view, content=None)

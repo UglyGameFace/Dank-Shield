@@ -1,3 +1,10 @@
+## ACTIVE: Trusted advertising embed collapse (2026-10-26)
+
+- **Single active task:** PR #738 was merged into main. Owner now explicitly requests Discord embed collapse for its already-approved OneBump channel. Branch `feat/trusted-advert-embed-collapse-20261026`. Do not reopen LFG, Cinema, or duplicate OneBump setup.
+- **Implementation:** New opt-in `suppress_embeds` on the existing exact bot+channel rule (default OFF), independent of cleanup, with Discord Manage Messages flag edit. New bot adverts and late embed updates; optional staff-only bounded recent-post action for existing adverts, no delete/repost/cross-channel bypass. Simple mobile setup modal; two layers of validation and REST pacing.
+- **Important disclosure:** Collapsing Discord rich embeds can remove the join card and may conflict with OneBump fair-play visibility rules. Do not claim it selectively blurs the text or preserves the original advert display.
+- **Release:** Exact-head Invite Shield UI/security tests, full CI and command limits, no SQL migration for this new setting, owner review, merge, Discloud rollout and real Discord Android canary. Existing 24-hour ledger must stay unchanged.
+
 ## ACTIVE FORCE SWITCH: OneBump × Invite Shield + optional ad retention (2026-10-26)
 
 - **Single active task:** With LFG PR #737 merged and its CI successful, owner authorized the next feature, exact-bot advertising trust plus optional 24-hour-per-ad cleanup. Work only in `feat/invite-shield-trusted-adverts-retention-20261026` until validated. LFG future promotion writes and other features paused.
