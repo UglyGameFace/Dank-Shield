@@ -1,3 +1,11 @@
+## ACTIVE FORCE SWITCH: LFG outside advertising (October 26, 2026)
+
+- **Active:** User explicitly switched from OneBump to LFG after PR #740 was merged. One task only: host-authorized promotion of public Community Hub sessions to LFG Atlas. Branch `feat/lfg-atlas-consent-publishing-20261026`. Preserve OneBump and other projects for later.
+- **Goal:** A real path to recruit gamers outside Discord: the session host or co-host explicitly enters region/duration and confirms POST using the guild's independently verified public invite. No automatic announcements, unsolicited DMs, scraping, paid token, or hidden publication.
+- **Architecture:** Service-role-only durable publication ledger, host+guild+session consent SQL RPC, atomic claim, strict third-party HTTP, stored private external delete token, rate-limited worker, revoke on end/unshare/maintenance/expiration or owner request, zero automatic POST retries after uncertain outcomes. Published game must match a documented Atlas game. No new slash commands.
+- **Gate:** Exact-head Community Hub Python/PG16/full CI and command-size regressions, then owner merge and guarded real Supabase migration before Discloud deployment. Atlas live HTTP endpoint was not reachable by the research tool, so require a live Discloud canary. No production external writes have been made.
+- **Owner preference:** One cohesive big PR, not a stack of small PRs; no dev jargon in moderator-facing UI.
+
 ## ACTIVE: Smart Bulk Collapse for trusted OneBump adverts (2026-10-26)
 
 - **Single active task:** Owner confirmed new approved adverts auto-collapse already works and requests uncapped-by-three Smart Bulk Collapse for existing posts, with progress, cancel, paced processing and restart recovery. Work in `feat/trusted-advert-smart-bulk-collapse-20261026` on merged PR #739; do not reimplement approved bot/channel setup.
