@@ -46,6 +46,7 @@ def filter_discovery_games(
     limit: int = 25,
     play_style: str = "",
     mic_preference: str = "",
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     """Filter *only* supplied public/native-authorized source rows by game.
 
@@ -66,8 +67,10 @@ def filter_discovery_games(
         raise ValueError("External provider does not support session preference filters")
 
     safe_limit = max(1, min(int(limit), 25))
+    safe_offset = max(0, min(int(offset), 100))
     key = game_search_key(query)
     matches: list[dict[str, Any]] = []
+    skipped_matches = 0
     for row in rows[:100]:
         if not isinstance(row, dict):
             continue
@@ -89,6 +92,9 @@ def filter_discovery_games(
         if style and row.get("play_style") != style:
             continue
         if mic and row.get("mic_preference") != mic:
+            continue
+        if skipped_matches < safe_offset:
+            skipped_matches += 1
             continue
         matches.append(dict(row))
         if len(matches) >= safe_limit:
