@@ -242,6 +242,6 @@ def test_public_find_button_routes_directly_to_unified_outside_first(monkeypatch
     response = SimpleNamespace(defer=AsyncMock())
     interaction = SimpleNamespace(response=response, user=SimpleNamespace(id=77))
     button = next(x for x in view.children if x.custom_id == "dank:lfg:board:find:v1")
-    asyncio.run(view.find(interaction, button))
+    asyncio.run(button.callback(interaction))
     ui._open_unified_player_discovery.assert_awaited_once_with(interaction, 77)
     response.defer.assert_awaited_once_with(thinking=True, ephemeral=True)
