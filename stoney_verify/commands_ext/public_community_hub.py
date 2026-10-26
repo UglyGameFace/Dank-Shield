@@ -2269,7 +2269,7 @@ def _outside_players_embed() -> discord.Embed:
     )
     embed.add_field(
         name="🎯 Live Multi-Game Groups • Free",
-        value="LFG Atlas public posts for 28+ games; filter game, region, group type and ready-now status. No API key.",
+        value="Atlas Gaming public posts for 28+ games; filter game, region, group type and ready-now status. No API key.",
         inline=False,
     )
     embed.add_field(
@@ -2365,10 +2365,10 @@ def _atlas_groups_embed(
     ready: bool, notice: str = "",
 ) -> discord.Embed:
     embed = discord.Embed(
-        title="🎯 Live Gaming Groups • LFG Atlas",
+        title="🎯 Live Gaming Groups • Atlas Gaming",
         description=(
             "Free, public, independently hosted looking-for-group posts across 28+ games. "
-            "LFG Atlas hosts the real listings; availability and age requirements must be checked there. "
+            "Atlas Gaming hosts the real listings; availability and age requirements must be checked there. "
             "This bot never contacts or auto-enrolls players."
         ), color=discord.Color.blurple(),
     )
@@ -2392,7 +2392,7 @@ def _atlas_groups_embed(
             "Ready now" if row.get("ready_now") else "",
         )))
         # Only allowitelisted provider-origin links, never external contact URLs.
-        view_label = "View on LFG Atlas" if row["url"] != atlas.SITE else "Browse LFG Atlas"
+        view_label = "View on Atlas Gaming" if row["url"] != atlas.SITE else "Browse Atlas Gaming"
         embed.add_field(
             name=f"🎮 {game_name}"[:95],
             value=f"**{title}**\n{details[:180]}\n[{view_label}]({row['url']})",
@@ -2415,7 +2415,7 @@ class AtlasGroupsView(_OwnedView):
         self.next_page.disabled = self.page + 1 >= self.pages
         self.toggle_ready.label = "Show All" if self.ready else "Ready Now"
         self.add_item(discord.ui.Button(
-            label="Browse LFG Atlas", emoji="🌐",
+            label="Browse Atlas Gaming", emoji="🌐",
             style=discord.ButtonStyle.link, url=atlas.SITE, row=2,
         ))
 
