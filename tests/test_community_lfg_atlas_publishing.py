@@ -24,6 +24,7 @@ def _row(**change):
     data = {
         "session_id": SID, "guild_id": str(GID), "actor_id": str(UID),
         "game": "Minecraft", "title": "Looking for players: Minecraft",
+        "adult_only": True,
         "region": "NA", "contact": "https://discord.gg/validcode",
         "state": "publishing", "claim_version": 2, "delete_attempts": 0,
         "revoke_requested": False,
@@ -113,6 +114,7 @@ def test_post_payload_is_readonly_projection_not_session_notes(monkeypatch):
     assert method == "POST" and url == atlas.API_POSTS
     assert payload["source"] == "dankshield" and payload["consent"] is True
     assert payload["type"] == "lfm" and payload["game"] == "minecraft"
+    assert payload["adult"] is True
     assert payload["contact"] == "https://discord.gg/validcode"
     assert "notes" not in payload and "actor_id" not in payload
     assert "DO_NOT_PUBLISH" not in repr(payload)
@@ -212,7 +214,7 @@ def test_control_is_one_host_consent_form_and_live_public_buttons():
     assert len(buttons) <= 25
     assert max(getattr(x, "row", 0) or 0 for x in buttons) <= 4
     modal = ui.ExternalAtlasPublishModal(SID, GID, UID)
-    assert len(modal.children) == 3
+    assert len(modal.children) == 4
     assert modal.confirm.label.startswith("Type POST")
 
 
