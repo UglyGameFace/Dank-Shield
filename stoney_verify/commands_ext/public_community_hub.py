@@ -2362,7 +2362,7 @@ class AtlasSearchModal(discord.ui.Modal, title="Search Outside Gaming Groups"):
 
 def _atlas_groups_embed(
     rows: list[dict[str, Any]], *, page: int, game: str, region: str,
-    ready: bool, notice: str = "",
+    ready: bool, group_type: str = "", notice: str = "",
 ) -> discord.Embed:
     embed = discord.Embed(
         title="🎯 Live Gaming Groups • Atlas Gaming",
@@ -2376,6 +2376,7 @@ def _atlas_groups_embed(
         f"Game: {discord.utils.escape_markdown(game)}" if game else "",
         f"Region: {discord.utils.escape_markdown(region)}" if region else "",
         "Ready now" if ready else "",
+        f"Group type: {group_type.upper()}" if group_type else "",
     )))
     if filters:
         embed.add_field(name="Filters", value=filters[:500], inline=False)
@@ -2402,18 +2403,55 @@ def _atlas_groups_embed(
     return embed
 
 
+class AtlasTypeSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, *, game: str, region: str, ready: bool, group_type: str) -> None:
+        self.owner_id = owner_id
+        self.game = game
+        self.region = region
+        self.ready = ready
+        self.group_type = group_type
+        options = [
+            ("Any group", "all"),
+            ("Looking for a group", "lfg"),
+            ("Recruiting teammates", "lfm"),
+            ("Gaming server", "server"),
+            ("Clan", "clan"),
+            ("Squad", "squad"),
+        ]
+        super().__init__(
+            placeholder="What kind of group?",
+            custom_id="dank:hub:atlas:type:v1", row=3,
+            options=[discord.SelectOption(label=label, value=value, default=(group_type or "all") == value)
+                     for label, value in options],
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _defer_update(interaction)
+        choice = self.values[0]
+        await _open_atlas_groups(
+            interaction, self.owner_id, game=self.game, region=self.region,
+            ready=self.ready, group_type="" if choice == "all" else choice,
+        )
+
+
 class AtlasGroupsView(_OwnedView):
     def __init__(self, owner_id: int, rows: list[dict[str, Any]], *, page: int = 0,
-                 game: str = "", region: str = "", ready: bool = False) -> None:
+                 game: str = "", region: str = "", ready: bool = False,
+                 group_type: str = "") -> None:
         super().__init__(owner_id)
         self.game = game[:55]
         self.region = region[:40]
         self.ready = bool(ready)
+        self.group_type = group_type
         self.page = max(0, min(int(page), max(0, (len(rows) - 1) // 5)))
         self.pages = max(1, (len(rows) + 4) // 5)
         self.previous.disabled = self.page == 0
         self.next_page.disabled = self.page + 1 >= self.pages
         self.toggle_ready.label = "Show All" if self.ready else "Ready Now"
+        self.add_item(AtlasTypeSelect(
+            owner_id, game=self.game, region=self.region, ready=self.ready,
+            group_type=self.group_type,
+        ))
         self.add_item(discord.ui.Button(
             label="Browse Atlas Gaming", emoji="🌐",
             style=discord.ButtonStyle.link, url=atlas.SITE, row=2,
@@ -2432,7 +2470,7 @@ class AtlasGroupsView(_OwnedView):
         await _defer_update(interaction)
         await _open_atlas_groups(
             interaction, self.owner_id, game=self.game, region=self.region,
-            ready=not self.ready,
+            ready=not self.ready, group_type=self.group_type,
         )
 
     @discord.ui.button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:atlas:prev:v1", row=1)
@@ -2441,7 +2479,7 @@ class AtlasGroupsView(_OwnedView):
         await _defer_update(interaction)
         await _open_atlas_groups(
             interaction, self.owner_id, game=self.game, region=self.region,
-            ready=self.ready, page=max(0, self.page - 1),
+            ready=self.ready, page=max(0, self.page - 1), group_type=self.group_type,
         )
 
     @discord.ui.button(label="More Groups", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:atlas:next:v1", row=1)
@@ -2450,7 +2488,7 @@ class AtlasGroupsView(_OwnedView):
         await _defer_update(interaction)
         await _open_atlas_groups(
             interaction, self.owner_id, game=self.game, region=self.region,
-            ready=self.ready, page=self.page + 1,
+            ready=self.ready, page=self.page + 1, group_type=self.group_type,
         )
 
     @discord.ui.button(label="Outside Sources", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:atlas:back:v1", row=1)
@@ -2463,6 +2501,7 @@ class AtlasGroupsView(_OwnedView):
 async def _open_atlas_groups(
     interaction: discord.Interaction, owner_id: int, *,
     game: str = "", region: str = "", ready: bool = False, page: int = 0,
+    group_type: str = "",
 ) -> None:
     rows: list[dict[str, Any]] = []
     notice = ""
@@ -2471,16 +2510,22 @@ async def _open_atlas_groups(
         if not bool(settings.get("enabled", True)) or bool(settings.get("maintenance_mode")):
             notice = "Community Hub is unavailable on this server."
         else:
-            rows = await atlas.list_atlas_posts(game=game, region=region, ready_now=ready)
+            rows = await atlas.list_atlas_posts(
+                game=game, region=region, ready_now=ready, group_type=group_type,
+            )
     except (hub.CommunityHubError, external.ExternalDiscoveryError) as exc:
         notice = str(exc)[:400]
     page = max(0, min(int(page), max(0, (len(rows) - 1) // 5)))
     await _edit_private_original(
         interaction, content=None,
         embed=_atlas_groups_embed(
-            rows, page=page, game=game, region=region, ready=ready, notice=notice,
+            rows, page=page, game=game, region=region, ready=ready,
+            group_type=group_type, notice=notice,
         ),
-        view=AtlasGroupsView(owner_id, rows, page=page, game=game, region=region, ready=ready),
+        view=AtlasGroupsView(
+            owner_id, rows, page=page, game=game, region=region,
+            ready=ready, group_type=group_type,
+        ),
     )
 
 
