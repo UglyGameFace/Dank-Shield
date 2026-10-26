@@ -1200,17 +1200,20 @@ async def _run_scheduled_guild_tracking(
                 gid,
                 "activity_restart_reconcile",
             ):
+                # Keep the REST lane serialized while giving large guilds
+                # enough wall-clock time to obey the shared pacing budget.
+                timeout_seconds = reconcile_timeout_seconds(guild)
                 try:
                     completed = await asyncio.wait_for(
                         _start_guild_tracking(guild),
-                        timeout=reconcile_timeout_seconds(),
+                        timeout=timeout_seconds,
                     )
                 except asyncio.TimeoutError:
                     await _force_new_window_after_startup_failure(
                         guild,
                         reason=(
                             "restart reconciliation exceeded "
-                            f"{reconcile_timeout_seconds()} seconds"
+                            f"{timeout_seconds} seconds"
                         ),
                     )
                     return
