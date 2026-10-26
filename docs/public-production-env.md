@@ -105,9 +105,9 @@ sending. Never interpret missing history as permission to send a fresh ping.
 
 ## Optional Community Hub external gaming sessions (The100.io)
 
-The100.io supports read-only upcoming gaming session discovery with a personal
-supporter API token. This integration does not post or join games on anyone's
-behalf; the provider separately approves Discord bot write operations.
+**The100.io personal API tokens are supporter-only as of October 26, 2026.** Its official API docs say developers building community tools can request complimentary lifetime supporter status from @muhuhuhaha or @fearbroner in the The100.io Discord server, **subject to their approval; do not assume it is free or automatically granted**. This provider is optional: **Public Recruiting and the public gaming directory require no The100.io token, no The100.io supporter plan, and no The100.io approval.**
+
+When separately authorized, The100.io supports read-only upcoming gaming session discovery. This integration does not post or join games on anyone's behalf; the provider additionally approves Discord bot write operations.
 
 - Apply `supabase/migrations/20261018010000_community_hub_external_the100.sql`
   through the existing schema pipeline **before** attempting to enable it.
@@ -128,6 +128,19 @@ behalf; the provider separately approves Discord bot write operations.
 
 Do not enable the provider in production before validating a real token and
 response format on a staging host. No new Discord slash commands are needed.
+
+## Public LFG Recruitment (opt-in, free)
+
+The same Dank Shield Site listener can serve `/lfg` and `/lfg.json` for public gaming sessions. This is **not** a separate Cinema, torrent, or streaming service.
+
+- Apply `supabase/migrations/20261026083000_community_hub_public_lfg_recruitment.sql` through the guarded migration process. Both server public recruitment and individual session opt-in are **off by default**.
+- If `DANK_SHARE_VIDEO_PUBLIC_BASE_URL` already names the HTTPS host running the Share Router listener, no additional public URL variable is needed. Otherwise configure `DANK_LFG_PUBLIC_BASE_URL=https://your-site.example` on the same existing host. Never set an unrelated hostname that does not serve the route.
+- Staff opens Community Hub → Staff Dashboard → Settings → Public Recruiting. They must explicitly verify a same-guild Discord invite and confirm **PUBLISH** before any host can opt a group into public discovery.
+- Group host/co-host or staff opens Manage Session → Share Outside Server. This publishes only the structured **game name**, explicitly approved **public community name**, group capacity and the already-approved guild invite; no private group, member ID, message link or group note is exposed.
+- Guests can see and share the public directory; members can browse it via **Community Hub → Public Gaming Network**. This does not automatically post in third-party servers or guarantee external traffic. Growth requires sharing the link through approved channels.
+- Never add a URL to an age-restricted server without preserving that server's own verification requirements; the directory does not verify visitors' ages.
+
+Full setup, rollback, and canary instructions: [Public LFG Recruitment](community-hub-public-recruitment.md).
 
 ## Startup health lines to expect
 
