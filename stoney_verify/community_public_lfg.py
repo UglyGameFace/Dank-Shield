@@ -51,6 +51,11 @@ def public_lfg_base_url() -> str:
     return value
 
 
+def public_lfg_page_url() -> str:
+    base = public_lfg_base_url()
+    return base + "/lfg" if base else ""
+
+
 def _rate_allowed(remote: str, *, now: float) -> bool:
     # Use peer address, not a caller-supplied X-Forwarded-For header.
     key = str(remote or "unknown")[:100]
