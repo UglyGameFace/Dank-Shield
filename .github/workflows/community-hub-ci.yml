@@ -29,6 +29,11 @@ on:
       - 'tests/test_community_free_lfg.py'
       - 'tests/test_community_lfg_atlas.py'
       - 'stoney_verify/community_lfg_atlas.py'
+      - 'stoney_verify/community_lfg_atlas_publishing.py'
+      - 'stoney_verify/community_lfg_atlas_publisher.py'
+      - 'tests/test_community_lfg_atlas_publishing.py'
+      - 'tests/sql/community_atlas_publishing_smoke.sql'
+      - 'supabase/migrations/20261026194500_lfg_atlas_optin_publishing.sql'
       - 'tests/test_community_lfg_unified_discovery.py'
       - 'tests/test_community_lfg_session_preferences.py'
       - 'tests/test_community_lfg_paged_discovery.py'
@@ -75,6 +80,11 @@ on:
       - 'tests/test_community_free_lfg.py'
       - 'tests/test_community_lfg_atlas.py'
       - 'stoney_verify/community_lfg_atlas.py'
+      - 'stoney_verify/community_lfg_atlas_publishing.py'
+      - 'stoney_verify/community_lfg_atlas_publisher.py'
+      - 'tests/test_community_lfg_atlas_publishing.py'
+      - 'tests/sql/community_atlas_publishing_smoke.sql'
+      - 'supabase/migrations/20261026194500_lfg_atlas_optin_publishing.sql'
       - 'tests/test_community_lfg_unified_discovery.py'
       - 'tests/test_community_lfg_session_preferences.py'
       - 'tests/test_community_lfg_paged_discovery.py'
@@ -125,7 +135,7 @@ jobs:
 
       - name: Compile Community Hub and integration owners
         run: |
-          python -m py_compile             stoney_verify/community_hub_service.py             stoney_verify/community_lfg_discovery.py             stoney_verify/community_hub_runtime.py             stoney_verify/community_voice_receive.py             stoney_verify/community_voice_captions.py             stoney_verify/community_voice_caption_runtime.py             stoney_verify/voice_safety_policy.py             stoney_verify/voice_safety_consent.py             stoney_verify/verification_new/basic_verify.py             stoney_verify/commands_ext/public_voice_safety.py             stoney_verify/commands_ext/public_community_hub.py             stoney_verify/commands_ext/public_live_captions.py             stoney_verify/commands_ext/public_command_surface_v2.py             stoney_verify/interaction_guard.py             stoney_verify/globals.py             stoney_verify/operation_queue.py             stoney_verify/permission_repair_core.py             tools/test_community_hub_static.py             tests/test_community_hub_contract.py             tests/test_community_lfg_paged_discovery.py             tests/test_community_public_lfg_recruitment.py             tests/test_community_public_lfg_network.py             tests/test_community_free_lfg.py             tests/test_community_lfg_atlas.py             stoney_verify/community_free_lfg.py             stoney_verify/community_lfg_atlas.py             stoney_verify/community_public_lfg.py             stoney_verify/share_router_public_server.py             tests/test_server_live_captions.py             tests/test_voice_safety_policy.py             tests/test_interaction_guard.py             tests/test_component_lifecycle_runtime_policy.py
+          python -m py_compile             stoney_verify/community_hub_service.py             stoney_verify/community_lfg_discovery.py             stoney_verify/community_hub_runtime.py             stoney_verify/community_voice_receive.py             stoney_verify/community_voice_captions.py             stoney_verify/community_voice_caption_runtime.py             stoney_verify/voice_safety_policy.py             stoney_verify/voice_safety_consent.py             stoney_verify/verification_new/basic_verify.py             stoney_verify/commands_ext/public_voice_safety.py             stoney_verify/commands_ext/public_community_hub.py             stoney_verify/commands_ext/public_live_captions.py             stoney_verify/commands_ext/public_command_surface_v2.py             stoney_verify/interaction_guard.py             stoney_verify/globals.py             stoney_verify/operation_queue.py             stoney_verify/permission_repair_core.py             tools/test_community_hub_static.py             tests/test_community_hub_contract.py             tests/test_community_lfg_paged_discovery.py             tests/test_community_public_lfg_recruitment.py             tests/test_community_public_lfg_network.py             tests/test_community_free_lfg.py             tests/test_community_lfg_atlas.py             stoney_verify/community_free_lfg.py             stoney_verify/community_lfg_atlas.py             stoney_verify/community_lfg_atlas_publishing.py             stoney_verify/community_lfg_atlas_publisher.py             tests/test_community_lfg_atlas_publishing.py             stoney_verify/community_public_lfg.py             stoney_verify/share_router_public_server.py             tests/test_server_live_captions.py             tests/test_voice_safety_policy.py             tests/test_interaction_guard.py             tests/test_component_lifecycle_runtime_policy.py
 
       - name: Focused Community Hub and interaction lifecycle tests
         run: |
@@ -134,6 +144,7 @@ jobs:
             tests/test_community_external_lfg.py \
             tests/test_community_free_lfg.py \
             tests/test_community_lfg_atlas.py \
+            tests/test_community_lfg_atlas_publishing.py \
             tests/test_community_lfg_unified_discovery.py \
             tests/test_community_lfg_session_preferences.py \
             tests/test_community_lfg_paged_discovery.py \
@@ -216,6 +227,14 @@ jobs:
           end;
           $$;
           SQL
+
+      - name: Verify Atlas posting migration and exact host consent
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/20261026194500_lfg_atlas_optin_publishing.sql
+          done
+          psql -v ON_ERROR_STOP=1 -f tests/sql/community_atlas_publishing_smoke.sql
 
       - name: Verify consent and revocation with real PostgreSQL
         run: psql -v ON_ERROR_STOP=1 -f tests/sql/community_public_lfg_recruitment_smoke.sql
