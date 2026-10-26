@@ -1079,6 +1079,14 @@ async def _start_workers_once() -> None:
         print("⚠️ Ticket automation worker failed:", repr(e))
 
     try:
+        from .trusted_advert_cleanup import start_trusted_advert_worker
+        task = start_trusted_advert_worker(bot)
+        if task is not None:
+            print("🧹 Opt-in trusted advert expiry worker started")
+    except Exception as e:
+        print("⚠️ Trusted advert worker failed:", type(e).__name__)
+
+    try:
         from .verification_reminders import start_unverified_reminder_worker
 
         start_unverified_reminder_worker(bot)
