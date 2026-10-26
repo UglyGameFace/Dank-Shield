@@ -218,8 +218,8 @@ class TrustedAdsView(discord.ui.View):
                                str(getattr(member, "display_name", ""))).casefold()
         ][:5]
         if candidates:
-            rows = [f"• {m.display_name}: \`{m.id}\` (verify this exact ID)" for m in candidates]
-            return await _notice(interaction, "Possible OneBump bot accounts in this server:\\n"
+            rows = [f"• {m.display_name}: `{m.id}` (verify this exact ID)" for m in candidates]
+            return await _notice(interaction, "Possible OneBump bot accounts in this server:\n"
                                   + "\\n".join(rows) +
                                   "\\nMatching a name is only a suggestion, never automatic trust.")
         await _notice(interaction, "No likely OneBump bot was found in the cached server members. "
