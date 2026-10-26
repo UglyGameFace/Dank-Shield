@@ -2268,7 +2268,7 @@ def _outside_players_embed() -> discord.Embed:
     )
     embed.add_field(
         name="⛏️ Minecraft Players • Free",
-        value="Search the public Minecraft LFG player pool by edition. No API key.",
+        value="Search public Minecraft player profiles by edition. No API key.",
         inline=False,
     )
     embed.add_field(
@@ -2395,7 +2395,7 @@ class MinecraftPlayersView(_OwnedView):
         self.previous.disabled = self.page <= 1
         self.next_page.disabled = self.page >= self.pages
         self.add_item(discord.ui.Button(
-            label="Open Minecraft LFG", emoji="🌐", style=discord.ButtonStyle.link,
+            label="Open Player Directory", emoji="🌐", style=discord.ButtonStyle.link,
             url=free_lfg.MINECRAFT_SITE_URL, row=2,
         ))
 
