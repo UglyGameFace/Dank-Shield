@@ -777,6 +777,19 @@ jobs:
               // The Discloud dashboard is still linked to this branch.
               if (name === 'aaa-cinema-pre-pregateway-bind') continue;
               if (inUseByOpenPR.has(name)) continue;
+              // Cinema's canonical runtime/tests moved to UglyGameFace/Dank-Cinema.
+              // Historical cleanup proof compares against the OLD Shield main
+              // and is no longer valid. Defer Cinema-owned refs, fail closed;
+              // never reinterpret missing old files as proof of retirement.
+              const cinemaOwnedBranch =
+                /cinema|torrent|movie[-_]?night/i.test(name) ||
+                reviewedCinemaWakeRecovery.has(name) ||
+                reviewedMovieMenuRecovery.has(name) ||
+                reviewedMovieSourceUX.has(name) ||
+                reviewedCinemaAuthMobile.has(name) ||
+                reviewedCinemaApprovedArt.has(name) ||
+                reviewedPickerAndPlayback.get(name)?.kind === 'canonical-cinema-source';
+              if (cinemaOwnedBranch) continue;
               const segments = name.toLowerCase().split(/[\\/._-]+/);
               const prs = closedByHead.get(name) || [];
               if (reviewedBatch) {

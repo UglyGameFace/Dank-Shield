@@ -107,3 +107,23 @@ def test_share_video_listener_uses_new_or_legacy_configuration_without_cinema(mo
     import pytest
     with pytest.raises(RuntimeError, match="HTTPS"):
         site._validate_public_base_url()
+
+
+def test_archived_cinema_runtime_and_legacy_tests_are_not_in_shield() -> None:
+    # Cinema's unchanged source was SHA-verified against Dank-Cinema/main before
+    # this removal; regression protects against reintroducing the old workload.
+    legacy = (
+        "stoney_verify/cinema_site.py",
+        "stoney_verify/cinema_storage.py",
+        "stoney_verify/movie_night_web.py",
+        "stoney_verify/torrent_streaming.py",
+        "stoney_verify/torrent_media_server.py",
+        "stoney_verify/commands_ext/public_movie_night.py",
+        "stoney_verify/api_new/torrent_stream_routes.py",
+        "stoney_verify/assets/cinema_site.js",
+        "stoney_verify/assets/cinema_site.css",
+        "tests/test_movie_night_web.py",
+        "tests/test_torrent_streaming.py",
+        "tools/qualify_cinema_rolling_engine.py",
+    )
+    assert all(not (ROOT / filename).exists() for filename in legacy)

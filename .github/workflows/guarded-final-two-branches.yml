@@ -117,6 +117,13 @@ jobs:
               return x.ahead_by === 0 &&
                 (x.status === 'behind' || x.status === 'identical');
             };
+            // Cinema's parity owner is now Dank-Cinema, not this Shield branch.
+            // The historical source-on-main checks below would 404. Disable
+            // this exact-pair retirement rather than deleting either branch
+            // using invalid proof. A dedicated migration-aware audit is needed.
+            if (branchNames.includes('feat/cinema-library-intelligence')) {
+              throw new Error('Cinema branch retirement is paused after source extraction; no deletion performed.');
+            }
             const validated = [];
             for (const name of branchNames) {
               const proof = expected.get(name);
