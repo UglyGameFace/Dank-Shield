@@ -728,6 +728,23 @@ async def decide_invite_message(
     cfg, settings = await load_invite_policy(guild, refresh=refresh_policy)
     decision.config_guild_id = guild_id
 
+    # Narrow precedence: the approved exact bot IN its approved channel may
+    # advertise, even if 'Watch Every Bot' would normally delete rich cards.
+    # Unlike allowed-channel/exempt-user lists, ordinary member invites are
+    # still inspected and blocked in this same channel.
+    from .invite_trusted_advertisers import trusted_rule
+    trusted = trusted_rule(message, cfg)
+    if trusted is not None:
+        decision.action = "allow"
+        decision.feature_owner = "Invite Shield • Trusted Advertisers"
+        decision.rule_id = "trusted_advertiser_exact_bot_channel"
+        decision.reason = "Exact staff-approved bot account posting in its one approved advertising channel."
+        decision.fix_hint = "Use Invite Shield > Trusted Advertising Bots to revoke bot/channel trust."
+        decision.trusted_advertiser = str(trusted["bot_id"])
+        decision.allowed_codes = list(codes)
+        record_invite_decision(message, decision)
+        return decision
+
     invite_shield = _registry_invite_shield_enabled(cfg, settings)
     link_shield = _registry_link_shield_enabled(cfg, settings)
     spam_enabled = _safe_bool(settings.get("enabled", settings.get("spam_blocker_enabled")), False)
