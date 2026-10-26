@@ -10,11 +10,27 @@
 
 ## 1. Release gate (GitHub)
 
-- Review Shield PR #729 and confirm its *exact-head* required checks, including the full `Dank Shield CI` suite, are successful.
+- **Source extraction is merged:** Shield PRs #729–#732 removed Cinema startup,
+  routes, packaging, four Cinema-specific workflows and archived Python/assets.
+  Source head `9a0594664e896ccb56dd2fc55f2ce770d580d5e9` passed the full
+  [Dank Shield CI run #40248955089](https://github.com/UglyGameFace/Dank-Shield/actions/runs/40248955089).
+  That success **does not** establish the deployed Discloud SHA or live process state.
+- For each later Shield release, require its own successful exact-head CI run
+  and `tools/audit_cinema_discloud_package.py` scan, not the historic PR check.
 - Confirm the new `share_router_public_server.py` is the only Site listener started by both `command_runtime.setup_hook` and `app.on_ready`. Both must be idempotent.
 - Verify `api_new/server`, `share_router_runtime`, public command registration, and lifecycle hooks import none of the archived Cinema/torrent modules.
 - Verify `requirements.txt` no longer installs `libtorrent` and that `.discloudignore` excludes every legacy Cinema filename (bare name as well as historical relative path).
-- Confirm Archive PR #2 is already merged in Cinema before merging/removing Shield code. Two historical non-runtime files remain unavailable in the destination and must be tracked.
+- Cinema [PR #11](https://github.com/UglyGameFace/Dank-Cinema/pull/11) also
+  preserved the final unreferenced `media_metadata.py` parser and its tests,
+  with matching original Git blob SHA and a passing independent CI run.
+  The Shield source/test copies have now been retired; shared Share Router
+  media code is intentionally untouched.
+- Archive PRs #2–#4 are merged in the independent Cinema repository;
+  the two formerly missing non-runtime files were subsequently preserved.
+  Historic Shield SQL migration history remains deliberately in place, because
+  deleting migration versions can break database version bookkeeping. The
+  Cinema-only tables must not be silently dropped while retention or migration
+  ownership is unresolved.
 
 ## 2. Production cutover (Android Discloud dashboard)
 
@@ -42,6 +58,8 @@
 
 ## 5. Standalone Cinema status
 
-- `UglyGameFace/Dank-Cinema` currently holds an archived source checkpoint only.
+- `UglyGameFace/Dank-Cinema` preserves the full historical source and has
+  independently tested offline bootstrap, signing, storage and Discord identity
+  components. It is not a deployed standalone media application.
 - Independence is incomplete: code still depends on Shield's Discord bot, permissions, guild config, database adapters and storage. A separate backend, own app credentials, safe media-source policy, and independent tests are required **before any standalone deployment**.
 - Do not run archived Cinema code on another server until its operation and media sources meet hosting rules and applicable licenses.
