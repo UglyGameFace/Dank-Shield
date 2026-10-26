@@ -299,6 +299,7 @@ _ALLOWED_SETTINGS = frozenset(
         "external_the100_enabled",
         "public_lfg_enabled",
         "public_lfg_invite_url",
+        "public_lfg_display_name",
         "detailed_retention_days",
         "aggregate_retention_days",
     }
