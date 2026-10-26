@@ -199,3 +199,65 @@ def test_sql_security_defaults_and_atomic_claims():
     assert "enable row level security" in text
     assert "revoke all on function public.dank_claim_due_trusted_adverts" in text
     assert "to service_role" in text
+
+
+def test_expired_tracked_ad_is_deleted_only_after_fresh_identity_and_permission_checks(monkeypatch):
+    posted = datetime.now(timezone.utc) - timedelta(hours=26)
+    advert = _message(created=posted, embeds=[SimpleNamespace(title="Public Partner Ad")])
+    advert.delete = AsyncMock()
+
+    class FakeChannel:
+        id = CHANNEL
+        def __init__(self):
+            self.fetch_message = AsyncMock(return_value=advert)
+        def permissions_for(self, member):
+            return SimpleNamespace(
+                view_channel=True, read_message_history=True,
+                manage_messages=True,
+            )
+
+    channel = FakeChannel()
+    advert.channel = channel
+    guild = SimpleNamespace(
+        id=GUILD,
+        me=SimpleNamespace(id=222222222222222221, bot=True),
+        get_channel=lambda cid: channel if cid == CHANNEL else None,
+    )
+    bot = SimpleNamespace(get_guild=lambda gid: guild if gid == GUILD else None)
+    async def load(gid, *, refresh=False):
+        assert gid == GUILD and refresh
+        return {"source": "guild_config", **_cfg(True)}
+    done = AsyncMock()
+    monkeypatch.setattr(cleanup, "get_guild_config", load)
+    monkeypatch.setattr(cleanup, "_finish", done)
+    monkeypatch.setattr(cleanup.discord, "TextChannel", FakeChannel)
+    row = {
+        "guild_id": str(GUILD), "channel_id": str(CHANNEL),
+        "message_id": str(advert.id), "bot_id": str(BOT),
+        "posted_at": posted.isoformat(), "attempts": 1,
+    }
+    outcome = asyncio.run(cleanup.process_claim(bot, row))
+    assert outcome == "deleted"
+    advert.delete.assert_awaited_once_with(
+        reason="Trusted advertising retention expired (server opt-in)"
+    )
+    done.assert_awaited_once_with(row, "done")
+    channel.fetch_message.assert_awaited_once_with(advert.id)
+
+
+def test_no_ad_history_scans_or_delete_all_calls_in_worker():
+    source = (Path(__file__).resolve().parents[1] /
+              "stoney_verify/trusted_advert_cleanup.py").read_text()
+    assert ".history(" not in source
+    assert ".purge(" not in source
+    assert ".delete_messages(" not in source
+    assert "asyncio.sleep(_POLL_SECONDS)" in source
+    assert "for record in batch[:8]" in source
+
+
+def test_onebump_setup_does_not_trust_by_name():
+    source = Path(ui.__file__).read_text(encoding="utf-8")
+    assert '"onebump" in' in source  # suggestion UI only
+    assert "await _resolve_bot(guild, self.bot_id.value)" in source
+    assert "not member.bot" in source
+    assert "Matching a name is only a suggestion" in source
