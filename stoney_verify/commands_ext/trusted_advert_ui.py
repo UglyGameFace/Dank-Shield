@@ -321,6 +321,7 @@ class RemoveAdvertRuleModal(discord.ui.Modal, title="Remove or Pause Trusted Bot
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if not _staff(interaction, self.owner_id):
             return await _notice(interaction, "Manage Server permission required.")
+        await interaction.response.defer(ephemeral=True)
         # Revocation must remain possible even after a bot leaves this guild.
         # The exact trusted ID is already known; do NOT require fetch_member.
         match = re.fullmatch(r"(?:<@!?)?([0-9]{15,20})>?", str(self.bot_id.value or "").strip())
@@ -334,7 +335,6 @@ class RemoveAdvertRuleModal(discord.ui.Modal, title="Remove or Pause Trusted Bot
         action = str(self.action.value).strip().upper()
         if action not in {"REMOVE", "PAUSE"}:
             return await _notice(interaction, "Type REMOVE to revoke, or PAUSE to stop expiry cleanup.")
-        await interaction.response.defer(ephemeral=True)
         try:
             await save_rule(interaction.guild.id, bot_id=bot_id, channel_id=self.channel_id,
                             remove=action == "REMOVE",
@@ -360,6 +360,10 @@ async def show_trusted_ads(interaction: discord.Interaction, owner_id: int, *, c
     guild = interaction.guild
     if guild is None or not _staff(interaction, owner_id):
         return await _notice(interaction, "Manage Server permission required.")
+    # Acknowledge before any slow configuration fetch to avoid Discord's
+    # three-second interaction expiry on mobile or under Discloud latency.
+    if not interaction.response.is_done():
+        await interaction.response.defer()
     try:
         rules = await load_rules(guild.id, refresh=True)
     except RuntimeError:
