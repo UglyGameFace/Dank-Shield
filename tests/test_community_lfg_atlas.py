@@ -135,7 +135,10 @@ def test_global_rest_pacing_and_safety_filters(monkeypatch):
 def test_mobile_atlas_panel_and_outbound_link_are_bounded():
     view = ui.AtlasGroupsView(111, [], game="Minecraft", ready=True)
     assert len(view.children) <= 25
-    assert {getattr(item, "row", 0) for item in view.children} <= {0, 1, 2}
+    assert {getattr(item, "row", 0) for item in view.children} <= {0, 1, 2, 3}
+    type_menu = next(x for x in view.children if isinstance(x, discord.ui.Select))
+    assert len(type_menu.options) == 6
+    assert type_menu.custom_id == "dank:hub:atlas:type:v1"
     assert next(x for x in view.children if isinstance(x, discord.ui.Button) and x.style == discord.ButtonStyle.link).url == atlas.SITE
     modal = ui.AtlasSearchModal(111, game="minecraft", region="NA")
     assert modal.game.default == "minecraft"
@@ -161,3 +164,27 @@ def test_atlas_guild_maintenance_does_not_fetch(monkeypatch):
     asyncio.run(ui._open_atlas_groups(SimpleNamespace(guild_id=123), 1))
     fetch.assert_not_awaited()
     assert "unavailable" in edit.await_args.kwargs["embed"].fields[0].value
+
+
+def test_public_atlas_group_type_choice_is_included_in_subsequent_reads(monkeypatch):
+    settings = AsyncMock(return_value={"enabled": True, "maintenance_mode": False})
+    upstream = AsyncMock(return_value=[{
+        "game": "Minecraft", "title": "Find a clan", "type": "CLAN",
+        "region": "NA", "mode": "SMP", "source": "atlas",
+        "ready_now": True, "url": atlas.SITE,
+    }])
+    edit = AsyncMock()
+    monkeypatch.setattr(ui.hub, "get_settings", settings)
+    monkeypatch.setattr(atlas, "list_atlas_posts", upstream)
+    monkeypatch.setattr(ui, "_edit_private_original", edit)
+    asyncio.run(ui._open_atlas_groups(
+        SimpleNamespace(guild_id=123), 1,
+        game="minecraft", region="NA", ready=True, group_type="clan",
+    ))
+    upstream.assert_awaited_once_with(
+        game="minecraft", region="NA", ready_now=True, group_type="clan",
+    )
+    view = edit.await_args.kwargs["view"]
+    assert view.group_type == "clan"
+    menu = next(x for x in view.children if isinstance(x, discord.ui.Select))
+    assert any(opt.value == "clan" and opt.default for opt in menu.options)
