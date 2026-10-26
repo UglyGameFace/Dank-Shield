@@ -460,6 +460,12 @@ class RecentFeatureUpdate:
 
 RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     RecentFeatureUpdate(
+        "protection", "Trusted advertising bots work with Invite Shield",
+        "Approve a real bot and its advertising channel without letting ordinary "
+        "members bypass invite protection. Optional old-ad cleanup is staff controlled.",
+        "2026-10-26",
+    ),
+    RecentFeatureUpdate(
         "community_hub", "Find Players can recruit beyond your Discord server",
         "Host-approved public group listings for opted-in servers, plus free "
         "outside discovery from multi-game listings and Minecraft profiles. "
