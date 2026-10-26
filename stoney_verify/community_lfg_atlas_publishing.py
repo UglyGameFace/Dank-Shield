@@ -216,7 +216,6 @@ async def send_post(row: dict[str, Any]) -> tuple[str, str, str]:
         "consent": True, "source": "dankshield", "game": slug,
         "type": "lfm", "title": str(row["title"])[:80],
         "region": str(row["region"])[:40], "contact": row["contact"],
-        "contact_kind": "discord",
         "hours": min(24, max(1, int((expiry-datetime.now(timezone.utc)).total_seconds()/3600)+1)),
     }
     timeout = aiohttp.ClientTimeout(total=9, connect=3)
