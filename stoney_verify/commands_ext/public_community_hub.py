@@ -4169,7 +4169,7 @@ def _public_network_embed(
     for row in groups[:8]:
         embed.add_field(
             name=_safe_str(row["game"], "Game")[:100],
-            value=f"Up to {row['capacity']} players • Open the selector below for the verified server invite.",
+            value=f"Hosted by {discord.utils.escape_markdown(row['community'])[:60]} • Up to {row['capacity']} players. Choose below for the invite.",
             inline=False,
         )
     if len(groups) > 8:
@@ -4185,7 +4185,7 @@ class PublicNetworkSelect(discord.ui.Select):
         options = [
             discord.SelectOption(
                 label=str(row["game"])[:100],
-                description=f"Up to {row['capacity']} players • opens server invite",
+                description=f"{row['community'][:50]} • up to {row['capacity']} players",
                 value=str(i),
                 emoji="🎮",
             )
@@ -4221,7 +4221,8 @@ class PublicNetworkSelect(discord.ui.Select):
         embed = discord.Embed(
             title=f"🎮 {row['game'][:80]}",
             description=(
-                "This gaming group was deliberately advertised outside its server. "
+                f"Hosted by **{discord.utils.escape_markdown(row['community'])[:60]}**. "
+                "This group was deliberately advertised outside its server. "
                 "Join its Discord first, then follow that server's verification and group-joining steps."
             ),
             color=discord.Color.blurple(),
@@ -4319,6 +4320,7 @@ def _public_recruiting_embed(settings: dict[str, Any]) -> discord.Embed:
         color=discord.Color.blurple(),
     )
     embed.add_field(name="Recruitment", value="Enabled" if enabled else "Off", inline=True)
+    embed.add_field(name="Public community name", value=_safe_str(settings.get("public_lfg_display_name"), "Not configured")[:60], inline=False)
     embed.add_field(name="Server invite", value=invite or "Not configured", inline=False)
     embed.add_field(name="Public board", value=(url) if url else "Public HTTPS Site URL not configured", inline=False)
     embed.add_field(
@@ -4330,6 +4332,12 @@ def _public_recruiting_embed(settings: dict[str, Any]) -> discord.Embed:
 
 
 class PublicRecruitingInviteModal(discord.ui.Modal, title="Publish Gaming Recruitment"):
+    community_name = discord.ui.TextInput(
+        label="Public community name",
+        placeholder="Your Discord server name",
+        min_length=2,
+        max_length=60,
+    )
     invite = discord.ui.TextInput(
         label="Permanent or approved server invite",
         placeholder="https://discord.gg/yourserver",
@@ -4347,6 +4355,12 @@ class PublicRecruitingInviteModal(discord.ui.Modal, title="Publish Gaming Recrui
             return await _followup(interaction, "Manage Server authority is required.")
         if _safe_str(self.confirmation.value) != "PUBLISH":
             return await _followup(interaction, "Recruitment was not enabled. Enter PUBLISH to confirm.")
+        name = " ".join(
+            "".join(ch if ch.isprintable() else " " for ch in str(self.community_name.value or ""))
+            .replace("@", "＠").split()
+        )[:60]
+        if len(name) < 2:
+            return await _followup(interaction, "Enter a public community name (2–60 characters).")
         url = verified_public_lfg_invite(self.invite.value)
         if not url:
             return await _followup(interaction, "Use a valid HTTPS Discord server invite, not a channel or website link.")
@@ -4360,7 +4374,7 @@ class PublicRecruitingInviteModal(discord.ui.Modal, title="Publish Gaming Recrui
         try:
             await hub.update_settings(
                 int(interaction.guild_id or 0),
-                {"public_lfg_invite_url": url, "public_lfg_enabled": True},
+                {"public_lfg_invite_url": url, "public_lfg_display_name": name, "public_lfg_enabled": True},
                 actor_id=int(interaction.user.id),
             )
         except hub.CommunityHubError as exc:
@@ -4375,7 +4389,9 @@ class PublicRecruitingSettingsView(_OwnedView):
         _ = button
         if not _staff_authorized(interaction):
             return await _private(interaction, "Manage Server authority is required.")
-        await interaction.response.send_modal(PublicRecruitingInviteModal())
+        modal = PublicRecruitingInviteModal()
+        modal.community_name.default = str(getattr(interaction.guild, "name", "") or "")[:60]
+        await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Stop Recruiting", emoji="🛑", style=discord.ButtonStyle.danger, custom_id="dank:hub:publiclfg:disable:v1", row=0)
     async def disable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
