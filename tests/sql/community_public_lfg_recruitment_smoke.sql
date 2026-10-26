@@ -48,13 +48,13 @@ $$;
 -- Even an enabled guild must explicitly provide a publishable identity.
 update public.dank_community_hub_settings set public_lfg_display_name = null
   where guild_id = 'public-demo';
-do $
+do $$
 begin
   if exists (select 1 from public.community_hub_public_lfg_directory(100)) then
     raise exception 'missing public community label leaked recruitment';
   end if;
 end;
-$;
+$$;
 update public.dank_community_hub_settings set public_lfg_display_name = 'The 420 Lobby'
   where guild_id = 'public-demo';
 
