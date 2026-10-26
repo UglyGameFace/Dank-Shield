@@ -30,6 +30,7 @@ on:
       - 'tests/test_community_lfg_paged_discovery.py'
       - 'tests/test_community_public_lfg_recruitment.py'
       - 'tests/test_community_public_lfg_network.py'
+      - 'tests/sql/community_public_lfg_recruitment_smoke.sql'
       - 'stoney_verify/community_public_lfg.py'
       - 'stoney_verify/share_router_public_server.py'
       - 'supabase/migrations/20261026083000_community_hub_public_lfg_recruitment.sql'
@@ -71,6 +72,7 @@ on:
       - 'tests/test_community_lfg_paged_discovery.py'
       - 'tests/test_community_public_lfg_recruitment.py'
       - 'tests/test_community_public_lfg_network.py'
+      - 'tests/sql/community_public_lfg_recruitment_smoke.sql'
       - 'stoney_verify/community_public_lfg.py'
       - 'stoney_verify/share_router_public_server.py'
       - 'supabase/migrations/20261026083000_community_hub_public_lfg_recruitment.sql'
@@ -204,6 +206,9 @@ jobs:
           end;
           $$;
           SQL
+
+      - name: Verify consent and revocation with real PostgreSQL
+        run: psql -v ON_ERROR_STOP=1 -f tests/sql/community_public_lfg_recruitment_smoke.sql
 
       - name: Verify security and lifecycle invariants
         run: |
