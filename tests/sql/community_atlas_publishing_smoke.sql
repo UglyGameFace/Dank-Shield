@@ -70,7 +70,7 @@ begin
   if has_table_privilege('anon','public.dank_community_atlas_publications','select')
     then raise exception 'anonymous role sees post credentials'; end if;
   if has_function_privilege('authenticated',
-     'public.dank_queue_atlas_publication(uuid,text,text,text,integer)','execute')
+     'public.dank_queue_atlas_publication(uuid,text,text,text,integer,boolean)','execute')
     then raise exception 'member can bypass host checks by calling publish RPC'; end if;
   select count(*) into cnt from public.dank_claim_atlas_publications(2)
     where state='removing';
