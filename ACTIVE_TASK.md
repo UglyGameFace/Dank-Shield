@@ -1,3 +1,11 @@
+## ACTIVE FORCE SWITCH: OneBump × Invite Shield + optional ad retention (2026-10-26)
+
+- **Single active task:** With LFG PR #737 merged and its CI successful, owner authorized the next feature, exact-bot advertising trust plus optional 24-hour-per-ad cleanup. Work only in `feat/invite-shield-trusted-adverts-retention-20261026` until validated. LFG future promotion writes and other features paused.
+- **Real OneBump policy:** Its official rules require adverts visible at least 24 hours, warn against purge-bot deletions, and may penalize extensive deletion. Exact trusted bot/channel allowance is independent from cleanup. Cleanup defaults OFF, requires an explicit acknowledgement, uses 24/48/72 hours + 10-minute margin and may still affect OneBump standing.
+- **Architecture:** Only exact bot account+approved channel bypasses the canonical Invite Shield delete decision. No username or blanket channel exemption, no automatic bumping or new command tree. Uses existing Search-Safe channel browser + Use This Channel. Private durable Supabase due-claim ledger and bounded worker; no arbitrary retrospective history purge.
+- **Merge/deploy gate:** Dedicated focused Invite Shield tests, real PG16 claim and RLS checks, full Dank Shield CI, permission/privacy regression, operator-approved guarded migration then deployment, and owner canary. Do not claim the bot was deployed or ads deleted just because code merged.
+- **Paused:** LFG #638 future external posting, Cinema, Watch Yo Mouf, other projects. Past active-task notes below are historical only.
+
 ## ACTIVE FORCE SWITCH: Free outside-player LFG discovery (October 26, 2026)
 
 - **One active task:** Large LFG provider upgrade following merged PR #736. New branch `feat/lfg-free-outside-player-discovery-20261026`. Keep other Dank Shield and Cinema work paused.
