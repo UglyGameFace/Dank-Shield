@@ -2335,7 +2335,7 @@ async def _open_external_sessions(
         elif not bool(settings.get("external_the100_enabled")):
             notice = "Staff have not enabled The100.io discovery in Community Hub Settings."
         elif not external.the100_configured():
-            notice = "The100.io needs a host-side API token before it can be used."
+            notice = "The100.io needs an authorized supporter/developer API token. Public Gaming Network works without it."
         else:
             sessions = await external.list_the100_sessions(limit=25)
             if not sessions:
