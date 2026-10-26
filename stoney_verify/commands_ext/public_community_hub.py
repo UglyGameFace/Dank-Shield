@@ -2920,7 +2920,7 @@ class SessionControlView(_OwnedView):
         if url:
             return await _followup(
                 interaction,
-                "✅ Group shared on the public LFG board. Share this public discovery link with gamers outside the server: "
+                "✅ Group shared on the public gaming board. Share this public discovery link with gamers outside the server: "
                 + url + "/lfg",
             )
         return await _followup(
