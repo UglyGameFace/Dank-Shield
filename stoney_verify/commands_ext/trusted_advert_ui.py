@@ -321,25 +321,39 @@ class RemoveAdvertRuleModal(discord.ui.Modal, title="Remove or Pause Trusted Bot
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if not _staff(interaction, self.owner_id):
             return await _notice(interaction, "Manage Server permission required.")
-        member = await _resolve_bot(interaction.guild, self.bot_id.value)
-        if member is None:
-            return await _notice(interaction, "Bot not found.")
+        # Revocation must remain possible even after a bot leaves this guild.
+        # The exact trusted ID is already known; do NOT require fetch_member.
+        match = re.fullmatch(r"(?:<@!?)?([0-9]{15,20})>?", str(self.bot_id.value or "").strip())
+        if match is None:
+            return await _notice(interaction, "Enter the approved bot's Discord User ID.")
+        bot_id = int(match.group(1))
         rules = await load_rules(interaction.guild.id, refresh=True)
-        current = next((v for v in rules if v["bot_id"] == member.id and v["channel_id"] == self.channel_id), None)
+        current = next((v for v in rules if v["bot_id"] == bot_id and v["channel_id"] == self.channel_id), None)
         if current is None:
-            return await _notice(interaction, "That bot isn't approved in this channel.")
+            return await _notice(interaction, "That exact bot isn't approved in this channel.")
         action = str(self.action.value).strip().upper()
         if action not in {"REMOVE", "PAUSE"}:
             return await _notice(interaction, "Type REMOVE to revoke, or PAUSE to stop expiry cleanup.")
         await interaction.response.defer(ephemeral=True)
         try:
-            await save_rule(interaction.guild.id, bot_id=member.id, channel_id=self.channel_id,
+            await save_rule(interaction.guild.id, bot_id=bot_id, channel_id=self.channel_id,
                             remove=action == "REMOVE",
                             cleanup_enabled=False, retention_hours=current["retention_hours"])
         except (RuntimeError, ValueError) as exc:
             return await _notice(interaction, f"No change: {str(exc)[:240]}")
-        await _notice(interaction, "✅ Bot trust revoked; protection restored." if action == "REMOVE" else
-                      "✅ Automatic deletion paused; trusted adverts are still allowed.")
+        try:
+            from ..trusted_advert_cleanup import cancel_scheduled_for_pair
+            await cancel_scheduled_for_pair(interaction.guild.id, self.channel_id, bot_id)
+            stale_note = ""
+        except Exception:
+            # The updated guild rule remains authoritative; the due worker
+            # checks it again rather than trusting the old ledger.
+            stale_note = " Cleanup records could not be cancelled immediately, but deletion is disabled by current policy."
+        await _notice(interaction, (
+            "✅ Bot trust revoked; Invite Shield protection restored."
+            if action == "REMOVE" else
+            "✅ Automatic deletion paused; approved bot messages stay allowed."
+        ) + stale_note)
 
 
 async def show_trusted_ads(interaction: discord.Interaction, owner_id: int, *, channel_id: int = 0) -> None:
