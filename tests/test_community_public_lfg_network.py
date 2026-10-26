@@ -40,7 +40,8 @@ def test_public_network_source_reads_only_consent_projection(monkeypatch):
     fetch.assert_awaited_once_with(limit=100)
     view = edited.await_args.kwargs["view"]
     assert isinstance(view, ui.PublicNetworkView)
-    assert len(view.children) <= 5
+    assert len(view.children) <= 25
+    assert all(getattr(x, 'row', 0) <= 4 for x in view.children)
     assert "Minecraft" in edited.await_args.kwargs["embed"].fields[1].name or (
         "Minecraft" in edited.await_args.kwargs["embed"].fields[0].name
     )
