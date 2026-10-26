@@ -180,6 +180,7 @@ def test_live_eligibility_requires_both_consents_and_host(monkeypatch):
     settings = {
         "enabled": True, "maintenance_mode": False, "public_lfg_enabled": True,
         "public_lfg_invite_url": "https://discord.gg/validcode",
+        "public_lfg_display_name": "Sample Gaming Guild",
         "max_session_lifetime_seconds": 43200, "idle_timeout_seconds": 1800,
     }
     session = {
