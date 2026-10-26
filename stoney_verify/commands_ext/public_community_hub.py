@@ -2260,7 +2260,7 @@ def _outside_players_embed() -> discord.Embed:
         title="🌍 Find Players Outside Your Server",
         description=(
             "Use real, independently published gaming directories. "
-            "Minecraft LFG has public player profiles (not an automatic invite or live Discord session). "
+            "The Minecraft player directory has public profiles (not an automatic invite or live Discord session). "
             "You can also browse outside communities manually. "
             "The100.io is optional and requires an authorized supporter/developer token. "
             "**Nobody is contacted automatically.**"
@@ -2352,11 +2352,11 @@ def _minecraft_players_embed(
     rows: list[dict[str, Any]], *, page: int, edition: str, notice: str = "",
 ) -> discord.Embed:
     embed = discord.Embed(
-        title="⛏️ Minecraft LFG • Outside Players",
+        title="⛏️ Minecraft Players • Outside Servers",
         description=(
-            "Public, opted-in Minecraft player profiles from an independent website. "
+            "Public Minecraft player profiles from an independent website. "
             "These profiles **are not confirmed online now**, do not represent open Discord sessions, "
-            "and are not members of your server. Open Minecraft LFG to contact people under its rules."
+            "and are not members of your server. Open Player Directory to contact people under its rules."
         ),
         color=discord.Color.blurple(),
     )
