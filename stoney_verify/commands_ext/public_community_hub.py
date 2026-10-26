@@ -2389,7 +2389,7 @@ def _unified_discovery_embed(
             title = discord.utils.escape_markdown(str(row.get("title") or "Group"))[:65]
             game_name = discord.utils.escape_markdown(str(row.get("game") or "Game"))[:40]
             place = discord.utils.escape_markdown(str(row.get("region") or ""))[:30]
-            url = str(row.get("url") or atlas.SITE)
+            url = atlas._safe_details_url(row.get("url"))
             # The Atlas adapter returns only trusted provider-origin URLs.
             displayed.append(
                 f"• **{game_name}**: {title}"
@@ -2533,7 +2533,7 @@ async def _open_unified_player_discovery(
     local_rows: list[dict[str, Any]] = []
     notices = ["", "", ""]
     for index, result in enumerate(results):
-        if isinstance(result, BaseException):
+        if isinstance(result, Exception):
             if index == 0:
                 notices[index] = "Outside group listings are temporarily unavailable. Try More Sources."
             elif index == 1:
