@@ -206,6 +206,25 @@ class TrustedAdsView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=browser.embed(), view=browser)
 
+    @discord.ui.button(label="Find Bot", emoji="🔎", style=discord.ButtonStyle.secondary, row=0)
+    async def find_bot(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        # Convenience only: usernames are NOT security identity. Staff must
+        # approve the actual ID separately and each candidate is a real bot.
+        candidates = [
+            member for member in list(getattr(self.guild, "members", []) or [])
+            if bool(getattr(member, "bot", False))
+            and "onebump" in (str(getattr(member, "name", "")) + " " +
+                               str(getattr(member, "display_name", ""))).casefold()
+        ][:5]
+        if candidates:
+            rows = [f"• {m.display_name}: \`{m.id}\` (verify this exact ID)" for m in candidates]
+            return await _notice(interaction, "Possible OneBump bot accounts in this server:\\n"
+                                  + "\\n".join(rows) +
+                                  "\\nMatching a name is only a suggestion, never automatic trust.")
+        await _notice(interaction, "No likely OneBump bot was found in the cached server members. "
+                      "Open the real bot's profile in Discord → Copy User ID, then choose Approve Bot.")
+
     @discord.ui.button(label="Approve Bot", emoji="🤖", style=discord.ButtonStyle.success, row=1)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
