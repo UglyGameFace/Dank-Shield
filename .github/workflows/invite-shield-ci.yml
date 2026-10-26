@@ -4,6 +4,11 @@ on:
   pull_request:
     paths:
       - 'stoney_verify/invite_policy_engine.py'
+      - 'stoney_verify/invite_trusted_advertisers.py'
+      - 'stoney_verify/trusted_advert_cleanup.py'
+      - 'stoney_verify/commands_ext/trusted_advert_ui.py'
+      - 'tests/test_trusted_advertising_invite_shield.py'
+      - 'supabase/migrations/20261026170500_trusted_advert_retention.sql'
       - 'stoney_verify/invite_policy_message_surface_runtime.py'
       - 'stoney_verify/invite_reconciliation_runtime.py'
       - 'stoney_verify/commands_ext/public_protection_invite_ui.py'
@@ -20,6 +25,11 @@ on:
       - main
     paths:
       - 'stoney_verify/invite_policy_engine.py'
+      - 'stoney_verify/invite_trusted_advertisers.py'
+      - 'stoney_verify/trusted_advert_cleanup.py'
+      - 'stoney_verify/commands_ext/trusted_advert_ui.py'
+      - 'tests/test_trusted_advertising_invite_shield.py'
+      - 'supabase/migrations/20261026170500_trusted_advert_retention.sql'
       - 'stoney_verify/invite_policy_message_surface_runtime.py'
       - 'stoney_verify/invite_reconciliation_runtime.py'
       - 'stoney_verify/commands_ext/public_protection_invite_ui.py'
@@ -62,10 +72,76 @@ jobs:
         run: git diff --check "$(git merge-base origin/main HEAD)"..HEAD
 
       - name: Compile Invite Shield owners
-        run: python -m py_compile stoney_verify/invite_policy_engine.py stoney_verify/invite_policy_message_surface_runtime.py stoney_verify/invite_reconciliation_runtime.py stoney_verify/commands_ext/public_protection_invite_ui.py stoney_verify/startup_guards/invite_shield_sanitize_shared.py tests/test_invite_live_enforcement.py tests/test_invite_policy_message_surface_runtime.py tests/test_invite_runtime_reconcile_194.py tests/test_protection_invite_native_ui.py tests/test_startup_recovery_scaling.py tools/audit_invite_link_safety.py
+        run: python -m py_compile stoney_verify/invite_policy_engine.py stoney_verify/invite_trusted_advertisers.py stoney_verify/trusted_advert_cleanup.py stoney_verify/commands_ext/trusted_advert_ui.py tests/test_trusted_advertising_invite_shield.py stoney_verify/invite_policy_message_surface_runtime.py stoney_verify/invite_reconciliation_runtime.py stoney_verify/commands_ext/public_protection_invite_ui.py stoney_verify/startup_guards/invite_shield_sanitize_shared.py tests/test_trusted_advertising_invite_shield.py tests/test_invite_live_enforcement.py tests/test_invite_policy_message_surface_runtime.py tests/test_invite_runtime_reconcile_194.py tests/test_protection_invite_native_ui.py tests/test_startup_recovery_scaling.py tools/audit_invite_link_safety.py
 
       - name: Focused Invite Shield tests
         run: python -m pytest -q --tb=short --disable-warnings tests/test_invite_live_enforcement.py tests/test_invite_policy_message_surface_runtime.py tests/test_invite_runtime_reconcile_194.py tests/test_protection_invite_native_ui.py tests/test_startup_recovery_scaling.py
 
       - name: Invite link safety audit
         run: python tools/audit_invite_link_safety.py
+
+  trusted-advert-postgres:
+    name: Trusted advertising durable retention PG16
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare Supabase roles
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+            if not exists (select 1 from pg_roles where rolname='anon') then create role anon; end if;
+            if not exists (select 1 from pg_roles where rolname='authenticated') then create role authenticated; end if;
+            if not exists (select 1 from pg_roles where rolname='service_role') then create role service_role; end if;
+          end;
+          $$;
+          SQL
+      - name: Apply migration twice and test private atomic due queue
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20261026170500_trusted_advert_retention.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20261026170500_trusted_advert_retention.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          insert into public.dank_trusted_advert_messages
+            (guild_id, channel_id, bot_id, message_id, posted_at, delete_after)
+          values
+            ('1','2','3','4',now()-interval '26 hours',now()-interval '1 hour');
+          do $$
+          declare first_count integer;
+          begin
+            if has_table_privilege('anon','public.dank_trusted_advert_messages','select') then
+              raise exception 'anon can select private advert ledger';
+            end if;
+            select count(*) into first_count from public.dank_claim_due_trusted_adverts(8);
+            if first_count <> 1 then
+              raise exception 'expected exactly one due claim, got %', first_count;
+            end if;
+            if exists(select 1 from public.dank_claim_due_trusted_adverts(8)) then
+              raise exception 'claimed advert was selected twice';
+            end if;
+            if (select attempts from public.dank_trusted_advert_messages where guild_id='1' and message_id='4') <> 1 then
+              raise exception 'claim did not increment attempts';
+            end if;
+          end;
+          $$;
+          SQL
