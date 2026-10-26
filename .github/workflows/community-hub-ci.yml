@@ -28,6 +28,10 @@ on:
       - 'tests/test_community_lfg_unified_discovery.py'
       - 'tests/test_community_lfg_session_preferences.py'
       - 'tests/test_community_lfg_paged_discovery.py'
+      - 'tests/test_community_public_lfg_recruitment.py'
+      - 'stoney_verify/community_public_lfg.py'
+      - 'stoney_verify/share_router_public_server.py'
+      - 'supabase/migrations/20261026083000_community_hub_public_lfg_recruitment.sql'
       - 'tests/test_community_hub_game_role_pings.py'
       - 'tests/test_community_voice_receive.py'
       - 'tests/test_community_voice_captions.py'
@@ -64,6 +68,10 @@ on:
       - 'tests/test_community_lfg_unified_discovery.py'
       - 'tests/test_community_lfg_session_preferences.py'
       - 'tests/test_community_lfg_paged_discovery.py'
+      - 'tests/test_community_public_lfg_recruitment.py'
+      - 'stoney_verify/community_public_lfg.py'
+      - 'stoney_verify/share_router_public_server.py'
+      - 'supabase/migrations/20261026083000_community_hub_public_lfg_recruitment.sql'
       - 'tests/test_community_hub_game_role_pings.py'
       - 'tests/test_community_voice_receive.py'
       - 'tests/test_community_voice_captions.py'
@@ -105,7 +113,7 @@ jobs:
 
       - name: Compile Community Hub and integration owners
         run: |
-          python -m py_compile             stoney_verify/community_hub_service.py             stoney_verify/community_lfg_discovery.py             stoney_verify/community_hub_runtime.py             stoney_verify/community_voice_receive.py             stoney_verify/community_voice_captions.py             stoney_verify/community_voice_caption_runtime.py             stoney_verify/voice_safety_policy.py             stoney_verify/voice_safety_consent.py             stoney_verify/verification_new/basic_verify.py             stoney_verify/commands_ext/public_voice_safety.py             stoney_verify/commands_ext/public_community_hub.py             stoney_verify/commands_ext/public_live_captions.py             stoney_verify/commands_ext/public_command_surface_v2.py             stoney_verify/interaction_guard.py             stoney_verify/globals.py             stoney_verify/operation_queue.py             stoney_verify/permission_repair_core.py             tools/test_community_hub_static.py             tests/test_community_hub_contract.py             tests/test_community_lfg_paged_discovery.py             tests/test_server_live_captions.py             tests/test_voice_safety_policy.py             tests/test_interaction_guard.py             tests/test_component_lifecycle_runtime_policy.py
+          python -m py_compile             stoney_verify/community_hub_service.py             stoney_verify/community_lfg_discovery.py             stoney_verify/community_hub_runtime.py             stoney_verify/community_voice_receive.py             stoney_verify/community_voice_captions.py             stoney_verify/community_voice_caption_runtime.py             stoney_verify/voice_safety_policy.py             stoney_verify/voice_safety_consent.py             stoney_verify/verification_new/basic_verify.py             stoney_verify/commands_ext/public_voice_safety.py             stoney_verify/commands_ext/public_community_hub.py             stoney_verify/commands_ext/public_live_captions.py             stoney_verify/commands_ext/public_command_surface_v2.py             stoney_verify/interaction_guard.py             stoney_verify/globals.py             stoney_verify/operation_queue.py             stoney_verify/permission_repair_core.py             tools/test_community_hub_static.py             tests/test_community_hub_contract.py             tests/test_community_lfg_paged_discovery.py             tests/test_community_public_lfg_recruitment.py             stoney_verify/community_public_lfg.py             stoney_verify/share_router_public_server.py             tests/test_server_live_captions.py             tests/test_voice_safety_policy.py             tests/test_interaction_guard.py             tests/test_component_lifecycle_runtime_policy.py
 
       - name: Focused Community Hub and interaction lifecycle tests
         run: |
@@ -115,6 +123,7 @@ jobs:
             tests/test_community_lfg_unified_discovery.py \
             tests/test_community_lfg_session_preferences.py \
             tests/test_community_lfg_paged_discovery.py \
+            tests/test_community_public_lfg_recruitment.py \
             tests/test_community_hub_game_role_pings.py \
             tests/test_community_voice_receive.py \
             tests/test_community_voice_captions.py \
@@ -176,6 +185,22 @@ jobs:
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260926044000_community_hub_matchmaking_loop.sql
             psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260926054000_community_hub_hublink.sql
           done
+
+      - name: Apply public recruiting migration twice and check safe defaults
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            psql -v ON_ERROR_STOP=1 -f supabase/migrations/20261026083000_community_hub_public_lfg_recruitment.sql
+          done
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $
+          begin
+            if exists (select 1 from public.community_hub_public_lfg_directory(20)) then
+              raise exception 'new public recruitment schema unexpectedly exposes rows';
+            end if;
+          end;
+          $;
+          SQL
 
       - name: Verify security and lifecycle invariants
         run: |
