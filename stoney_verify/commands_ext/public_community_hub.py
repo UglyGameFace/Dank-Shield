@@ -3119,6 +3119,11 @@ class ExternalAtlasPublishModal(discord.ui.Modal, title="Advertise This Gaming G
         placeholder="2", default="2",
         min_length=1, max_length=2,
     )
+    adult = discord.ui.TextInput(
+        label="18+ players only? YES or NO",
+        placeholder="YES if your community is age-restricted",
+        min_length=2, max_length=3,
+    )
     confirm = discord.ui.TextInput(
         label="Type POST to share your server invite",
         placeholder="POST", min_length=4, max_length=4,
@@ -3143,6 +3148,11 @@ class ExternalAtlasPublishModal(discord.ui.Modal, title="Advertise This Gaming G
             duration = int(str(self.hours.value or "").strip())
         except ValueError:
             return await _followup(interaction, "Choose 1, 2, 4, 12 or 24 hours.")
+        adult_text = str(self.adult.value or "").strip().upper()
+        if adult_text not in {"YES", "NO"}:
+            return await _followup(interaction, "Choose YES or NO for the 18+ audience.")
+        guild_age_level = getattr(getattr(interaction.guild, "nsfw_level", None), "name", "")
+        adult_only = adult_text == "YES" or guild_age_level == "explicit"
         from ..community_lfg_atlas_publishing import (
             enqueue_host_publication, AtlasPublishError, atlas_game_slug,
         )
@@ -3156,6 +3166,7 @@ class ExternalAtlasPublishModal(discord.ui.Modal, title="Advertise This Gaming G
             result = await enqueue_host_publication(
                 self.session_id, self.guild_id, self.owner_id,
                 region=str(self.region.value or "").strip(), hours=duration,
+                adult_only=adult_only,
             )
         except (AtlasPublishError, hub.CommunityHubError) as exc:
             return await _followup(interaction, f"❌ {str(exc)[:420]}")
@@ -3164,6 +3175,7 @@ class ExternalAtlasPublishModal(discord.ui.Modal, title="Advertise This Gaming G
             "✅ External gaming advertisement **queued**, not yet published. "
             "Your guild's staff-approved invite, game and region will be public on Atlas Gaming "
             "when the provider confirms it. No member IDs or session notes are shared. "
+            ("Audience: 18+ only. " if adult_only else "Audience: general gaming. ") +
             "Use **External Ad Status** to check confirmation and **Remove External Ad** to revoke.",
         )
 
