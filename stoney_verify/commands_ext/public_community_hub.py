@@ -2864,6 +2864,64 @@ class SessionControlView(_OwnedView):
             message = "Game-role calls are unavailable; no successful ping was confirmed."
         await _followup(interaction, message)
 
+    @discord.ui.button(label="Share Outside Server", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:manage:publiclfg:v1", row=2)
+    async def share_outside(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        guild_id = int(interaction.guild_id or 0)
+        if guild_id <= 0 or bool(getattr(interaction.user, "bot", False)):
+            return await _followup(interaction, "Use this control as a server member.")
+        try:
+            session = await hub.get_session(self.session_id, guild_id=guild_id)
+            members = await hub.list_session_members(self.session_id)
+            settings = await hub.get_settings(guild_id)
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
+        mine = next(
+            (row for row in members if _safe_int(row.get("user_id")) == int(interaction.user.id)),
+            None,
+        )
+        if _safe_str((mine or {}).get("role")) not in {"host", "cohost"} and not _staff_authorized(interaction):
+            return await _followup(interaction, "Only this group's host, co-host or server staff can share it publicly.")
+        current = bool(session.get("public_lfg_opt_in"))
+        if not current:
+            if (
+                not bool(settings.get("enabled", True))
+                or bool(settings.get("maintenance_mode"))
+                or not bool(settings.get("public_lfg_enabled"))
+                or not verified_public_lfg_invite(settings.get("public_lfg_invite_url"))
+            ):
+                return await _followup(
+                    interaction,
+                    "Outside recruitment is off. Ask staff to enable Public Recruiting in Community Hub Settings first.",
+                )
+            if session.get("privacy") != "public" or session.get("state") not in {"open", "forming", "ready", "active"}:
+                return await _followup(interaction, "Only an active, publicly joinable gaming group can be shared.")
+        try:
+            updated = await hub.set_session_public_lfg(
+                self.session_id, guild_id, enabled=not current,
+                expected_version=_safe_int(session.get("version"), 0),
+            )
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
+        await _edit_private_original(
+            interaction, content=None,
+            embed=build_session_embed(updated, members), view=self,
+        )
+        if current:
+            return await _followup(interaction, "✅ Public recruiting revoked. This group is no longer listed outside Discord.")
+        url = community_public_lfg_url()
+        if url:
+            return await _followup(
+                interaction,
+                "✅ Group shared on the public LFG board. Share this public discovery link with gamers outside the server: "
+                + url + "/lfg",
+            )
+        return await _followup(
+            interaction,
+            "✅ Group marked for public recruiting. Staff still need to configure a public HTTPS Site URL before you can share the board.",
+        )
+
     @discord.ui.button(label="Back to Group", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:manage:back:v1", row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -3818,6 +3876,7 @@ def _settings_embed(settings: dict[str, Any], bot: Any) -> discord.Embed:
     )
     embed.add_field(name="Mode", value=_safe_str(settings.get("mode"), "minimal").title(), inline=True)
     embed.add_field(name="Maintenance", value="On" if bool(settings.get("maintenance_mode")) else "Off", inline=True)
+    embed.add_field(name="Public Recruiting", value="On" if bool(settings.get("public_lfg_enabled")) else "Off", inline=True)
     embed.add_field(name="Member-created sessions", value="On" if bool(settings.get("allow_member_creation", True)) else "Off", inline=True)
     embed.add_field(name="Aggregate analytics", value="On" if bool(settings.get("analytics_enabled", True)) else "Off", inline=True)
     embed.add_field(
@@ -4052,6 +4111,121 @@ class CategoryPickerView(_OwnedView):
         await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings))
 
 
+def verified_public_lfg_invite(value: Any) -> str:
+    from ..community_public_lfg import verified_invite_url
+    return verified_invite_url(value)
+
+
+def community_public_lfg_url() -> str:
+    from ..community_public_lfg import public_lfg_base_url
+    return public_lfg_base_url()
+
+
+def _public_recruiting_embed(settings: dict[str, Any]) -> discord.Embed:
+    enabled = bool(settings.get("public_lfg_enabled"))
+    invite = verified_public_lfg_invite(settings.get("public_lfg_invite_url"))
+    url = community_public_lfg_url()
+    embed = discord.Embed(
+        title="📣 Public Gaming Recruitment",
+        description=(
+            "Help people **outside this Discord server** discover your gaming groups. "
+            "First, authorized staff approve a server invite and publish the board. "
+            "Then each group's host or co-host separately chooses **Share Outside Server**. "
+            "Private groups and member identities are never published."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name="Recruitment", value="Enabled" if enabled else "Off", inline=True)
+    embed.add_field(name="Server invite", value=invite or "Not configured", inline=False)
+    embed.add_field(name="Public board", value=(url + "/lfg") if url else "Public HTTPS Site URL not configured", inline=False)
+    embed.add_field(
+        name="Important",
+        value="Outside users join your **server**, then must meet your verification/age rules before joining a session. Publishing does not message strangers or auto-advertise elsewhere.",
+        inline=False,
+    )
+    return embed
+
+
+class PublicRecruitingInviteModal(discord.ui.Modal, title="Publish Gaming Recruitment"):
+    invite = discord.ui.TextInput(
+        label="Permanent or approved server invite",
+        placeholder="https://discord.gg/yourserver",
+        max_length=140,
+    )
+    confirmation = discord.ui.TextInput(
+        label="Type PUBLISH to allow public group listings",
+        placeholder="PUBLISH",
+        max_length=7,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await _defer_ephemeral(interaction)
+        if not _staff_authorized(interaction) or interaction.guild is None:
+            return await _followup(interaction, "Manage Server authority is required.")
+        if _safe_str(self.confirmation.value) != "PUBLISH":
+            return await _followup(interaction, "Recruitment was not enabled. Enter PUBLISH to confirm.")
+        url = verified_public_lfg_invite(self.invite.value)
+        if not url:
+            return await _followup(interaction, "Use a valid HTTPS Discord server invite, not a channel or website link.")
+        try:
+            live_invite = await interaction.client.fetch_invite(url)
+        except (discord.HTTPException, discord.InvalidArgument, ValueError):
+            return await _followup(interaction, "Discord could not verify this invitation. Nothing was published.")
+        destination = getattr(live_invite, "guild", None)
+        if not destination or int(destination.id) != int(interaction.guild_id or 0):
+            return await _followup(interaction, "That invite points to another server. Nothing was published.")
+        try:
+            await hub.update_settings(
+                int(interaction.guild_id or 0),
+                {"public_lfg_invite_url": url, "public_lfg_enabled": True},
+                actor_id=int(interaction.user.id),
+            )
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
+        ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
+        await _followup(interaction, "✅ Recruitment is enabled. Hosts must still opt in for EACH public group via Manage Session → Share Outside Server.")
+
+
+class PublicRecruitingSettingsView(_OwnedView):
+    @discord.ui.button(label="Set Invite & Enable", emoji="🌍", style=discord.ButtonStyle.success, custom_id="dank:hub:publiclfg:enable:v1", row=0)
+    async def enable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _staff_authorized(interaction):
+            return await _private(interaction, "Manage Server authority is required.")
+        await interaction.response.send_modal(PublicRecruitingInviteModal())
+
+    @discord.ui.button(label="Stop Recruiting", emoji="🛑", style=discord.ButtonStyle.danger, custom_id="dank:hub:publiclfg:disable:v1", row=0)
+    async def disable(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _staff_authorized(interaction):
+            return await _private(interaction, "Manage Server authority is required.")
+        await _defer_update(interaction)
+        try:
+            # Revoke the guild gate immediately, even if old session flags remain.
+            settings = await hub.update_settings(
+                int(interaction.guild_id or 0), {"public_lfg_enabled": False},
+                actor_id=int(interaction.user.id),
+            )
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
+        ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
+        await _edit_private_original(
+            interaction, content=None,
+            embed=_public_recruiting_embed(settings), view=self,
+        )
+        await _followup(interaction, "Public recruiting stopped. All sessions from this guild are hidden from the outside directory.")
+
+    @discord.ui.button(label="Back to Settings", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:publiclfg:back:v1", row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _defer_update(interaction)
+        settings = await hub.get_settings(int(interaction.guild_id or 0))
+        await _edit_private_original(
+            interaction, content=None, embed=_settings_embed(settings, interaction.client),
+            view=HubSettingsView(self.owner_id, settings),
+        )
+
+
 class HubSettingsView(_OwnedView):
     def __init__(self, owner_id: int, settings: dict[str, Any]) -> None:
         super().__init__(owner_id)
@@ -4213,6 +4387,22 @@ class HubSettingsView(_OwnedView):
         modal.creations_hour.default = str(_safe_int(self.settings.get("max_session_creations_per_hour_per_member"), 10))
         modal.reports_hour.default = str(_safe_int(self.settings.get("max_reports_per_hour_per_member"), 5))
         await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Public Recruiting", emoji="📣", style=discord.ButtonStyle.primary, custom_id="dank:hub:settings:publiclfg:v1", row=4)
+    async def public_recruiting(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not _staff_authorized(interaction):
+            return await _private(interaction, "Manage Server authority is required.")
+        await _defer_update(interaction)
+        try:
+            settings = await hub.get_settings(int(interaction.guild_id or 0))
+        except hub.CommunityHubError as exc:
+            return await _followup(interaction, f"❌ {_error_text(exc)}")
+        await _edit_private_original(
+            interaction, content=None,
+            embed=_public_recruiting_embed(settings),
+            view=PublicRecruitingSettingsView(self.owner_id),
+        )
 
     @discord.ui.button(label="The100.io Discovery", emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:the100:v1", row=4)
     async def the100(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
