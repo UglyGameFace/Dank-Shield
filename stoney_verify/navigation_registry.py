@@ -460,6 +460,13 @@ class RecentFeatureUpdate:
 
 RECENT_UPDATES: tuple[RecentFeatureUpdate, ...] = (
     RecentFeatureUpdate(
+        "community_hub", "Find Players can recruit beyond your Discord server",
+        "Host-approved public group listings, verified community invites, "
+        "and a shared Public Gaming Network help gamers find opted-in servers. "
+        "Hosts can stop sharing anytime.",
+        "2026-10-26",
+    ),
+    RecentFeatureUpdate(
         "verification_reminders", "Full-server verification reminders by channel or DM",
         "Check members against each server's saved Unverified and access roles, "
         "select up to 25 per group, and send early by channel or DM. "
