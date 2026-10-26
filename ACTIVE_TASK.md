@@ -1,3 +1,11 @@
+## Cinema source archive physically retired from Shield (2026-10-25)
+
+- **Source:** 29 Cinema runtime/assets, 34 Cinema-only tests, seven archived Cinema docs and two diagnostics removed from Shield working tree. These 72 files were all present in `UglyGameFace/Dank-Cinema/main` prior to deletion; production modules and docs matched exact Git blob SHAs. Four Shield tests had intentionally changed retirement contracts; Cinema retains their original test implementations.
+- **Preserved:** Shared guild-level Community & Pings notification-role metadata and its tests, Shield's Supabase migration history, Discord verification, Share Router, startup logic and databases. Nothing was deleted from production data or Discloud file storage by this Git change.
+- **Branch cleanup:** Historical Cinema branch retirement candidates are deferred, not deleted, because their old source-on-Shield parity checks are invalid after extraction. Guarded final-two branch retirement aborts before deletion pending a new verified archive-specific proof. Unrelated cleanup remains governed by its existing owner gate.
+- **Safe deploy:** Exact-sha CI and guarded Discloud code commit; production state, host process shutdown, Share Router video links, route 404 responses, backups and data preservation remain **unverified** until an actual host deployment. Never assume a merge stopped prior media processes.
+- **Next:** Finalize PR for physical source retirement, check full CI and protect other modules, then verify authorized live deployment. Separately continue standalone Cinema app runtime/auth/DB migration; torrent engine remains inactive in its independent bootstrap.
+
 ## FORCE SWITCH active task: extract Dank Cinema from Dank Shield (2026-10-25)
 
 - **Outcome:** Preserve Cinema source in `UglyGameFace/Dank-Cinema`; make the Discloud Dank Shield deployment start only non-Cinema services and continue ordinary Share Router.

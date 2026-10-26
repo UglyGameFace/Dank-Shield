@@ -50,6 +50,9 @@ def assert_separation() -> None:
         assert path in ignores and Path(path).name in ignores, (
             f"Missing Discloud exact-name Cinema exclusion: {path}"
         )
+        assert not (ROOT / path).exists(), (
+            f"Legacy Cinema file was reintroduced into Shield: {path}"
+        )
     requirement = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     assert not any(
         line.strip().lower().startswith("libtorrent")

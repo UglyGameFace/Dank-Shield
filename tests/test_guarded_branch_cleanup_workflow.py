@@ -1299,3 +1299,16 @@ def test_final_two_cleanup_requires_replacement_parity_and_archives_both_first()
     ):
         assert token in source
     assert source.index("Preserve both exact commits BEFORE any branch deletion.") < source.index("github.rest.git.deleteRef(")
+
+
+def test_cinema_source_extraction_defers_legacy_branch_retirements_without_deleting() -> None:
+    workflow = _workflow()
+    assert "const cinemaOwnedBranch =" in workflow
+    assert "reviewedCinemaWakeRecovery.has(name)" in workflow
+    assert "reviewedMovieSourceUX.has(name)" in workflow
+    assert "if (cinemaOwnedBranch) continue;" in workflow
+    final_pair = (WORKFLOW.parent / "guarded-final-two-branches.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "Cinema branch retirement is paused after source extraction" in final_pair
+    assert "if (branchNames.includes('feat/cinema-library-intelligence'))" in final_pair
