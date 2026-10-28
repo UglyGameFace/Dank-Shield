@@ -114,6 +114,29 @@ def get_guild_role_config(guild_id: int) -> dict[str, Any]:
             _CFG_CACHE[gid] = (now, {})
             return {}
         table = (os.getenv("DANK_GUILD_CONFIG_TABLE") or "guild_configs").strip() or "guild_configs"
+        if table == "guild_configs":
+            try:
+                # Sync member/event listeners cannot await guild_config.
+                # Fetch only role IDs instead of re-downloading four large
+                # copies of every server setting for each role-truth refresh.
+                response = sb.rpc(
+                    "get_dank_guild_role_config", {"p_guild_id": str(gid)}
+                ).execute()
+                compact = getattr(response, "data", None)
+                if isinstance(compact, list):
+                    compact = compact[0] if compact else None
+                if (
+                    isinstance(compact, Mapping)
+                    and str(compact.get("guild_id") or "") == str(gid)
+                ):
+                    cfg = merge_config_row(compact)
+                    _CFG_CACHE[gid] = (now, dict(cfg))
+                    return cfg
+            except Exception:
+                # Migration not installed, RPC unavailable or permission
+                # regression: original read remains as a safe fallback.
+                pass
+
         res = sb.table(table).select("*").eq("guild_id", str(gid)).limit(1).execute()
         rows = getattr(res, "data", None) or []
         if rows and isinstance(rows[0], Mapping):
