@@ -38,9 +38,16 @@ def coverage(root: Path = ROOT) -> dict[str, object]:
     referenced_tables = sorted({str(hit["table_name"]) for hit in report["findings"]
         if hit["call"] == "table" and hit.get("table_name")})
     unrecognized_tables = sorted(set(referenced_tables) - set(SOURCE_KEYS))
+    # Ignore the production package name when classifying ownership. Matching
+    # 'stoney_verify/' would otherwise put EVERY file into "verification",
+    # silently hiding unmapped callers from the cutover safety report.
+    relative_paths = {
+        path: Path(path).relative_to("stoney_verify").as_posix().lower()
+        for path in direct_files
+    }
     groups = {
         group: [path for path in direct_files
-                if any(term in path.lower() for term in terms)]
+                if any(term in relative_paths[path] for term in terms)]
         for group, terms in PRIORITY_PATH_TERMS.items()
     }
     grouped = {path for paths in groups.values() for path in paths}
