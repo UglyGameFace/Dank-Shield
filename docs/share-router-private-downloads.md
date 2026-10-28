@@ -1,53 +1,67 @@
-# Share Router #390: opt-in Download channel and DM delivery
+# Share Router video delivery: owner-selected and per-server
 
-This is the limited, first phase of a user-requested **download-to-DM** feature.
-It is not a general-purpose unlimited downloading or public file host.
+The video request feature has **three explicit delivery choices** and a pause
+switch. It does not send videos to all members: it processes a single public link
+posted by a member in a staff-configured video request channel. DM delivery is
+not mandatory.
 
-## Member flow
+## Simple setup on Discord Android
 
-1. Staff open Dank Shield Share Router and select **Create Download Channel**.
-   The bot creates one ordinary text channel named `video-downloads` and saves
-   that channel's ID alongside the guild's existing Share Router routes. Nothing
-   is activated in unrelated guilds and existing proxy routes are untouched.
-2. A member posts **one public supported media link** to that channel.
-3. The existing, single canonical Share Router message listener dispatches
-   that exact channel to the bounded Download handler. The handler uses the
-   current provider-neutral resolver, bounded HTTP download, and optional
-   safe HLS/DASH remux, without storing media in PostgreSQL or Supabase.
-4. A verified/connected Discord bot DM receives the actual video attachment
-   only if it is within the DM-safe limit. The handler uses a conservative
-   **19 MiB** cap below Discord's documented 20 MiB default bot cap, which is
-   unrelated to a server's boosted Level 3 upload allowance.
-5. If the media is too large, unavailable, inaccessible or not remuxable, the
-   member receives a **source link in DM**. This is NOT a downloaded attachment
-   or proof that the browser offers a save-file flow. A server-boosted guild
-   cannot raise the size limit of the bot's private DM.
-6. If Discord rejects the DM upload as too large, the bot sends an honest
-   fallback link. If the bot cannot DM the member, it leaves the original link
-   in the channel and reports that privacy settings may be blocking DMs.
-7. Only after the DM succeeds may the bot delete the original request. Source
-   cleanup requires Manage Messages; a message may otherwise remain visible.
+1. Open **Share Router → Where Videos Go**. The screen shows the current request
+   channel and saved delivery mode. Existing servers with a configured download
+   channel but no delivery setting keep their original **Private DM** behavior.
+2. Choose **Private DM**, **Post in Server Channel**, **Both DM and Channel**, or
+   **Pause Downloads**. For channel delivery, choose **Use This Channel** or the
+   existing Search-Safe **Choose Channel** picker. Styled names and emojis use
+   the same shared picker as other Dank Shield features.
+3. **Review and explicitly confirm** the choice. If no request channel exists,
+   confirmation creates one ordinary `#video-downloads` channel, provided the
+   owner and bot have Manage Channels. Alternatively, choose an existing request
+   channel first. Selecting an existing request channel **pauses** delivery
+   until the owner separately selects and saves the desired destination mode.
+4. A member posts one supported public video URL in the request channel.
+   Staff-defined destinations receive the actual attachment when the bot can
+   upload it, or an expiring hosted Watch/Download link when hosting works.
+   A source-only link or error is not counted as successful downloaded delivery.
+5. The original request is removed only when **all configured destinations**
+   successfully receive an attachment or hosted link and the bot has
+   Manage Messages. If just one of the two destinations succeeds, the source
+   stays and staff receive a non-mention warning in the request channel.
+   If hosting or delivery fails, the source stays.
+6. **Pause Downloads** stops handling new requests while preserving the chosen
+   request channel, forwarding routes and Discord channel itself. Resume by
+   explicitly choosing a delivery mode. **Advanced Tools → Download Settings**
+   retains expiry, hosting checks and source diagnostics.
 
-### Guild management and safety
+## Safeguards and compatibility
 
-- Opt-in and explicitly configured **per guild**, using the existing
-  `data/share_routes.json` persistence owner. **Disable Downloads** turns
-  off processing but does **not** delete a Discord channel behind staff's back.
-- Two simultaneous transfers across the process maximum; never queue unlimited
-  requests. A 120-second per-guild-member cooldown, with bounded memory, also
-  prevents member-driven reply storms.
-- Only safe public HTTP(S) media URLs are processed, with one link per message.
-  Existing resolver/private-IP/redirect guards and byte/time limits still apply.
-  No arbitrary HTML/script/filesystem URLs or torrent downloads are introduced.
-- Media bytes are temporary and automatically closed/unlinked after sending.
-  No retention of personal video or raw media payloads in the bot's databases.
-- Intake channel is an ordinary text channel, **not a confidential inbox**.
-  Members may see source links until the bot deletes them; use trusted community
-  permissions and do not ask members to upload private files. DMs can be
-  disabled by recipients.
-- Never auto-enable this in all guilds or scrape/private-login media.
+- All settings use the **existing per-guild Share Router JSON route owner**;
+  no parallel database, migration, route listener or second downloader is added.
+  Legacy per-guild download channel IDs default to DM-only so old working
+  configurations are not silently altered. Absent or invalid explicit modes,
+  missing destination IDs and paused channels never activate DMs.
+- Server-channel delivery requires a distinct, non-NSFW ordinary channel in
+  the same guild. The sender must be able to view and send there; Dank Shield
+  needs View, Send and Attach Files. Permissions are checked during selection,
+  confirmation and again before delivery. A missing/unsafe destination is
+  blocked without silently falling back to DMs.
+- Request channels are ordinary text channels and **not private inboxes**.
+  Staff choose access using normal Discord roles and channel permissions.
+  The sender must be able to view and post in the request channel. The bot
+  must be able to read its message history for the durable download queue.
+- Existing non-destructive ordinary-channel forwarding, private share
+  channels, cleanup policies, provider resolver, 19 MiB conservative bot
+  attachment limit, upload/hosting byte caps, cooldowns, queue accounting,
+  no-mentions responses and failure handling remain in place.
+- Hosted media links are bearer links: anyone who obtains the link may use
+  it until expiration. Sharing them in a server channel is a conscious owner
+  choice, not the same privacy model as a DM. Never use NSFW sources to
+  publish into ordinary channels.
+- A paused download request is checked both at intake and before queued jobs
+  process; interrupted or stale jobs may be abandoned, never rerouted to a
+  newly enabled DM by silent fallback.
 
-## Expiring private HTTPS links: implementation and easy setup
+## Original delivery infrastructure and HTTPS hosting
 
 The public video delivery endpoint is now owned by the independent Shield
 Share Router listener in `stoney_verify/share_router_public_server.py`.
@@ -71,19 +85,19 @@ listener or another database. It never provides public directory listings.
    `service: "dank_share_router_public"` and both old `/cinema` and
    `/media/torrent/stream/not-a-token` return 404. Do not restart the old
    Cinema-enabled ZIP.
-3. In Discord, open `/dank home` → Share Router → **Create Download Channel**.
-   The feature is per guild; existing Share Router proxy routing is untouched.
-4. Press **Download Settings**, choose **1 hour**, **24 hours**, **7 days**
+3. In Discord, open **Share Router → Where Videos Go**, choose a delivery mode,
+   and confirm the request/destination channels. Existing forwarding routes stay intact.
+4. In **Advanced Tools → Download Settings**, choose **1 hour**, **24 hours**, **7 days**
    (default), or **30 days** (maximum), then **Test HTTPS Hosting**. A passing
    test creates a tiny temporary private token, reads it through the configured
    HTTPS origin, and revokes it; the URL never appears in Discord.
 5. Post one safe **public** video URL in the created channel. A small file
-   arrives as a normal DM video attachment. If hosting is online and size/storage
-   budgets permit, a larger file is staged privately and delivered in a DM as
+   arrives as an attachment in the owner-selected DM and/or channel. If hosting
+   is online and size/storage budgets permit, larger files are staged and delivered as
    separate **Watch** (inline HTTP video) and **Download** (attachment HTTP)
    links. When hosting is not ready or budgets are exceeded, the bot sends an
    honest original-source link rather than claiming a file is hosted.
-6. **Disable Downloads** stops the member workflow without deleting the
+6. **Pause Downloads** stops the member workflow without deleting the
    Discord channel or already-created links. Existing links continue until
    their own expiry; if immediate revocation is required, remove the staged
    object or stop the service and invalidate storage.
