@@ -443,7 +443,7 @@ def test_source_cleanup_only_enqueues_successful_route_acks():
     assert source.index("native_sent = await _relay_native_video_upload(") < source.rindex(
         "await _cleanup_delivered_proxy_post"
     )
-    assert 'name="Automatic proxy cleanup"' in ui
+    assert 'name="Automatic cleanup"' in ui
     assert "delivered posts are removed" not in ui.lower() or "Failed shares" in ui
 
 
