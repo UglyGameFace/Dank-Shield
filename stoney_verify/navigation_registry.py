@@ -273,8 +273,9 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Share Router",
         "🔗",
         "community",
-        "Choose which channels share videos, photos, or links. Keep original posts if you prefer.",
-        ("share", "share route", "share router", "memes", "share sheet", "proxy channel", "facebook videos", "inline media"),
+        "Set up sharing, choose where videos go, and manage forwarding without deleting ordinary posts.",
+        ("share", "share route", "share router", "memes", "share sheet", "proxy channel", "facebook videos", "inline media",
+         "set up sharing", "where videos go", "video delivery", "manage forwarding", "check my setup", "advanced share tools"),
         True,
     ),
     NavigationFeature(
@@ -282,8 +283,9 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Share Router Downloads",
         "📥",
         "community",
-        "Manage video downloads, private viewing links, and test troublesome social links.",
-        ("downloads", "download channel", "download settings", "watch link", "download link", "facebook download", "video hosting", "download expiry", "share router download"),
+        "Manage video request channels, private viewing links, expiry, and source-link tests.",
+        ("downloads", "download channel", "download settings", "watch link", "download link", "facebook download", "video hosting", "download expiry", "share router download",
+         "video download settings", "video request channel"),
         True,
     ),
     NavigationFeature(
