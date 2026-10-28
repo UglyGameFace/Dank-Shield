@@ -55,6 +55,8 @@ _CONFIG_EGRESS_METRICS = {
     "compact_full_reads": 0,
     "compact_not_modified": 0,
     "legacy_full_reads": 0,
+    "compact_patch_writes": 0,
+    "legacy_patch_fallbacks": 0,
 }
 GUILD_CONFIG_PATCH_RPC = "patch_dank_guild_config_compact"
 GUILD_CONFIG_PATCH_LEGACY_RPC = "patch_dank_guild_config"
@@ -919,11 +921,15 @@ def _execute_guild_config_patch_rpc(sb: Any, parameters: Mapping[str, Any]) -> A
     timeouts and ambiguous errors must not trigger a second write here.
     """
     try:
-        return sb.rpc(GUILD_CONFIG_PATCH_RPC, dict(parameters)).execute()
+        result = sb.rpc(GUILD_CONFIG_PATCH_RPC, dict(parameters)).execute()
+        _CONFIG_EGRESS_METRICS["compact_patch_writes"] += 1
+        return result
     except Exception as exc:
         if not _is_missing_atomic_patch_rpc_error(exc):
             raise
-        return sb.rpc(GUILD_CONFIG_PATCH_LEGACY_RPC, dict(parameters)).execute()
+        result = sb.rpc(GUILD_CONFIG_PATCH_LEGACY_RPC, dict(parameters)).execute()
+        _CONFIG_EGRESS_METRICS["legacy_patch_fallbacks"] += 1
+        return result
 
 
 def _atomic_patch_guild_config_sync(
