@@ -42,6 +42,9 @@ from stoney_verify.share_router_runtime import (
     guild_pending_source_cleanup_count,
     guild_download_channel_id,
     guild_download_expiry_seconds,
+    guild_download_delivery,
+    configure_guild_download,
+    _guild_source_lock,
     save_guild_download_channel,
     save_guild_download_expiry_seconds,
     prune_missing_custom_share_sources,
@@ -152,139 +155,64 @@ def _target_label(target: Optional[discord.TextChannel]) -> str:
 
 async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
     routes = await guild_routes(int(guild.id))
-    custom_ids = await guild_custom_share_sources(int(guild.id))
-    category = find_share_router_category(guild)
+    active = sum(route_health(guild, route).ok for route in routes)
+    needs_attention = len(routes) - active
+    download_id = await guild_download_channel_id(int(guild.id))
+    mode, destination_id = await guild_download_delivery(int(guild.id))
+    intake = guild.get_channel(download_id) if download_id else None
+    target = guild.get_channel(destination_id) if destination_id else None
+
+    if not download_id:
+        delivery = "Off. Set up a video download channel to start."
+    elif not isinstance(intake, discord.TextChannel):
+        delivery = "⚠️ Saved download channel is missing. Check setup before enabling."
+    elif mode == "off":
+        delivery = f"Paused in {intake.mention}. No automatic messages are sent."
+    elif mode == "dm":
+        delivery = f"{intake.mention} → private DM to the member who posted the link."
+    else:
+        where = target.mention if isinstance(target, discord.TextChannel) else "⚠️ destination missing"
+        delivery = f"{intake.mention} → {where}"
+        if mode == "both":
+            delivery += " and a private DM to the author."
 
     embed = discord.Embed(
         title="🔗 Share Router",
         description=(
-            "**Two forwarding modes:** Use Existing Channel to forward from an ordinary "
-            "channel **without deleting its posts**, or Create Proxy for a private "
-            "mobile share-sheet drop-off that cleans successful posts. Both use "
-            "Search-Safe destination selection."
-
+            "Move shared posts between channels and choose where requested "
+            "videos are delivered. Each server manages its own settings. "
+            "Nothing is sent to DMs unless that delivery option is enabled."
         ),
         color=discord.Color.blurple(),
     )
-
-    if category is None:
-        hub_status = "ℹ️ No proxy hub. Optional for Use Existing Channel; Create / Repair Hub enables private mobile drop-offs."
-    elif str(category.name) != SHARE_ROUTER_CATEGORY_NAME:
-        hub_status = f"⚠️ Found styled/legacy hub: {category.name}. Repair will restore the plain name."
-    else:
-        found = sum(1 for name in DEFAULT_SHARE_CHANNELS if find_share_source_channel(category, name) is not None)
-        hub_status = f"✅ {category.name} • {found}/{len(DEFAULT_SHARE_CHANNELS)} proxy channels present."
-    embed.add_field(name="Proxy hub", value=hub_status[:1024], inline=False)
-    live_custom = sum(isinstance(guild.get_channel(source_id), discord.TextChannel) for source_id in custom_ids)
-    embed.add_field(name="Custom proxies", value=f"{live_custom} active / {len(custom_ids)} registered in this server. Create Proxy adds another source without replacing the four defaults.", inline=False)
-    download_id = await guild_download_channel_id(int(guild.id))
-    download_expiry = await guild_download_expiry_seconds(int(guild.id))
-    hosting_ready, hosting_reason = delivery_status()
-    download_channel = guild.get_channel(download_id) if download_id else None
     embed.add_field(
-        name="Private video downloads",
+        name="Sharing between channels",
         value=(
-            f"✅ {download_channel.mention} • Posts send a **private DM** to their author. "
-            "Small videos are DM attachments. Above the DM limit: "
-            + ("expiring Watch + Download links." if hosting_ready else "source-link fallback.")
-            + f" Expiration: {download_expiry // 3600}h."
-            if isinstance(download_channel, discord.TextChannel)
-            else ("⚠️ Download channel missing. Disable it before creating a replacement."
-                  if download_id else "Disabled • Create Download Channel to opt in.")
-        )[:1024],
+            f"{active}/{len(routes)} working"
+            + (f" • ⚠️ {needs_attention} need attention" if needs_attention else "")
+            + ". Choose **Manage Forwarding** to edit sources and destinations."
+        ) if routes else "No forwarding configured yet. Choose **Set Up Sharing**.",
         inline=False,
     )
-    if download_id:
-        embed.add_field(
-            name="Large-file delivery status",
-            value=(
-                "✅ Host configured • Live public reachability must still be tested."
-                if hosting_ready else f"⚠️ {hosting_reason}"
-            )[:1024],
-            inline=False,
-        )
-    pending_cleanup = await guild_pending_source_cleanup_count(int(guild.id))
-    cleanup_status = (
-        f"⚠️ {pending_cleanup} delivered post(s) awaiting deletion. "
-        "Check Dank Shield's Manage Messages permission in the proxy channels."
-        if pending_cleanup else "✅ Delivered shares are removed from their proxy sources."
-    )
-    embed.add_field(
-        name="Automatic proxy cleanup",
-        value=(
-            f"{cleanup_status}\n"
-            "If forwarding fails, the original is kept so no share is lost. "
-            "Successful forwards are cleaned automatically, including custom and default proxies."
-        )[:1024],
-        inline=False,
-    )
-
-    lines: list[str] = []
-    healthy = 0
-    for route in routes[:20]:
-        source_id = _safe_int(route.get("source_channel_id"), 0)
-        target_id = _safe_int(route.get("target_channel_id"), 0)
-        source = guild.get_channel(source_id)
-        target = guild.get_channel(target_id)
-        health = route_health(guild, route)
-        if health.ok:
-            healthy += 1
-        icon = "✅" if health.ok else "⚠️"
-        source_text = f"#{source.name}" if isinstance(source, discord.TextChannel) else f"source {source_id}"
-        target_text = _target_label(target if isinstance(target, discord.TextChannel) else None)
-        keep_original = (
-            isinstance(source, discord.TextChannel)
-            and not is_share_router_design_resource(source)
-            and route.get("delete_source") is False
-        )
-        mode = "🛡️ Keep Original" if keep_original else "🧹 Proxy cleanup"
-        raw_filter = route.get("content_filter", "everything")
-        display_filter = (
-            _FILTER_LABELS.get(raw_filter, "⚠️ Invalid filter")
-            if isinstance(raw_filter, str) else "⚠️ Invalid filter"
-        )
-        line = f"{icon} {source_text} → {target_text} • {mode} • {display_filter}"
-        if health.blockers:
-            line += f" • {health.blockers[0]}"
-        elif health.warnings:
-            line += f" • {health.warnings[0]}"
-        lines.append(line[:300])
-    if len(routes) > 20:
-        lines.append(f"…and {len(routes) - 20} more. All routes remain active.")
-
+    embed.add_field(name="Video downloads", value=delivery[:1024], inline=False)
     if routes:
-        embed.add_field(
-            name=f"Saved routes • {healthy}/{len(routes)} healthy",
-            value="\n".join(lines)[:1024],
-            inline=False,
-        )
-    else:
-        embed.add_field(
-            name="Saved routes",
-            value="None yet. Use Existing Channel for a non-destructive route, or Create / Repair Hub for private share-sheet proxies.",
-            inline=False,
-        )
-
-    embed.add_field(
-        name="Safety boundary",
-        value=(
-            "Proxies stay hidden, non-age-restricted, and clean delivered source posts. "
-            "Existing channels keep original posts and can be public. An age-restricted "
-            "source never forwards to a non-age-restricted destination. All routes "
-            "require the sender to have normal destination View + Send permissions."
-        )[:1024],
-        inline=False,
+        preview = []
+        for route in routes[:4]:
+            source = guild.get_channel(_safe_int(route.get("source_channel_id")))
+            target_channel = guild.get_channel(_safe_int(route.get("target_channel_id")))
+            origin = source.mention if isinstance(source, discord.TextChannel) else "Missing source"
+            destination = (
+                target_channel.mention if isinstance(target_channel, discord.TextChannel)
+                else "Missing destination"
+            )
+            marker = "✅" if route_health(guild, route).ok else "⚠️"
+            preview.append(f"{marker} {origin} → {destination}")
+        if len(routes) > 4:
+            preview.append(f"…and {len(routes) - 4} more in Manage Forwarding.")
+        embed.add_field(name="Your channel routes", value="\n".join(preview)[:1024], inline=False)
+    embed.set_footer(
+        text="Advanced options, safety checks, video testing and cleanup remain available in Tools."
     )
-    embed.add_field(
-        name="Who can use the proxies",
-        value=(
-            "Hub repair preserves unrelated explicit permission overwrites and grants the configuring "
-            "admin plus configured staff/control roles access. Add any other intended role through "
-            "normal Discord channel permissions."
-        )[:1024],
-        inline=False,
-    )
-    embed.set_footer(text="Share Router proxy channels keep plain names so mobile sharing stays reliable. • Share Router v2")
     return embed
 
 
@@ -645,7 +573,7 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
     if not source_ids:
         return await _private(
             interaction,
-            "❌ No proxy channels are available. Run Create / Repair Hub or Create Proxy first.",
+            "❌ No private share channels are available. Use Set Up Sharing to create them first.",
         )
 
     async def back(back_interaction: discord.Interaction) -> None:
@@ -668,8 +596,8 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
         resource_kinds=("text",),
         on_pick=picked,
         custom_id="dank:share_router:source",
-        placeholder="Choose a proxy source…",
-        title="Choose Share Router Source",
+        placeholder="Choose a share channel…",
+        title="Choose Share Channel to Forward From",
         predicate=lambda resource: int(getattr(resource, "id", 0)) in source_ids,
         on_home=back,
         home_label="Share Router",
@@ -890,9 +818,9 @@ async def _open_remove_picker(interaction: discord.Interaction) -> None:
 
 
 
-class ShareRouterCreateSourceModal(discord.ui.Modal, title="Create Share Router Proxy"):
+class ShareRouterCreateSourceModal(discord.ui.Modal, title="Create Private Share Channel"):
     name = discord.ui.TextInput(
-        label="Proxy channel name",
+        label="Share channel name",
         placeholder="gaming-clips",
         min_length=1,
         max_length=100,
@@ -910,7 +838,7 @@ class ShareRouterCreateSourceModal(discord.ui.Modal, title="Create Share Router 
         if guild is None:
             return
         if not (interaction.user.guild_permissions.administrator or interaction.user.guild_permissions.manage_channels):
-            return await _private(interaction, "❌ Manage Channels permission is required to create proxies.")
+            return await _private(interaction, "❌ Manage Channels permission is required to create share channels.")
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             source = await create_custom_share_source(guild, interaction.user, str(self.name.value))
@@ -920,7 +848,7 @@ class ShareRouterCreateSourceModal(discord.ui.Modal, title="Create Share Router 
                 embed=None, view=ShareRouterView(self.owner_id),
             )
         await interaction.edit_original_response(
-            content=f"✅ Created {source.mention}. Use Add / Change Route to select the destination.",
+            content=f"✅ Created {source.mention}. Choose Add / Change Forwarding to select where its posts go.",
             embed=await _share_router_embed(guild),
             view=ShareRouterView(self.owner_id),
         )
