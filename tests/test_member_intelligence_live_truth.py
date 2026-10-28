@@ -98,7 +98,7 @@ def _class_method(class_name: str, method_name: str) -> ast.AsyncFunctionDef:
 def test_selector_and_buttons_share_authoritative_resolver():
     selector = ast.unparse(_class_method("IntelligenceMemberSelect", "callback"))
     assert "_resolve_intelligence_member(" in selector
-    assert "_show_stored_member_history(" in selector
+    assert selector.count("_show_stored_member_history(") == 2  # both absent and live cases
     assert "get_member(" not in selector
     target = next(x for x in TREE.body if isinstance(x, ast.ClassDef) and x.name == "IntelligenceTargetView")
     body = ast.unparse(target)
