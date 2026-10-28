@@ -635,11 +635,17 @@ def _matching_join_event(
     except (TypeError, ValueError):
         return {}
 
+    matches: List[Dict[str, Any]] = []
     for event in event_rows:
         if str(event.get("event_type") or "").lower() != "member_joined":
             continue
         metadata = _safe_meta(event.get("metadata"))
-        recorded_at = metadata.get("joined_at") or event.get("created_at")
+        if not any(_clean_text(metadata.get(key)) for key in (
+            "entry_method", "join_source", "invite_code", "invited_by"
+        )):
+            continue
+        original_join_time = metadata.get("joined_at")
+        recorded_at = original_join_time or event.get("created_at")
         if not recorded_at:
             continue
         try:
@@ -648,9 +654,21 @@ def _matching_join_event(
                 event_time = event_time.replace(tzinfo=timezone.utc)
         except (TypeError, ValueError):
             continue
-        if abs((when - event_time).total_seconds()) <= 300:
-            return metadata
-    return {}
+        # Exact Discord join timestamps are available in canonical events.
+        # When absent, allow only a short event-processing delay.
+        tolerance = 5 if original_join_time else 60
+        if abs((when - event_time).total_seconds()) <= tolerance:
+            matches.append(metadata)
+
+    if not matches:
+        return {}
+    # If two distinct sources appear close together, don't assign either.
+    sources = {
+        (_clean_text(meta.get("entry_method")), _clean_text(meta.get("invite_code")),
+         _clean_text(meta.get("invited_by")))
+        for meta in matches
+    }
+    return matches[0] if len(sources) == 1 else {}
 
 
 def _build_relationships(
