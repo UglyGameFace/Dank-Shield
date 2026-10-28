@@ -505,7 +505,7 @@ def test_repair_post_defer_render_failure_reports_explicit_error():
         / "stoney_verify/commands_ext/public_share_router.py"
     ).read_text(encoding="utf-8")
     repair = source.split("async def repair(self, interaction:", 1)[1].split(
-        '    @discord.ui.button(label="Add / Change Route"', 1
+        '    @discord.ui.button(label="Add / Change Forwarding"', 1
     )[0]
     assert "await interaction.response.defer(ephemeral=True, thinking=True)" in repair
     assert 'embed = await _share_router_embed(guild)' in repair
