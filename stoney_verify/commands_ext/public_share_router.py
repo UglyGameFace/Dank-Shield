@@ -458,7 +458,7 @@ def _target_options_embed(
             "Search is the fastest way to find the real destination on mobile. "
             "Dank Shield can match the current/styled name, a saved previous name, Discord ID, or mention.\n\n"
             + (
-                "🧹 **Proxy mode:** original drop-off posts are cleaned up after delivery."
+                "🧹 **Private share channel:** original drop-off posts are cleaned up after delivery."
                 if delete_source else
                 "🛡️ **Keep Original mode:** posts stay in your existing channel. "
                 "Only members who can also post in the destination will be forwarded."
@@ -550,7 +550,7 @@ class ShareRouterTargetLandingView(_OwnedView):
         _ = button
         await _replace(interaction, embed=self.browser.embed(), view=self.browser)
 
-    @discord.ui.button(label="Back to Proxy Sources", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Back to Share Channels", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if self.delete_source:
@@ -622,7 +622,7 @@ async def _open_source_picker(interaction: discord.Interaction) -> None:
             return
         current = await available_share_source_ids(guild)
         if not isinstance(resource, discord.TextChannel) or resource.id not in current:
-            return await _private(pick_interaction, "❌ This proxy source is no longer configured.")
+            return await _private(pick_interaction, "❌ This share channel is no longer configured.")
         await _open_target_browser(
             pick_interaction, resource,
             delete_source=is_share_router_design_resource(resource),
@@ -724,7 +724,7 @@ async def _open_target_browser(
             return await _private(pick_interaction, "❌ Source channel no longer exists.")
         source_ids = await available_share_source_ids(guild)
         if delete_source and int(source.id) not in source_ids:
-            return await _private(pick_interaction, "❌ This proxy source is no longer configured.")
+            return await _private(pick_interaction, "❌ This share channel is no longer configured.")
         if delete_source != is_share_router_design_resource(source):
             return await _private(pick_interaction, "❌ Channel mode changed. Start again.")
         if not isinstance(resource, discord.TextChannel):
@@ -747,7 +747,7 @@ async def _open_target_browser(
                 name="What to fix",
                 value=(
                     (
-                        "Keep the proxy non-age-restricted, private, and allow the bot to delete "
+                        "Keep this share channel non-age-restricted, private, and allow the bot to delete "
                         "delivered posts in it. The destination must allow sending."
                         if delete_source else
                         "Keep the existing channel unchanged. Give Dank Shield View Channel "
@@ -882,7 +882,7 @@ class ShareRouterCreateSourceModal(discord.ui.Modal, title="Create Private Share
             source = await create_custom_share_source(guild, interaction.user, str(self.name.value))
         except (discord.HTTPException, OSError, ValueError) as exc:
             return await interaction.edit_original_response(
-                content=f"❌ Proxy creation failed: {exc}",
+                content=f"❌ Could not create share channel: {exc}",
                 embed=None, view=ShareRouterView(self.owner_id),
             )
         await interaction.edit_original_response(
@@ -897,13 +897,13 @@ class ShareRouterDeleteSourceConfirmView(_OwnedView):
         super().__init__(owner_id)
         self.source_id = int(source_id)
 
-    @discord.ui.button(label="Delete Proxy Channel", emoji="🗑️", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Delete Share Channel", emoji="🗑️", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_manage(interaction):
             return
         if not (interaction.user.guild_permissions.administrator or interaction.user.guild_permissions.manage_channels):
-            return await _private(interaction, "❌ Manage Channels permission is required to delete proxies.")
+            return await _private(interaction, "❌ Manage Channels permission is required to delete share channels.")
         guild = interaction.guild
         if guild is None:
             return
@@ -912,16 +912,16 @@ class ShareRouterDeleteSourceConfirmView(_OwnedView):
             await delete_custom_share_source(guild, self.source_id)
         except (discord.HTTPException, OSError, ValueError) as exc:
             return await interaction.edit_original_response(
-                content=f"❌ Proxy deletion stopped: {exc}",
+                content=f"❌ Share channel deletion stopped: {exc}",
                 embed=None, view=ShareRouterView(self.owner_id),
             )
         await interaction.edit_original_response(
-            content="✅ Custom proxy channel and its route removed. Built-in proxies were not changed.",
+            content="✅ Private share channel and its forwarding rule removed. Default share channels were not changed.",
             embed=await _share_router_embed(guild),
             view=ShareRouterView(self.owner_id),
         )
 
-    @discord.ui.button(label="Keep Proxy", emoji="↩️", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Cancel Delete", emoji="↩️", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_share_router(interaction, replace_message=True)
@@ -937,7 +937,7 @@ async def _open_delete_source_picker(interaction: discord.Interaction) -> None:
         if isinstance(guild.get_channel(source_id), discord.TextChannel)
     }
     if not active:
-        return await _private(interaction, "ℹ️ No custom proxy channels are available to delete.")
+        return await _private(interaction, "ℹ️ No extra private share channels are available to delete.")
 
     async def back(back_interaction: discord.Interaction) -> None:
         await open_share_router(back_interaction, replace_message=True)
@@ -949,13 +949,13 @@ async def _open_delete_source_picker(interaction: discord.Interaction) -> None:
             not isinstance(resource, discord.TextChannel)
             or int(resource.id) not in set(await guild_custom_share_sources(int(guild.id)))
         ):
-            return await _private(pick_interaction, "❌ This is no longer a registered custom proxy.")
+            return await _private(pick_interaction, "❌ This is no longer a registered private share channel.")
         embed = discord.Embed(
-            title="⚠️ Permanently delete proxy?",
+            title="⚠️ Permanently delete share channel?",
             description=(
                 f"Delete {resource.mention} from Discord and remove its saved forwarding rule? "
-                "Any remaining messages in this proxy will also be deleted. "
-                "The destination and four built-in proxy channels are never deleted."
+                "Any remaining messages in this share channel will also be deleted. "
+                "The destination and four default share channels are never deleted."
             ),
             color=discord.Color.orange(),
         )
@@ -970,8 +970,8 @@ async def _open_delete_source_picker(interaction: discord.Interaction) -> None:
         resource_kinds=("text",),
         on_pick=picked,
         custom_id="dank:share_router:delete_source",
-        placeholder="Choose a custom proxy to delete…",
-        title="Delete Custom Proxy Channel",
+        placeholder="Choose an extra private share channel to delete…",
+        title="Delete Extra Share Channel",
         predicate=lambda resource: int(getattr(resource, "id", 0)) in active,
         on_home=back,
         home_label="Share Router",
@@ -994,11 +994,11 @@ class ShareRouterPruneConfirmView(_OwnedView):
             count = await prune_missing_custom_share_sources(guild)
         except (discord.HTTPException, OSError, ValueError) as exc:
             return await interaction.edit_original_response(
-                content=f"❌ Could not verify missing proxy channels: {exc}",
+                content=f"❌ Could not verify missing share channels: {exc}",
                 embed=None, view=ShareRouterView(self.owner_id),
             )
         await interaction.edit_original_response(
-            content=f"✅ Pruned {count} custom proxy registration(s) not visible in Discord's live channel listing for this server. No Discord channel was deleted.",
+            content=f"✅ Pruned {count} saved share-channel entry/entries not visible in Discord's channel listing for this server. No Discord channel was deleted.",
             embed=await _share_router_embed(guild),
             view=ShareRouterView(self.owner_id),
         )
@@ -1201,9 +1201,9 @@ class ShareRouterControlsView(_OwnedView):
         await _replace(
             interaction,
             embed=discord.Embed(
-                title="⚠️ Confirm stale proxy cleanup",
+                title="⚠️ Confirm missing share-channel cleanup",
                 description=(
-                    "Only custom proxy IDs absent from Discord's channel listing in this server "
+                    "Only saved private share channel IDs absent from Discord's channel listing "
                     "will be unregistered, along with their saved routes. No live channel is deleted. "
                     "**Important:** Discord may omit channels that Dank Shield cannot view. "
                     "If access was revoked rather than the channel being deleted, restore bot "
