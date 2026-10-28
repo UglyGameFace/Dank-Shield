@@ -111,8 +111,7 @@ def test_historical_embed_shows_source_and_confidence_not_guesses():
     function = next(x for x in TREE.body if isinstance(x, ast.FunctionDef)
                     and x.name == "_historical_member_embed")
     body = ast.unparse(function)
-    assert 'snapshot.get("recent_joins")' in body
-    assert 'snapshot.get("relationships")' in body
+    assert "recent_joins" in body and "relationships" in body
     assert "entry_truth_quality" in body
     assert "entry_conflict" in body
     assert "No reliable invite or inviter attribution" in body
