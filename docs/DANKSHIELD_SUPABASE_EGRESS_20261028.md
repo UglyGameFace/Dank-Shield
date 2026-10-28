@@ -111,3 +111,28 @@ in this billing cycle is not erased by software changes.
   observability data source; local query counts are not billed egress bytes.
 - Continue the separate old-source/Discloud PostgreSQL backup parity and
   migration gate; this optimization does **not** authorize cutover or deletion.
+
+## Second validated root path: synchronous verification role truth
+
+The separate 45-second cache in `stoney_verify/role_truth.py` fetched
+`guild_configs.select('*')` when the canonical async config cache was empty.
+This is a common member/event role-check path, not a rare setup screen.
+The role-only RPC `get_dank_guild_role_config` now returns only the eight
+role IDs that verification actually consumes. It preserves the full legacy
+nested-column and non-null flat-column precedence and is service_role-only.
+For a custom primary config table, or if the RPC is unavailable, the existing
+source read remains the fallback.
+
+**Live SQL verification (2026-10-28):** applied the second function-only
+migration to the dedicated project and compared **all 12 guilds** against
+the independently reconstructed legacy merge. Exactly **12/12** role payloads
+and guild identities match. The largest serialized response drops from
+**460,096 to 332 bytes**, and the 12-row total from **651,852 to 2,419
+bytes** when role-only configuration is sufficient. This is on-wire
+payload projection, not network billing measurements. Anon and authenticated
+lack execute privilege; service_role can execute; SECURITY INVOKER verified.
+No role configuration was rewritten or deleted.
+
+The bottleneck fix **must be deployed as a code update** and monitored for
+actual traffic reduction. A Free plan's 5 GB quota is fixed: no workload
+can be promised zero quota risk at arbitrary future guild count or traffic.
