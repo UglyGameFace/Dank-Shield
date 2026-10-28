@@ -1576,6 +1576,160 @@ async def _choose_video_destination(interaction: discord.Interaction, mode: str)
     )
 
 
+async def _request_channel_blocker(guild: discord.Guild, channel: Any, routes: list[dict[str, Any]]) -> str:
+    if (
+        not isinstance(channel, discord.TextChannel)
+        or getattr(channel.guild, "id", None) != int(guild.id)
+        or is_share_router_design_resource(channel)
+    ):
+        return "Select an ordinary text channel in this server."
+    if any(_safe_int(route.get("source_channel_id")) == int(channel.id) for route in routes):
+        return "This channel already forwards posts elsewhere. Choose a different request channel."
+    try:
+        if channel.is_nsfw():
+            return "A video request channel cannot be age-restricted."
+        bot = guild.me
+        perms = channel.permissions_for(bot) if bot is not None else None
+        if (
+            perms is None or not perms.view_channel or not perms.send_messages
+            or not perms.read_message_history
+        ):
+            return "Dank Shield needs View Channel, Send Messages and Read History."
+    except Exception:
+        return "Could not check this request channel's permissions."
+    return ""
+
+
+class ShareRouterRequestConfirmView(_OwnedView):
+    def __init__(self, owner_id: int, request_id: int) -> None:
+        super().__init__(owner_id)
+        self.request_id = request_id
+
+    @discord.ui.button(label="Use Channel, Keep Downloads Paused", emoji="✅", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        guild = interaction.guild
+        routes = await guild_routes(int(guild.id))
+        channel = guild.get_channel(self.request_id)
+        blocker = await _request_channel_blocker(guild, channel, routes)
+        if blocker:
+            return await _private(interaction, "❌ " + blocker)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            async with _guild_source_lock(int(guild.id)):
+                routes = await guild_routes(int(guild.id))
+                blocker = await _request_channel_blocker(
+                    guild, guild.get_channel(self.request_id), routes,
+                )
+                if blocker:
+                    raise ValueError(blocker)
+                # Selecting the intake channel alone never starts sending DMs.
+                await configure_guild_download(
+                    int(guild.id), channel_id=self.request_id, mode="off",
+                )
+        except (ValueError, OSError) as exc:
+            return await interaction.edit_original_response(
+                content=f"❌ Request channel was not changed: {exc}",
+                embed=None, view=ShareRouterVideoDeliveryView(self.owner_id),
+            )
+        await interaction.edit_original_response(
+            content="✅ Request channel saved with delivery paused. Now choose where videos go.",
+            embed=await _video_delivery_embed(guild),
+            view=ShareRouterVideoDeliveryView(self.owner_id),
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_share_router_video_delivery(interaction)
+
+
+async def _confirm_request_channel(interaction: discord.Interaction, channel: Any) -> None:
+    if not await _require_manage(interaction):
+        return
+    guild = interaction.guild
+    blocker = await _request_channel_blocker(guild, channel, await guild_routes(int(guild.id)))
+    if blocker:
+        return await _private(interaction, "❌ " + blocker)
+    await _replace(
+        interaction,
+        embed=discord.Embed(
+            title="Confirm Video Request Channel",
+            description=(
+                f"Use {channel.mention} for video requests? "
+                "**Downloads will be paused** until you separately choose DM, "
+                "server channel or both. The old request channel stays on Discord "
+                "but stops being monitored. Existing forwarding routes are untouched."
+            ),
+            color=discord.Color.blurple(),
+        ),
+        view=ShareRouterRequestConfirmView(int(interaction.user.id), int(channel.id)),
+    )
+
+
+class ShareRouterRequestChoiceView(_OwnedView):
+    @discord.ui.button(label="Use This Channel", emoji="📍", style=discord.ButtonStyle.primary)
+    async def use_here(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _confirm_request_channel(interaction, interaction.channel)
+
+    @discord.ui.button(label="Choose Channel", emoji="🔎", style=discord.ButtonStyle.secondary)
+    async def choose(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await _require_manage(interaction):
+            return
+        guild = interaction.guild
+        routes = await guild_routes(int(guild.id))
+
+        async def home(back_interaction: discord.Interaction) -> None:
+            await open_share_router_video_delivery(back_interaction)
+
+        async def picked(pick_interaction: discord.Interaction, resource: Any) -> None:
+            await _confirm_request_channel(pick_interaction, resource)
+
+        browser = DankGuildResourceBrowserView(
+            guild=guild,
+            author_id=self.owner_id,
+            resource_kinds=("text",),
+            on_pick=picked,
+            custom_id="dank:share_router:download_request_channel",
+            placeholder="Choose where members will post links…",
+            title="Choose Video Request Channel",
+            predicate=lambda resource: not (
+                isinstance(resource, discord.TextChannel)
+                and is_share_router_design_resource(resource)
+            ) and isinstance(resource, discord.TextChannel),
+            on_home=home,
+            home_label="Where Videos Go",
+        )
+        await _replace(interaction, embed=browser.embed(), view=browser)
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_share_router_video_delivery(interaction)
+
+
+async def _choose_request_channel(interaction: discord.Interaction) -> None:
+    if not await _require_manage(interaction):
+        return
+    await _replace(
+        interaction,
+        embed=discord.Embed(
+            title="Choose Where Members Request Videos",
+            description=(
+                "Use an existing text channel, or go back and choose a delivery "
+                "option to create a new #video-downloads channel. "
+                "Selecting an existing request channel never enables delivery by itself."
+            ),
+            color=discord.Color.blurple(),
+        ),
+        view=ShareRouterRequestChoiceView(int(interaction.user.id)),
+    )
+
+
 class ShareRouterVideoDeliveryView(_OwnedView):
     @discord.ui.button(label="Private DM", emoji="✉️", style=discord.ButtonStyle.primary, row=0)
     async def dm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1597,7 +1751,12 @@ class ShareRouterVideoDeliveryView(_OwnedView):
         _ = button
         await _open_download_delivery_confirmation(interaction, "off")
 
-    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Choose Request Channel", emoji="📍", style=discord.ButtonStyle.secondary, row=2)
+    async def request_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _choose_request_channel(interaction)
+
+    @discord.ui.button(label="Back", emoji="⬅️", style=discord.ButtonStyle.secondary, row=3)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_share_router(interaction, replace_message=True)
