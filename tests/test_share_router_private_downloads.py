@@ -702,3 +702,164 @@ def test_downloads_use_existing_router_listener_not_second_listener() -> None:
     assert "ensure_share_router_runtime" in Path("stoney_verify/share_router_runtime.py").read_text()
     assert "bot.add_listener(route_message" in Path("stoney_verify/share_router_runtime.py").read_text()
     assert "add_listener" not in Path("stoney_verify/share_router_private_downloads.py").read_text()
+
+
+
+def test_owner_delivery_modes_are_guild_scoped_preserve_legacy_and_routes(tmp_path, monkeypatch):
+    monkeypatch.setattr(router, "ROUTES_FILE", tmp_path / "routes.json")
+
+    async def check():
+        assert await router.guild_download_delivery(111) == ("off", 0)
+        await router.save_route(111, source_channel_id=88, target_channel_id=99)
+        routes = await router.guild_routes(111)
+        # Existing channels with no new setting must keep the prior DM behavior.
+        await router.save_guild_download_channel(111, 77)
+        assert await router.guild_download_delivery(111) == ("dm", 0)
+        await router.configure_guild_download(
+            111, channel_id=77, mode="channel", destination_id=123,
+        )
+        assert await router.guild_download_delivery(111) == ("channel", 123)
+        assert await router.guild_download_delivery(222) == ("off", 0)
+        await router.configure_guild_download(
+            111, channel_id=77, mode="both", destination_id=123,
+        )
+        assert await router.guild_download_delivery(111) == ("both", 123)
+        await router.configure_guild_download(111, channel_id=77, mode="off")
+        assert await router.guild_download_channel_id(111) == 77
+        assert await router.guild_download_delivery(111) == ("off", 0)
+        assert await router.guild_routes(111) == routes
+        with pytest.raises(ValueError):
+            await router.configure_guild_download(
+                111, channel_id=77, mode="channel", destination_id=77,
+            )
+        with pytest.raises(ValueError):
+            await router.configure_guild_download(
+                111, channel_id=77, mode="both",
+            )
+        assert await router.guild_download_delivery(111) == ("off", 0)
+
+    run(check())
+    # Corrupted/missing explicit delivery settings must never re-enable DMs.
+    import json
+    data = json.loads(router.ROUTES_FILE.read_text())
+    data["111"]["download_delivery_mode"] = "unknown"
+    router.ROUTES_FILE.write_text(json.dumps(data))
+    assert run(router.guild_download_delivery(111)) == ("off", 0)
+
+
+def _outbound_delivery_fixture(monkeypatch, *, mode="channel", dm_blocked=False,
+                               destination_permitted=True):
+    import io
+
+    class OutboundChannel(FakeChannel):
+        name = "video-results"
+        category = None
+        guild = SimpleNamespace(id=111)
+
+        def __init__(self):
+            super().__init__(99)
+            self.sent = []
+
+        def permissions_for(self, member):
+            return SimpleNamespace(
+                view_channel=True, send_messages=True,
+                attach_files=destination_permitted, manage_messages=True,
+            )
+
+        async def send(self, content, *, allowed_mentions, file=None):
+            self.sent.append((content, file, allowed_mentions))
+
+    destination = OutboundChannel()
+    message = FakeMessage(member=FakeMember(dm_blocked=dm_blocked))
+    message.guild.get_channel = lambda cid: destination if cid == 99 else None
+    monkeypatch.setattr(downloads.discord, "TextChannel", FakeChannel)
+
+    async def configured(_guild_id):
+        return mode, 99
+
+    monkeypatch.setattr(router, "guild_download_delivery", configured)
+    async def resolve(url, *, max_bytes):
+        return _resolution(url)
+
+    class File:
+        filename = "video.mp4"
+        fp = io.BytesIO(b"safe example video bytes")
+        closed = False
+        resets = 0
+
+        def reset(self, *, seek):
+            assert seek
+            self.resets += 1
+            self.fp.seek(0)
+
+        def close(self):
+            self.closed = True
+
+    file = File()
+
+    async def download(url, *, max_bytes, request_headers):
+        return SimpleNamespace(
+            file=file, source_url=url, size_bytes=100, cleanup_path=None,
+        )
+
+    monkeypatch.setattr(downloads, "resolve_first_media", resolve)
+    monkeypatch.setattr(router, "_download_resolved_progressive", download)
+    return message, destination, file
+
+
+def test_owner_can_select_server_channel_without_any_dm(monkeypatch):
+    message, destination, file = _outbound_delivery_fixture(monkeypatch, mode="channel")
+    assert run(downloads.handle_download_message(message))
+    assert len(destination.sent) == 1
+    assert destination.sent[0][1] is file
+    assert destination.sent[0][2].everyone is False
+    assert message.author.sent == []
+    assert message.deleted
+    assert file.closed
+
+
+def test_owner_can_enable_both_with_explicit_consent(monkeypatch):
+    message, destination, file = _outbound_delivery_fixture(monkeypatch, mode="both")
+    assert run(downloads.handle_download_message(message))
+    assert len(message.author.sent) == 1
+    assert len(destination.sent) == 1
+    assert file.resets == 1
+    assert message.deleted
+
+
+def test_partial_both_delivery_keeps_original(monkeypatch):
+    message, destination, file = _outbound_delivery_fixture(
+        monkeypatch, mode="both", dm_blocked=True,
+    )
+    assert run(downloads.handle_download_message(message))
+    assert not message.author.sent
+    assert len(destination.sent) == 1
+    assert not message.deleted
+    assert any("only some" in note[0] for note in message.channel.problems)
+
+
+def test_destination_permission_revocation_blocks_delivery(monkeypatch):
+    message, destination, _file = _outbound_delivery_fixture(
+        monkeypatch, mode="channel", destination_permitted=False,
+    )
+    assert run(downloads.handle_download_message(message))
+    assert not message.deleted
+    assert not destination.sent
+    assert not message.author.sent
+    assert "permissions changed" in message.channel.problems[0][0]
+
+
+def test_paused_downloads_never_contact_media_or_member(monkeypatch):
+    message = FakeMessage()
+
+    async def disabled(_guild_id):
+        return "off", 0
+
+    async def unexpected(*_args, **_kwargs):
+        raise AssertionError("Paused mode must not attempt media retrieval")
+
+    monkeypatch.setattr(router, "guild_download_delivery", disabled)
+    monkeypatch.setattr(downloads, "resolve_first_media", unexpected)
+    assert run(downloads.handle_download_message(message))
+    assert message.author.sent == []
+    assert not message.deleted
