@@ -100,3 +100,76 @@ def test_explicit_join_row_source_remains_authoritative() -> None:
     assert result["invite_code"] == "ACTUAL"
     assert result["invited_by_name"] == "Creator"
     assert result["attribution_record"] == "join_history_or_profile"
+
+
+def test_older_join_event_is_queried_if_recent_activity_has_no_join(monkeypatch) -> None:
+    import asyncio
+    from stoney_verify.tickets_new import member_context_service as svc
+
+    async def member_reader(**kwargs):
+        return {"guild_id": str(kwargs["guild_id"]), "user_id": str(kwargs["user_id"]),
+                "joined_at": JOIN_AT, "entry_method": None, "invite_code": None}
+
+    async def joins_reader(**kwargs):
+        return []
+
+    event_queries = []
+
+    async def events_reader(**kwargs):
+        event_queries.append(kwargs.get("event_types"))
+        if kwargs.get("event_types"):
+            return [_event()]
+        return [{"event_type": "member_updated", "metadata": {},
+                 "created_at": "2026-10-28T10:00:00+00:00"}]
+
+    async def tickets_reader(**kwargs):
+        return []
+
+    async def no_open_ticket(**kwargs):
+        return None
+
+    monkeypatch.setattr(svc, "get_guild_member_row", member_reader)
+    monkeypatch.setattr(svc, "list_member_join_rows", joins_reader)
+    monkeypatch.setattr(svc, "list_member_event_rows", events_reader)
+    monkeypatch.setattr(svc, "list_member_ticket_rows", tickets_reader)
+    monkeypatch.setattr(svc, "find_open_ticket_for_owner", no_open_ticket)
+
+    snapshot = asyncio.run(svc.get_member_context_snapshot(
+        guild_id=1514374173517152418, user_id=USER_ID,
+    ))
+    assert snapshot["relationships"]["invite_code"] == "hg5BAT8tsw"
+    assert snapshot["relationships"]["attribution_record"] == "member_joined_event"
+    assert event_queries == [None, ("member_joined",)]
+    # Historical source does not alter the activity count or fake a join row.
+    assert snapshot["event_summary"]["total"] == 1
+    assert snapshot["recent_joins"] == []
+
+
+def test_unmatched_old_join_event_is_rejected_by_snapshot(monkeypatch) -> None:
+    import asyncio
+    from stoney_verify.tickets_new import member_context_service as svc
+
+    async def member_reader(**kwargs):
+        return {"joined_at": "2026-10-28T12:00:00+00:00", "invite_code": None}
+
+    async def no_rows(**kwargs):
+        return []
+
+    async def events_reader(**kwargs):
+        if kwargs.get("event_types"):
+            return [_event()]
+        return []
+
+    async def no_open_ticket(**kwargs):
+        return None
+
+    monkeypatch.setattr(svc, "get_guild_member_row", member_reader)
+    monkeypatch.setattr(svc, "list_member_join_rows", no_rows)
+    monkeypatch.setattr(svc, "list_member_event_rows", events_reader)
+    monkeypatch.setattr(svc, "list_member_ticket_rows", no_rows)
+    monkeypatch.setattr(svc, "find_open_ticket_for_owner", no_open_ticket)
+
+    snapshot = asyncio.run(svc.get_member_context_snapshot(
+        guild_id=1514374173517152418, user_id=USER_ID,
+    ))
+    assert snapshot["relationships"]["invite_code"] is None
