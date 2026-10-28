@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 import discord
 
 from ..guild_sweep import run_bounded_guild_sweep
+from ..guild_config import guild_config_cache_snapshot
 
 from ..globals import (
     bot,
@@ -20,6 +21,12 @@ from ..globals import (
 SYNC_INTERVAL = 300
 DB_MAX_ATTEMPTS = 5
 UPSERT_CHUNK_SIZE = 100
+# Role/staff snapshots are not live event streams. Avoid identical upserts,
+# but always re-persist periodically to repair external drift or DB restores.
+_FULL_METRICS_RESYNC_SECONDS = 60 * 60
+_LAST_ROLE_SIGNATURES: Dict[int, tuple[float, tuple]] = {}
+_LAST_STAFF_SIGNATURES: Dict[int, tuple[float, tuple]] = {}
+_METRICS_SKIPPED = {"roles": 0, "staff": 0}
 _LAST_ROLE_METRICS_COUNTS: Dict[int, int] = {}
 _LAST_STAFF_METRICS_COUNTS: Dict[int, int] = {}
 _METRICS_TASK: asyncio.Task | None = None
@@ -95,6 +102,17 @@ def _sync_role_metrics(guild: discord.Guild) -> int:
     if not payload:
         return 0
 
+    guild_id = int(guild.id)
+    signature = tuple(sorted(
+        (row["role_id"], row["name"], row["position"], row["member_count"])
+        for row in payload
+    ))
+    now = time.monotonic()
+    previous = _LAST_ROLE_SIGNATURES.get(guild_id)
+    if previous and previous[1] == signature and now - previous[0] < _FULL_METRICS_RESYNC_SECONDS:
+        _METRICS_SKIPPED["roles"] += 1
+        return len(payload)
+
     def _bulk_upsert() -> None:
         sb = get_supabase(force_new=False)
         if sb is None:
@@ -106,6 +124,7 @@ def _sync_role_metrics(guild: discord.Guild) -> int:
             ).execute()
 
     _execute_db_write(f"role metrics bulk upsert ({guild.id})", _bulk_upsert)
+    _LAST_ROLE_SIGNATURES[guild_id] = (time.monotonic(), signature)
     return len(payload)
 
 
@@ -141,6 +160,16 @@ def _sync_staff_metrics(guild: discord.Guild) -> int:
     if not payload:
         return 0
 
+    guild_id = int(guild.id)
+    signature = tuple(sorted(
+        (row["staff_id"], row["staff_name"]) for row in payload
+    ))
+    now = time.monotonic()
+    previous = _LAST_STAFF_SIGNATURES.get(guild_id)
+    if previous and previous[1] == signature and now - previous[0] < _FULL_METRICS_RESYNC_SECONDS:
+        _METRICS_SKIPPED["staff"] += 1
+        return len(payload)
+
     def _bulk_upsert() -> None:
         sb = get_supabase(force_new=False)
         if sb is None:
@@ -152,6 +181,7 @@ def _sync_staff_metrics(guild: discord.Guild) -> int:
             ).execute()
 
     _execute_db_write(f"staff metrics bulk upsert ({guild.id})", _bulk_upsert)
+    _LAST_STAFF_SIGNATURES[guild_id] = (time.monotonic(), signature)
     return len(payload)
 
 
@@ -239,6 +269,12 @@ async def metrics_loop() -> None:
             f"guilds={result.total} ok={result.succeeded} failed={result.failed} "
             f"concurrency={result.concurrency} elapsed_s={result.seconds:.2f} "
             f"halted_on_failures={halted_on_failures}"
+        )
+        # Local counters only: no telemetry queries or additional egress.
+        cfg_metrics = guild_config_cache_snapshot().get("egress", {})
+        print(
+            "📉 database traffic optimization "
+            f"config={cfg_metrics} unchanged_metric_upserts={dict(_METRICS_SKIPPED)}"
         )
         # No overlapping passes or zero-delay retry loops after an overrun.
         await asyncio.sleep(
