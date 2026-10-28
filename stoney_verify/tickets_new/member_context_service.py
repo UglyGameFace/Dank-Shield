@@ -1117,7 +1117,24 @@ async def get_member_context_snapshot(
         print(f"⚠️ member_context_service.get_member_context_snapshot open-ticket lookup failed: {repr(e)}")
         open_ticket = None
 
-    relationships = _build_relationships(member_row, join_rows, event_rows)
+    # A busy member's join event may be older than the recent activity window.
+    # Only perform this additional, guild/user-scoped read when the newer
+    # records have no invite code to show and the join has a known timestamp.
+    latest_join = join_rows[0] if join_rows else {}
+    expected_join = latest_join.get("joined_at") or (member_row or {}).get("joined_at")
+    has_invite = bool(latest_join.get("invite_code") or (member_row or {}).get("invite_code"))
+    attribution_events = event_rows
+    if (include_recent_events and expected_join and not has_invite
+            and not _matching_join_event(member_row, join_rows, event_rows)):
+        older_join_events = await list_member_event_rows(
+            guild_id=gid,
+            user_id=uid,
+            limit=10,
+            event_types=("member_joined",),
+        )
+        attribution_events = [*event_rows, *older_join_events]
+
+    relationships = _build_relationships(member_row, join_rows, attribution_events)
     name_history = _build_name_history(member_row, join_rows, ticket_rows)
     join_summary = _build_join_summary(member_row, join_rows, event_rows, relationships)
     ticket_summary = _build_ticket_history_summary(ticket_rows, open_ticket)
