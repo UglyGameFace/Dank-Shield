@@ -11,6 +11,8 @@ from stoney_verify import share_router_private_downloads as downloads
 from stoney_verify import share_router_runtime as router
 from stoney_verify.share_router_media_resolver import MediaResolution
 
+ORIGINAL_GUILD_DOWNLOAD_DELIVERY = router.guild_download_delivery
+
 
 def run(coro):
     return asyncio.run(coro)
@@ -706,6 +708,7 @@ def test_downloads_use_existing_router_listener_not_second_listener() -> None:
 
 
 def test_owner_delivery_modes_are_guild_scoped_preserve_legacy_and_routes(tmp_path, monkeypatch):
+    monkeypatch.setattr(router, "guild_download_delivery", ORIGINAL_GUILD_DOWNLOAD_DELIVERY)
     monkeypatch.setattr(router, "ROUTES_FILE", tmp_path / "routes.json")
 
     async def check():
