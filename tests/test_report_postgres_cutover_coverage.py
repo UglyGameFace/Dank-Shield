@@ -28,9 +28,21 @@ def test_unstaged_literal_table_is_reported(tmp_path: Path):
     package = tmp_path / "stoney_verify"
     package.mkdir()
     (package / "missing.py").write_text(
-        "get_supabase().table('important_new_table').select('*')\\n",
+        "get_supabase().table('important_new_table').select('*')\n",
         encoding="utf-8",
     )
     report = coverage(tmp_path)
     assert "important_new_table" in report["literal_tables_not_in_staging"]
     assert report["cutover_authorized"] is False
+
+def test_nested_verification_source_is_classified_without_package_prefix(tmp_path: Path):
+    package = tmp_path / "stoney_verify"
+    verification = package / "member_verification"
+    verification.mkdir(parents=True)
+    (verification / "joining.py").write_text("get_supabase()\\n", encoding="utf-8")
+    (package / "unmapped.py").write_text("get_supabase()\\n", encoding="utf-8")
+    report = coverage(tmp_path)
+    assert report["direct_supabase_files"] == 2
+    assert "stoney_verify/member_verification/joining.py" in report["direct_supabase_file_groups"]["verification"]
+    assert report["other_direct_supabase_files"] == ["stoney_verify/unmapped.py"]
+    assert report["production_postgresql_ready"] is False
