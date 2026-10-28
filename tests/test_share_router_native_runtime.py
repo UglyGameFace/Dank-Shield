@@ -623,7 +623,7 @@ def test_share_router_destination_selection_is_search_first_on_mobile() -> None:
     assert "class ShareRouterTargetLandingView(_OwnedView)" in PUBLIC_UI
     assert 'label="Search Destination"' in PUBLIC_UI
     assert 'label="Browse Channels"' in PUBLIC_UI
-    assert 'label="Back to Proxy Sources"' in PUBLIC_UI
+    assert 'label="Back to Share Channels"' in PUBLIC_UI
     assert 'label="Close"' in PUBLIC_UI
 
     assert "DankGuildResourceBrowserView(" in target_region
