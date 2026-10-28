@@ -41,3 +41,23 @@ Status: **AUDIT ONLY. No source deletion, data transfer, credential rotation, or
 - The Discloud database is not accessible through the currently connected tools; **no storage capacity, backup writes or restore can be verified here**.
 - Existing migration scripts/workflows must be reviewed and reused, not replaced by a new untested bulk-copy tool.
 - No destructive cleanup, Aiven termination, or DB writes are part of this PR.
+
+## 2026-10-28 live read-only recheck (after PR #750 merge)
+
+This recheck ran read-only, direct SQL against both connected Supabase projects. The earlier compact table-list `rows` metadata can be stale; the following are exact SQL `count(*)` observations and nonportable diagnostic whole-row fingerprints, **not** a transactionally consistent cross-project backup.
+
+| Table | Old shared IdleGrowOp | Dedicated DankShield |
+| --- | ---: | ---: |
+| `guild_configs` | 12 | 12 |
+| `tickets` | 115 | 116 |
+| `guild_members` | 820 | 847 |
+| `member_activity_ledger` | 309 | 331 |
+| `staff_action_logs` | 3,369 | 3,369 |
+| `activity_feed_events` | 4,760 | 4,821 |
+| `guild_config_versions` | 920 | 171 |
+
+All 3,369 staff-action rows gave the same aggregate whole-row diagnostic digest in both projects. Guild configs, tickets, members, member activity ledger and configuration history did **not** match their corresponding whole-row digests. This is not proof of identical schemas, completeness, or subsequent drift absence. The latest dedicated `guild_members.updated_at` observed was 2026-10-28 04:07:45 UTC, versus 2026-10-22 03:33:25 UTC in the old project. Recent writes support the dedicated project being active, but only the actual Discloud runtime identity probe proves its configured endpoint.
+
+**Schema difference:** The old public schema has 88 tables and the dedicated public schema has 79. Nine tables are old-only: `audit_events`, `audit_logs`, `dank_community_atlas_publications`, `dank_trusted_advert_collapse_jobs`, `dank_trusted_advert_messages`, `dank_verify_reminder_delivery`, `dashboard_staff_messages`, `raid_events`, `staff_users`. Before deciding which belong in the dedicated primary, classify legacy and independently Discloud-owned data and inspect actual running callers. All six checked LFG/advert contracts exist in the old project but are absent in the new: `public_lfg_opt_in` and `public_lfg_enabled` columns, `community_hub_public_lfg_directory` function, and the three publication/advert tables. Existing merged source migrations cannot be assumed to have been applied to the live dedicated project. The hard-pinned `supabase_live/migrations/` workflow is authoritative for new production SQL; never replay the old migration directory globally.
+
+**Preservation gate:** The old project retains 920 history versions (July 21–Oct 22), versus 171 in the new project (Aug 11–Oct 28). Neither project reports any `is_manual=true` versions. This does **not** make older automatic versions disposable. Preserve the lossless old history, including schema/permissions and recoverable restore, before any source retirement. Discloud PostgreSQL capacity, isolated archives, live read/write, rollback and recovery remain unverified by this recheck. PR #750 is a successfully merged **offline, read-only** parity tool, not a database cutover.
