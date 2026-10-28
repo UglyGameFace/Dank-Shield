@@ -570,6 +570,31 @@ class CustomActivityScanModal(discord.ui.Modal, title="Custom activity review"):
         )
 
 
+async def _resolve_intelligence_member(
+    guild: Optional[discord.Guild], user_id: int,
+) -> tuple[Optional[discord.Member], str]:
+    """Live Discord REST result is authoritative; cache absence is not a departure."""
+    if guild is None or user_id <= 0:
+        return None, "unavailable"
+    try:
+        fetched = await guild.fetch_member(user_id)
+    except discord.NotFound:
+        return None, "absent"
+    except (discord.Forbidden, discord.HTTPException):
+        return None, "unavailable"
+    except Exception:
+        return None, "unavailable"
+    return (fetched, "verified") if isinstance(fetched, discord.Member) else (None, "unavailable")
+
+
+def _intelligence_presence_text(status: str) -> str:
+    return {
+        "verified": "✅ Confirmed in this server by a live Discord member lookup.",
+        "absent": "ℹ️ Discord did not find this user in the server at lookup time.",
+        "unavailable": "⚠️ Live membership could not be verified. This does NOT mean the user left.",
+    }.get(status, "⚠️ Current membership not checked.")
+
+
 class IntelligenceMemberSelect(discord.ui.UserSelect):
     def __init__(self, parent: "IntelligenceMenuView") -> None:
         self.parent_view = parent
@@ -583,21 +608,28 @@ class IntelligenceMemberSelect(discord.ui.UserSelect):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         selected = self.values[0] if self.values else None
-        member = interaction.guild.get_member(int(getattr(selected, "id", 0) or 0))
-        if not isinstance(member, discord.Member):
-            await reply_ephemeral(
-                interaction,
-                "❌ That user is not currently a server member.",
-            )
+        user_id = int(getattr(selected, "id", 0) or 0)
+        if user_id <= 0:
+            await reply_ephemeral(interaction, "❌ Select a Discord user first.")
+            return
+        # REST verification can exceed Discord's 3-second response window.
+        await interaction.response.defer(ephemeral=True)
+        if not await require_review(interaction):
+            return
+        member, status = await _resolve_intelligence_member(interaction.guild, user_id)
+        if member is None:
+            # Historical evidence is useful even when Discord returns 404 or fails.
+            await _show_stored_member_history(interaction, user_id, presence=status)
             return
         view = IntelligenceTargetView(
             owner_id=self.parent_view.owner_id,
             member=member,
         )
-        await interaction.response.edit_message(
-            embed=member_detail_embed(member, None),
-            view=view,
-        )
+        embed = member_detail_embed(member, None)
+        embed.add_field(name="Live membership", value=_intelligence_presence_text(status), inline=False)
+        await _replace_panel(interaction, embed=embed, view=view)
+        # Show the retained join/source report on selection, not behind another menu.
+        await _show_stored_member_history(interaction, user_id, presence=status)
 
 
 class IntelligenceMenuView(OwnedView):
@@ -622,34 +654,33 @@ class IntelligenceTargetView(OwnedView):
         self.member_id = int(member.id)
         super().__init__(owner_id)
 
-    def _member(self, interaction: discord.Interaction) -> Optional[discord.Member]:
-        member = interaction.guild.get_member(self.member_id)
-        return member if isinstance(member, discord.Member) else None
+    async def _verified_member(self, interaction: discord.Interaction) -> Optional[discord.Member]:
+        member, status = await _resolve_intelligence_member(interaction.guild, self.member_id)
+        if status != "verified":
+            await reply_ephemeral(interaction, _intelligence_presence_text(status))
+            return None
+        return member
 
     @discord.ui.button(label="Intelligence Review", emoji="🧠", style=discord.ButtonStyle.primary, row=0)
     async def review(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        member = self._member(interaction)
+        await interaction.response.defer(ephemeral=True)
+        member = await self._verified_member(interaction)
         if member is None:
-            await reply_ephemeral(interaction, "❌ That member left the server.")
             return
         await open_review_panel(interaction, member)
 
-    @discord.ui.button(label="Verdict History", emoji="🧾", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Stored History", emoji="🧾", style=discord.ButtonStyle.secondary, row=0)
     async def history(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        member = self._member(interaction)
-        if member is None:
-            await reply_ephemeral(interaction, "❌ That member left the server.")
-            return
         await _show_stored_member_history(interaction, self.member_id)
 
     @discord.ui.button(label="Moderation Panel", emoji="🛡️", style=discord.ButtonStyle.secondary, row=0)
     async def moderation(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        member = self._member(interaction)
+        await interaction.response.defer(ephemeral=True)
+        member = await self._verified_member(interaction)
         if member is None:
-            await reply_ephemeral(interaction, "❌ That member left the server.")
             return
         from .public_member_role_browser import _load_quick_roles
 
@@ -660,9 +691,8 @@ class IntelligenceTargetView(OwnedView):
             member=member,
             browser=back_view,
         )
-        await interaction.response.edit_message(
-            embed=member_detail_embed(member, None),
-            view=view,
+        await _replace_panel(
+            interaction, embed=member_detail_embed(member, None), view=view,
         )
 
     @discord.ui.button(label="Back to Intelligence", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
@@ -673,7 +703,10 @@ class IntelligenceTargetView(OwnedView):
 
 
 
-def _historical_member_embed(user_id: int, snapshot: dict[str, Any], verdicts: list[dict[str, Any]]) -> discord.Embed:
+def _historical_member_embed(
+    user_id: int, snapshot: dict[str, Any], verdicts: list[dict[str, Any]],
+    *, presence: str = "unchecked",
+) -> discord.Embed:
     """Display guild-scoped stored evidence, not Discord membership guesses."""
     member = snapshot.get("member") or {}
     joins = snapshot.get("join_summary") or {}
@@ -703,7 +736,40 @@ def _historical_member_embed(user_id: int, snapshot: dict[str, Any], verdicts: l
         f"Left: `{str(joins.get('left_at') or 'not recorded')[:50]}`\\n"
         f"Last seen: `{str(joins.get('last_seen_at') or 'unknown')[:50]}`"
     ).replace("\\n", "\n")
+    embed.add_field(name="Live membership", value=_intelligence_presence_text(presence), inline=False)
     embed.add_field(name="Membership History", value=join_text[:1024], inline=False)
+    recent = snapshot.get("recent_joins") or []
+    latest = recent[0] if recent and isinstance(recent[0], dict) else {}
+    relations = snapshot.get("relationships") or {}
+    method = str(latest.get("entry_method") or joins.get("latest_entry_method") or "").strip()
+    method_names = {
+        "invite": "Server invite",
+        "vanity_invite": "Vanity invitation",
+        "vouched": "Member vouched for entry",
+        "manual_verification": "Staff verification",
+        "ticket_verification": "Ticket-based verification",
+    }
+    source = method_names.get(method, "Unknown")
+    code = str(latest.get("invite_code") or relations.get("invite_code") or "").strip()
+    inviter = str(latest.get("invited_by_name") or relations.get("invited_by_name") or "").strip()
+    quality = str(latest.get("entry_truth_quality") or member.get("entry_truth_quality") or "").strip().lower()
+    conflicted = bool(latest.get("entry_conflict") or member.get("entry_conflict"))
+    if conflicted:
+        confidence = "Conflicting records; attribution not verified"
+    elif quality in {"confirmed", "partial", "unknown"}:
+        confidence = {"confirmed": "Confirmed in retained join record", "partial": "Partial / uncertain", "unknown": "Unknown"}[quality]
+    else:
+        confidence = "Not recorded"
+    def _plain(value: str, limit: int = 80) -> str:
+        return discord.utils.escape_markdown(value[:limit]).replace("@", "@\u200b")
+    source_lines = [f"Source: **{_plain(source)}**", f"Confidence: **{confidence}**"]
+    if code:
+        source_lines.append(f"Invite code (retained): `{_plain(code, 32)}`")
+    if inviter:
+        source_lines.append(f"Inviter (retained): **{_plain(inviter)}**")
+    if not code and not inviter and source == "Unknown":
+        source_lines.append("No reliable invite or inviter attribution was stored for this join.")
+    embed.add_field(name="How they joined", value="\n".join(source_lines)[:1024], inline=False)
     types = events.get("type_counts") or {}
     type_text = ", ".join(
         f"{str(k)[:36]}: {v}" for k, v in list(types.items())[:8]
@@ -741,7 +807,9 @@ def _historical_member_embed(user_id: int, snapshot: dict[str, Any], verdicts: l
     return embed
 
 
-async def _show_stored_member_history(interaction: discord.Interaction, user_id: int) -> None:
+async def _show_stored_member_history(
+    interaction: discord.Interaction, user_id: int, *, presence: Optional[str] = None,
+) -> None:
     """Read historical guild records without fetch_user() or a live member."""
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -752,6 +820,8 @@ async def _show_stored_member_history(interaction: discord.Interaction, user_id:
     from stoney_verify.tickets_new.member_context_service import get_member_context_snapshot
     from stoney_verify.member_review_feedback import get_member_review_history
     guild_id = int(interaction.guild.id)
+    if presence is None:
+        _, presence = await _resolve_intelligence_member(interaction.guild, user_id)
     try:
         context_result, feedback_result = await asyncio.wait_for(
             asyncio.gather(
@@ -780,7 +850,7 @@ async def _show_stored_member_history(interaction: discord.Interaction, user_id:
             ephemeral=True,
         )
     await interaction.followup.send(
-        embed=_historical_member_embed(user_id, snapshot, verdicts),
+        embed=_historical_member_embed(user_id, snapshot, verdicts, presence=presence),
         ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )

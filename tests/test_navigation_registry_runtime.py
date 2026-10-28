@@ -123,6 +123,9 @@ def test_find_feature_understands_common_names_and_aliases() -> None:
     assert registry.search_features("invite shield")[0].key == "protection"
     assert registry.search_features("ping roles")[0].key == "community_pings_manager"
     assert registry.search_features("share router")[0].key == "share_router"
+    for name in ("set up sharing", "where videos go", "video delivery", "manage forwarding", "check my setup"):
+        assert registry.search_features(name)[0].key == "share_router"
+    assert registry.search_features("video request channel")[0].key == "share_downloads"
     assert registry.search_features("member setup manager")[0].key == "member_setup_manager"
     assert registry.search_features("captions")[0].key == "live_captions"
     assert registry.search_features("ticket forms")[0].key == "tickets"

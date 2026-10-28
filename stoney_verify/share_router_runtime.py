@@ -896,6 +896,57 @@ async def guild_download_channel_id(guild_id: int) -> int:
     return channel_id
 
 
+DOWNLOAD_DELIVERY_MODES = frozenset({"off", "dm", "channel", "both"})
+
+
+async def guild_download_delivery(guild_id: int) -> tuple[str, int]:
+    """One per-guild delivery authority; existing configured channels retain DM mode.
+
+    A corrupt or incomplete explicit setting is disabled, never downgraded
+    into an unexpected DM or cross-channel send.
+    """
+    async with _DATA_LOCK:
+        bucket = _read_route_state_unlocked().get(str(int(guild_id))) or {}
+        if not isinstance(bucket, dict) or _safe_int(bucket.get("download_channel_id"), 0) <= 0:
+            return "off", 0
+        mode = bucket.get("download_delivery_mode", "dm")
+        target = _safe_int(bucket.get("download_destination_channel_id"), 0)
+        if mode not in DOWNLOAD_DELIVERY_MODES:
+            return "off", 0
+        if mode in {"channel", "both"}:
+            return (mode, target) if target > 0 else ("off", 0)
+        return mode, 0
+
+
+async def configure_guild_download(
+    guild_id: int, *, channel_id: int, mode: str, destination_id: int = 0,
+) -> None:
+    """Atomically save an explicitly selected download mode and channel.
+
+    Shares the existing route file and lock; never alters forwarding routes.
+    """
+    if int(guild_id) <= 0 or int(channel_id) <= 0 or mode not in DOWNLOAD_DELIVERY_MODES:
+        raise ValueError("Invalid Share Router download settings")
+    if mode in {"channel", "both"}:
+        if int(destination_id) <= 0 or int(destination_id) == int(channel_id):
+            raise ValueError("A separate destination channel is required")
+    elif destination_id:
+        raise ValueError("This delivery mode does not use a destination channel")
+    async with _DATA_LOCK:
+        data = _load_all_unlocked()
+        key = str(int(guild_id))
+        bucket = data.get(key)
+        if not isinstance(bucket, dict):
+            bucket = {}
+        bucket["download_channel_id"] = str(int(channel_id))
+        bucket["download_delivery_mode"] = mode
+        bucket["download_destination_channel_id"] = (
+            str(int(destination_id)) if mode in {"channel", "both"} else ""
+        )
+        data[key] = bucket
+        _save_all_unlocked(data)
+
+
 async def guild_download_expiry_seconds(guild_id: int) -> int:
     # Reuse the existing Share Router per-guild file, with safe defaults.
     async with _DATA_LOCK:
@@ -2068,6 +2119,9 @@ async def route_message(message: discord.Message) -> None:
 
         routes, download_channel_id = await guild_route_state(int(guild.id))
         if download_channel_id and int(message.channel.id) == download_channel_id:
+            mode, _ = await guild_download_delivery(int(guild.id))
+            if mode == "off":
+                return
             # Discord gateway listener stays non-blocking while download workers
             # process a bounded durable queue. Never create another listener.
             from .share_router_download_queue import enqueue_download_request

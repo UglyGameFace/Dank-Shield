@@ -133,7 +133,7 @@ def test_footer_copy_uses_user_guidance_instead_of_implementation_notes() -> Non
     assert "Only currently available tools are shown" in community
     assert "Welcome & Exit setup • choose where join and exit messages are sent" in welcome
     assert "Setup check • review warnings before changing settings" in setup
-    assert "Share Router proxy channels keep plain names so mobile sharing stays reliable." in share
+    assert "Advanced options, safety checks, video testing and cleanup remain available in Tools." in share
     assert "Dank Shield • open a feature center to manage settings" in help_surface
     assert "Dank Shield ticket panel • choose a category" in ticket
     assert "Dank Shield ticket panel • choose a category" in refresh

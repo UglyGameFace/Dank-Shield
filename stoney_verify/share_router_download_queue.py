@@ -276,8 +276,11 @@ async def _process_job(bot: Any, job: DownloadJob) -> None:
     guild = bot.get_guild(job.guild_id)
     if guild is None:
         return
-    from .share_router_runtime import guild_download_channel_id
+    from .share_router_runtime import guild_download_channel_id, guild_download_delivery
     if await guild_download_channel_id(job.guild_id) != job.channel_id:
+        return
+    mode, _ = await guild_download_delivery(job.guild_id)
+    if mode == "off":
         return
     channel = guild.get_channel(job.channel_id)
     if not isinstance(channel, discord.TextChannel):

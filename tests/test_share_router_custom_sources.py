@@ -285,9 +285,9 @@ def test_new_ui_pages_sources_and_routes_and_preserves_old_routing_behavior():
     root = Path(__file__).resolve().parents[1]
     ui = (root / "stoney_verify/commands_ext/public_share_router.py").read_text(encoding="utf-8")
     runtime = (root / "stoney_verify/share_router_runtime.py").read_text(encoding="utf-8")
-    assert 'label="Create Proxy"' in ui
-    assert 'label="Delete Custom Proxy"' in ui
-    assert 'label="Remove Missing Proxies"' in ui
+    assert 'label="Create Private Share Channel"' in ui
+    assert 'label="Delete Private Share Channel"' in ui
+    assert 'label="Clean Up Missing Channels"' in ui
     assert "ShareRouterDeleteSourceConfirmView" in ui
     assert 'custom_id="dank:share_router:source"' in ui
     assert 'custom_id="dank:share_router:remove"' in ui
@@ -443,7 +443,7 @@ def test_source_cleanup_only_enqueues_successful_route_acks():
     assert source.index("native_sent = await _relay_native_video_upload(") < source.rindex(
         "await _cleanup_delivered_proxy_post"
     )
-    assert 'name="Automatic proxy cleanup"' in ui
+    assert 'name="Automatic cleanup"' in ui
     assert "delivered posts are removed" not in ui.lower() or "Failed shares" in ui
 
 
@@ -505,7 +505,7 @@ def test_repair_post_defer_render_failure_reports_explicit_error():
         / "stoney_verify/commands_ext/public_share_router.py"
     ).read_text(encoding="utf-8")
     repair = source.split("async def repair(self, interaction:", 1)[1].split(
-        '    @discord.ui.button(label="Add / Change Route"', 1
+        '    @discord.ui.button(label="Add / Change Forwarding"', 1
     )[0]
     assert "await interaction.response.defer(ephemeral=True, thinking=True)" in repair
     assert 'embed = await _share_router_embed(guild)' in repair
@@ -734,10 +734,17 @@ def test_existing_source_uses_shared_search_safe_browser_and_real_ui_controls():
 
     view = ui.ShareRouterView(42)
     buttons = {part.label for part in view.children if isinstance(part, discord_ui.Button)}
-    assert "Use Existing Channel" in buttons
-    assert "Create Proxy" in buttons
-    assert "Add / Change Route" in buttons
-    assert len(view.children) <= 25
+    assert "Set Up Sharing" in buttons
+    assert "Where Videos Go" in buttons
+    assert "Manage Forwarding" in buttons
+    assert len(view.children) <= 7
+    setup = ui.ShareRouterControlsView(42, section="setup")
+    routes = ui.ShareRouterControlsView(42, section="routes")
+    assert "Share From Existing Channel" in {part.label for part in setup.children}
+    assert "Create Private Share Channel" in {part.label for part in setup.children}
+    assert "Add / Change Forwarding" in {part.label for part in routes.children}
+    assert "Delete Private Share Channel" in {part.label for part in routes.children}
+    assert len(setup.children) <= 5 and len(routes.children) <= 5
     text = Path(ui.__file__).read_text(encoding="utf-8")
     assert 'custom_id="dank:share_router:existing_source"' in text
     assert 'resource_kinds=("text",)' in text
