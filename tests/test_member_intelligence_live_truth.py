@@ -114,5 +114,7 @@ def test_historical_embed_shows_source_and_confidence_not_guesses():
     assert "recent_joins" in body and "relationships" in body
     assert "entry_truth_quality" in body
     assert "entry_conflict" in body
-    assert "No reliable invite or inviter attribution" in body
+    assert "The exact invite and creator could not be established for this join." in body
+    assert "entry_quality_reason" in body
+    assert "Original member-joined event" in body
     assert "_intelligence_presence_text(presence)" in body
