@@ -1,4 +1,16 @@
-## ACTIVE: Member Intelligence live membership and join-source truth (2026-10-28)
+## ACTIVE FORCE SWITCH: PR #754 Database Migration CI repair (2026-10-28)
+
+- **Owner authorization:** Explicit `FORCE SWITCH: PR #754 Database Migration` on Oct 28. One active task only: diagnose and fix PR #754 failed CI without starting a live migration or changing another subsystem.
+- **Failure evidence:** Original `Dank Shield CI` run 40747714506 failed with two `tests/test_report_postgres_cutover_coverage.py` tests; 4,091 other tests passed. The coverage report included the common package name `stoney_verify` when matching "verif" and classified every direct caller as verification, hiding unmapped files. One fixture accidentally contained literal backslash-n and crashed AST parsing.
+- **Scope/fix:** Only the read-only AST production Supabase inventory/coverage tools, their tests, and this task checkpoint. Classify paths below the `stoney_verify` prefix; repair the test fixture; check nested verification and unmapped callers. Preserve the previous inventory design. No migrations, backend routing, live DB writes, secrets or release changes.
+- **Branch:** `fix/postgres-production-caller-inventory-20261028`; original PR #754 head `70717fc2b80a37f921bd69b35b8fd52f9b394bfa` and failed job 123025833560. CI repair on branch; revalidate exact new head after merging current main. Do not mark the cutover production-accepted because a static inventory passes.
+- **Suspended:** Member Intelligence #756 is **merged** in main at `3579ccdb0dea6454bcedc568accf375d4f29dc2c`, CI green (4,101 passed, 28 skipped), but actual Discloud/Discord Android canary remains unverified. Preserve its code/history and return to live acceptance only after this switch is released.
+- **Database guardrail:** The latest documented owner direction has dedicated DankShield Supabase as intended primary and Discloud PostgreSQL as isolated archive/backup. This inventory must not silently convert that into authority to move production to PostgreSQL, bypass parity/rollback, or touch historical IdleGrowOp data.
+- **Exit gate:** Exact-head focused tests plus full CI, diff review, merge only with CI and required status green. Reassess cutover architecture separately before any later production database implementation.
+
+---
+
+## SUSPENDED PRODUCTION CANARY / MERGED #756: Member Intelligence live membership and join-source truth (2026-10-28)
 
 - **Single active task/outcome:** Correct owner-reported false “not currently a server member” on Discord `/mod` → Intelligence, and show stored join-source attribution with its actual evidence quality. Issue #755; branch `fix/member-intelligence-live-presence-and-join-source-20261028`. The owner expressly requested #753 be merged first to unblock this task.
 - **Root cause:** `IntelligenceMemberSelect` and `IntelligenceTargetView` treated `guild.get_member()` cache misses as departures. The stored snapshot already returns join-source method, inviter, invite code and evidence quality but `_historical_member_embed` omitted them.
