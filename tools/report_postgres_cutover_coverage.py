@@ -8,10 +8,16 @@ import argparse
 import json
 from pathlib import Path
 
+# Support both `python tools/report_postgres_cutover_coverage.py` and
+# `python -m tools.report_postgres_cutover_coverage` from the repo root.
+import sys
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 from tools.audit_supabase_production_callers import ROOT, inventory
 
-# Explicit first-slice table list is imported from the actual migration module
-# rather than maintained in two competing lists.
+# The first-slice allowlist is source code, not a production DB query.
 from stoney_verify.core_data_stage import SOURCE_KEYS
 
 PRIORITY_PATH_TERMS = {
