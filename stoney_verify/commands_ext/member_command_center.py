@@ -628,6 +628,8 @@ class IntelligenceMemberSelect(discord.ui.UserSelect):
         embed = member_detail_embed(member, None)
         embed.add_field(name="Live membership", value=_intelligence_presence_text(status), inline=False)
         await _replace_panel(interaction, embed=embed, view=view)
+        # Show the retained join/source report on selection, not behind another menu.
+        await _show_stored_member_history(interaction, user_id, presence=status)
 
 
 class IntelligenceMenuView(OwnedView):
