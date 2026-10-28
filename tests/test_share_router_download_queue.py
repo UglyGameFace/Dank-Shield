@@ -330,3 +330,32 @@ def test_download_queue_is_not_a_new_gateway_listener():
     assert "enqueue_download_request(message)" in runtime_source
     assert "await start_download_workers(bot)" in runtime_source
     assert "add_listener" not in queue_source
+
+
+
+def test_paused_download_worker_never_fetches_request_message(monkeypatch):
+    fetched = []
+
+    class Channel:
+        id = 500
+
+        async def fetch_message(self, message_id):
+            fetched.append(message_id)
+            raise AssertionError("A paused queue must never fetch the original request")
+
+    guild = SimpleNamespace(
+        id=400,
+        get_channel=lambda cid: Channel() if cid == 500 else None,
+    )
+    bot = SimpleNamespace(get_guild=lambda gid: guild if gid == 400 else None)
+
+    async def configured_channel(_guild_id):
+        return 500
+
+    async def paused(_guild_id):
+        return "off", 0
+
+    monkeypatch.setattr(runtime, "guild_download_channel_id", configured_channel)
+    monkeypatch.setattr(runtime, "guild_download_delivery", paused)
+    asyncio.run(queue._process_job(bot, queue.DownloadJob(1, 400, 500, 200, 600)))
+    assert not fetched
