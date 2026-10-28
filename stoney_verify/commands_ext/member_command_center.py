@@ -689,9 +689,8 @@ class IntelligenceTargetView(OwnedView):
             member=member,
             browser=back_view,
         )
-        await interaction.response.edit_message(
-            embed=member_detail_embed(member, None),
-            view=view,
+        await _replace_panel(
+            interaction, embed=member_detail_embed(member, None), view=view,
         )
 
     @discord.ui.button(label="Back to Intelligence", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
@@ -760,15 +759,15 @@ def _historical_member_embed(
     else:
         confidence = "Not recorded"
     def _plain(value: str, limit: int = 80) -> str:
-        return discord.utils.escape_markdown(value[:limit]).replace("@", "@\\u200b")
+        return discord.utils.escape_markdown(value[:limit]).replace("@", "@\u200b")
     source_lines = [f"Source: **{_plain(source)}**", f"Confidence: **{confidence}**"]
     if code:
-        source_lines.append(f"Invite code (retained): \\u0060{_plain(code, 32)}\\u0060")
+        source_lines.append(f"Invite code (retained): `{_plain(code, 32)}`")
     if inviter:
         source_lines.append(f"Inviter (retained): **{_plain(inviter)}**")
     if not code and not inviter and source == "Unknown":
         source_lines.append("No reliable invite or inviter attribution was stored for this join.")
-    embed.add_field(name="How they joined", value="\\n".join(source_lines)[:1024], inline=False)
+    embed.add_field(name="How they joined", value="\n".join(source_lines)[:1024], inline=False)
     types = events.get("type_counts") or {}
     type_text = ", ".join(
         f"{str(k)[:36]}: {v}" for k, v in list(types.items())[:8]
