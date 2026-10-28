@@ -610,11 +610,75 @@ def _derive_verification_label(member_row: Optional[Dict[str, Any]]) -> str:
     return "Not Synced Yet"
 
 
+def _matching_join_event(
+    member_row: Optional[Dict[str, Any]],
+    join_rows: Sequence[Dict[str, Any]],
+    event_rows: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Recover original join evidence only for the same recorded join.
+
+    A past event must never become the supposed invite for a later rejoin.
+    Joins are guild/user-scoped by the existing database readers.
+    """
+    latest_join = join_rows[0] if join_rows else {}
+    expected = (
+        latest_join.get("joined_at")
+        if isinstance(latest_join, dict) and latest_join.get("joined_at")
+        else member_row.get("joined_at") if isinstance(member_row, dict) else None
+    )
+    if not expected:
+        return {}
+    try:
+        when = datetime.fromisoformat(str(expected).replace("Z", "+00:00"))
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return {}
+
+    matches: List[Dict[str, Any]] = []
+    for event in event_rows:
+        if str(event.get("event_type") or "").lower() != "member_joined":
+            continue
+        metadata = _safe_meta(event.get("metadata"))
+        if not any(_clean_text(metadata.get(key)) for key in (
+            "entry_method", "join_source", "invite_code", "invited_by"
+        )):
+            continue
+        original_join_time = metadata.get("joined_at")
+        recorded_at = original_join_time or event.get("created_at")
+        if not recorded_at:
+            continue
+        try:
+            event_time = datetime.fromisoformat(str(recorded_at).replace("Z", "+00:00"))
+            if event_time.tzinfo is None:
+                event_time = event_time.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        # Exact Discord join timestamps are available in canonical events.
+        # When absent, allow only a short event-processing delay.
+        tolerance = 5 if original_join_time else 60
+        if abs((when - event_time).total_seconds()) <= tolerance:
+            matches.append(metadata)
+
+    if not matches:
+        return {}
+    # If two distinct sources appear close together, don't assign either.
+    sources = {
+        (_clean_text(meta.get("entry_method")), _clean_text(meta.get("invite_code")),
+         _clean_text(meta.get("invited_by")))
+        for meta in matches
+    }
+    return matches[0] if len(sources) == 1 else {}
+
+
 def _build_relationships(
     member_row: Optional[Dict[str, Any]],
     join_rows: Sequence[Dict[str, Any]],
+    event_rows: Sequence[Dict[str, Any]] = (),
 ) -> Dict[str, Any]:
     latest_join = join_rows[0] if join_rows else {}
+    member = member_row or {}
+    event = _matching_join_event(member_row, join_rows, event_rows)
 
     def _pick(*values: Any) -> Optional[str]:
         for value in values:
@@ -623,57 +687,48 @@ def _build_relationships(
                 return text
         return None
 
+    unknown = {"unknown", "unknown_join", "invite_unresolved", "invite_cache_warming",
+               "invite_tracking_unavailable", "none", "null"}
+    def _evidence(*values: Any) -> Optional[str]:
+        for value in values:
+            text = _clean_text(value)
+            if text and text.lower() not in unknown:
+                return text
+        return _pick(*values)
+
+    # Prefer durable join history and profile data. The event is a narrowly
+    # timestamp-matched fallback, not a source of retroactive join guesses.
+    entry_method = _evidence(latest_join.get("entry_method"), member.get("entry_method"), event.get("entry_method"))
+    invite_code = _evidence(latest_join.get("invite_code"), member.get("invite_code"), event.get("invite_code"))
+    inviter = _evidence(latest_join.get("invited_by"), member.get("invited_by"), event.get("invited_by"))
+    evidence_from_event = bool(
+        event and (
+            (entry_method == event.get("entry_method") and
+             not _evidence(latest_join.get("entry_method"), member.get("entry_method")))
+            or (invite_code == event.get("invite_code") and
+                not _evidence(latest_join.get("invite_code"), member.get("invite_code")))
+        )
+    )
+
     return {
-        "entry_method": _pick(
-            member_row.get("entry_method") if isinstance(member_row, dict) else None,
-            latest_join.get("entry_method") if isinstance(latest_join, dict) else None,
-        ),
-        "verification_source": _pick(
-            member_row.get("verification_source") if isinstance(member_row, dict) else None,
-            latest_join.get("verification_source") if isinstance(latest_join, dict) else None,
-        ),
-        "entry_reason": _pick(
-            member_row.get("entry_reason") if isinstance(member_row, dict) else None,
-            latest_join.get("join_note") if isinstance(latest_join, dict) else None,
-        ),
-        "approval_reason": _pick(
-            member_row.get("approval_reason") if isinstance(member_row, dict) else None,
-        ),
-        "invited_by": _pick(
-            member_row.get("invited_by") if isinstance(member_row, dict) else None,
-            latest_join.get("invited_by") if isinstance(latest_join, dict) else None,
-        ),
-        "invited_by_name": _pick(
-            member_row.get("invited_by_name") if isinstance(member_row, dict) else None,
-            latest_join.get("invited_by_name") if isinstance(latest_join, dict) else None,
-        ),
-        "invite_code": _pick(
-            member_row.get("invite_code") if isinstance(member_row, dict) else None,
-            latest_join.get("invite_code") if isinstance(latest_join, dict) else None,
-        ),
-        "vouched_by": _pick(
-            member_row.get("vouched_by") if isinstance(member_row, dict) else None,
-            latest_join.get("vouched_by") if isinstance(latest_join, dict) else None,
-        ),
-        "vouched_by_name": _pick(
-            member_row.get("vouched_by_name") if isinstance(member_row, dict) else None,
-            latest_join.get("vouched_by_name") if isinstance(latest_join, dict) else None,
-        ),
-        "approved_by": _pick(
-            member_row.get("approved_by") if isinstance(member_row, dict) else None,
-            latest_join.get("approved_by") if isinstance(latest_join, dict) else None,
-        ),
-        "approved_by_name": _pick(
-            member_row.get("approved_by_name") if isinstance(member_row, dict) else None,
-            latest_join.get("approved_by_name") if isinstance(latest_join, dict) else None,
-        ),
-        "verification_ticket_id": _pick(
-            member_row.get("verification_ticket_id") if isinstance(member_row, dict) else None,
-        ),
-        "source_ticket_id": _pick(
-            member_row.get("source_ticket_id") if isinstance(member_row, dict) else None,
-            latest_join.get("source_ticket_id") if isinstance(latest_join, dict) else None,
-        ),
+        "entry_method": entry_method,
+        "join_source": _evidence(latest_join.get("join_source"), member.get("join_source"), event.get("join_source")),
+        "verification_source": _pick(member.get("verification_source"), latest_join.get("verification_source"), event.get("verification_source")),
+        "entry_reason": _pick(member.get("entry_reason"), latest_join.get("join_note")),
+        "approval_reason": _pick(member.get("approval_reason")),
+        "invited_by": inviter,
+        "invited_by_name": _pick(latest_join.get("invited_by_name"), member.get("invited_by_name"), event.get("invited_by_name")),
+        "invite_code": invite_code,
+        "vouched_by": _pick(member.get("vouched_by"), latest_join.get("vouched_by"), event.get("vouched_by")),
+        "vouched_by_name": _pick(member.get("vouched_by_name"), latest_join.get("vouched_by_name"), event.get("vouched_by_name")),
+        "approved_by": _pick(member.get("approved_by"), latest_join.get("approved_by"), event.get("approved_by")),
+        "approved_by_name": _pick(member.get("approved_by_name"), latest_join.get("approved_by_name"), event.get("approved_by_name")),
+        "verification_ticket_id": _pick(member.get("verification_ticket_id")),
+        "source_ticket_id": _pick(member.get("source_ticket_id"), latest_join.get("source_ticket_id"), event.get("source_ticket_id")),
+        "entry_truth_quality": _evidence(latest_join.get("entry_truth_quality"), member.get("entry_truth_quality"), event.get("entry_truth_quality")),
+        "entry_quality_reason": _pick(latest_join.get("entry_quality_reason"), event.get("entry_quality_reason"), member.get("entry_quality_reason")),
+        "entry_conflict": bool(latest_join.get("entry_conflict") or member.get("entry_conflict") or event.get("entry_conflict")),
+        "attribution_record": "member_joined_event" if evidence_from_event else "join_history_or_profile",
     }
 
 
@@ -1080,7 +1135,24 @@ async def get_member_context_snapshot(
         print(f"⚠️ member_context_service.get_member_context_snapshot open-ticket lookup failed: {repr(e)}")
         open_ticket = None
 
-    relationships = _build_relationships(member_row, join_rows)
+    # A busy member's join event may be older than the recent activity window.
+    # Only perform this additional, guild/user-scoped read when the newer
+    # records have no invite code to show and the join has a known timestamp.
+    latest_join = join_rows[0] if join_rows else {}
+    expected_join = latest_join.get("joined_at") or (member_row or {}).get("joined_at")
+    has_invite = bool(latest_join.get("invite_code") or (member_row or {}).get("invite_code"))
+    attribution_events = event_rows
+    if (include_recent_events and expected_join and not has_invite
+            and not _matching_join_event(member_row, join_rows, event_rows)):
+        older_join_events = await list_member_event_rows(
+            guild_id=gid,
+            user_id=uid,
+            limit=10,
+            event_types=("member_joined",),
+        )
+        attribution_events = [*event_rows, *older_join_events]
+
+    relationships = _build_relationships(member_row, join_rows, attribution_events)
     name_history = _build_name_history(member_row, join_rows, ticket_rows)
     join_summary = _build_join_summary(member_row, join_rows, event_rows, relationships)
     ticket_summary = _build_ticket_history_summary(ticket_rows, open_ticket)

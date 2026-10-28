@@ -424,16 +424,28 @@ async def _detect_join_entry_context_unlocked(
         _VANITY_USES_CACHE[gid] = vanity_uses
         return default_context
 
-    best_code: Optional[str] = None
-    best_delta = 0
-    for code, new_uses in current_uses.items():
-        old_use_count = int(old_uses.get(code, 0) or 0)
-        delta = int(new_uses or 0) - old_use_count
-        if delta > best_delta:
-            best_delta = delta
-            best_code = code
+    # A member-join gateway event has no invite code. Counters are usable only
+    # when one code advanced by exactly one since our last baseline. Picking the
+    # largest delta can incorrectly credit a particular member during a burst.
+    increments: list[tuple[str, int]] = []
+    if invites_ok:
+        for code, new_uses in current_uses.items():
+            old_use_count = int(old_uses.get(code, 0) or 0)
+            delta = int(new_uses or 0) - old_use_count
+            if delta > 0:
+                increments.append((code, delta))
 
-    if best_code and best_delta > 0:
+    vanity_delta = (
+        int(vanity_uses) - int(old_vanity_uses)
+        if old_vanity_uses is not None and vanity_uses is not None
+        else 0
+    )
+    unique_invite = (
+        invites_ok and len(increments) == 1 and increments[0][1] == 1
+        and vanity_delta == 0
+    )
+    if unique_invite:
+        best_code = increments[0][0]
         meta = current_meta.get(best_code) or old_meta.get(best_code) or {}
         inviter_name = str(meta.get("inviter_name") or "").strip() or None
         inviter_id = str(meta.get("inviter_id") or "").strip() or None
@@ -466,7 +478,7 @@ async def _detect_join_entry_context_unlocked(
         _VANITY_USES_CACHE[gid] = vanity_uses
         return context
 
-    if old_vanity_uses is not None and vanity_uses is not None and int(vanity_uses) > int(old_vanity_uses):
+    if invites_ok and not increments and vanity_delta == 1:
         context = build_join_context(
             entry_method="vanity_invite",
             join_source="vanity_invite",
@@ -476,6 +488,26 @@ async def _detect_join_entry_context_unlocked(
             entry_reason="Joined using the server vanity URL.",
             join_note="Joined through vanity invite tracking.",
             vanity_used=True,
+        )
+        _INVITE_USES_CACHE[gid] = current_uses
+        _INVITE_META_CACHE[gid] = current_meta
+        _VANITY_USES_CACHE[gid] = vanity_uses
+        return context
+
+    if invites_ok and (increments or vanity_delta > 0):
+        # The snapshot contains multiple possible joins, so assigning its most
+        # popular invite to this member would invent evidence.
+        context = build_join_context(
+            entry_method="invite_unresolved",
+            join_source="invite_unresolved",
+            verification_source="invite_unresolved",
+            entry_reason="Multiple invite uses appeared between snapshots; the exact invite cannot be tied to this member.",
+            join_note="Invite-use changes were ambiguous during a join burst.",
+            vanity_used=False,
+        )
+        context["entry_quality_reason"] = (
+            "Several invite uses or sources changed before this join was checked. "
+            "No exact invite or inviter is claimed."
         )
         _INVITE_USES_CACHE[gid] = current_uses
         _INVITE_META_CACHE[gid] = current_meta

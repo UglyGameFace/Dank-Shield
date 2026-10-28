@@ -118,3 +118,89 @@ def test_warm_join_uses_real_increment_not_lifetime_invite_count() -> None:
 
     assert context["entry_method"] == "invite"
     assert context["invite_code"] == "existing"
+
+
+class FakeMultiInviteGuild(FakeGuild):
+    def __init__(self, *, uses: dict[str, int], vanity_uses: int | None = None) -> None:
+        super().__init__(manage_guild=True, features=["VANITY_URL"] if vanity_uses is not None else [])
+        self.uses = uses
+        self.current_vanity_uses = vanity_uses
+
+    async def invites(self):
+        self.invites_calls += 1
+        return [
+            SimpleNamespace(
+                code=code, uses=count, max_uses=0, temporary=False,
+                inviter=SimpleNamespace(id=111, name="creator"),
+                channel=None,
+            )
+            for code, count in self.uses.items()
+        ]
+
+    async def vanity_invite(self):
+        self.vanity_calls += 1
+        return SimpleNamespace(code="example", uses=self.current_vanity_uses)
+
+
+def test_multiple_changed_invites_do_not_misattribute_largest_delta() -> None:
+    guild = FakeMultiInviteGuild(uses={"first": 12, "second": 8})
+    join_context._INVITE_USES_CACHE[guild.id] = {"first": 10, "second": 7}
+    join_context._INVITE_META_CACHE[guild.id] = {}
+    join_context._VANITY_USES_CACHE[guild.id] = None
+
+    result = asyncio.run(
+        join_context._detect_join_entry_context_unlocked(
+            SimpleNamespace(guild=guild), baseline_ready=True,
+        )
+    )
+    assert result["entry_method"] == "invite_unresolved"
+    assert result["invite_code"] is None
+    assert result["invited_by"] is None
+    assert "several invite uses" in result["entry_quality_reason"].lower()
+
+
+def test_two_uses_on_one_invite_cannot_identify_a_specific_join() -> None:
+    guild = FakeMultiInviteGuild(uses={"first": 12})
+    join_context._INVITE_USES_CACHE[guild.id] = {"first": 10}
+    join_context._INVITE_META_CACHE[guild.id] = {}
+    join_context._VANITY_USES_CACHE[guild.id] = None
+
+    result = asyncio.run(
+        join_context._detect_join_entry_context_unlocked(
+            SimpleNamespace(guild=guild), baseline_ready=True,
+        )
+    )
+    assert result["entry_method"] == "invite_unresolved"
+    assert result["invite_code"] is None
+
+
+def test_concurrent_vanity_and_normal_invite_use_remains_unknown() -> None:
+    guild = FakeMultiInviteGuild(uses={"first": 11}, vanity_uses=6)
+    join_context._INVITE_USES_CACHE[guild.id] = {"first": 10}
+    join_context._INVITE_META_CACHE[guild.id] = {}
+    join_context._VANITY_USES_CACHE[guild.id] = 5
+
+    result = asyncio.run(
+        join_context._detect_join_entry_context_unlocked(
+            SimpleNamespace(guild=guild), baseline_ready=True,
+        )
+    )
+    assert result["entry_method"] == "invite_unresolved"
+    assert result["vanity_used"] is False
+    assert result["invite_code"] is None
+
+
+def test_only_one_vanity_increment_confirms_vanity_without_personal_inviter() -> None:
+    guild = FakeMultiInviteGuild(uses={"first": 10}, vanity_uses=6)
+    join_context._INVITE_USES_CACHE[guild.id] = {"first": 10}
+    join_context._INVITE_META_CACHE[guild.id] = {}
+    join_context._VANITY_USES_CACHE[guild.id] = 5
+
+    result = asyncio.run(
+        join_context._detect_join_entry_context_unlocked(
+            SimpleNamespace(guild=guild), baseline_ready=True,
+        )
+    )
+    assert result["entry_method"] == "vanity_invite"
+    assert result["vanity_used"] is True
+    assert result["invited_by"] is None
