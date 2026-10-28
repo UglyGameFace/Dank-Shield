@@ -39,8 +39,8 @@ def test_nested_verification_source_is_classified_without_package_prefix(tmp_pat
     package = tmp_path / "stoney_verify"
     verification = package / "member_verification"
     verification.mkdir(parents=True)
-    (verification / "joining.py").write_text("get_supabase()\\n", encoding="utf-8")
-    (package / "unmapped.py").write_text("get_supabase()\\n", encoding="utf-8")
+    (verification / "joining.py").write_text("get_supabase()\n", encoding="utf-8")
+    (package / "unmapped.py").write_text("get_supabase()\n", encoding="utf-8")
     report = coverage(tmp_path)
     assert report["direct_supabase_files"] == 2
     assert "stoney_verify/member_verification/joining.py" in report["direct_supabase_file_groups"]["verification"]
