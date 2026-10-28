@@ -119,3 +119,19 @@ def test_rpc_migration_is_read_only_and_server_only():
     assert "from public, anon, authenticated" in sql.lower()
     assert "update public.guild_configs" not in sql.lower()
     assert "delete from public.guild_configs" not in sql.lower()
+
+
+def test_configured_legacy_primary_is_not_overridden_by_compact_rpc(monkeypatch):
+    sb = _Supabase([_row()])
+    monkeypatch.setattr(cfg, "get_supabase", lambda: sb)
+    monkeypatch.setattr(
+        cfg, "GUILD_CONFIG_TABLE_FALLBACKS", ("legacy_config", "guild_configs")
+    )
+    monkeypatch.setattr(
+        cfg, "_fetch_existing_row_sync",
+        lambda table, _gid: {"guild_id": "98765", "staff_role_id": "202"}
+        if table == "legacy_config" else None,
+    )
+    result = cfg._db_get_guild_config_sync(98765)
+    assert result["staff_role_id"] == "202"
+    assert sb.calls == []
