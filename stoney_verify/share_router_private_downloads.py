@@ -203,11 +203,12 @@ async def handle_download_message(message: discord.Message) -> bool:
                         file.reset(seek=True)
                     else:
                         file.fp.seek(0)
-                await recipient.send(
-                    text, file=file, allowed_mentions=discord.AllowedMentions.none(),
-                ) if file is not None else await recipient.send(
-                    text, allowed_mentions=discord.AllowedMentions.none(),
-                )
+                kwargs: dict[str, Any] = {
+                    "allowed_mentions": discord.AllowedMentions.none(),
+                }
+                if file is not None:
+                    kwargs["file"] = file
+                await recipient.send(text, **kwargs)
                 successful += 1
             except discord.HTTPException as exc:
                 errors.append(exc)
@@ -407,8 +408,11 @@ async def handle_download_message(message: discord.Message) -> bool:
             except discord.Forbidden:
                 await _reply_problem(
                     message,
-                    "I couldn't send this video to the selected destination. "
-                    "Check permissions and retry after the cooldown; your original link was kept.",
+                    ("I couldn't DM you. Allow messages from the bot and retry after "
+                     "the cooldown; your original link has been kept."
+                     if delivery_mode == "dm" else
+                     "I couldn't send to the selected destination. Check its permissions; "
+                     "your original link was kept."),
                 )
                 return True
             except discord.HTTPException:
