@@ -33,7 +33,11 @@ def scan_source(path: Path) -> list[dict[str, object]]:
             continue
         # Method names may occur on non-Supabase clients. These are candidates,
         # not confirmed dependencies, and require manual review.
+        table_name = None
+        if name == "table" and node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+            table_name = node.args[0].value
         hits.append({
+            "table_name": table_name,
             "line": node.lineno,
             "call": name,
             "classification": "direct" if name in CALL_NAMES else "candidate",
