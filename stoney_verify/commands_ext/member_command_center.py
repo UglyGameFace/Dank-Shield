@@ -748,12 +748,15 @@ def _historical_member_embed(
         "vouched": "Member vouched for entry",
         "manual_verification": "Staff verification",
         "ticket_verification": "Ticket-based verification",
+        "invite_cache_warming": "Tracking started after this join",
+        "invite_tracking_unavailable": "Invite tracking was unavailable",
+        "invite_unresolved": "Invite usage could not be matched",
     }
     source = method_names.get(method, "Unknown")
     code = str(latest.get("invite_code") or relations.get("invite_code") or "").strip()
     inviter = str(latest.get("invited_by_name") or relations.get("invited_by_name") or "").strip()
-    quality = str(latest.get("entry_truth_quality") or member.get("entry_truth_quality") or "").strip().lower()
-    conflicted = bool(latest.get("entry_conflict") or member.get("entry_conflict"))
+    quality = str(latest.get("entry_truth_quality") or relations.get("entry_truth_quality") or member.get("entry_truth_quality") or "").strip().lower()
+    conflicted = bool(latest.get("entry_conflict") or relations.get("entry_conflict") or member.get("entry_conflict"))
     if conflicted:
         confidence = "Conflicting records; attribution not verified"
     elif quality in {"confirmed", "partial", "unknown"}:
@@ -767,8 +770,18 @@ def _historical_member_embed(
         source_lines.append(f"Invite code (retained): `{_plain(code, 32)}`")
     if inviter:
         source_lines.append(f"Inviter (retained): **{_plain(inviter)}**")
-    if not code and not inviter and source == "Unknown":
-        source_lines.append("No reliable invite or inviter attribution was stored for this join.")
+    if relations.get("attribution_record") == "member_joined_event":
+        source_lines.append("Record: **Original member-joined event** (matched to this join)")
+    reason = str(
+        latest.get("entry_quality_reason")
+        or relations.get("entry_quality_reason")
+        or member.get("entry_quality_reason")
+        or ""
+    ).strip()
+    if reason:
+        source_lines.append(f"Tracking details: {_plain(reason, 220)}")
+    if not code and not inviter:
+        source_lines.append("The exact invite and creator could not be established for this join.")
     embed.add_field(name="How they joined", value="\n".join(source_lines)[:1024], inline=False)
     types = events.get("type_counts") or {}
     type_text = ", ".join(
