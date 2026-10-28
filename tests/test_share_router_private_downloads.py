@@ -866,3 +866,25 @@ def test_paused_downloads_never_contact_media_or_member(monkeypatch):
     assert run(downloads.handle_download_message(message))
     assert message.author.sent == []
     assert not message.deleted
+
+
+def test_pause_during_inflight_download_prevents_old_destination_delivery(monkeypatch):
+    message, destination, file = _outbound_delivery_fixture(monkeypatch, mode="channel")
+    mode = {"value": "channel"}
+
+    async def current(_guild_id):
+        return (mode["value"], 99) if mode["value"] == "channel" else ("off", 0)
+
+    async def download(url, *, max_bytes, request_headers):
+        # Simulate owner pressing Pause while the large extraction was running.
+        mode["value"] = "off"
+        return SimpleNamespace(file=file, source_url=url, size_bytes=100, cleanup_path=None)
+
+    monkeypatch.setattr(router, "guild_download_delivery", current)
+    monkeypatch.setattr(router, "_download_resolved_progressive", download)
+    assert run(downloads.handle_download_message(message))
+    assert message.author.sent == []
+    assert destination.sent == []
+    assert not message.deleted
+    assert file.closed
+    assert any("settings changed" in note[0] for note in message.channel.problems)
