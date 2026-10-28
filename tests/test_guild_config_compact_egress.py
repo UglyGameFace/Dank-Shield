@@ -15,6 +15,9 @@ class _Response:
     def __init__(self, data):
         self.data = data
 
+    def execute(self):
+        return self
+
 
 class _Supabase:
     def __init__(self, rows, *, error=None):
