@@ -59,8 +59,9 @@ def test_missing_join_row_recovers_confirmed_source_from_same_join_event() -> No
     assert "Server invite" in source
     assert "hg5BAT8tsw" in source
     assert "DISBOARD" in source
+    assert "Invite creator" in source
     assert "Original member-joined event" in source
-    assert "Confirmed in retained join record" in source
+    assert "Confirmed in retained join event" in source
 
 
 def test_old_event_cannot_supply_source_of_later_rejoin() -> None:
