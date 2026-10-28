@@ -4,11 +4,11 @@ from stoney_verify.commands_ext.member_command_center import _historical_member_
 from stoney_verify.tickets_new.member_context_service import _build_relationships
 
 
-USER_ID = 443230350567800843
+USER_ID = 123456789012345678
 JOIN_AT = "2026-09-07T18:08:45.042+00:00"
 
 
-def _event(*, when: str = JOIN_AT, code: str = "hg5BAT8tsw") -> dict:
+def _event(*, when: str = JOIN_AT, code: str = "INVITE123") -> dict:
     return {
         "event_type": "member_joined",
         "created_at": "2026-09-07T18:08:47.277+00:00",
@@ -17,8 +17,8 @@ def _event(*, when: str = JOIN_AT, code: str = "hg5BAT8tsw") -> dict:
             "entry_method": "invite",
             "join_source": "discord_invite",
             "invite_code": code,
-            "invited_by": "302050872383242240",
-            "invited_by_name": "DISBOARD#2760",
+            "invited_by": "234567890123456789",
+            "invited_by_name": "ListingBot#0001",
             "entry_truth_quality": "confirmed",
             "entry_quality_reason": "Invite usage delta identified a specific invite.",
             "entry_confidence": 95,
@@ -38,8 +38,8 @@ def test_missing_join_row_recovers_confirmed_source_from_same_join_event() -> No
     }
     relationships = _build_relationships(member, [], [_event()])
     assert relationships["entry_method"] == "invite"
-    assert relationships["invite_code"] == "hg5BAT8tsw"
-    assert relationships["invited_by_name"] == "DISBOARD#2760"
+    assert relationships["invite_code"] == "INVITE123"
+    assert relationships["invited_by_name"] == "ListingBot#0001"
     assert relationships["entry_truth_quality"] == "confirmed"
     assert relationships["attribution_record"] == "member_joined_event"
 
@@ -57,8 +57,8 @@ def test_missing_join_row_recovers_confirmed_source_from_same_join_event() -> No
     fields = {field.name: field.value for field in rendered.fields}
     source = fields["How they joined"]
     assert "Server invite" in source
-    assert "hg5BAT8tsw" in source
-    assert "DISBOARD" in source
+    assert "INVITE123" in source
+    assert "ListingBot" in source
     assert "Invite creator" in source
     assert "Original member-joined event" in source
     assert "Confirmed in retained join event" in source
@@ -136,9 +136,9 @@ def test_older_join_event_is_queried_if_recent_activity_has_no_join(monkeypatch)
     monkeypatch.setattr(svc, "find_open_ticket_for_owner", no_open_ticket)
 
     snapshot = asyncio.run(svc.get_member_context_snapshot(
-        guild_id=1514374173517152418, user_id=USER_ID,
+        guild_id=987654321098765432, user_id=USER_ID,
     ))
-    assert snapshot["relationships"]["invite_code"] == "hg5BAT8tsw"
+    assert snapshot["relationships"]["invite_code"] == "INVITE123"
     assert snapshot["relationships"]["attribution_record"] == "member_joined_event"
     assert event_queries == [None, ("member_joined",)]
     # Historical source does not alter the activity count or fake a join row.
@@ -171,6 +171,6 @@ def test_unmatched_old_join_event_is_rejected_by_snapshot(monkeypatch) -> None:
     monkeypatch.setattr(svc, "find_open_ticket_for_owner", no_open_ticket)
 
     snapshot = asyncio.run(svc.get_member_context_snapshot(
-        guild_id=1514374173517152418, user_id=USER_ID,
+        guild_id=987654321098765432, user_id=USER_ID,
     ))
     assert snapshot["relationships"]["invite_code"] is None
