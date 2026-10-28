@@ -125,7 +125,7 @@ listener or another database. It never provides public directory listings.
   transfers may still count to prevent an indefinite retry loophole.
 - The URL contains an unguessable random bearer token, with only its hash
   retained in a small sidecar manifest. **Anyone with the link can access
-  it until expiry**. Anyone who receives a forwarded DM or copies the URL can
+  it until expiry**. Anyone who receives a DM, sees a channel post, or copies the URL can
   therefore watch/download without Discord login. Do not use for private,
   restricted, illegal or rights-unlicensed material.
 - The media endpoint serves only pre-staged local video with safe filename
@@ -139,7 +139,7 @@ listener or another database. It never provides public directory listings.
 - The endpoint limits concurrent active transfers; capacity and egress are
   host-account dependent. A signed URL is **not an unlimited-file-size hack**,
   and Discord-native previews remain best-effort across clients.
-- Temp media is removed on failed staging, failed DM, and after expiry.
+- Temp media is removed on failed staging, undelivered links, and after expiry.
   The live public-host canary is still required to verify actual ingress,
   storage persistence, bandwidth and watch/download accessibility.
 
@@ -149,21 +149,23 @@ for this feature; staged media never belongs in the reminder database.
 ## Live tests required before enabling
 
 - Two guilds: only the staff-configured channel processes messages.
-- One public progressive MP4 under the bot DM limit reaches only the sender,
-  is playable/downloadable in Discord Android and desktop, and cleans source
-  only when DM delivery actually succeeded.
+- A public progressive MP4 under the bot upload limit is delivered only to the
+  destinations expressly chosen by server staff: member DM, a permitted server
+  channel, or both. Channel-only mode must send **no DM**. Source cleanup requires
+  successful delivery to all selected destinations.
 - A separate-audio/video source and short HLS/DASH clip remain within time,
   temporary-file and byte budgets, or return honest links.
-- A file over cap, failed downloader, failed DM (50007), API 413, no
-  Attach/Manage Messages, disabled feature, repeated posts and concurrent
-  requests preserve expected data and state.
+- A file over cap, failed downloader, failed DM (50007), missing channel or
+  permission, API 413, no Attach/Manage Messages, paused feature, repeated posts,
+  concurrent requests and partial 'Both' delivery preserve source posts.
 - Expiration presets are saved per guild; token does not disclose source URL.
 - HTTPS Test Hosting verifies the same external public origin that Discord
-  and a user would reach. Check DM Watch and Download links with the member,
-  then test Android and desktop Discord clients. Never interpret a passing
+  and a user would reach. Check Watch and Download links in each chosen destination
+  on Android and desktop Discord. Never interpret a passing
   HTTP test as guaranteed Discord inline preview.
 - Test storage retention across a real Discloud restart/redeploy, outbound
   egress quota, concurrent streams, disk quota, and file/manifest expiry.
-- Staff UI creation/disable is accessible on Android and does not interfere
-  with regular Share Router proxy routes.
+- Staff can configure an existing request channel, create one after an explicit
+  delivery choice, select a destination with Search-Safe or Use This Channel,
+  pause and resume on Android. Normal Share Router forwarding remains unchanged.
 - Live Discloud CPU/RAM/egress and storage quotas are measured, not guessed.
