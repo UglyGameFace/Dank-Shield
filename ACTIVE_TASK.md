@@ -1,4 +1,17 @@
-## ACTIVE FORCE SWITCH: Share Router owner-controlled delivery and simple menus (2026-10-28)
+## ACTIVE: Member Intelligence live membership and join-source truth (2026-10-28)
+
+- **Single active task/outcome:** Correct owner-reported false “not currently a server member” on Discord `/mod` → Intelligence, and show stored join-source attribution with its actual evidence quality. Issue #755; branch `fix/member-intelligence-live-presence-and-join-source-20261028`. The owner expressly requested #753 be merged first to unblock this task.
+- **Root cause:** `IntelligenceMemberSelect` and `IntelligenceTargetView` treated `guild.get_member()` cache misses as departures. The stored snapshot already returns join-source method, inviter, invite code and evidence quality but `_historical_member_embed` omitted them.
+- **Execution path:** Discord staff member picker → REST `Guild.fetch_member` → verified current member panel; Discord 404 or API error → guild-scoped stored history without false membership claims. History by numeric ID also resolves current membership truth and reads `get_member_context_snapshot` and staff verdicts behind `require_review`.
+- **Scope:** Single existing `member_command_center.py` authority, focused tests and this task record. Reuse join-context/source fields and existing DB snapshot. No new DB tables, invite tracker, moderation enforcement, global member sweep, duplicate resolver service or new slash commands.
+- **Status/changes:** Implementation branch started; strict REST-present / 404 / transient-failure distinctions, stored history for unresolved picker selections, source/confidence display. Regression tests added. **NOT yet validated, merged, deployed or production accepted.** Must pass exact-commit CI and Discord Android canary.
+- **Safety/compatibility:** Preserve staff-only access, historical IDs for departed members, protected role/moderation checks and prior public menus. Unknown inviter stays unknown, a DB presence flag is never asserted as live Discord truth, REST errors never assert departure, no fabricated retroactive attribution.
+- **Cleanup/conflicts:** Share Router PR #753 merged into main as `e525a75c376344cc0609069484602cc6b7308879`; its pre-merge CI passed. Live Discloud/Android owner/nonstaff delivery acceptance remains an explicit unverified release check, not a claim of production success. Database consolidation PR #752 remained preserved and suspended.
+- **Next:** Finish code review of deferred interaction response paths and join display; run focused tests, static/compile/full CI, inspect diff and correct regressions, then owner merge and live guild canary on Discloud before claiming fixed.
+
+---
+
+## MERGED / RELEASE-CANARY PENDING: Share Router owner-controlled delivery and simple menus (2026-10-28)
 
 - **Single active task/outcome:** Fix confusing Share Router Discord setup and automatic DM-only video delivery without removing any forwarding, custom channels, cleanup, provider or hosted-download capabilities. User authorized exact `FORCE SWITCH: Share Router` with reason on Oct 28. Do not work on database cutover, LFG or other features concurrently.
 - **Scope:** Existing `public_share_router.py` ephemeral UI, `share_router_runtime.py` per-guild file, single `route_message` intake, queued worker, canonical `share_router_private_downloads.py`, shared `DankGuildResourceBrowserView`, impacted tests/docs only. No new slash commands, per-guild DB tables, independent downloader or fallback sender.
