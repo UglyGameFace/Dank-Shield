@@ -800,9 +800,10 @@ def _outbound_delivery_fixture(monkeypatch, *, mode="channel", dm_blocked=False,
 
     file = File()
 
-    async def download(url, *, max_bytes, request_headers):
+    async def download(resolution, *, max_bytes):
         return SimpleNamespace(
-            file=file, source_url=url, size_bytes=100, cleanup_path=None,
+            file=file, source_url=resolution.canonical_url,
+            size_bytes=100, cleanup_path=None,
         )
 
     monkeypatch.setattr(downloads, "resolve_first_media", resolve)
@@ -875,10 +876,11 @@ def test_pause_during_inflight_download_prevents_old_destination_delivery(monkey
     async def current(_guild_id):
         return (mode["value"], 99) if mode["value"] == "channel" else ("off", 0)
 
-    async def download(url, *, max_bytes, request_headers):
-        # Simulate owner pressing Pause while the large extraction was running.
+    async def download(resolution, *, max_bytes):
+        # Simulate owner pressing Pause while extraction was running.
         mode["value"] = "off"
-        return SimpleNamespace(file=file, source_url=url, size_bytes=100, cleanup_path=None)
+        return SimpleNamespace(file=file, source_url=resolution.canonical_url,
+                               size_bytes=100, cleanup_path=None)
 
     monkeypatch.setattr(router, "guild_download_delivery", current)
     monkeypatch.setattr(router, "_download_resolved_progressive", download)
