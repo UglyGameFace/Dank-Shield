@@ -136,3 +136,38 @@ No role configuration was rewritten or deleted.
 The bottleneck fix **must be deployed as a code update** and monitored for
 actual traffic reduction. A Free plan's 5 GB quota is fixed: no workload
 can be promised zero quota risk at arbitrary future guild count or traffic.
+
+## Third root path: oversized responses from atomic configuration writes
+
+The 24-hour API gateway window contains **291 POST** requests to
+`/rest/v1/rpc/patch_dank_guild_config`. The legacy RPC correctly performs
+server-side CAS/merge but returns `to_jsonb(guild_configs)`, including all
+four duplicated JSON containers. Its response volume can remain material
+after optimizing GET traffic.
+
+A **new** `patch_dank_guild_config_compact` SQL function calls the original
+authoritative atomic writer exactly once, then projects its response to the
+same losslessly merged compact shape as the read function. When the original
+CAS returns `__atomic_patch_applied` and `__atomic_patch_row`, that
+envelope and its result are kept, with only the inner row compacted. Existing
+SQL lock, sparse merge, key clearance, CAS comparisons and audit triggers
+are not replaced.
+
+Both canonical Python write paths (normal atomic patch and CAS) now
+prefer the compact wrapper; if and only if the new function is definitely
+missing, they fall back to the existing atomic writer. Network or ambiguous
+errors are **not** interpreted as permission to invoke a second write.
+The existing client retry logic still needs end-to-end idempotency scrutiny
+before claiming full network-exactly-once semantics.
+
+**Live validation:** deployed function-only migration to the dedicated
+Supabase project, SECURITY INVOKER and service_role-only execution confirmed.
+The pure, read-only JSON projection matched **12/12** current guild records:
+largest simulated write response 460,096 bytes -> 116,638 bytes. No actual
+atomic write or CAS mutation was invoked as part of this verification; the
+existing database writer and persisted rows remain unchanged. The full
+write/CAS runtime canary remains a release gate.
+
+The canonical cache metrics include `compact_patch_writes` and
+`legacy_patch_fallbacks` for regression visibility, in addition to read
+counters.
