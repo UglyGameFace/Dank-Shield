@@ -68,6 +68,9 @@ class FakeMessage:
 @pytest.fixture(autouse=True)
 def reset_state(monkeypatch):
     monkeypatch.setattr(downloads.discord, "Member", FakeMember)
+    async def legacy_download_mode(_guild_id):
+        return "dm", 0
+    monkeypatch.setattr(router, "guild_download_delivery", legacy_download_mode)
     downloads.reset_download_state_for_tests()
     yield
     downloads.reset_download_state_for_tests()
