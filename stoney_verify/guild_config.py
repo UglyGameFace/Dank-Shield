@@ -56,7 +56,8 @@ _CONFIG_EGRESS_METRICS = {
     "compact_not_modified": 0,
     "legacy_full_reads": 0,
 }
-GUILD_CONFIG_PATCH_RPC = "patch_dank_guild_config"
+GUILD_CONFIG_PATCH_RPC = "patch_dank_guild_config_compact"
+GUILD_CONFIG_PATCH_LEGACY_RPC = "patch_dank_guild_config"
 
 _CONFIG_CACHE: Dict[str, Dict[str, Any]] = {}
 _CONFIG_CACHE_TS: Dict[str, datetime] = {}
@@ -911,6 +912,20 @@ def _rpc_mapping_row(response: Any) -> dict[str, Any]:
     return {}
 
 
+def _execute_guild_config_patch_rpc(sb: Any, parameters: Mapping[str, Any]) -> Any:
+    """Do one authoritative atomic write with a compact response when supported.
+
+    Only a definitive missing-function error may invoke the old RPC. Network
+    timeouts and ambiguous errors must not trigger a second write here.
+    """
+    try:
+        return sb.rpc(GUILD_CONFIG_PATCH_RPC, dict(parameters)).execute()
+    except Exception as exc:
+        if not _is_missing_atomic_patch_rpc_error(exc):
+            raise
+        return sb.rpc(GUILD_CONFIG_PATCH_LEGACY_RPC, dict(parameters)).execute()
+
+
 def _atomic_patch_guild_config_sync(
     sb: Any,
     guild_id: int,
@@ -938,14 +953,14 @@ def _atomic_patch_guild_config_sync(
 
     response = _execute_db_op(
         f"atomic guild config patch guild={int(guild_id)}",
-        lambda: sb.rpc(
-            GUILD_CONFIG_PATCH_RPC,
+        lambda: _execute_guild_config_patch_rpc(
+            sb,
             {
                 "p_guild_id": str(int(guild_id)),
                 "p_patch": payload,
                 "p_clear_keys": clears,
             },
-        ).execute(),
+        ),
     )
     return _rpc_mapping_row(response)
 
@@ -981,8 +996,8 @@ def _compare_and_swap_guild_config_key_sync(
     stamp = _now().isoformat()
     response = _execute_db_op(
         f"atomic guild config CAS guild={gid} key={clean_key}",
-        lambda: sb.rpc(
-            GUILD_CONFIG_PATCH_RPC,
+        lambda: _execute_guild_config_patch_rpc(
+            sb,
             {
                 "p_guild_id": str(gid),
                 "p_patch": {
@@ -994,7 +1009,7 @@ def _compare_and_swap_guild_config_key_sync(
                 "p_clear_keys": [],
                 "p_expected": {clean_key: expected},
             },
-        ).execute(),
+        ),
     )
     envelope = _rpc_mapping_row(response)
     if "__atomic_patch_applied" not in envelope:
