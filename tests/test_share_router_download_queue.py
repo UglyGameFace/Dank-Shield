@@ -16,6 +16,9 @@ from stoney_verify import share_router_runtime as runtime
 def isolated_queue(monkeypatch, tmp_path):
     monkeypatch.setenv("DANK_SHARE_DOWNLOAD_QUEUE_DB", str(tmp_path / "private" / "queue.sqlite3"))
     monkeypatch.setattr(queue, "_LAST_GUILD_ID", "")
+    async def legacy_delivery(_guild_id):
+        return "dm", 0
+    monkeypatch.setattr(runtime, "guild_download_delivery", legacy_delivery)
     yield
     for task in queue._WORKERS:
         if not task.done():
