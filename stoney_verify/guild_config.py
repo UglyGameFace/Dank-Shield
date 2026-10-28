@@ -49,6 +49,13 @@ GUILD_CONFIG_TABLE_FALLBACKS = tuple(
 
 _CACHE_TTL_SECONDS = 60
 _DB_MAX_ATTEMPTS = 5
+_COMPACT_GUILD_CONFIG_RPC = "get_dank_guild_config_compact"
+_CONFIG_EGRESS_METRICS = {
+    "cache_hits": 0,
+    "compact_full_reads": 0,
+    "compact_not_modified": 0,
+    "legacy_full_reads": 0,
+}
 GUILD_CONFIG_PATCH_RPC = "patch_dank_guild_config"
 
 _CONFIG_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -271,6 +278,7 @@ def guild_config_cache_snapshot() -> Dict[str, Any]:
             "keys": keys,
             "cached_guilds": len(keys),
             "ttl_seconds": _CACHE_TTL_SECONDS,
+            "egress": dict(_CONFIG_EGRESS_METRICS),
             "table": GUILD_CONFIG_TABLE,
             "table_order": list(GUILD_CONFIG_TABLE_FALLBACKS),
             "public_config_isolation": public_config_isolation_enabled(),
@@ -560,7 +568,10 @@ def _fetch_existing_row_sync(table_name: str, guild_id: int) -> Optional[Dict[st
     return None
 
 
-def _db_get_guild_config_sync(guild_id: Any) -> GuildRuntimeConfig:
+def _db_get_guild_config_sync(
+    guild_id: Any,
+    known_updated_at: Optional[str] = None,
+) -> GuildRuntimeConfig:
     gid = _fallback_guild_id(guild_id)
     if gid <= 0:
         return env_fallback_guild_config(guild_id)
@@ -568,11 +579,43 @@ def _db_get_guild_config_sync(guild_id: Any) -> GuildRuntimeConfig:
     if sb is None:
         return _fallback_config_for_read_state(gid, source="unavailable:supabase_none")
 
+    # The DB-owned RPC preserves the legacy four-JSON precedence and flat-column
+    # overrides, but sends the merged JSON only once. A revision match returns
+    # a tiny sentinel instead of retransmitting a potentially 460 KB row.
+    # Until the migration is installed, retain the original read for rollback.
+    if "guild_configs" in GUILD_CONFIG_TABLE_FALLBACKS:
+        try:
+            response = sb.rpc(
+                _COMPACT_GUILD_CONFIG_RPC,
+                {
+                    "p_guild_id": str(gid),
+                    "p_known_updated_at": known_updated_at,
+                },
+            ).execute()
+            row = getattr(response, "data", None)
+            if isinstance(row, list):
+                row = row[0] if row else None
+            if isinstance(row, Mapping):
+                row = dict(row)
+                if row.get("_not_modified") is True:
+                    _CONFIG_EGRESS_METRICS["compact_not_modified"] += 1
+                    return GuildRuntimeConfig(
+                        {"guild_id": str(gid), "source": "unchanged:compact_rpc"}
+                    )
+                if row:
+                    _CONFIG_EGRESS_METRICS["compact_full_reads"] += 1
+                    return _normalize_config_row(row, gid, table_name="guild_configs")
+        except Exception as exc:
+            _debug(f"compact guild config read unavailable guild={gid}: {type(exc).__name__}")
+            # Revert to the authoritative legacy read. Never return an empty
+            # config simply because the optional optimization is unavailable.
+
     read_failed = False
     for table_name in GUILD_CONFIG_TABLE_FALLBACKS:
         try:
             existing = _fetch_existing_row_sync(table_name, gid)
             if existing:
+                _CONFIG_EGRESS_METRICS["legacy_full_reads"] += 1
                 return _normalize_config_row(existing, gid, table_name=table_name)
         except Exception as exc:
             if not _is_missing_table_error(exc):
@@ -600,10 +643,29 @@ async def get_guild_config(
     if not force_refresh and _cache_valid(gid):
         cached = _CONFIG_CACHE.get(key)
         if cached:
+            _CONFIG_EGRESS_METRICS["cache_hits"] += 1
             return GuildRuntimeConfig(cached)
 
-    config = await _run_db(f"get guild config async guild={gid}", lambda: _db_get_guild_config_sync(gid))
+    # Invalidation removes the cached revision, ensuring writes still cause
+    # immediate fresh reads. A forced read may validate an unchanged revision.
+    previous = _CONFIG_CACHE.get(key)
+    previous_updated_at = _safe_str(previous.get("updated_at"), "") if previous else ""
+    config = await _run_db(
+        f"get guild config async guild={gid}",
+        lambda: _db_get_guild_config_sync(gid, previous_updated_at or None),
+    )
     source = _safe_str(config.get("source"), "unknown").lower()
+    if source.startswith("unchanged:"):
+        if previous:
+            _CONFIG_CACHE_TS[key] = _now()
+            return GuildRuntimeConfig(previous)
+        # Defensive: a revision sentinel without a matching local snapshot is
+        # not a usable config and must be fetched from the database.
+        config = await _run_db(
+            f"get guild config no-cache guild={gid}",
+            lambda: _db_get_guild_config_sync(gid),
+        )
+        source = _safe_str(config.get("source"), "unknown").lower()
     if source.startswith("unavailable:"):
         cached = _CONFIG_CACHE.get(key)
         if cached:
