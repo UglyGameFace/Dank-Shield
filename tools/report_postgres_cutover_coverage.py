@@ -35,6 +35,8 @@ def coverage(root: Path = ROOT) -> dict[str, object]:
         str(hit["file"]) for hit in report["findings"]
         if hit["classification"] == "direct"
     })
+    referenced_tables = sorted({str(hit["table_name"]) for hit in report["findings"]\n        if hit["call"] == "table" and hit.get("table_name")})
+    unrecognized_tables = sorted(set(referenced_tables) - set(SOURCE_KEYS))
     groups = {
         group: [path for path in direct_files
                 if any(term in path.lower() for term in terms)]
@@ -45,6 +47,8 @@ def coverage(root: Path = ROOT) -> dict[str, object]:
         "schema": "dankshield-pg-cutover-coverage-v1",
         "staging_table_count": len(SOURCE_KEYS),
         "staging_tables": sorted(SOURCE_KEYS),
+        "literal_table_references": referenced_tables,
+        "literal_tables_not_in_staging": unrecognized_tables,
         "direct_supabase_files": len(direct_files),
         "direct_supabase_file_groups": groups,
         "other_direct_supabase_files": sorted(set(direct_files) - grouped),
@@ -79,6 +83,7 @@ def main() -> None:
         for group, paths in result["direct_supabase_file_groups"].items():
             print(f"{group}: {len(paths)} files")
         print(f"Other direct callers: {len(result['other_direct_supabase_files'])}")
+        print(f"Literal tables outside staging: {len(result['literal_tables_not_in_staging'])}")
         print("CUTOVER BLOCKED: mandatory production gates are not satisfied.")
 
 
