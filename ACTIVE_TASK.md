@@ -1,3 +1,14 @@
+## ACTIVE: Supabase egress quota repair (2026-10-28)
+
+- **Owner direction:** Fix the dedicated DankShield Supabase free-plan egress exhaustion end-to-end, preserving member truth, settings and rollback. This supersedes the completed #757 development task for this conversation; #757's live Discord canary remains separately pending.
+- **Evidence:** Dedicated project is ACTIVE_HEALTHY, DB size ~96 MB, but organization used 6.72 GB of its 5 GB uncached egress. Last-24h logs have 17,219 guild config GETs; current row-size multiplication implies ~1.55 GiB of uncompressed full-config response traffic, a **projection, not an invoice figure**. One 460 KB row has four ~114 KB JSON containers and was fetched ~2,939 times. Six of 12 rows disagree across JSON containers. See `docs/DANKSHIELD_SUPABASE_EGRESS_20261028.md`.
+- **Branch:** `fix/supabase-egress-configuration-20261028`, starting `main@dd72ccd0af1b351a8f2c26a1ec0ae9ba5f05e3e2`.
+- **Implementation underway:** SQL read-only, invoker-security compact config RPC with revision shortcut; canonical reader uses RPC with legacy fallback; 60-second cache and forced freshness preserved. Skip unchanged 5-minute metrics upserts, hourly resync, local counters and targeted regression tests.
+- **Safety:** No existing config/history rows deleted, no canonical backend switch, no direct Supabase data change, no Discloud deploy at this checkpoint. Six divergent JSON rows require full archive/restore proof before storage compaction. Retain old IdleGrowOp source and Discloud backup plans; do not attribute the entire egress bill to config traffic without a by-service billing breakdown.
+- **Next:** Exact branch tests and PR CI, inspect diff/secret exposure, apply reviewed function-only migration on the dedicated project, compare live SQL output with legacy config for divergent rows, validate service-role-only access, deploy/canary, then measure 1-hour/24-hour actual egress change. If any check fails, preserve the branch and do not claim production fixed.
+
+---
+
 ## ACTIVE: Member Intelligence historical invite-source recovery (2026-10-28)
 
 - **Owner goal:** Make the existing Member Intelligence and invite tracking explain how a member joined using actual retained evidence, without false attribution. User requested this after PR #754 completed.
