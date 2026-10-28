@@ -189,6 +189,15 @@ async def handle_download_message(message: discord.Message) -> bool:
             return True
 
     async def send_delivery(text: str, *, file: Any = None) -> bool:
+        # Processing may take minutes. A staff pause, destination edit or mode
+        # change during extraction must not deliver to an old recipient.
+        current_mode, current_destination = await guild_download_delivery(int(message.guild.id))
+        if (current_mode, current_destination) != (delivery_mode, destination_id):
+            await _reply_problem(
+                message, "Video delivery settings changed while this request was processing. "
+                         "Nothing was sent and the original link was kept.",
+            )
+            return False
         recipients = []
         if delivery_mode in {"dm", "both"}:
             recipients.append(message.author)
