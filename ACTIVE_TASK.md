@@ -1,3 +1,16 @@
+## ACTIVE: Member Intelligence historical invite-source recovery (2026-10-28)
+
+- **Owner goal:** Make the existing Member Intelligence and invite tracking explain how a member joined using actual retained evidence, without false attribution. User requested this after PR #754 completed.
+- **Lock:** This is the only active implementation task; unrelated DB cutover, Share Router and LFG remain untouched. PR #754 was merged at `68c84a82` after exact-head CI success. PR #756 previously merged but its live Discloud canary is not yet verified.
+- **Root cause (read-only database evidence):** For member `443230350567800843` in guild `1514374173517152418`, both connected Supabase projects have one profile and one `member_joined` event but zero `member_joins` rows. The original event metadata records invite `hg5BAT8tsw`, creator DISBOARD#2760 and a 95-point recorded delta confidence, while the profile's source fields are null/unknown. The canonical member context snapshot reads recent event rows but did not use the original event's attribution, so the UI showed Unknown.
+- **Other confirmed issue:** Join detection selected the largest invite counter increase without checking if multiple invite codes or vanity counters advanced. Bursts could attribute the wrong invite; now ambiguous increments remain unknown rather than fabricate certainty.
+- **Execution path:** `events.on_member_join` → `members_new.join_context_service.detect_join_entry_context` → `persist_member_join_context` (member, join, event records); `/mod` Intelligence → `get_member_context_snapshot` → `_build_relationships` → `_historical_member_embed`.
+- **Implementation:** Same existing reader and writer modules. Event recovery requires a recorded join timestamp match (300-second bound), preserves newer row/profile evidence, and queries older `member_joined` records only when needed. UI labels invite *creator*, not the individual who shared a link, and shows recorded evidence source/failure explanation. Invite burst handling never selects a largest delta as proof. Focused regression tests added.
+- **Validation:** Repository CI and exact-head tests pending. No production Supabase writes, data migration, runtime/Discloud deployment or destructive changes. Historical event recovery must be confirmed in live staff-only Discord canary; public DISBOARD click origin cannot be proven from invite creator alone.
+- **Next:** Open focused PR, run focused and full GitHub Actions, resolve failures, check final diff, then merge only on green validation and separately confirm live Discloud/Android behavior. Preserve all unrelated active branches and production data.
+
+---
+
 ## ACTIVE FORCE SWITCH: PR #754 Database Migration CI repair (2026-10-28)
 
 - **Owner authorization:** Explicit `FORCE SWITCH: PR #754 Database Migration` on Oct 28. One active task only: diagnose and fix PR #754 failed CI without starting a live migration or changing another subsystem.
