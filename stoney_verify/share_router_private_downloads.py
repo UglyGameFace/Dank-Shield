@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-"""Opt-in Share Router video download-to-DM, through its one message owner.
+"""Per-guild Share Router download delivery, through its one message owner.
 
-A download request is a member's explicit public URL in a configured channel.
-No unsolicited bulk DMs, no persistent media cache, and no upload-size tricks.
-Anything beyond the bot's DM limit is a *link*, not a disguised attachment.
+A member submits one public video URL in a staff-configured intake channel.
+Staff explicitly choose private DM, a permitted server channel, or both.
+Legacy active download channels retain their prior DM-only behavior.
+No bulk unsolicited DMs, unbounded file cache, or upload-size tricks.
 """
 
 import asyncio
@@ -156,6 +157,70 @@ async def handle_download_message(message: discord.Message) -> bool:
     except Exception:
         return True
 
+    from .share_router_runtime import guild_download_delivery, is_share_router_design_resource
+    delivery_mode, destination_id = await guild_download_delivery(int(message.guild.id))
+    if delivery_mode == "off":
+        return True
+
+    destination = None
+    if delivery_mode in {"channel", "both"}:
+        destination = message.guild.get_channel(destination_id)
+        if (
+            not isinstance(destination, discord.TextChannel)
+            or int(destination.id) == int(channel.id)
+            or getattr(destination.guild, "id", None) != int(message.guild.id)
+            or is_share_router_design_resource(destination)
+        ):
+            await _reply_problem(message, "The chosen video destination is missing or unsafe. The link was kept.")
+            return True
+        try:
+            sender_access = destination.permissions_for(message.author)
+            bot = message.guild.me
+            bot_access = destination.permissions_for(bot) if bot is not None else None
+            if (
+                destination.is_nsfw()
+                or not sender_access.view_channel or not sender_access.send_messages
+                or bot_access is None or not bot_access.view_channel
+                or not bot_access.send_messages or not bot_access.attach_files
+            ):
+                await _reply_problem(message, "The video destination is unavailable or its permissions changed. The link was kept.")
+                return True
+        except Exception:
+            return True
+
+    async def send_delivery(text: str, *, file: Any = None) -> bool:
+        recipients = []
+        if delivery_mode in {"dm", "both"}:
+            recipients.append(message.author)
+        if destination is not None:
+            recipients.append(destination)
+        successful = 0
+        errors: list[discord.HTTPException] = []
+        for index, recipient in enumerate(recipients):
+            try:
+                if file is not None and index:
+                    if hasattr(file, "reset"):
+                        file.reset(seek=True)
+                    else:
+                        file.fp.seek(0)
+                await recipient.send(
+                    text, file=file, allowed_mentions=discord.AllowedMentions.none(),
+                ) if file is not None else await recipient.send(
+                    text, allowed_mentions=discord.AllowedMentions.none(),
+                )
+                successful += 1
+            except discord.HTTPException as exc:
+                errors.append(exc)
+        if errors and not successful:
+            raise errors[0]
+        if errors:
+            await _reply_problem(
+                message,
+                "The video reached only some chosen destinations. "
+                "The original link was kept; check Discord channel and DM permissions.",
+            )
+        return not errors
+
     _gate()  # Initialize per-event-loop limits BEFORE tracking this user.
     key = (int(message.guild.id), int(message.author.id))
     now = time.monotonic()
@@ -269,12 +334,10 @@ async def handle_download_message(message: discord.Message) -> bool:
                         use_host = video.size_bytes > DM_ATTACHMENT_BYTES and hosting_ready
                         if not use_host:
                             try:
-                                await message.author.send(
-                                    prefix + "🎬 Your video from the Share Router Download channel:",
+                                delivered_file_or_hosted_link = await send_delivery(
+                                    prefix + "🎬 Video shared with Dank Shield:",
                                     file=video.file,
-                                    allowed_mentions=discord.AllowedMentions.none(),
                                 )
-                                delivered_file_or_hosted_link = True
                             except discord.HTTPException as exc:
                                 # Discord can reject uploads regardless of the
                                 # advertised maximum; retry as hosted link only
@@ -283,12 +346,11 @@ async def handle_download_message(message: discord.Message) -> bool:
                                     raise
                                 use_host = hosting_ready
                                 if not use_host:
-                                    await message.author.send(
+                                    await send_delivery(
                                         "🔗 Discord rejected this video attachment as too large. "
                                         "The original public source is here instead:\n"
                                         + resolution.canonical_url
                                         + "\n\nThis is a link, not a downloaded file.",
-                                        allowed_mentions=discord.AllowedMentions.none(),
                                     )
 
                         if use_host:
@@ -301,28 +363,25 @@ async def handle_download_message(message: discord.Message) -> bool:
                             )
                             staged_link = await stage_video(video.file.fp, ttl_seconds=ttl, ext=ext)
                             if staged_link is None:
-                                await message.author.send(
+                                await send_delivery(
                                     "🔗 This video could not be hosted within the storage/size limit. "
                                     "The original public source is available here:\n"
                                     + resolution.canonical_url,
-                                    allowed_mentions=discord.AllowedMentions.none(),
                                 )
                             else:
                                 watch_url, download_url, stored_id = staged_link
                                 try:
-                                    await message.author.send(
-                                        prefix + "🎬 Your private video is ready.\n"
+                                    delivered_file_or_hosted_link = await send_delivery(
+                                        prefix + "🎬 Your video is ready.\n"
                                         f"▶️ Watch: {watch_url}\n"
                                         f"📥 Download: {download_url}\n"
                                         f"⏳ Both links expire in {ttl // 86400} day(s)."
                                         if ttl >= 86400 else
-                                        prefix + "🎬 Your private video is ready.\n"
+                                        prefix + "🎬 Your video is ready.\n"
                                         f"▶️ Watch: {watch_url}\n"
                                         f"📥 Download: {download_url}\n"
                                         "⏳ Both links expire in 1 hour.",
-                                        allowed_mentions=discord.AllowedMentions.none(),
                                     )
-                                    delivered_file_or_hosted_link = True
                                 except Exception:
                                     await revoke_video(stored_id)
                                     raise
@@ -337,20 +396,19 @@ async def handle_download_message(message: discord.Message) -> bool:
                 else:
                     # Nothing was downloaded or staged. Name the actual failure
                     # stage, not Discord's DM upload limit or hypothetical config.
-                    await message.author.send(
+                    await send_delivery(
                         download_failure_message(
                             resolution,
                             reason=failure_reason,
                             hosting_ready=hosting_ready,
                             hosting_reason=hosting_reason,
                         ),
-                        allowed_mentions=discord.AllowedMentions.none(),
                     )
             except discord.Forbidden:
                 await _reply_problem(
                     message,
-                    "I couldn't DM you. Allow messages from the bot and retry after "
-                    "the cooldown; your original link has been kept.",
+                    "I couldn't send this video to the selected destination. "
+                    "Check permissions and retry after the cooldown; your original link was kept.",
                 )
                 return True
             except discord.HTTPException:
@@ -362,7 +420,7 @@ async def handle_download_message(message: discord.Message) -> bool:
                 return True
 
             # Do not delete the original source if only an error/source link
-            # was DMed. The member may need it to retry after a provider outage.
+            # was delivered, or either selected destination failed.
             # Only actual attachments or staged hosted links count as delivery.
             if not delivered_file_or_hosted_link:
                 return True
