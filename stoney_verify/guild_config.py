@@ -583,7 +583,9 @@ def _db_get_guild_config_sync(
     # overrides, but sends the merged JSON only once. A revision match returns
     # a tiny sentinel instead of retransmitting a potentially 460 KB row.
     # Until the migration is installed, retain the original read for rollback.
-    if "guild_configs" in GUILD_CONFIG_TABLE_FALLBACKS:
+    # Do not override a deployment explicitly configured for a legacy
+    # primary table just because guild_configs is a later fallback.
+    if GUILD_CONFIG_TABLE_FALLBACKS and GUILD_CONFIG_TABLE_FALLBACKS[0] == "guild_configs":
         try:
             response = sb.rpc(
                 _COMPACT_GUILD_CONFIG_RPC,
