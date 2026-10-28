@@ -35,7 +35,8 @@ def coverage(root: Path = ROOT) -> dict[str, object]:
         str(hit["file"]) for hit in report["findings"]
         if hit["classification"] == "direct"
     })
-    referenced_tables = sorted({str(hit["table_name"]) for hit in report["findings"]\n        if hit["call"] == "table" and hit.get("table_name")})
+    referenced_tables = sorted({str(hit["table_name"]) for hit in report["findings"]
+        if hit["call"] == "table" and hit.get("table_name")})
     unrecognized_tables = sorted(set(referenced_tables) - set(SOURCE_KEYS))
     groups = {
         group: [path for path in direct_files
