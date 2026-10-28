@@ -138,3 +138,48 @@ def test_configured_legacy_primary_is_not_overridden_by_compact_rpc(monkeypatch)
     result = cfg._db_get_guild_config_sync(98765)
     assert result["staff_role_id"] == "202"
     assert sb.calls == []
+
+
+class _PatchRPCFallback:
+    def __init__(self, first_error):
+        self.calls = []
+        self.first_error = first_error
+    def rpc(self, name, params):
+        self.calls.append((name, dict(params)))
+        if name == cfg.GUILD_CONFIG_PATCH_RPC:
+            raise self.first_error
+        assert name == cfg.GUILD_CONFIG_PATCH_LEGACY_RPC
+        return _Response({"guild_id": "98765", "settings": {"enabled": True}})
+
+
+def test_compact_patch_missing_function_falls_back_to_original_atomic_writer():
+    db = _PatchRPCFallback(RuntimeError("PGRST202 function not found"))
+    params = {"p_guild_id": "98765", "p_patch": {"enabled": True}, "p_clear_keys": []}
+    result = cfg._execute_guild_config_patch_rpc(db, params).data
+    assert result["settings"]["enabled"] is True
+    assert [name for name, _ in db.calls] == [
+        cfg.GUILD_CONFIG_PATCH_RPC, cfg.GUILD_CONFIG_PATCH_LEGACY_RPC,
+    ]
+    assert db.calls[0][1] == db.calls[1][1] == params
+
+
+def test_ambiguous_patch_write_error_does_not_trigger_another_write():
+    import pytest
+    db = _PatchRPCFallback(TimeoutError("server disconnected after write"))
+    with pytest.raises(TimeoutError, match="server disconnected"):
+        cfg._execute_guild_config_patch_rpc(
+            db, {"p_guild_id": "98765", "p_patch": {"enabled": True}}
+        )
+    assert len(db.calls) == 1
+
+
+def test_compact_patch_sql_uses_exact_old_writer_once_and_keeps_cas():
+    sql = Path("supabase_fresh/migrations/202610280003_dankshield_compact_config_patch_response.sql").read_text()
+    assert "as materialized" in sql.lower()
+    assert sql.count("public.patch_dank_guild_config(") == 1
+    assert "'__atomic_patch_row'" in sql
+    assert "'__atomic_patch_applied'" not in sql or "envelope" in sql
+    assert "security invoker" in sql.lower()
+    assert "to service_role" in sql.lower()
+    assert "from public, anon, authenticated" in sql.lower()
+    assert "update public.guild_configs" not in sql.lower()
