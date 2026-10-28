@@ -769,9 +769,12 @@ def _historical_member_embed(
     if code:
         source_lines.append(f"Invite code (retained): `{_plain(code, 32)}`")
     if inviter:
-        source_lines.append(f"Inviter (retained): **{_plain(inviter)}**")
+        source_lines.append(f"Invite creator (retained): **{_plain(inviter)}**")
     if relations.get("attribution_record") == "member_joined_event":
         source_lines.append("Record: **Original member-joined event** (matched to this join)")
+        if quality == "confirmed" and not conflicted:
+            confidence = "Confirmed in retained join event"
+            source_lines[1] = f"Confidence: **{confidence}**"
     reason = str(
         latest.get("entry_quality_reason")
         or relations.get("entry_quality_reason")
