@@ -1015,14 +1015,22 @@ async def _download_settings_embed(guild: discord.Guild) -> discord.Embed:
     embed = discord.Embed(
         title="📥 Private Video Downloads",
         description=(
-            "One-time server setup: **Create Download Channel** on the Share Router menu. "
-            "Members post a public video URL there; the result is sent privately in DM. "
-            "Smaller files arrive as attachments; larger ones use expiring HTTPS Watch and "
-            "Download links when hosting is available."
+            "Server owners choose **Where Videos Go** to select private DMs, "
+            "a server channel, both, or off. This advanced page controls link "
+            "expiration and media hosting. Smaller files are sent as attachments; "
+            "larger ones use expiring HTTPS links when hosting is available."
         ),
         color=discord.Color.blurple(),
     )
-    embed.add_field(name="Download channel", value=channel.mention if channel else "Not configured", inline=False)
+    mode, destination_id = await guild_download_delivery(int(guild.id))
+    target = guild.get_channel(destination_id) if destination_id else None
+    labels = {"off": "Paused", "dm": "Private DM", "channel": "Server channel", "both": "DM and server channel"}
+    embed.add_field(name="Request channel", value=channel.mention if channel else "Not configured", inline=False)
+    embed.add_field(
+        name="Where videos go",
+        value=labels[mode] + (f" • {target.mention}" if isinstance(target, discord.TextChannel) else ""),
+        inline=False,
+    )
     embed.add_field(name="Link expiration", value={
         3600: "1 hour", 86400: "24 hours", 604800: "7 days (recommended)",
         2592000: "30 days (maximum)",
@@ -1094,26 +1102,60 @@ class ShareRouterDownloadSettingsView(_OwnedView):
             return
         await interaction.response.send_modal(ShareRouterProviderProbeModal(int(interaction.user.id)))
 
-    @discord.ui.button(label="Back to Share Router", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Where Videos Go", emoji="⬅️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await open_share_router_video_delivery(interaction)
+
+
+class ShareRouterControlsView(_OwnedView):
+    """Existing handlers remain authoritative, grouped into small plain-language views."""
+
+    def __init__(self, owner_id: int, *, section: str) -> None:
+        super().__init__(owner_id)
+        sections = {
+            "setup": {
+                "Share From Existing Channel", "Create Private Share Channel",
+                "Create / Repair Share Channels", "Share Router Home",
+            },
+            "routes": {
+                "Add / Change Forwarding", "Remove Forwarding",
+                "Delete Private Share Channel", "Clean Up Missing Channels",
+                "Share Router Home",
+            },
+            "advanced": {
+                "Download Settings", "Video Service Status", "Test Video Link",
+                "Refresh", "Share Router Home",
+            },
+        }
+        if section not in sections:
+            raise ValueError("Unknown Share Router menu section")
+        for item in tuple(self.children):
+            if getattr(item, "label", "") not in sections[section]:
+                self.remove_item(item)
+        for index, item in enumerate(self.children):
+            item.row = index // 5
+
+    @discord.ui.button(label="Share Router Home", emoji="⬅️", style=discord.ButtonStyle.secondary, row=4)
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_share_router(interaction, replace_message=True)
 
-class ShareRouterView(_OwnedView):
-    @discord.ui.button(label="Use Existing Channel", emoji="📁", style=discord.ButtonStyle.primary, row=2)
+
+    @discord.ui.button(label="Share From Existing Channel", emoji="📁", style=discord.ButtonStyle.primary, row=2)
     async def use_existing_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await _require_manage(interaction):
             return
         await _open_existing_source_picker(interaction)
 
-    @discord.ui.button(label="Create Proxy", emoji="➕", style=discord.ButtonStyle.primary, row=2)
+    @discord.ui.button(label="Create Private Share Channel", emoji="➕", style=discord.ButtonStyle.primary, row=2)
     async def create_proxy(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_manage(interaction):
             return
         await interaction.response.send_modal(ShareRouterCreateSourceModal(int(interaction.user.id)))
 
-    @discord.ui.button(label="Remove Missing Proxies", emoji="🧹", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Clean Up Missing Channels", emoji="🧹", style=discord.ButtonStyle.secondary, row=2)
     async def clean_missing(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_manage(interaction):
@@ -1135,97 +1177,31 @@ class ShareRouterView(_OwnedView):
             view=ShareRouterPruneConfirmView(int(interaction.user.id)),
         )
 
-    @discord.ui.button(label="Delete Custom Proxy", emoji="🗑️", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Delete Private Share Channel", emoji="🗑️", style=discord.ButtonStyle.secondary, row=2)
     async def delete_proxy(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_manage(interaction):
             return
         await _open_delete_source_picker(interaction)
 
-    @discord.ui.button(label="Create Download Channel", emoji="📥", style=discord.ButtonStyle.primary, row=3)
+    @discord.ui.button(label="Video Download Setup", emoji="📥", style=discord.ButtonStyle.primary, row=3)
     async def create_download_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        if not await _require_manage(interaction):
-            return
-        guild = interaction.guild
-        if guild is None:
-            return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        existing_id = await guild_download_channel_id(int(guild.id))
-        if existing_id:
-            await interaction.edit_original_response(
-                content="⚠️ This server already has a configured download channel. "
-                        "Disable the old one first if it was deleted.",
-                embed=None, view=None,
-            )
-            return
-        me = guild.me
-        if me is None or not me.guild_permissions.manage_channels:
-            await interaction.edit_original_response(
-                content="❌ Dank Shield needs Manage Channels to create the video download channel.",
-                embed=None, view=None,
-            )
-            return
-        channel = None
-        try:
-            channel = await guild.create_text_channel(
-                "video-downloads",
-                topic="Post one public video link to receive a private DM. "
-                      "Discord's DM upload limits apply; source links may remain "
-                      "visible if the bot cannot delete messages.",
-                reason="Dank Shield Share Router opt-in private video download channel",
-            )
-            await save_guild_download_channel(int(guild.id), int(channel.id))
-        except Exception as exc:
-            # Best-effort rollback only for a channel created by this click.
-            if channel is not None:
-                try:
-                    await channel.delete(reason="Download configuration save failed")
-                except discord.HTTPException:
-                    pass
-            await interaction.edit_original_response(
-                content=f"❌ Download setup did not finish ({type(exc).__name__}). "
-                        "Check channel permissions and try again.",
-                embed=None, view=None,
-            )
-            return
-        await interaction.edit_original_response(
-            content=(
-                f"✅ Created {channel.mention}. Members can paste one public video URL "
-                "per message; Dank Shield will DM the file when it fits the DM "
-                "limit, otherwise a link. Source posts are deleted only after "
-                "successful DM delivery and only with Manage Messages."
-            ),
-            embed=None, view=None, allowed_mentions=_ALLOWED_MENTIONS,
-        )
+        await open_share_router_video_delivery(interaction)
 
     @discord.ui.button(label="Download Settings", emoji="⏳", style=discord.ButtonStyle.secondary, row=3)
     async def download_settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         await open_share_router_download_settings(interaction)
 
-    @discord.ui.button(label="Disable Downloads", emoji="⏸️", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="Pause Downloads", emoji="⏸️", style=discord.ButtonStyle.secondary, row=3)
     async def disable_downloads(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_manage(interaction):
             return
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            await save_guild_download_channel(int(interaction.guild.id), 0)
-        except Exception as exc:
-            await interaction.edit_original_response(
-                content=f"❌ Could not disable downloads ({type(exc).__name__}).",
-                embed=None, view=None,
-            )
-            return
-        await interaction.edit_original_response(
-            content="✅ Auto-download DMs disabled for this server. "
-                    "The Discord channel was preserved; remove it manually if desired.",
-            embed=None, view=None,
-        )
+        await _open_download_delivery_confirmation(interaction, "off")
 
-    @discord.ui.button(label="Create / Repair Hub", emoji="🛠️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Create / Repair Share Channels", emoji="🛠️", style=discord.ButtonStyle.primary, row=0)
     async def repair(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_manage(interaction):
@@ -1286,14 +1262,14 @@ class ShareRouterView(_OwnedView):
                     f"guild={int(guild.id)}"
                 )
 
-    @discord.ui.button(label="Add / Change Route", emoji="➕", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Add / Change Forwarding", emoji="➕", style=discord.ButtonStyle.success, row=0)
     async def add_route(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_manage(interaction):
             return
         await _open_source_picker(interaction)
 
-    @discord.ui.button(label="Remove Route", emoji="🗑️", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="Remove Forwarding", emoji="🗑️", style=discord.ButtonStyle.danger, row=0)
     async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_manage(interaction):
@@ -1305,14 +1281,14 @@ class ShareRouterView(_OwnedView):
         _ = button
         await open_share_router(interaction, replace_message=True)
 
-    @discord.ui.button(label="Media Health", emoji="🎞️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Video Service Status", emoji="🎞️", style=discord.ButtonStyle.secondary, row=1)
     async def media_health(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_manage(interaction):
             return
         await _private(interaction, embed=_share_media_health_embed())
 
-    @discord.ui.button(label="Test Provider", emoji="🧪", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Test Video Link", emoji="🧪", style=discord.ButtonStyle.secondary, row=1)
     async def test_provider(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
         if not await _require_manage(interaction):
