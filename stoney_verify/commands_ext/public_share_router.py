@@ -216,6 +216,44 @@ async def _share_router_embed(guild: discord.Guild) -> discord.Embed:
     return embed
 
 
+async def _share_router_check_embed(guild: discord.Guild) -> discord.Embed:
+    embed = await _share_router_embed(guild)
+    embed.title = "✅ Share Router Setup Check"
+    pending = await guild_pending_source_cleanup_count(int(guild.id))
+    embed.add_field(
+        name="Automatic cleanup",
+        value=(
+            f"⚠️ {pending} successfully forwarded posts are awaiting deletion. "
+            "Check Manage Messages in private share channels."
+            if pending else "Successful private shares are cleaned after delivery. "
+            "Failed shares always keep their original posts."
+        ),
+        inline=False,
+    )
+    category = find_share_router_category(guild)
+    custom = await guild_custom_share_sources(int(guild.id))
+    working = sum(isinstance(guild.get_channel(cid), discord.TextChannel) for cid in custom)
+    embed.add_field(
+        name="Private share channels",
+        value=(
+            ("✅ Hub found" if category is not None else "No private hub yet")
+            + f" • {working}/{len(custom)} extra channels found"
+        ),
+        inline=False,
+    )
+    download_id = await guild_download_channel_id(int(guild.id))
+    if download_id:
+        ready, reason = delivery_status()
+        embed.add_field(
+            name="Large video links",
+            value="✅ Configured • verify public reachability in Advanced Tools."
+            if ready else "⚠️ Large-file hosting unavailable: " + reason[:800],
+            inline=False,
+        )
+    embed.set_footer(text="This check is read-only. Choose a setup option to make changes.")
+    return embed
+
+
 def _share_media_health_embed() -> discord.Embed:
     """Operator-only aggregates. Never expose URL, query, token or user content."""
     snapshot = media_resolver_snapshot()
@@ -1812,7 +1850,13 @@ class ShareRouterView(_OwnedView):
     @discord.ui.button(label="Check My Setup", emoji="✅", style=discord.ButtonStyle.secondary, row=1)
     async def status(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await open_share_router(interaction, replace_message=True)
+        if not await _require_manage(interaction):
+            return
+        await _replace(
+            interaction,
+            embed=await _share_router_check_embed(interaction.guild),
+            view=ShareRouterView(self.owner_id),
+        )
 
     @discord.ui.button(label="Advanced Tools", emoji="🧰", style=discord.ButtonStyle.secondary, row=2)
     async def advanced(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
