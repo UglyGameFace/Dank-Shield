@@ -1,3 +1,15 @@
+## CURRENT CONVERSATION: Custom trusted-advert cleanup hours (2026-10-29)
+
+- **Objective:** Accept owner-entered whole hours such as 25 for approved advertising bots, retaining the published 24-hour minimum and existing ten-minute buffer. No automated bumping or guarantee against provider penalties.
+- **Root cause:** Preset-only validation existed in the Discord modal, canonical config save/normalization, and expiry calculation. Merely changing the form would reject or shorten custom values elsewhere.
+- **Branch/base:** `fix/trusted-advert-custom-hours-20261029`, based on `main@76ad58844e2ddf1c6135a5a84ed93f1f3dd738de` (merged egress PR #758). No open PRs at initial live inspection; prior work remains preserved below and in its existing refs.
+- **Change:** One shared whole-hours parser and deadline calculation; custom duration retained through config round trips and tracking; malformed durations keep bot trust but disable deletion. Longer durations reschedule existing queued adverts directly to the current deadline without exhausting failure retries. Staff authorization, exact bot/channel consent and preview preferences remain intact. No schema migration, live config edit, deployment or channel cleanup.
+- **Validation:** Full local suite on Python 3.12.14: **4,166 passed, 28 skipped, 7 subtests passed** in 13m36s. Earlier focused trusted-advert/Invite Shield/UI regressions: 125 passed. All 42 standalone tool checks/additional CI audits and four further invite/setup/surface audits passed; compileall and diff whitespace review passed. No unrelated code, secrets, generated artifacts, or migration edits in the reviewed diff. Remote PR CI and live Android/Discloud acceptance remain unverified because publishing was blocked.
+- **Explicit publication/merge approval:** Owner answered yes on October 29 to pushing this tested fix to the public GitHub repository UglyGameFace/Dank-Shield and merging after exact-head CI passes. Publish this preserved branch and open one focused PR. No additional confirmation is needed for those approved actions. Discloud deployment, live config changes and advert deletion remain subject to existing release/recovery gates.
+- **Release/next step:** Push the approved focused branch, open its PR, verify exact-head checks and merge the validated head. Honor existing current-main CI, recovery/rollback and live acceptance gates for Discloud. Confirm the Android modal accepts 25 and displays at least 25 hours + 10 minutes after the verified deployment. No unrelated database or branch-retirement work started.
+
+---
+
 ## ACTIVE: Supabase egress quota repair (2026-10-28)
 
 - **Owner direction:** Fix the dedicated DankShield Supabase free-plan egress exhaustion end-to-end, preserving member truth, settings and rollback. This supersedes the completed #757 development task for this conversation; #757's live Discord canary remains separately pending.
