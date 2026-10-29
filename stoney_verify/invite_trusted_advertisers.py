@@ -11,10 +11,43 @@ from typing import Any, Mapping
 
 CONFIG_KEY = "invite_trusted_advertisers_v1"
 MAX_RULES = 10
-RETAIN_CHOICES = (24, 48, 72)
+MIN_RETENTION_HOURS = 24
 # OneBump's published fair-play rules require ads stay up at least 24 hours.
 # Allow extra time for Discord clocks, bot downtime and boundary races.
 RETENTION_GRACE_MINUTES = 10
+
+
+def parse_retention_hours(value: Any) -> int:
+    """Accept custom whole hours without truncating fractions or shortening them."""
+    error = "Enter a whole number of hours, at least 24 (for example, 25)."
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError(error)
+    raw = str(value).strip()
+    if not raw.isdecimal():
+        raise ValueError(error)
+    try:
+        hours = int(raw)
+        if hours < MIN_RETENTION_HOURS:
+            raise ValueError(error)
+        # Reject dates the scheduler/database cannot represent, rather than
+        # imposing another preset list or allowing an overflow during tracking.
+        datetime.now(timezone.utc) + timedelta(
+            hours=hours, minutes=RETENTION_GRACE_MINUTES,
+        )
+    except (ValueError, OverflowError):
+        raise ValueError(error) from None
+    return hours
+
+
+def retention_deadline(posted: Any, hours: Any) -> datetime | None:
+    if not isinstance(posted, datetime) or posted.tzinfo is None:
+        return None
+    try:
+        return posted.astimezone(timezone.utc) + timedelta(
+            hours=parse_retention_hours(hours), minutes=RETENTION_GRACE_MINUTES,
+        )
+    except (ValueError, OverflowError):
+        return None
 
 
 def _id(value: Any) -> int:
@@ -40,17 +73,19 @@ def clean_rules(config: Mapping[str, Any] | Any) -> list[dict[str, Any]]:
         channel_id = _id(item.get("channel_id"))
         if not bot_id or not channel_id or (bot_id, channel_id) in used:
             continue
+        cleanup_enabled = item.get("cleanup_enabled") is True
         try:
-            retention = int(item.get("retention_hours", 24))
-        except (TypeError, ValueError):
-            retention = 24
-        if retention not in RETAIN_CHOICES:
-            retention = 24
+            retention = parse_retention_hours(item.get("retention_hours", 24))
+        except ValueError:
+            retention = MIN_RETENTION_HOURS
+            # Keep exact bot/channel trust, but never silently shorten an
+            # invalid saved duration and then delete its advertisements.
+            cleanup_enabled = False
         used.add((bot_id, channel_id))
         out.append({
             "bot_id": bot_id,
             "channel_id": channel_id,
-            "cleanup_enabled": item.get("cleanup_enabled") is True,
+            "cleanup_enabled": cleanup_enabled,
             "retention_hours": retention,
             "suppress_embeds": item.get("suppress_embeds") is True,
         })
@@ -102,17 +137,8 @@ def is_advert_like(message: Any) -> bool:
 
 
 def expires_at(message: Any, rule: Mapping[str, Any]) -> datetime | None:
-    posted = getattr(message, "created_at", None)
-    if not isinstance(posted, datetime) or posted.tzinfo is None:
-        return None
-    try:
-        hours = int(rule.get("retention_hours", 24))
-    except (TypeError, ValueError):
-        return None
-    if hours not in RETAIN_CHOICES:
-        return None
-    return posted.astimezone(timezone.utc) + timedelta(
-        hours=hours, minutes=RETENTION_GRACE_MINUTES,
+    return retention_deadline(
+        getattr(message, "created_at", None), rule.get("retention_hours", 24),
     )
 
 
@@ -133,8 +159,7 @@ async def save_rule(guild_id: int, *, bot_id: int, channel_id: int,
     gid, bot, chan = _id(guild_id), _id(bot_id), _id(channel_id)
     if not gid or not bot or not chan:
         raise ValueError("Select a valid bot and channel.")
-    if retention_hours not in RETAIN_CHOICES:
-        raise ValueError("Choose 24, 48 or 72 hours.")
+    retention_hours = parse_retention_hours(retention_hours)
     for _attempt in range(3):
         cfg = await get_guild_config(gid, refresh=True)
         if str(cfg.get("source", "")).startswith("unavailable:"):

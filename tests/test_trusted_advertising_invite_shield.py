@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from pathlib import Path
 
 import discord
@@ -23,13 +23,13 @@ CHANNEL = 333333333333333333
 OTHER_CHANNEL = 555555555555555555
 
 
-def _cfg(cleanup_on=False):
+def _cfg(cleanup_on=False, *, hours=24):
     return {
         "automod_block_invites": True,
         trust.CONFIG_KEY: [
             {
                 "bot_id": BOT, "channel_id": CHANNEL,
-                "retention_hours": 24, "cleanup_enabled": cleanup_on,
+                "retention_hours": hours, "cleanup_enabled": cleanup_on,
             }
         ],
     }
@@ -81,6 +81,103 @@ def test_24_hour_retention_has_safety_buffer_not_early_delete():
     expiry = trust.expires_at(msg, rule)
     assert expiry == now + timedelta(hours=24, minutes=10)
     assert trust.expires_at(msg, {"retention_hours": 1}) is None
+
+
+@pytest.mark.parametrize("hours", [24, 25, 26, 36, 48, 72, 100, 168, 10000])
+def test_custom_hours_survive_saved_config_and_set_exact_expiry(hours):
+    posted = datetime.now(timezone.utc)
+    msg = _message(created=posted)
+    rule = trust.trusted_rule(msg, _cfg(True, hours=str(hours)))
+    assert rule["retention_hours"] == hours
+    assert rule["cleanup_enabled"] is True
+    assert trust.expires_at(msg, rule) == posted + timedelta(hours=hours, minutes=10)
+
+
+@pytest.mark.parametrize("value", [23, 0, -25, True, 25.5, "25.5", "", "hours", None, 10**20])
+def test_invalid_hours_never_enable_or_shorten_cleanup(value):
+    with pytest.raises(ValueError, match="at least 24"):
+        trust.parse_retention_hours(value)
+    rules = trust.clean_rules(_cfg(True, hours=value))
+    assert rules[0]["bot_id"] == BOT
+    assert rules[0]["cleanup_enabled"] is False
+    assert trust.expires_at(_message(), {"retention_hours": value}) is None
+
+
+def test_saving_custom_hours_round_trips_without_losing_preview_preference(monkeypatch):
+    from stoney_verify import guild_config
+    saved = {"source": "guild_config", **_cfg(True, hours=48)}
+    saved[trust.CONFIG_KEY][0]["suppress_embeds"] = True
+    monkeypatch.setattr(guild_config, "get_guild_config", AsyncMock(return_value=saved))
+    cas = AsyncMock(return_value=(True, {}))
+    monkeypatch.setattr(guild_config, "compare_and_swap_guild_config_key", cas)
+    monkeypatch.setattr(engine, "invalidate_invite_policy", lambda _gid: None)
+    result = asyncio.run(trust.save_rule(
+        GUILD, bot_id=BOT, channel_id=CHANNEL,
+        cleanup_enabled=True, retention_hours=25,
+    ))
+    stored = cas.await_args.kwargs["value"]
+    assert result == trust.clean_rules({trust.CONFIG_KEY: stored})
+    assert result[0]["retention_hours"] == 25
+    assert result[0]["suppress_embeds"] is True
+
+
+@pytest.mark.parametrize("hours", [25, 100, 168])
+def test_cleanup_modal_accepts_custom_hours(monkeypatch, hours):
+    modal = ui.ConfirmAdvertCleanupModal(1, channel_id=CHANNEL)
+    modal.hours._value = f" {hours} "
+    modal.bot_id._value = str(BOT)
+    modal.consent._value = "DELETE"
+    assert modal.hours.max_length >= len(str(hours))
+    interaction = SimpleNamespace(
+        guild=SimpleNamespace(id=GUILD),
+        user=SimpleNamespace(id=1, guild_permissions=SimpleNamespace(manage_guild=True)),
+        response=SimpleNamespace(defer=AsyncMock()),
+    )
+    monkeypatch.setattr(ui, "_resolve_bot", AsyncMock(return_value=SimpleNamespace(id=BOT)))
+    monkeypatch.setattr(ui, "load_rules", AsyncMock(return_value=trust.clean_rules(_cfg())))
+    save = AsyncMock()
+    notice = AsyncMock()
+    monkeypatch.setattr(ui, "save_rule", save)
+    monkeypatch.setattr(ui, "_notice", notice)
+    asyncio.run(modal.on_submit(interaction))
+    save.assert_awaited_once_with(
+        GUILD, bot_id=BOT, channel_id=CHANNEL,
+        cleanup_enabled=True, retention_hours=hours,
+    )
+    assert f"{hours} hours + 10 minutes" in notice.await_args.args[1]
+
+
+@pytest.mark.parametrize("hours,manage_guild", [("23", True), ("25.5", True), ("25", False)])
+def test_cleanup_modal_rejects_invalid_hours_or_nonstaff_before_saving(monkeypatch, hours, manage_guild):
+    modal = ui.ConfirmAdvertCleanupModal(1, channel_id=CHANNEL)
+    modal.hours._value = hours
+    modal.consent._value = "DELETE"
+    interaction = SimpleNamespace(
+        guild=SimpleNamespace(id=GUILD),
+        user=SimpleNamespace(id=1, guild_permissions=SimpleNamespace(manage_guild=manage_guild)),
+        response=SimpleNamespace(defer=AsyncMock()),
+    )
+    resolve = AsyncMock()
+    save = AsyncMock()
+    monkeypatch.setattr(ui, "_resolve_bot", resolve)
+    monkeypatch.setattr(ui, "save_rule", save)
+    monkeypatch.setattr(ui, "_notice", AsyncMock())
+    asyncio.run(modal.on_submit(interaction))
+    save.assert_not_awaited()
+    resolve.assert_not_awaited()
+    interaction.response.defer.assert_not_awaited()
+
+
+def test_custom_hours_are_used_when_tracking_advert(monkeypatch):
+    posted = datetime.now(timezone.utc)
+    message = _message(created=posted)
+    monkeypatch.setattr(engine, "load_invite_policy", AsyncMock(return_value=(_cfg(True, hours=25), {})))
+    database = Mock()
+    monkeypatch.setattr(cleanup, "_db", lambda: database)
+    assert asyncio.run(cleanup.track_advert(message)) is True
+    payload = database.table.return_value.insert.call_args.args[0]
+    assert payload["delete_after"] == (posted + timedelta(hours=25, minutes=10)).isoformat()
+    assert payload["posted_at"] == posted.isoformat()
 
 
 def test_ad_shape_does_not_count_interaction_receipts_or_text_only():
@@ -171,7 +268,42 @@ def test_process_claim_never_deletes_before_post_plus_grace(monkeypatch):
     monkeypatch.setattr(cleanup, "get_guild_config", load)
     monkeypatch.setattr(cleanup, "_finish", finish)
     assert asyncio.run(cleanup.process_claim(bot, record)) == "not-due"
-    finish.assert_awaited_once_with(record, "pending", error="retention_not_elapsed")
+    finish.assert_awaited_once_with(
+        record, "pending", error="retention_not_elapsed",
+        due_at=posted + timedelta(hours=24, minutes=10),
+    )
+
+
+def test_longer_retention_reschedules_without_exhausting_failure_retries(monkeypatch):
+    posted = datetime.now(timezone.utc) - timedelta(hours=26)
+    record = {
+        "guild_id": str(GUILD), "channel_id": str(CHANNEL),
+        "message_id": "222222222222222222", "bot_id": str(BOT),
+        "posted_at": posted.isoformat(), "attempts": 8,
+    }
+    guild = SimpleNamespace(id=GUILD, get_channel=Mock())
+    bot = SimpleNamespace(get_guild=lambda _id: guild)
+    monkeypatch.setattr(cleanup, "get_guild_config", AsyncMock(return_value={
+        "source": "guild_config", **_cfg(True, hours=100),
+    }))
+    database = Mock()
+    monkeypatch.setattr(cleanup, "_db", lambda: database)
+    assert asyncio.run(cleanup.process_claim(bot, record)) == "not-due"
+    update = database.table.return_value.update.call_args.args[0]
+    assert update["state"] == "pending"
+    assert update["attempts"] == 0
+    assert update["delete_after"] == (posted + timedelta(hours=100, minutes=10)).isoformat()
+    guild.get_channel.assert_not_called()
+
+
+def test_actual_deletion_failures_still_have_a_bounded_retry_budget(monkeypatch):
+    database = Mock()
+    monkeypatch.setattr(cleanup, "_db", lambda: database)
+    record = {"guild_id": str(GUILD), "message_id": "222222222222222222", "attempts": 8}
+    asyncio.run(cleanup._finish(record, "pending", error="Forbidden"))
+    update = database.table.return_value.update.call_args.args[0]
+    assert update["state"] == "failed"
+    assert "attempts" not in update
 
 
 def test_main_ui_and_worker_wiring_use_existing_owners():
@@ -201,8 +333,19 @@ def test_sql_security_defaults_and_atomic_claims():
     assert "to service_role" in text
 
 
-def test_expired_tracked_ad_is_deleted_only_after_fresh_identity_and_permission_checks(monkeypatch):
-    posted = datetime.now(timezone.utc) - timedelta(hours=26)
+@pytest.mark.parametrize("age,expected", [
+    (timedelta(hours=24, minutes=59), "not-due"),
+    (timedelta(hours=25, minutes=9, seconds=59), "not-due"),
+    (timedelta(hours=25, minutes=10), "deleted"),
+])
+def test_custom_retention_deletes_only_after_selected_hours_plus_grace(monkeypatch, age, expected):
+    now = datetime(2026, 10, 29, 12, tzinfo=timezone.utc)
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz)
+    monkeypatch.setattr(cleanup, "datetime", FrozenDateTime)
+    posted = now - age
     advert = _message(created=posted, embeds=[SimpleNamespace(title="Public Partner Ad")])
     advert.delete = AsyncMock()
 
@@ -226,7 +369,7 @@ def test_expired_tracked_ad_is_deleted_only_after_fresh_identity_and_permission_
     bot = SimpleNamespace(get_guild=lambda gid: guild if gid == GUILD else None)
     async def load(gid, *, refresh=False):
         assert gid == GUILD and refresh
-        return {"source": "guild_config", **_cfg(True)}
+        return {"source": "guild_config", **_cfg(True, hours=25)}
     done = AsyncMock()
     monkeypatch.setattr(cleanup, "get_guild_config", load)
     monkeypatch.setattr(cleanup, "_finish", done)
@@ -237,7 +380,15 @@ def test_expired_tracked_ad_is_deleted_only_after_fresh_identity_and_permission_
         "posted_at": posted.isoformat(), "attempts": 1,
     }
     outcome = asyncio.run(cleanup.process_claim(bot, row))
-    assert outcome == "deleted"
+    assert outcome == expected
+    if expected == "not-due":
+        advert.delete.assert_not_awaited()
+        channel.fetch_message.assert_not_awaited()
+        done.assert_awaited_once_with(
+            row, "pending", error="retention_not_elapsed",
+            due_at=posted + timedelta(hours=25, minutes=10),
+        )
+        return
     advert.delete.assert_awaited_once_with(
         reason="Trusted advertising retention expired (server opt-in)"
     )

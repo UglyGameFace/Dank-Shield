@@ -7,7 +7,9 @@ from typing import Any
 
 import discord
 
-from ..invite_trusted_advertisers import clean_rules, load_rules, save_rule
+from ..invite_trusted_advertisers import (
+    clean_rules, load_rules, save_rule, parse_retention_hours,
+)
 from ..ui import DankGuildResourceBrowserView
 
 
@@ -108,10 +110,11 @@ def _embed(guild: discord.Guild, channel_id: int, rules: list[dict[str, Any]]) -
         inline=False,
     )
     embed.add_field(
-        name="OneBump and 24-hour cleanup",
+        name="OneBump and optional cleanup",
         value=(
             "OneBump says adverts must stay visible **at least 24 hours** and warns "
-            "against bulk/purge deletion. The optional cleanup waits **24 hours + 10 minutes**, "
+            "against bulk/purge deletion. Enter **any whole number of hours, 24 or more** "
+            "(for example, **25**); cleanup adds a **10-minute safety buffer**. It "
             "is OFF by default and might still affect OneBump fair-play standing. "
             "Never enable it unless you accept that risk. More info: bump.ltd/guides/fair-play"
         ),
@@ -173,12 +176,15 @@ class ApproveAdvertBotModal(discord.ui.Modal, title="Approve an Advertising Bot"
             return await _notice(interaction, f"Could not save: {str(exc)[:250]}")
         await _notice(interaction, f"✅ Trusted **{member.display_name}** (`{member.id}`) only in {channel.mention}. "
                       "Invite Shield remains enabled for everyone else. Cleanup is OFF. "
-                      "Reopen Trusted Advertising Bots to opt into 24-hour cleanup if desired.")
+                      "Reopen Trusted Advertising Bots to choose cleanup hours if desired.")
 
 
 class ConfirmAdvertCleanupModal(discord.ui.Modal, title="Optional Advertisement Cleanup"):
     bot_id = discord.ui.TextInput(label="Trusted bot ID", placeholder="Paste an approved bot ID", min_length=15, max_length=25)
-    hours = discord.ui.TextInput(label="Hours (24, 48, or 72)", default="24", min_length=2, max_length=2)
+    hours = discord.ui.TextInput(
+        label="Hours to keep adverts (24 or more)", default="24",
+        placeholder="e.g. 25, 36, 100 or 168", min_length=2, max_length=8,
+    )
     consent = discord.ui.TextInput(
         label="Type DELETE to accept fair-play risk",
         placeholder="DELETE", min_length=6, max_length=6,
@@ -195,11 +201,9 @@ class ConfirmAdvertCleanupModal(discord.ui.Modal, title="Optional Advertisement 
         if str(self.consent.value).strip().upper() != "DELETE":
             return await _notice(interaction, "No change. Explicit DELETE confirmation required.")
         try:
-            hours = int(self.hours.value)
-        except (TypeError, ValueError):
-            return await _notice(interaction, "Choose 24, 48 or 72 hours.")
-        if hours not in (24, 48, 72):
-            return await _notice(interaction, "Choose 24, 48 or 72 hours.")
+            hours = parse_retention_hours(self.hours.value)
+        except ValueError as exc:
+            return await _notice(interaction, str(exc))
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
         member = await _resolve_bot(guild, self.bot_id.value)
@@ -216,7 +220,7 @@ class ConfirmAdvertCleanupModal(discord.ui.Modal, title="Optional Advertisement 
         except (RuntimeError, ValueError) as exc:
             return await _notice(interaction, f"No change: {str(exc)[:240]}")
         await _notice(interaction, f"✅ Optional cleanup enabled for bot `{member.id}` in <#{self.channel_id}> "
-                      f"after each NEW advert is {hours} hours + 10 minutes old. "
+                      f"once each tracked advert is at least {hours} hours + 10 minutes old. "
                       "OneBump may penalize automated deletion; consider leaving cleanup off.")
 
 
@@ -329,7 +333,7 @@ class TrustedPreviewModal(discord.ui.Modal, title="Collapse Trusted Ad Previews"
             return await _notice(
                 interaction,
                 "✅ Future adverts will display normally. Existing hidden previews "
-                "stay hidden. Trust and 24-hour cleanup are preserved." + extra,
+                "stay hidden. Trust and your cleanup hours are preserved." + extra,
             )
         if action in {"RECENT", "ON+RECENT"}:
             try:
@@ -361,7 +365,7 @@ class TrustedPreviewModal(discord.ui.Modal, title="Collapse Trusted Ad Previews"
         await _notice(interaction,
             "✅ New approved adverts will collapse automatically. Existing embeds "
             "are unchanged until you choose ON+RECENT or RECENT. "
-            "Trust and scheduled 24-hour deletion settings are preserved."
+            "Trust and your scheduled cleanup hours are preserved."
         )
 
 

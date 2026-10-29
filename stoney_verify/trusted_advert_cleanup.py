@@ -12,7 +12,9 @@ from typing import Any
 import discord
 
 from .globals import get_supabase
-from .invite_trusted_advertisers import trusted_rule, is_advert_like, expires_at
+from .invite_trusted_advertisers import (
+    trusted_rule, is_advert_like, expires_at, retention_deadline,
+)
 from .guild_config import get_guild_config
 
 TABLE = "dank_trusted_advert_messages"
@@ -96,13 +98,14 @@ async def _claim_due() -> list[dict[str, Any]]:
     return await _db_run(fetch)
 
 
-async def _finish(record: dict[str, Any], state: str, *, error: str = "") -> None:
+async def _finish(record: dict[str, Any], state: str, *, error: str = "",
+                  due_at: datetime | None = None) -> None:
     gid = str(record.get("guild_id") or "")
     mid = str(record.get("message_id") or "")
     if state not in {"done", "cancelled", "pending", "failed"}:
         return
     attempts = int(record.get("attempts") or 0)
-    if state == "pending" and attempts >= 8:
+    if state == "pending" and attempts >= 8 and due_at is None:
         state = "failed"
     update: dict[str, Any] = {
         "state": state,
@@ -111,7 +114,13 @@ async def _finish(record: dict[str, Any], state: str, *, error: str = "") -> Non
         "updated_at": _iso(datetime.now(timezone.utc)),
     }
     if state == "pending":
-        update["delete_after"] = _iso(datetime.now(timezone.utc) + timedelta(minutes=30))
+        if due_at is not None:
+            update["delete_after"] = _iso(due_at)
+            # A longer retention setting is a scheduled wait, not a failed
+            # deletion. Do not exhaust retries while waiting for its deadline.
+            update["attempts"] = 0
+        else:
+            update["delete_after"] = _iso(datetime.now(timezone.utc) + timedelta(minutes=30))
     def finish() -> None:
         _db().table(TABLE).update(update).eq("guild_id", gid).eq("message_id", mid).eq("state", "claimed").execute()
     await _db_run(finish)
@@ -141,11 +150,12 @@ async def process_claim(bot: Any, record: dict[str, Any]) -> str:
         if rule is None or not rule["cleanup_enabled"]:
             await _finish(record, "cancelled", error="trusted_rule_revoked")
             return "rule-revoked"
-        expected = posted + timedelta(
-            hours=rule["retention_hours"], minutes=10,
-        )
+        expected = retention_deadline(posted, rule["retention_hours"])
+        if expected is None:
+            await _finish(record, "cancelled", error="invalid_stored_row")
+            return "invalid-row"
         if datetime.now(timezone.utc) < expected:
-            await _finish(record, "pending", error="retention_not_elapsed")
+            await _finish(record, "pending", error="retention_not_elapsed", due_at=expected)
             return "not-due"
         channel = guild.get_channel(cid)
         if not isinstance(channel, discord.TextChannel):
@@ -173,8 +183,11 @@ async def process_claim(bot: Any, record: dict[str, Any]) -> str:
         # Do not delete if a message created after tracked timestamp somehow
         # reuses an ID or the recorded timestamp does not match.
         actual_expiry = expires_at(message, rule)
-        if actual_expiry is None or datetime.now(timezone.utc) < actual_expiry:
-            await _finish(record, "pending", error="message_too_new")
+        if actual_expiry is None:
+            await _finish(record, "cancelled", error="invalid_message_timestamp")
+            return "invalid-timestamp"
+        if datetime.now(timezone.utc) < actual_expiry:
+            await _finish(record, "pending", error="message_too_new", due_at=actual_expiry)
             return "message-too-new"
         try:
             await message.delete(reason="Trusted advertising retention expired (server opt-in)")
