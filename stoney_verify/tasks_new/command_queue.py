@@ -46,7 +46,8 @@ from ..events_new.members import (
 
 _QUEUE_TASK: Optional[asyncio.Task] = None
 _QUEUE_STARTED = False
-_POLL_SECONDS = 3.0
+_POLL_SECONDS = 5.0  # Bound dashboard command pickup to 5s while cutting idle requests.
+_DB_FAILURE_POLL_SECONDS = 30.0  # Avoid request storms while storage is unavailable.
 
 
 def _utc_iso(dt: Optional[datetime]) -> Optional[str]:
@@ -137,8 +138,7 @@ async def _get_member(guild: discord.Guild, user_id: Any) -> Optional[discord.Me
 def _claim_command(command_id: str) -> bool:
     sb = _sb()
     if sb is None:
-        print("⚠️ Supabase unavailable; cannot claim command.")
-        return False
+        raise RuntimeError("Supabase unavailable; cannot claim command.")
 
     try:
         resp = (
@@ -158,7 +158,7 @@ def _claim_command(command_id: str) -> bool:
         return len(rows) > 0
     except Exception as e:
         print(f"❌ Failed claiming bot command {command_id}:", repr(e))
-        return False
+        raise
 
 
 def _complete_command(command_id: str, result: Dict[str, Any]) -> None:
@@ -212,8 +212,7 @@ def _fail_command(command_id: str, error_text: str, result: Optional[Dict[str, A
 def _fetch_next_pending_command() -> Optional[Dict[str, Any]]:
     sb = _sb()
     if sb is None:
-        print("⚠️ Supabase unavailable; cannot fetch command queue.")
-        return None
+        raise RuntimeError("Supabase unavailable; cannot fetch command queue.")
 
     try:
         resp = (
@@ -229,7 +228,7 @@ def _fetch_next_pending_command() -> Optional[Dict[str, Any]]:
         return rows[0] if rows else None
     except Exception as e:
         print("❌ Failed fetching next pending bot command:", repr(e))
-        return None
+        raise
 
 
 async def _handle_create_ticket(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -454,35 +453,35 @@ async def _queue_loop() -> None:
     print("🧠 Command queue worker started.")
 
     while not bot.is_closed():
+        delay = _POLL_SECONDS
         try:
-            command = _fetch_next_pending_command()
-
-            if not command:
-                await asyncio.sleep(_POLL_SECONDS)
-                continue
-
-            command_id = _safe_str(command.get("id"))
-            if not command_id:
-                await asyncio.sleep(_POLL_SECONDS)
-                continue
-
-            claimed = _claim_command(command_id)
-            if not claimed:
-                await asyncio.sleep(0.25)
-                continue
-
-            try:
-                result = await _execute_command(command)
-                _complete_command(command_id, result)
-                print(f"✅ bot_commands completed → {command.get('action')} ({command_id})")
-            except Exception as e:
-                _fail_command(command_id, repr(e))
-                print(f"❌ bot_commands failed → {command.get('action')} ({command_id}):", repr(e))
-
+            # Supabase-py is synchronous. Never let a slow API request or an
+            # unavailable database block Discord's gateway/event loop.
+            command = await asyncio.to_thread(_fetch_next_pending_command)
+            if command:
+                command_id = _safe_str(command.get("id"))
+                if command_id:
+                    claimed = await asyncio.to_thread(_claim_command, command_id)
+                    if claimed:
+                        try:
+                            result = await _execute_command(command)
+                            await asyncio.to_thread(_complete_command, command_id, result)
+                            print(f"✅ bot_commands completed → {command.get('action')} ({command_id})")
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as e:
+                            await asyncio.to_thread(_fail_command, command_id, repr(e))
+                            print(f"❌ bot_commands failed → {command.get('action')} ({command_id}):", repr(e))
+                    # Drain queued work promptly without hammering an empty
+                    # table every quarter second.
+                    delay = 0.25
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             print("❌ Command queue loop error:", repr(e))
+            delay = _DB_FAILURE_POLL_SECONDS
 
-        await asyncio.sleep(_POLL_SECONDS)
+        await asyncio.sleep(delay)
 
 
 def start_command_queue_worker() -> None:
