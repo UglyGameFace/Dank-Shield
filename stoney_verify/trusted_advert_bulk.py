@@ -25,6 +25,8 @@ TABLE = "dank_trusted_advert_collapse_jobs"
 CHUNK_SCAN_LIMIT = 25
 CHUNK_EDIT_LIMIT = 6
 WORKER_POLL_SECONDS = 20
+_IDLE_MAX_SECONDS = 300  # Bulk preview cleanup is not a real-time moderation path.
+_WAKE_QUEUE: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
 _CANCELLED_LOCAL: set[tuple[str, str, str]] = set()
 _TASK: asyncio.Task | None = None
 
@@ -90,6 +92,12 @@ async def start_bulk_collapse(
             "Use Collapse Status to see progress or cancel it."
         )
     _CANCELLED_LOCAL.discard((gid, cid, bid))
+    # Wake the in-process worker immediately for a newly authorized job,
+    # rather than polling Supabase every 20s when no work exists.
+    try:
+        _WAKE_QUEUE.put_nowait(None)
+    except asyncio.QueueFull:
+        pass
     return rows[0]
 
 
@@ -278,9 +286,15 @@ async def process_bulk_claim(bot: Any, row: dict[str, Any]) -> str:
 async def _worker(bot: Any) -> None:
     await bot.wait_until_ready()
     print("🫥 trusted_embed_bulk: durable paced worker started")
+    idle_delay = WORKER_POLL_SECONDS
     while not bot.is_closed():
         try:
-            for row in await _claim_jobs():
+            jobs = await _claim_jobs()
+            if jobs:
+                idle_delay = WORKER_POLL_SECONDS
+            else:
+                idle_delay = min(_IDLE_MAX_SECONDS, idle_delay * 2)
+            for row in jobs:
                 outcome = await process_bulk_claim(bot, row)
                 if outcome in ("completed", "revoked"):
                     print(
@@ -291,7 +305,14 @@ async def _worker(bot: Any) -> None:
             raise
         except Exception as exc:
             print(f"⚠️ trusted_embed_bulk: poll_failed type={type(exc).__name__}")
-        await asyncio.sleep(WORKER_POLL_SECONDS)
+            idle_delay = min(_IDLE_MAX_SECONDS, max(60, idle_delay * 2))
+        # A local staff-initiated job wakes immediately. A DB-backed fallback
+        # always probes eventually for other processes and after restarts.
+        try:
+            await asyncio.wait_for(_WAKE_QUEUE.get(), timeout=idle_delay)
+            idle_delay = WORKER_POLL_SECONDS
+        except asyncio.TimeoutError:
+            pass
 
 
 def start_bulk_worker(bot: Any) -> asyncio.Task:
