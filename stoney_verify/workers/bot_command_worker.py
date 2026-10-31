@@ -39,7 +39,8 @@ from ..verification_new.service import (
     deny_verification,
 )
 
-POLL_INTERVAL = 3
+POLL_INTERVAL = 5.0  # Canonical app.py worker: reduce idle Supabase polling.
+DB_FAILURE_POLL_SECONDS = 30.0  # Distinguish storage outages from empty queues.
 COMMAND_STALE_PROCESSING_SECONDS = 300
 
 _WORKER_TASK: Optional[asyncio.Task] = None
@@ -326,7 +327,7 @@ async def fetch_pending_command() -> Optional[Dict[str, Any]]:
     def _read() -> Optional[Dict[str, Any]]:
         sb = get_supabase()
         if sb is None:
-            return None
+            raise RuntimeError("Supabase unavailable while fetching bot commands")
 
         res = (
             sb.table("bot_commands")
@@ -346,7 +347,9 @@ async def fetch_pending_command() -> Optional[Dict[str, Any]]:
         return await _run_db_op("fetch bot command", _read)
     except Exception as e:
         print("❌ Failed fetching bot command:", repr(e))
-        return None
+        # An empty queue is normal; a failed fetch is not. Let the loop back
+        # off instead of hammering an unavailable database every few seconds.
+        raise
 
 
 async def claim_command(cmd_id: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
@@ -2281,7 +2284,14 @@ async def worker_loop():
     print("🤖 Bot command worker started.")
 
     while not bot.is_closed():
-        cmd = await fetch_pending_command()
+        try:
+            cmd = await fetch_pending_command()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print("❌ Bot command queue storage unavailable:", repr(e))
+            await asyncio.sleep(DB_FAILURE_POLL_SECONDS)
+            continue
 
         if not cmd:
             await asyncio.sleep(POLL_INTERVAL)
