@@ -1522,6 +1522,32 @@ async def on_member_join(member: discord.Member):
                         f"for {member.id}: {type(exc).__name__}: {exc}"
                     )
 
+            # Reuse the current join-risk evidence: no separate broad scan and
+            # no outside-server data. Only an actual Discord ban confirms ban status.
+            try:
+                from .member_connection_intelligence import verified_ban_connections
+
+                banned_links = (await verified_ban_connections(guild, join_context, risk_profile)
+                                if not getattr(member, "bot", False) else [])
+                if banned_links:
+                    linked_ids = ", ".join(f"`{x['user_id']}`" for x in banned_links[:5])
+                    notice = discord.Embed(
+                        title="🔗 Connection Intelligence • Banned-account link",
+                        description=(
+                            f"Account `{member.id}` has a stored relationship to a banned account.\n"
+                            f"Related banned account(s): {linked_ids}\n"
+                            "This is a staff review lead, **not** proof of ban evasion or a leak."
+                        ),
+                        color=discord.Color.orange(),
+                    )
+                    await _post_modlog(
+                        guild, notice,
+                        event_key=f"ban_connection_join:{member.id}",
+                        dedupe_window_seconds=900,
+                    )
+            except Exception as exc:
+                print(f"⚠️ ban connection join check failed: {type(exc).__name__}")
+
     except Exception as exc:
         print("⚠️ on_member_join error:", exc)
         try:
@@ -1702,6 +1728,38 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
                     pass
         except Exception as e:
             print(f"⚠️ on_member_ban post-ban cleanup error for user={getattr(user, 'id', 'unknown')}: {repr(e)}")
+
+        # A ban triggers a bounded, staff-only review of existing relationships.
+        # It never takes action against the associated accounts.
+        try:
+            from .member_connection_intelligence import analyze_member_connections
+
+            connection_report = await analyze_member_connections(guild.id, user.id)
+            matches = connection_report.get("matches") or []
+            if matches:
+                lines = [
+                    f"• `{row['user_id']}`: {row['category']}"
+                    for row in matches[:5]
+                ]
+                notice = discord.Embed(
+                    title="🔗 Connection Intelligence • Ban review",
+                    description=(
+                        f"Banned account: `{user.id}`\n"
+                        + "\n".join(lines)
+                        + "\nThese records identify possible relationships, **not** leaks or guilt. "
+                        "Use /dank members → Intelligence → Recent Ban Connections to review evidence."
+                    )[:4000],
+                    color=discord.Color.orange(),
+                )
+                if connection_report.get("coverage") != "available":
+                    notice.set_footer(text="Evidence incomplete; some storage reads failed.")
+                await _post_modlog(
+                    guild, notice,
+                    event_key=f"ban_connections:{user.id}",
+                    dedupe_window_seconds=900,
+                )
+        except Exception as exc:
+            print(f"⚠️ ban connection review unavailable: {type(exc).__name__}")
 
     except Exception as e:
         print("⚠️ on_member_ban error:", repr(e))

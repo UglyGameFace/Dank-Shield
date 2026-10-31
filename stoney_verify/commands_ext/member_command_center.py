@@ -74,7 +74,7 @@ def _center_embed() -> discord.Embed:
     )
     embed.add_field(
         name="🧠 Intelligence",
-        value="Review join intelligence and inspect reversible staff-verdict history.",
+        value="See join history, connection evidence, bans, and staff review in one place.",
         inline=False,
     )
     embed.add_field(
@@ -148,10 +148,9 @@ def _intelligence_embed() -> discord.Embed:
     return discord.Embed(
         title="🧠 Member Intelligence",
         description=(
-            "Select a current member for moderation and intelligence, or enter a "
-            "Discord user ID to inspect retained join/leave events, activity timestamps, "
-            "tickets and staff decisions for someone who left or was kicked. "
-            "Stored records are not proof someone is still in the server."
+            "Select a member, review recent bans, or inspect a historical account. "
+            "Connection evidence and join history share this one staff-only screen. "
+            "Links do not prove leaked information, friendship, or ban evasion."
         ),
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow(),
@@ -642,6 +641,33 @@ class IntelligenceMenuView(OwnedView):
         _ = button
         await interaction.response.send_modal(MemberHistoryByIdModal())
 
+    @discord.ui.button(label="Recent Ban Connections", emoji="🔗", style=discord.ButtonStyle.primary, row=1)
+    async def recent_bans(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await require_review(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            bans = [entry async for entry in interaction.guild.bans(limit=10)]
+        except (discord.Forbidden, discord.HTTPException):
+            await reply_ephemeral(interaction, "⚠️ Cannot list bans. Check Dank Shield's Ban Members permission.")
+            return
+        if not bans:
+            await reply_ephemeral(interaction, "No ban records are available for this server.")
+            return
+        view = RecentBanConnectionView(self.owner_id, bans)
+        embed = discord.Embed(
+            title="🔗 Recent Ban Connections",
+            description="Choose a banned user. Dank Shield will check stored server evidence, not outside DMs or private servers.",
+            color=discord.Color.blurple(),
+        )
+        await _replace_panel(interaction, embed=embed, view=view)
+
+    @discord.ui.button(label="Connections by ID", emoji="🔍", style=discord.ButtonStyle.secondary, row=1)
+    async def connections_by_id(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.send_modal(ConnectionByIdModal())
+
     @discord.ui.button(label="Command Center", emoji="🏠", style=discord.ButtonStyle.secondary, row=2)
     async def command_center(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
@@ -694,6 +720,14 @@ class IntelligenceTargetView(OwnedView):
         await _replace_panel(
             interaction, embed=member_detail_embed(member, None), view=view,
         )
+
+    @discord.ui.button(label="Connections", emoji="🔗", style=discord.ButtonStyle.secondary, row=1)
+    async def connections(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await require_review(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        await _show_connection_report(interaction, self.owner_id, self.member_id)
 
     @discord.ui.button(label="Back to Intelligence", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -870,6 +904,152 @@ async def _show_stored_member_history(
         ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
+
+
+
+def _connection_embed(report: dict[str, Any]) -> discord.Embed:
+    target = report["target_user_id"]
+    embed = discord.Embed(
+        title="🔗 Member Connection Intelligence",
+        description=(
+            f"Account: `{target}`\n"
+            "Only relationships recorded inside this server are considered. "
+            "**No result proves that anyone leaked information or owns another account.**"
+        ).replace("\n", "\n"),
+        color=discord.Color.blurple(),
+    )
+    matches = report.get("matches") or []
+    embed.add_field(
+        name="Connection results",
+        value=(f"{report.get('total_matches', len(matches))} recorded account(s) • "
+               f"Evidence: {report.get('coverage', 'unknown')}"),
+        inline=False,
+    )
+    for row in matches[:8]:
+        evidence = row.get("evidence") or []
+        summary = "\n".join(f"• {item['label']}" for item in evidence[:3])
+        if row.get("identity_review") == "staff_marked_not_same_person":
+            summary += "\n• Staff previously ruled out a same-person claim"
+        embed.add_field(
+            name=f"Account {row['user_id']} • {row['category']}"[:256],
+            value=summary[:1024] or "Recorded relationship",
+            inline=False,
+        )
+    if not matches:
+        embed.add_field(
+            name="No verified relationship in available records",
+            value="No supported link was found in the records checked. This is not proof the accounts are unrelated.",
+            inline=False,
+        )
+    if report.get("truncated") or len(matches) > 8:
+        embed.add_field(name="Coverage limit", value="Only the first matching records are displayed; this is not an exhaustive investigation.", inline=False)
+    if report.get("errors"):
+        embed.add_field(
+            name="Incomplete evidence",
+            value="; ".join(report["errors"])[:1024] +
+                  "\nMissing records cannot be interpreted as a clean result.",
+            inline=False,
+        )
+    embed.set_footer(text="Staff-only • No automatic punishment • Discord DMs and outside servers are not visible")
+    return embed
+
+
+async def _show_connection_report(
+    interaction: discord.Interaction, owner_id: int, target_id: int
+) -> None:
+    from stoney_verify.member_connection_intelligence import analyze_member_connections
+
+    if not await require_review(interaction):
+        return
+    try:
+        report = await analyze_member_connections(interaction.guild.id, target_id)
+    except Exception as exc:
+        await reply_ephemeral(interaction, f"⚠️ Connection investigation unavailable ({type(exc).__name__}).")
+        return
+    await _replace_panel(
+        interaction,
+        embed=_connection_embed(report),
+        view=ConnectionReportView(owner_id, target_id),
+    )
+
+
+class ConnectionReportView(OwnedView):
+    def __init__(self, owner_id: int, target_id: int) -> None:
+        self.target_id = target_id
+        super().__init__(owner_id)
+
+    @discord.ui.button(label="Refresh Evidence", emoji="🔄", style=discord.ButtonStyle.primary, row=0)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await interaction.response.defer(ephemeral=True)
+        await _show_connection_report(interaction, self.owner_id, self.target_id)
+
+    @discord.ui.button(label="Stored History", emoji="🧾", style=discord.ButtonStyle.secondary, row=0)
+    async def history(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        if not await require_review(interaction):
+            return
+        await _show_stored_member_history(interaction, self.target_id)
+
+    @discord.ui.button(label="Intelligence Menu", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace_panel(interaction, embed=_intelligence_embed(), view=IntelligenceMenuView(self.owner_id))
+
+
+class RecentBanConnectionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, bans: list[Any]) -> None:
+        self.owner_id = owner_id
+        options = [
+            discord.SelectOption(
+                label=str(entry.user)[:90],
+                value=str(entry.user.id),
+                description="Review stored links to this banned account",
+            ) for entry in bans
+        ]
+        super().__init__(
+            placeholder="Choose a banned account…",
+            options=options,
+            min_values=1,
+            max_values=1,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await require_review(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        await _show_connection_report(interaction, self.owner_id, int(self.values[0]))
+
+
+class RecentBanConnectionView(OwnedView):
+    def __init__(self, owner_id: int, bans: list[Any]) -> None:
+        super().__init__(owner_id)
+        self.add_item(RecentBanConnectionSelect(owner_id, bans))
+
+    @discord.ui.button(label="Intelligence Menu", emoji="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        _ = button
+        await _replace_panel(interaction, embed=_intelligence_embed(), view=IntelligenceMenuView(self.owner_id))
+
+
+class ConnectionByIdModal(discord.ui.Modal, title="Connection Intelligence"):
+    user_id = discord.ui.TextInput(
+        label="Discord user ID (even if banned)",
+        placeholder="Enter a user ID, not a username",
+        max_length=22,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw = str(self.user_id.value or "").strip()
+        if not raw.isascii() or not raw.isdecimal() or not 15 <= len(raw) <= 22:
+            await reply_ephemeral(interaction, "❌ Enter a valid Discord user ID (15–22 digits).")
+            return
+        if not await require_review(interaction):
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        await _show_connection_report(interaction, interaction.user.id, int(raw))
+
 
 
 class MemberHistoryByIdModal(discord.ui.Modal, title="Stored Member Intelligence"):
