@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from stoney_verify.member_connection_intelligence import (
     build_connection_report,
+    _read_connection_report,
     verified_ban_connections,
 )
 
@@ -78,14 +79,14 @@ def test_not_linked_verdict_suppresses_identity_claim_not_real_invite() -> None:
                 "user_a_id": OTHER, "user_b_id": TARGET,
                 "status": "active", "link_type": "not_linked",
             }],
-            "proof_forward": [{"user_id": TARGET, "matched_user_id": OTHER}],
+            "manual_a": [{"user_a_id": TARGET, "user_b_id": OTHER, "status": "active", "link_type": "confirmed_duplicate"}],
             "invited": [{"user_id": OTHER, "invited_by": TARGET, "entry_truth_quality": "confirmed"}],
         },
     )
     item = report["matches"][0]
     assert item["identity_review"] == "staff_marked_not_same_person"
     assert item["category"] == "documented server relationship"
-    assert all(e["kind"] != "identity_record" for e in item["evidence"])
+    assert all(e["kind"] != "reviewed_identity" for e in item["evidence"])
 
 
 def test_missing_data_cannot_be_displayed_as_complete() -> None:
@@ -107,6 +108,40 @@ def test_self_matches_discarded_and_caps_are_explicit() -> None:
     assert len(report["matches"]) == 12
     assert all(row["user_id"] != TARGET for row in report["matches"])
 
+
+
+def test_live_reader_uses_only_tables_in_dedicated_supabase(monkeypatch) -> None:
+    """Missing identity_proof_matches must not create two failing queries per review."""
+    tables = []
+
+    class Query:
+        def select(self, columns):
+            assert columns
+            return self
+
+        def eq(self, column, value):
+            assert column and value
+            return self
+
+        def limit(self, count):
+            assert count <= 40
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=[])
+
+    class DB:
+        def table(self, name):
+            tables.append(name)
+            assert name in {"guild_members", "member_joins", "manual_alt_links"}
+            return Query()
+
+    monkeypatch.setattr("stoney_verify.globals.get_supabase", lambda: DB())
+    report = _read_connection_report(int(TARGET), int(OTHER))
+    assert report["coverage"] == "available"
+    assert report["matches"] == []
+    assert len(tables) == 8
+    assert "identity_proof_matches" not in tables
 
 def test_unverified_invitations_and_weak_names_do_not_trigger_ban_assertions() -> None:
     class Guild:
