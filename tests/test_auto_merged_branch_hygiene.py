@@ -67,7 +67,8 @@ def test_never_force_clean_unverified_or_prod_branches() -> None:
     assert "aaa-cinema-pre-pregateway-bind" in workflow
     assert "backup/stoneyverify-stable" in workflow
     assert "vars.DANK_DISCLOUD_DEPLOY_BRANCH" in workflow
-    assert ".slice(0, 20)" in workflow
+    assert "Math.min(20, eligibleCandidates.length)" in workflow
+    assert "(candidateStart + i) % eligibleCandidates.length" in workflow
     assert "eligibleCandidates.length > candidates.length" in workflow
     assert "throw new Error('More than 20 temporary branches" not in workflow
     assert "allBranches.length > 250" in workflow
