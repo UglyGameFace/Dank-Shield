@@ -364,7 +364,7 @@ class _OwnedView(discord.ui.View):
         return False
 
 
-async def _open_manager_message(interaction: discord.Interaction, *, owner_id: Optional[int] = None) -> None:
+async def _open_manager_message(interaction: discord.Interaction, *, owner_id: Optional[int] = None, section: str = "options") -> None:
     guild = interaction.guild
     if guild is None:
         return await _reply(interaction, "This only works inside a server.")
@@ -372,7 +372,7 @@ async def _open_manager_message(interaction: discord.Interaction, *, owner_id: O
     await _replace(
         interaction,
         embed=_manager_embed(guild, raw, model),
-        view=CommunityPingsManagerView(owner_id or int(interaction.user.id)),
+        view=CommunityPingsManagerView(owner_id or int(interaction.user.id), section=section),
     )
 
 
@@ -469,7 +469,7 @@ class CommunityOptionModal(discord.ui.Modal, title="Community / Ping Option"):
         saved = await _save(interaction, expected_config=self.baseline, updated=updated)
         if saved is None:
             return
-        await _open_manager_message(interaction, owner_id=self.owner_id)
+        await _open_manager_message(interaction, owner_id=self.owner_id, section=self.section)
 
 
 class CommunityGroupModal(discord.ui.Modal, title="Community & Pings Group"):
