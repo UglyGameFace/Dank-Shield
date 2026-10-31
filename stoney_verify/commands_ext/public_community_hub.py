@@ -4704,63 +4704,91 @@ class AnalyticsView(_OwnedView):
         await _open_staff_dashboard(interaction, self.owner_id)
 
 
-def _settings_embed(settings: dict[str, Any], bot: Any) -> discord.Embed:
-    presence_runtime = bool(getattr(getattr(bot, "intents", None), "presences", False))
-    on = lambda key, default=False: "On" if bool(settings.get(key, default)) else "Off"
+def _settings_embed(
+    settings: dict[str, Any], bot: Any, *, section: str = "general",
+) -> discord.Embed:
+    """Display the selected settings area, not four unrelated inventories."""
+    section = section if section in {"general", "rooms", "limits", "notifications"} else "general"
+    enabled = lambda key, default=False: "On" if bool(settings.get(key, default)) else "Off"
+    labels = {
+        "general": "General",
+        "rooms": "Rooms & Threads",
+        "limits": "Session Limits",
+        "notifications": "Notifications & Analytics",
+    }
     embed = discord.Embed(
-        title="⚙️ Community Hub Settings",
-        description=(
-            f"**Mode: {_safe_str(settings.get('mode'), 'minimal').title()}** • "
-            f"Maintenance: **{on('maintenance_mode')}**\n"
-            "Minimal posts session cards; Smart manages temporary spaces; "
-            "Managed adds full Hub infrastructure. Choose the area you need below."
-        ),
+        title=f"⚙️ Community Hub • {labels[section]}",
+        description="Choose the settings area and change only the options you need.",
         color=discord.Color.blurple(),
     )
-    embed.add_field(
-        name="Participation & safety",
-        value=(
-            f"Public recruiting: **{on('public_lfg_enabled')}** • "
-            f"Member-created: **{on('allow_member_creation', True)}**\n"
-            f"Analytics: **{on('analytics_enabled', True)}** • "
-            f"Presence: **{on('presence_analytics_enabled') if presence_runtime else 'Intent unavailable'}**"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Session limits",
-        value=(
-            f"Active: **{_safe_int(settings.get('max_active_sessions'), 20)}** • "
-            f"Per member: **{_safe_int(settings.get('max_active_sessions_per_member'), 2)}** • "
-            f"Voice rooms: **{_safe_int(settings.get('max_temporary_voice_rooms'), 12)}**\n"
-            f"Group size: **{_safe_int(settings.get('max_session_capacity'), 25)}** • "
-            f"Minimum: **{_safe_int(settings.get('minimum_players_to_start'), 1)}** • "
-            f"Ready required: **{on('require_ready_to_start')}**"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Notifications & outside groups",
-        value=(
-            f"Notices: **{on('notifications_enabled', True)}** • "
-            f"Max/hour: **{_safe_int(settings.get('max_notifications_per_hour'), 5)}**\n"
-            f"The100.io: **{on('external_the100_enabled')}** "
-            f"({'API ready' if external.the100_configured() else 'No host token'}) • Read-only"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Cleanup and abuse limits",
-        value=(
-            f"Cooldown: **{_safe_int(settings.get('session_creation_cooldown_seconds'), 30)}s** • "
-            f"Reports/hour: **{_safe_int(settings.get('max_reports_per_hour_per_member'), 5)}**\n"
-            f"Idle: **{_safe_int(settings.get('idle_timeout_seconds'), 1800)}s** • "
-            f"Lifetime: **{_safe_int(settings.get('max_session_lifetime_seconds'), 43200)}s** • "
-            f"End: **{'Archive' if bool(settings.get('archive_threads_on_end', True)) else 'Delete'}**"
-        ),
-        inline=False,
-    )
-    embed.set_footer(text="Detailed limits, ready timers and dispatch caps are in their settings controls")
+    if section == "general":
+        embed.add_field(
+            name="Participation",
+            value=(
+                f"Mode: **{_safe_str(settings.get('mode'), 'minimal').title()}**\n"
+                f"Maintenance: **{enabled('maintenance_mode')}** • "
+                f"Member-created sessions: **{enabled('allow_member_creation', True)}**\n"
+                f"Public recruiting: **{enabled('public_lfg_enabled')}**"
+            ),
+            inline=False,
+        )
+        embed.set_footer(text="Minimal = cards • Smart = temporary rooms • Managed = full hub")
+    elif section == "rooms":
+        embed.add_field(
+            name="Temporary spaces",
+            value=(
+                f"Voice rooms: **{enabled('auto_create_voice', True)}** • "
+                f"Discussions: **{enabled('auto_create_thread', True)}**\n"
+                f"End discussions: **{'Archive' if bool(settings.get('archive_threads_on_end', True)) else 'Delete'}**\n"
+                "Parent Category chooses where temporary rooms are created."
+            ),
+            inline=False,
+        )
+    elif section == "limits":
+        embed.add_field(
+            name="Session capacity",
+            value=(
+                f"Active: **{_safe_int(settings.get('max_active_sessions'), 20)}** • "
+                f"Per member: **{_safe_int(settings.get('max_active_sessions_per_member'), 2)}**\n"
+                f"Voice rooms: **{_safe_int(settings.get('max_temporary_voice_rooms'), 12)}** • "
+                f"Group size: **{_safe_int(settings.get('max_session_capacity'), 25)}**\n"
+                f"Minimum to start: **{_safe_int(settings.get('minimum_players_to_start'), 1)}** • "
+                f"Ready required: **{enabled('require_ready_to_start')}**"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Abuse & lifecycle",
+            value=(
+                f"Create cooldown: **{_safe_int(settings.get('session_creation_cooldown_seconds'), 30)}s** • "
+                f"Reports/hour: **{_safe_int(settings.get('max_reports_per_hour_per_member'), 5)}**\n"
+                f"Idle: **{_safe_int(settings.get('idle_timeout_seconds'), 1800)}s** • "
+                f"Hard lifetime: **{_safe_int(settings.get('max_session_lifetime_seconds'), 43200)}s**"
+            ),
+            inline=False,
+        )
+    else:
+        presence = bool(getattr(getattr(bot, "intents", None), "presences", False))
+        embed.add_field(
+            name="Notifications & data",
+            value=(
+                f"Notices: **{enabled('notifications_enabled', True)}** • "
+                f"Max/hour: **{_safe_int(settings.get('max_notifications_per_hour'), 5)}**\n"
+                f"Aggregate analytics: **{enabled('analytics_enabled', True)}** • "
+                f"Presence: **{enabled('presence_analytics_enabled') if presence else 'Intent unavailable'}**"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Outside groups",
+            value=(
+                f"The100.io: **{enabled('external_the100_enabled')}** • "
+                f"{'API ready' if external.the100_configured() else 'Host token missing'}\n"
+                "Discovery is read-only; it does not join third-party groups."
+            ),
+            inline=False,
+        )
+    embed.set_footer(text=embed.footer.text or "Changes are saved per server; source permissions are checked")
     return embed
 
 
@@ -4784,7 +4812,7 @@ class ModeSelect(discord.ui.Select):
             actor_id=int(interaction.user.id),
         )
         runtime.invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client, section=self.section), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
 
 class LimitsModal(discord.ui.Modal, title="Community Hub Limits"):
@@ -5325,7 +5353,7 @@ class HubSettingsSectionSelect(discord.ui.Select):
         await _edit_private_original(
             interaction,
             content=None,
-            embed=_settings_embed(settings, interaction.client),
+            embed=_settings_embed(settings, interaction.client, section=self.values[0]),
             view=HubSettingsView(self.owner_id, settings, section=self.values[0]),
         )
 
@@ -5353,7 +5381,7 @@ class HubSettingsView(_OwnedView):
         new_value = not bool(self.settings.get("maintenance_mode"))
         settings = await hub.update_settings(int(interaction.guild_id or 0), {"maintenance_mode": new_value}, actor_id=int(interaction.user.id))
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client, section=self.section), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Auto Voice", emoji="🎙️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:voice:v1", row=1)
     async def voice(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -5365,7 +5393,7 @@ class HubSettingsView(_OwnedView):
             actor_id=int(interaction.user.id),
         )
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client, section=self.section), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Auto Discussion", emoji="💬", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:thread:v1", row=1)
     async def thread(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -5377,7 +5405,7 @@ class HubSettingsView(_OwnedView):
             actor_id=int(interaction.user.id),
         )
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client, section=self.section), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Presence Analytics", emoji="📡", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:presence:v1", row=1)
     async def presence(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -5394,7 +5422,7 @@ class HubSettingsView(_OwnedView):
             actor_id=int(interaction.user.id),
         )
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client, section=self.section), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Notifications", emoji="🔔", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:notifications:v1", row=2)
     async def notifications(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -5409,7 +5437,7 @@ class HubSettingsView(_OwnedView):
         await _edit_private_original(
             interaction,
             content=None,
-            embed=_settings_embed(settings, interaction.client),
+            embed=_settings_embed(settings, interaction.client, section=self.section),
             view=HubSettingsView(self.owner_id, settings, section=self.section),
         )
 
@@ -5467,7 +5495,7 @@ class HubSettingsView(_OwnedView):
             actor_id=int(interaction.user.id),
         )
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client, section=self.section), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Archive Ended Threads", emoji="🗄️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:archive:v1", row=3)
     async def archive_threads(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -5479,7 +5507,7 @@ class HubSettingsView(_OwnedView):
             actor_id=int(interaction.user.id),
         )
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client, section=self.section), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Aggregate Analytics", emoji="📊", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:analytics:v1", row=3)
     async def aggregate_analytics(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -5491,7 +5519,7 @@ class HubSettingsView(_OwnedView):
             actor_id=int(interaction.user.id),
         )
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client, section=self.section), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Abuse Limits", emoji="🚦", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:abuse:v1", row=3)
     async def abuse_limits(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -5536,7 +5564,7 @@ class HubSettingsView(_OwnedView):
         except hub.CommunityHubError as exc:
             return await _followup(interaction, f"❌ {_error_text(exc)}")
         ensure_community_hub_runtime(interaction.client).invalidate_settings(int(interaction.guild_id or 0))
-        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client), view=HubSettingsView(self.owner_id, settings, section=self.section))
+        await _edit_private_original(interaction, content=None, embed=_settings_embed(settings, interaction.client, section=self.section), view=HubSettingsView(self.owner_id, settings, section=self.section))
 
     @discord.ui.button(label="Staff Dashboard", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="dank:hub:settings:back:v1", row=3)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
