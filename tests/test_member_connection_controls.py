@@ -114,7 +114,7 @@ class FakeTextChannel:
         self.fail_role = False
 
     def overwrites_for(self, who):
-        current = self.overwrites.get(who.id)
+        current = self.overwrites.get(who)
         return FakeOverwrite(current.view_channel if current is not None else None)
 
     def permissions_for(self, who):
@@ -124,9 +124,9 @@ class FakeTextChannel:
         if self.fail_role and who.id == 456:
             raise RuntimeError("Discord denied role write")
         if overwrite is None:
-            self.overwrites.pop(who.id, None)
+            self.overwrites.pop(who, None)
         else:
-            self.overwrites[who.id] = overwrite
+            self.overwrites[who] = overwrite
 
 
 class FakeGuild:
@@ -170,11 +170,12 @@ def test_confirmed_channel_protection_and_exact_restore(monkeypatch):
 def test_other_role_explicit_allow_blocks_protection(monkeypatch):
     record = install_store(monkeypatch)
     guild, actor = install_discord(monkeypatch)
-    guild.channel.overwrites[321] = FakeOverwrite(True)
+    other_role = FakeRole(321, guild)
+    guild.channel.overwrites[other_role] = FakeOverwrite(True)
     with pytest.raises(controls.ConnectionControlError, match="Another role or member"):
         run(controls.protect_channel(guild, actor, guild.channel, guild.trusted))
     assert record["current"] is None
-    assert guild.channel.overwrites[321].view_channel is True
+    assert guild.channel.overwrites[other_role].view_channel is True
 
 
 def test_permission_failure_rolls_back_and_removes_pending_record(monkeypatch):
@@ -191,7 +192,7 @@ def test_outside_permission_change_prevents_blind_restore(monkeypatch):
     record = install_store(monkeypatch)
     guild, actor = install_discord(monkeypatch)
     run(controls.protect_channel(guild, actor, guild.channel, guild.trusted))
-    guild.channel.overwrites[123].view_channel = True
+    guild.channel.overwrites[guild.default_role].view_channel = True
     with pytest.raises(controls.ConnectionControlError, match="changed outside"):
         run(controls.remove_protection(guild, actor, "789"))
     assert "789" in record["current"]["protected"]
