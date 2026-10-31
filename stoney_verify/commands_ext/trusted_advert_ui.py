@@ -466,12 +466,12 @@ class TrustedAdsView(discord.ui.View):
         _ = button
         if not isinstance(self.guild.get_channel(self.channel_id), discord.TextChannel):
             return await _notice(interaction, "Choose a text channel first.")
-        await interaction.response.send_modal(ApproveAdvertBotModal(self.owner_id, channel_id=self.channel_id, section=self.section))
+        await interaction.response.send_modal(ApproveAdvertBotModal(self.owner_id, channel_id=self.channel_id))
 
     @discord.ui.button(label="Enable Cleanup", emoji="🕒", style=discord.ButtonStyle.secondary, row=1)
     async def cleanup(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.send_modal(ConfirmAdvertCleanupModal(self.owner_id, channel_id=self.channel_id, section=self.section))
+        await interaction.response.send_modal(ConfirmAdvertCleanupModal(self.owner_id, channel_id=self.channel_id))
 
     @discord.ui.button(label="Collapse Previews", emoji="🫥", style=discord.ButtonStyle.secondary, row=1)
     async def collapse_previews(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -490,7 +490,7 @@ class TrustedAdsView(discord.ui.View):
     @discord.ui.button(label="Manage / Remove", emoji="🗑️", style=discord.ButtonStyle.secondary, row=1)
     async def remove(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await interaction.response.send_modal(RemoveAdvertRuleModal(self.owner_id, channel_id=self.channel_id, section=self.section))
+        await interaction.response.send_modal(RemoveAdvertRuleModal(self.owner_id, channel_id=self.channel_id))
 
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=2)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -560,7 +560,7 @@ class TrustedAdsView(discord.ui.View):
         from .public_protection_invite_ui import _redraw
         from ..invite_scope_settings import load_invite_scope_settings
         scope = await load_invite_scope_settings(self.guild.id, refresh=True)
-        await _redraw(interaction, author_id=self.owner_id, scope=scope, origin_channel_id=self.channel_id, section=self.section)
+        await _redraw(interaction, author_id=self.owner_id, scope=scope, origin_channel_id=self.channel_id)
 
 
 class RemoveAdvertRuleModal(discord.ui.Modal, title="Remove or Pause Trusted Bot"):
