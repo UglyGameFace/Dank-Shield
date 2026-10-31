@@ -8,7 +8,6 @@ proof of misconduct or an alternative account.
 """
 
 import asyncio
-from collections import defaultdict
 from typing import Any
 
 
@@ -45,7 +44,7 @@ def build_connection_report(
         if evidence not in entry["evidence"]:
             entry["evidence"].append(evidence)
 
-    for row in source.get("invited", []):
+    for row in source.get("invited", []) + source.get("join_invited", []):
         if _id(row.get("invited_by")) == uid and not row.get("entry_conflict"):
             quality = _text(row.get("entry_truth_quality")).lower()
             if quality in {"confirmed", "verified", "high", "high_confidence", "exact", "trusted"}:
@@ -53,11 +52,11 @@ def build_connection_report(
             else:
                 record(row.get("user_id"), "Possible inviter attribution (not confirmed)", "weak", "guild_members")
 
-    for row in source.get("vouched", []):
+    for row in source.get("vouched", []) + source.get("join_vouched", []):
         if _id(row.get("vouched_by")) == uid:
             record(row.get("user_id"), "This user vouched for their entry", "social", "guild_members")
 
-    for row in source.get("target", []):
+    for row in source.get("target", []) + source.get("join_target", []):
         for field, label in (
             ("invited_by", "Invited this user"),
             ("vouched_by", "Vouched for this user"),
@@ -136,6 +135,9 @@ def _read_connection_report(guild_id: int, user_id: int) -> dict[str, Any]:
         ("target", "guild_members", "user_id", uid),
         ("invited", "guild_members", "invited_by", uid),
         ("vouched", "guild_members", "vouched_by", uid),
+        ("join_target", "member_joins", "user_id", uid),
+        ("join_invited", "member_joins", "invited_by", uid),
+        ("join_vouched", "member_joins", "vouched_by", uid),
         ("manual_a", "manual_alt_links", "user_a_id", uid),
         ("manual_b", "manual_alt_links", "user_b_id", uid),
         ("proof_forward", "identity_proof_matches", "user_id", uid),
@@ -143,7 +145,13 @@ def _read_connection_report(guild_id: int, user_id: int) -> dict[str, Any]:
     )
     for key, table, column, value in requests:
         try:
-            query = (db.table(table).select("*").eq("guild_id", gid)
+            projection = {
+                "guild_members": "user_id,invited_by,vouched_by,entry_truth_quality,entry_conflict",
+                "member_joins": "user_id,invited_by,vouched_by,entry_truth_quality,entry_conflict",
+                "manual_alt_links": "user_a_id,user_b_id,link_type,status",
+                "identity_proof_matches": "user_id,matched_user_id",
+            }[table]
+            query = (db.table(table).select(projection).eq("guild_id", gid)
                      .eq(column, value).limit(_QUERY_LIMIT))
             if table == "manual_alt_links":
                 query = query.eq("status", "active")
