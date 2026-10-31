@@ -13,7 +13,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: dank-shield-auto-archive-merged-pr-heads
+  group: guarded-merged-branch-cleanup
   cancel-in-progress: false
 
 jobs:
@@ -24,6 +24,8 @@ jobs:
     steps:
       - name: Preserve original commit tags before retiring finished PR refs
         uses: actions/github-script@v7
+        env:
+          LINKED_PRODUCTION_BRANCH: ${{ vars.DANK_DISCLOUD_DEPLOY_BRANCH }}
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -51,7 +53,8 @@ jobs:
               'main',
               'aaa-cinema-pre-pregateway-bind',
               'chore/guarded-merged-branch-cleanup-20261015',
-              'audit/protection-picker-migration'
+              'audit/protection-picker-migration',
+              String(process.env.LINKED_PRODUCTION_BRANCH || '').trim()
             ]);
 
             const branches = await github.paginate(

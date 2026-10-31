@@ -4,7 +4,7 @@ name: Retire merged temporary branches
 # separate from the owner-reviewed historical cleanup workflow.
 on:
   schedule:
-    - cron: '37 4 * * *'
+    - cron: '*/5 * * * *' # Frequent guarded cleanup; GitHub may delay scheduled starts
   workflow_dispatch:
     inputs:
       mode:
@@ -14,7 +14,13 @@ on:
         options:
           - preview
           - delete
+          - preview-reviewed-merged
+          - delete-reviewed-merged
         default: preview
+      confirmation:
+        description: 'Exact token from reviewed preview'
+        type: string
+        required: false
 
 permissions:
   contents: write
@@ -35,6 +41,7 @@ jobs:
         env:
           REQUESTED_MODE: ${{ inputs.mode }}
           LINKED_PRODUCTION_BRANCH: ${{ vars.DANK_DISCLOUD_DEPLOY_BRANCH }}
+          CLEANUP_CONFIRMATION: ${{ inputs.confirmation }}
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -63,13 +70,144 @@ jobs:
             ]);
             const isManual = context.eventName === 'workflow_dispatch';
             const mode = isManual ? process.env.REQUESTED_MODE : 'delete';
-            if (!['preview', 'delete'].includes(mode)) {
+            if (!['preview', 'delete', 'preview-reviewed-merged', 'delete-reviewed-merged'].includes(mode)) {
               throw new Error('Unsupported branch hygiene mode');
             }
             if (isManual && mode === 'delete' && context.actor !== 'UglyGameFace') {
               throw new Error('Manual deletion requires repository owner');
             }
             const deleting = mode === 'delete';
+
+            const reviewed = mode === 'preview-reviewed-merged' || mode === 'delete-reviewed-merged';
+            if (reviewed) {
+              if (!isManual || context.actor !== 'UglyGameFace') {
+                throw new Error('Owner dispatch required');
+              }
+              const deleteReviewed = mode === 'delete-reviewed-merged';
+              if (deleteReviewed && !String(process.env.LINKED_PRODUCTION_BRANCH || '').trim()) {
+                throw new Error('Verify and set DANK_DISCLOUD_DEPLOY_BRANCH before deleting reviewed refs');
+              }
+              const mainSha = (await github.rest.repos.getBranch({
+                owner, repo, branch: 'main'
+              })).data.commit.sha;
+              const branches = await github.paginate(github.rest.repos.listBranches, {
+                owner, repo, per_page: 100
+              });
+              const openPRs = await github.paginate(github.rest.pulls.list, {
+                owner, repo, state: 'open', per_page: 100
+              });
+              const inUse = new Set();
+              for (const pr of openPRs) {
+                if (pr.head.repo?.full_name === fullName) inUse.add(pr.head.ref);
+                if (pr.base.repo?.full_name === fullName) inUse.add(pr.base.ref);
+              }
+              const prefixes = ['feat/', 'fix/', 'extract/', 'docs/', 'audit/', 'chore/'];
+              const heldPrefixes = [
+                'aaa-', 'archive/', 'backup/', 'recovery/', 'integration/',
+                'reconcile/', 'release/', 'deploy/', 'ops/', 'ci/', 'migration/'
+              ];
+              const sensitive = new Set([
+                'backup','restore','recovery','archive','release','deploy',
+                'deployment','discloud','staging','migration','supabase',
+                'database','postgres','production','rollback','revert',
+                'snapshot','stable','known','good'
+              ]);
+              const safeName = name =>
+                prefixes.some(p => name.startsWith(p)) &&
+                !heldPrefixes.some(p => name.startsWith(p)) &&
+                !protectedHeads.has(name) &&
+                !name.split(/[\\/_-]+/).some(x => sensitive.has(x.toLowerCase()));
+              const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+              const eligible = [];
+              for (const branch of branches) {
+                if (branch.protected || inUse.has(branch.name) || !safeName(branch.name)) continue;
+                const prs = await github.paginate(github.rest.pulls.list, {
+                  owner, repo, head: owner + ':' + branch.name,
+                  state: 'all', per_page: 100
+                });
+                if (prs.length !== 1) continue;
+                const pr = prs[0];
+                if (!pr.merged_at || pr.state !== 'closed' ||
+                    Date.parse(pr.merged_at) > cutoff ||
+                    pr.base?.ref !== 'main' || pr.base?.repo?.full_name !== fullName ||
+                    pr.head?.repo?.full_name !== fullName ||
+                    pr.head.sha !== branch.commit.sha || !pr.merge_commit_sha) continue;
+                const graph = (await github.rest.repos.compareCommits({
+                  owner, repo, base: pr.merge_commit_sha, head: mainSha
+                })).data;
+                if (graph.behind_by !== 0 ||
+                    !['ahead', 'identical'].includes(graph.status)) continue;
+                eligible.push({name: branch.name, sha: branch.commit.sha, pr: pr.number});
+              }
+              eligible.sort((a,b) => a.name.localeCompare(b.name));
+              const batch = eligible.slice(0, 12);
+              const fingerprint = require('crypto').createHash('sha256')
+                .update(JSON.stringify({mainSha,batch})).digest('hex')
+                .slice(0, 16).toUpperCase();
+              const token = 'DELETE_REVIEWED_' + fingerprint;
+              if (deleteReviewed && process.env.CLEANUP_CONFIRMATION !== token) {
+                throw new Error('Delete requires exact preview token bound to main and branch SHAs');
+              }
+              const retired = [], held = [];
+              for (const item of batch) {
+                if (!deleteReviewed) continue;
+                try {
+                  const currentMain = (await github.rest.repos.getBranch({
+                    owner, repo, branch: 'main'
+                  })).data.commit.sha;
+                  const current = (await github.rest.repos.getBranch({
+                    owner, repo, branch: item.name
+                  })).data;
+                  const nowOpen = await github.paginate(github.rest.pulls.list, {
+                    owner, repo, state: 'open', per_page: 100
+                  });
+                  if (currentMain !== mainSha || current.protected ||
+                      current.commit.sha !== item.sha ||
+                      nowOpen.some(pr => pr.head.ref === item.name || pr.base.ref === item.name)) {
+                    held.push(item.name + ': branch, main or PR changed');
+                    continue;
+                  }
+                  const tag = 'tags/branch-retirement-reviewed-20261031/' + item.name;
+                  let archive;
+                  try {
+                    archive = (await github.rest.git.getRef({owner,repo,ref:tag})).data;
+                  } catch (error) {
+                    if (error.status !== 404) throw error;
+                    await github.rest.git.createRef({
+                      owner,repo,ref:'refs/' + tag,sha:item.sha
+                    });
+                    archive = (await github.rest.git.getRef({owner,repo,ref:tag})).data;
+                  }
+                  if (archive.object.type !== 'commit' || archive.object.sha !== item.sha) {
+                    held.push(item.name + ': archive mismatch');
+                    continue;
+                  }
+                  const lease = (await github.rest.git.getRef({
+                    owner,repo,ref:'heads/' + item.name
+                  })).data;
+                  if (lease.object.sha !== item.sha) {
+                    held.push(item.name + ': SHA lease changed');
+                    continue;
+                  }
+                  await github.rest.git.deleteRef({owner,repo,ref:'heads/' + item.name});
+                  retired.push(item);
+                } catch (error) {
+                  held.push(item.name + ': ' + String(error.message || error));
+                }
+              }
+              const after = await github.paginate(github.rest.repos.listBranches, {
+                owner,repo,per_page:100
+              });
+              await core.summary.addHeading('Reviewed merged-branch retirement')
+                .addRaw('Main: ' + mainSha + '; eligible: ' + eligible.length +
+                  '; batch: ' + batch.length + '; before: ' + branches.length +
+                  '; after: ' + after.length + '; deleted: ' + retired.length + '.\n')
+                .addRaw('Exact preview token: ' + token + '\n')
+                .addCodeBlock(JSON.stringify({batch,retired,held},null,2),'json').write();
+              if (held.length) core.setFailed('Some reviewed refs were held');
+              return;
+            }
+
 
             const allBranches = await github.paginate(
               github.rest.repos.listBranches, { owner, repo, per_page: 100 }
@@ -131,19 +269,159 @@ jobs:
                   rows.push([name, 'held', 'Git ref changed before delete']);
                   continue;
                 }
+                const tag = 'tags/branch-retirement-opt-in/' + name;
+                let archive;
+                try {
+                  archive = (await github.rest.git.getRef({owner,repo,ref:tag})).data;
+                } catch (error) {
+                  if (error.status !== 404) throw error;
+                  await github.rest.git.createRef({
+                    owner,repo,ref:'refs/' + tag,sha:branch.commit.sha
+                  });
+                  archive = (await github.rest.git.getRef({owner,repo,ref:tag})).data;
+                }
+                if (archive.object.type !== 'commit' ||
+                    archive.object.sha !== branch.commit.sha) {
+                  rows.push([name, 'held', 'Archive SHA mismatch']);
+                  continue;
+                }
                 await github.rest.git.deleteRef({ owner, repo, ref: 'heads/' + name });
                 removed++;
               }
               rows.push([name, deleting ? 'deleted' : 'preview', 'Exact merged-to-main PR #' + pr.number]);
             }
 
-            const after = deleting
+            // The opt-in namespace alone cannot retire historical feat/fix PR
+            // branches. Scheduled cleanup also processes a small, rotating batch
+            // of EXACT-HEAD merged PRs whose commits are already ancestors of
+            // main. Squash/diverged histories stay in the owner-reviewed path.
+            let integratedRemoved = 0;
+            if (!isManual) {
+              const deployedRef = String(process.env.LINKED_PRODUCTION_BRANCH || '').trim();
+              if (!deployedRef) {
+                core.warning('Historical retirement skipped: DANK_DISCLOUD_DEPLOY_BRANCH is not verified');
+              } else {
+                const openPRs = await github.paginate(github.rest.pulls.list, {
+                  owner, repo, state: 'open', per_page: 100
+                });
+                const inUse = new Set();
+                for (const pr of openPRs) {
+                  if (pr.head.repo?.full_name === fullName) inUse.add(pr.head.ref);
+                  if (pr.base.repo?.full_name === fullName) inUse.add(pr.base.ref);
+                }
+                const historicalPrefixes = ['feat/', 'fix/', 'extract/', 'docs/', 'audit/', 'chore/'];
+                const heldPrefixes = [
+                  'aaa-', 'backup/', 'archive/', 'recovery/', 'integration/',
+                  'reconcile/', 'release/', 'deploy/', 'deployment/', 'ops/',
+                  'ci/', 'migration/', 'production/', 'staging/'
+                ];
+                const heldSegments = new Set([
+                  'backup', 'restore', 'recovery', 'archive', 'release',
+                  'deploy', 'deployment', 'discloud', 'staging', 'migration',
+                  'supabase', 'database', 'postgres', 'production', 'rollback',
+                  'revert', 'snapshot', 'stable', 'known', 'good'
+                ]);
+                const historical = allBranches.filter(branch =>
+                  !branch.protected && !inUse.has(branch.name) &&
+                  !protectedHeads.has(branch.name) &&
+                  historicalPrefixes.some(prefix => branch.name.startsWith(prefix)) &&
+                  !heldPrefixes.some(prefix => branch.name.startsWith(prefix)) &&
+                  !branch.name.split(/[\\/_-]+/).some(segment =>
+                    heldSegments.has(segment.toLowerCase()))
+                ).sort((a, b) => a.name.localeCompare(b.name));
+                const startMain = (await github.rest.repos.getBranch({
+                  owner, repo, branch: 'main'
+                })).data.commit.sha;
+                // Rotate scans to avoid repeatedly getting stuck on diverged refs.
+                const start = historical.length
+                  ? Math.floor(Date.now() / 300000) % historical.length : 0;
+                const scanLimit = Math.min(24, historical.length);
+                const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+                for (let i = 0; i < scanLimit && integratedRemoved < 8; i++) {
+                  const item = historical[(start + i) % historical.length];
+                  const name = item.name, sha = item.commit.sha;
+                  try {
+                    const graph = (await github.rest.repos.compareCommits({
+                      owner, repo, base: 'main', head: name
+                    })).data;
+                    // Never delete a branch containing even one unique commit.
+                    if (graph.ahead_by !== 0 ||
+                        !['behind', 'identical'].includes(graph.status)) continue;
+                    const prs = await github.paginate(github.rest.pulls.list, {
+                      owner, repo, head: owner + ':' + name, state: 'all', per_page: 100
+                    });
+                    if (prs.length !== 1) continue;
+                    const pr = prs[0];
+                    if (!pr.merged_at || pr.state !== 'closed' ||
+                        Date.parse(pr.merged_at) > cutoff ||
+                        pr.base?.ref !== 'main' ||
+                        pr.base?.repo?.full_name !== fullName ||
+                        pr.head?.repo?.full_name !== fullName ||
+                        pr.head?.sha !== sha) continue;
+                    const currentMain = (await github.rest.repos.getBranch({
+                      owner, repo, branch: 'main'
+                    })).data.commit.sha;
+                    const fresh = (await github.rest.repos.getBranch({
+                      owner, repo, branch: name
+                    })).data;
+                    if (currentMain !== startMain || fresh.protected ||
+                        fresh.commit.sha !== sha) {
+                      rows.push([name, 'held', 'Main or branch changed']);
+                      continue;
+                    }
+                    const tagRef = 'tags/branch-retirement-integrated/' + name;
+                    let archive;
+                    try {
+                      archive = (await github.rest.git.getRef({
+                        owner, repo, ref: tagRef
+                      })).data;
+                    } catch (error) {
+                      if (error.status !== 404) throw error;
+                      await github.rest.git.createRef({
+                        owner, repo, ref: 'refs/' + tagRef, sha
+                      });
+                      archive = (await github.rest.git.getRef({
+                        owner, repo, ref: tagRef
+                      })).data;
+                    }
+                    if (archive.object.type !== 'commit' || archive.object.sha !== sha) {
+                      rows.push([name, 'held', 'Archive SHA mismatch']);
+                      continue;
+                    }
+                    const latestOpen = await github.paginate(github.rest.pulls.list, {
+                      owner, repo, state: 'open', per_page: 100
+                    });
+                    const lease = (await github.rest.git.getRef({
+                      owner, repo, ref: 'heads/' + name
+                    })).data;
+                    const mainLease = (await github.rest.repos.getBranch({
+                      owner, repo, branch: 'main'
+                    })).data.commit.sha;
+                    if (mainLease !== startMain || lease.object.sha !== sha ||
+                        latestOpen.some(pr =>
+                          (pr.head.repo?.full_name === fullName && pr.head.ref === name) ||
+                          (pr.base.repo?.full_name === fullName && pr.base.ref === name))) {
+                      rows.push([name, 'held', 'SHA lease, main or PR changed']);
+                      continue;
+                    }
+                    await github.rest.git.deleteRef({owner, repo, ref: 'heads/' + name});
+                    integratedRemoved++;
+                    rows.push([name, 'deleted', 'Merged PR #' + pr.number +
+                      '; no unique commits; archived exact SHA']);
+                  } catch (error) {
+                    rows.push([name, 'held', String(error.message || error)]);
+                  }
+                }
+              }
+            }
+
+            const after = (deleting || integratedRemoved)
               ? await github.paginate(github.rest.repos.listBranches, { owner, repo, per_page: 100 })
               : allBranches;
             await core.summary
               .addHeading('Guarded temporary-branch hygiene')
               .addRaw('Mode: ' + mode + '; before: ' + allBranches.length +
-                '; after: ' + after.length + '; deleted: ' + removed + '.')
+                '; after: ' + after.length + '; deleted: ' + (removed + integratedRemoved) + '.')
               .addTable([
                 [{data:'Branch',header:true},{data:'Result',header:true},{data:'Evidence',header:true}],
                 ...(rows.length ? rows : [['(none)', 'no-op', 'No eligible exact-head merged branches']])
@@ -151,6 +429,6 @@ jobs:
 
             // This is an alert, not permission to delete unknown refs.
             if (after.length >= 75) {
-              core.setFailed('Branch count is ' + after.length +
+              core.warning('Branch count is ' + after.length +
                 '; run owner-reviewed historical preview. Never prune unknown branches automatically.');
             }
