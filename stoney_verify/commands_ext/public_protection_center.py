@@ -481,6 +481,42 @@ def _invite_delete_health(guild: discord.Guild, channel: Any | None) -> str:
     return "✅ ready"
 
 
+# Visible panel controls and the details they explain stay grouped together.
+# Existing mutation callbacks remain authoritative; no feature is retired.
+_PROTECTION_SECTIONS: tuple[tuple[str, str, str], ...] = (
+    ("overview", "Overview", "See current protections and choose a preset"),
+    ("links", "Links & Invites", "Control unwanted links and invite spam"),
+    ("filters", "Content Filters", "Manage Automod words and test matching"),
+    ("spam", "Spam Guard", "Manage rate limits and spam response"),
+    ("antinuke", "AntiNuke", "Control destructive-action detection and recovery"),
+    ("tools", "Other Tools", "Open voice safety and server counters"),
+)
+
+_PROTECTION_SECTION_BUTTONS = {
+    "overview": ("safe", "strict", "off"),
+    "links": ("block_invites", "block_links", "allow_links", "invite_settings"),
+    "filters": ("add_filter", "import_pack", "test"),
+    "spam": ("edit_spamguard",),
+    "antinuke": (
+        "antinuke_toggle", "antinuke_mode", "antinuke_strict_lockdown",
+        "antinuke_trusted", "antinuke_thresholds", "antinuke_restore_member",
+    ),
+    "tools": ("voice_safety", "live_stats"),
+}
+
+_PROTECTION_BUTTON_SECTIONS = {
+    "dank_protection:" + button: section
+    for section, buttons in _PROTECTION_SECTION_BUTTONS.items()
+    for button in buttons
+}
+
+
+def _protection_section_for_interaction(interaction: discord.Interaction) -> str:
+    data = getattr(interaction, "data", None)
+    custom_id = data.get("custom_id", "") if isinstance(data, dict) else ""
+    return _PROTECTION_BUTTON_SECTIONS.get(str(custom_id), "overview")
+
+
 def _protection_embed(
     guild: discord.Guild,
     cfg: Any,
@@ -489,111 +525,112 @@ def _protection_embed(
     *,
     channel: Any | None = None,
     load_warning: str = "",
+    section: str = "overview",
 ) -> discord.Embed:
-    bad_words = _csv_items(_cfg_value(cfg, "automod_bad_words", ""))
+    """One mobile-sized section; details remain accessible, not truncated away."""
+    if section not in _PROTECTION_SECTION_BUTTONS:
+        section = "overview"
     automod_on = _cfg_bool(cfg, "automod_enabled", False)
     spam_on = bool(spam.get("enabled"))
     antinuke = anti_nuke_service.normalize_antinuke_settings(cfg)
-    strict_lockdown = _cfg_bool(antinuke, STRICT_LOCKDOWN_KEY, False)
-    antinuke_missing = anti_nuke_service.antinuke_permission_health(
-        guild,
-        {**antinuke, "antinuke_enabled": True},
-    )
-    both_on = automod_on and spam_on
-    description = (
-        "One product surface. Three protection engines underneath:\n"
-        "**Automod** filters content and links. **Spam Guard** watches message behavior and floods. "
-        "**AntiNuke** watches audit-log-attributed destructive admin actions."
-    )
-    if load_warning:
-        description += (
-            "\n\n⚠️ **Live state degraded**\n"
-            + str(load_warning)[:700]
-            + "\nNo protection setting is changed by this fallback."
-        )
     embed = discord.Embed(
-        title="🛡️ Dank Shield Protection Center",
-        description=description,
-        color=discord.Color.green() if both_on else discord.Color.gold() if (automod_on or spam_on) else discord.Color.dark_grey(),
-        timestamp=discord.utils.utcnow(),
+        title=f"🛡️ Protection • {next(label for key, label, _ in _PROTECTION_SECTIONS if key == section)}",
+        color=discord.Color.green() if automod_on and spam_on else discord.Color.gold(),
     )
-    embed.add_field(
-        name="Quick recommendation",
-        value=(
-            "Use **Safe** for normal public servers. It blocks Discord invite spam while allowing normal links.\n"
-            "Use **Block All Links** during raids, raids-after-ping, or if members should not post URLs at all."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Link Shield — bad server spam",
-        value=(
-            f"**Policy:** {_link_policy_label(cfg)}\n"
-            f"**Discord invites:** {'blocked' if _cfg_bool(cfg, 'automod_block_invites', False) else 'allowed'}\n"
-            f"**All external links:** {'blocked' if _cfg_bool(cfg, 'automod_block_links', False) else 'allowed'}\n"
-            f"**Live delete access here:** {_invite_delete_health(guild, channel)}\n"
-            "**Modern app cards:** visible Components V2 text is checked; generated previews/support-button URLs are ignored"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Automod — content filters",
-        value=(
-            f"**Enabled:** {'✅ Yes' if automod_on else '⚪ No'}\n"
-            f"**Preset:** `{_cfg_value(cfg, 'automod_preset', 'custom') or 'custom'}`\n"
-            f"**Bad-word filters:** `{len(bad_words)}`\n"
-            f"**Max mentions:** `{_cfg_int(cfg, 'automod_max_mentions', 0) or 'off'}`"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Spam Guard — behavior protection",
-        value=(
-            f"**Enabled:** {'✅ Yes' if spam_on else '⚪ No'}\n"
-            f"**Mode:** `{spam.get('mode', 'unknown')}`\n"
-            f"**Window:** `{spam.get('window_seconds', '—')}s` • **Messages:** `{spam.get('message_threshold', '—')}` • "
-            f"**Duplicates:** `{spam.get('duplicate_threshold', '—')}`\n"
-            f"**Invite threshold:** `{spam.get('invite_threshold', '—')}` • **Timeout:** `{spam.get('timeout_minutes', '—')}m` • **Saving:** `{spam_source}`"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="AntiNuke — destructive action protection",
-        value=_embed_field_text(
-            f"**Enabled:** {'✅ Yes' if antinuke['antinuke_enabled'] else '⚪ No — opt in when ready'}\n"
-            f"**Mode:** `{antinuke['antinuke_mode']}`\n"
-            f"**Strict Lockdown:** {'ON' if strict_lockdown else 'OFF'}\n"
-            "**Control:** `server owner only`\n"
-            f"**Permission health:** {'✅ Ready' if not antinuke_missing else '❌ Missing: ' + ', '.join(antinuke_missing)}\n"
-            f"**Window:** `{antinuke['antinuke_window_seconds']}s` • "
-            f"**Channel deletes:** `{antinuke['antinuke_channel_delete_threshold']}` • "
-            f"**Role deletes:** `{antinuke['antinuke_role_delete_threshold']}`\n"
-            f"**Mass bans/kicks:** `{antinuke['antinuke_ban_threshold']}` / `{antinuke['antinuke_kick_threshold']}` • "
-            f"**Webhook creates:** `{antinuke['antinuke_webhook_create_threshold']}`\n"
-            f"**Trusted inviters:** `{len(antinuke['antinuke_trusted_user_ids'])} users` • "
-            f"`{len(antinuke['antinuke_trusted_role_ids'])} roles`\n"
-            f"**Pre-approved bots:** `{len(antinuke['antinuke_trusted_bot_ids'])}`"
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="What buttons do",
-        value=(
-            "**AntiNuke** = owner-only destructive-action protection, containment mode, trust lists, and thresholds.\n"
-            "**Strict Lockdown** = optional owner-only maximum-restriction policy; normal Contain keeps trusted staff on configured thresholds.\n"
-            "**Trust Lists** = trusted delegated inviters plus bot IDs that are pre-approved before owner-added installs.\n"
-            "**Restore Member** = owner-only recovery for a Discord ID that was unbanned but still has active AntiNuke hostile reputation.\n"
-            "**Edit Spam Guard** = message speed, duplicate messages, invite-flood threshold, timeout length.\n"
-            "**Invite Blocker** = live ON/OFF for Discord invite links.\n"
-            "**Block All Links** = stop every URL.\n"
-            "**Server Stats** = open the dedicated live counter studio for setup, repair, visibility, labels, layout, and formatting.\n"
-            "**Voice Safety** = optional, consented AI voice conduct review with staff alerts; off by default.\n"
-            "**Add Filter / Import Pack / Test** = add one filter, paste a vetted line-delimited pack, or test bypass behavior."
-        ),
-        inline=False,
-    )
-    embed.set_footer(text="Protection Center • changes apply to this server’s Automod and Spam Guard settings.")
+    if section == "overview":
+        embed.description = (
+            "**Your protection at a glance**\n"
+            f"Automod: **{'On' if automod_on else 'Off'}**  •  "
+            f"Spam Guard: **{'On' if spam_on else 'Off'}**\n"
+            f"AntiNuke: **{'On' if antinuke['antinuke_enabled'] else 'Off'}**  •  "
+            f"Links: **{_link_policy_label(cfg)}**\n\n"
+            "Choose a section for its settings. **Safe** is the recommended "
+            "starting preset; Strict and Off change protection."
+        )
+    elif section == "links":
+        embed.description = "Manage invite spam and links. Only this section's controls are shown."
+        embed.add_field(
+            name="Current rules",
+            value=(
+                f"Invites: **{'Blocked' if _cfg_bool(cfg, 'automod_block_invites', False) else 'Allowed'}**\n"
+                f"Other links: **{'Blocked' if _cfg_bool(cfg, 'automod_block_links', False) else 'Allowed'}**\n"
+                f"Delete access in this channel: {_invite_delete_health(guild, channel)}"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="How it works",
+            value="Invite Blocker changes Discord invites; Link Shield changes all URLs. "
+                  "Invite Settings controls exceptions and special cases.",
+            inline=False,
+        )
+    elif section == "filters":
+        bad_words = _csv_items(_cfg_value(cfg, "automod_bad_words", ""))
+        embed.description = "Build content rules and test them before enabling stricter enforcement."
+        embed.add_field(
+            name="Automod filters",
+            value=(
+                f"Enabled: **{'Yes' if automod_on else 'No'}**\n"
+                f"Preset: **{_cfg_value(cfg, 'automod_preset', 'custom') or 'custom'}**\n"
+                f"Bad-word rules: **{len(bad_words)}**  •  "
+                f"Max mentions: **{_cfg_int(cfg, 'automod_max_mentions', 0) or 'Off'}**"
+            ),
+            inline=False,
+        )
+    elif section == "spam":
+        embed.description = "Adjust rapid messages, repeated content and the response to spam."
+        embed.add_field(
+            name="Spam Guard status",
+            value=(
+                f"Enabled: **{'Yes' if spam_on else 'No'}**\n"
+                f"Response: **{spam.get('mode', 'unknown')}**  •  "
+                f"Window: **{spam.get('window_seconds', '—')}s**\n"
+                f"Messages: **{spam.get('message_threshold', '—')}**  •  "
+                f"Duplicates: **{spam.get('duplicate_threshold', '—')}**\n"
+                f"Invite threshold: **{spam.get('invite_threshold', '—')}**  •  "
+                f"Timeout: **{spam.get('timeout_minutes', '—')}m**\n"
+                f"Storage: **{spam_source}**"
+            ),
+            inline=False,
+        )
+    elif section == "antinuke":
+        missing = anti_nuke_service.antinuke_permission_health(
+            guild, {**antinuke, "antinuke_enabled": True},
+        )
+        embed.description = (
+            "Owner-only protection against destructive staff or bot actions. "
+            "Use Trust Lists and Thresholds for detailed settings."
+        )
+        embed.add_field(
+            name="AntiNuke — destructive action protection",
+            value=_embed_field_text(
+                f"Enabled: **{'Yes' if antinuke['antinuke_enabled'] else 'No'}**  •  "
+                f"Mode: **{antinuke['antinuke_mode']}**\n"
+                f"Strict Lockdown: **{'On' if _cfg_bool(antinuke, STRICT_LOCKDOWN_KEY, False) else 'Off'}**\n"
+                f"Permission health: **{'Ready' if not missing else 'Missing: ' + ', '.join(missing)}**\n"
+                f"Window: **{antinuke['antinuke_window_seconds']}s**  •  "
+                f"Channel / role deletes: **{antinuke['antinuke_channel_delete_threshold']} / {antinuke['antinuke_role_delete_threshold']}**\n"
+                f"Mass bans / kicks: **{antinuke['antinuke_ban_threshold']} / {antinuke['antinuke_kick_threshold']}**  •  "
+                f"Webhook creates: **{antinuke['antinuke_webhook_create_threshold']}**\n"
+                f"Trusted: **{len(antinuke['antinuke_trusted_user_ids'])} users**, "
+                f"**{len(antinuke['antinuke_trusted_role_ids'])} roles**, "
+                f"**{len(antinuke['antinuke_trusted_bot_ids'])} bots**"
+            ),
+            inline=False,
+        )
+    else:
+        embed.description = (
+            "**Voice Safety** opens opt-in voice moderation and consent settings.\n"
+            "**Server Stats** opens member counters and their layout tools.\n\n"
+            "These features keep their own permission checks and settings."
+        )
+    if load_warning:
+        embed.add_field(
+            name="⚠️ Live state incomplete",
+            value=_embed_field_text(str(load_warning), limit=240),
+            inline=False,
+        )
+    embed.set_footer(text="Only this section is shown • Select another section for more")
     return embed
 
 
