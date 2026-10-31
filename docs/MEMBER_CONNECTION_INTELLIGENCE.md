@@ -1,41 +1,44 @@
-# Member Connection Intelligence: ban-related review
+# Member Connection Intelligence: ban-related review and trusted channel access
 
-## Placement and purpose
+## Where staff find it
 
-One canonical staff surface: `/dank members` → **Intelligence**.
-- Select a current member → **Connections** for an evidence-led report.
-- **Recent Ban Connections** browses up to ten recent banned accounts. No IDs need to be remembered.
-- **Connections by ID** remains available for historical accounts.
-- **Stored History** and existing **Intelligence Review** / staff-verdict controls remain available. No commands or moderation features were removed.
+Open `/dank members` → **Intelligence** → **Connection Controls**. The two automatic review switches and restricted-channel manager are on one compact private panel. Select **Recent Ban Connections** to browse up to ten recently banned accounts by name, or inspect a current member. **Connections by ID** remains available only for older records. Existing member history and review tools are unchanged.
 
-The feature does **not** reveal Discord friendships, other private servers, DMs, off-platform accounts, or screenshots shared by members. It does not infer that a person knowing a banned member is a leak.
+## Three server controls
 
-## Evidence model
+1. **Monitor** (on by default): after a member is banned, check the existing guild's retained evidence for related accounts. Send a private moderator lead only if relationships exist. No role, timeout, ban, kick or public post results from a connection.
+2. **Review suspicious accounts** (on by default): after the normal join safety and verification process, check only an explicit recorded invite/identity link against Discord's current ban status. Alert staff privately if verified. Similar usernames, age buckets, weak clusters, unconfirmed invites and friendship guesses do not trigger a banned-account claim.
+3. **Protect restricted channels** (opt-in): an authorized admin picks a specific trusted role and text channel using Dank Shield's Search-Safe role/channel browser and explicitly confirms. For that channel, Dank Shield denies `@everyone` visibility and allows the chosen role. The server's existing Discord Administrator permission always bypasses channel overwrites. A friend, inviter or possible alt is **never** automatically punished or restricted because of a connection.
 
-The read-only analyzer uses existing guild-scoped `guild_members`, `member_joins`, and `manual_alt_links` data. The dedicated primary Supabase project has `identity_proofs` but no `identity_proof_matches` relationship table, so this feature deliberately does **not** query the nonexistent table or infer another account from a single proof. It never queries other guilds or gathers private identity/device information.
+Protection supports up to ten specific text channels per guild. This is **not** a server-wide role rewrite. It refuses a channel with conflicting explicit access grants to another role/member. No other role/member overwrite is modified. Channel/category permission synchronization may become unsynced when a channel is protected. Administrators must check any inherited/category or elevated access. Users with the trusted role can read the channel, regardless of their recorded connections. The protection applies to channel visibility, not copy/export/screenshot prevention.
 
-The four distinct evidence classes are:
-1. Reviewed duplicate account relationship recorded by staff.
-2. Staff-marked possible same person.
-3. Member invite or vouch relationship recorded by the server.
-4. Unconfirmed invite attribution, clearly labeled as weak.
+**Review or remove** shows live status (including permission drift, deleted channel/role or interrupted setup). **Restore previous visibility** checks the current exact overwrites before restoring only the two visibility bits changed by the bot. Other changes are not silently overwritten. A pending/partial operation has a durable recovery record; use the review/restore menu, or manually resolve deleted targets in Discord. No global permission rollback or retroactive member action is performed.
 
-A `not_linked` staff decision suppresses same-identity claims but does not erase a legitimate historical invitation. Unresolved joins do not become proven links. No evidence available, incomplete data, and insufficient coverage are not clean bills of health. Findings are never considered proof of leaking information.
+Only a member with Administrator/Manage Server can change the review switches. Protecting/restoring a channel additionally requires Manage Roles permissions for the user and bot, including at the selected channel. Every action re-checks identity, guild, role/channel existence and permissions when confirmed; changing settings requires an authoritative persistent config compare-and-swap. Write failures are not reported as success.
 
-## Automatic review
+## Evidence and privacy
 
-- **Member ban event**: read a bounded set of existing relationships and, when any exist, post a private moderator-log lead. No public announcement, role change, kick, ban, or timeout.
-- **Member join event**: after the existing join verification/safety path, reuse its risk profile and invite evidence. Only explicit linked IDs are checked against Discord's current ban endpoint. Similar names and weak risk clusters do not trigger ban assertions.
-- **Staff panels**: re-read evidence on demand using the Refresh Evidence button. Data is not cached as an authoritative friendship graph.
+The read-only, bounded analyzer consumes only existing guild-scoped `guild_members`, `member_joins` and `manual_alt_links` records. No new personal-data table, identity matching service, OAuth permission or private DM collection is added. Four distinct evidence classes remain:
 
-All work runs with the existing moderation and storage permissions. The analysis is not part of the bot's verification decision. Backend query errors are marked as partial data, never silently turned into innocence or guilt.
+- Staff-reviewed duplicate account relationship.
+- Staff-marked possible duplicate identity.
+- Confirmed server invitation or vouch relationship.
+- Weak unconfirmed invitation attribution.
 
-## Limits and operations
+An explicit `not_linked` staff decision suppresses same-person claims without erasing actual history. Missing data, insufficient coverage and backend errors are not interpreted as a clean bill of health. Relationships never prove leaking information.
 
-- Guild-scoped database queries have bounded results; the UI shows a capped first page and flags truncated results.
-- Actual Discord Ban Members privileges are required to browse recent bans or verify ban status. A failed Discord ban lookup is not an assertion.
-- Discord does not supply ordinary bots with friendship or external server lists.
-- New schemas, OAuth scopes, external services, and new persistent personal-data collections are **not** introduced.
-- Existing authorization, staff-verdict, moderation hierarchies, RLS, and log-channel configuration remain authoritative.
-- Moderators must review evidence and any reports of leaked content. Do not automatically restrict people merely for shared invitations or knowing someone.
-- Confirm production visibility and storage permissions with a controlled canary before treating the alert system as operational. The feature cannot reconstruct relationships never recorded.
+Connection leads go through the **existing moderator-log pipeline with 15-minute semantic deduplication**. These sensitive alerts are now suppressed when the configured log channel is public or its staff visibility cannot be reasonably verified. The modlog must be non-public, and only elevated staff or configured staff roles may have explicit channel view allows. Other ordinary modlog events retain their existing routing policy. There is no automatic public alert.
+
+Discord bots cannot discover ordinary friendships, other servers, private DMs, off-platform exchanges or screenshots. No bot can prevent trusted users from privately sharing screenshots. Restricted-channel trust and human review are therefore the correct boundary, rather than punishing people for social association.
+
+## Rollout / production acceptance
+
+- This feature extends merged PR #767 and reuses the one `/dank members` Intelligence surface; no duplicate slash command, background scanner, relationship database or automatic punishment engine is introduced.
+- Run full exact-head CI and focused config-CAS, owner authorization, Discord overwrite, false-positive, recovery and privacy tests.
+- Merge only after relevant checks pass and reconcile the concurrent whole-bot UI overhaul PR #773. Do not claim a production feature from a branch alone.
+- After the approved Discloud deployment, test from Android **and desktop**: owner/staff/member access, default switches, switching settings off and on, ban/join deduplication in a private modlog, bad/modlog-permission paths, selected channel and role, conflicting overwrite refusal, permission change, visible access as trusted and untrusted members, remove/restore, missing role/channel, pending recovery and restart.
+- Verify the actual running bot's commit and the configured guild database schema/permissions. GitHub CI cannot prove live Discord channel permissions or delivery.
+
+## Original investigation affordances
+
+Select current member → **Connections**, **Recent Ban Connections**, **Connections by ID** and **Stored History** remain available. Ban status is verified against Discord and a failed lookup is never treated as banned. Existing staff-verdict, moderated-action permissions, role hierarchy, verification and join safeguards are preserved.
