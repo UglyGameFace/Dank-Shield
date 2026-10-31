@@ -40,7 +40,7 @@ def test_fully_integrated_historical_cleanup_is_archive_first_and_bounded() -> N
     assert "Math.floor(Date.now() / 300000)" in workflow
     assert "historical[(start + i) % historical.length]" in workflow
     assert "DANK_DISCLOUD_DEPLOY_BRANCH is verified" in workflow
-    assert "const historicalPrefixes = ['feat/', 'fix/', 'extract/', 'docs/', 'audit/', 'chore/']" in workflow
+    assert "const historicalPrefixes = ['feat/', 'fix/', 'hotfix/', 'extract/', 'docs/', 'audit/', 'chore/']" in workflow
     assert "const scanLimit = Math.min(24, historical.length)" in workflow
     assert "(integratedRemoved + archivedOnly) < 8" in workflow
     assert "graph.ahead_by !== 0" in workflow
