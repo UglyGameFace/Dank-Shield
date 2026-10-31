@@ -199,7 +199,7 @@ def _studio_embed(
     if preview_error:
         embed.add_field(
             name="⚠️ Preview needs repair",
-            value=f"{preview_error[:700]}\nThe studio remains available; try a different style then preview again.",
+            value=f"{preview_error[:700]}\nThe Studio is still usable. Try a different style, then preview again.",
             inline=False,
         )
     embed.set_footer(text="Join Card Studio • Settings apply to live joins only")
