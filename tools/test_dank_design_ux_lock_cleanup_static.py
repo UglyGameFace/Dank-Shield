@@ -19,8 +19,8 @@ def test_home_uses_five_plain_language_jobs() -> None:
         "Undo Last Apply",
     ):
         assert f'label="{label}"' in V2
-    assert "Pick **one job** below" in V2
-    assert "Only one action is immediate" in V2
+    assert "**Choose a design task below.**" in V2
+    assert "Renaming one selected item applies immediately" in V2
     assert "Change One Style" not in V2
     assert "Fix Mismatched Names" not in V2
 

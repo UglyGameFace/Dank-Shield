@@ -73,52 +73,39 @@ def _can_enable(guild: discord.Guild, cfg: Mapping[str, Any]) -> str:
 def _embed(guild: discord.Guild, cfg: Mapping[str, Any], policy: ReminderPolicy) -> discord.Embed:
     channel = verification_channel(guild, cfg)
     blocker = _can_enable(guild, cfg)
+    destination = delivery_channel(guild, policy) if policy.delivery != "dm" else None
     embed = discord.Embed(
-        title="🔔 Unverified Member Reminders",
+        title="🔔 Verification Reminders",
         description=(
-            "Uses Dank Shield's **existing Simple Verify status and role mapping**, not a separate member list. "
-            "This server controls its own settings. Members who verify stop qualifying automatically. "
-            "**Automatic reminders** follow the saved hours and repeat limits. "
-            "**Check Scheduled Due** checks that schedule now. "
-            "**Send Reminder Now** scans members against your server's saved Unverified role, "
-            "previews eligible people, and can remind them before the automatic delay "
-            "by channel or DM. No permanent manual reminder attempt limit."
+            "Configure the schedule and destination, then preview before sending. "
+            "**Automatic** and **Send Reminder Now** have separate safeguards. "
+            "Verified members stop qualifying."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="Status",
-        value="Automatic reminders: enabled (requires healthy database)" if policy.enabled
-        else "Automatic reminders: disabled (staff manual send is separate)",
-        inline=True,
+        name="Delivery status",
+        value=(
+            f"Automatic: **{'On' if policy.enabled else 'Off'}**\n"
+            f"Destination: **{'Private DM' if policy.delivery == 'dm' else 'Server channel'}**"
+            + (f" {destination.mention}" if destination else "")
+        ),
+        inline=False,
     )
     embed.add_field(
         name="Schedule",
-        value=f"First after **{policy.delay_hours}h** • repeat at most every **{policy.repeat_hours}h** • max **{policy.max_reminders}** per join",
-        inline=False,
-    )
-    embed.add_field(
-        name="Verification channel",
-        value=channel.mention if channel else "Not configured",
-        inline=True,
-    )
-    embed.add_field(
-        name="Delivery",
         value=(
-            "Private DM (no public ping)" if policy.delivery == "dm"
-            else "Member mention in " + (
-                delivery_channel(guild, policy).mention
-                if delivery_channel(guild, policy) else "an unconfigured channel"
-            )
-        ) + " • atomic duplicate prevention",
+            f"First: **{policy.delay_hours}h** • "
+            f"Repeat: **{policy.repeat_hours}h** • "
+            f"Max: **{policy.max_reminders} per join**\n"
+            f"Verification: {channel.mention if channel else 'Not configured'}"
+        ),
         inline=False,
     )
     if blocker:
-        embed.add_field(name="Setup required", value=blocker, inline=False)
+        embed.add_field(name="Setup needed", value=blocker, inline=False)
     embed.set_footer(
-        text="Use This Channel SAVES the destination (no instant post). "
-             "Scheduled checks respect the delay. Manual sends need preview and "
-             "confirmation and do not change automatic reminder limits."
+        text="Choose channel or DM, Preview, then confirm manual sends • Check Database for storage health"
     )
     return embed
 

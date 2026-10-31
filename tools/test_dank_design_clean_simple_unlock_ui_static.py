@@ -8,7 +8,9 @@ V2 = (ROOT / "stoney_verify/commands_ext/public_design_studio_v2.py").read_text(
 
 
 def test_home_has_clear_current_workflow() -> None:
-    assert "Pick **one job** below" in V2
+    assert "**Choose a design task below.**" in V2
+    assert "Batch changes use Preview" in V2
+    assert "Renaming one selected item applies immediately" in V2
     assert "Design Entire Server" in V2
     assert "Edit One Category / Channel" in V2
     assert "Fix Inconsistent Names" in V2

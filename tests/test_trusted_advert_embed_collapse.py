@@ -173,12 +173,17 @@ def test_manual_recent_scans_at_most_15_and_changes_at_most_three(monkeypatch):
 def test_owner_panel_has_single_reused_collapse_control():
     actions = [item.label for item in ui.TrustedAdsView(
         5, SimpleNamespace(), CHANNEL,
-        rules=trust.clean_rules(_config(collapse=True)),
+        rules=trust.clean_rules(_config(collapse=True)), section="retention",
     ).children if hasattr(item, "label")]
     assert "Collapse Previews" in actions
     assert "Enable Cleanup" in actions
-    assert "Use This Channel" in actions
-    assert len(actions) <= 25
+    assert "Use This Channel" in {
+        item.label for item in ui.TrustedAdsView(
+            5, SimpleNamespace(), CHANNEL,
+            rules=trust.clean_rules(_config(collapse=True)), section="approval",
+        ).children if getattr(item, "label", None)
+    }
+    assert len(actions) <= 9
     modal = ui.TrustedPreviewModal(5, channel_id=CHANNEL, bot_id=BOT)
     assert modal.bot_id.default == str(BOT)
     assert modal.action.default == "ON+RECENT"

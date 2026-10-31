@@ -62,44 +62,56 @@ async def _invoke_saved(name: str, interaction: discord.Interaction) -> None:
     await callback(interaction)
 
 
-async def open_dank_home(interaction: discord.Interaction) -> None:
-    embed = discord.Embed(
-        title="🛡️ Dank Shield Control Center",
+_DANK_HOME_SECTIONS = {
+    "personal": ("My Profile", "Roles & Profiles", "Status", "Help"),
+    "server": (
+        "Setup & Settings", "Protection", "Welcome & Join", "Members",
+        "Server Design", "Logs & Activity", "Diagnostics",
+    ),
+}
+
+
+def _home_embed(*, section: str = "personal") -> discord.Embed:
+    section = section if section in _DANK_HOME_SECTIONS else "personal"
+    return discord.Embed(
+        title=f"🛡️ Dank Shield • {'My Tools' if section == 'personal' else 'Server Tools'}",
         description=(
-            "Choose what you want to manage. The slash-command list stays short "
-            "and readable; the full tools live in guided menus like a real "
-            "control panel."
+            "Choose a task below. Every feature opens its own focused settings; "
+            "staff-only actions still check your permissions."
         ),
         color=discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(
-        name="For everyone",
-        value="🪪 My Profile • ❓ Help • 📡 Status",
-        inline=False,
-    )
-    embed.add_field(
-        name="For server managers",
-        value=(
-            "⚙️ Setup • 🛡️ Protection • 👋 Welcome & Join • 👥 Members • "
-            "🎨 Design • 🎭 Roles & Profiles • 🧾 Logs • 🩺 Diagnostics"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Why this is easier",
-        value=(
-            "Buttons show only the next useful choices, mobile screens stay "
-            "uncluttered, and advanced settings no longer flood Discord autocomplete."
-        ),
-        inline=False,
-    )
-    embed.set_footer(text="Dank Shield Command Center")
+
+
+async def open_dank_home(interaction: discord.Interaction) -> None:
     await _private(
         interaction,
-        embed=embed,
+        embed=_home_embed(),
         view=DankHomeView(owner_id=interaction.user.id),
     )
+
+
+class _DankHomeSectionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, section: str) -> None:
+        self.owner_id = int(owner_id)
+        super().__init__(
+            placeholder="Choose Dank Shield tools",
+            options=[
+                discord.SelectOption(label="My Tools", value="personal", default=section == "personal"),
+                discord.SelectOption(label="Server Tools", value="server", default=section == "server"),
+            ],
+            row=0, custom_id="dank:home:area:v2",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await _private(interaction, content="Open your own Dank Shield home.")
+        section = self.values[0]
+        await interaction.response.edit_message(
+            embed=_home_embed(section=section),
+            view=DankHomeView(owner_id=self.owner_id, section=section),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 async def open_profile_entry(interaction: discord.Interaction) -> None:
@@ -130,6 +142,19 @@ class _OwnedView(discord.ui.View):
 
 
 class DankHomeView(_OwnedView):
+    def __init__(self, *, owner_id: int, section: str = "personal") -> None:
+        super().__init__(owner_id=owner_id)
+        self.section = section if section in _DANK_HOME_SECTIONS else "personal"
+        existing = {str(getattr(item, "label", "")): item for item in self.children}
+        self.clear_items()
+        self.add_item(_DankHomeSectionSelect(self.owner_id, self.section))
+        names = (*_DANK_HOME_SECTIONS[self.section], "Close")
+        for index, name in enumerate(names):
+            item = existing[name]
+            item.row = 1 + index // 4
+            self.add_item(item)
+
+
     @discord.ui.button(
         label="Setup & Settings",
         emoji="⚙️",

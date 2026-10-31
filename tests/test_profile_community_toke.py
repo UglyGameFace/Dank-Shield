@@ -334,25 +334,20 @@ def test_toke_setup_uses_only_shared_resource_browser_for_channel_discovery() ->
 
 
 def test_generic_manager_exposes_add_edit_and_safe_remove_controls() -> None:
-    labels = _labels(CommunityPingsManagerView(1))
+    sections = community_ui._PINGS_MANAGER_SECTIONS
+    all_labels = set()
+    for section, expected in sections.items():
+        view = CommunityPingsManagerView(1, section=section)
+        labels = _labels(view)
+        assert set(expected) | {"Refresh", "Home", "Close"} <= labels
+        assert len(view.children) <= 9
+        all_labels.update(labels)
     assert {
-        "Add Option",
-        "Edit Option",
-        "Add Group",
-        "Edit Group",
-        "Delete Group",
-        "Member Preview",
-        "Toke Starter",
-        "Toke Notify",
-        "Movie Night Notify",
-        "Toke Channel",
-        "Toke Settings",
-        "Clear Toke Channel",
-        "Refresh",
-        "Home",
-        "Close",
-    } <= labels
-    assert len(CommunityPingsManagerView(1).children) <= 25
+        "Add Option", "Edit Option", "Add Group", "Edit Group", "Delete Group",
+        "Member Preview", "Toke Starter", "Toke Notify", "Movie Night Notify",
+        "Toke Channel", "Toke Settings", "Clear Toke Channel",
+        "Refresh", "Home", "Close",
+    } <= all_labels
 
 
 def test_direct_toke_mapping_moves_one_capability_without_losing_the_other() -> None:

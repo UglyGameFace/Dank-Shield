@@ -785,95 +785,90 @@ def _strict_gate_flow_value(
     )[:1024]
 
 
-def _admin_embed(guild: discord.Guild, state: Mapping[str, Any]) -> discord.Embed:
+def _admin_embed(guild: discord.Guild, state: Mapping[str, Any], *, section: str = "roles") -> discord.Embed:
     health = gate_health(guild, state)
     channel = health["setup_channel"]
-    access_role = health["access_role"]
+    access = health["access_role"]
     prerequisite = health["prerequisite_role"]
-    categories = list(health["protected_categories"])
     latest = latest_revision(state)
-
+    blockers = list(health["blockers"])
+    warnings = list(health["warnings"])
     embed = discord.Embed(
         title="🪪 Member Setup Manager",
         description=(
-            "Publish versioned member-role/profile changes without wiping existing choices. "
-            "Strict Gate is separate and cannot activate until its role/channel/category health checks pass."
+            "Configure member requirements, review changes, then publish. "
+            "Strict Gate requires a healthy role and channel mapping and is enabled separately."
         ),
         color=discord.Color.green() if state.get("gate_active") else discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
     )
     embed.add_field(
-        name="Published setup",
+        name="Published status",
         value=(
-            f"Revision: **{int(state.get('current_revision') or 0)}**\n"
-            f"Latest: **{_severity_label(str((latest or {}).get('severity') or SEVERITY_MINOR))}**\n"
-            f"Gate: **{'ACTIVE' if state.get('gate_active') else 'Not active'}**"
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="Member Setup channel",
-        value=channel.mention if isinstance(channel, discord.TextChannel) else "Not selected",
-        inline=True,
-    )
-    embed.add_field(
-        name="Member Access role (automatic)",
-        value=(
-            f"{access_role.mention}\nDank Shield grants/removes this role after setup."
-            if isinstance(access_role, discord.Role)
-            else "Not selected — choose the role Dank Shield should grant/remove automatically."
-        ),
-        inline=True,
-    )
-    panel_message_id = _safe_int(state.get("panel_message_id"), 0)
-    embed.add_field(
-        name="Public setup panel",
-        value=(
-            "Connected — **Refresh Public Panel** updates it after setup changes."
-            if panel_message_id > 0
-            else "Needs refresh — use **Refresh Public Panel** to connect the live member setup panel."
+            f"Revision **{int(state.get('current_revision') or 0)}** • "
+            f"Latest **{_severity_label(str((latest or {}).get('severity') or SEVERITY_MINOR))}**\n"
+            f"Strict Gate: **{'On' if state.get('gate_active') else 'Off'}** • "
+            f"Public panel: **{'Connected' if _safe_int(state.get('panel_message_id'), 0) > 0 else 'Needs refresh'}**"
         ),
         inline=False,
     )
     embed.add_field(
-        name="Eligibility prerequisite (optional)",
+        name="Channel and access",
         value=(
-            f"{prerequisite.mention}\nMember must already have this role; Dank Shield does not grant it."
-            if isinstance(prerequisite, discord.Role)
-            else "None — setup completion alone can qualify a member for Member Access."
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="Protected categories",
-        value=(
-            "\n".join(f"• {category.name}" for category in categories[:12])
-            if categories else "None selected"
+            f"Member Setup: {channel.mention if isinstance(channel, discord.TextChannel) else 'Not selected'}\n"
+            f"Access role: {access.mention if isinstance(access, discord.Role) else 'Not selected'}\n"
+            f"Optional prerequisite: {prerequisite.mention if isinstance(prerequisite, discord.Role) else 'None'}\n"
+            f"Protected categories: **{len(health['protected_categories'])}**"
         ),
         inline=False,
     )
-    embed.add_field(
-        name="How Strict Gate works",
-        value=_strict_gate_flow_value(guild, state),
-        inline=False,
-    )
-    if health["blockers"]:
+    # Keep the overview short. Explain role semantics, the gate, or publishing
+    # only on the corresponding focused page so no critical setup guidance vanishes.
+    if section == "roles":
         embed.add_field(
-            name="Strict Gate blockers",
-            value="\n".join(f"• {item}" for item in health["blockers"][:8]),
+            name="Role meanings",
+            value=(
+                "**Member Access role (automatic):** Dank Shield **grants/removes** this role after setup.\n"
+                "**Eligibility prerequisite (optional):** the member must **already have** it; "
+                "Dank Shield does **not** grant it."
+            ),
             inline=False,
         )
-    else:
-        embed.add_field(name="Strict Gate health", value="✅ Ready to activate.", inline=False)
-    if health["warnings"]:
+    elif section == "gate":
         embed.add_field(
-            name="Warnings",
-            value="\n".join(f"• {item}" for item in health["warnings"][:6]),
+            name="How Strict Gate works",
+            value=_strict_gate_flow_value(guild, state),
             inline=False,
         )
+    elif section == "publish":
+        embed.add_field(
+            name="Public panel action",
+            value=(
+                "Connected — **Refresh Public Panel** to publish the latest revision."
+                if _safe_int(state.get("panel_message_id"), 0) > 0
+                else "Needs refresh — use **Refresh Public Panel** to post the current revision."
+            ),
+            inline=False,
+        )
+    health_lines = (
+        [f"❌ {item}" for item in blockers[:6]]
+        + [f"⚠️ {item}" for item in warnings[:3]]
+    )
+    if len(blockers) > 6 or len(warnings) > 3:
+        health_lines.append(
+            f"And {max(0, len(blockers)-6) + max(0, len(warnings)-3)} more readiness items."
+        )
+    embed.add_field(
+        name="Gate readiness",
+        value=_clip("\n".join(health_lines) if health_lines else "✅ Ready to activate.", 1024),
+        inline=False,
+    )
     if latest:
-        embed.add_field(name="Latest published change", value=_clip(latest.get("summary"), 1024), inline=False)
-    embed.set_footer(text="Publishing a revision and activating the Discord access gate are separate actions.")
+        embed.add_field(
+            name="Latest published change",
+            value=_clip(latest.get("summary"), 350),
+            inline=False,
+        )
+    embed.set_footer(text="Use the controls to inspect exact roles, categories, revisions and gate requirements")
     return embed
 
 
@@ -1302,10 +1297,59 @@ class GateSuspendConfirmModal(discord.ui.Modal):
         )
 
 
+_MEMBER_SETUP_SECTIONS = {
+    "roles": ("Setup Channel", "Use This Channel", "Member Access Role",
+              "Create Member Access", "Eligibility Prerequisite", "Clear Eligibility Rule"),
+    "categories": ("Add Protected Category", "Clear Protected Categories"),
+    "publish": ("Publish Minor", "Publish Recommended", "Publish Required",
+                "Publish Access-Gated", "Refresh Public Panel"),
+    "gate": ("Activate Strict Gate", "Suspend Strict Gate"),
+}
+
+
+class _MemberSetupSectionSelect(discord.ui.Select):
+    def __init__(self, current: str):
+        labels = {
+            "roles": "Channels & Roles",
+            "categories": "Protected Categories",
+            "publish": "Publish & Public Panel",
+            "gate": "Strict Gate",
+        }
+        super().__init__(
+            placeholder="Choose Member Setup area",
+            options=[
+                discord.SelectOption(label=label, value=key, default=current == key)
+                for key, label in labels.items()
+            ],
+            row=0,
+            custom_id="dank:member_setup:admin:section:v2",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if not await _staff_authorized(interaction):
+            return
+        await _defer_panel_update(interaction)
+        state = await load_guild_setup_state(int(interaction.guild_id), refresh=True)
+        await _replace(
+            interaction,
+            embed=_admin_embed(interaction.guild, state, section=self.values[0]),
+            view=MemberSetupAdminView(int(interaction.user.id), section=self.values[0]),
+        )
+
+
 class MemberSetupAdminView(discord.ui.View):
-    def __init__(self, owner_id: int) -> None:
+    def __init__(self, owner_id: int, *, section: str = "roles") -> None:
         super().__init__(timeout=900)
         self.owner_id = int(owner_id)
+        self.section = section if section in _MEMBER_SETUP_SECTIONS else "roles"
+        all_items = {str(getattr(item, "label", "")): item for item in self.children}
+        self.clear_items()
+        self.add_item(_MemberSetupSectionSelect(self.section))
+        labels = (*_MEMBER_SETUP_SECTIONS[self.section], "Refresh", "Close")
+        for index, label in enumerate(labels):
+            item = all_items[label]
+            item.row = 1 + index // 4
+            self.add_item(item)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.owner_id:
@@ -1340,7 +1384,7 @@ class MemberSetupAdminView(discord.ui.View):
             setup_channel_id=channel.id,
             actor_id=interaction.user.id,
         )
-        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id))
+        await _replace(interaction, embed=_admin_embed(guild, state, section=self.section), view=MemberSetupAdminView(self.owner_id, section=self.section))
 
     @discord.ui.button(label="Member Access Role", emoji="🔑", style=discord.ButtonStyle.secondary, row=0)
     async def access_role(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1393,13 +1437,13 @@ class MemberSetupAdminView(discord.ui.View):
                     "❌ The existing **Member Access** role is currently the Eligibility Prerequisite. "
                     "Choose a different prerequisite or a different dedicated Member Access role."
                 ),
-                embed=_admin_embed(guild, state),
-                view=MemberSetupAdminView(self.owner_id),
+                embed=_admin_embed(guild, state, section=self.section),
+                view=MemberSetupAdminView(self.owner_id, section=self.section),
             )
             return
 
         state = await configure_guild_setup(guild.id, access_role_id=role.id, actor_id=interaction.user.id)
-        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id))
+        await _replace(interaction, embed=_admin_embed(guild, state, section=self.section), view=MemberSetupAdminView(self.owner_id, section=self.section))
 
     @discord.ui.button(label="Eligibility Prerequisite", emoji="✅", style=discord.ButtonStyle.secondary, row=1)
     async def prerequisite(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1427,7 +1471,7 @@ class MemberSetupAdminView(discord.ui.View):
             prerequisite_role_id=0,
             actor_id=interaction.user.id,
         )
-        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id))
+        await _replace(interaction, embed=_admin_embed(guild, state, section=self.section), view=MemberSetupAdminView(self.owner_id, section=self.section))
 
     @discord.ui.button(label="Add Protected Category", emoji="🔒", style=discord.ButtonStyle.secondary, row=1)
     async def add_category(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1451,7 +1495,7 @@ class MemberSetupAdminView(discord.ui.View):
             return await _reply(interaction, "Suspend Strict Gate before changing protected categories.", ok=False)
         await _defer_panel_update(interaction)
         state = await configure_guild_setup(guild.id, protected_category_ids=[], actor_id=interaction.user.id)
-        await _replace(interaction, embed=_admin_embed(guild, state), view=MemberSetupAdminView(self.owner_id))
+        await _replace(interaction, embed=_admin_embed(guild, state, section=self.section), view=MemberSetupAdminView(self.owner_id, section=self.section))
 
     @discord.ui.button(label="Publish Minor", emoji="📝", style=discord.ButtonStyle.secondary, row=2)
     async def publish_minor(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1492,8 +1536,8 @@ class MemberSetupAdminView(discord.ui.View):
         await _replace(
             interaction,
             content=f"✅ Refreshed the Member Setup & Profile panel in {message.channel.mention}.",
-            embed=_admin_embed(guild, state),
-            view=MemberSetupAdminView(self.owner_id),
+            embed=_admin_embed(guild, state, section=self.section),
+            view=MemberSetupAdminView(self.owner_id, section=self.section),
         )
 
     @discord.ui.button(label="Activate Strict Gate", emoji="🛡️", style=discord.ButtonStyle.danger, row=3)
@@ -1530,8 +1574,15 @@ class MemberSetupAdminView(discord.ui.View):
     @discord.ui.button(label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary, row=3)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         _ = button
-        await open_member_setup_admin(interaction)
-
+        if not await _staff_authorized(interaction):
+            return
+        await _defer_panel_update(interaction)
+        state = await load_guild_setup_state(int(interaction.guild_id), refresh=True)
+        await _replace(
+            interaction,
+            embed=_admin_embed(interaction.guild, state, section=self.section),
+            view=MemberSetupAdminView(self.owner_id, section=self.section),
+        )
 
     @discord.ui.button(label="Close", emoji="✖️", style=discord.ButtonStyle.secondary, row=4)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -1553,7 +1604,7 @@ async def open_member_setup_admin(interaction: discord.Interaction) -> None:
     state = await load_guild_setup_state(guild.id, refresh=True)
     await _replace(
         interaction,
-        embed=_admin_embed(guild, state),
+        embed=_admin_embed(guild, state, section=self.section),
         view=MemberSetupAdminView(interaction.user.id),
     )
 

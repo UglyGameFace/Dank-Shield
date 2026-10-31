@@ -85,100 +85,114 @@ async def _send_private(
         await interaction.followup.send(**payload)
 
 
-async def _welcome_embed(guild: discord.Guild, config: Any) -> discord.Embed:
-    static_channel = welcome_channel_for(guild, config)
+_WELCOME_SECTIONS = {
+    "static": ("Use This Channel", "Edit Welcome Text", "Preview Static Message", "Post / Update Static"),
+    "join": ("Join Card Studio", "Preview Join Card"),
+    "exit": ("Exit Card Studio", "Preview Exit Card"),
+    "tools": ("Text Announcements", "Uploads & Advanced", "Lifecycle Health"),
+}
+_WELCOME_SECTION_LABELS = {
+    "static": "Static Welcome",
+    "join": "Join Card",
+    "exit": "Exit Card",
+    "tools": "Other Tools",
+}
 
-    join_theme_key = configured_theme_key(config)
-    join_theme = BUILTIN_THEMES.get(join_theme_key)
-    join_font_key = configured_font_style_key(config)
-    join_cards = _cfg_bool(config, "welcome_card_enabled")
-    join_channel_id = _cfg_int(
-        config,
-        "join_welcome_channel_id",
-        "welcome_channel_id",
-    )
-    join_channel = guild.get_channel(join_channel_id)
 
-    exit_enabled = exit_cards_enabled(config)
-    exit_channel, exit_reason = resolve_exit_card_channel(guild, config)
-    exit_theme_key = configured_exit_theme_key(config)
-    exit_theme = BUILTIN_THEMES.get(exit_theme_key)
-    exit_font_key = configured_exit_font_style_key(config)
-
-    join_text_enabled = _cfg_bool(
-        config,
-        "welcome_join_enabled",
-        "join_welcome_enabled",
-    )
-
+async def _welcome_embed(
+    guild: discord.Guild, config: Any, *, section: str = "static",
+) -> discord.Embed:
+    """Compact on desktop and mobile; only the selected task is described."""
+    section = section if section in _WELCOME_SECTIONS else "static"
     embed = discord.Embed(
-        title="👋 Welcome, Join & Exit",
-        description=(
-            "Static start-here content, the live Welcome Card, and the live Exit "
-            "Card each have one clear owner. Staff audit/modlog events remain separate."
-        ),
+        title=f"👋 Welcome & Exit • {_WELCOME_SECTION_LABELS[section]}",
         color=discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(
-        name="📌 Static welcome/start-here message",
-        value=(
-            f"**Channel:** {static_channel.mention if isinstance(static_channel, discord.TextChannel) else 'Not selected'}\n"
-            f"**Message:** {'Enabled' if bool(_value(config, 'welcome_message_enabled', False)) else 'Not posted/enabled'}\n"
-            "Use the channel picker, edit the text, preview it, then post/update without duplicates."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="🖼️ Canonical live Welcome Card",
-        value=(
-            f"**Status:** {'On' if join_cards else 'Off'}\n"
-            f"**Channel:** {join_channel.mention if isinstance(join_channel, discord.TextChannel) else 'Not selected'}\n"
-            f"**Theme:** {getattr(join_theme, 'label', join_theme_key)}\n"
-            f"**Font:** {_font_label(config, join_font_key)}\n"
-            f"**Colors:** {configured_color_mode(config).replace('_', ' ').title()}\n"
-            f"**Shuffle:** {configured_shuffle_mode(config).replace('_', ' ').title()}"
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="🚪 Canonical live Exit Card",
-        value=(
-            f"**Status:** {'On' if exit_enabled else 'Off'}\n"
-            f"**Channel:** {exit_channel.mention if isinstance(exit_channel, discord.TextChannel) else 'Not selected'}\n"
-            f"**Theme:** {getattr(exit_theme, 'label', exit_theme_key)}\n"
-            f"**Font:** {_font_label(config, exit_font_key)}\n"
-            f"**Colors:** {configured_exit_color_mode(config).replace('_', ' ').title()}\n"
-            f"**Shuffle:** {configured_exit_shuffle_mode(config).replace('_', ' ').title()}\n"
-            f"**Route:** {exit_reason}"
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="📣 Compatibility text announcement",
-        value=(
-            f"**Separate join text:** {'On' if join_text_enabled else 'Off'}"
-            + (
-                f" in {join_channel.mention}"
-                if isinstance(join_channel, discord.TextChannel)
-                else ""
-            )
-            + "\nThe old leave-event sender is retired; Exit Card Studio owns public leaves."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Simple order",
-        value=(
-            "1. Set your static welcome/start-here message if you use one.\n"
-            "2. Open **Join Card Studio** for live joins.\n"
-            "3. Open **Exit Card Studio** for live leaves.\n"
-            "4. Preview each live card before relying on it."
-        ),
-        inline=False,
-    )
-    embed.set_footer(text="Welcome & Exit setup • choose where join and exit messages are sent")
+    if section == "static":
+        static_channel = welcome_channel_for(guild, config)
+        embed.description = "Edit, preview, and post the static start-here message. Posting updates the existing panel when possible."
+        embed.add_field(
+            name="Static welcome",
+            value=(
+                f"Channel: {static_channel.mention if isinstance(static_channel, discord.TextChannel) else 'Not selected'}\n"
+                f"Status: **{'Enabled' if bool(_value(config, 'welcome_message_enabled', False)) else 'Not posted/enabled'}**"
+            ),
+            inline=False,
+        )
+    elif section == "join":
+        join_id = _cfg_int(config, "join_welcome_channel_id", "welcome_channel_id")
+        channel = guild.get_channel(join_id)
+        theme_key = configured_theme_key(config)
+        embed.description = "Preview the live card members see when joining, or open Join Card Studio to change its design."
+        embed.add_field(
+            name="Live join card",
+            value=(
+                f"Status: **{'On' if _cfg_bool(config, 'welcome_card_enabled') else 'Off'}**\n"
+                f"Channel: {channel.mention if isinstance(channel, discord.TextChannel) else 'Not selected'}\n"
+                f"Style: **{getattr(BUILTIN_THEMES.get(theme_key), 'label', theme_key)}** • "
+                f"{_font_label(config, configured_font_style_key(config))}"
+            ),
+            inline=False,
+        )
+    elif section == "exit":
+        channel, reason = resolve_exit_card_channel(guild, config)
+        theme_key = configured_exit_theme_key(config)
+        embed.description = "Preview the leave card, or open Exit Card Studio for delivery, design and text settings."
+        embed.add_field(
+            name="Live exit card",
+            value=(
+                f"Status: **{'On' if exit_cards_enabled(config) else 'Off'}**\n"
+                f"Channel: {channel.mention if isinstance(channel, discord.TextChannel) else 'Not selected'}\n"
+                f"Style: **{getattr(BUILTIN_THEMES.get(theme_key), 'label', theme_key)}** • "
+                f"{_font_label(config, configured_exit_font_style_key(config))}\n"
+                f"Route: **{reason}**"
+            ),
+            inline=False,
+        )
+    else:
+        embed.description = (
+            "Configure optional join-text announcements, manage card artwork/uploads, "
+            "or inspect lifecycle health. These are separate from member-facing card delivery."
+        )
+        embed.add_field(
+            name="Join text",
+            value=f"Status: **{'On' if _cfg_bool(config, 'welcome_join_enabled', 'join_welcome_enabled') else 'Off'}**",
+            inline=False,
+        )
+    embed.set_footer(text="Choose a section • No changes occur until you use an action")
     return embed
+
+
+class _WelcomeSectionSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, section: str) -> None:
+        self.owner_id = int(owner_id)
+        super().__init__(
+            placeholder="Choose welcome or exit settings",
+            options=[
+                discord.SelectOption(
+                    label=label, value=key, default=section == key,
+                )
+                for key, label in _WELCOME_SECTION_LABELS.items()
+            ],
+            row=0, custom_id="dank:welcome:settings:section:v2",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if int(interaction.user.id) != self.owner_id:
+            return await _send_private(interaction, content="Open your own Welcome & Exit panel.")
+        if not await _require_setup_permission(interaction):
+            return
+        guild = interaction.guild
+        if guild is None:
+            return await _send_private(interaction, content="Use this inside a server.")
+        from .commands_ext import public_setup_solid as solid
+        await solid._safe_defer_update(interaction)
+        config = await get_guild_config(int(guild.id), refresh=True)
+        section = self.values[0]
+        await solid._edit_or_followup(
+            interaction, embed=await _welcome_embed(guild, config, section=section),
+            view=WelcomeSetupView(owner_id=self.owner_id, config=config, section=section),
+        )
 
 
 class WelcomeTemplateModal(discord.ui.Modal):
@@ -249,11 +263,25 @@ class WelcomeChannelSelect(discord.ui.ChannelSelect):
 
 
 class WelcomeSetupView(discord.ui.View):
-    def __init__(self, *, owner_id: int, config: Any) -> None:
+    def __init__(self, *, owner_id: int, config: Any, section: str = "static") -> None:
         super().__init__(timeout=900)
         self.owner_id = int(owner_id)
         self.config = config
-        self.add_item(WelcomeChannelSelect())
+        self.section = section if section in _WELCOME_SECTIONS else "static"
+        original = {str(getattr(item, "label", "")): item for item in self.children}
+        self.clear_items()
+        self.add_item(_WelcomeSectionSelect(self.owner_id, self.section))
+        if self.section == "static":
+            picker = WelcomeChannelSelect()
+            picker.row = 1
+            self.add_item(picker)
+        actions = (*_WELCOME_SECTIONS[self.section], "Refresh", "Back to All Features", "Close")
+        if self.section == "tools":
+            actions += ("Setup Home",)
+        for index, name in enumerate(actions):
+            item = original[name]
+            item.row = (2 if self.section == "static" else 1) + index // 4
+            self.add_item(item)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if int(interaction.user.id) != self.owner_id:
@@ -478,8 +506,8 @@ class WelcomeSetupView(discord.ui.View):
         config = await get_guild_config(guild.id, refresh=True)
         await solid._edit_or_followup(
             interaction,
-            embed=await _welcome_embed(guild, config),
-            view=WelcomeSetupView(owner_id=self.owner_id, config=config),
+            embed=await _welcome_embed(guild, config, section=self.section),
+            view=WelcomeSetupView(owner_id=self.owner_id, config=config, section=self.section),
         )
 
     @discord.ui.button(

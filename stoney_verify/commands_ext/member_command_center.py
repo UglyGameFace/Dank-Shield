@@ -51,39 +51,15 @@ async def _invoke_command(
 
 
 def _center_embed() -> discord.Embed:
-    embed = discord.Embed(
+    return discord.Embed(
         title="👥 Member Command Center",
         description=(
-            "One staff command for member browsing, moderation, intelligence, "
-            "activity review, cleanup, locks, notices, and safety settings.\n\n"
-            "Choose a category below. The entire center is private and locked "
-            "to the staff member who opened it."
+            "**Choose what you're working on:** members, activity, "
+            "intelligence, or staff safety. Each opens its own tools.\n\n"
+            "Moderation actions still require permission checks and confirmation."
         ),
         color=discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(
-        name="👤 Live Members",
-        value="Browse any role, search a member, and open guarded moderation actions.",
-        inline=False,
-    )
-    embed.add_field(
-        name="📊 Activity & Cleanup",
-        value="Run inactivity reviews, reopen results, and use confirmed cleanup flows.",
-        inline=False,
-    )
-    embed.add_field(
-        name="🧠 Intelligence",
-        value="See join history, connection evidence, bans, and staff review in one place.",
-        inline=False,
-    )
-    embed.add_field(
-        name="🔒 Operations & Safety",
-        value="Manage scan locks, notice results, evidence coverage, and cleanup settings.",
-        inline=False,
-    )
-    embed.set_footer(text="/dank members • one command, feature menus inside")
-    return embed
 
 
 def _live_members_embed(quick_roles: list[discord.Role]) -> discord.Embed:

@@ -122,27 +122,14 @@ class _OwnedView(discord.ui.View):
 
 
 def _center_embed() -> discord.Embed:
-    embed = discord.Embed(
+    return discord.Embed(
         title="✅ Verification Center",
         description=(
-            "Member status, diagnostics, verification, role repair, server-wide Pending/Unverified "
-            "repair, role mapping, the public Verify panel, and opt-in unverified reminders are all here."
+            "Choose a member to review or fix access, or open server-wide "
+            "verification settings. Changes remain permission-checked."
         ),
         color=discord.Color.blurple(),
-        timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(
-        name="Member actions",
-        value="Pick a member below for Status • Diagnose • Verify • Pending repair • Verified/Resident role changes.",
-        inline=False,
-    )
-    embed.add_field(
-        name="Server actions",
-        value="Repair missing Pending roles • Post/refresh Verify panel • Map exact existing verification roles.",
-        inline=False,
-    )
-    embed.set_footer(text="Verification Center • staff controls")
-    return embed
 
 
 def _target_embed(member: discord.Member) -> discord.Embed:
