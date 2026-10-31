@@ -117,5 +117,13 @@ def test_welcome_profile_and_history_keep_setup_navigation() -> None:
     assert sum(1 for item in profile.children if item.row == 3) <= 5
     history = config_history_ui.ConfigHistoryView([])
 
-    for view in (welcome, profile, history):
+    for view in (profile, history):
         _assert_navigation(view, "Back to All Features", "Setup Home", "Close")
+    # Welcome is now split into focused pages; Setup Home lives under Other Tools.
+    for section in ("static", "join", "exit", "tools"):
+        scoped = welcome_setup_ui.WelcomeSetupView(owner_id=7, config={}, section=section)
+        assert {"Back to All Features", "Close"} <= _labels(scoped)
+        assert len(scoped.children) <= 9
+    assert "Setup Home" in _labels(welcome_setup_ui.WelcomeSetupView(
+        owner_id=7, config={}, section="tools",
+    ))
