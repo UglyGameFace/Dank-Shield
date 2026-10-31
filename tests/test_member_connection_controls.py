@@ -108,6 +108,7 @@ class FakeMember:
         self.guild = guild
         self.id = member_id
         self.guild_permissions = FakePerms()
+        self.bot = member_id == 999
 
 
 class FakeTextChannel:
@@ -140,6 +141,8 @@ class FakeGuild:
         self.default_role = FakeRole(123, self)
         self.trusted = FakeRole(456, self)
         self.me = FakeMember(self, 999)
+        # Bot Administrator bypasses the deny in the ordinary test guild.
+        self.me.guild_permissions.administrator = True
         self.channel = FakeTextChannel(self, 789)
         self.roles = [self.default_role, self.trusted]
 
@@ -279,3 +282,18 @@ def test_existing_elevated_moderator_role_grant_is_preserved(monkeypatch):
     assert guild.channel.overwrites_for(mod_role).view_channel is True
     run(controls.remove_protection(guild, actor, "789"))
     assert guild.channel.overwrites_for(mod_role).view_channel is True
+
+
+def test_bot_must_retain_recovery_visibility_after_everyone_deny(monkeypatch):
+    record = install_store(monkeypatch)
+    guild, actor = install_discord(monkeypatch)
+    guild.me.guild_permissions.administrator = False
+    guild.me.roles = []
+    with pytest.raises(controls.ConnectionControlError, match="lose channel access"):
+        run(controls.protect_channel(guild, actor, guild.channel, guild.trusted))
+    assert record["current"] is None
+
+    guild.channel.overwrites[guild.me] = FakeOverwrite(True)
+    run(controls.protect_channel(guild, actor, guild.channel, guild.trusted))
+    assert record["current"]["protected"]["789"]["state"] == "active"
+    assert guild.channel.overwrites_for(guild.me).view_channel is True
