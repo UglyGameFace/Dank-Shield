@@ -438,8 +438,8 @@ FEATURES: tuple[NavigationFeature, ...] = (
         "Help",
         "❓",
         "utilities",
-        "Choose a help topic, search for a tool, or browse all available features.",
-        ("help", "commands", "where is", "how do i", "find feature", "help topics", "getting started", "where are settings", "help with reminders"),
+        "Read step-by-step how-to guides for every feature, search questions, or browse by topic.",
+        ("help", "commands", "where is", "how do i", "find feature", "how to use", "how to", "guide", "tutorial", "instructions", "find help", "browse guides", "help topics", "getting started", "where are settings", "help with reminders"),
     ),
 )
 
