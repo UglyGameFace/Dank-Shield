@@ -133,7 +133,7 @@ def test_footer_copy_uses_user_guidance_instead_of_implementation_notes() -> Non
 
     assert "Community Tools • previews stay private until you publish or post a test" in community
     assert "Only currently available tools are shown" in community
-    assert "Welcome & Exit setup • choose where join and exit messages are sent" in welcome
+    assert "Choose a section • No changes occur until you use an action" in welcome
     assert "Setup check • review warnings before changing settings" in setup
     assert "Advanced options, safety checks, video testing and cleanup remain available in Tools." in share
     # The current help page has a short, actionable footer rather than the
