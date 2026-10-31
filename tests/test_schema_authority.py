@@ -169,18 +169,14 @@ def test_production_schema_changes_flow_through_supabase_cli() -> None:
 def test_production_schema_deploy_waits_for_canonical_ci() -> None:
     workflow = _text(DEPLOY_WORKFLOW)
 
-    # Production promotion must be a privileged follow-up to the canonical CI
-    # run, never a sibling push workflow racing the same main commit.
-    assert "workflow_run:" in workflow
-    assert 'workflows: ["Dank Shield CI"]' in workflow
-    assert "types: [completed]" in workflow
-    assert "branches: [main]" in workflow
+    # CI success is required evidence, never automatic permission to mutate production.
+    assert "  workflow_run:" not in workflow
+    assert "  workflow_dispatch:" in workflow
     assert "\n  push:\n" not in workflow
-
-    assert "github.event.workflow_run.conclusion == 'success'" in workflow
-    assert "github.event.workflow_run.event == 'push'" in workflow
-    assert "github.event.workflow_run.head_branch == 'main'" in workflow
-    assert "github.event.workflow_run.head_sha" in workflow
+    assert "if: github.event_name == 'workflow_dispatch'" in workflow
+    assert "APPROVE_CURRENT_MAIN_SUPABASE_MIGRATION" in workflow
+    assert "VERIFIED_OFF_DISCLOUD_BACKUP" in workflow
+    assert "ROLLBACK_TESTED" in workflow
 
     # Promotion must reject stale CI completions. An older successful main run
     # must never deploy after a newer commit has already become canonical main.
