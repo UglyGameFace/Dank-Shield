@@ -271,4 +271,7 @@ def test_roles_and_profiles_sections_preserve_permission_gated_controls():
     member = roles.RolesProfilesView(
         123, staff=False, role_manager=False, setup_manager=False, section="roles",
     )
-    assert len(member.children) == 2  # selector + return home, never a privilege shortcut
+    assert member.section == "profile"
+    assert {item.value for item in member.children[0].options} == {"profile"}
+    assert all(item.label not in {"Server Role Editor", "Create Role", "Role Health"}
+               for item in member.children if getattr(item, "label", None))
