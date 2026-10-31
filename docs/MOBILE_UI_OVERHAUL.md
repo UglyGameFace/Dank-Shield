@@ -72,8 +72,12 @@ python tools/audit_discord_mobile_panels.py --strict-parse --json-out mobile-pan
 - Welcome & Exit: focused static message, live join, live exit, and other tools.
 - Join Card Studio and Exit Card Studio: delivery, design, and artwork pages;
   refresh and navigation preserve working handlers and confirmation boundaries.
-- Advanced Settings: core features, appearance, and operations instead of nine
-  unrelated instruction fields.
+- Setup navigation: retain the existing production-registered
+  `CompactManagerView` as the single authoritative Advanced Settings entry,
+  with its canonical category picker and five focused controls. The duplicate
+  unregistered hub implementation was removed rather than introducing a second
+  menu that is overwritten at runtime. Both isolated and registered test paths
+  validate the same compact UI.
 - Trusted Advertising Bots: approval and retention/preview pages, with exact
   bot/channel identity and 24h+ retention safeguards still enforced.
 - Action & Reminder Center: member tasks vs staff settings, no hidden scheduler.
