@@ -3,6 +3,9 @@ name: Retire merged temporary branches
 # Only opt-in temporary branch namespaces are eligible. This is deliberately
 # separate from the owner-reviewed historical cleanup workflow.
 on:
+  push:
+    branches:
+      - main # Also run after validated integration; scheduled triggers may be delayed or disabled
   schedule:
     - cron: '*/5 * * * *' # Frequent guarded cleanup; GitHub may delay scheduled starts
   workflow_dispatch:
