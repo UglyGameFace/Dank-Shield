@@ -135,9 +135,9 @@ HELP_GUIDES: dict[str, HelpGuide] = {
         "Staff-only tools keep their existing permission checks."),
     "share_router": HelpGuide(
         "Choose which member posts are shared and where media goes.",
-        ("Open Share Router and choose Where Videos Go to set Private DM, Server Channel or both.",
-         "Choose Share From Existing Channel or add forwarding rules; select which posts qualify.",
-         "Save This Choice, test a supported link, and check the configured destination."),
+        ("Open Share Router → Where Videos Go. For one-channel setup, open the desired text channel and choose Requests + Results Here.",
+         "Confirm Save Requests + Results Here for channel-only delivery with no DMs, or choose separate request and delivery channels, Private DM or Both.",
+         "Test with one supported public video link and check the chosen results destination."),
         "Regular source posts remain in their channels unless an independent moderation rule removes them.",
         "DM delivery is a destination choice, not a reason to message every member automatically."),
     "share_downloads": HelpGuide(

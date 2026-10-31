@@ -157,7 +157,7 @@ async def handle_download_message(message: discord.Message) -> bool:
     except Exception:
         return True
 
-    from .share_router_runtime import guild_download_delivery, is_share_router_design_resource
+    from .share_router_runtime import guild_download_delivery
     delivery_mode, destination_id = await guild_download_delivery(int(message.guild.id))
     if delivery_mode == "off":
         return True
@@ -167,9 +167,7 @@ async def handle_download_message(message: discord.Message) -> bool:
         destination = message.guild.get_channel(destination_id)
         if (
             not isinstance(destination, discord.TextChannel)
-            or int(destination.id) == int(channel.id)
             or getattr(destination.guild, "id", None) != int(message.guild.id)
-            or is_share_router_design_resource(destination)
         ):
             await _reply_problem(message, "The chosen video destination is missing or unsafe. The link was kept.")
             return True

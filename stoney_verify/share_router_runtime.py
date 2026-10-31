@@ -928,8 +928,8 @@ async def configure_guild_download(
     if int(guild_id) <= 0 or int(channel_id) <= 0 or mode not in DOWNLOAD_DELIVERY_MODES:
         raise ValueError("Invalid Share Router download settings")
     if mode in {"channel", "both"}:
-        if int(destination_id) <= 0 or int(destination_id) == int(channel_id):
-            raise ValueError("A separate destination channel is required")
+        if int(destination_id) <= 0:
+            raise ValueError("Choose a text channel for the video results.")
     elif destination_id:
         raise ValueError("This delivery mode does not use a destination channel")
     async with _DATA_LOCK:

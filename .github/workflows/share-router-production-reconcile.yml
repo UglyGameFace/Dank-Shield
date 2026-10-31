@@ -15,6 +15,7 @@ on:
       - "tests/test_share_router_custom_sources.py"
       - "tests/test_share_router_native_runtime.py"
       - "tests/test_share_router_private_downloads.py"
+      - "tests/test_share_router_video_channel_picker.py"
       - "tests/test_share_router_media_titles.py"
       - "tests/test_share_router_download_queue.py"
       - "tests/test_share_router_external_links.py"
@@ -43,7 +44,7 @@ jobs:
       - name: Compile canonical Share Router modules
         run: python -m py_compile stoney_verify/share_router_media_resolver.py stoney_verify/share_router_media_titles.py stoney_verify/share_router_runtime.py stoney_verify/share_router_private_downloads.py stoney_verify/share_router_download_queue.py stoney_verify/share_router_external_links.py stoney_verify/share_router_resources.py stoney_verify/commands_ext/public_share_router.py
       - name: Test per-guild routes, cleanup, media compatibility and menus
-        run: python -m pytest tests/test_share_router_custom_sources.py tests/test_share_router_native_runtime.py tests/test_share_router_private_downloads.py tests/test_share_router_download_queue.py tests/test_share_router_external_links.py tests/test_share_router_media_resolver.py tests/test_share_router_media_titles.py tests/test_share_router_manifest_proxy.py tests/test_user_facing_footer_cleanup.py -q --tb=short --disable-warnings
+        run: python -m pytest tests/test_share_router_custom_sources.py tests/test_share_router_native_runtime.py tests/test_share_router_private_downloads.py tests/test_share_router_video_channel_picker.py tests/test_share_router_download_queue.py tests/test_share_router_external_links.py tests/test_share_router_media_resolver.py tests/test_share_router_media_titles.py tests/test_share_router_manifest_proxy.py tests/test_user_facing_footer_cleanup.py -q --tb=short --disable-warnings
         env:
           DANK_STARTUP_LOG_STYLE: quiet
           DANK_COMMAND_LOG_STYLE: quiet
