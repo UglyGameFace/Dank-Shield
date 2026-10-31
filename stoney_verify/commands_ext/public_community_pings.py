@@ -195,105 +195,58 @@ def _manager_embed(
     raw_config: Mapping[str, Any],
     model: CommunityPingsConfig,
 ) -> discord.Embed:
-    embed = discord.Embed(
-        title="🌿 Community & Pings Manager",
-        description=(
-            "**Home › Community & Engagement › Community & Pings Manager**\n"
-            "Build the optional roles members may choose for themselves. Community roles and notification roles "
-            "share one safe engine; access/staff/verification roles remain blocked."
-        ),
-        color=discord.Color.green(),
-        timestamp=discord.utils.utcnow(),
-    )
-    embed.add_field(name="Revision", value=str(int(model.revision)), inline=True)
-    embed.add_field(name="Options", value=f"{len(model.options)} / {MAX_COMMUNITY_OPTIONS}", inline=True)
-    embed.add_field(name="Groups", value=str(len(model.groups)), inline=True)
-
     starter_id, notify_id = toke_role_ids(model, raw_config)
     starter = guild.get_role(starter_id) if starter_id else None
     notify = guild.get_role(notify_id) if notify_id else None
     channel_id = _safe_int(raw_config.get(LEGACY_TOKE_CHANNEL_KEY), 0)
     channel = guild.get_channel(channel_id) if channel_id else None
+    movie_id = movie_night_role_id(model)
+    movie = guild.get_role(movie_id) if movie_id else None
+
+    embed = discord.Embed(
+        title="🌿 Community & Pings Manager",
+        description=(
+            "Create optional member roles and notifications. Select an option "
+            "to inspect its exact prerequisites, group, and role permissions."
+        ),
+        color=discord.Color.green(),
+    )
     embed.add_field(
-        name="/toke integration",
+        name="Role choices",
         value=(
-            f"Starter: {starter.mention if isinstance(starter, discord.Role) else 'Not configured'}\n"
+            f"**{len(model.options)}/{MAX_COMMUNITY_OPTIONS}** options • "
+            f"**{len(model.groups)}** groups • Revision **{model.revision}**\n"
+            "Use the option picker to review or edit individual roles."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="/toke notifications",
+        value=(
+            f"Starter: {starter.mention if isinstance(starter, discord.Role) else 'Not configured'} • "
             f"Notify: {notify.mention if isinstance(notify, discord.Role) else 'Not configured'}\n"
-            f"Preferred channel: {channel.mention if isinstance(channel, discord.TextChannel) else 'Use the command channel'}\n"
-            "Use **Toke Starter**, **Toke Notify**, and **Toke Channel** below. "
-            "Starter/Notify choose from enabled safe Community & Pings options; use **Add Option** first if a role is not listed."
+            f"Channel: {channel.mention if isinstance(channel, discord.TextChannel) else 'Command channel'}"
         ),
         inline=False,
     )
-
-    movie_night_id = movie_night_role_id(model)
-    movie_night_role = guild.get_role(movie_night_id) if movie_night_id else None
     embed.add_field(
-        name="🎬 Movie Night integration",
-        value=(
-            f"Notify role: {movie_night_role.mention if isinstance(movie_night_role, discord.Role) else 'Not configured'}\n"
-            "Movie Night uses the capability mapping, not the role name. "
-            "The role may be renamed/styled later without breaking notifications. "
-            "Use **Movie Night Notify** to map an enabled notification option."
-        ),
+        name="Movie Night",
+        value=f"Notify role: {movie.mention if isinstance(movie, discord.Role) else 'Not configured'}",
         inline=False,
     )
-
     if model.source == "legacy":
         embed.add_field(
-            name="Legacy preset detected",
-            value=(
-                "Your existing Stoner / Sesh Pings mapping is loaded as a compatibility preset. "
-                "The first Builder save converts it into the generic revisioned model without removing the roles."
-            ),
+            name="Existing roles retained",
+            value="Legacy Stoner/Sesh Pings settings will migrate on the first confirmed Builder save.",
             inline=False,
         )
-
     if not model.options:
         embed.add_field(
-            name="Configured options",
-            value="None yet. Add an existing safe role to begin.",
+            name="First step",
+            value="Choose Add Option and select a safe role to offer to members.",
             inline=False,
         )
-    else:
-        groups = _group_map(model)
-        lines: list[str] = []
-        for option in model.options[:20]:
-            role = guild.get_role(int(option.role_id))
-            role_text = role.mention if isinstance(role, discord.Role) else f"Missing role \`{option.role_id}\`"
-            group = groups.get(option.group_key)
-            group_name = group.label if group is not None else option.group_key
-            flags: list[str] = []
-            if not option.enabled:
-                flags.append("disabled")
-            if not option.removable:
-                flags.append("locked removal")
-            if option.prerequisite_role_id:
-                flags.append("prerequisite")
-            if option.exclusive_key:
-                flags.append(f"exclusive:{option.exclusive_key}")
-            if CAP_TOKE_START in option.capabilities:
-                flags.append("/toke starter")
-            if CAP_TOKE_NOTIFY in option.capabilities:
-                flags.append("/toke notify")
-            flag_text = f" • {', '.join(flags)}" if flags else ""
-            kind = "Ping" if option.kind == "notification" else "Community"
-            lines.append(
-                f"{option.emoji} **{option.label}** · {kind} · {group_name}\n"
-                f"↳ {role_text}{flag_text}"
-            )
-        suffix = f"\n… and {len(model.options) - 20} more" if len(model.options) > 20 else ""
-        embed.add_field(name="Configured options", value=("\n".join(lines) + suffix)[:1024], inline=False)
-
-    embed.add_field(
-        name="Member safety",
-        value=(
-            "Every role is revalidated against live hierarchy and sensitive-role rules before it can be offered or changed. "
-            "Prerequisites, mutual exclusion, group limits, and non-removable choices are rechecked at click time."
-        ),
-        inline=False,
-    )
-    embed.set_footer(text="Dank Shield • Community & Pings • changes are per server")
+    embed.set_footer(text="Exact option settings stay in the editor • Protected/staff roles are blocked")
     return embed
 
 
