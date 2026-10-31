@@ -76,25 +76,18 @@ def build_connection_report(
         elif kind == "same_person_likely":
             record(other, "Staff marked possible duplicate account", "possible_identity", "manual_alt_links")
 
-    for row in source.get("proof_forward", []) + source.get("proof_reverse", []):
-        a, b = _id(row.get("user_id")), _id(row.get("matched_user_id"))
-        other = b if a == uid else a if b == uid else ""
-        if other:
-            record(other, "Stored identity-proof match (verify its provenance)", "identity_record", "identity_proof_matches")
-
     ordered = []
-    priority = {"reviewed_identity": 0, "identity_record": 1, "possible_identity": 2, "social": 3, "weak": 4}
+    priority = {"reviewed_identity": 0, "possible_identity": 1, "social": 2, "weak": 3}
     for other, item in found.items():
         if other in suppressed:
             item["evidence"] = [e for e in item["evidence"] if e["kind"] not in
-                                {"reviewed_identity", "identity_record", "possible_identity"}]
+                                {"reviewed_identity", "possible_identity"}]
             item["identity_review"] = "staff_marked_not_same_person"
         if not item["evidence"]:
             continue
         kinds = {e["kind"] for e in item["evidence"]}
         item["category"] = (
             "reviewed identity record" if "reviewed_identity" in kinds else
-            "identity evidence to review" if "identity_record" in kinds else
             "possible identity link" if "possible_identity" in kinds else
             "documented server relationship" if "social" in kinds else
             "unverified join relationship"
@@ -131,6 +124,9 @@ def _read_connection_report(guild_id: int, user_id: int) -> dict[str, Any]:
 
     source: dict[str, list[dict[str, Any]]] = {}
     errors: list[str] = []
+    # The dedicated primary Supabase has identity_proofs, not an
+    # identity_proof_matches relationship table. Do not query a nonexistent
+    # table or infer a second account from a single person's proof.
     requests = (
         ("target", "guild_members", "user_id", uid),
         ("invited", "guild_members", "invited_by", uid),
@@ -140,8 +136,6 @@ def _read_connection_report(guild_id: int, user_id: int) -> dict[str, Any]:
         ("join_vouched", "member_joins", "vouched_by", uid),
         ("manual_a", "manual_alt_links", "user_a_id", uid),
         ("manual_b", "manual_alt_links", "user_b_id", uid),
-        ("proof_forward", "identity_proof_matches", "user_id", uid),
-        ("proof_reverse", "identity_proof_matches", "matched_user_id", uid),
     )
     for key, table, column, value in requests:
         try:
@@ -149,7 +143,6 @@ def _read_connection_report(guild_id: int, user_id: int) -> dict[str, Any]:
                 "guild_members": "user_id,invited_by,vouched_by,entry_truth_quality,entry_conflict",
                 "member_joins": "user_id,invited_by,vouched_by,entry_truth_quality,entry_conflict",
                 "manual_alt_links": "user_a_id,user_b_id,link_type,status",
-                "identity_proof_matches": "user_id,matched_user_id",
             }[table]
             query = (db.table(table).select(projection).eq("guild_id", gid)
                      .eq(column, value).limit(_QUERY_LIMIT))
