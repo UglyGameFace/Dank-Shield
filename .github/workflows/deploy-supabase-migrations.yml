@@ -90,7 +90,7 @@ jobs:
 
           echo "Validated current production migration target: $TARGET_SHA"
 
-      - name: Verify exact target passed canonical CI
+      - name: Verify manual target passed canonical CI
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
