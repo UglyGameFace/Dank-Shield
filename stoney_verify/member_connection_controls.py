@@ -138,9 +138,18 @@ def _check_grants(channel: discord.TextChannel, trusted: discord.Role) -> None:
         if principal.id in {channel.guild.default_role.id, trusted.id}:
             continue
         if overwrite.view_channel is True:
+            if isinstance(principal, discord.Role):
+                perms = principal.permissions
+                if any(bool(getattr(perms, name, False)) for name in (
+                    "administrator", "manage_guild", "manage_roles",
+                    "moderate_members", "kick_members", "ban_members", "manage_messages",
+                )):
+                    # Keep explicit access for actual moderators. Never rewrite
+                    # their existing role overwrites behind the owner's back.
+                    continue
             raise ConnectionControlError(
-                "Another role or member has explicit channel access. Remove that allowance "
-                "in Discord first; no permissions were changed."
+                "An ordinary role or individual member has explicit channel access. "
+                "Remove that allowance in Discord first; no permissions were changed."
             )
 
 
@@ -315,7 +324,8 @@ async def post_private_connection_alert(
                 continue
             p = role.permissions
             elevated = (p.administrator or p.manage_guild or p.manage_roles
-                        or p.moderate_members or p.kick_members or p.ban_members)
+                        or p.moderate_members or p.kick_members or p.ban_members
+                        or p.manage_messages)
             if role.id not in allowed_staff and not elevated:
                 return False
         # Explicit member allowances cannot be classified safely from cached
