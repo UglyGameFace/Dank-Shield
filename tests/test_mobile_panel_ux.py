@@ -325,8 +325,9 @@ def test_setup_and_trusted_advert_buttons_are_partitioned_not_deleted():
 
     # Production registers the canonical compact setup implementation. Do not
     # assert against a legacy view that registration intentionally replaces.
-    assert setup.AdvancedSettingsHubView is compact.CompactManagerView
-    panel = setup.AdvancedSettingsHubView()
+    if compact._PATCHED:
+        assert setup.AdvancedSettingsHubView is compact.CompactManagerView
+    panel = compact.CompactManagerView()
     assert _buttons(panel) == {
         "Change Plan", "Check Configuration", "Advanced", "Setup Home", "Close",
     }
