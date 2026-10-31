@@ -109,47 +109,10 @@ async def open_profile_entry(interaction: discord.Interaction) -> None:
 
 
 async def open_help_entry(interaction: discord.Interaction) -> None:
-    embed = discord.Embed(
-        title="❓ Dank Shield Help",
-        description=(
-            "Start with `/dank home`. It opens every Dank Shield area without "
-            "making you memorize dozens of commands."
-        ),
-        color=discord.Color.blurple(),
-    )
-    embed.add_field(
-        name="Main commands",
-        value=(
-            "`/dank home` — full control center\n"
-            "`/dank setup` — guided server setup\n"
-            "`/dank members` — complete member command center\n"
-            "`/dank profile` — your profile signature, privacy, platforms, and appearance\n"
-            "`/dank status` — live bot status\n"
-            "`/dank diagnostics` — read-only manager health report"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Welcome Card Studio",
-        value=(
-            "Use `/dank welcome card-studio` for the complete live join-card "
-            "panel, `/dank welcome card-preview` for a production preview, "
-            "`/dank welcome card-upload` for custom artwork, and "
-            "`/dank welcome card-font-upload` for a licensed custom font."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Daily commands remain direct",
-        value="Ticket, verification, and moderation commands keep their own normal command families.",
-        inline=False,
-    )
-    await _private(
-        interaction,
-        embed=embed,
-        view=DankHelpView(owner_id=interaction.user.id),
-    )
-
+    # Compatibility entry uses the same final public help owner; do not
+    # maintain a second command list with obsolete /dank aliases.
+    from .public_command_surface_v2 import _route_feature
+    await _route_feature(interaction, "help")
 
 class _OwnedView(discord.ui.View):
     def __init__(self, *, owner_id: int, timeout: float = PRIVATE_MENU_TTL_SECONDS) -> None:
@@ -355,51 +318,6 @@ class DankHomeView(_OwnedView):
         _ = button
         await interaction.response.edit_message(
             content="Dank Shield Control Center closed.",
-            embed=None,
-            view=None,
-        )
-
-
-class DankHelpView(_OwnedView):
-    @discord.ui.button(
-        label="Open Control Center",
-        emoji="🛡️",
-        style=discord.ButtonStyle.primary,
-    )
-    async def home(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        await open_dank_home(interaction)
-
-    @discord.ui.button(
-        label="My Profile",
-        emoji="🪪",
-        style=discord.ButtonStyle.secondary,
-    )
-    async def profile(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        await open_profile_entry(interaction)
-
-    @discord.ui.button(
-        label="Close",
-        emoji="✖️",
-        style=discord.ButtonStyle.danger,
-    )
-    async def close(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        _ = button
-        await interaction.response.edit_message(
-            content="Help closed.",
             embed=None,
             view=None,
         )
