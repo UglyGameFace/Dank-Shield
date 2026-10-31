@@ -55,3 +55,31 @@ checks, not a green GitHub CI badge alone.
 
 This is the single reminder-worker delivery authority, not a new reminder bot
 or an Action Center sender. LFG #638 remains separate.
+
+
+## Check Database (staff-only troubleshooting)
+
+**Verification Center → Unverified Reminders → Check Database** performs read-only
+checks against the bot's existing `DANK_VERIFY_REMINDER_DATABASE_URL`. It
+checks the private PostgreSQL connection, the scheduled reminder ledger, the
+manual guild budget, and manual member delivery history **independently**.
+
+Each table check verifies the expected columns without reading member rows and
+tests **every** required table permission separately. PostgreSQL accepts a
+comma-separated privilege string as "any permission", so that form must not
+be used to assert full readiness. The existing manual sender gate also requires
+all of SELECT, INSERT and UPDATE for both manual tables.
+
+The button reports actionable categories (not configured, unreachable,
+authentication refused, database missing, missing table, missing column,
+missing permission, or unclassified database error) and suggests the responsible
+next step. It never shows a connection URL, password, hostname, raw exception,
+or member history. It creates no tables, changes no settings, sends no reminders,
+and does not weaken the existing fail-closed send gates.
+
+The scheduled and manual ledgers require **separate** existing PostgreSQL
+migrations: `202610110001_verify_unverified_reminders.sql` for scheduled sends
+and `202610250001_verify_manual_reminders.sql` for manual sends. Apply either
+only through the approved private-network deployment operation and verify
+existing data and rollback procedures first. Never point this feature at a
+different PostgreSQL instance to make a status message turn green.
