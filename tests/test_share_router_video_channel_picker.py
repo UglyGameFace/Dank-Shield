@@ -96,9 +96,9 @@ def test_destination_picker_lists_every_available_text_channel(monkeypatch):
     assert {candidate.resource_id for candidate in browser.candidates} == {
         item.id for item in channels
     }
-    assert any(button.label == "Next" for button in browser.children)
-    assert any(button.label == "Search" for button in browser.children)
-    assert any(button.label == "Use This Channel" for button in browser.children)
+    assert any(getattr(button, "label", "") == "Next" for button in browser.children)
+    assert any(getattr(button, "label", "") == "Search" for button in browser.children)
+    assert any(getattr(button, "label", "") == "Use This Channel" for button in browser.children)
 
 
 def test_request_picker_does_not_hide_managed_category_or_conflicting_rows(monkeypatch):
