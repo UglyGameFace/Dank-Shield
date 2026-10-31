@@ -34,6 +34,28 @@ and business logic. Navigation must never become a second implementation of a fe
     owner supports that mode. Public/persistent panels keep their feature-owned private
     response behavior.
 
+## Help: mobile-first and registry-owned
+
+`/dank help` and the Home Help button open **one short private overview**:
+a topic selector, **Find Feature**, **Directory**, **Home**, and **Close**.
+Do not render a duplicate page of raw slash commands, dense inline command
+strings, or a hardcoded list of feature names on the overview.
+
+- Topics show at most three practical destinations with one plain sentence
+  each, drawn from the canonical `navigation_registry.FEATURES`.
+- Topic buttons call `_route_feature`, leaving permissions, state, settings,
+  and actions with existing feature owners. Member-facing tools stay available.
+- Find Feature and Directory remain the complete escape hatches; no feature is
+  removed or hidden by shortening Help.
+- Compatibility entry `public_command_hub.open_help_entry` delegates to
+  the same current help route, rather than maintaining obsolete /dank aliases.
+- Help views remain private, owner-locked, and bounded by the shared menu TTL.
+  A topic switch edits the same private message, rather than sending another.
+- Updating the public command contract is **not** necessary for help text
+  changes. Do not add new slash commands merely to make a help topic.
+- Reopen the help message after a deployment. Existing ephemeral messages
+  retain old content and controls until they expire.
+
 ## Home categories
 
 Home is optimized for Discord mobile without renaming product areas.
