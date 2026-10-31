@@ -19,7 +19,7 @@ Production-changing work follows this order:
 5. Merge the validated PR.
 6. Let **Dank Shield CI** validate the resulting `main` SHA.
 7. Only while that CI-green SHA is still the current `main` head may production promotion run.
-8. If `supabase_live/migrations/` contains pending migrations, the production migration workflow first checks the **live DankShield project ID**, imports only that project's already-applied migration history into an isolated temporary directory, then previews and applies only the reviewed new SQL through the Supabase CLI. The old `supabase/migrations/` folder is retained strictly as historical old-project source and must never be pushed to live DankShield.
+8. Only after separate explicit owner approval, verified independent off-Discloud backup, tested rollback/canary plan, and a manual workflow dispatch, if `supabase_live/migrations/` contains pending migrations, the production migration workflow first checks the **live DankShield project ID**, imports only that project's already-applied migration history into an isolated temporary directory, then previews and applies only the reviewed new SQL through the Supabase CLI. The old `supabase/migrations/` folder is retained strictly as historical old-project source and must never be pushed to live DankShield.
 9. Runtime/deployment acceptance evidence is recorded against the same `main` SHA.
 
 A PR being green does not authorize production mutation by itself. The merged `main` SHA must also pass canonical CI because the merge result is the release candidate. A successful CI result also expires for promotion if a newer commit becomes the canonical `main` head before the deployment job reaches its gate.
@@ -28,29 +28,26 @@ A PR being green does not authorize production mutation by itself. The merged `m
 
 `.github/workflows/deploy-supabase-migrations.yml` is the sole GitHub Actions owner for production Supabase migration application.
 
-Automatic production migration runs must satisfy all of these conditions:
+Production migration runs are **manual-only**. Passing CI, merging a PR, or an unrelated push cannot authorize database mutation. The owner must separately approve the risk and attest to an independently verified off-Discloud backup and a tested rollback/canary plan. The workflow checks these exact manual input tokens before checkout or Supabase authentication:
 
-- Triggered only after the **Dank Shield CI** workflow completes on `main`.
-- The triggering CI conclusion is `success`.
-- The triggering CI event is a `push`, not a pull-request run.
-- The migration workflow checks out the exact triggering `main` SHA.
-- The target SHA is still the exact current canonical `main` head when deployment begins; stale successful CI runs are rejected.
-- The `production` GitHub environment is used.
-- Production migration runs remain serialized with `cancel-in-progress: false`.
-- The GitHub Actions `SUPABASE_PROJECT_ID` secret must match the live DankShield project `viamriafkbqhquvrsnua`; **all other project IDs fail before link or SQL**.
-- A throwaway CLI project directory is initialized in the runner and populated with the **live database's own previously applied** migration SQL, not `supabase/migrations/` or `supabase_fresh/migrations/`.
-- The original 27 applied baseline versions in `supabase_live/production_baseline_versions.txt` and the three explicitly reviewed, already-applied compact-RPC versions in `supabase_live/approved_postcutover_versions.txt` must all be present. The verifier pins the latter three; unknown or missing remote history fails closed. Only new, version-unique migration SQL from `supabase_live/migrations/` is allowed for production.
-- `supabase migration list` and `supabase db push --dry-run --include-all` run before the real `supabase db push --include-all`.
+- `approval`: `APPROVE_CURRENT_MAIN_SUPABASE_MIGRATION`
+- `backup_verified`: `VERIFIED_OFF_DISCLOUD_BACKUP`
+- `rollback_tested`: `ROLLBACK_TESTED`
 
-The deploy workflow intentionally runs after every successful canonical `main` CI completion. When no migrations are pending, the Supabase migration commands are a no-op. If a newer commit reaches `main` before an older CI run completes, the older deployment attempt fails closed as stale and the newer current-head CI run owns promotion.
+These attestations are **not** proof of backup integrity, live canary completion, or host-file recovery. Operators must independently verify and retain evidence outside the workflow before dispatch. No Discloud deployment is performed by this workflow.
 
-## Manual migration recovery
+The migration job additionally requires:
 
-`workflow_dispatch` exists for controlled recovery, not as a CI bypass.
+- The **full 40-character SHA** of the current `main` head, with a successful canonical **Dank Shield CI** push run for that exact SHA. It rejects stale or failing releases.
+- Serialized execution in the `production` GitHub environment with `cancel-in-progress: false`.
+- `SUPABASE_PROJECT_ID` equal to dedicated DankShield project `viamriafkbqhquvrsnua`; any other project fails before link or SQL.
+- A throwaway CLI directory seeded only from the dedicated live project's already-applied migrations, not the old IdleGrowOp/Supabase history.
+- The immutable 27-version baseline and three reviewed compact-RPC versions, with unknown/missing remote history rejected.
+- A migration list and `supabase db push --dry-run --include-all` before any actual `supabase db push --include-all`.
 
-A manual run must use the **full 40-character SHA at the current head of `main`**. The workflow independently queries GitHub Actions and refuses promotion unless it also finds a successful **Dank Shield CI** `push` run on `main` for that exact SHA.
+## Manual migration release
 
-Use manual dispatch only when the automatic post-CI promotion did not run, was interrupted, or must be safely replayed. Do not use it to deploy an older main ancestor, an unmerged branch, a failing commit, or an arbitrary local SHA.
+Open **Deploy Supabase migrations** using `workflow_dispatch` only after reviewing the pending SQL and recording the independent backup, recovery rehearsal, and canary plan. Supply the exact current-main SHA and all three confirmations. The workflow independently verifies successful canonical CI and target identity. Never use this to replay old-project migrations, bypass release risk approval, or assume the bot was deployed to Discloud.
 
 ## Database rollback boundary
 

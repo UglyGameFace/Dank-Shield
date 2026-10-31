@@ -53,7 +53,13 @@ def test_live_workflow_hard_rejects_old_project_and_never_uses_legacy_chain() ->
     assert 'cd "$LIVE_WORKDIR"' in text
     assert 'group: supabase-production-migrations' in text
     assert 'environment: production' in text
-    assert "github.event.workflow_run.conclusion == 'success'" in text
+    assert "  workflow_run:" not in text
+    assert "  workflow_dispatch:" in text
+    assert "if: github.event_name == 'workflow_dispatch'" in text
+    assert "APPROVE_CURRENT_MAIN_SUPABASE_MIGRATION" in text
+    assert "VERIFIED_OFF_DISCLOUD_BACKUP" in text
+    assert "ROLLBACK_TESTED" in text
+    assert text.index("Require explicit release approval") < text.index("Check out validated release commit")
     assert "supabase migration repair" not in text
     assert "supabase/migrations/*" not in text
 

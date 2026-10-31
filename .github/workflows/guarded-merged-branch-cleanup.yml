@@ -42,6 +42,7 @@ jobs:
         env:
           CLEANUP_MODE: ${{ inputs.mode }}
           CLEANUP_CONFIRMATION: ${{ inputs.confirmation }}
+          LINKED_PRODUCTION_BRANCH: ${{ vars.DANK_DISCLOUD_DEPLOY_BRANCH }}
         with:
           script: |
             const mode = process.env.CLEANUP_MODE;
@@ -62,6 +63,17 @@ jobs:
             }
 
             const { owner, repo } = context.repo;
+            const linkedProductionBranch = String(process.env.LINKED_PRODUCTION_BRANCH || '').trim();
+            if (deleting) {
+              if (!linkedProductionBranch) {
+                throw Error('Verify DANK_DISCLOUD_DEPLOY_BRANCH before owner-reviewed deletion');
+              }
+              const linked = (await github.rest.repos.getBranch({
+                owner, repo, branch: linkedProductionBranch
+              })).data;
+              if (!linked.commit?.sha) throw Error('Unresolvable deployment branch');
+            }
+
             const fullName = `${owner}/${repo}`;
             const defaultBranch = (await github.rest.repos.get({ owner, repo }))
               .data.default_branch;
@@ -105,7 +117,8 @@ jobs:
             const explicitlyRetained = new Set([
               'aaa-cinema-pre-pregateway-bind',
               'backup/stoneyverify-stable-7fdc331-20261008',
-              'chore/guarded-merged-branch-cleanup-20261015'
+              'chore/guarded-merged-branch-cleanup-20261015',
+              linkedProductionBranch
             ]);
             // Audited no-PR refs with zero commits ahead of main. The runtime
             // MUST still prove ancestry and unchanged SHA before deletion.
@@ -774,6 +787,7 @@ jobs:
             for (const branch of branches) {
               const name = branch.name;
               if (name === defaultBranch || branch.protected) continue;
+              if (name === linkedProductionBranch) continue;
               // The Discloud dashboard is still linked to this branch.
               if (name === 'aaa-cinema-pre-pregateway-bind') continue;
               if (inUseByOpenPR.has(name)) continue;
@@ -2559,6 +2573,7 @@ jobs:
         env:
           CLEANUP_MODE: ${{ inputs.mode }}
           CLEANUP_CONFIRMATION: ${{ inputs.confirmation }}
+          LINKED_PRODUCTION_BRANCH: ${{ vars.DANK_DISCLOUD_DEPLOY_BRANCH }}
         with:
           script: |
             const mode = process.env.CLEANUP_MODE;
@@ -2567,6 +2582,17 @@ jobs:
             if (deleting && process.env.CLEANUP_CONFIRMATION !==
                 'DELETE_VERIFIED_ZERO_AHEAD_BRANCHES') throw Error('Missing exact owner confirmation');
             const { owner, repo } = context.repo;
+            const linkedProductionBranch = String(process.env.LINKED_PRODUCTION_BRANCH || '').trim();
+            if (deleting) {
+              if (!linkedProductionBranch) {
+                throw Error('Verify DANK_DISCLOUD_DEPLOY_BRANCH before owner-reviewed deletion');
+              }
+              const linked = (await github.rest.repos.getBranch({
+                owner, repo, branch: linkedProductionBranch
+              })).data;
+              if (!linked.commit?.sha) throw Error('Unresolvable deployment branch');
+            }
+
             const meta = await github.rest.repos.get({ owner, repo });
             if (meta.data.default_branch !== 'main') throw Error('Unexpected default branch');
             // Frozen list established by Oct 22 GitHub main...branch ancestry checks.
@@ -2627,7 +2653,7 @@ jobs:
                 if (error.status === 404) return null;
                 throw error;
               }
-              if (item.protected || hasActivePR(name)) return null;
+              if (item.protected || hasActivePR(name) || name === linkedProductionBranch) return null;
               const followup = reviewedFollowup.get(name);
               if (followup) {
                 if (item.commit.sha !== followup.sha) return null;

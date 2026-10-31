@@ -92,3 +92,10 @@ def test_opt_in_deletion_is_archived_and_high_branch_count_is_not_failure() -> N
     assert "core.warning('Branch count is '" in text
     assert "core.setFailed('Branch count is '" not in text
     assert "if (candidates.length > 20)" in text
+
+
+def test_no_opt_in_delete_when_deployment_reference_is_unknown() -> None:
+    text = _workflow()
+    assert "if (isManual && mode === 'delete' && !deploymentBranchConfigured)" in text
+    assert "const deleting = mode === 'delete' && deploymentBranchConfigured;" in text
+    assert text.index("const deleting = mode === 'delete' && deploymentBranchConfigured;") < text.index("if (deleting) {", text.index("const allBranches ="))
