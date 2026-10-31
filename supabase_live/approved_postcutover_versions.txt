@@ -1,0 +1,8 @@
+# Read-only verified post-cutover migration-history entries on dedicated DankShield Supabase.
+# Project viamriafkbqhquvrsnua; observed through connected Supabase list_migrations 2026-10-31.
+# These were already applied directly to the dedicated project before this reconciliation.
+# This is NOT an instruction to replay SQL or modify migration history.
+# Original 2026-10-22 baseline stays unchanged. Additions require explicit code/test review.
+20261028232821
+20261028234027
+20261028235128
